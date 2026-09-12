@@ -3,6 +3,7 @@ namespace sollang.compiler.ir.typed
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
 
 hasCanonicalValueType node: ref TypedIrNode -> Bool {
     node.typeId >= 0 and not (node.typeOrigin == 1 and node.typeSymbol == 0)
@@ -287,5 +288,114 @@ sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                 read! => nodes[readIndex!]
             }
         readIndex! + 1 => readIndex!
+    }
+}
+
+# Final arithmetic fixed-point recovery can widen an initializer after the
+# ordinary slot pass has already frozen its binding and direct reads. Refresh
+# only declaration roots whose value is that repaired arithmetic node, then
+# preserve the invariant type across every later version of the same mutable
+# source symbol. Result `?` payload bindings and unrelated aliases remain
+# governed by the broader late-value rules above.
+sealPostArithmeticSlotTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    [Int; ~] => arithmeticRootBySymbol!
+    0 => arithmeticRootSeed!
+    arithmeticRootSeed! < (prepared.package.symbols -> len)
+        -> while {
+            arithmeticRootBySymbol! -> push(-1)
+            arithmeticRootSeed! + 1 => arithmeticRootSeed!
+        }
+    0 => arithmeticBindingIndex!
+    arithmeticBindingIndex! < (nodes -> len) -> while {
+        nodes[arithmeticBindingIndex!] => arithmeticBinding!
+        arithmeticBinding!.kind == 17
+            and arithmeticBinding!.sourceModule >= 0
+            and arithmeticBinding!.sourceModule < (prepared.package.ranges -> len)
+            and arithmeticBinding!.symbol >= 0 -> if {
+                prepared.package.ranges[arithmeticBinding!.sourceModule] => arithmeticBindingRange
+                arithmeticBinding!.symbol < arithmeticBindingRange.symbolCount
+                    -> if {
+                        arithmeticBindingRange.symbolStart + arithmeticBinding!.symbol => arithmeticGlobalSymbol
+                        arithmeticRootBySymbol![arithmeticGlobalSymbol] => arithmeticRootIndex
+                        arithmeticRootIndex < 0
+                            and arithmeticBinding!.operand0 >= 0
+                            and arithmeticBinding!.operand0 < (nodes -> len)
+                            and nodes[arithmeticBinding!.operand0].kind == 8
+                            and nodes[arithmeticBinding!.operand0].opcode >= grammar.tokenIdPlus()
+                            and nodes[arithmeticBinding!.operand0].opcode <= grammar.tokenIdPercent()
+                            and (nodes[arithmeticBinding!.operand0] -> hasCanonicalValueType)
+                            -> if {
+                                nodes[arithmeticBinding!.operand0] => arithmeticRootValue
+                                arithmeticRootValue.typeId => arithmeticBinding!.typeId
+                                arithmeticRootValue.typeKind => arithmeticBinding!.typeKind
+                                arithmeticRootValue.typeOrigin => arithmeticBinding!.typeOrigin
+                                arithmeticRootValue.typeModule => arithmeticBinding!.typeModule
+                                arithmeticRootValue.typeSymbol => arithmeticBinding!.typeSymbol
+                                arithmeticRootValue.typeFlags => arithmeticBinding!.typeFlags
+                                arithmeticBinding! => nodes[arithmeticBindingIndex!]
+                                arithmeticBindingIndex! => arithmeticRootBySymbol![arithmeticGlobalSymbol]
+                            }
+                        arithmeticRootBySymbol![arithmeticGlobalSymbol] => refreshedArithmeticRootIndex
+                        refreshedArithmeticRootIndex >= 0 and refreshedArithmeticRootIndex != arithmeticBindingIndex!
+                            -> if {
+                                nodes[refreshedArithmeticRootIndex] => arithmeticRoot
+                                arithmeticBinding!.operand0 >= 0
+                                    and arithmeticBinding!.operand0 < (nodes -> len)
+                                    and nodes[arithmeticBinding!.operand0].kind == 8
+                                    and nodes[arithmeticBinding!.operand0].opcode >= grammar.tokenIdPlus()
+                                    and nodes[arithmeticBinding!.operand0].opcode <= grammar.tokenIdPercent()
+                                    -> if {
+                                        nodes[arithmeticBinding!.operand0] => arithmeticRebindValue!
+                                        nodes -> sealIntegerLiteralPeerContext(arithmeticRebindValue!.operand0, arithmeticRoot)
+                                        nodes -> sealIntegerLiteralPeerContext(arithmeticRebindValue!.operand1, arithmeticRoot)
+                                        arithmeticRoot.typeId => arithmeticRebindValue!.typeId
+                                        arithmeticRoot.typeKind => arithmeticRebindValue!.typeKind
+                                        arithmeticRoot.typeOrigin => arithmeticRebindValue!.typeOrigin
+                                        arithmeticRoot.typeModule => arithmeticRebindValue!.typeModule
+                                        arithmeticRoot.typeSymbol => arithmeticRebindValue!.typeSymbol
+                                        arithmeticRoot.typeFlags => arithmeticRebindValue!.typeFlags
+                                        arithmeticRebindValue! => nodes[arithmeticBinding!.operand0]
+                                    }
+                                arithmeticRoot.typeId => arithmeticBinding!.typeId
+                                arithmeticRoot.typeKind => arithmeticBinding!.typeKind
+                                arithmeticRoot.typeOrigin => arithmeticBinding!.typeOrigin
+                                arithmeticRoot.typeModule => arithmeticBinding!.typeModule
+                                arithmeticRoot.typeSymbol => arithmeticBinding!.typeSymbol
+                                arithmeticRoot.typeFlags => arithmeticBinding!.typeFlags
+                                arithmeticBinding! => nodes[arithmeticBindingIndex!]
+                            }
+                    }
+            }
+        arithmeticBindingIndex! + 1 => arithmeticBindingIndex!
+    }
+    0 => arithmeticReadIndex!
+    arithmeticReadIndex! < (nodes -> len) -> while {
+        nodes[arithmeticReadIndex!] => arithmeticRead!
+        arithmeticRead!.kind == 5
+            and arithmeticRead!.operand0 >= 0
+            and arithmeticRead!.operand0 < (nodes -> len)
+            and nodes[arithmeticRead!.operand0].kind == 17
+            and nodes[arithmeticRead!.operand0].sourceModule >= 0
+            and nodes[arithmeticRead!.operand0].sourceModule < (prepared.package.ranges -> len)
+            and nodes[arithmeticRead!.operand0].symbol >= 0
+            -> if {
+                nodes[arithmeticRead!.operand0] => arithmeticReadBinding
+                prepared.package.ranges[arithmeticReadBinding.sourceModule] => arithmeticReadRange
+                arithmeticReadBinding.symbol < arithmeticReadRange.symbolCount
+                    -> if {
+                        arithmeticReadRange.symbolStart + arithmeticReadBinding.symbol => arithmeticReadGlobalSymbol
+                        arithmeticRootBySymbol![arithmeticReadGlobalSymbol] >= 0
+                            -> if {
+                                arithmeticReadBinding.typeId => arithmeticRead!.typeId
+                                arithmeticReadBinding.typeKind => arithmeticRead!.typeKind
+                                arithmeticReadBinding.typeOrigin => arithmeticRead!.typeOrigin
+                                arithmeticReadBinding.typeModule => arithmeticRead!.typeModule
+                                arithmeticReadBinding.typeSymbol => arithmeticRead!.typeSymbol
+                                arithmeticReadBinding.typeFlags => arithmeticRead!.typeFlags
+                                arithmeticRead! => nodes[arithmeticReadIndex!]
+                            }
+                    }
+            }
+        arithmeticReadIndex! + 1 => arithmeticReadIndex!
     }
 }

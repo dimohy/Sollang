@@ -41,6 +41,7 @@ foreach ($name in @(
     "verify-focused-slg-format.ps1"
     "verify-llvm-no-allocation-audit.ps1"
     "verify-process-child-try-wait-contract.ps1"
+    "verify-process-child-kill-contract.ps1"
     "verify-async-result-propagation-contract.ps1"
     "verify-async-owned-array-cancellation-contract.ps1"
     "verify-portable-memory-io-contract.ps1"
@@ -76,6 +77,7 @@ if ($IsWindows) {
 }
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
+Invoke-CheckedContract -Name "update-llvm-emitter-module-manifests.ps1" -Parameters @{ Mode = "Check" }
 foreach ($name in @(
     "verify-selfhost-fragment-manifests.ps1"
     "verify-selfhost-source-structure.ps1"
@@ -226,6 +228,7 @@ $linuxSocketRuntimePath = Join-Path $RepositoryRoot "src/Sollang.Compiler/CodeGe
 $textContextPath = Join-Path $RepositoryRoot "selfhost/llvm/text/context_prepare.slg"
 $entrypointsPath = Join-Path $RepositoryRoot "selfhost/llvm/text/entrypoints.slg"
 $incrementalVerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-incremental.ps1"
+$eachCallResultVerifierPath = Join-Path $RepositoryRoot "scripts/verify-each-call-result-source-selection.ps1"
 $stage2VerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-stage2.ps1"
 $stage3VerifierPath = Join-Path $RepositoryRoot "scripts/verify-selfhost-stage3.ps1"
 $releasePublisherPath = Join-Path $RepositoryRoot "scripts/publish-release.ps1"
@@ -588,6 +591,7 @@ $controlAllocasMeasurement = [IO.File]::ReadAllText($controlAllocasMeasurementPa
 $interpolationReferenceSelfhostCounts = [IO.File]::ReadAllText($interpolationReferenceSelfhostCountsPath)
 $interpolationReferenceSelfhostOrder = [IO.File]::ReadAllText($interpolationReferenceSelfhostOrderPath)
 $incrementalVerifier = [IO.File]::ReadAllText($incrementalVerifierPath)
+$eachCallResultVerifier = [IO.File]::ReadAllText($eachCallResultVerifierPath)
 $stage2Verifier = [IO.File]::ReadAllText($stage2VerifierPath)
 $stage3Verifier = [IO.File]::ReadAllText($stage3VerifierPath)
 $privateFieldDiagnosticVerifier = [IO.File]::ReadAllText($privateFieldDiagnosticVerifierPath)
@@ -854,7 +858,7 @@ Assert-Contains $emitterDiagnostics 'diagnosticCode == 34 -> if { count! + 1 => 
 Assert-Contains $invariants 'typedControlTerminates controlIndex: Int, context: ref emitterContext.EmitContext -> Bool' "LLVM invariant has a state-free structural termination resolver"
 Assert-Contains $invariants 'typedIfThenValueIndex -> typedControlTerminates(context) => typedIfThenTerminates' "typed if invariant excludes a terminating then path"
 Assert-Contains $invariants 'typedIfElseValueIndex -> typedControlTerminates(context) => typedIfElseTerminates' "typed if invariant excludes a terminating else path"
-Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealCompletedIfAndRegionTypes' 4 "initial and both late projected-match seals immediately propagate through enclosing regions and ifs"
+Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealCompletedIfAndRegionTypes' 5 "initial, bounded projected-match, and final contextual seals immediately propagate through enclosing regions and ifs"
 Assert-NotContains $typedOrdinaryFunctionFinalize 'normalizeMatchResultTypeFromCompleteArms' "rejected duplicate per-function complete-arm normalization"
 Assert-NotContains $typedSourceLoweringFinalize 'normalizeMatchResultTypeFromCompleteArms' "rejected duplicate entry complete-arm normalization"
 Assert-NotContains $typedSourceLoweringFinalize 'entryMatchResultArm.typeOrigin => entryControlTypeNode!.typeOrigin' "rejected entry first-arm match result promotion"
@@ -1092,7 +1096,9 @@ Assert-Matches $typedFunctionLowering '(?s)public matchArmTerminalValueIndex arm
 Assert-Matches $typedFunctionLowering '(?s)normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode.*?true => allContinuingArmsAgree!.*?terminal\.kind != 23.*?terminal\.typeId != resultTypeId!.*?false => allContinuingArmsAgree!.*?allContinuingArmsAgree! and hasContinuingValue! and selectedTerminal! >= 0' "late enum and numeric-subject controls require complete canonical agreement across continuing arms"
 Assert-Matches $typedFunctionLowering '(?s)sealEnumMatchTypesFromTerminalArms results: mut \[TypedIrNode; ~\].*?match! -> normalizeMatchResultTypeFromCompleteArms\(matchIndex!, unitTypeId, results, types, flags\).*?match!\.typeOrigin == 1 and match!\.typeSymbol == 0' "every match re-enters authoritative complete-arm normalization and propagates canonical Unit to its parent region"
 Assert-Matches $typedFunctionLowering '(?s)sealControlBindingAliasTypes results: mut \[TypedIrNode; ~\].*?binding!\.kind == 17.*?read!\.kind == 5' "control result bindings and direct reads share one linear alias seal"
-Assert-Matches $typedFunctionLowering '(?s)repairEnumMatchSubjectsFromControlBindings results: mut \[TypedIrNode; ~\], types: ref \[typeIds\.SemanticType; ~\].*?read\.kind == 5.*?results\[read\.operand0\]\.kind == 17.*?results\[read\.operand0\]\.flags != 1.*?results\[results\[read\.operand0\]\.operand0\]\.kind == 18.*?kind == 27.*?kind == 33.*?kind == 34.*?read\.typeId >= 0.*?types\[read\.typeId\] => readType.*?readType\.kind == 1.*?readType\.kind == 7.*?readType\.origin == 4.*?readType\.symbol == 0 or readType\.symbol == 1.*?read\.parent.*?results\[read\.parent\]\.kind == 27.*?read\.nextOperand.*?results\[read\.nextOperand\]\.kind == 27.*?results\[subjectMatchIndex!\]\.operand0 != readIndex!.*?readIndex! => subjectMatch!\.operand0' "enum rematch subjects require an exact live binding/control chain, a copyable scalar or Option/Result enum, and a direct match edge"
+Assert-Matches $typedFunctionLowering '(?s)repairEnumMatchSubjectsFromControlBindings results: mut \[TypedIrNode; ~\], types: ref \[typeIds\.SemanticType; ~\].*?read\.kind == 5.*?results\[read\.operand0\] => subjectBinding.*?subjectBinding\.kind == 29.*?subjectBinding\.kind == 17.*?subjectBinding\.flags != 1.*?results\[subjectBinding\.operand0\]\.kind == 18.*?kind == 27.*?kind == 33.*?kind == 34.*?directControlSubject! and read\.typeId >= 0.*?types\[read\.typeId\] => readType.*?readType\.kind == 1.*?readType\.kind == 7.*?readType\.origin == 4.*?readType\.symbol == 0 or readType\.symbol == 1.*?read\.parent.*?results\[read\.parent\]\.kind == 27.*?read\.nextOperand.*?results\[read\.nextOperand\]\.kind == 27.*?results\[subjectMatchIndex!\]\.operand0 != readIndex!.*?readIndex! => subjectMatch!\.operand0' "enum rematch subjects require an exact payload-or-control binding chain, a copyable scalar or Option/Result enum, and a direct match edge"
+Assert-Matches $typedFunctionLowering '(?s)enumPayloadArmIndex payloadIndex: Int, nodes: ref \[TypedIrNode; ~\].*?nodes\[payloadIndex\]\.kind == 29.*?nodes\[payloadParent\]\.kind == 19.*?nodes\[payloadParent\]\.kind == 8.*?nodes\[payloadParent\]\.operand0 == payloadIndex.*?nodes\[nodes\[payloadParent\]\.parent\]\.kind == 19' "enum payload arm lookup accepts only the direct arm or canonical pattern-condition ownership edge"
+Assert-MatchCount $typedFunctionLowering '-> enumPayloadArmIndex\((results|nodes)\)' 2 "nominal and final projected payload sealing share the exact enum payload arm lookup"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealControlBindingAliasTypes\s+nodes -> repairEnumMatchSubjectsFromControlBindings\(frozenRecursiveSemanticTypes\)\s+# The final projected-method pass' "the final projected producer closure repairs control-bound enum rematch subjects before arm sealing"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> repairPostfixMatchArmResults.*?nodes -> sealBooleanOperatorTypes\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?# A nominal terminal can become typed only in sealLateTypes\..*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\)' "late Bool, match, alias, and nominal-member sealing close the bounded dependency chain"
 Assert-Matches $typedResolvedContextFinalize '(?s)# Repeat the same bounded closure after the second and final projected.*?nodes -> sealFinalProjectedMatchSubjectsAndPayloads\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealFinalEnumArmTagsAndPayloads\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealNominalEnumPayloadsByArmTags\(frozenRecursiveSemanticTypes, recursiveTypeFlags, prepared, recursiveTypes\).*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealCompletedIfAndRegionTypes.*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateValueAliasTypes\(prepared\)' "final mutable projected Result call restores canonical match subjects, arm tags, payloads, and binding types"
@@ -1818,11 +1824,27 @@ Assert-Contains $standardProcess "public struct CapturedOutput" "bounded process
 Assert-Contains $standardProcessRuntime "public collect: move self, limits: CaptureLimits" "instance-owned bounded process capture"
 Assert-NotMatches $standardProcess '(?m)^public (setEnvironment|removeEnvironment|clearEnvironment):' "global child environment mutator"
 Assert-NotMatches $standardProcess '(?m)^public (stdin|stdout|stderr):' "global child stdio mutator"
-Assert-Contains $typedCore "-277 => processCall!.opcode" "explicit process spawn opcode"
-Assert-Contains $typedCore "-278 => processCall!.opcode" "explicit process wait opcode"
-Assert-Contains $typedCore "-285 => processCall!.opcode" "explicit Child.id projection opcode"
-Assert-Contains $typedCore "-286 => processCall!.opcode" "explicit ProcessId.asUInt64 projection opcode"
-Assert-Contains $typedCore "processCollectSymbol! -> if { -288 => processCall!.opcode }" "explicit process collect opcode"
+Assert-Contains $typedCore "resolvedProcessRuntimeOpcode call: ref TypedIrNode" "exact physical process target opcode authority"
+$processRuntimeOpcodes = [ordered]@{
+    run = -210
+    runToFile = -211
+    collect = -288
+    spawn = -277
+    wait = -278
+    pollChild = -308
+    killChild = -309
+    id = -285
+    asUInt64 = -286
+    exit = -222
+    arguments = -212
+    environment = -235
+}
+foreach ($processRuntimeOpcode in $processRuntimeOpcodes.GetEnumerator()) {
+    $escapedProcessName = [regex]::Escape([string]$processRuntimeOpcode.Key)
+    Assert-Matches $typedCore `
+        ('sourceMatches\(targetName\.span\.start, targetName\.span\.length, "' + $escapedProcessName + '"\)\s*-> if \{ ' + $processRuntimeOpcode.Value + ' => opcode! \}') `
+        "exact process $($processRuntimeOpcode.Key) opcode"
+}
 Assert-Contains $typedResolvedContextSeal "nodes -> len => lateCallControlTypeIndex!" "late call-result control convergence"
 Assert-Contains $typedResolvedContextSeal "nodes[lateCallControlType!.operand1] => lateCallRegionValue" "late call-result region type propagation"
 Assert-Contains $typedCore "false => lateNonValueContinuingArm!" "non-value continuing enum-arm classification"
@@ -1830,7 +1852,7 @@ Assert-Contains $typedResolvedContextSeal "nodes -> len => lateNonValueMatchInde
 Assert-Contains $typedResolvedContextSeal "and nodes[lateNonValueTerminalIndex].kind != 23" "explicit return exclusion from enum value joins"
 Assert-Contains $typedCore 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "receiveFromInto")' "socket receiveFromInto intrinsic identity"
 Assert-Contains $typedCore "-> if { -287 => finalSocketIntrinsic!.opcode }" "socket receiveFromInto opcode"
-Assert-NotContains $typedCore "processCollectSymbol! -> if { -287 => processCall!.opcode }" "process and socket opcode collision"
+Assert-NotMatches $typedCore 'sourceMatches\(targetName\.span\.start, targetName\.span\.length, "collect"\)\s*-> if \{ -287 => opcode! \}' "process and socket opcode collision"
 Assert-Contains $typedCore "public isProcessProjectionOpcode" "canonical process domain projection predicate"
 Assert-Contains $typedCore "public isProcessExecutionOpcode" "canonical process execution predicate"
 Assert-Contains $typedCore "opcode == -288" "process collect execution classification"
@@ -2049,6 +2071,9 @@ $eachCallResultGateCount = ([regex]::Matches($incrementalVerifier, 'verify-each-
 if ($eachCallResultGateCount -ne 2) {
     throw "incremental each-call-result source-selection gates drifted: expected pre-emission and rebuilt-candidate checks, actual $eachCallResultGateCount"
 }
+Assert-Contains $eachCallResultVerifier '$stdlibRoot = Join-Path $root ''stdlib''' "candidate each-call-result authoritative stdlib root"
+Assert-Contains $eachCallResultVerifier '$required = @($fixture, $expectedPath, $typeIdsPath, $typesPath, $astPath, $functionExpressionsPath, $managed, $baseline) + $stdlibSources' "candidate each-call-result stdlib input fingerprint coverage"
+Assert-Contains $eachCallResultVerifier '--stdlib $stdlibRoot' "candidate each-call-result explicit stdlib route"
 Assert-Contains $incrementalVerifier 'verify-llvm-direct-call-closure.ps1' "focused LLVM direct-call closure gate"
 Assert-Contains $incrementalVerifier '. (Join-Path $PSScriptRoot "verification-process.ps1")' "shared bounded verification process helper"
 Assert-Contains $incrementalVerifier '[int]$CompilerTimeoutMilliseconds = 3600000' "measured bounded selfhost compiler emission default"
@@ -2160,7 +2185,7 @@ Assert-Contains $typedResolvedContextFinalize 'nodes -> settleLateFinalFunctionC
 Assert-Contains $typedResolvedContextFinalize 'sealFinalFunctionReturnAncestors nodes:' "final implicit return ancestor authority"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> settleLateFinalFunctionControlResults\(prepared\).*?nodes -> sealFinalFunctionReturnAncestors' "function return ancestor sealing is the final result-edge pass"
 Assert-Contains $typedResolvedContextFinalize 'sealFinalContextualNumericLiterals nodes:' "final contextual numeric literal closure"
-Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals' "late aliases feed final nominal-member, binary-topology, and numeric-literal consumers"
+Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealCompletedIfAndRegionTypes\s+nodes -> sealControlBindingAliasTypes' "late aliases feed the final nominal-member, binary, arithmetic, numeric, enum, and control consumers in bounded order"
 Assert-Contains $typedResolvedContextFinalize 'canonicalLeft.typeId == canonicalRight.typeId' "final arithmetic width requires exact operand identity"
 Assert-Contains $typedResolvedContextSeal 'not finalReturnRootInsideControl! -> if {' "branch-local returned aggregate parent preservation"
 Assert-Contains $functionReturns 'scheduledTopLevelReturnCandidate.kind != 26' "straight-line return excludes contextual enum wrapper candidates"

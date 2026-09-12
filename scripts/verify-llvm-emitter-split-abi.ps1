@@ -51,10 +51,10 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 322) {
-    throw "Expected 322 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 325) {
+    throw "Expected 325 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
-$requiredLibraryHelpers = @(
+$requiredStatefulHelpers = @(
     "isImportedLibraryFunction"
     "targetsImportedLibraryFunction"
     "emitNativeTargetLoad"
@@ -62,10 +62,13 @@ $requiredLibraryHelpers = @(
     "emitImportedLibraryGlobals"
     "isNativePathStyleCall"
     "emitNativePathStyleValue"
+    "emitAwaitTaskValue"
+    "emitDurationSleepTask"
+    "emitAsyncFunction"
 )
-foreach ($requiredLibraryHelper in $requiredLibraryHelpers) {
-    if ($requiredLibraryHelper -notin $helperNames) {
-        throw "Library interop split helper '$requiredLibraryHelper' is missing from the pointer-ABI gate."
+foreach ($requiredStatefulHelper in $requiredStatefulHelpers) {
+    if ($requiredStatefulHelper -notin $helperNames) {
+        throw "Stateful split helper '$requiredStatefulHelper' is missing from the pointer-ABI gate."
     }
 }
 
@@ -88,13 +91,14 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 100) {
-    throw "Expected 100 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 101) {
+    throw "Expected 101 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredDiagnosticReadonlyHelpers = @(
     "libraryImportDiagnosticCount"
     "emitLibraryImportDiagnostics"
     "emitOpenImportAmbiguity"
+    "usesAsyncRuntime"
 )
 foreach ($requiredDiagnosticReadonlyHelper in $requiredDiagnosticReadonlyHelpers) {
     if ($requiredDiagnosticReadonlyHelper -notin $readonlyHelpers.Name) {

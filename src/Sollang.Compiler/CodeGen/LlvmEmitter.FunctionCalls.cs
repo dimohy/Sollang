@@ -451,7 +451,8 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketPoll
             or BoundFunctionKind.RuntimeSocketReactorWait
             or BoundFunctionKind.RuntimeDnsLookup
-            or BoundFunctionKind.RuntimePollChildProcess))
+            or BoundFunctionKind.RuntimePollChildProcess
+            or BoundFunctionKind.RuntimeKillChildProcess))
         {
             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
         }
@@ -1439,6 +1440,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects one UInt64 token");
             }
             return EmitRuntimePollChildProcessIntrinsic(function, token);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeKillChildProcess)
+        {
+            if (argument is not RuntimeInt token || additionalArguments is { Count: > 0 })
+            {
+                throw new SollangException($"{function.Name} expects one UInt64 token");
+            }
+            return EmitRuntimeKillChildProcessIntrinsic(function, token);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeChildProcessId)

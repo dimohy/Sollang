@@ -1594,6 +1594,15 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
                         directOwnedCopyMoveIndex! + 1 => directOwnedCopyMoveIndex!
                     }
                 typed[directOwnedCopy.operand0] => directOwnedCopySource
+                directOwnedCopySource.operand0 >= 0
+                    and directOwnedCopySource.operand0 < (typed -> len)
+                    and typed[directOwnedCopySource.operand0].kind == 29
+                    -> if {
+                        # A match payload binder owns the selected enum payload.
+                        # Its first affine binding transfers that owner; it is
+                        # not a second read of independently addressable storage.
+                        true => directOwnedCopyTransfers!
+                    }
                 false => directOwnedCopySourceIsParameter!
                 0 => directOwnedCopySourceSearch!
                 directOwnedCopySourceSearch! < (typed -> len) and not directOwnedCopySourceIsParameter!
@@ -1839,6 +1848,7 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
                                 (previousCandidateIr -> lexicalExecutableAst) == (mutableBindingIrIndex! -> lexicalExecutableAst)
                                     and typed[previousCandidateIr].astNode != mutableBinding.astNode
                                     and (previousCandidateIr -> sameBindingName(mutableBindingIrIndex!))
+                                    and (mutableBindingIrIndex! -> nodeBelongsTo(typed[previousCandidateIr].parent))
                                     and (previousCandidateIr -> useReachableAfterMove(mutableBindingIrIndex!))
                                     -> if { previousCandidateIr => previousMutableBindingIr! }
                             }

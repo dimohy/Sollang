@@ -2045,6 +2045,21 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_poll_result { i32 0, i32 2 }
             }
 
+            define internal i1 @sollang_kill_process(i64 %token) #0 {
+            entry:
+              %pid = trunc i64 %token to i32
+              %valid = icmp sgt i32 %pid, 0
+              br i1 %valid, label %terminate, label %failure
+
+            terminate:
+              %killed = call i32 @kill(i32 %pid, i32 9)
+              %succeeded = icmp eq i32 %killed, 0
+              ret i1 %succeeded
+
+            failure:
+              ret i1 false
+            }
+
             define internal void @sollang_drop_process_child(i64 %token) #0 {
             entry:
               %pid = trunc i64 %token to i32

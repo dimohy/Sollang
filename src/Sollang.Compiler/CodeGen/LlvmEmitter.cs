@@ -141,7 +141,8 @@ internal sealed partial class LlvmEmitter
                     or BoundFunctionKind.RuntimeCollectProcess
                     or BoundFunctionKind.RuntimeSpawnProcess
                     or BoundFunctionKind.RuntimeWaitProcess
-                    or BoundFunctionKind.RuntimePollChildProcess);
+                    or BoundFunctionKind.RuntimePollChildProcess
+                    or BoundFunctionKind.RuntimeKillChildProcess);
         _usesProcessCapture = _reachableFunctions.Any(static function =>
                 function.Kind == BoundFunctionKind.RuntimeCollectProcess);
         _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
@@ -261,10 +262,10 @@ internal sealed partial class LlvmEmitter
     private bool UsesChildProcess(Expression expression)
     {
         if (expression is CallExpression call
-                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.pollChild") return true;
+                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.Child.kill" or "sys.process.pollChild" or "sys.process.killChild") return true;
         if (expression is FlowExpression flow
                 && flow.Targets.Any(target =>
-                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.pollChild")) return true;
+                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.Child.kill" or "sys.process.pollChild" or "sys.process.killChild")) return true;
         return expression switch
         {
             StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesChildProcess(x.Expression)),

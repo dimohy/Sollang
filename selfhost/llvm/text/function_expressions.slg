@@ -17,7 +17,7 @@ emitFunctionIntrinsicExpressions expressionIndex: Int, functionIndex: Int, funct
         -> if { expressionIndex -> emitMappedBytesExpression(functionIndex, context, state) }
     expression -> isMappedBytesFlush(context)
         -> if { expressionIndex -> emitMappedBytesFlush(functionIndex, context, state) }
-    expression.kind == 5
+    expression.kind == 5 and not (expressionIndex -> isAwaitSourceNode(context))
         -> if {
             expression -> referenceValueTypeId(context, state) => expressionReferenceValueTypeId
             expressionIndex -> mutableBorrowParameterOrdinal(functionIndex, context, state) => expressionMutableParameterOrdinal
@@ -940,12 +940,19 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                         "  store " -> print
                         expression -> writeArrayElementType(context, state)
                         " " -> print
-                        arrayElement.kind == 3 -> if {
-                            arrayElement -> writeIntegerLiteral(context, state)
-                        } else {
-                            arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == context.ir[function.operand1].symbol
-                                -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
-                        }
+                        arrayElement.kind == 3 or arrayElement.kind == 4
+                            -> if {
+                                arrayElement -> sourceToken(context, state) => arrayElementToken
+                                arrayElement.kind == 3 -> if {
+                                    arrayElement -> writeIntegerLiteral(context, state)
+                                } else {
+                                    (context.sources[arrayElement.sourceModule] -> byte(arrayElementToken.span.start)) == 116
+                                        -> if { "1" -> print } else { "0" -> print }
+                                }
+                            } else {
+                                arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == context.ir[function.operand1].symbol
+                                    -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
+                            }
                         ", ptr %v$(expressionIndex)_ptr$(arrayElementPosition!), align " -> print
                         expression -> arrayElementAlign(context, state) -> writeDecimalLine
                         arrayOperandCount! > 1 -> if { arrayElement.nextOperand => arrayElementIndex! }

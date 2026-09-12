@@ -1,0 +1,78 @@
+# Verifies that Child.kill requests forced termination without consuming the
+# affine owner, while cached completion remains an idempotent no-op.
+import std.time as time
+import sys.process as process
+
+main {
+    process.arguments() => args
+    args -> len => count
+    count > 1 -> if {
+        count == 2 -> if {
+            time.Duration { millis: 30000 } -> sleep -> await
+        } else {
+            process.exit(7)
+        }
+    } else {
+        process.command(args[0]) => killCommand!
+        killCommand! -> arg("--child")
+        killCommand! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) {
+                child => owner!
+                owner! -> kill -> when {
+                    Result<Unit, Text>.Ok(done) { "kill=ok" -> println }
+                    Result<Unit, Text>.Err(error) { "kill-error=$error" -> println }
+                }
+                owner! -> wait -> when {
+                    Result<process.ExitStatus, Text>.Ok(status) { "wait=terminal" -> println }
+                    Result<process.ExitStatus, Text>.Err(error) {
+                        error == "signal" -> if {
+                            "wait=terminal" -> println
+                        } else {
+                            "wait-error=$error" -> println
+                        }
+                    }
+                }
+            }
+            Result<process.Child, Text>.Err(error) { "spawn-error=$error" -> println }
+        }
+
+        process.command(args[0]) => completedCommand!
+        completedCommand! -> arg("--child")
+        completedCommand! -> arg("--complete")
+        completedCommand! -> spawn -> when {
+            Result<process.Child, Text>.Ok(child) {
+                child => owner!
+                false => completed!
+                0 => attempts!
+                not completed! and attempts! < 400 -> while {
+                    owner! -> tryWait -> when {
+                        Result<Option<process.ExitStatus>, Text>.Ok(status) {
+                            status -> when {
+                                Option<process.ExitStatus>.Some(exit) { true => completed! }
+                                Option<process.ExitStatus>.None {
+                                    time.Duration { millis: 5 } -> sleep -> await
+                                }
+                            }
+                        }
+                        Result<Option<process.ExitStatus>, Text>.Err(error) {
+                            "poll-error=$error" -> println
+                            true => completed!
+                        }
+                    }
+                    attempts! + 1 => attempts!
+                }
+                owner! -> kill -> when {
+                    Result<Unit, Text>.Ok(done) { "cached-kill=ok" -> println }
+                    Result<Unit, Text>.Err(error) { "cached-kill-error=$error" -> println }
+                }
+                owner! -> wait -> when {
+                    Result<process.ExitStatus, Text>.Ok(status) {
+                        "cached-wait=$(status -> exitCode)" -> println
+                    }
+                    Result<process.ExitStatus, Text>.Err(error) { "cached-wait-error=$error" -> println }
+                }
+            }
+            Result<process.Child, Text>.Err(error) { "cached-spawn-error=$error" -> println }
+        }
+    }
+}

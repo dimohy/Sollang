@@ -359,48 +359,59 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
 # adopts its concrete peer width, and arithmetic adopts the same width. Boolean
 # comparison results remain untouched.
 sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~] -> Unit {
-    0 => numericIndex!
-    numericIndex! < (nodes -> len) -> while {
-        nodes[numericIndex!] => numeric!
-        (numeric!.opcode >= grammar.tokenIdPlus()
-            and numeric!.opcode <= grammar.tokenIdPercent())
-            => numericArithmetic
-        (numericArithmetic
-            or numeric!.opcode == grammar.tokenIdEqualEqual()
-            or numeric!.opcode == grammar.tokenIdBangEqual()
-            or (numeric!.opcode >= grammar.tokenIdLessEqual()
-            and numeric!.opcode <= grammar.tokenIdGreater()))
-            => numericOperands
-        numeric!.kind == 8
-            and numericOperands
-            and numeric!.operand0 >= 0
-            and numeric!.operand0 < (nodes -> len)
-            and numeric!.operand1 >= 0
-            and numeric!.operand1 < (nodes -> len)
-            -> if {
-                nodes[numeric!.operand1] => right
-                nodes -> sealIntegerLiteralPeerContext(numeric!.operand0, right)
-                nodes[numeric!.operand0] => left
-                nodes -> sealIntegerLiteralPeerContext(numeric!.operand1, left)
-                nodes[numeric!.operand0] => canonicalLeft
-                nodes[numeric!.operand1] => canonicalRight
-                numericArithmetic
-                    and canonicalLeft.typeId >= 0
-                    and canonicalLeft.typeId == canonicalRight.typeId
-                    and canonicalLeft.typeKind == 1
-                    and canonicalLeft.typeOrigin == 1
-                    and integerTypeRank(canonicalLeft.typeSymbol) > 0
-                    -> if {
-                        canonicalLeft.typeId => numeric!.typeId
-                        canonicalLeft.typeKind => numeric!.typeKind
-                        canonicalLeft.typeOrigin => numeric!.typeOrigin
-                        canonicalLeft.typeModule => numeric!.typeModule
-                        canonicalLeft.typeSymbol => numeric!.typeSymbol
-                        canonicalLeft.typeFlags => numeric!.typeFlags
-                        numeric! => nodes[numericIndex!]
-                    }
-            }
-        numericIndex! + 1 => numericIndex!
+    true => numericTypesChanged!
+    numericTypesChanged! -> while {
+        false => numericTypesChanged!
+        0 => numericIndex!
+        numericIndex! < (nodes -> len) -> while {
+            nodes[numericIndex!] => numeric!
+            (numeric!.opcode >= grammar.tokenIdPlus()
+                and numeric!.opcode <= grammar.tokenIdPercent())
+                => numericArithmetic
+            (numericArithmetic
+                or numeric!.opcode == grammar.tokenIdEqualEqual()
+                or numeric!.opcode == grammar.tokenIdBangEqual()
+                or (numeric!.opcode >= grammar.tokenIdLessEqual()
+                and numeric!.opcode <= grammar.tokenIdGreater()))
+                => numericOperands
+            numeric!.kind == 8
+                and numericOperands
+                and numeric!.operand0 >= 0
+                and numeric!.operand0 < (nodes -> len)
+                and numeric!.operand1 >= 0
+                and numeric!.operand1 < (nodes -> len)
+                -> if {
+                    nodes[numeric!.operand0].typeId => previousLeftTypeId
+                    nodes[numeric!.operand1].typeId => previousRightTypeId
+                    numeric!.typeId => previousResultTypeId
+                    nodes[numeric!.operand1] => right
+                    nodes -> sealIntegerLiteralPeerContext(numeric!.operand0, right)
+                    nodes[numeric!.operand0] => left
+                    nodes -> sealIntegerLiteralPeerContext(numeric!.operand1, left)
+                    nodes[numeric!.operand0] => canonicalLeft
+                    nodes[numeric!.operand1] => canonicalRight
+                    numericArithmetic
+                        and canonicalLeft.typeId >= 0
+                        and canonicalLeft.typeId == canonicalRight.typeId
+                        and canonicalLeft.typeKind == 1
+                        and canonicalLeft.typeOrigin == 1
+                        and integerTypeRank(canonicalLeft.typeSymbol) > 0
+                        -> if {
+                            canonicalLeft.typeId => numeric!.typeId
+                            canonicalLeft.typeKind => numeric!.typeKind
+                            canonicalLeft.typeOrigin => numeric!.typeOrigin
+                            canonicalLeft.typeModule => numeric!.typeModule
+                            canonicalLeft.typeSymbol => numeric!.typeSymbol
+                            canonicalLeft.typeFlags => numeric!.typeFlags
+                            numeric! => nodes[numericIndex!]
+                        }
+                    previousLeftTypeId != nodes[numeric!.operand0].typeId
+                        or previousRightTypeId != nodes[numeric!.operand1].typeId
+                        or previousResultTypeId != nodes[numericIndex!].typeId
+                        -> if { true => numericTypesChanged! }
+                }
+            numericIndex! + 1 => numericIndex!
+        }
     }
 }
 
@@ -969,7 +980,6 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                 finalArithmeticTypeIndex! + 1 => finalArithmeticTypeIndex!
             }
     }
-
     # Call targets and argument chains are final only after the late call/type
     # repairs above. Reapply contextual empty-array typing at this boundary so
     # a late-resolved local or imported call cannot leave `[]` untyped.
@@ -1959,5 +1969,10 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
     # the pre-LLVM invariants inspect those member projections.
     nodes -> sealLateNominalMemberTypes(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!)
     nodes -> sealFinalBinaryOperandTopology(prepared)
+    nodes -> sealPostArithmeticSlotTypes(prepared)
     nodes -> sealFinalContextualNumericLiterals
+    nodes -> sealPostArithmeticSlotTypes(prepared)
+    nodes -> sealEnumMatchTypesFromTerminalArms(frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    nodes -> sealCompletedIfAndRegionTypes
+    nodes -> sealControlBindingAliasTypes
 }

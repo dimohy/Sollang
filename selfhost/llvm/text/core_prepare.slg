@@ -585,6 +585,7 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
 emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console {
     profile -> if { "preamble start" -> runtime.eprintln }
     context -> diagnostics.usesParallelRuntime => usesComputePool
+    context -> diagnostics.usesAsyncRuntime => usesAsyncRuntime
     [Int; ~] => dropTypeActive!
     0 => dropTypeActiveIndex!
     dropTypeActiveIndex! < (context.types -> len)
@@ -745,7 +746,13 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
             -> if { true => usesTaskType! }
         taskTypeSearch! + 1 => taskTypeSearch!
     }
-    usesTaskType! -> if { "%sollang.task = type { ptr, ptr }" -> println }
+    usesTaskType! or usesAsyncRuntime -> if { "%sollang.task = type { ptr, ptr }" -> println }
+    usesAsyncRuntime -> if {
+        "%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }" -> println
+        "@sollang_task_ready_head = internal global ptr null" -> println
+        "@sollang_task_ready_tail = internal global ptr null" -> println
+        "@sollang_task_timer_head = internal global ptr null" -> println
+    }
     false => usesStreamType!
     false => usesEventStreamType!
     0 => producerTypeSearch!
@@ -1116,7 +1123,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     }
     profile -> if { "preamble after product declarations" -> runtime.eprintln }
     profile -> if { "preamble before runtime" -> runtime.eprintln }
-    dropTypeActive! -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText!, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
+    dropTypeActive! -> emitCoreRuntimePreamble(state.intrinsicRuntimeModule, requiresEarlyTextType!, usesComputePool, usesAsyncRuntime, usesDirectoryTraversal, usesOwnedDropRuntime!, usesSourceText!, usesStandardInputSourceText, usesText!, context, state) => runtimePreamble
     profile -> if { "preamble after runtime" -> runtime.eprintln }
     runtimePreamble.usesArguments => usesArguments
     runtimePreamble.usesNativeInterop => usesNativeInterop

@@ -2835,6 +2835,21 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_poll_result { i32 0, i32 2 }
             }
 
+            define internal i1 @sollang_kill_process(i64 %token) #0 {
+            entry:
+              %valid = icmp ne i64 %token, 0
+              br i1 %valid, label %terminate, label %failure
+
+            terminate:
+              %process_handle = inttoptr i64 %token to ptr
+              %terminated = call i32 @TerminateProcess(ptr %process_handle, i32 1)
+              %succeeded = icmp ne i32 %terminated, 0
+              ret i1 %succeeded
+
+            failure:
+              ret i1 false
+            }
+
             define internal void @sollang_drop_process_child(i64 %token) #0 {
             entry:
               %valid = icmp ne i64 %token, 0

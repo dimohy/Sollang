@@ -543,18 +543,11 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                     }
                             }
                         } else {
-                            knownCall.functionSymbol == -103
-                                or knownCall.functionSymbol == -105
-                                or knownCall.functionSymbol == -110
-                                or knownCall.functionSymbol == -115 -> if {
-                                    1 => expressionTypeOrigin!
-                                    -1 => expressionTypeModule!
-                                    2 => expressionTypeSymbol!
-                                }
-                            knownCall.functionSymbol == -112 -> if {
+                            knownCall.functionSymbol -> builtinRuntimeCallResultTypeSymbol => builtinCallTypeSymbol
+                            builtinCallTypeSymbol >= 0 -> if {
                                 1 => expressionTypeOrigin!
                                 -1 => expressionTypeModule!
-                                9 => expressionTypeSymbol!
+                                builtinCallTypeSymbol => expressionTypeSymbol!
                             }
                         }
                 }
@@ -1568,11 +1561,20 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                                                     expressionFlags! + 8 => expressionFlags!
                                                                 }
                                                         } else {
-                                                            resolvedCall.functionSymbol == -115 -> if {
+                                                            resolvedCall.functionSymbol -> builtinRuntimeCallResultTypeSymbol => builtinResolvedCallTypeSymbol
+                                                            builtinResolvedCallTypeSymbol >= 0 -> if {
                                                                 1 => expressionTypeOrigin!
                                                                 -1 => expressionTypeModule!
-                                                                2 => expressionTypeSymbol!
+                                                                builtinResolvedCallTypeSymbol => expressionTypeSymbol!
                                                             }
+                                                            resolvedCall.functionSymbol -> builtinRuntimeCallIsAsync
+                                                                and (expressionFlags! / 8) % 2 == 0
+                                                                -> if {
+                                                                    resolvedCall.functionSymbol => expressionOpcode!
+                                                                    -1 => expressionSymbol!
+                                                                    -1 => expressionTargetModule!
+                                                                    expressionFlags! + 8 => expressionFlags!
+                                                                }
                                                         }
                                                 }
                                         }

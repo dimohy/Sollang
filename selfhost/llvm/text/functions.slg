@@ -10,10 +10,74 @@ import syntax.generated.slg as grammar
 # reference, preserving the original direct-call and allocation behavior.
 
 emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
-    context -> emitterContext.isGenericInstance(requestedFunctionIndex)
-        -> if { requestedFunctionIndex -> emitFunctionNamed("_g$(requestedFunctionIndex)", context, state) } else {
-            requestedFunctionIndex -> emitFunctionNamed("", context, state)
+    context.ir[requestedFunctionIndex] => function
+    function.flags / 8 % 2 == 1
+        -> if {
+            requestedFunctionIndex -> emitAsyncFunction(context, state)
+        } else {
+            context -> emitterContext.isGenericInstance(requestedFunctionIndex)
+                -> if { requestedFunctionIndex -> emitFunctionNamed("_g$(requestedFunctionIndex)", context, state) } else {
+                    requestedFunctionIndex -> emitFunctionNamed("", context, state)
+                }
         }
+}
+
+emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context.ir[requestedFunctionIndex] => function
+    requestedFunctionIndex -> emitFunctionNamed("_async_body", context, state) => functionEnd
+
+    "define internal i1 @sollang_m$(function.sourceModule)_s$(function.symbol)_async_worker(ptr %control) {" -> println
+    "entry:" -> println
+    "  %async_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
+    "  %async_context = load ptr, ptr %async_context_slot, align 8" -> println
+    function.typeOrigin == 1 and function.typeSymbol == 0
+        -> if {
+            "  call void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body()" -> println
+        } else {
+            "  %async_result = call " -> print
+            function -> writeIrType(context, state)
+            " @sollang_m$(function.sourceModule)_s$(function.symbol)_async_body()" -> println
+            "  store " -> print
+            function -> writeIrType(context, state)
+            " %async_result, ptr %async_context, align " -> print
+            function -> storageAlign(context, state) -> writeDecimalLine
+        }
+    "  ret i1 true" -> println
+    "}" -> println
+
+    "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_cancel(ptr %control) {" -> println
+    "entry:" -> println
+    "  %async_cancel_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
+    "  %async_cancel_context = load ptr, ptr %async_cancel_context_slot, align 8" -> println
+    "  call void @free(ptr %async_cancel_context)" -> println
+    "  ret void" -> println
+    "}" -> println
+
+    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)() {" -> println
+    "entry:" -> println
+    1 => asyncContextSize!
+    function.typeId >= 0 and function.typeId < (context.typeSizes -> len) and context.typeSizes[function.typeId] > 0
+        -> if { context.typeSizes[function.typeId] => asyncContextSize! }
+    "  %async_context = call ptr @malloc(i64 $(asyncContextSize!))" -> println
+    "  %async_context_allocated = icmp ne ptr %async_context, null" -> println
+    "  br i1 %async_context_allocated, label %async_initialize, label %async_allocation_failed" -> println
+    "async_allocation_failed:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "async_initialize:" -> println
+    "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_worker, ptr @free, ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_cancel, ptr %async_context)" -> println
+    "  %async_started = icmp ne ptr %async_handle, null" -> println
+    "  br i1 %async_started, label %async_ready, label %async_start_failed" -> println
+    "async_start_failed:" -> println
+    "  call void @free(ptr %async_context)" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "async_ready:" -> println
+    "  %async_task_handle = insertvalue %sollang.task poison, ptr %async_handle, 0" -> println
+    "  %async_task = insertvalue %sollang.task %async_task_handle, ptr %async_context, 1" -> println
+    "  ret %sollang.task %async_task" -> println
+    "}" -> println
+    functionEnd
 }
 
 staticReadonlyNumericArrayReturn functionIndex: Int, context: ref emitterContext.EmitContext -> Int {

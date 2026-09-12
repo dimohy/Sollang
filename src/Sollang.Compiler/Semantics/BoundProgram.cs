@@ -218,6 +218,7 @@ internal enum BoundFunctionKind
     RuntimeSpawnProcess,
     RuntimeWaitProcess,
     RuntimePollChildProcess,
+    RuntimeKillChildProcess,
     RuntimeChildProcessId,
     RuntimeProcessIdValue,
     RuntimeExitProcess,

@@ -9,6 +9,7 @@ import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.number_format as numberFormat
 import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.async_runtime as asyncRuntime
 import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
 import sollang.compiler.llvm.emitter.process_runtime as processRuntime
 import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
@@ -225,6 +226,65 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
     ir! -> typedIr.materializeGenericClosure(prepared, recursiveTypes!) => genericInstances
     ir! -> typedIr.bindGenericBodies(genericInstances) => genericBodies
     ir! -> typedIr.materializeContextualArrayOwners(prepared, recursiveTypes!)
+    # Flow targets are source syntax rather than standalone Typed IR nodes.
+    # Build the exact source-path index once so every await lowering remains
+    # O(1) and never rescans a complete source AST per expression.
+    [Bool; ~] => awaitSourceByAst!
+    [Int; ~] => flowSourceByAst!
+    0 => awaitAstInit!
+    awaitAstInit! < (prepared.package.nodes -> len)
+        -> while {
+            awaitSourceByAst! -> push(false)
+            flowSourceByAst! -> push(-1)
+            awaitAstInit! + 1 => awaitAstInit!
+        }
+    0 => awaitSourceIndex!
+    awaitSourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[awaitSourceIndex!] => awaitSourceRange
+            0 => awaitSourceAst!
+            awaitSourceAst! < awaitSourceRange.astCount
+                -> while {
+                    prepared.package.nodes[awaitSourceRange.astStart + awaitSourceAst!] => awaitSourceNode
+                    awaitSourceNode.kind == 15
+                        and awaitSourceNode.parent >= 0
+                        and awaitSourceNode.parent < awaitSourceRange.astCount
+                        and prepared.package.nodes[awaitSourceRange.astStart + awaitSourceNode.parent].kind == 10
+                        -> if {
+                            awaitSourceRange.astStart + awaitSourceAst!
+                                => flowSourceByAst![awaitSourceRange.astStart + awaitSourceNode.parent]
+                        }
+                    awaitSourceAst! + 1 => awaitSourceAst!
+                }
+            awaitSourceIndex! + 1 => awaitSourceIndex!
+        }
+    0 => awaitTargetSourceIndex!
+    awaitTargetSourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[awaitTargetSourceIndex!] => awaitTargetRange
+            0 => awaitTargetAst!
+            awaitTargetAst! < awaitTargetRange.astCount
+                -> while {
+                    prepared.package.nodes[awaitTargetRange.astStart + awaitTargetAst!] => awaitTargetNode
+                    awaitTargetNode.kind == 16
+                        and awaitTargetNode.payloadToken >= 0
+                        and awaitTargetNode.payloadToken < awaitTargetRange.tokenCount
+                        and awaitTargetNode.parent >= 0
+                        and awaitTargetNode.parent < awaitTargetRange.astCount
+                        and prepared.package.nodes[awaitTargetRange.astStart + awaitTargetNode.parent].kind == 10
+                        -> if {
+                            prepared.package.tokens[awaitTargetRange.tokenStart + awaitTargetNode.payloadToken] => awaitTargetToken
+                            prepared.package.sources[awaitTargetSourceIndex!]
+                                -> slice(awaitTargetToken.span.start, awaitTargetToken.span.length) => awaitTargetName
+                            awaitTargetName == "await" -> if {
+                                flowSourceByAst![awaitTargetRange.astStart + awaitTargetNode.parent] => indexedAwaitSource
+                                indexedAwaitSource >= 0 -> if { true => awaitSourceByAst![indexedAwaitSource] }
+                            }
+                        }
+                    awaitTargetAst! + 1 => awaitTargetAst!
+                }
+            awaitTargetSourceIndex! + 1 => awaitTargetSourceIndex!
+        }
     # Call discovery precedes final receiver typing. Build one compact global
     # AST index after generic closure convergence so every later diagnostic is O(1)
     # instead of rescanning the full IR for each preliminary call entry.
@@ -813,6 +873,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         symbols: analysisSymbols!
         calls: analysisCalls!
         finalCallResolvedByAst: finalCallResolvedByAst!
+        awaitSourceByAst: awaitSourceByAst!
         libraries: libraries
         libraryCalls: libraryCalls
         libraryCallDiagnostics: libraryCallDiagnostics
@@ -875,6 +936,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
     context -> diagnostics.usesSocketRuntime => needsSocketRuntime
     context -> diagnostics.usesDnsRuntime => needsDnsRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context -> diagnostics.usesAsyncRuntime => needsAsyncRuntime
     context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     context -> diagnostics.comInteropFunctionCount => comInteropCount
     context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
@@ -995,6 +1057,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
         runtimeSymbols -> llvmRuntime.emitWindows
+        needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitWindowsRuntime }
     }
     needsSourceTextRuntime -> if {
         runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
@@ -1025,6 +1088,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     context -> diagnostics.usesSocketRuntime => needsSocketRuntime
     context -> diagnostics.usesDnsRuntime => needsDnsRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context -> diagnostics.usesAsyncRuntime => needsAsyncRuntime
     context.usesConcurrentStreamJoins => needsConcurrentStreamJoins
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
@@ -1082,6 +1146,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
         runtimeSymbols -> llvmRuntime.emitLinux
+        needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitLinuxRuntime }
     }
     needsSourceTextRuntime -> if {
         not needsProcessRuntime and not needsOwnedFileRuntime

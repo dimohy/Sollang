@@ -1080,6 +1080,18 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     poll_error:
       ret %sollang.process_poll_result { i32 0, i32 2 }
     }
+    define internal i1 @sollang_kill_process(i64 %token) {
+    entry:
+      %valid = icmp ne i64 %token, 0
+      br i1 %valid, label %terminate, label %failure
+    terminate:
+      %handle = inttoptr i64 %token to ptr
+      %terminated = call i32 @TerminateProcess(ptr %handle, i32 1)
+      %succeeded = icmp ne i32 %terminated, 0
+      ret i1 %succeeded
+    failure:
+      ret i1 false
+    }
     define internal void @sollang_drop_process_child(i64 %token) {
     entry:
       %valid = icmp ne i64 %token, 0
@@ -1696,6 +1708,18 @@ public emitLinuxProcessRuntime hasCloseDeclaration: Bool -> Unit uses Console {
       ret %sollang.process_poll_result { i32 0, i32 0 }
     poll_error:
       ret %sollang.process_poll_result { i32 0, i32 2 }
+    }
+    define internal i1 @sollang_kill_process(i64 %token) {
+    entry:
+      %pid = trunc i64 %token to i32
+      %valid = icmp sgt i32 %pid, 0
+      br i1 %valid, label %terminate, label %failure
+    terminate:
+      %killed = call i32 @kill(i32 %pid, i32 9)
+      %succeeded = icmp eq i32 %killed, 0
+      ret i1 %succeeded
+    failure:
+      ret i1 false
     }
     define internal void @sollang_drop_process_child(i64 %token) {
     entry:

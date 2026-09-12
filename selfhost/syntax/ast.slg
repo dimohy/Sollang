@@ -31,8 +31,9 @@ struct LowerRequest {
 
 # The generated grammar deliberately recognizes a complete stream chain as one
 # block-function statement.  Semantic lowering is simpler and fully general
-# when every stage owns its callback and the preceding stage is its source, so
-# split that flat syntax node into nested kind-48 nodes before symbol creation.
+# when every stage owns its target, arguments, and optional callback while the
+# preceding stage is its source, so split that flat syntax node into nested
+# kind-48 nodes before symbol creation.
 #
 # No source text is copied.  Synthetic nodes retain token/span indexes into the
 # original source and only the small flat AST arena grows.
@@ -72,7 +73,12 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
                 tokenIndex! + 1 => tokenIndex!
             }
 
-            (arrows! -> len) > 1 and stageBodyCount! > 1
+            # A single callback can still have ordinary call stages before it
+            # (`input -> values(flags) -> each value { ... }`).  Split every
+            # multi-stage callback pipeline so the preceding call owns an AST
+            # node and semantic call result instead of being guessed from its
+            # rightmost argument expression.
+            (arrows! -> len) > 1 and stageBodyCount! > 0
                 -> if {
                     [Int; ~] => stageNodes!
                     0 => stageIndex!
@@ -176,6 +182,11 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
                             (roleNames! -> len) > 0 -> if {
                                 roleNames![0] => stage!.tertiaryToken
                             }
+                            # A preceding ordinary call has a target and optional
+                            # arguments but no callback body.  Model it as a normal
+                            # flow expression so ownership validation does not
+                            # mistake its owned result for an unbound block result.
+                            not roleBodyReached! -> if { 10 => stage!.kind }
                             # Additional callback inputs (scan and future arities)
                             # are ordinary synthetic parameter AST nodes.
                             1 => additionalRoleIndex!

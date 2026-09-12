@@ -2988,6 +2988,10 @@ internal sealed partial class SemanticCompiler
                 function,
                 inputType,
                 returnType),
+            "sys.process.killChild" => RequireProcessKillChildIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
             "sys.process.Child.id" => RequireProcessChildIdIntrinsicSignature(
                 function,
                 inputType,
@@ -4114,6 +4118,22 @@ internal sealed partial class SemanticCompiler
                 $"intrinsic '{function.Name}' must have signature UInt64 -> ChildPoll");
         }
         return BoundFunctionKind.RuntimePollChildProcess;
+    }
+
+    private BoundFunctionKind RequireProcessKillChildIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType != BoundType.UInt64
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || returnType != BoundType.Bool)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature UInt64 -> Bool");
+        }
+        return BoundFunctionKind.RuntimeKillChildProcess;
     }
 
     private BoundFunctionKind RequireProcessChildIdIntrinsicSignature(
@@ -10288,6 +10308,7 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeSpawnProcess:
                     case BoundFunctionKind.RuntimeWaitProcess:
                     case BoundFunctionKind.RuntimePollChildProcess:
+                    case BoundFunctionKind.RuntimeKillChildProcess:
                     case BoundFunctionKind.RuntimeChildProcessId:
                     case BoundFunctionKind.RuntimeProcessIdValue:
                     case BoundFunctionKind.RuntimeReadDirectory:
@@ -11799,6 +11820,7 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeSpawnProcess:
             case BoundFunctionKind.RuntimeWaitProcess:
             case BoundFunctionKind.RuntimePollChildProcess:
+            case BoundFunctionKind.RuntimeKillChildProcess:
             case BoundFunctionKind.RuntimeChildProcessId:
             case BoundFunctionKind.RuntimeProcessIdValue:
             case BoundFunctionKind.RuntimeSyncFile:
@@ -13617,7 +13639,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeCollectProcess
                 or BoundFunctionKind.RuntimeSpawnProcess
                 or BoundFunctionKind.RuntimeWaitProcess
-                or BoundFunctionKind.RuntimePollChildProcess => ["Process"],
+                or BoundFunctionKind.RuntimePollChildProcess
+                or BoundFunctionKind.RuntimeKillChildProcess => ["Process"],
             BoundFunctionKind.RuntimeRunProcessToFile => ["Process", "File"],
             BoundFunctionKind.RuntimeEnvironment => ["Environment"],
             BoundFunctionKind.RuntimeOpenIntWriter

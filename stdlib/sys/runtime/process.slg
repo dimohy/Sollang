@@ -52,6 +52,22 @@ impl Child {
         }
     }
 
+    # Requests forced termination without consuming or reaping the owner. The
+    # existing wait/tryWait path remains the single authority that observes and
+    # caches terminal state, so successful kill never closes the native token.
+    public kill: mut self -> Result<Unit, Text> uses Process {
+        self.completionState -> when {
+            == 0 {
+                self.token -> killChild -> if {
+                    Result<Unit, Text>.Ok
+                } else {
+                    Result<Unit, Text>.Err("kill")
+                }
+            }
+            else { Result<Unit, Text>.Ok }
+        }
+    }
+
     public wait: move self -> Result<ExitStatus, Text> uses Process = intrinsic
 }
 
@@ -63,3 +79,5 @@ impl ProcessId {
 public exit code: Int -> Unit uses Process = intrinsic
 
 pollChild token: UInt64 -> ChildPoll uses Process = intrinsic
+
+killChild token: UInt64 -> Bool uses Process = intrinsic

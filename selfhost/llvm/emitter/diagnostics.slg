@@ -539,6 +539,18 @@ public usesParallelBranches context: ref emitterContext.EmitContext -> Bool {
     usesParallelBranch!
 }
 
+public usesAsyncRuntime context: ref emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        node.opcode == -113 or node.flags / 8 % 2 == 1
+            -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
 public usesProcessRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
@@ -3611,7 +3623,9 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
             "; sollang semantic error: duplicate struct initializer field (source $(failure.sourceModule)); initialize each declared field exactly once" -> println
         }
         failure.code == 3 -> if {
-            "; sollang semantic error: struct initializer field type mismatch (source $(failure.sourceModule), field $(failure.fieldOrdinal)); match the declared field type and ownership" -> println
+            context.ranges[failure.sourceModule] => range
+            context.nodes[range.astStart + failure.astNode] => initializer
+            "; sollang semantic error: struct initializer field type mismatch (source $(failure.sourceModule), field $(failure.fieldOrdinal)); match the declared field type and ownership; source span byte $(initializer.start), length $(initializer.length)" -> println
         }
         failure.code == 4 -> if {
             "; sollang semantic error: struct initializer field count mismatch (source $(failure.sourceModule)); initialize each declared field exactly once" -> println

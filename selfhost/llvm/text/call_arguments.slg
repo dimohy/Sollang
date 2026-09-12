@@ -1584,56 +1584,60 @@ writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: In
 }
 writeCallResultPrefix callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
-    call -> targetsNativeTry(context, state) => nativeTryCall
-    nativeTryCall -> if {
-        "  %native_try_status_$(callIndex) = call i32" -> print
+    (call.flags / 8) % 2 == 1 -> if {
+        "  %v$(callIndex) = call %sollang.task" -> print
     } else {
-        false => nativeAggregateResult!
-        0 => nativeAggregateWidth!
-        (call -> targetsNativeFunction(context, state)) and call.typeId >= 0
-            -> if {
-                context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0) => nativeAggregateResult!
-                nativeAggregateResult! and context.expectedPathStyle == 1
-                    -> if { call.typeId -> nativeWindowsDirectAggregateWidth(context, state) => nativeAggregateWidth! }
-            }
-        nativeAggregateResult! -> if {
-            context.expectedPathStyle == 1 -> if {
-                nativeAggregateWidth! > 0 -> if {
-                    "  %native_result_bits_$(callIndex) = call i$(nativeAggregateWidth!)" -> print
+        call -> targetsNativeTry(context, state) => nativeTryCall
+        nativeTryCall -> if {
+            "  %native_try_status_$(callIndex) = call i32" -> print
+        } else {
+            false => nativeAggregateResult!
+            0 => nativeAggregateWidth!
+            (call -> targetsNativeFunction(context, state)) and call.typeId >= 0
+                -> if {
+                    context -> diagnostics.nativeAbiStructTypeSafe(call.typeId, 0) => nativeAggregateResult!
+                    nativeAggregateResult! and context.expectedPathStyle == 1
+                        -> if { call.typeId -> nativeWindowsDirectAggregateWidth(context, state) => nativeAggregateWidth! }
+                }
+            nativeAggregateResult! -> if {
+                context.expectedPathStyle == 1 -> if {
+                    nativeAggregateWidth! > 0 -> if {
+                        "  %native_result_bits_$(callIndex) = call i$(nativeAggregateWidth!)" -> print
+                    } else {
+                        "  call void" -> print
+                    }
                 } else {
-                    "  call void" -> print
+                    call.typeId -> nativeSysVAggregateIndirect(context, state)
+                        -> if {
+                            "  call void" -> print
+                        } else {
+                            "  %native_result_bits_$(callIndex) = call " -> print
+                            context.typeSizes[call.typeId] > 8 -> if {
+                                "{ " -> print
+                                call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                                ", " -> print
+                                call.typeId -> writeNativeSysVCoercionType(1, context, state)
+                                " }" -> print
+                            } else {
+                                call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                            }
+                        }
                 }
             } else {
-                call.typeId -> nativeSysVAggregateIndirect(context, state)
+                call.typeOrigin == 1 and call.typeSymbol == 0
+                    -> if { "  call " -> print } else { "  %v$(callIndex) = call " -> print }
+                call -> targetsNativeFunction(context, state)
                     -> if {
-                        "  call void" -> print
-                    } else {
-                        "  %native_result_bits_$(callIndex) = call " -> print
-                        context.typeSizes[call.typeId] > 8 -> if {
-                            "{ " -> print
-                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
-                            ", " -> print
-                            call.typeId -> writeNativeSysVCoercionType(1, context, state)
-                            " }" -> print
-                        } else {
-                            call.typeId -> writeNativeSysVCoercionType(0, context, state)
+                        call.typeId >= 0 -> if {
+                            context.types[call.typeId] => nativeScalarResultType
+                            nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 3 or nativeScalarResultType.symbol == 4)
+                                -> if { "signext " -> print }
+                            nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 8 or nativeScalarResultType.symbol == 9)
+                                -> if { "zeroext " -> print }
                         }
                     }
+                call -> writeIrType(context, state)
             }
-        } else {
-            call.typeOrigin == 1 and call.typeSymbol == 0
-                -> if { "  call " -> print } else { "  %v$(callIndex) = call " -> print }
-            call -> targetsNativeFunction(context, state)
-                -> if {
-                    call.typeId >= 0 -> if {
-                        context.types[call.typeId] => nativeScalarResultType
-                        nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 3 or nativeScalarResultType.symbol == 4)
-                            -> if { "signext " -> print }
-                        nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 8 or nativeScalarResultType.symbol == 9)
-                            -> if { "zeroext " -> print }
-                    }
-                }
-            call -> writeIrType(context, state)
         }
     }
 }

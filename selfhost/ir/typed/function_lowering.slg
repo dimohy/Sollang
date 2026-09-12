@@ -1067,19 +1067,25 @@ repairEnumMatchSubjectsFromControlBindings results: mut [TypedIrNode; ~], types:
     0 => readIndex!
     readIndex! < (results -> len) -> while {
         results[readIndex!] => read
-        read.kind == 5
-            and read.operand0 >= 0
-            and read.operand0 < (results -> len)
-            and results[read.operand0].kind == 17
-            and results[read.operand0].flags != 1
-            and results[read.operand0].operand0 >= 0
-            and results[read.operand0].operand0 < (results -> len)
-            and (results[results[read.operand0].operand0].kind == 18
-            or results[results[read.operand0].operand0].kind == 27
-            or results[results[read.operand0].operand0].kind == 33
-            or results[results[read.operand0].operand0].kind == 34)
-            and read.typeId >= 0
-            and read.typeId < (types -> len)
+        false => directControlSubject!
+        read.kind == 5 and read.operand0 >= 0 and read.operand0 < (results -> len)
+            -> if {
+                results[read.operand0] => subjectBinding
+                subjectBinding.kind == 29 -> if {
+                    true => directControlSubject!
+                } else {
+                    subjectBinding.kind == 17
+                        and subjectBinding.flags != 1
+                        and subjectBinding.operand0 >= 0
+                        and subjectBinding.operand0 < (results -> len)
+                        and (results[subjectBinding.operand0].kind == 18
+                        or results[subjectBinding.operand0].kind == 27
+                        or results[subjectBinding.operand0].kind == 33
+                        or results[subjectBinding.operand0].kind == 34)
+                        -> if { true => directControlSubject! }
+                }
+            }
+        directControlSubject! and read.typeId >= 0 and read.typeId < (types -> len)
             -> if {
                 types[read.typeId] => readType
                 readType.kind == 1
@@ -1107,6 +1113,32 @@ repairEnumMatchSubjectsFromControlBindings results: mut [TypedIrNode; ~], types:
             }
         readIndex! + 1 => readIndex!
     }
+}
+
+# An enum payload binder may be attached directly to its arm or to the arm's
+# canonical pattern condition. Both shapes encode the same exact ownership edge;
+# resolve only that structural chain so payload sealing never depends on names or
+# source proximity.
+enumPayloadArmIndex payloadIndex: Int, nodes: ref [TypedIrNode; ~] -> Int {
+    -1 => armIndex!
+    payloadIndex >= 0 and payloadIndex < (nodes -> len) and nodes[payloadIndex].kind == 29
+        -> if {
+            nodes[payloadIndex].parent => payloadParent
+            payloadParent >= 0 and payloadParent < (nodes -> len)
+                -> if {
+                    nodes[payloadParent].kind == 19 -> if {
+                        payloadParent => armIndex!
+                    } else {
+                        nodes[payloadParent].kind == 8
+                            and nodes[payloadParent].operand0 == payloadIndex
+                            and nodes[payloadParent].parent >= 0
+                            and nodes[payloadParent].parent < (nodes -> len)
+                            and nodes[nodes[payloadParent].parent].kind == 19
+                            -> if { nodes[payloadParent].parent => armIndex! }
+                    }
+                }
+        }
+    armIndex!
 }
 
 intrinsicResultTypeId candidateTypeId: Int, types: ref [typeIds.SemanticType; ~] -> Int {
@@ -1420,9 +1452,10 @@ sealNominalEnumPayloadsByArmTags results: mut [TypedIrNode; ~], types: ref [type
     0 => payloadIndex!
     payloadIndex! < (results -> len) -> while {
         results[payloadIndex!] => payload!
-        payload!.kind == 29 and payload!.parent >= 0 and payload!.parent < (results -> len)
-            -> if {
-                results[payload!.parent] => arm
+        payload!.kind == 29 -> if {
+            payloadIndex! -> enumPayloadArmIndex(results) => payloadArmIndex
+            payloadArmIndex >= 0 -> if {
+                results[payloadArmIndex] => arm
                 arm.kind == 19 and arm.opcode >= 0 and arm.parent >= 0 and arm.parent < (results -> len)
                     and results[arm.parent].kind == 27
                     -> if {
@@ -1441,6 +1474,7 @@ sealNominalEnumPayloadsByArmTags results: mut [TypedIrNode; ~], types: ref [type
                             }
                     }
             }
+        }
         payloadIndex! + 1 => payloadIndex!
     }
     0 => referenceIndex!
@@ -3345,48 +3379,49 @@ sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared
     finalProjectedPayloadIndex! < (nodes -> len)
         -> while {
             nodes[finalProjectedPayloadIndex!] => finalProjectedPayload!
-            finalProjectedPayload!.kind == 29
-                and finalProjectedPayload!.parent >= 0
-                and nodes[finalProjectedPayload!.parent].kind == 19
-                and nodes[finalProjectedPayload!.parent].parent >= 0
-                and nodes[nodes[finalProjectedPayload!.parent].parent].kind == 27
-                -> if {
-                    nodes[finalProjectedPayload!.parent] => finalProjectedPayloadArm
-                    nodes[finalProjectedPayloadArm.parent] => finalProjectedPayloadMatch
-                    -1 => finalProjectedPayloadTypeId!
-                    finalProjectedPayloadMatch.operand0 >= 0
-                        and nodes[finalProjectedPayloadMatch.operand0].typeId >= 0
-                        -> if {
-                            frozenRecursiveSemanticTypes[nodes[finalProjectedPayloadMatch.operand0].typeId]
-                                => finalProjectedPayloadSubjectType
-                            finalProjectedPayloadSubjectType.kind == 7
-                                and finalProjectedPayloadSubjectType.origin == 4
-                                -> if {
-                                    finalProjectedPayloadSubjectType.symbol == 0 -> if {
-                                        finalProjectedPayloadSubjectType.first => finalProjectedPayloadTypeId!
-                                    }
-                                    finalProjectedPayloadSubjectType.symbol == 1 -> if {
-                                        finalProjectedPayloadArm.opcode == 0 -> if {
+            finalProjectedPayload!.kind == 29 -> if {
+                finalProjectedPayloadIndex! -> enumPayloadArmIndex(nodes) => finalProjectedPayloadArmIndex
+                finalProjectedPayloadArmIndex >= 0
+                    and nodes[finalProjectedPayloadArmIndex].parent >= 0
+                    and nodes[nodes[finalProjectedPayloadArmIndex].parent].kind == 27
+                    -> if {
+                        nodes[finalProjectedPayloadArmIndex] => finalProjectedPayloadArm
+                        nodes[finalProjectedPayloadArm.parent] => finalProjectedPayloadMatch
+                        -1 => finalProjectedPayloadTypeId!
+                        finalProjectedPayloadMatch.operand0 >= 0
+                            and nodes[finalProjectedPayloadMatch.operand0].typeId >= 0
+                            -> if {
+                                frozenRecursiveSemanticTypes[nodes[finalProjectedPayloadMatch.operand0].typeId]
+                                    => finalProjectedPayloadSubjectType
+                                finalProjectedPayloadSubjectType.kind == 7
+                                    and finalProjectedPayloadSubjectType.origin == 4
+                                    -> if {
+                                        finalProjectedPayloadSubjectType.symbol == 0 -> if {
                                             finalProjectedPayloadSubjectType.first => finalProjectedPayloadTypeId!
-                                        } else {
-                                            finalProjectedPayloadSubjectType.second => finalProjectedPayloadTypeId!
+                                        }
+                                        finalProjectedPayloadSubjectType.symbol == 1 -> if {
+                                            finalProjectedPayloadArm.opcode == 0 -> if {
+                                                finalProjectedPayloadSubjectType.first => finalProjectedPayloadTypeId!
+                                            } else {
+                                                finalProjectedPayloadSubjectType.second => finalProjectedPayloadTypeId!
+                                            }
                                         }
                                     }
-                                }
-                        }
-                    finalProjectedPayloadTypeId! >= 0
-                        and finalProjectedPayloadTypeId! < (frozenRecursiveSemanticTypes -> len)
-                        -> if {
-                            frozenRecursiveSemanticTypes[finalProjectedPayloadTypeId!] => finalProjectedPayloadType
-                            finalProjectedPayloadTypeId! => finalProjectedPayload!.typeId
-                            finalProjectedPayloadType.kind => finalProjectedPayload!.typeKind
-                            finalProjectedPayloadType.origin => finalProjectedPayload!.typeOrigin
-                            finalProjectedPayloadType.module => finalProjectedPayload!.typeModule
-                            finalProjectedPayloadType.symbol => finalProjectedPayload!.typeSymbol
-                            recursiveTypeFlags[finalProjectedPayloadTypeId!] => finalProjectedPayload!.typeFlags
-                            finalProjectedPayload! => nodes[finalProjectedPayloadIndex!]
-                        }
-                }
+                            }
+                        finalProjectedPayloadTypeId! >= 0
+                            and finalProjectedPayloadTypeId! < (frozenRecursiveSemanticTypes -> len)
+                            -> if {
+                                frozenRecursiveSemanticTypes[finalProjectedPayloadTypeId!] => finalProjectedPayloadType
+                                finalProjectedPayloadTypeId! => finalProjectedPayload!.typeId
+                                finalProjectedPayloadType.kind => finalProjectedPayload!.typeKind
+                                finalProjectedPayloadType.origin => finalProjectedPayload!.typeOrigin
+                                finalProjectedPayloadType.module => finalProjectedPayload!.typeModule
+                                finalProjectedPayloadType.symbol => finalProjectedPayload!.typeSymbol
+                                recursiveTypeFlags[finalProjectedPayloadTypeId!] => finalProjectedPayload!.typeFlags
+                                finalProjectedPayload! => nodes[finalProjectedPayloadIndex!]
+                            }
+                    }
+            }
             finalProjectedPayloadIndex! + 1 => finalProjectedPayloadIndex!
         }
     0 => finalProjectedPayloadReadIndex!

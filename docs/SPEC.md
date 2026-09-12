@@ -1165,8 +1165,11 @@ moves that owner into a real asynchronous Task and returns the next owner in a
 ticks, `Skip` advances to the next aligned tick, and `Delay` schedules from the
 observed wake time. `cancel(move self)` and `close(move self)` explicitly end an
 idle schedule, while cancellation of an in-flight wait consumes its Task.
-Browser targets reject this async surface rather than blocking. Self-host async
-parity and network/process deadline consumers remain unfinished slices.
+Browser targets reject this async surface rather than blocking. The
+current-source self-host candidate executes the focused zero-parameter
+`Duration.sleep`/`await` slice through an affine Task and scheduler-owned timer
+queue. General self-host async state-machine parity and network/process deadline
+consumers remain unfinished slices.
 
 `sleep` registers its Task in the executor's deadline-ordered timer queue. It
 does not allocate an OS thread and does not remain in the runnable queue. When
@@ -1179,10 +1182,14 @@ task groups, closure-capture analysis, and failure propagation follow.
 Postfix `?` inside an `async Result<T, E>` function completes the affine Task
 with the fully constructed `Err(E)`. The internal readiness worker stores that
 Result in the Task context and returns `true`; it never returns the enum through
-the worker's Boolean readiness ABI. The managed Windows/Linux backend
-implements this contract; the browser target rejects async functions. The self-host LLVM backend still
-lacks the equivalent structured-async scheduler and must not claim parity
-merely because a synchronous lowering happens to print the same output.
+the worker's Boolean readiness ABI. The managed Windows/Linux backend implements
+this complete contract; the browser target rejects async functions. The
+self-host LLVM candidate currently implements only the focused zero-parameter
+async function plus canonical `Duration.sleep`/`await` Task boundary. Parameters
+and captures, multiple suspension states, typed spills and resume, fallible
+completion, cancellation ownership, and platform differential execution remain
+required before claiming self-host parity. Synchronous output equivalence alone
+is never async evidence.
 
 ## Local Functions
 
@@ -3205,9 +3212,17 @@ identifier. `ProcessId` is observational data rather than an ownership or
 signalling capability, and its number may be reused by the host after the child
 is reaped. An unconsumed `Child` remains attached to its lexical owner;
 scope exit kills and reaps it before releasing the platform handle or PID.
+`child! -> kill` mutably borrows that owner and requests forced termination
+without waiting, reaping, closing, clearing, or copying its native token.
+Windows uses `TerminateProcess`; Linux sends `SIGKILL`. Success means that the
+host accepted the termination request, not that terminal state has already been
+observed. `tryWait(mut)` or `wait(move)` remains the single reap authority. A
+terminal state already cached by `tryWait` makes a later `kill` an idempotent
+success without another host call. An invalid token or rejected request returns
+`Err("kill")` and leaves the owner available for a later wait or lexical cleanup.
 After `wait(move)`, a second use is a compile-time ownership error with guidance
 to retain a returned owner, borrow before moving, or create a new owner.
-`Err("spawn")`, `Err("wait")`,
+`Err("spawn")`, `Err("kill")`, `Err("wait")`,
 and `Err("signal")` distinguish host launch failure, wait failure, and POSIX
 signal termination. The argv owner remains valid and is dropped normally after
 the runtime call; the `Command` itself is consumed. `statusToFile` has the same

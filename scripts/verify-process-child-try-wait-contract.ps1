@@ -48,7 +48,8 @@ Assert-Contains 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs' 'br
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs' '@waitpid(i32 %pid, ptr %status_slot, i32 1)' 'Linux WNOHANG poll'
 Assert-Contains 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs' '%interrupted = icmp eq i32 %errno, 4' 'Linux EINTR retry'
 Assert-Contains 'selfhost/ir/typed.slg' 'opcode == -308' 'selfhost process poll opcode'
-Assert-Contains 'selfhost/ir/typed/resolved_context_normalize_phases.slg' "processCall!.symbol == processPollChildSymbol!`n                        -> if { -308 => processCall!.opcode }" 'selfhost poll binding'
+Assert-Contains 'selfhost/ir/typed/resolved_context_normalize_phases.slg' 'resolvedProcessRuntimeOpcode call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {' 'selfhost exact process-runtime resolver'
+Assert-Contains 'selfhost/ir/typed/resolved_context_normalize_phases.slg' "targetSource -> sourceMatches(targetName.span.start, targetName.span.length, `"pollChild`")`n                                    -> if { -308 => opcode! }" 'selfhost poll binding'
 Assert-Contains 'selfhost/llvm/text/platform_io.slg' '@sollang_poll_process' 'selfhost poll lowering'
 
 foreach ($fixture in $contract.fixtures) {

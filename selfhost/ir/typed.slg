@@ -174,7 +174,23 @@ public mapExpressionClauseFlags opcode: Int, operandCount: Int -> Int {
 # self-host lowering is an aggregate field extraction, never a wrapper call.
 public isProcessProjectionOpcode opcode: Int -> Bool => opcode == -285 or opcode == -286
 
-public isProcessExecutionOpcode opcode: Int -> Bool => opcode == -210 or opcode == -211 or opcode == -277 or opcode == -278 or opcode == -288 or opcode == -308
+public isProcessExecutionOpcode opcode: Int -> Bool => opcode == -210 or opcode == -211 or opcode == -277 or opcode == -278 or opcode == -288 or opcode == -308 or opcode == -309
+
+# Built-in runtime calls have no source declaration from which the ordinary
+# function-result resolver can recover a type. Keep their value contract in
+# one authority shared by entry and ordinary-function lowering. Async calls
+# retain the underlying result type here; the async bit identifies the Task
+# boundary until await consumes it.
+public builtinRuntimeCallResultTypeSymbol functionSymbol: Int -> Int {
+    -1 => result!
+    functionSymbol == -103 or functionSymbol == -105 or functionSymbol == -110 or functionSymbol == -115
+        -> if { 2 => result! }
+    functionSymbol == -112 -> if { 9 => result! }
+    functionSymbol == -113 -> if { 0 => result! }
+    result!
+}
+
+public builtinRuntimeCallIsAsync functionSymbol: Int -> Bool => functionSymbol == -113
 
 integerTypeRank symbol: Int -> Int {
     0 => rank!
@@ -1044,6 +1060,10 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
     results! -> sealResolvedContext(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, runtimeSymbols) => finalWrappedValueByNode
     profileStopAfter == 2 -> if { results! -> return }
     results! -> finalizeResolvedContext(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, runtimeSymbols, finalWrappedValueByNode)
+    # Finalization can establish a cross-fragment intrinsic target after the
+    # normal normalization phases. Seal process opcodes from that exact target
+    # before the immutable Typed IR crosses into LLVM emission.
+    results! -> normalizeResolvedProcessRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences!, recursiveTypeFlags)
     results!
 }
 

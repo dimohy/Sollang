@@ -32,6 +32,112 @@ import syntax.generated.slg as grammar
 import sys.file as file
 import sys.runtime as runtime
 
+isAwaitSourceNode nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    nodeIndex >= 0 and nodeIndex < (context.ir -> len)
+        -> if {
+            context.ir[nodeIndex] => node
+            node.kind == 5 and node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len) and node.astNode >= 0
+                -> if {
+                    context.ranges[node.sourceModule] => range
+                    node.astNode < range.astCount
+                        -> if { context.awaitSourceByAst[range.astStart + node.astNode] -> return }
+                }
+        }
+    false
+}
+
+awaitTaskProducer nodeIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    context.ir[nodeIndex].operand0 => producerIndex!
+    0 => depth!
+    producerIndex! >= 0 and producerIndex! < (context.ir -> len) and depth! < 4
+        -> while {
+            context.ir[producerIndex!] => producer
+            (producer.flags / 8) % 2 == 1 and (producer.kind == 6 or producer.kind == 9)
+                -> if {
+                    4 => depth!
+                } else {
+                    (producer.kind == 5 or producer.kind == 17) and producer.operand0 >= 0
+                        -> if {
+                            producer.operand0 => producerIndex!
+                            depth! + 1 => depth!
+                        } else {
+                            -1 => producerIndex!
+                            4 => depth!
+                        }
+                }
+        }
+    producerIndex!
+}
+
+emitAwaitTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodeIndex -> isAwaitSourceNode(context) -> if {
+        nodeIndex -> awaitTaskProducer(context) => producerIndex
+        producerIndex >= 0 -> if {
+            context.ir[nodeIndex] => awaited
+            "  %v$(nodeIndex)_task_handle = extractvalue %sollang.task %v$(producerIndex), 0" -> println
+            "  %v$(nodeIndex)_task_context = extractvalue %sollang.task %v$(producerIndex), 1" -> println
+            "  %v$(nodeIndex)_task_joined = call i1 @sollang_task_join(ptr %v$(nodeIndex)_task_handle)" -> println
+            "  br i1 %v$(nodeIndex)_task_joined, label %await$(nodeIndex)_joined, label %await$(nodeIndex)_failed" -> println
+            "await$(nodeIndex)_failed:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "await$(nodeIndex)_joined:" -> println
+            not (awaited.typeOrigin == 1 and awaited.typeSymbol == 0)
+                -> if {
+                    "  %v$(nodeIndex) = load " -> print
+                    awaited -> writeIrType(context, state)
+                    ", ptr %v$(nodeIndex)_task_context, align " -> print
+                    awaited -> storageAlign(context, state) -> writeDecimalLine
+                }
+            "  %v$(nodeIndex)_task_released = call i1 @sollang_task_release(ptr %v$(nodeIndex)_task_handle)" -> println
+            "  br i1 %v$(nodeIndex)_task_released, label %await$(nodeIndex)_released, label %await$(nodeIndex)_release_failed" -> println
+            "await$(nodeIndex)_release_failed:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "await$(nodeIndex)_released:" -> println
+        }
+    }
+}
+
+emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[nodeIndex] => node
+    node.opcode == -113 and node.operand0 >= 0 -> if {
+        context.ir[node.operand0] => duration
+        "  %v$(nodeIndex)_sleep_millis = extractvalue " -> print
+        duration -> writeIrType(context, state)
+        " " -> print
+        node.operand0 -> writeValue(ownerIndex, context, state)
+        ", 0" -> println
+        "  %v$(nodeIndex)_sleep_positive = icmp sgt i64 %v$(nodeIndex)_sleep_millis, 0" -> println
+        "  %v$(nodeIndex)_sleep_normalized = select i1 %v$(nodeIndex)_sleep_positive, i64 %v$(nodeIndex)_sleep_millis, i64 0" -> println
+        "  %v$(nodeIndex)_sleep_now = call i64 @sollang_now_millis()" -> println
+        "  %v$(nodeIndex)_sleep_remaining = sub i64 9223372036854775807, %v$(nodeIndex)_sleep_now" -> println
+        "  %v$(nodeIndex)_sleep_too_large = icmp sgt i64 %v$(nodeIndex)_sleep_normalized, %v$(nodeIndex)_sleep_remaining" -> println
+        "  %v$(nodeIndex)_sleep_finite_deadline = add i64 %v$(nodeIndex)_sleep_now, %v$(nodeIndex)_sleep_normalized" -> println
+        "  %v$(nodeIndex)_sleep_deadline = select i1 %v$(nodeIndex)_sleep_too_large, i64 9223372036854775807, i64 %v$(nodeIndex)_sleep_finite_deadline" -> println
+        "  %v$(nodeIndex)_sleep_context = call ptr @malloc(i64 1)" -> println
+        "  %v$(nodeIndex)_sleep_allocated = icmp ne ptr %v$(nodeIndex)_sleep_context, null" -> println
+        "  br i1 %v$(nodeIndex)_sleep_allocated, label %sleep$(nodeIndex)_initialize, label %sleep$(nodeIndex)_allocation_failed" -> println
+        "sleep$(nodeIndex)_allocation_failed:" -> println
+        "  call void @llvm.trap()" -> println
+        "  unreachable" -> println
+        "sleep$(nodeIndex)_initialize:" -> println
+        "  store i8 0, ptr %v$(nodeIndex)_sleep_context, align 1" -> println
+        "  %v$(nodeIndex)_sleep_handle = call ptr @sollang_task_start(ptr @sollang_sleep_worker, ptr @free, ptr @sollang_sleep_cancel, ptr %v$(nodeIndex)_sleep_context)" -> println
+        "  %v$(nodeIndex)_sleep_started = icmp ne ptr %v$(nodeIndex)_sleep_handle, null" -> println
+        "  br i1 %v$(nodeIndex)_sleep_started, label %sleep$(nodeIndex)_ready, label %sleep$(nodeIndex)_start_failed" -> println
+        "sleep$(nodeIndex)_start_failed:" -> println
+        "  call void @free(ptr %v$(nodeIndex)_sleep_context)" -> println
+        "  call void @llvm.trap()" -> println
+        "  unreachable" -> println
+        "sleep$(nodeIndex)_ready:" -> println
+        "  %v$(nodeIndex)_sleep_deadline_slot = getelementptr %sollang.task_control, ptr %v$(nodeIndex)_sleep_handle, i32 0, i32 8" -> println
+        "  store i64 %v$(nodeIndex)_sleep_deadline, ptr %v$(nodeIndex)_sleep_deadline_slot, align 8" -> println
+        "  %v$(nodeIndex)_task_handle = insertvalue %sollang.task poison, ptr %v$(nodeIndex)_sleep_handle, 0" -> println
+        "  %v$(nodeIndex) = insertvalue %sollang.task %v$(nodeIndex)_task_handle, ptr %v$(nodeIndex)_sleep_context, 1" -> println
+    }
+}
+
 writeIfDirectBranchTargets expression: typedIr.TypedIrNode, expressionIndex: Int -> Unit uses Console {
     expression.opcode == -28 -> if {
         ", label %if$(expressionIndex)_merge, label %if$(expressionIndex)_then" -> println

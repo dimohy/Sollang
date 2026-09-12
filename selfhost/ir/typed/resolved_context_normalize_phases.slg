@@ -1314,159 +1314,190 @@ normalizeResolvedControls nodes: mut [TypedIrNode; ~], prepared: ref semanticCon
     }
 }
 
-normalizeResolvedProcessRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
-    # Imported process intrinsics are resolved by module and symbol identity,
-    # not by the surface token on the call expression. Preserve that identity
-    # as stable backend opcodes after all per-source IR has been merged.
-    -1 => processModuleSource!
-    0 => processModuleSearch!
-    processModuleSearch! < (prepared.modules -> len)
-        -> while {
-            prepared.modules[processModuleSearch!] => processModuleIdentity
-            processModuleIdentity.pathHash == 15528987723426532771
-                -> if { processModuleIdentity.sourceIndex => processModuleSource! }
-            processModuleSearch! + 1 => processModuleSearch!
-        }
-    -1 => processArgumentsSymbol!
-    -1 => processRunSymbol!
-    -1 => processRunToFileSymbol!
-    -1 => processCollectSymbol!
-    -1 => processSpawnSymbol!
-    -1 => processWaitSymbol!
-    -1 => processPollChildSymbol!
-    -1 => processChildIdSymbol!
-    -1 => processIdValueSymbol!
-    -1 => processExitSymbol!
-    -1 => processEnvironmentSymbol!
-    processModuleSource! >= 0 -> if {
-        prepared.package.ranges[processModuleSource!] => processSourceRange
-        prepared.package.sources[processModuleSource!] -> len => processSourceLength
-        prepared.package.sources[processModuleSource!] -> slice(UIntSize(0), processSourceLength) => processSource
-        0 => processSymbolSearch!
-        processSymbolSearch! < processSourceRange.symbolCount
-            -> while {
-                prepared.package.symbols[processSourceRange.symbolStart + processSymbolSearch!] => processSymbol
-                processSymbol.kind == 7 or processSymbol.kind == 31
+resolvedTimeRuntimeOpcode call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    -1 => opcode!
+    call.targetModule >= 0
+        and call.targetModule < (prepared.package.ranges -> len)
+        and call.symbol >= 0
+        -> if {
+            prepared.package.ranges[call.targetModule] => targetRange
+            call.symbol < targetRange.symbolCount -> if {
+                prepared.package.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
+                (targetSymbol.kind == 7 or targetSymbol.kind == 31)
+                    and targetSymbol.flags / 128 % 2 == 1
+                    and targetSymbol.nameToken >= 0
+                    and targetSymbol.nameToken < targetRange.tokenCount
                     -> if {
-                        prepared.package.tokens[processSourceRange.tokenStart + processSymbol.nameToken] => processNameToken
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "run")
-                            -> if { processSymbolSearch! => processRunSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "runToFile")
-                            -> if { processSymbolSearch! => processRunToFileSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "collect")
-                            -> if { processSymbolSearch! => processCollectSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "spawn")
-                            -> if { processSymbolSearch! => processSpawnSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "wait")
-                            -> if { processSymbolSearch! => processWaitSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "pollChild")
-                            -> if { processSymbolSearch! => processPollChildSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "id")
-                            -> if { processSymbolSearch! => processChildIdSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "asUInt64")
-                            -> if { processSymbolSearch! => processIdValueSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "exit")
-                            -> if { processSymbolSearch! => processExitSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "arguments")
-                            -> if { processSymbolSearch! => processArgumentsSymbol! }
-                        processSource -> sourceMatches(processNameToken.span.start, processNameToken.span.length, "environment")
-                            -> if { processSymbolSearch! => processEnvironmentSymbol! }
+                        prepared.package.sources[call.targetModule] -> len => targetSourceLength
+                        prepared.package.sources[call.targetModule]
+                            -> slice(UIntSize(0), targetSourceLength) => targetSource
+                        prepared.modules[call.targetModule] => targetIdentity
+                        targetSource -> sourceMatches(targetIdentity.pathStart, targetIdentity.pathLength, "std.time")
+                            -> if {
+                                prepared.package.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "sleep")
+                                    -> if { -113 => opcode! }
+                            }
                     }
-                processSymbolSearch! + 1 => processSymbolSearch!
             }
-        0 => processCallIndex!
-        processCallIndex! < (nodes -> len) -> while {
-            nodes[processCallIndex!] => processCall!
-            (processCall!.kind == 6 or processCall!.kind == 9) and processCall!.targetModule == processModuleSource!
-                -> if {
-                    processCall!.symbol == processArgumentsSymbol!
-                        -> if { -212 => processCall!.opcode }
-                    processCall!.symbol == processRunSymbol! -> if { -210 => processCall!.opcode }
-                    processCall!.symbol == processRunToFileSymbol!
-                        -> if { -211 => processCall!.opcode }
-                    processCall!.symbol == processCollectSymbol! -> if { -288 => processCall!.opcode }
-                    processCall!.symbol == processSpawnSymbol! -> if { -277 => processCall!.opcode }
-                    processCall!.symbol == processWaitSymbol! -> if { -278 => processCall!.opcode }
-                    processCall!.symbol == processPollChildSymbol!
-                        -> if { -308 => processCall!.opcode }
-                    processCall!.symbol == processChildIdSymbol! -> if { -285 => processCall!.opcode }
-                    processCall!.symbol == processIdValueSymbol! -> if { -286 => processCall!.opcode }
-                    processCall!.symbol == processExitSymbol! -> if { -222 => processCall!.opcode }
-                    processCall!.symbol == processEnvironmentSymbol!
-                        -> if { -235 => processCall!.opcode }
-                    (processCall!.opcode -> isProcessExecutionOpcode) or (processCall!.opcode -> isProcessProjectionOpcode)
-                        and processCall!.operand0 < 0
-                        and processCall!.sourceModule >= 0
-                        and processCall!.astNode >= 0 -> if {
-                            prepared.package.ranges[processCall!.sourceModule] => processCallRange
-                            prepared.package.nodes[processCallRange.astStart + processCall!.astNode] => processCallAst
-                            -1 => processInputSymbol!
-                            -1 => processInputToken!
-                            0 => processInputAstSearch!
-                            processInputAstSearch! < processCallRange.astCount
-                                -> while {
-                                    prepared.package.nodes[processCallRange.astStart + processInputAstSearch!] => processInputAst
-                                    processInputAst.parent == processCall!.astNode
-                                        and processInputAst.kind == 15
-                                        and processInputAst.start == processCallAst.start
-                                        -> if {
-                                            processInputAst.payloadToken => processInputToken!
-                                            0 => processInputNameSearch!
-                                            processInputNameSearch! < processCallRange.nameCount
-                                                -> while {
-                                                    prepared.package.names[processCallRange.nameStart + processInputNameSearch!] => processInputName
-                                                    processInputName.astNode == processInputAstSearch!
-                                                        -> if {
-                                                            processInputName.symbol => processInputSymbol!
-                                                        }
-                                                    processInputNameSearch! + 1 => processInputNameSearch!
-                                                }
-                                        }
-                                    processInputAstSearch! + 1 => processInputAstSearch!
-                                }
-                            processCallIndex! => processInputBindingSearch!
-                            processInputBindingSearch! > 0 and processCall!.operand0 < 0
-                                -> while {
-                                    processInputBindingSearch! - 1 => processInputBindingSearch!
-                                    nodes[processInputBindingSearch!] => processInputBinding
-                                    false => processInputBindingMatches!
-                                    processInputBinding.kind == 17
-                                        and processInputBinding.sourceModule == processCall!.sourceModule
-                                        and processInputSymbol! >= 0
-                                        and processInputBinding.symbol == processInputSymbol!
-                                        -> if {
-                                            true => processInputBindingMatches!
-                                        }
-                                    processInputBinding.kind == 17
-                                        and processInputBinding.sourceModule == processCall!.sourceModule
-                                        and processInputToken! >= 0
-                                        and processInputBinding.payloadToken >= 0 -> if {
-                                            prepared.package.tokens[processCallRange.tokenStart + processInputToken!] => processInputReferenceName
-                                            prepared.package.tokens[processCallRange.tokenStart + processInputBinding.payloadToken] => processInputBindingName
-                                            processInputReferenceName.span.length == processInputBindingName.span.length => processInputNameEqual!
-                                            UIntSize(0) => processInputNameByte!
-                                            processInputNameEqual! and processInputNameByte! < processInputReferenceName.span.length
-                                                -> while {
-                                                    (prepared.package.sources[processCall!.sourceModule] -> byte(processInputReferenceName.span.start + processInputNameByte!)) != (prepared.package.sources[processCall!.sourceModule] -> byte(processInputBindingName.span.start + processInputNameByte!))
-                                                        -> if {
-                                                            false => processInputNameEqual!
-                                                        }
-                                                    processInputNameByte! + 1 => processInputNameByte!
-                                                }
-                                            processInputNameEqual! -> if { true => processInputBindingMatches! }
-                                        }
-                                    processInputBindingMatches!
-                                        and processInputBinding.astNode >= 0
-                                        and prepared.package.nodes[processCallRange.astStart + processInputBinding.astNode].start <= processCallAst.start
-                                        -> if {
-                                            processInputBindingSearch! => processCall!.operand0
-                                        }
-                                }
-                        }
-                    processCall! => nodes[processCallIndex!]
-                }
-            processCallIndex! + 1 => processCallIndex!
         }
+    opcode!
+}
+
+normalizeResolvedTimeRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    # The stdlib-aware resolver retains the exact declared intrinsic identity.
+    # Convert only std.time's intrinsic sleep declaration; an unrelated method
+    # with the same spelling remains an ordinary user call.
+    0 => timeCallIndex!
+    timeCallIndex! < (nodes -> len) -> while {
+        nodes[timeCallIndex!] => timeCall!
+        timeCall!.kind == 6 or timeCall!.kind == 9
+            -> if {
+                timeCall! -> resolvedTimeRuntimeOpcode(prepared) => timeOpcode
+                timeOpcode == -113 -> if {
+                    timeOpcode => timeCall!.opcode
+                    (timeCall!.flags / 8) % 2 == 0 -> if { timeCall!.flags + 8 => timeCall!.flags }
+                    timeCall! => nodes[timeCallIndex!]
+                }
+            }
+        timeCallIndex! + 1 => timeCallIndex!
+    }
+}
+
+resolvedProcessRuntimeOpcode call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    -1 => opcode!
+    call.targetModule >= 0
+        and call.targetModule < (prepared.modules -> len)
+        and call.symbol >= 0
+        -> if {
+            prepared.package.ranges[call.targetModule] => targetRange
+            call.symbol < targetRange.symbolCount -> if {
+                prepared.package.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
+                (targetSymbol.kind == 7 or targetSymbol.kind == 31)
+                    and targetSymbol.nameToken >= 0
+                    and targetSymbol.nameToken < targetRange.tokenCount
+                    -> if {
+                        prepared.package.sources[call.targetModule] -> len => targetSourceLength
+                        prepared.package.sources[call.targetModule]
+                            -> slice(UIntSize(0), targetSourceLength) => targetSource
+                        prepared.modules[call.targetModule] => targetIdentity
+                        targetSource -> sourceMatches(targetIdentity.pathStart, targetIdentity.pathLength, "sys.process")
+                            -> if {
+                                prepared.package.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "run")
+                                    -> if { -210 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "runToFile")
+                                    -> if { -211 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "collect")
+                                    -> if { -288 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "spawn")
+                                    -> if { -277 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "wait")
+                                    -> if { -278 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "pollChild")
+                                    -> if { -308 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "killChild")
+                                    -> if { -309 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "id")
+                                    -> if { -285 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "asUInt64")
+                                    -> if { -286 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "exit")
+                                    -> if { -222 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "arguments")
+                                    -> if { -212 => opcode! }
+                                targetSource -> sourceMatches(targetName.span.start, targetName.span.length, "environment")
+                                    -> if { -235 => opcode! }
+                            }
+                    }
+            }
+        }
+    opcode!
+}
+
+normalizeResolvedProcessRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+    # Resolve every process intrinsic from the exact physical target fragment.
+    # A namespace can span several files, so one representative source cannot
+    # authoritatively provide every declaration's source-local symbol.
+    0 => processCallIndex!
+    processCallIndex! < (nodes -> len) -> while {
+        nodes[processCallIndex!] => processCall!
+        processCall!.kind == 6 or processCall!.kind == 9
+            -> if {
+                processCall! -> resolvedProcessRuntimeOpcode(prepared) => processOpcode
+                processOpcode != -1 -> if { processOpcode => processCall!.opcode }
+                (processCall!.opcode -> isProcessExecutionOpcode) or (processCall!.opcode -> isProcessProjectionOpcode)
+                    and processCall!.operand0 < 0
+                    and processCall!.sourceModule >= 0
+                    and processCall!.astNode >= 0 -> if {
+                        prepared.package.ranges[processCall!.sourceModule] => processCallRange
+                        prepared.package.nodes[processCallRange.astStart + processCall!.astNode] => processCallAst
+                        -1 => processInputSymbol!
+                        -1 => processInputToken!
+                        0 => processInputAstSearch!
+                        processInputAstSearch! < processCallRange.astCount
+                            -> while {
+                                prepared.package.nodes[processCallRange.astStart + processInputAstSearch!] => processInputAst
+                                processInputAst.parent == processCall!.astNode
+                                    and processInputAst.kind == 15
+                                    and processInputAst.start == processCallAst.start
+                                    -> if {
+                                        processInputAst.payloadToken => processInputToken!
+                                        0 => processInputNameSearch!
+                                        processInputNameSearch! < processCallRange.nameCount
+                                            -> while {
+                                                prepared.package.names[processCallRange.nameStart + processInputNameSearch!] => processInputName
+                                                processInputName.astNode == processInputAstSearch!
+                                                    -> if {
+                                                        processInputName.symbol => processInputSymbol!
+                                                    }
+                                                processInputNameSearch! + 1 => processInputNameSearch!
+                                            }
+                                    }
+                                processInputAstSearch! + 1 => processInputAstSearch!
+                            }
+                        processCallIndex! => processInputBindingSearch!
+                        processInputBindingSearch! > 0 and processCall!.operand0 < 0
+                            -> while {
+                                processInputBindingSearch! - 1 => processInputBindingSearch!
+                                nodes[processInputBindingSearch!] => processInputBinding
+                                false => processInputBindingMatches!
+                                processInputBinding.kind == 17
+                                    and processInputBinding.sourceModule == processCall!.sourceModule
+                                    and processInputSymbol! >= 0
+                                    and processInputBinding.symbol == processInputSymbol!
+                                    -> if {
+                                        true => processInputBindingMatches!
+                                    }
+                                processInputBinding.kind == 17
+                                    and processInputBinding.sourceModule == processCall!.sourceModule
+                                    and processInputToken! >= 0
+                                    and processInputBinding.payloadToken >= 0 -> if {
+                                        prepared.package.tokens[processCallRange.tokenStart + processInputToken!] => processInputReferenceName
+                                        prepared.package.tokens[processCallRange.tokenStart + processInputBinding.payloadToken] => processInputBindingName
+                                        processInputReferenceName.span.length == processInputBindingName.span.length => processInputNameEqual!
+                                        UIntSize(0) => processInputNameByte!
+                                        processInputNameEqual! and processInputNameByte! < processInputReferenceName.span.length
+                                            -> while {
+                                                (prepared.package.sources[processCall!.sourceModule] -> byte(processInputReferenceName.span.start + processInputNameByte!)) != (prepared.package.sources[processCall!.sourceModule] -> byte(processInputBindingName.span.start + processInputNameByte!))
+                                                    -> if {
+                                                        false => processInputNameEqual!
+                                                    }
+                                                processInputNameByte! + 1 => processInputNameByte!
+                                            }
+                                        processInputNameEqual! -> if { true => processInputBindingMatches! }
+                                    }
+                                processInputBindingMatches!
+                                    and processInputBinding.astNode >= 0
+                                    and prepared.package.nodes[processCallRange.astStart + processInputBinding.astNode].start <= processCallAst.start
+                                    -> if {
+                                        processInputBindingSearch! => processCall!.operand0
+                                    }
+                            }
+                    }
+                processCall! => nodes[processCallIndex!]
+            }
+        processCallIndex! + 1 => processCallIndex!
     }
 }
 

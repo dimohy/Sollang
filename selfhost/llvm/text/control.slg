@@ -826,6 +826,25 @@ subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.
             armResultSearch! + 1 => armResultSearch!
         }
     }
+    # Resolve a transparent value-flow wrapper only after following aggregate
+    # consumers. Otherwise that root walk can select the wrapper again even
+    # though only its same-typed nested control owns an emitted SSA value.
+    resolved! >= 0 and resolved! < (context.ir -> len)
+        and context.ir[resolved!].kind == 9
+        and context.ir[resolved!].parent == armResultIndex
+        and context.ir[resolved!].operand1 >= 0
+        and context.ir[resolved!].operand1 < (context.ir -> len)
+        -> if {
+            context.ir[resolved!].operand1 => directControlIndex
+            context.ir[directControlIndex] => directControl
+            (directControl.kind == 18
+                or directControl.kind == 20
+                or directControl.kind == 27
+                or directControl.kind == 33
+                or directControl.kind == 34)
+                and (directControl -> sameCanonicalIrType(context.ir[armResultIndex]))
+                -> if { directControlIndex => resolved! }
+        }
     resolved!
 }
 emitRegionValueRoot valueIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

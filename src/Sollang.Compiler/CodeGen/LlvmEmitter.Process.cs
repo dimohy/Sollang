@@ -295,6 +295,22 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStruct(function.ReturnType, value);
     }
 
+    private RuntimeBool EmitRuntimeKillChildProcessIntrinsic(BoundFunction function, RuntimeInt token)
+    {
+        if (!_platform.SupportsChildProcesses)
+        {
+            throw new SollangException("child processes are unavailable on the current target");
+        }
+        if (token.Type != BoundType.UInt64 || function.ReturnType != BoundType.Bool)
+        {
+            throw new SollangException($"{function.Name} expects UInt64 -> Bool");
+        }
+
+        var succeeded = NextTemp("process_kill_succeeded");
+        EmitCall(succeeded, "i1", "sollang_kill_process", $"i64 {token.ValueName}");
+        return new RuntimeBool(succeeded);
+    }
+
     private RuntimeStruct EmitRuntimeChildProcessIdIntrinsic(
         BoundFunction function,
         RuntimeStruct child)

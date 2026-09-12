@@ -3,22 +3,16 @@ param()
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$facadePath = Join-Path $repoRoot "selfhost/llvm/text.slg"
-$modulePaths = @(
-    "selfhost/llvm/emitter/number_format.slg"
-    "selfhost/llvm/emitter/compute_runtime.slg"
-    "selfhost/llvm/emitter/text_output_runtime.slg"
-    "selfhost/llvm/emitter/process_runtime.slg"
-    "selfhost/llvm/emitter/environment_runtime.slg"
-    "selfhost/llvm/emitter/socket_runtime.slg"
-    "selfhost/llvm/emitter/mouse_event_runtime.slg"
-    "selfhost/llvm/emitter/stream_join_runtime.slg"
-    "selfhost/llvm/emitter/com_runtime.slg"
-    "selfhost/llvm/emitter/ownership.slg"
-    "selfhost/llvm/emitter/context.slg"
-    "selfhost/llvm/emitter/type_queries.slg"
-    "selfhost/llvm/emitter/diagnostics.slg"
-)
+$moduleContractPath = Join-Path $repoRoot "scripts/contracts/llvm-emitter-modules.json"
+$moduleContract = Get-Content -LiteralPath $moduleContractPath -Raw | ConvertFrom-Json
+if ($moduleContract.schemaVersion -ne 1) {
+    throw "Unsupported LLVM emitter module contract schema '$($moduleContract.schemaVersion)'."
+}
+$facadePath = Join-Path $repoRoot ([string]$moduleContract.facade)
+$modulePaths = @($moduleContract.modules | ForEach-Object { [string]$_ })
+if ($modulePaths.Count -eq 0 -or @($modulePaths | Select-Object -Unique).Count -ne $modulePaths.Count) {
+    throw "LLVM emitter module contract must contain a non-empty unique module inventory."
+}
 $fragmentPaths = @(
     "selfhost/llvm/text/entry_expressions.slg"
     "selfhost/llvm/text/core_prepare.slg"
