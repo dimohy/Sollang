@@ -2851,6 +2851,16 @@ Container rules:
   numeric array indices are disjoint at their first difference. A runtime
   index, or projections whose disjointness cannot otherwise be proven, remain
   conservatively overlapping.
+
+Borrow-origin flow state distinguishes an unknown place from a value that is
+known to have no borrowed storage origin. Bindings and flow bindings whose
+`Text`-carrying value is owned or backed only by static storage retain an
+explicit empty-origin state. Mutable rebinds and control-flow joins propagate
+that state together with nonempty origin sets. Consequently, aliasing and
+returning a mutable value selected only from static string literals is valid,
+while any reachable rebind from local `SourceText` storage keeps its concrete
+owner origin and is rejected if it escapes the function.
+
 - A user struct field may have type `ref T`. The reference remains a plain
   pointer in the runtime layout, while the compiler attaches its inferred
   origin to the containing value. A function may return such a struct only

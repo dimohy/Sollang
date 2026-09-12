@@ -4602,7 +4602,8 @@ internal sealed partial class SemanticCompiler
                     }
                     RegisterFixedLengthArrayCandidate(binding, valueType);
                     IReadOnlySet<string> borrowedOrigins = EmptyBorrowOrigins();
-                    var hasBorrowedTextOrigins = TypeCanCarryBorrowedTextOrigin(valueType)
+                    var carriesBorrowedTextOrigin = TypeCanCarryBorrowedTextOrigin(valueType);
+                    var hasBorrowedTextOrigins = carriesBorrowedTextOrigin
                         && TryGetBorrowedSourceCallSiteOrigins(
                             binding.Value,
                             functions,
@@ -4622,6 +4623,14 @@ internal sealed partial class SemanticCompiler
                     }
                     else
                     {
+                        // Keep a known-empty origin state for owned/static Text.
+                        // Its presence distinguishes that provenance from an
+                        // untracked owner place when aliases and branch exits
+                        // are analyzed later.
+                        if (carriesBorrowedTextOrigin)
+                        {
+                            _activeBorrowedTextOrigins[binding.Name] = EmptyBorrowOrigins();
+                        }
                         var readonlyReferenceCarriers = GetReadonlyReferenceCarrierOrigins(
                             binding.Value,
                             valueType,
@@ -4881,7 +4890,8 @@ internal sealed partial class SemanticCompiler
 
                         bindings.Add(bindingEffect.Name, bindingEffect.Type);
                         IReadOnlySet<string> flowBorrowedOrigins = EmptyBorrowOrigins();
-                        if (TypeCanCarryBorrowedTextOrigin(bindingEffect.Type)
+                        var flowCarriesBorrowedTextOrigin = TypeCanCarryBorrowedTextOrigin(bindingEffect.Type);
+                        if (flowCarriesBorrowedTextOrigin
                             && TryGetBorrowedSourceCallSiteOrigins(
                                 expressionStatement.Expression,
                                 functions,
@@ -4898,6 +4908,10 @@ internal sealed partial class SemanticCompiler
                         {
                             _activeBorrowedTextOrigins[bindingEffect.Name] = flowReferenceOrigins;
                             _activeReadonlyReferenceBindings.Add(bindingEffect.Name);
+                        }
+                        else if (flowCarriesBorrowedTextOrigin)
+                        {
+                            _activeBorrowedTextOrigins[bindingEffect.Name] = EmptyBorrowOrigins();
                         }
                     }
 

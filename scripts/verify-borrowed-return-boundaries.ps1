@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [ValidateSet('fallthrough', 'explicit-return', 'source-text-pass-through', 'projection-alias')]
+    [ValidateSet('fallthrough', 'explicit-return', 'source-text-pass-through', 'projection-alias', 'mutable-static-text', 'mutable-local-borrow')]
     [string[]]$CaseId
 )
 
@@ -14,10 +14,12 @@ $output = Join-Path $root ('artifacts/scratch/borrowed-return-scalars-' + [guid]
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $resultPath = Join-Path $output 'result.json'
 $cases = @(
-    @{ id = 'fallthrough'; mode = 'run'; expected = '42' },
-    @{ id = 'explicit-return'; mode = 'run'; expected = '42' },
-    @{ id = 'source-text-pass-through'; mode = 'build'; expected = 'while borrowed Text view' },
-    @{ id = 'projection-alias'; mode = 'run'; expected = 'name' }
+    @{ id = 'fallthrough'; mode = 'run'; expected = '42'; source = 'scripts/probes/borrowed-return-scalars/fallthrough.slg' },
+    @{ id = 'explicit-return'; mode = 'run'; expected = '42'; source = 'scripts/probes/borrowed-return-scalars/explicit-return.slg' },
+    @{ id = 'source-text-pass-through'; mode = 'build'; expected = 'while borrowed Text view'; source = 'scripts/probes/borrowed-return-scalars/source-text-pass-through.slg' },
+    @{ id = 'projection-alias'; mode = 'run'; expected = 'name'; source = 'scripts/probes/borrowed-return-scalars/projection-alias.slg' },
+    @{ id = 'mutable-static-text'; mode = 'run'; expectedPath = 'examples/regression/expected/1736-mutable-static-text-return.stdout.txt'; source = 'examples/regression/1736-mutable-static-text-return.slg' },
+    @{ id = 'mutable-local-borrow'; mode = 'build'; expected = "borrowed origin 'bytes' cannot escape function 'selectText'"; source = 'scripts/probes/borrowed-return-scalars/mutable-local-borrow.slg' }
 )
 if ($PSBoundParameters.ContainsKey('CaseId')) {
     if (@($CaseId).Count -eq 0 -or @($CaseId | Select-Object -Unique).Count -ne $CaseId.Count) {
@@ -41,7 +43,12 @@ $record = [ordered]@{
 try {
     foreach ($contract in $cases) {
         $id = $contract.id
-        $source = Join-Path $root "scripts/probes/borrowed-return-scalars/$id.slg"
+        $source = Join-Path $root $contract.source
+        $expected = if ($contract.ContainsKey('expectedPath')) {
+            ([IO.File]::ReadAllText((Join-Path $root $contract.expectedPath))).Replace("`r`n", "`n").TrimEnd()
+        } else {
+            $contract.expected
+        }
         $sourceHash = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash
         $exe = Join-Path $output "$id.exe"
         $ir = Join-Path $output "$id.ll"
@@ -52,7 +59,7 @@ try {
         $case = [ordered]@{
             id = $id
             mode = $contract.mode
-            expected = $contract.expected
+            expected = $expected
             source = $source
             sourceSha256 = $sourceHash
             exitCode = $exitCode
@@ -63,12 +70,12 @@ try {
         }
         if ($contract.mode -ceq 'build') {
             if ($exitCode -ne 0 -and $actual -match 'semantic error' -and
-                $actual.Contains($contract.expected, [StringComparison]::Ordinal) -and
+                $actual.Contains($expected, [StringComparison]::Ordinal) -and
                 $case.generatedProducts.Count -eq 0) {
                 $case.status = 'passed'
                 $record.completed++
             }
-        } elseif ($exitCode -eq 0 -and $actual.Replace("`r`n", "`n").TrimEnd() -ceq $contract.expected) {
+        } elseif ($exitCode -eq 0 -and $actual.Replace("`r`n", "`n").TrimEnd() -ceq $expected) {
             $assembleLog = (& (Join-Path $llvm 'bin/llvm-as.exe') $ir -o (Join-Path $output "$id.bc") 2>&1) -join "`n"
             $assembleExit = $LASTEXITCODE
             [IO.File]::WriteAllText((Join-Path $output "$id.assemble.log"), $assembleLog + "`n")
