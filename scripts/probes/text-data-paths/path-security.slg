@@ -1,0 +1,54 @@
+import sys.path as path
+
+showNormalize label: Text, value: Text, style: path.Style -> Unit uses Console {
+    path.fromText(value, style) -> normalizeConfined -> when {
+        Ok(normalized) { "$label=ok,$(normalized -> pathText)" -> println }
+        Err(error) { "$label=err,$error" -> println }
+    }
+}
+
+showContains label: Text, rootText: Text, candidateText: Text, style: path.Style -> Unit uses Console {
+    path.fromText(rootText, style) => root
+    path.fromText(candidateText, style) => candidate
+    root -> containsLexically(candidate) -> when {
+        Ok(contained) { "$label=ok,$contained" -> println }
+        Err(error) { "$label=err,$error" -> println }
+    }
+}
+
+main {
+    showNormalize("posix", "/safe/./child/../leaf", path.Style.Posix)
+    showNormalize("escape", "../outside", path.Style.Posix)
+    path.fromBytes(['s', 'a', 'f', 'e', '\0', 'x'; ~], path.Style.Posix) -> when {
+        Ok(value) {
+            value -> normalizeConfined -> when {
+                Ok(normalized) { "nul=ok" -> println }
+                Err(error) { "nul=err,$error" -> println }
+            }
+        }
+        Err(error) { "nul=factory-err,$error" -> println }
+    }
+    showNormalize("drive", "1:\\bad", path.Style.Windows)
+    showNormalize("device", "\\\\.\\PhysicalDrive0", path.Style.Windows)
+    showNormalize("extended", "\\\\?\\C:\\safe", path.Style.Windows)
+    showNormalize("nt", "\\??\\C:\\safe", path.Style.Windows)
+    showNormalize("triple", "\\\\\\server\\share", path.Style.Windows)
+    showNormalize("unc", "\\\\server\\share\\folder\\..\\leaf", path.Style.Windows)
+    showContains("exact", "/safe/root", "/safe/root", path.Style.Posix)
+    showContains("child", "/safe/root", "/safe/root/child", path.Style.Posix)
+    showContains("sibling-prefix", "/safe/root", "/safe/rooted", path.Style.Posix)
+    showContains("normalized-escape", "/safe/root", "/safe/root/../outside", path.Style.Posix)
+    showContains("windows-child", "C:\\safe", "C:/safe/child", path.Style.Windows)
+    path.fromBytes([240, 159, 152, 128; ~], path.Style.Posix) -> when {
+        Ok(value) { "utf8-valid=ok,$(value -> byteCount)" -> println }
+        Err(error) { "utf8-valid=err,$error" -> println }
+    }
+    path.fromBytes([192, 128; ~], path.Style.Posix) -> when {
+        Ok(value) { "utf8-overlong=ok" -> println }
+        Err(error) { "utf8-overlong=err,$error" -> println }
+    }
+    path.fromBytes([237, 160, 128; ~], path.Style.Posix) -> when {
+        Ok(value) { "utf8-surrogate=ok" -> println }
+        Err(error) { "utf8-surrogate=err,$error" -> println }
+    }
+}

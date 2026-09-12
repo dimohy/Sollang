@@ -1,0 +1,29 @@
+import sys.file as file
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Result<Option<UInt8>, Text>.Ok(value) => value -> when {
+        Option<UInt8>.Some(byte) => Int(byte)
+        Option<UInt8>.None => -1
+    }
+    Result<Option<UInt8>, Text>.Err(error) => -2
+}
+
+main {
+    file.openWrite("artifacts/scratch/portable-memory-io/file-task-cancel.bin") -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            [UInt8; ~] => buffer!
+            buffer! -> reserve(4096)
+            (buffer! -> len) < 4096 -> while { buffer! -> push(77) }
+            writer -> writeRangeAtAsync(buffer!, 0, 4096, 0, false) => task
+            task -> cancel
+        }
+        Result<file.FileWriter, Text>.Err(error) { }
+    }
+    file.openRead("artifacts/scratch/portable-memory-io/file-task-cancel.bin") -> when {
+        Result<file.File, Text>.Ok(reader) {
+            reader -> readAt<UInt8>(0) -> valueOrEnd => first
+            "file-task-cancel=$first" -> println
+        }
+        Result<file.File, Text>.Err(error) { error -> println }
+    }
+}

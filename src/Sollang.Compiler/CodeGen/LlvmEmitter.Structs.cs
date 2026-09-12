@@ -8,6 +8,10 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private readonly HashSet<Expression> _accountedOwnedStructLiterals =
+        new(ReferenceEqualityComparer.Instance);
+    private int _ownedStructLiteralDepth;
+
     private string EmitStructTypeDefinitions()
     {
         if (_program.Types.Structs.Count == 0 && _program.Types.Enums.Count == 0
@@ -84,6 +88,19 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeStruct EmitStructLiteralExpression(StructLiteralExpression expression)
     {
+        _ownedStructLiteralDepth++;
+        try
+        {
+            return EmitStructLiteralExpressionCore(expression);
+        }
+        finally
+        {
+            _ownedStructLiteralDepth--;
+        }
+    }
+
+    private RuntimeStruct EmitStructLiteralExpressionCore(StructLiteralExpression expression)
+    {
         if (!_program.Types.TryResolve(expression.TypeName, out var type) || !_program.Types.IsStruct(type))
         {
             throw new SollangException($"unknown runtime struct type '{expression.TypeName}'");
@@ -91,7 +108,6 @@ internal sealed partial class LlvmEmitter
 
         var definition = _program.Types.GetStruct(type);
         var fieldsByName = definition.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
-        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
         var aggregate = "poison";
         foreach (var initializer in expression.Fields)
         {
@@ -109,25 +125,110 @@ internal sealed partial class LlvmEmitter
                 next,
                 $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
             aggregate = next;
-            if (!copiesFixedValue && !RegisterOwnedFieldProjectionTransfer(
-                    initializer.Value,
-                    field.Type,
-                    projectedTransfers))
-            {
-                RemoveOwnedLiteralSources(initializer.Value, field.Type);
-            }
         }
-        foreach (var (ownerName, transferredPaths) in projectedTransfers)
+        if (_ownedStructLiteralDepth == 1)
         {
-            var owner = (RuntimeStruct)_locals[ownerName];
-            DropOwnedStructFieldsExceptMovedAndTransferred(
-                ownerName,
-                owner,
-                transferredPaths);
-            RemoveLocal(ownerName);
+            AccountOwnedStructLiteralSources(expression, type);
+            _accountedOwnedStructLiterals.Add(expression);
         }
 
         return new RuntimeStruct(type, aggregate);
+    }
+
+    private void AccountOwnedStructLiteralSources(Expression expression, BoundType expectedType)
+    {
+        var wholeOwners = new HashSet<string>(StringComparer.Ordinal);
+        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
+        CollectOwnedLiteralTransfers(expression, expectedType, wholeOwners, projectedTransfers);
+        foreach (var ownerName in wholeOwners)
+        {
+            RemoveLocal(ownerName);
+        }
+        foreach (var (ownerName, transferredPaths) in projectedTransfers)
+        {
+            if (!_locals.TryGetValue(ownerName, out var ownerValue) || ownerValue is not RuntimeStruct owner)
+            {
+                continue;
+            }
+            DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths);
+            RemoveLocal(ownerName);
+        }
+    }
+
+    private void CollectOwnedLiteralTransfers(
+        Expression expression,
+        BoundType expectedType,
+        ISet<string> wholeOwners,
+        IDictionary<string, List<IReadOnlyList<string>>> projectedTransfers)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+        if (expression is NameExpression name
+            && _locals.TryGetValue(name.Name, out var source)
+            && source.Type == expectedType)
+        {
+            wholeOwners.Add(name.Name);
+            return;
+        }
+        if (RegisterOwnedFieldProjectionTransfer(expression, expectedType, projectedTransfers))
+        {
+            return;
+        }
+        if (_program.Types.IsDynamicArray(expectedType)
+            && expression is ArrayLiteralExpression array)
+        {
+            var elementType = _program.Types.GetDynamicArray(expectedType).ElementType;
+            foreach (var element in array.Elements)
+            {
+                CollectOwnedLiteralTransfers(element, elementType, wholeOwners, projectedTransfers);
+            }
+            return;
+        }
+        if (_program.Types.IsDictionary(expectedType)
+            && expression is DictionaryLiteralExpression dictionary)
+        {
+            var definition = _program.Types.GetDictionary(expectedType);
+            foreach (var entry in dictionary.Entries)
+            {
+                CollectOwnedLiteralTransfers(entry.Key, definition.KeyType, wholeOwners, projectedTransfers);
+                CollectOwnedLiteralTransfers(entry.Value, definition.ValueType, wholeOwners, projectedTransfers);
+            }
+            return;
+        }
+        if (!_program.Types.IsStruct(expectedType))
+        {
+            return;
+        }
+
+        IReadOnlyDictionary<string, Expression>? initializers = expression switch
+        {
+            StructLiteralExpression structure => structure.Fields.ToDictionary(
+                static field => field.Name,
+                static field => field.Value,
+                StringComparer.Ordinal),
+            ProductExpression product => product.Elements
+                .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                .ToDictionary(static element => element.Name, static element => element.Value, StringComparer.Ordinal),
+            DictionaryLiteralExpression contextual => contextual.Entries.ToDictionary(
+                entry => ((NameExpression)entry.Key).Name,
+                static entry => entry.Value,
+                StringComparer.Ordinal),
+            _ => null
+        };
+        if (initializers is null)
+        {
+            return;
+        }
+        foreach (var field in _program.Types.GetStruct(expectedType).Fields)
+        {
+            if (initializers.TryGetValue(field.Name, out var initializer)
+                && !CopiesFixedStorageField(initializer, field.Type))
+            {
+                CollectOwnedLiteralTransfers(initializer, field.Type, wholeOwners, projectedTransfers);
+            }
+        }
     }
 
     private bool RegisterOwnedFieldProjectionTransfer(
@@ -312,6 +413,12 @@ internal sealed partial class LlvmEmitter
     private void RemoveOwnedLiteralSources(Expression expression, BoundType expectedType)
     {
         if (!_program.Types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+
+        if (expression is StructLiteralExpression
+            && _accountedOwnedStructLiterals.Contains(expression))
         {
             return;
         }

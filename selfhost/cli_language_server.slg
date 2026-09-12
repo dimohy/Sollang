@@ -601,21 +601,26 @@ appendDiagnosticMessage output: mut [UInt8; ~], source: file.SourceText, diagnos
                 }
             } else {
                 source -> slice(UIntSize(0), source -> len) => sourceView
-                sourceView -> diagnostics.expectedCodes => expected
-                expected[(expected -> len) - 1] => expectedCode
                 output -> appendText("parse error at ")
                 output -> appendPositiveInt(position.line + 1)
                 output -> appendText(":")
                 output -> appendPositiveInt(position.character + 1)
-                output -> appendText(": expected ")
-                expectedCode >= 0 -> if {
-                    grammar.tokenNames() => tokenNames
-                    output -> appendText(tokenNames[expectedCode])
+                diagnostic.code == 6 -> if {
+                    output -> appendText(": duplicate product field label '")
+                    output -> appendBytes(source, diagnostic.span.start, diagnostic.span.length)
+                    output -> appendText("'")
                 } else {
-                    grammar.keywordTexts() => keywordTexts
-                    output -> appendText("'")
-                    output -> appendText(keywordTexts[0 - expectedCode - 1])
-                    output -> appendText("'")
+                    sourceView -> diagnostics.preferredExpectedCode(diagnostic) => expectedCode
+                    output -> appendText(": expected ")
+                    expectedCode >= 0 -> if {
+                        grammar.tokenNames() => tokenNames
+                        output -> appendText(tokenNames[expectedCode])
+                    } else {
+                        grammar.keywordTexts() => keywordTexts
+                        output -> appendText("'")
+                        output -> appendText(keywordTexts[0 - expectedCode - 1])
+                        output -> appendText("'")
+                    }
                 }
             }
         }

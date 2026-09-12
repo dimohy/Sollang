@@ -205,7 +205,17 @@ manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: 
         bytes! -> appendText(target)
         bytes! -> appendText(".slglib.json")
     }
-    path.Path { bytes: bytes!, style: style } => unresolved
+    status! != 0 -> if {
+        ManifestPath { status: status!, value: path.fromText("", style) } => failure
+        failure -> return
+    }
+    path.fromBytes(bytes!, style) -> when {
+        Ok(value) { value }
+        Err(error) {
+            ManifestPath { status: 3, value: path.fromText("", style) } => failure
+            failure -> return
+        }
+    } => unresolved
     status! == 0 -> if {
         unresolved -> path.normalizeConfined -> when {
             Ok(normalized) {
@@ -213,10 +223,7 @@ manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: 
                 success -> return
             }
             Err(error) {
-                ManifestPath {
-                    status: 3
-                    value: path.Path { bytes: [UInt8; ~], style: style }
-                } => failure
+                ManifestPath { status: 3, value: path.fromText("", style) } => failure
                 failure -> return
             }
         }
@@ -302,37 +309,37 @@ public exportSymbol catalog: ref LibraryCatalog, interfaceIndex: Int, exportInde
 }
 
 public runtimeLibraryLength catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
-    Int(catalog.runtimeLibraries[interfaceIndex].bytes -> len)
+    Int(catalog.runtimeLibraries[interfaceIndex] -> byteCount)
 }
 
 public runtimeLibraryStyle catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
-    catalog.runtimeLibraries[interfaceIndex].style -> when {
+    catalog.runtimeLibraries[interfaceIndex] -> styleKind -> when {
         Posix { 0 }
         Windows { 1 }
     }
 }
 
 runtimePathByte value: path.Path, byteIndex: Int -> UInt8 {
-    value.bytes[byteIndex]
+    value -> byteAt(UIntSize(byteIndex))
 }
 
 public runtimeLibraryByte catalog: ref LibraryCatalog, interfaceIndex: Int, byteIndex: Int -> UInt8 {
     catalog.runtimeLibraries[interfaceIndex] -> runtimePathByte(byteIndex)
 }
 
-runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfaces.MetadataSpan -> path.Path {
+runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfaces.MetadataSpan -> Result<path.Path, Text> {
     [UInt8; ~] => bytes!
     0 => directoryLength!
     UIntSize(0) => pathIndex!
-    pathIndex! < UIntSize(manifestPath.bytes -> len)
+    pathIndex! < (manifestPath -> byteCount)
         -> while {
-            manifestPath.bytes[Int(pathIndex!)] => current
+            manifestPath -> byteAt(pathIndex!) => current
             current == 47 or current == 92 -> if { Int(pathIndex! + 1) => directoryLength! }
             pathIndex! + 1 => pathIndex!
         }
     0 => directoryIndex!
     directoryIndex! < directoryLength! -> while {
-        bytes! -> push(manifestPath.bytes[directoryIndex!])
+        bytes! -> push(manifestPath -> byteAt(UIntSize(directoryIndex!)))
         directoryIndex! + 1 => directoryIndex!
     }
     UIntSize(0) => libraryIndex!
@@ -340,8 +347,7 @@ runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfa
         bytes! -> push(manifest -> byte(libraryFile.start + libraryIndex!))
         libraryIndex! + 1 => libraryIndex!
     }
-    path.Path { bytes: bytes!, style: manifestPath.style } => runtimePath
-    runtimePath
+    path.fromBytes(bytes!, manifestPath -> styleKind)
 }
 
 sameTokenText source: Text, left: syntax.SyntaxToken, right: syntax.SyntaxToken -> Bool {
@@ -478,7 +484,13 @@ public load package: ref analysis.PackageAnalysis, sourcePaths: [Text; ~], targe
                                 interfaceIndex => binding!.interfaceIndex
                                 manifestSource -> len => manifestLength
                                 manifestSource -> slice(UIntSize(0), manifestLength) => manifestText
-                                resolved.value -> runtimeLibraryPath(manifestText, document.libraryFile) => runtimeLibrary
+                                resolved.value -> runtimeLibraryPath(manifestText, document.libraryFile) -> when {
+                                    Ok(value) { value }
+                                    Err(error) {
+                                        3 => binding!.status
+                                        path.fromText("", style)
+                                    }
+                                } => runtimeLibrary
                                 document.status == 0 -> if {
                                     manifestText -> interfaces.spanEquals(document.target, target)
                                         -> if {

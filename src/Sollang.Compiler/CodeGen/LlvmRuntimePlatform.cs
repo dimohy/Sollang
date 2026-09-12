@@ -942,7 +942,21 @@ internal abstract class LlvmRuntimePlatform
 
             inspect_owned_transfer:
               %is_write = icmp eq i32 %operation, 1
-              br i1 %is_write, label %perform_owned_write, label %perform_owned_read
+              br i1 %is_write, label %perform_owned_write, label %inspect_owned_buffer_read
+
+            inspect_owned_buffer_read:
+              %is_buffer_read = icmp eq i32 %operation, 5
+              br i1 %is_buffer_read, label %perform_owned_buffer_read, label %inspect_owned_buffer_write
+
+            inspect_owned_buffer_write:
+              %is_buffer_write = icmp eq i32 %operation, 6
+              br i1 %is_buffer_write, label %perform_owned_buffer_write, label %inspect_owned_noop
+
+            inspect_owned_noop:
+              %is_noop = icmp eq i32 %operation, 7
+              %is_cancelled_noop = icmp eq i32 %operation, 8
+              %is_known_noop = or i1 %is_noop, %is_cancelled_noop
+              br i1 %is_known_noop, label %perform_owned_noop, label %perform_owned_read
 
             perform_owned_read:
               %owned_handle_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 17
@@ -952,12 +966,37 @@ internal abstract class LlvmRuntimePlatform
               %owned_result = call %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %owned_handle, ptr %data_slot, i64 %size64, i64 %owned_offset)
               br label %record_read
 
+            perform_owned_buffer_read:
+              %buffer_read_handle_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 17
+              %buffer_read_handle = load i64, ptr %buffer_read_handle_slot, align 8
+              %buffer_read_offset_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 18
+              %buffer_read_offset = load i64, ptr %buffer_read_offset_slot, align 8
+              %buffer_read_pointer_value = load i64, ptr %data_slot, align 8
+              %buffer_read_pointer = inttoptr i64 %buffer_read_pointer_value to ptr
+              %buffer_read_result = call %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %buffer_read_handle, ptr %buffer_read_pointer, i64 %size64, i64 %buffer_read_offset)
+              br label %record_read
+
             perform_owned_write:
               %write_handle_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 17
               %write_handle = load i64, ptr %write_handle_slot, align 8
               %write_offset_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 18
               %write_offset = load i64, ptr %write_offset_slot, align 8
               %write_result = call %sollang.file_count_result @sollang_platform_write_owned_file_at(i64 %write_handle, ptr %data_slot, i64 %size64, i64 %write_offset)
+              br label %record_read
+
+            perform_owned_buffer_write:
+              %buffer_write_handle_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 17
+              %buffer_write_handle = load i64, ptr %buffer_write_handle_slot, align 8
+              %buffer_write_offset_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 18
+              %buffer_write_offset = load i64, ptr %buffer_write_offset_slot, align 8
+              %buffer_write_pointer_value = load i64, ptr %data_slot, align 8
+              %buffer_write_pointer = inttoptr i64 %buffer_write_pointer_value to ptr
+              %buffer_write_result = call %sollang.file_count_result @sollang_platform_write_owned_file_at(i64 %buffer_write_handle, ptr %buffer_write_pointer, i64 %size64, i64 %buffer_write_offset)
+              br label %record_read
+
+            perform_owned_noop:
+              %noop_result0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+              %noop_result = insertvalue %sollang.file_count_result %noop_result0, i32 0, 1
               br label %record_read
 
             perform_owned_sync:
@@ -993,7 +1032,7 @@ internal abstract class LlvmRuntimePlatform
               br label %record_read
 
             record_read:
-              %result = phi %sollang.file_count_result [ %compatibility_result, %perform_compatibility_read ], [ %owned_result, %perform_owned_read ], [ %write_result, %perform_owned_write ], [ %sync_result, %perform_owned_sync ], [ %open_count_result, %record_open ]
+              %result = phi %sollang.file_count_result [ %compatibility_result, %perform_compatibility_read ], [ %owned_result, %perform_owned_read ], [ %buffer_read_result, %perform_owned_buffer_read ], [ %write_result, %perform_owned_write ], [ %buffer_write_result, %perform_owned_buffer_write ], [ %noop_result, %perform_owned_noop ], [ %sync_result, %perform_owned_sync ], [ %open_count_result, %record_open ]
               %count = extractvalue %sollang.file_count_result %result, 0
               %ok = extractvalue %sollang.file_count_result %result, 1
               %count_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 14

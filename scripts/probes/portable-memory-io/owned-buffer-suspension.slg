@@ -1,0 +1,45 @@
+enum FailureKind {
+    InvalidProgress
+    End
+}
+
+struct ReadSuccess {
+    buffer: [UInt8; ~]
+    count: Int
+    end: Bool
+}
+
+struct ReadFailure {
+    buffer: [UInt8; ~]
+    kind: FailureKind
+}
+
+readInto buffer: move [UInt8; ~], count: Int -> async Result<ReadSuccess, ReadFailure> {
+    buffer => output
+    yield
+    count >= 0 and count <= (output -> len) -> if {
+        Result<ReadSuccess, ReadFailure>.Ok(ReadSuccess {
+            buffer: output
+            count: count
+            end: count == 0
+        })
+    } else {
+        Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+            buffer: output
+            kind: FailureKind.InvalidProgress
+        })
+    }
+}
+
+describe result: Result<ReadSuccess, ReadFailure> -> Unit uses Console {
+    result -> when {
+        Ok(success) { "count=$(success.count),len=$(success.buffer -> len),end=$(success.end)" -> println }
+        Err(failure) { "failed-len=$(failure.buffer -> len)" -> println }
+    }
+}
+
+main {
+    [0, 0, 0; ~] -> readInto(2) -> await -> describe
+    [0, 0; ~] -> readInto(3) -> await -> describe
+    [UInt8; ~] -> readInto(0) -> await -> describe
+}

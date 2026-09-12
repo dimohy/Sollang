@@ -1,0 +1,36 @@
+import std.io as io
+import std.io.async as aio
+
+main {
+    io.memoryReader([1, 2, 3; ~], 2) -> when {
+        Ok(reader) {
+            reader -> aio.readMemoryInto([0, 0; ~], aio.Cancellation { requested: false }) -> await -> when {
+                Ok(success) {
+                    "read=count:$(success.count),first:$(success.buffer[0]),last:$(success.buffer[1]),end:$(success.end),remaining:$(success.reader -> remaining)" -> println
+                }
+                Err(failure) { "read=failed" -> println }
+            }
+        }
+        Err(error) { "reader-construction-failed" -> println }
+    }
+
+    io.memoryReader([4; ~], 1) -> when {
+        Ok(reader) {
+            reader -> aio.readMemoryInto([0; ~], aio.Cancellation { requested: true }) -> await -> when {
+                Ok(success) { "cancel=unexpected" -> println }
+                Err(failure) { "cancel=returned-buffer:$(failure.buffer -> len),remaining:$(failure.reader -> remaining)" -> println }
+            }
+        }
+        Err(error) { "reader-construction-failed" -> println }
+    }
+
+    io.memoryWriter(0) -> when {
+        Ok(writer) {
+            writer -> aio.writeMemoryRange([9; ~], 0, 1, aio.Cancellation { requested: false }) -> await -> when {
+                Ok(success) { "zero=unexpected" -> println }
+                Err(failure) { "zero=returned-buffer:$(failure.buffer -> len),stored:$(failure.writer -> byteCount)" -> println }
+            }
+        }
+        Err(error) { "writer-construction-failed" -> println }
+    }
+}

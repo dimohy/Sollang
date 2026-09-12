@@ -1024,7 +1024,7 @@ internal sealed partial class LlvmEmitter
         return handle;
     }
 
-    private RuntimeEnum EmitRuntimeFileBufferCall(
+    private RuntimeValue EmitRuntimeFileBufferCall(
         BoundFunction function,
         RuntimeStruct file,
         IReadOnlyList<RuntimeValue> arguments)
@@ -1033,9 +1033,430 @@ internal sealed partial class LlvmEmitter
         {
             BoundFunctionKind.RuntimeReadBytesAt => EmitRuntimeReadBytesAt(function, file, arguments),
             BoundFunctionKind.RuntimeWriteBytesAt => EmitRuntimeWriteBytesAt(function, file, arguments),
+            BoundFunctionKind.RuntimeReadBytesAtAsync => EmitRuntimeReadBytesAtAsync(function, file, arguments),
+            BoundFunctionKind.RuntimeWriteBytesAtAsync => EmitRuntimeWriteBytesAtAsync(function, file, arguments),
             _ => throw new SollangException($"unsupported file buffer intrinsic '{function.Name}'")
         };
     }
+
+    private RuntimeTask EmitRuntimeReadBytesAtAsync(
+        BoundFunction function,
+        RuntimeStruct file,
+        IReadOnlyList<RuntimeValue> arguments)
+    {
+        if (arguments.Count != 3
+            || arguments[0] is not RuntimeDynamicInlineArray output
+            || output.ElementType != BoundType.UInt8
+            || arguments[1] is not RuntimeInt { Type: BoundType.UInt64 } offset
+            || arguments[2] is not RuntimeBool cancelled)
+        {
+            throw new SollangException($"{function.Name} expects move [UInt8; ~], UInt64, Bool");
+        }
+
+        ValidateAsyncFileBufferResult(function, read: true);
+        var operation = NextTemp("file_async_read_into_operation");
+        EmitAssign(operation, $"select i1 {cancelled.ValueName}, i32 8, i32 5");
+        return EmitRuntimeFileBufferTask(
+            function,
+            file,
+            output,
+            output.PointerName,
+            output.LengthName,
+            offset.ValueName,
+            operation,
+            "file_async_read_into");
+    }
+
+    private RuntimeTask EmitRuntimeWriteBytesAtAsync(
+        BoundFunction function,
+        RuntimeStruct writer,
+        IReadOnlyList<RuntimeValue> arguments)
+    {
+        if (arguments.Count != 5
+            || arguments[1] is not RuntimeInt { Type: BoundType.UIntSize } inputOffset
+            || arguments[2] is not RuntimeInt { Type: BoundType.UIntSize } length
+            || arguments[3] is not RuntimeInt { Type: BoundType.UInt64 } fileOffset
+            || arguments[4] is not RuntimeBool cancelled)
+        {
+            throw new SollangException($"{function.Name} expects move [UInt8; ~], UIntSize, UIntSize, UInt64, Bool");
+        }
+
+        if (arguments[0] is not RuntimeDynamicInlineArray input
+            || input.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException($"{function.Name} expects move [UInt8; ~]");
+        }
+
+        ValidateAsyncFileBufferResult(function, read: false);
+        var inputOffset64 = EmitRuntimeIntegerAsI64(inputOffset, "file_async_write_range_offset64");
+        var length64 = EmitRuntimeIntegerAsI64(length, "file_async_write_range_length64");
+        var offsetInBounds = NextTemp("file_async_write_range_offset_in_bounds");
+        EmitCompare(offsetInBounds, "ule", "i64", inputOffset64, input.LengthName);
+        var remaining = NextTemp("file_async_write_range_remaining");
+        EmitAssign(remaining, $"sub i64 {input.LengthName}, {inputOffset64}");
+        var lengthInBounds = NextTemp("file_async_write_range_length_in_bounds");
+        EmitCompare(lengthInBounds, "ule", "i64", length64, remaining);
+        var rangeValid = NextTemp("file_async_write_range_valid");
+        EmitAssign(rangeValid, $"and i1 {offsetInBounds}, {lengthInBounds}");
+        var pointer = NextTemp("file_async_write_range_pointer");
+        EmitAssign(pointer, $"getelementptr i8, ptr {input.PointerName}, i64 {inputOffset64}");
+        var validOperation = NextTemp("file_async_write_range_valid_operation");
+        EmitAssign(validOperation, $"select i1 {rangeValid}, i32 6, i32 7");
+        var operation = NextTemp("file_async_write_range_operation");
+        EmitAssign(operation, $"select i1 {cancelled.ValueName}, i32 8, i32 {validOperation}");
+        return EmitRuntimeFileBufferTask(
+            function,
+            writer,
+            input,
+            pointer,
+            length64,
+            fileOffset.ValueName,
+            operation,
+            "file_async_write_range");
+    }
+
+    private RuntimeTask EmitRuntimeFileBufferTask(
+        BoundFunction function,
+        RuntimeStruct file,
+        RuntimeDynamicInlineArray buffer,
+        string pointer,
+        string length,
+        string offset,
+        string operation,
+        string prefix)
+    {
+        var contextSize = AsyncContextSize(function);
+        var context = NextTemp(prefix + "_context");
+        EmitCall(context, "ptr", "sollang_alloc", $"i64 {contextSize}");
+        var allocated = NextTemp(prefix + "_context_allocated");
+        EmitCompare(allocated, "ne", "ptr", context, "null");
+        var initializeLabel = NextLabel(prefix + "_initialize");
+        var allocationFailedLabel = NextLabel(prefix + "_allocation_failed");
+        EmitConditionalBranch(allocated, initializeLabel, allocationFailedLabel);
+        EmitLabel(allocationFailedLabel);
+        EmitTrap();
+        EmitLabel(initializeLabel);
+
+        var handle = NextTemp(prefix + "_handle");
+        EmitCall(
+            handle,
+            "ptr",
+            "sollang_task_start",
+            $"ptr @sollang_file_operation_task_worker, ptr @sollang_free, "
+            + $"ptr @{AsyncFileBufferCancelSymbol(function)}, ptr {context}");
+        var started = NextTemp(prefix + "_started");
+        EmitCompare(started, "ne", "ptr", handle, "null");
+        var readyLabel = NextLabel(prefix + "_ready");
+        var startFailedLabel = NextLabel(prefix + "_start_failed");
+        EmitConditionalBranch(started, readyLabel, startFailedLabel);
+        EmitLabel(startFailedLabel);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {context}");
+        EmitTrap();
+        EmitLabel(readyLabel);
+
+        var fileValue = MaterializeAggregateValue(file);
+        EmitAsyncFunctionContextStore(
+            context,
+            function,
+            5,
+            fileValue.TypeName,
+            fileValue.ValueName,
+            RuntimeAlignment(file.Type));
+        var bufferValue = MaterializeAggregateValue(buffer);
+        EmitAsyncFunctionContextStore(
+            context,
+            function,
+            10,
+            bufferValue.TypeName,
+            bufferValue.ValueName,
+            RuntimeAlignment(buffer.Type));
+        EmitAsyncFunctionContextStore(
+            context,
+            function,
+            6,
+            AsyncStorageLlvmType(function.ReturnType),
+            "zeroinitializer",
+            RuntimeAlignment(function.ReturnType));
+
+        var boundedLength = NextTemp(prefix + "_bounded_length");
+        var lengthFits = NextTemp(prefix + "_length_fits");
+        EmitCompare(lengthFits, "ule", "i64", length, "2147483647");
+        EmitAssign(boundedLength, $"select i1 {lengthFits}, i64 {length}, i64 2147483647");
+        var size = NextTemp(prefix + "_size");
+        EmitAssign(size, $"trunc i64 {boundedLength} to i32");
+        var sizeAddress = NextTemp(prefix + "_size_address");
+        EmitAssign(sizeAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 11");
+        EmitStore("i32", size, sizeAddress, 4);
+        var pointerValue = NextTemp(prefix + "_pointer_value");
+        EmitAssign(pointerValue, $"ptrtoint ptr {pointer} to i64");
+        var dataAddress = NextTemp(prefix + "_data_address");
+        EmitAssign(dataAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 13");
+        EmitStore("i64", pointerValue, dataAddress, 8);
+
+        var expectedTypeName = function.Kind == BoundFunctionKind.RuntimeReadBytesAtAsync
+            ? "sys.file.File"
+            : "sys.file.FileWriter";
+        var sourceHandle = ExtractOwnedFileHandle(file, expectedTypeName);
+        var ownedHandle = NextTemp(prefix + "_owned_handle");
+        EmitCall(ownedHandle, "i64", "sollang_platform_duplicate_owned_file", $"i64 {sourceHandle}");
+        var handleAddress = NextTemp(prefix + "_owned_handle_address");
+        EmitAssign(handleAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 17");
+        EmitStore("i64", ownedHandle, handleAddress, 8);
+        var offsetAddress = NextTemp(prefix + "_offset_address");
+        EmitAssign(offsetAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 18");
+        EmitStore("i64", offset, offsetAddress, 8);
+        var explicitAddress = NextTemp(prefix + "_explicit_address");
+        EmitAssign(explicitAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 19");
+        EmitStore("i32", "1", explicitAddress, 4);
+        var operationAddress = NextTemp(prefix + "_operation_address");
+        EmitAssign(operationAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
+        EmitStore("i32", operation, operationAddress, 4);
+
+        return new RuntimeTask(
+            _program.Types.GetOrAddTask(function.ReturnType),
+            function.InputType,
+            function.ReturnType,
+            handle,
+            context,
+            function);
+    }
+
+    private void EmitAsyncFileBufferCancelFunctions()
+    {
+        foreach (var function in _reachableFunctions
+                     .Where(static function => function.Kind is
+                         BoundFunctionKind.RuntimeReadBytesAtAsync
+                         or BoundFunctionKind.RuntimeWriteBytesAtAsync))
+        {
+            _currentFunction = function;
+            _tempId = 0;
+            _labelId = 0;
+            ClearLocalState();
+            EmitFunctionLine($"define internal void @{AsyncFileBufferCancelSymbol(function)}(ptr %control) #0 {{");
+            EmitLabel("entry");
+            _currentBlockLabel = "entry";
+            var contextSlot = NextTemp("file_buffer_cancel_context_slot");
+            EmitAssign(contextSlot, "getelementptr %sollang.task_control, ptr %control, i32 0, i32 0");
+            EmitLoad("%context", "ptr", contextSlot, 8);
+            var explicitSlot = NextTemp("file_buffer_cancel_explicit_slot");
+            EmitAssign(explicitSlot, "getelementptr %sollang.task_control, ptr %control, i32 0, i32 19");
+            var explicitValue = NextTemp("file_buffer_cancel_explicit");
+            EmitLoad(explicitValue, "i32", explicitSlot, 4);
+            var ownsDuplicate = NextTemp("file_buffer_cancel_owns_duplicate");
+            EmitCompare(ownsDuplicate, "ne", "i32", explicitValue, "0");
+            var closeLabel = NextLabel("file_buffer_cancel_close_duplicate");
+            var dropLabel = NextLabel("file_buffer_cancel_drop_owners");
+            EmitConditionalBranch(ownsDuplicate, closeLabel, dropLabel);
+
+            EmitLabel(closeLabel);
+            _currentBlockLabel = closeLabel;
+            var handleSlot = NextTemp("file_buffer_cancel_handle_slot");
+            EmitAssign(handleSlot, "getelementptr %sollang.task_control, ptr %control, i32 0, i32 17");
+            var handle = NextTemp("file_buffer_cancel_handle");
+            EmitLoad(handle, "i64", handleSlot, 8);
+            EmitCall(target: null, "void", "sollang_platform_close_owned_file", $"i64 {handle}");
+            EmitStore("i32", "0", explicitSlot, 4);
+            EmitBranch(dropLabel);
+
+            EmitLabel(dropLabel);
+            _currentBlockLabel = dropLabel;
+            DropCancelledAsyncInput(function);
+            DropCancelledAsyncAdditionalInputs(function);
+            EmitCall(target: null, "void", "sollang_free", "ptr %context");
+            EmitInstruction("ret void");
+            _currentBlockTerminated = true;
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+    }
+
+    private static string AsyncFileBufferCancelSymbol(BoundFunction function) =>
+        SymbolForFunction(function)[1..] + "_file_buffer_cancel";
+
+    private RuntimeEnum EmitRuntimeCompletedFileBuffer(
+        BoundFunction function,
+        string completedTaskControl,
+        string context)
+    {
+        var read = function.Kind == BoundFunctionKind.RuntimeReadBytesAtAsync;
+        ValidateAsyncFileBufferResult(function, read);
+        var fileAggregate = NextTemp("file_async_owner");
+        EmitAsyncFunctionContextLoad(
+            fileAggregate,
+            context,
+            function,
+            5,
+            AsyncStorageLlvmType(function.InputType),
+            RuntimeAlignment(function.InputType!.Value));
+        var file = new RuntimeStruct(function.InputType.Value, fileAggregate);
+        var bufferType = function.AdditionalParameters![0].Type;
+        var bufferAggregate = NextTemp("file_async_buffer_owner");
+        EmitAsyncFunctionContextLoad(
+            bufferAggregate,
+            context,
+            function,
+            10,
+            AsyncStorageLlvmType(bufferType),
+            RuntimeAlignment(bufferType));
+        var buffer = (RuntimeDynamicInlineArray)DematerializeAggregateValue(bufferType, bufferAggregate);
+
+        var countSlot = NextTemp("file_async_count_slot");
+        EmitAssign(countSlot, $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 14");
+        var count = NextTemp("file_async_count");
+        EmitLoad(count, "i64", countSlot, 8);
+        var okSlot = NextTemp("file_async_ok_slot");
+        EmitAssign(okSlot, $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 15");
+        var platformOk = NextTemp("file_async_ok");
+        EmitLoad(platformOk, "i32", okSlot, 4);
+        var succeeded = NextTemp("file_async_succeeded");
+        EmitCompare(succeeded, "ne", "i32", platformOk, "0");
+        var operationSlot = NextTemp("file_async_operation_slot");
+        EmitAssign(operationSlot, $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 20");
+        var operation = NextTemp("file_async_operation");
+        EmitLoad(operation, "i32", operationSlot, 4);
+
+        var resultDefinition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = resultDefinition.Variants.First(static variant => variant.Name == "Ok");
+        var errVariant = resultDefinition.Variants.First(static variant => variant.Name == "Err");
+        var successLabel = NextLabel("file_async_success");
+        var failureLabel = NextLabel("file_async_failure");
+        var endLabel = NextLabel("file_async_result_end");
+        EmitConditionalBranch(succeeded, successLabel, failureLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var countValue = new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(count));
+        RuntimeStruct successPayload;
+        if (read)
+        {
+            var countIsZero = NextTemp("file_async_count_zero");
+            EmitCompare(countIsZero, "eq", "i64", count, "0");
+            var requestWasNonempty = NextTemp("file_async_request_nonempty");
+            EmitCompare(requestWasNonempty, "ne", "i64", buffer.LengthName, "0");
+            var end = NextTemp("file_async_end");
+            EmitAssign(end, $"and i1 {countIsZero}, {requestWasNonempty}");
+            successPayload = EmitRuntimeStructAggregate(
+                resultDefinition.Variants.First(static variant => variant.Name == "Ok").PayloadType!.Value,
+                [file, buffer, countValue, new RuntimeBool(end)],
+                "file_async_read_success");
+        }
+        else
+        {
+            successPayload = EmitRuntimeStructAggregate(
+                resultDefinition.Variants.First(static variant => variant.Name == "Ok").PayloadType!.Value,
+                [file, buffer, countValue],
+                "file_async_write_success");
+        }
+        var success = EmitEnumValue(function.ReturnType, okVariant, successPayload);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(failureLabel);
+        _currentBlockLabel = failureLabel;
+        var failureType = errVariant.PayloadType!.Value;
+        var failureDefinition = _program.Types.GetStruct(failureType);
+        var errorType = failureDefinition.GetField("error").Type;
+        var error = EmitAsyncFileBufferError(errorType, operation);
+        var failurePayload = EmitRuntimeStructAggregate(
+            failureType,
+            [file, buffer, error],
+            read ? "file_async_read_failure" : "file_async_write_failure");
+        var failure = EmitEnumValue(function.ReturnType, errVariant, failurePayload);
+        EmitBranch(endLabel);
+        var failureExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            read ? "file_async_read_result" : "file_async_write_result",
+            function.ReturnType,
+            [(success, successExit), (failure, failureExit)]);
+    }
+
+    private RuntimeEnum EmitAsyncFileBufferError(BoundType errorType, string operation)
+    {
+        var definition = _program.Types.GetEnum(errorType);
+        var io = definition.Variants.First(static variant => variant.Name == "Io");
+        var invalidRange = definition.Variants.First(static variant => variant.Name == "InvalidRange");
+        var cancelled = definition.Variants.First(static variant => variant.Name == "Cancelled");
+        var cancelledCondition = NextTemp("file_async_error_cancelled");
+        EmitCompare(cancelledCondition, "eq", "i32", operation, "8");
+        var cancelledLabel = NextLabel("file_async_error_cancelled");
+        var inspectRangeLabel = NextLabel("file_async_error_inspect_range");
+        var rangeLabel = NextLabel("file_async_error_range");
+        var ioLabel = NextLabel("file_async_error_io");
+        var endLabel = NextLabel("file_async_error_end");
+        EmitConditionalBranch(cancelledCondition, cancelledLabel, inspectRangeLabel);
+
+        EmitLabel(cancelledLabel);
+        _currentBlockLabel = cancelledLabel;
+        var cancelledValue = EmitEnumValue(errorType, cancelled, payload: null);
+        EmitBranch(endLabel);
+        var cancelledExit = _currentBlockLabel;
+
+        EmitLabel(inspectRangeLabel);
+        _currentBlockLabel = inspectRangeLabel;
+        var rangeCondition = NextTemp("file_async_error_invalid_range");
+        EmitCompare(rangeCondition, "eq", "i32", operation, "7");
+        EmitConditionalBranch(rangeCondition, rangeLabel, ioLabel);
+
+        EmitLabel(rangeLabel);
+        _currentBlockLabel = rangeLabel;
+        var rangeValue = EmitEnumValue(errorType, invalidRange, payload: null);
+        EmitBranch(endLabel);
+        var rangeExit = _currentBlockLabel;
+
+        EmitLabel(ioLabel);
+        _currentBlockLabel = ioLabel;
+        var ioValue = EmitEnumValue(errorType, io, EmitRuntimeErrorText("io"));
+        EmitBranch(endLabel);
+        var ioExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "file_async_error",
+            errorType,
+            [(cancelledValue, cancelledExit), (rangeValue, rangeExit), (ioValue, ioExit)]);
+    }
+
+    private RuntimeStruct EmitRuntimeStructAggregate(
+        BoundType type,
+        IReadOnlyList<RuntimeValue> values,
+        string prefix)
+    {
+        var definition = _program.Types.GetStruct(type);
+        if (definition.Fields.Count != values.Count)
+        {
+            throw new SollangException($"{definition.Name} has an invalid file async payload shape");
+        }
+        var aggregate = "poison";
+        for (var index = 0; index < values.Count; index++)
+        {
+            var value = values[index];
+            EnsureRuntimeType(value, definition.Fields[index].Type, definition.Name);
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp(prefix);
+            EmitAssign(next,
+                $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {index}");
+            aggregate = next;
+        }
+        return new RuntimeStruct(type, aggregate);
+    }
+
+    private void ValidateAsyncFileBufferResult(BoundFunction function, bool read)
+    {
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !IsRuntimeStructNamed(resultTypes.Ok, read ? "sys.file.ReadAtSuccess" : "sys.file.WriteAtSuccess")
+            || !IsRuntimeStructNamed(resultTypes.Error, read ? "sys.file.ReadAtFailure" : "sys.file.WriteAtFailure"))
+        {
+            throw new SollangException($"{function.Name} has an invalid asynchronous file buffer result");
+        }
+    }
+
+    private bool IsRuntimeStructNamed(BoundType type, string name) =>
+        _program.Types.IsStruct(type)
+        && string.Equals(_program.Types.GetStruct(type).Name, name, StringComparison.Ordinal);
 
     private RuntimeEnum EmitRuntimeReadBytesAt(
         BoundFunction function,

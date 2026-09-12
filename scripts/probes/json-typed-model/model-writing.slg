@@ -1,0 +1,151 @@
+import std.text.json as json
+import sys.file as file
+
+printBytes bytes: [UInt8; ~] -> Unit uses Console {
+    bytes -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> println
+}
+
+expectInvalid document: ref json.Document, label: Text -> Result<Unit, json.Error> uses Console {
+    json.writer(256, 8)? => writer!
+    writer! -> document(document) -> when {
+        Ok(done) { "$label=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidModel { "$label=invalid,$(writer! -> byteCount)" -> println }
+                else { "$label=wrong-error,$(writer! -> byteCount)" -> println }
+            }
+        }
+    }
+    Result<Unit, json.Error>.Ok
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(256, 8, 64, 64)? => limits
+    json.reader("""{"a":-12.5e+2,"a":[true,"x"]}""", limits)? => sourceReader!
+    sourceReader! -> document? => sourceDocument
+
+    json.writer(29, 8)? => exact!
+    exact! -> document(sourceDocument)?
+    "positive=$(exact! -> byteCount)" -> println
+    exact! -> intoBytes? => exactBytes
+    exactBytes -> printBytes
+
+    json.writer(28, 8)? => short!
+    short! -> document(sourceDocument) -> when {
+        Ok(done) { "boundary=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                OutputLimitExceeded { "boundary=limited,$(short! -> byteCount)" -> println }
+                else { "boundary=wrong-error,$(short! -> byteCount)" -> println }
+            }
+        }
+    }
+    short! -> nullValue?
+    short! -> intoBytes? => retryBytes
+    retryBytes -> printBytes
+
+    json.reader("[]", limits)? => cycleReader!
+    cycleReader! -> document? => cycle!
+    cycle!.values -> take(cycle!.root) => cycleRoot!
+    cycleRoot!.items -> push(cycle!.root)
+    cycle!.values -> push(cycleRoot!)
+    cycle! -> expectInvalid("cycle")?
+
+    json.reader("[null]", limits)? => revisitReader!
+    revisitReader! -> document? => revisit!
+    revisit!.values -> take(revisit!.root) => revisitRoot!
+    revisitRoot!.items[0] => shared
+    revisitRoot!.items -> push(shared)
+    revisit!.values -> push(revisitRoot!)
+    revisit! -> expectInvalid("revisit")?
+
+    json.reader("[]", limits)? => indexReader!
+    indexReader! -> document? => invalidIndex!
+    invalidIndex!.values -> take(invalidIndex!.root) => indexRoot!
+    indexRoot!.items -> push(99)
+    invalidIndex!.values -> push(indexRoot!)
+    invalidIndex! -> expectInvalid("index")?
+
+    json.reader("null", limits)? => rootReader!
+    rootReader! -> document? => invalidRoot!
+    99 => invalidRoot!.root
+    invalidRoot! -> expectInvalid("root")?
+
+    json.reader("null", limits)? => payloadReader!
+    payloadReader! -> document? => invalidPayload!
+    invalidPayload!.values -> take(invalidPayload!.root) => payloadRoot!
+    payloadRoot!.bytes -> push('x')
+    invalidPayload!.values -> push(payloadRoot!)
+    invalidPayload! -> expectInvalid("payload")?
+
+    json.reader("1", limits)? => numberReader!
+    numberReader! -> document? => invalidNumber!
+    invalidNumber!.values -> take(invalidNumber!.root) => numberRoot!
+    numberRoot!.bytes -> push('x')
+    invalidNumber!.values -> push(numberRoot!)
+    json.writer(256, 8)? => numberWriter!
+    numberWriter! -> document(invalidNumber!) -> when {
+        Ok(done) { "number=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidNumber { "number=invalid,$(numberWriter! -> byteCount)" -> println }
+                else { "number=wrong-error,$(numberWriter! -> byteCount)" -> println }
+            }
+        }
+    }
+
+    json.reader(""" "x" """, limits)? => utf8Reader!
+    utf8Reader! -> document? => invalidUtf8!
+    invalidUtf8!.values -> take(invalidUtf8!.root) => utf8Root!
+    utf8Root!.bytes -> push(255)
+    invalidUtf8!.values -> push(utf8Root!)
+    json.writer(256, 8)? => utf8Writer!
+    utf8Writer! -> document(invalidUtf8!) -> when {
+        Ok(done) { "utf8=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidUtf8 { "utf8=invalid,$(utf8Writer! -> byteCount)" -> println }
+                else { "utf8=wrong-error,$(utf8Writer! -> byteCount)" -> println }
+            }
+        }
+    }
+
+    json.reader("[[null]]", limits)? => depthReader!
+    depthReader! -> document? => deep
+    json.writer(64, 1)? => shallow!
+    shallow! -> document(deep) -> when {
+        Ok(done) { "depth=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                DepthLimitExceeded { "depth=limited,$(shallow! -> byteCount)" -> println }
+                else { "depth=wrong-error,$(shallow! -> byteCount)" -> println }
+            }
+        }
+    }
+
+    json.writer(64, 8)? => transactional!
+    transactional! -> beginArray?
+    transactional! -> byteCount => before
+    transactional! -> document(cycle!) -> when {
+        Ok(done) { "transaction=accepted" -> println }
+        Err(error) {
+            error.kind -> when {
+                InvalidModel { "transaction=$before,$(transactional! -> byteCount)" -> println }
+                else { "transaction=wrong-error,$(transactional! -> byteCount)" -> println }
+            }
+        }
+    }
+    transactional! -> boolean(true)?
+    transactional! -> endArray?
+    transactional! -> intoBytes? => transactionBytes
+    transactionBytes -> printBytes
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

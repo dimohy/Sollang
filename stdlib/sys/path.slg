@@ -5,8 +5,8 @@ import sys.directory.kind as kinds
 # Path owns its UTF-8 storage. It is not a Text alias and therefore cannot
 # outlive borrowed source storage accidentally.
 public struct Path {
-    public bytes: [UInt8; ~]
-    public style: Style
+    bytes: [UInt8; ~]
+    style: Style
 }
 
 # A query follows symbolic links and returns one owned canonical path together
@@ -57,13 +57,18 @@ impl Path {
         self -> queryRaw -> when {
             Ok(raw) {
                 raw.bytes -> copyBytes => canonicalBytes
-                Info {
-                    canonical: Path { bytes: canonicalBytes, style: style }
-                    kind: raw.kindCode -> queryKind
-                    byteLength: raw.byteLength
-                    modifiedNanos: raw.modifiedNanos
-                } => info
-                Result<Info, Text>.Ok(info) -> return
+                fromBytes(canonicalBytes, style) -> when {
+                    Ok(canonical) {
+                        Info {
+                            canonical: canonical
+                            kind: raw.kindCode -> queryKind
+                            byteLength: raw.byteLength
+                            modifiedNanos: raw.modifiedNanos
+                        } => info
+                        Result<Info, Text>.Ok(info) -> return
+                    }
+                    Err(error) { Result<Info, Text>.Err(error) -> return }
+                }
             }
             Err(error) {
                 Result<Info, Text>.Err(error) -> return
@@ -113,7 +118,56 @@ public fromText value: Text, style: Style -> Path {
     result
 }
 
+validUtf8 bytes: [UInt8; ~] -> Bool {
+    UIntSize(bytes -> len) => length
+    UIntSize(0) => index!
+    index! < length -> while {
+        bytes[Int(index!)] => first
+        first <= 127 -> if { index! + 1 => index! } else {
+            first >= 194 and first <= 223 -> if {
+                index! + 1 < length and bytes[Int(index! + 1)] >= 128 and bytes[Int(index! + 1)] <= 191
+                    -> unless { false -> return }
+                index! + 2 => index!
+            } else {
+                first >= 224 and first <= 239 -> if {
+                    index! + 2 < length -> unless { false -> return }
+                    bytes[Int(index! + 1)] => second
+                    second >= 128 and second <= 191 and bytes[Int(index! + 2)] >= 128 and bytes[Int(index! + 2)] <= 191
+                        -> unless { false -> return }
+                    first == 224 and second < 160 -> if { false -> return }
+                    first == 237 and second > 159 -> if { false -> return }
+                    index! + 3 => index!
+                } else {
+                    first >= 240 and first <= 244 -> unless { false -> return }
+                    index! + 3 < length -> unless { false -> return }
+                    bytes[Int(index! + 1)] => second
+                    second >= 128 and second <= 191
+                        and bytes[Int(index! + 2)] >= 128 and bytes[Int(index! + 2)] <= 191
+                        and bytes[Int(index! + 3)] >= 128 and bytes[Int(index! + 3)] <= 191
+                        -> unless { false -> return }
+                    first == 240 and second < 144 -> if { false -> return }
+                    first == 244 and second > 143 -> if { false -> return }
+                    index! + 4 => index!
+                }
+            }
+        }
+    }
+    true
+}
+
+# The owned-byte boundary is fallible so callers cannot forge a Path containing
+# malformed UTF-8. NUL is rejected by filesystem and confinement operations,
+# where its diagnostic has the relevant operation context.
+public fromBytes value: move [UInt8; ~], style: Style -> Result<Path, Text> {
+    validUtf8(value) -> unless { Result<Path, Text>.Err("path is not valid UTF-8") -> return }
+    Result<Path, Text>.Ok(Path { bytes: value, style: style })
+}
+
 impl Path {
+    public styleKind: self -> Style => self.style
+
+    public byteAt: self, index: UIntSize -> UInt8 => self.bytes[Int(index)]
+
     public byteCount: self -> UIntSize {
         UIntSize(self.bytes -> len)
     }
@@ -210,7 +264,7 @@ impl Path {
     }
 
     # Joins two borrowed path values into a fresh owned result.
-    public joinDiscovered: self, child: ref Path -> Path {
+    joinDiscovered: self, child: ref Path -> Path {
         [UInt8; ~] => bytes!
         UIntSize(0) => baseIndex!
         baseIndex! < UIntSize(self.bytes -> len) -> while {
@@ -252,6 +306,95 @@ impl Path {
         Result<Path, Text>.Ok(joined)
     }
 
+    copyOwned: self -> Path {
+        self.bytes -> copyBytes => bytes
+        Path { bytes: bytes, style: self.style }
+    }
+
+    # Pure lexical containment. Both operands are normalized under the same
+    # fail-closed rules, and a byte prefix counts only at a component boundary.
+    # Filesystem links are deliberately outside this operation.
+    public containsLexically: self, candidate: ref Path -> Result<Bool, Text> {
+        not sameStyle(self.style, candidate.style) -> if {
+            Result<Bool, Text>.Err("path styles differ") -> return
+        }
+        self -> copyOwned -> normalizeConfined? => root
+        candidate -> copyOwned -> normalizeConfined? => value
+        UIntSize(root.bytes -> len) => rootLength
+        UIntSize(value.bytes -> len) => valueLength
+        rootLength <= valueLength => contained!
+        UIntSize(0) => index!
+        contained! and index! < rootLength -> while {
+            root.bytes[Int(index!)] != value.bytes[Int(index!)]
+                -> if { false => contained! }
+            index! + 1 => index!
+        }
+        contained! and valueLength > rootLength -> if {
+            rootLength == 0 or not isSeparator(root.bytes[Int(rootLength - 1)], root.style)
+                -> if { isSeparator(value.bytes[Int(rootLength)], root.style)
+                        -> unless { false => contained! } }
+        }
+        Result<Bool, Text>.Ok(contained!)
+    }
+
+    # Windows canonical query results use the trusted extended-length spelling.
+    # Strip only that runtime-produced prefix before applying the public lexical
+    # validator; untrusted input still rejects every device/extended namespace.
+    normalizeResolvedCanonical: move self -> Result<Path, Text> {
+        self.style => style
+        self.bytes => source
+        UIntSize(source -> len) => length
+        style -> when {
+            Posix {
+                source -> copyBytes => comparable
+                Path { bytes: comparable, style: style } -> normalizeConfined
+            }
+            Windows {
+                [UInt8; ~] => comparable!
+                UIntSize(0) => index!
+                length >= 4 and isSeparator(source[0], style) and isSeparator(source[1], style)
+                    and source[2] == '?' and isSeparator(source[3], style)
+                    -> if {
+                        4 => index!
+                        length >= 8 and source[4] == 'U' and source[5] == 'N'
+                            and source[6] == 'C' and isSeparator(source[7], style)
+                            -> if {
+                                comparable! -> push('\\')
+                                comparable! -> push('\\')
+                                8 => index!
+                            }
+                    }
+                index! < length -> while {
+                    comparable! -> push(source[Int(index!)])
+                    index! + 1 => index!
+                }
+                Path { bytes: comparable!, style: style } -> normalizeConfined
+            }
+        }
+    }
+
+    # Resolves both operands through the target filesystem before applying the
+    # component-boundary lexical comparison. This detects a symlink or junction
+    # that resolves outside the root at query time. It is a snapshot check, not
+    # a substitute for handle-relative open when an attacker can race updates.
+    public containsResolved: self, candidate: ref Path -> Result<Bool, Text> uses File {
+        self -> query -> when {
+            Ok(rootInfo) {
+                candidate -> query -> when {
+                    Ok(candidateInfo) {
+                        rootInfo.canonical -> copyOwned => rootQueried
+                        candidateInfo.canonical -> copyOwned => candidateQueried
+                        rootQueried -> normalizeResolvedCanonical? => rootCanonical
+                        candidateQueried -> normalizeResolvedCanonical? => candidateCanonical
+                        rootCanonical -> containsLexically(candidateCanonical)
+                    }
+                    Err(error) { Result<Bool, Text>.Err(error) }
+                }
+            }
+            Err(error) { Result<Bool, Text>.Err(error) }
+        }
+    }
+
     # Lexical normalization never touches the filesystem. Parent components that
     # would cross the starting root are rejected, which is the safe default for
     # package roots and module discovery.
@@ -265,6 +408,11 @@ impl Path {
             Windows => true
         } => windows
         UIntSize(source -> len) => sourceLength
+        UIntSize(0) => validationIndex!
+        validationIndex! < sourceLength -> while {
+            source[Int(validationIndex!)] == 0 -> if { pathError("path contains NUL") -> return }
+            validationIndex! + 1 => validationIndex!
+        }
         UIntSize(0) => index!
         false => absolute!
         false => unc!
@@ -272,6 +420,8 @@ impl Path {
 
         windows -> if {
             sourceLength >= 2 and source[1] == ':' -> if {
+                (source[0] >= 'A' and source[0] <= 'Z') or (source[0] >= 'a' and source[0] <= 'z')
+                    -> unless { pathError("invalid drive prefix") -> return }
                 output! -> push(source[0])
                 output! -> push(':')
                 2 => index!
@@ -283,6 +433,18 @@ impl Path {
                             -> while { index! + 1 => index! }
                     }
             } else {
+                sourceLength >= 4 and isSeparator(source[0], style)
+                    and isSeparator(source[1], style)
+                    and (source[2] == '?' or source[2] == '.')
+                    and isSeparator(source[3], style)
+                    -> if { pathError("unsupported path namespace") -> return }
+                sourceLength >= 4 and isSeparator(source[0], style)
+                    and source[1] == '?' and source[2] == '?'
+                    and isSeparator(source[3], style)
+                    -> if { pathError("unsupported path namespace") -> return }
+                sourceLength >= 3 and isSeparator(source[0], style)
+                    and isSeparator(source[1], style) and isSeparator(source[2], style)
+                    -> if { pathError("invalid UNC path") -> return }
                 sourceLength >= 2 and (source[0] == '/' or source[0] == '\\') and (source[1] == '/' or source[1] == '\\')
                     -> if {
                         output! -> push('\\')

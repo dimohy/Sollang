@@ -1,0 +1,32 @@
+# Declaration consumers must preserve nested product and container layout.
+struct DeclarationLayout {
+    product: (left: Int, right: [Int; 2])
+    fixed: [(left: Int, right: Int); 2]
+    bounded: [(left: Int, right: Int); <=3]
+    growable: [(left: Int, right: Int); ~]
+}
+
+enum DeclarationPayload {
+    Product((left: Int, right: [Int; 2]))
+    Fixed([(left: Int, right: Int); 2])
+    Bounded([(left: Int, right: Int); <=3])
+    Growable([(left: Int, right: Int); ~])
+    Reference(ref (left: Int, right: Int))
+}
+
+main {
+    DeclarationLayout {
+        product: (left: 1, right: [2, 3])
+        fixed: [(left: 4, right: 5), (left: 6, right: 7)]
+        bounded: [(left: 8, right: 9); <=3]
+        growable: [(left: 10, right: 11); ~]
+    } => layout
+    layout.product.left + layout.product.right[1] => productTotal
+    productTotal + layout.fixed[1].right + layout.bounded[0].left => inlineTotal
+    inlineTotal + layout.growable[0].right -> println
+
+    DeclarationPayload.Product((left: 12, right: [13, 14])) -> when {
+        Product(value) { value.left + value.right[1] -> println }
+        else { 0 -> println }
+    }
+}

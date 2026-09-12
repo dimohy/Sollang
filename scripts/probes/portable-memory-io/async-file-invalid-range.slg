@@ -1,0 +1,26 @@
+import sys.file as file
+
+main {
+    file.openWrite("artifacts/scratch/portable-memory-io/file-range-output.bin") -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            [UInt8; ~] => buffer!
+            buffer! -> push(81)
+            buffer! -> push(82)
+            writer -> writeRangeAtAsync(buffer!, 2, 1, 0, false) -> await -> when {
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Ok(success) { "unexpected" -> println }
+                Result<file.WriteAtSuccess, file.WriteAtFailure>.Err(failure) {
+                    failure.writer -> writeRangeAt(failure.buffer, 0, 2, 3) -> when {
+                        Result<UIntSize, Text>.Ok(count) {
+                            failure.error -> when {
+                                InvalidRange { "file-range=$count,$(failure.buffer -> len)" -> println }
+                                else { "wrong-error" -> println }
+                            }
+                        }
+                        Result<UIntSize, Text>.Err(error) { error -> println }
+                    }
+                }
+            }
+        }
+        Result<file.FileWriter, Text>.Err(error) { error -> println }
+    }
+}

@@ -1,0 +1,32 @@
+import sys.file as file
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Result<Option<UInt8>, Text>.Ok(value) => value -> when {
+        Option<UInt8>.Some(byte) => Int(byte)
+        Option<UInt8>.None => -1
+    }
+    Result<Option<UInt8>, Text>.Err(error) => -2
+}
+
+main {
+    "artifacts/scratch/portable-memory-io/file-cancel-input.bin" -> file.openWriter
+    UInt8(91) -> file.write
+    file.closeWriter()
+    file.openRead("artifacts/scratch/portable-memory-io/file-cancel-input.bin") -> when {
+        Result<file.File, Text>.Ok(reader) {
+            [UInt8; ~] => buffer!
+            buffer! -> push(0)
+            reader -> readIntoAtAsync(buffer!, 0, true) -> await -> when {
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Ok(success) { "unexpected" -> println }
+                Result<file.ReadAtSuccess, file.ReadAtFailure>.Err(failure) {
+                    failure.file -> readAt<UInt8>(0) -> valueOrEnd => byte
+                    failure.error -> when {
+                        Cancelled { "file-cancel=$byte,$(failure.buffer -> len)" -> println }
+                        else { "wrong-error" -> println }
+                    }
+                }
+            }
+        }
+        Result<file.File, Text>.Err(error) { error -> println }
+    }
+}

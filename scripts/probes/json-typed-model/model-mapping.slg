@@ -1,0 +1,60 @@
+import std.text.json as json
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(256, 8, 64, 64)? => limits
+    json.reader("""{"name":"Sol\uB791","items":[null,true,-12.5e+2],"dup":1,"dup":2}""", limits)? => reader!
+    reader! -> document? => document
+    document.values[document.root].kind -> when {
+        Object { "root=object" -> println }
+        else { "root=unexpected" -> println }
+    }
+    "values=$(document.values -> len),members=$(document.values[document.root].members -> len)" -> println
+    document.values[document.root].members[0].value => nameIndex
+    "name=$(document.values[document.root].members[0].name -> len),$(document.values[nameIndex].bytes -> len),$(document.values[nameIndex].bytes[0]),$(document.values[nameIndex].bytes[5])" -> println
+    document.values[document.root].members[1].value => itemsIndex
+    document.values[itemsIndex].items[1] => booleanIndex
+    document.values[itemsIndex].items[2] => numberIndex
+    "items=$(document.values[itemsIndex].items -> len),bool=$(document.values[booleanIndex].boolean),number=$(document.values[numberIndex].bytes -> len),$(document.values[numberIndex].bytes[0]),$(document.values[numberIndex].bytes[3]),$(document.values[numberIndex].bytes[5]),$(document.values[numberIndex].bytes[7])" -> println
+    document.values[document.root].members[2].value => firstNumberIndex
+    document.values[document.root].members[3].value => secondNumberIndex
+    "duplicates=$(document.values[document.root].members[2].name -> len),$(document.values[firstNumberIndex].bytes[0]),$(document.values[document.root].members[3].name -> len),$(document.values[secondNumberIndex].bytes[0])" -> println
+    "reader=$(reader! -> offset),$(reader! -> tokenCount)" -> println
+
+    json.reader("""["ok"]""", limits)? => forgedReader!
+    forgedReader! -> next? => begin
+    forgedReader! -> next? => original
+    json.Token {
+        kind: original.kind
+        start: original.start
+        length: original.length + 100
+        contentStart: original.contentStart
+        contentLength: original.contentLength
+        decodedLength: original.decodedLength
+        depth: original.depth
+    } => forgedSpan
+    forgedReader! -> decodeString(forgedSpan, 64) -> when {
+        Ok(bytes) { "forged-span=accepted" -> println }
+        Err(error) { "forged-span=$(error.offset)" -> println }
+    }
+    json.Token {
+        kind: original.kind
+        start: original.start
+        length: original.length
+        contentStart: original.contentStart
+        contentLength: original.contentLength + 1
+        decodedLength: original.decodedLength
+        depth: original.depth
+    } => forgedMetadata
+    forgedReader! -> decodeString(forgedMetadata, 64) -> when {
+        Ok(bytes) { "forged-metadata=accepted" -> println }
+        Err(error) { "forged-metadata=$(error.offset)" -> println }
+    }
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

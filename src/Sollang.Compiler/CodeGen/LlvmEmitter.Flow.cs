@@ -143,6 +143,8 @@ internal sealed partial class LlvmEmitter
                         or BoundFunctionKind.RuntimeMouseEvents
                         or BoundFunctionKind.RuntimeReadBytesAt
                         or BoundFunctionKind.RuntimeWriteBytesAt
+                        or BoundFunctionKind.RuntimeReadBytesAtAsync
+                        or BoundFunctionKind.RuntimeWriteBytesAtAsync
                         or BoundFunctionKind.RuntimeSocketReceive
                         or BoundFunctionKind.RuntimeSocketReceiveAppend
                         or BoundFunctionKind.RuntimeSocketReceiveVectored
@@ -330,6 +332,8 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeSocketListen:
                     case BoundFunctionKind.RuntimeReadBytesAt:
                     case BoundFunctionKind.RuntimeWriteBytesAt:
+                    case BoundFunctionKind.RuntimeReadBytesAtAsync:
+                    case BoundFunctionKind.RuntimeWriteBytesAtAsync:
                     case BoundFunctionKind.RuntimeSocketAccept:
                     case BoundFunctionKind.RuntimeSocketConnect:
                     case BoundFunctionKind.RuntimeSocketReceive:

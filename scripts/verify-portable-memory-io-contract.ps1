@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$OutputDirectory = 'artifacts/scratch/portable-memory-io/contract'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,17 @@ if (-not (Test-Json -Json $contractText -SchemaFile $schemaPath)) {
     throw 'Portable memory I/O contract does not satisfy its schema'
 }
 $contract = $contractText | ConvertFrom-Json
+if ($contract.completion.requiredUnsupportedCount -ne 0) {
+    throw 'Portable memory I/O completion target must require unsupported=0'
+}
+if ($contract.completion.status -ceq 'complete' -and
+    ($contract.unsupported.Count -ne 0 -or $contract.blockers.Count -ne 0)) {
+    throw 'Portable memory I/O cannot be complete while unsupported capabilities or blockers remain'
+}
+if ($contract.completion.status -ceq 'blocked' -and
+    ($contract.unsupported.Count -eq 0 -or $contract.blockers.Count -eq 0)) {
+    throw 'Portable memory I/O blocked state requires explicit unsupported capabilities and blockers'
+}
 foreach ($relativePath in $contract.sources) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath) -PathType Leaf)) {
         throw "Portable memory I/O source is missing: $relativePath"
@@ -26,6 +38,11 @@ foreach ($fixture in $contract.fixtures) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath) -PathType Leaf)) {
             throw "Portable memory I/O evidence is missing: $relativePath"
         }
+    }
+}
+foreach ($probe in $contract.focusedProbes) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $probe.source) -PathType Leaf)) {
+        throw "Portable memory I/O focused probe is missing: $($probe.source)"
     }
 }
 
@@ -61,6 +78,36 @@ foreach ($required in @(
         throw "Portable memory I/O implementation is missing: $required"
     }
 }
+$asyncSourcePath = Join-Path $root 'stdlib/std/io/async.slg'
+$asyncSource = [IO.File]::ReadAllText($asyncSourcePath)
+foreach ($required in @(
+    'namespace std.io.async',
+    'public readMemoryInto reader: move io.MemoryReader, output: move [UInt8; ~]',
+    'public writeMemoryRange writer: move io.MemoryWriter, input: move [UInt8; ~]',
+    '-> async Result<ReadSuccess, ReadFailure>',
+    '-> async Result<WriteSuccess, WriteFailure>',
+    'public struct BufferQueue',
+    'public bufferQueue highWatermark: Int, lowWatermark: Int',
+    'highWatermark: Int',
+    'lowWatermark: Int',
+    'producerPaused: Bool',
+    'Error.Cancelled',
+    'Error.Backpressure',
+    'Error.WriteZero',
+    'public offer: move self, input: move [UInt8; ~]',
+    'public drain: move self, output: move [UInt8; ~]',
+    'public intoQueue: move self -> BufferQueue',
+    'yield'
+)) {
+    if (-not $asyncSource.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Portable asynchronous memory I/O candidate is missing: $required"
+    }
+}
+foreach ($forbidden in @(' -> sleep', 'readIntoAt(', 'receiveInto(')) {
+    if ($asyncSource.Contains($forbidden, [StringComparison]::Ordinal)) {
+        throw "Portable asynchronous memory I/O must not hide synchronous work or fake suspension: $forbidden"
+    }
+}
 $socketSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/socket.slg'))
 foreach ($required in @(
     'import std.io as io',
@@ -76,7 +123,8 @@ foreach ($required in @(
         throw "Portable socket I/O adapter is missing: $required"
     }
 }
-$fileSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/io/file.slg'))
+$fileSourcePath = Join-Path $root 'stdlib/std/io/file.slg'
+$fileSource = [IO.File]::ReadAllText($fileSourcePath)
 foreach ($required in @(
     'public struct ByteReader',
     'file: sysfile.File',
@@ -93,7 +141,18 @@ foreach ($required in @(
     'impl io.Writer for ByteWriter',
     'public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Text> uses File',
     'self.file -> writeRangeAt(input, offset, length, self.offset)? => count',
-    'public intoFileWriter: move self -> sysfile.FileWriter'
+    'public intoFileWriter: move self -> sysfile.FileWriter',
+    'import std.io.async as asyncio',
+    'public struct AsyncReadSuccess',
+    'public struct AsyncReadFailure',
+    'public struct AsyncWriteSuccess',
+    'public struct AsyncWriteFailure',
+    'public readIntoAsync: move self, output: move [UInt8; ~], cancellation: asyncio.Cancellation',
+    'readIntoAtAsync(output, currentOffset, cancellation.requested) -> await',
+    'public writeRangeAsync: move self, input: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: asyncio.Cancellation',
+    'writeRangeAtAsync(input, offset, length, currentOffset, cancellation.requested) -> await',
+    'adaptReadCompletion',
+    'adaptWriteCompletion'
 )) {
     if (-not $fileSource.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable file I/O adapter is missing: $required"
@@ -102,10 +161,19 @@ foreach ($required in @(
 if ([regex]::Matches($fileSource, 'self\.offset \+ UInt64\(count\) => self\.offset').Count -ne 2) {
     throw 'Portable file adapters must advance each explicit position exactly once after successful progress'
 }
-$sysFileSource = [IO.File]::ReadAllText((Join-Path $root 'stdlib/sys/file.slg'))
+$sysFilePath = Join-Path $root 'stdlib/sys/file.slg'
+$sysFileSource = [IO.File]::ReadAllText($sysFilePath)
 foreach ($required in @(
     'public readIntoAt: self, output: mut [UInt8; ~], offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic',
-    'public writeRangeAt: self, input: ref [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic'
+    'public writeRangeAt: self, input: ref [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic',
+    'public enum AsyncTransferError',
+    'Io(Text)',
+    'public struct ReadAtSuccess',
+    'public struct ReadAtFailure',
+    'public struct WriteAtSuccess',
+    'public struct WriteAtFailure',
+    'public readIntoAtAsync: move self, output: move [UInt8; ~], offset: UInt64, cancelled: Bool -> async Result<ReadAtSuccess, ReadAtFailure> uses File = intrinsic',
+    'public writeRangeAtAsync: move self, input: move [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64, cancelled: Bool -> async Result<WriteAtSuccess, WriteAtFailure> uses File = intrinsic'
 )) {
     if (-not $sysFileSource.Contains($required, [StringComparison]::Ordinal)) {
         throw "Portable file I/O intrinsic surface is missing: $required"
@@ -113,6 +181,8 @@ foreach ($required in @(
 }
 $managedSemantic = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs'))
 $managedEmitter = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs'))
+$managedStructsPath = Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs'
+$managedStructs = [IO.File]::ReadAllText($managedStructsPath)
 $selfhostTyped = [IO.File]::ReadAllText((Join-Path $root 'selfhost/ir/typed.slg'))
 $selfhostEmitter = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/text/platform_io.slg'))
 $selfhostRuntime = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/runtime.slg'))
@@ -123,6 +193,14 @@ foreach ($check in @(
     @{ Text = $managedEmitter; Needle = 'EmitRuntimeReadBytesAt(function, file, arguments)' },
     @{ Text = $managedEmitter; Needle = 'EmitRuntimeWriteBytesAt(function, file, arguments)' },
     @{ Text = $managedEmitter; Needle = 'EmitUIntSizeFromI64(count)' },
+    @{ Text = $managedSemantic; Needle = '"sys.file.File.readIntoAtAsync" => RequireFileReadIntoAtSignature' },
+    @{ Text = $managedSemantic; Needle = '"sys.file.FileWriter.writeRangeAtAsync" => RequireFileWriteRangeAtSignature' },
+    @{ Text = $managedEmitter; Needle = 'EmitRuntimeReadBytesAtAsync' },
+    @{ Text = $managedEmitter; Needle = 'EmitRuntimeWriteBytesAtAsync' },
+    @{ Text = $managedEmitter; Needle = 'EmitAsyncFileBufferCancelFunctions' },
+    @{ Text = $managedEmitter; Needle = 'EmitRuntimeErrorText("io")' },
+    @{ Text = $managedStructs; Needle = 'CollectOwnedLiteralTransfers' },
+    @{ Text = $managedStructs; Needle = 'DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths)' },
     @{ Text = $selfhostTyped; Needle = '-> if { -304 => opcode! }' },
     @{ Text = $selfhostTyped; Needle = '-> if { -305 => opcode! }' },
     @{ Text = $selfhostEmitter; Needle = 'call.opcode == -304 or call.opcode == -305' },
@@ -289,4 +367,152 @@ foreach ($gateName in @(
     }
 }
 
-Write-Host "[portable memory I/O contract] PASS $($contract.surfaces.Count) surfaces, $($contract.invariants.Count) invariants, fixtures $($contract.fixtures -join ', ')."
+$compilerPath = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+$llvmAsPath = Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe'
+$closureVerifierPath = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
+if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
+    throw 'Managed compiler is missing for portable memory I/O focused probes'
+}
+foreach ($toolPath in @($llvmAsPath, $closureVerifierPath)) {
+    if (-not (Test-Path -LiteralPath $toolPath -PathType Leaf)) {
+        throw "Portable memory I/O independent LLVM gate is missing: $toolPath"
+    }
+}
+$resolvedOutput = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
+    [IO.Path]::GetFullPath($OutputDirectory)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
+}
+[IO.Directory]::CreateDirectory($resolvedOutput) | Out-Null
+
+$formatSources = @($asyncSourcePath, $sysFilePath, $fileSourcePath) + @($contract.focusedProbes | ForEach-Object { Join-Path $root $_.source })
+$formatLog = (& dotnet $compilerPath format --check @formatSources 2>&1) -join "`n"
+if ($LASTEXITCODE -ne 0) {
+    throw "Portable memory I/O authoritative format failed:`n$formatLog"
+}
+
+$probeResults = @()
+foreach ($probe in $contract.focusedProbes) {
+    $probePath = Join-Path $root $probe.source
+    $target = if ($null -ne $probe.PSObject.Properties['target']) { $probe.target } else { 'windows-x64' }
+    $extension = if ($target -ceq 'wasm32-browser') { '.wasm' } elseif ($target -ceq 'linux-x64') { '' } else { '.exe' }
+    $executable = Join-Path $resolvedOutput "$($probe.id)$extension"
+    $compileArguments = @($compilerPath, 'build', $probePath, '-o', $executable, '--keep-temps', '-O0')
+    if ($target -cne 'windows-x64') {
+        $compileArguments += @('--target', $target)
+    }
+    $compileLog = (& dotnet @compileArguments 2>&1) -join "`n"
+    $compileExitCode = $LASTEXITCODE
+    $llvmAsExitCode = $null
+    $closureExitCode = $null
+    $llvmSha256 = $null
+    $bitcodeSha256 = $null
+    if ($probe.expectation -ceq 'compiler-rejected') {
+        $log = $compileLog
+        $exitCode = $compileExitCode
+    } else {
+        if ($compileExitCode -ne 0) {
+            throw "Portable memory I/O executable probe did not compile: $($probe.id):`n$compileLog"
+        }
+        $llvmPath = [IO.Path]::ChangeExtension($executable, '.ll')
+        $bitcodePath = [IO.Path]::ChangeExtension($executable, '.bc')
+        if (-not (Test-Path -LiteralPath $llvmPath -PathType Leaf)) {
+            throw "Portable memory I/O successful probe emitted no LLVM: $($probe.id)"
+        }
+        $assemblyLog = (& $llvmAsPath $llvmPath -o $bitcodePath 2>&1) -join "`n"
+        $llvmAsExitCode = $LASTEXITCODE
+        if ($llvmAsExitCode -ne 0 -or $assemblyLog.Length -ne 0) {
+            throw "Portable memory I/O llvm-as failed for $($probe.id):`n$assemblyLog"
+        }
+        $closureLog = (& $closureVerifierPath -LlvmPath $llvmPath 6>&1) -join "`n"
+        $closureExitCode = if ($?) { 0 } else { 1 }
+        if ($closureExitCode -ne 0) {
+            throw "Portable memory I/O V004 direct-call closure failed for $($probe.id):`n$closureLog"
+        }
+        $llvmSha256 = (Get-FileHash -LiteralPath $llvmPath -Algorithm SHA256).Hash
+        $bitcodeSha256 = (Get-FileHash -LiteralPath $bitcodePath -Algorithm SHA256).Hash
+        if ($target -ceq 'linux-x64') {
+            if ($executable -notmatch '^([A-Za-z]):\\(.*)$') {
+                throw "Portable memory I/O Linux executable path is not a Windows drive path: $executable"
+            }
+            $drive = $Matches[1].ToLowerInvariant()
+            $tail = $Matches[2].Replace('\', '/')
+            $linuxExecutable = "/mnt/$drive/$tail"
+            $log = (& wsl.exe -e $linuxExecutable 2>&1) -join "`n"
+        } else {
+            $log = (& $executable 2>&1) -join "`n"
+        }
+        $exitCode = $LASTEXITCODE
+    }
+    if ($probe.expectation -ceq 'exact-stdout') {
+        if ($exitCode -ne 0) {
+            throw "Portable memory I/O positive probe failed: $($probe.id):`n$log"
+        }
+        $actualLines = @($log -split "`r?`n" | Where-Object { $_.Length -gt 0 })
+        $expectedLines = @($probe.expected)
+        if (($actualLines -join "`n") -cne ($expectedLines -join "`n")) {
+            throw "Portable memory I/O stdout mismatch for $($probe.id):`n$log"
+        }
+    } elseif ($probe.expectation -ceq 'compiler-rejected') {
+        if ($exitCode -eq 0) {
+            throw "Portable memory I/O blocker probe unexpectedly succeeded: $($probe.id)"
+        }
+        foreach ($expected in $probe.expected) {
+            if (-not $log.Contains($expected, [StringComparison]::Ordinal)) {
+                throw "Portable memory I/O blocker diagnostic drifted for $($probe.id): $expected"
+            }
+        }
+    } elseif ($probe.expectation -ceq 'native-rejected') {
+        if ($exitCode.ToString([Globalization.CultureInfo]::InvariantCulture) -cne $probe.expected[0]) {
+            throw "Portable memory I/O native blocker exit drifted for $($probe.id): $exitCode"
+        }
+    } else {
+        throw "Unknown portable memory I/O probe expectation: $($probe.expectation)"
+    }
+    $probeResults += [ordered]@{
+        id = $probe.id
+        target = $target
+        expectation = $probe.expectation
+        compileExitCode = $compileExitCode
+        exitCode = $exitCode
+        llvmAsExitCode = $llvmAsExitCode
+        directCallClosureExitCode = $closureExitCode
+        sourceSha256 = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash
+        llvmSha256 = $llvmSha256
+        bitcodeSha256 = $bitcodeSha256
+        logSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($log)))
+    }
+}
+
+$inputHashes = [ordered]@{}
+foreach ($path in @($contractPath, $schemaPath, $asyncSourcePath, $sysFilePath, $fileSourcePath, $managedStructsPath, $compilerPath, $llvmAsPath, $closureVerifierPath) + $formatSources) {
+    $relative = [IO.Path]::GetRelativePath($root, $path).Replace('\', '/')
+    $inputHashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+}
+$result = [ordered]@{
+    schemaVersion = 1
+    status = $contract.completion.status
+    completed = if ($contract.completion.status -ceq 'complete') {
+        4
+    } elseif (@($contract.blockers | Where-Object { $_.layer -ceq 'managed-codegen' }).Count -eq 0) {
+        3
+    } else {
+        2
+    }
+    total = 4
+    surfaces = $contract.surfaces.Count
+    invariants = $contract.invariants.Count
+    fixtures = $contract.fixtures.Count
+    unsupported = $contract.unsupported.Count
+    blockerIds = @($contract.blockers | ForEach-Object { $_.id })
+    compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
+    probes = $probeResults
+    inputHashes = $inputHashes
+}
+$resultPath = Join-Path $resolvedOutput 'result.json'
+[IO.File]::WriteAllText(
+    $resultPath,
+    ($result | ConvertTo-Json -Depth 8) + "`n",
+    [Text.UTF8Encoding]::new($false))
+
+Write-Host "[portable memory I/O contract] $($contract.completion.status.ToUpperInvariant()) $($contract.surfaces.Count) surfaces, $($contract.invariants.Count) invariants, $($contract.fixtures.Count) fixtures, $($contract.unsupported.Count) unsupported. Result: $resultPath"

@@ -1,0 +1,23 @@
+struct Endpoint {
+    bytes: [UInt8; ~]
+    offset: Int
+}
+
+struct Completion {
+    endpoint: Endpoint
+    buffer: [UInt8; ~]
+}
+
+transfer endpoint: move Endpoint, buffer: move [UInt8; ~] -> async Completion {
+    endpoint => active!
+    buffer => output!
+    yield
+    active!.offset + 1 => active!.offset
+    active!.bytes[0] => output![0]
+    Completion { endpoint: active!, buffer: output! }
+}
+
+main {
+    Endpoint { bytes: [1; ~], offset: 0 } -> transfer([0; ~]) -> await => completed
+    "endpoint=$(completed.endpoint.bytes -> len),offset=$(completed.endpoint.offset),buffer=$(completed.buffer -> len),value=$(completed.buffer[0])" -> println
+}

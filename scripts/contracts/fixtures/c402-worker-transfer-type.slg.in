@@ -1,0 +1,106 @@
+struct SemanticType {
+    kind: Int
+    origin: Int
+    symbol: Int
+    first: Int
+    second: Int
+    status: Int
+}
+
+struct NominalField {
+    ownerType: Int
+    fieldType: Int
+    status: Int
+}
+
+struct EmitContext {
+    types: [SemanticType; ~]
+    fields: [NominalField; ~]
+}
+
+struct CoreEmitterState {
+    token: Int
+}
+
+appendType values: mut [SemanticType; ~], value: SemanticType -> Unit {
+    values -> push(value)
+}
+
+typeShape kind: Int, origin: Int, symbol: Int, first: Int, second: Int, status: Int -> SemanticType => SemanticType {
+    kind: kind
+    origin: origin
+    symbol: symbol
+    first: first
+    second: second
+    status: status
+}
+
+check label: Text, typeId: Int, expectedGeneral: Bool, expectedDirect: Bool, expectedResult: Bool, context: ref EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+    typeId -> workerTransferType(context, state) => general
+    typeId -> directWorkerSourceTextType(context) => direct
+    typeId -> workerTryParallelResultType(context, state) => result
+    "$label=$general,$direct,$result" -> println
+    ((general and expectedGeneral) or (not general and not expectedGeneral))
+        and ((direct and expectedDirect) or (not direct and not expectedDirect))
+        and ((result and expectedResult) or (not result and not expectedResult))
+}
+
+__WORKER_TRANSFER_TYPE__
+
+__DIRECT_SOURCE_TEXT_TYPE__
+
+__TRY_PARALLEL_RESULT_TYPE__
+
+main {
+    [SemanticType; ~] => types!
+    types! -> appendType(typeShape(1, 1, 2, -1, -1, 0))
+    types! -> appendType(typeShape(1, 1, 24, -1, -1, 0))
+    types! -> appendType(typeShape(3, 0, 0, 1, -1, 0))
+    types! -> appendType(typeShape(4, 0, 0, 1, -1, 0))
+    types! -> appendType(typeShape(7, 4, 0, 1, -1, 0))
+    types! -> appendType(typeShape(7, 4, 1, 1, 0, 0))
+    types! -> appendType(typeShape(7, 4, 1, 0, 1, 0))
+    types! -> appendType(typeShape(7, 4, 1, 1, 1, 0))
+    types! -> appendType(typeShape(7, 4, 1, 2, 0, 0))
+    types! -> appendType(typeShape(7, 4, 1, 3, 0, 0))
+    types! -> appendType(typeShape(7, 4, 1, 4, 0, 0))
+    types! -> appendType(typeShape(7, 4, 1, 5, 0, 0))
+    types! -> appendType(typeShape(1, 1, 24, -1, -1, 1))
+    types! -> appendType(typeShape(7, 4, 1, 0, -1, 0))
+    [NominalField; ~] => fields
+    EmitContext { types: types!, fields: fields } => context
+    CoreEmitterState { token: 0 } => state
+
+    true => passed!
+    check("int", 0, true, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("source-text", 1, false, true, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("dynamic-source-text", 2, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("fixed-source-text", 3, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("option-source-text", 4, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("direct-result-source-text-ok", 5, false, false, true, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("direct-result-source-text-error", 6, false, false, true, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("direct-result-source-text-both", 7, false, false, true, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("result-dynamic-source-text", 8, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("result-fixed-source-text", 9, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("result-option-source-text", 10, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("result-nested-result", 11, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("invalid-source-text", 12, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("result-missing-error", 13, true, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    check("out-of-range", 99, false, false, false, context, state) => casePassed!
+    passed! and casePassed! => passed!
+    "C402 worker transfer matrix=$(passed!): 15/15,45/45" -> println
+}

@@ -14,7 +14,8 @@ $fixturePath = Join-Path $root "examples\regression\1697-uri-normalization-polic
 $expectedPath = Join-Path $root "examples\regression\expected\1697-uri-normalization-policy.stdout.txt"
 $boundaryFixturePath = Join-Path $root "examples\regression\1698-uri-resolution-boundaries.slg"
 $boundaryExpectedPath = Join-Path $root "examples\regression\expected\1698-uri-resolution-boundaries.stdout.txt"
-foreach ($path in @($contractPath, $schemaPath, $sourcePath, $fixturePath, $expectedPath, $boundaryFixturePath, $boundaryExpectedPath)) {
+$browserRunnerPath = Join-Path $root "scripts\verify-uri-browser-program.mjs"
+foreach ($path in @($contractPath, $schemaPath, $sourcePath, $fixturePath, $expectedPath, $boundaryFixturePath, $boundaryExpectedPath, $browserRunnerPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "URI normalization contract input is missing: $path"
     }
@@ -25,8 +26,17 @@ if (-not (Test-Json -Json $contractText -SchemaFile $schemaPath)) {
     throw "URI normalization contract does not satisfy its schema"
 }
 $contract = $contractText | ConvertFrom-Json
-if ($contract.surfaces.Count -ne 4 -or $contract.invariants.Count -ne 8 -or $contract.fixtures.Count -ne 4) {
+if ($contract.surfaces.Count -ne 4 -or $contract.invariants.Count -ne 10 -or $contract.fixtures.Count -ne 4) {
     throw "URI normalization contract dimensions drifted"
+}
+$expectedFixtures = @(
+    "1031-uri-percent-codec",
+    "1032-uri-reference-authority",
+    "1697-uri-normalization-policy",
+    "1698-uri-resolution-boundaries"
+)
+if (@(Compare-Object $expectedFixtures @($contract.fixtures) -CaseSensitive).Count -ne 0) {
+    throw "URI normalization fixture authority drifted"
 }
 foreach ($fixtureName in $contract.fixtures) {
     foreach ($relative in @("examples/regression/$fixtureName.slg", "examples/regression/expected/$fixtureName.stdout.txt")) {
@@ -54,6 +64,36 @@ foreach ($required in @(
 foreach ($forbidden in @("uses Network", "uses File", "defaultBase", "globalBase")) {
     if ($source.Contains($forbidden, [StringComparison]::OrdinalIgnoreCase)) {
         throw "URI normalization implementation retained forbidden ambient behavior: $forbidden"
+    }
+}
+
+foreach ($requiredInvariant in @(
+    "All URI fixtures compile under the managed compiler and execute with exact output on Windows, Linux under WSL, and a Node-hosted wasm32-browser ABI harness",
+    "Browser URI programs import only the allowlisted bounded allocator, reallocator, memset, memcpy, output, and panic host functions and no file, clock, random, DNS, or network effect")) {
+    if ($contract.invariants -cnotcontains $requiredInvariant) {
+        throw "URI normalization target invariant is missing: $requiredInvariant"
+    }
+}
+
+$browserRunner = [IO.File]::ReadAllText($browserRunnerPath)
+$allowlistMatch = [regex]::Match($browserRunner, '(?s)const allowedImports = new Set\(\[(.*?)\]\);')
+if (-not $allowlistMatch.Success) { throw "URI browser import allowlist declaration is missing" }
+$declaredImports = @([regex]::Matches($allowlistMatch.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+$expectedImports = @(
+    "env:sollang_browser_alloc",
+    "env:sollang_browser_realloc",
+    "env:memset",
+    "env:memcpy",
+    "env:sollang_browser_write",
+    "env:sollang_browser_panic"
+)
+if (@(Compare-Object $expectedImports $declaredImports -CaseSensitive).Count -ne 0 -or
+    @($declaredImports | Sort-Object -Unique).Count -ne $expectedImports.Count) {
+    throw "URI browser import allowlist differs from the independent six-function authority"
+}
+foreach ($requiredLimit in @('MAX_WASM_BYTES', 'MAX_MEMORY_PAGES', 'MAX_ALLOCATION_BYTES', 'MAX_OUTPUT_BYTES')) {
+    if (-not $browserRunner.Contains("const $requiredLimit =", [StringComparison]::Ordinal)) {
+        throw "URI browser runner is missing fail-closed limit: $requiredLimit"
     }
 }
 
@@ -90,4 +130,4 @@ if ($boundaryFixture -notmatch 'base -> check\(' -or
     throw "URI resolution fixture must retain all 42 RFC cases and both empty-delimiter boundary probes"
 }
 
-Write-Host "[URI normalization contract] PASS 4 surfaces, 8 invariants, 4 fixtures, bounded owned output, all 42 RFC resolution cases, and 2 empty-delimiter probes."
+Write-Host "[URI normalization contract] PASS 4 surfaces, 10 invariants, 4 fixtures, bounded owned output, all 42 RFC resolution cases, 2 empty-delimiter probes, exact browser imports/limits, and the three-target managed execution contract."

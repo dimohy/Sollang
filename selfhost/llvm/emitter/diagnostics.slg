@@ -3193,8 +3193,11 @@ initializerIntegerLiteralFits expectedId: Int, value: typedIr.TypedIrNode, conte
         true => negative!
     }
     context.sources[value.sourceModule] => source
+    source -> len => sourceLength
     literal!.start => cursor!
     literal!.start + literal!.length => end!
+    literal!.length == 0 or literal!.start >= sourceLength or end! < literal!.start or end! > sourceLength
+        -> if { false -> return }
     false => foldedLiteral!
     Long(0) => foldedValue!
     Long(1) => foldedPlace!
@@ -3260,6 +3263,7 @@ initializerIntegerLiteralFits expectedId: Int, value: typedIr.TypedIrNode, conte
     UIntSize(0) => digits!
     false => significant!
     false => sawDigit!
+    false => previousDigit!
     0 => comparison!
     0 => codePoint!
     cursor! < end! -> while {
@@ -3268,9 +3272,13 @@ initializerIntegerLiteralFits expectedId: Int, value: typedIr.TypedIrNode, conte
             UInt8(-(foldedValue! / foldedPlace! % 10) + 48) => digit!
             foldedPlace! / 10 => foldedPlace!
         } else { source -> byte(cursor!) => digit! }
-        digit! != 95 -> if {
+        digit! == 95 -> if {
+            not previousDigit! -> if { false -> return }
+            false => previousDigit!
+        } else {
             digit! < 48 or digit! > 57 -> if { false -> return }
             true => sawDigit!
+            true => previousDigit!
             digit! != 48 -> if { true => significant! }
             significant! -> if {
                 digits! < (limit! -> len) and comparison! == 0
@@ -3284,7 +3292,7 @@ initializerIntegerLiteralFits expectedId: Int, value: typedIr.TypedIrNode, conte
         }
         cursor! + 1 => cursor!
     }
-    not sawDigit! or (negative! and unsigned and significant!)
+    not sawDigit! or not previousDigit! or (negative! and unsigned and significant!)
         -> if { false -> return }
     expected.symbol == 14 and codePoint! >= 55_296 and codePoint! <= 57_343
         -> if { false -> return }
@@ -3657,6 +3665,71 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
     }
 }
 
+invalidArrayElementLayout typeId: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => invalid!
+    typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            context.types[typeId] => outer
+            (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)
+                and outer.first >= 0
+                and outer.first < (context.types -> len)
+                -> if {
+                    context.types[outer.first] => element
+                    element.kind == 1 and element.origin == 1 and element.symbol == 0
+                        -> if { true => invalid! }
+                    element.kind == 2
+                        or element.kind == 3
+                        or element.kind == 4
+                        or element.kind == 5
+                        or element.kind == 12
+                        or element.kind == 13
+                        -> if {
+                            # Growable owners intentionally retain a growable child;
+                            # every other direct container nesting is rejected by
+                            # the managed semantic authority as an unsupported
+                            # inline element layout.
+                            not (outer.kind == 3 and element.kind == 3)
+                                -> if { true => invalid! }
+                        }
+                }
+        }
+    invalid!
+}
+
+arrayElementLayoutDiagnosticCount context: ref emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => typeIndex!
+    typeIndex! < (context.types -> len) -> while {
+        typeIndex! -> invalidArrayElementLayout(context)
+            -> if { count! + 1 => count! }
+        typeIndex! + 1 => typeIndex!
+    }
+    count!
+}
+
+emitArrayElementLayoutDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+    0 => typeIndex!
+    typeIndex! < (context.types -> len) -> while {
+        typeIndex! -> invalidArrayElementLayout(context)
+            -> if {
+                context.types[typeIndex!] => invalidArray
+                invalidArray.kind == 2 -> if {
+                    "; sollang semantic error: readonly array views require inline scalar or user-value elements" -> println
+                }
+                invalidArray.kind == 3 -> if {
+                    "; sollang semantic error: growable array elements must have a supported inline value layout" -> println
+                }
+                invalidArray.kind == 4 -> if {
+                    "; sollang semantic error: fixed array elements must be inline scalar or user values" -> println
+                }
+                invalidArray.kind == 12 -> if {
+                    "; sollang semantic error: bounded array elements must be inline scalar or user values" -> println
+                }
+            }
+        typeIndex! + 1 => typeIndex!
+    }
+}
+
 public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
     context.initializerDiagnostics -> len => initializerFailures
     context -> traitSignatureDiagnostics(false) => signatureFailures
@@ -3721,6 +3794,8 @@ public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int us
     count! + nonExhaustiveEnums => count!
     context -> privateFieldOperationDiagnosticCount => privateFieldOperations
     count! + privateFieldOperations => count!
+    context -> arrayElementLayoutDiagnosticCount => invalidArrayElementLayouts
+    count! + invalidArrayElementLayouts => count!
     count!
 }
 
@@ -3744,6 +3819,7 @@ public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit u
     context -> emitLogicalFlowOperandDiagnostics
     context -> emitEnumExhaustivenessDiagnostics
     context -> emitPrivateFieldOperationDiagnostics
+    context -> emitArrayElementLayoutDiagnostics
 }
 
 constantCollectionMessage failure: constantLowering.Failure -> Text {

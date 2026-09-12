@@ -244,6 +244,8 @@ internal enum BoundFunctionKind
     RuntimeWriteScalarAtAsync,
     RuntimeReadBytesAt,
     RuntimeWriteBytesAt,
+    RuntimeReadBytesAtAsync,
+    RuntimeWriteBytesAtAsync,
     RuntimeSyncFileAsync,
     RuntimeSyncFile,
     RuntimeAtomicReplaceFile,
@@ -504,7 +506,8 @@ internal sealed class TypeDefinitionTable
         IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
         int pointerSize,
         IReadOnlyDictionary<TypeId, TypeId>? declaredOptions = null,
-        IReadOnlyDictionary<TypeId, (TypeId Ok, TypeId Error)>? declaredResults = null)
+        IReadOnlyDictionary<TypeId, (TypeId Ok, TypeId Error)>? declaredResults = null,
+        IReadOnlyDictionary<string, TypeId>? declaredProducts = null)
     {
         _names = new Dictionary<string, TypeId>(names, StringComparer.Ordinal);
         _structs = new Dictionary<TypeId, BoundStructDefinition>(structs);
@@ -527,6 +530,13 @@ internal sealed class TypeDefinitionTable
             foreach (var (id, shape) in declaredResults)
             {
                 RegisterResultShape(id, shape.Ok, shape.Error, _enums[id].Name);
+            }
+        }
+        if (declaredProducts is not null)
+        {
+            foreach (var (shape, id) in declaredProducts)
+            {
+                _productsByShape.Add(shape, id);
             }
         }
         foreach (var definition in _enums.Values.Where(static definition =>
@@ -601,11 +611,7 @@ internal sealed class TypeDefinitionTable
             throw new ArgumentException("product types require at least two fields", nameof(fields));
         }
 
-        var shape = string.Join('|', fields.Select(static field =>
-        {
-            var label = field.Label ?? string.Empty;
-            return $"{label.Length}:{label}:{(int)field.Type}";
-        }));
+        var shape = ProductShape(fields);
         if (_productsByShape.TryGetValue(shape, out var existing))
         {
             _names.TryAdd(displayName, existing);
@@ -622,6 +628,13 @@ internal sealed class TypeDefinitionTable
         _names.TryAdd(displayName, id);
         return id;
     }
+
+    internal static string ProductShape(IReadOnlyList<(string? Label, TypeId Type)> fields) =>
+        string.Join('|', fields.Select(static field =>
+        {
+            var label = field.Label ?? string.Empty;
+            return $"{label.Length}:{label}:{(int)field.Type}";
+        }));
 
     public bool IsEnum(TypeId type) => _enums.ContainsKey(type);
 

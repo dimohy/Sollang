@@ -1,0 +1,36 @@
+import std.io.async as aio
+
+main {
+    aio.bufferQueue(4, 1) -> when {
+        Ok(queue) {
+            queue -> offer([10, 11, 12, 13; ~], 0, 4, aio.Cancellation { requested: false }) -> await -> when {
+                Ok(first) {
+                    "first=count:$(first.count),paused:$(first.backpressured),buffered:$(first.queue -> bufferedBytes)" -> println
+                    first -> intoQueue => fullQueue
+                    fullQueue -> offer([14; ~], 0, 1, aio.Cancellation { requested: false }) -> await -> when {
+                        Ok(unexpected) { "second=unexpected" -> println }
+                        Err(blocked) {
+                            "second=backpressure,buffered:$(blocked.queue -> bufferedBytes)" -> println
+                            blocked -> intoQueue => blockedQueue
+                            blockedQueue -> drain([0, 0, 0; ~], aio.Cancellation { requested: false }) -> await -> when {
+                                Ok(drained) {
+                                    "drain=count:$(drained.count),first:$(drained.output[0]),last:$(drained.output[2]),buffered:$(drained.queue -> bufferedBytes),paused:$(drained.queue -> isBackpressured)" -> println
+                                    drained -> intoQueue => resumedQueue
+                                    resumedQueue -> offer([15; ~], 0, 1, aio.Cancellation { requested: false }) -> await -> when {
+                                        Ok(resumed) {
+                                            "resume=count:$(resumed.count),buffered:$(resumed.queue -> bufferedBytes),paused:$(resumed.backpressured)" -> println
+                                        }
+                                        Err(failure) { "resume=failed" -> println }
+                                    }
+                                }
+                                Err(failure) { "drain=failed" -> println }
+                            }
+                        }
+                    }
+                }
+                Err(failure) { "first=failed" -> println }
+            }
+        }
+        Err(error) { "queue=invalid" -> println }
+    }
+}

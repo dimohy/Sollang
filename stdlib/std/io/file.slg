@@ -1,11 +1,13 @@
 namespace std.io.file
 
 import std.io as io
+import std.io.async as asyncio
 import sys.file as sysfile
 
 # ByteReader and ByteWriter own their native handles and explicit positions.
-# Protocol operations borrow those owners, perform one positional platform
-# operation, and advance only by the successful byte count.
+# Synchronous protocol operations borrow those owners. Async adapter operations
+# move the endpoint and caller buffer into the Task and return both owners on
+# ordinary completion. Positions advance only by a successful byte count.
 public struct ByteReader {
     file: sysfile.File
     offset: UInt64
@@ -14,6 +16,73 @@ public struct ByteReader {
 public struct ByteWriter {
     file: sysfile.FileWriter
     offset: UInt64
+}
+
+public struct AsyncReadSuccess {
+    public reader: ByteReader
+    public buffer: [UInt8; ~]
+    public count: Int
+    public end: Bool
+}
+
+public struct AsyncReadFailure {
+    public reader: ByteReader
+    public buffer: [UInt8; ~]
+    public error: sysfile.AsyncTransferError
+}
+
+public struct AsyncWriteSuccess {
+    public writer: ByteWriter
+    public buffer: [UInt8; ~]
+    public count: Int
+}
+
+public struct AsyncWriteFailure {
+    public writer: ByteWriter
+    public buffer: [UInt8; ~]
+    public error: sysfile.AsyncTransferError
+}
+
+adaptReadCompletion completion: move Result<sysfile.ReadAtSuccess, sysfile.ReadAtFailure>, currentOffset: UInt64 -> Result<AsyncReadSuccess, AsyncReadFailure> => completion -> when {
+    Result<sysfile.ReadAtSuccess, sysfile.ReadAtFailure>.Ok(success) {
+        currentOffset + UInt64(success.count) => nextOffset
+        Int(success.count) => count
+        success.end => end
+        Result<AsyncReadSuccess, AsyncReadFailure>.Ok(AsyncReadSuccess {
+            reader: ByteReader { file: success.file, offset: nextOffset }
+            buffer: success.buffer
+            count: count
+            end: end
+        })
+    }
+    Result<sysfile.ReadAtSuccess, sysfile.ReadAtFailure>.Err(failure) {
+        failure.error => error
+        Result<AsyncReadSuccess, AsyncReadFailure>.Err(AsyncReadFailure {
+            reader: ByteReader { file: failure.file, offset: currentOffset }
+            buffer: failure.buffer
+            error: error
+        })
+    }
+}
+
+adaptWriteCompletion completion: move Result<sysfile.WriteAtSuccess, sysfile.WriteAtFailure>, currentOffset: UInt64 -> Result<AsyncWriteSuccess, AsyncWriteFailure> => completion -> when {
+    Result<sysfile.WriteAtSuccess, sysfile.WriteAtFailure>.Ok(success) {
+        currentOffset + UInt64(success.count) => nextOffset
+        Int(success.count) => count
+        Result<AsyncWriteSuccess, AsyncWriteFailure>.Ok(AsyncWriteSuccess {
+            writer: ByteWriter { file: success.writer, offset: nextOffset }
+            buffer: success.buffer
+            count: count
+        })
+    }
+    Result<sysfile.WriteAtSuccess, sysfile.WriteAtFailure>.Err(failure) {
+        failure.error => error
+        Result<AsyncWriteSuccess, AsyncWriteFailure>.Err(AsyncWriteFailure {
+            writer: ByteWriter { file: failure.writer, offset: currentOffset }
+            buffer: failure.buffer
+            error: error
+        })
+    }
 }
 
 public byteReader file: move sysfile.File -> ByteReader {
@@ -31,6 +100,12 @@ impl ByteReader {
         self.file => file
         file
     }
+
+    public readIntoAsync: move self, output: move [UInt8; ~], cancellation: asyncio.Cancellation -> async Result<AsyncReadSuccess, AsyncReadFailure> uses File {
+        self.offset => currentOffset
+        self.file => rawFile
+        rawFile -> readIntoAtAsync(output, currentOffset, cancellation.requested) -> await -> adaptReadCompletion(currentOffset)
+    }
 }
 
 impl ByteWriter {
@@ -39,6 +114,12 @@ impl ByteWriter {
     public intoFileWriter: move self -> sysfile.FileWriter {
         self.file => file
         file
+    }
+
+    public writeRangeAsync: move self, input: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: asyncio.Cancellation -> async Result<AsyncWriteSuccess, AsyncWriteFailure> uses File {
+        self.offset => currentOffset
+        self.file => rawWriter
+        rawWriter -> writeRangeAtAsync(input, offset, length, currentOffset, cancellation.requested) -> await -> adaptWriteCompletion(currentOffset)
     }
 }
 

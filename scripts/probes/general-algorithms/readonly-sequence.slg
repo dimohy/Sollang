@@ -1,0 +1,39 @@
+import std.algorithm as algorithm
+
+struct OwnedEntry { key: Int, payload: box Int }
+struct OwnedEntryComparison { }
+
+impl algorithm.Comparison for OwnedEntryComparison {
+    type Item = OwnedEntry
+    public compare: self, left: ref OwnedEntry, right: ref OwnedEntry -> Int {
+        left.key < right.key -> if { -1 } else {
+            left.key > right.key -> if { 1 } else { 0 }
+        }
+    }
+}
+
+main {
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    algorithm.Ordering { direction: algorithm.Direction.Descending } => descending
+    OwnedEntryComparison { } => comparison
+    [OwnedEntry;
+        { key: 1, payload: box 10 },
+        { key: 2, payload: box 20 },
+        { key: 2, payload: box 21 },
+        { key: 4, payload: box 40 };
+        ~
+    ] => values!
+    OwnedEntry { key: 2, payload: box 99 } => needle
+
+    ascending -> isSorted(values!, comparison) -> println
+    descending -> isSorted(values!, comparison) -> println
+    ascending -> binarySearchRef(values!, needle, comparison) => found
+    "search=$(found.index),$(found.found)" -> println
+    "lower=$(ascending -> lowerBound(values!, needle, comparison))" -> println
+    "upper=$(ascending -> upperBound(values!, needle, comparison))" -> println
+    ascending -> equalRange(values!, needle, comparison) => range
+    "range=$(range.start),$(range.end)" -> println
+
+    values! -> take(0) => retained
+    "reuse=$(retained.key),$(values! -> len)" -> println
+}

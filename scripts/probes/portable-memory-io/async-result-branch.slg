@@ -1,0 +1,46 @@
+enum FailureKind {
+    Cancelled
+}
+
+struct Endpoint {
+    bytes: [UInt8; ~]
+    offset: Int
+}
+
+struct Success {
+    endpoint: Endpoint
+    buffer: [UInt8; ~]
+}
+
+struct Failure {
+    endpoint: Endpoint
+    buffer: [UInt8; ~]
+    kind: FailureKind
+}
+
+transfer endpoint: move Endpoint, buffer: move [UInt8; ~], cancelled: Bool -> async Result<Success, Failure> {
+    endpoint => active!
+    buffer => output!
+    yield
+    active!.offset + 1 => active!.offset
+    active!.bytes[0] => output![0]
+    cancelled -> if {
+        Result<Success, Failure>.Err(Failure {
+            endpoint: active!
+            buffer: output!
+            kind: FailureKind.Cancelled
+        })
+    } else {
+        Result<Success, Failure>.Ok(Success {
+            endpoint: active!
+            buffer: output!
+        })
+    }
+}
+
+main {
+    Endpoint { bytes: [7; ~], offset: 0 } -> transfer([0; ~], false) -> await -> when {
+        Ok(success) { "value=$(success.buffer[0]),offset=$(success.endpoint.offset)" -> println }
+        Err(failure) { "cancelled" -> println }
+    }
+}

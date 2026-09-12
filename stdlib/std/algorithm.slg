@@ -21,6 +21,11 @@ public struct SearchResult {
     public found: Bool
 }
 
+public struct EqualRange {
+    public start: Int
+    public end: Int
+}
+
 public enum Error {
     ReversedBounds
 }
@@ -46,7 +51,7 @@ impl Ordering {
         Result<T, Error>.Ok(value)
     }
 
-    before<T, C>: self, left: T, right: T, comparison: C -> Bool where C: Comparison, C.Item == T {
+    before<T, C>: self, left: ref T, right: ref T, comparison: C -> Bool where C: Comparison, C.Item == T {
         comparison -> Comparison.compare(left, right) => order
         self.direction -> when {
             Ascending { order < 0 }
@@ -95,7 +100,7 @@ impl Ordering {
     # The array must already be sorted by this direction and comparator.
     # Return the first equal position, or the insertion position when absent.
     # This borrows the existing growable storage without copying its elements.
-    public binarySearch<T, C>: self, values: [T; ~], needle: T, comparison: C -> SearchResult where C: Comparison, C.Item == T {
+    public lowerBound<T, C>: self, values: [T], needle: ref T, comparison: C -> Int where C: Comparison, C.Item == T {
         0 => lower!
         values -> len => upper!
         lower! < upper! -> while {
@@ -107,10 +112,52 @@ impl Ordering {
                     middle => upper!
                 }
         }
-        false => found!
-        lower! < (values -> len) -> if {
-            comparison -> Comparison.compare(values[lower!], needle) == 0 => found!
+        lower!
+    }
+
+    public upperBound<T, C>: self, values: [T], needle: ref T, comparison: C -> Int where C: Comparison, C.Item == T {
+        0 => lower!
+        values -> len => upper!
+        lower! < upper! -> while {
+            lower! + (upper! - lower!) / 2 => middle
+            self -> before(needle, values[middle], comparison)
+                -> if {
+                    middle => upper!
+                } else {
+                    middle + 1 => lower!
+                }
         }
-        SearchResult { index: lower!, found: found! }
+        lower!
+    }
+
+    public equalRange<T, C>: self, values: [T], needle: ref T, comparison: C -> EqualRange where C: Comparison, C.Item == T {
+        EqualRange {
+            start: self -> lowerBound(values, needle, comparison),
+            end: self -> upperBound(values, needle, comparison)
+        }
+    }
+
+    public isSorted<T, C>: self, values: [T], comparison: C -> Bool where C: Comparison, C.Item == T {
+        1 => index!
+        index! < (values -> len) -> while {
+            self -> before(values[index!], values[index! - 1], comparison)
+                -> if { false -> return }
+            index! + 1 => index!
+        }
+        true
+    }
+
+    public binarySearchRef<T, C>: self, values: [T], needle: ref T, comparison: C -> SearchResult where C: Comparison, C.Item == T {
+        self -> lowerBound(values, needle, comparison) => lower
+        false => found!
+        lower < (values -> len) -> if {
+            comparison -> Comparison.compare(values[lower], needle) == 0 => found!
+        }
+        SearchResult { index: lower, found: found! }
+    }
+
+    # Copyable needles retain the literal-friendly compatibility surface.
+    public binarySearch<T, C>: self, values: [T], needle: T, comparison: C -> SearchResult where C: Comparison, C.Item == T {
+        self -> binarySearchRef(values, needle, comparison)
     }
 }

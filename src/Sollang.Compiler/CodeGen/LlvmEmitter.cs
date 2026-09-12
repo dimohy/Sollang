@@ -80,6 +80,8 @@ internal sealed partial class LlvmEmitter
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =
         new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _activeStandardLibraryFunctionScans =
+        new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _reachableFunctions =
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundDynTraitConversion> _reachableDynTraitConversions =
@@ -152,6 +154,8 @@ internal sealed partial class LlvmEmitter
         _usesAsyncFile = _reachableFunctions.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
+                or BoundFunctionKind.RuntimeReadBytesAtAsync
+                or BoundFunctionKind.RuntimeWriteBytesAtAsync
                 or BoundFunctionKind.RuntimeSyncFileAsync
                 or BoundFunctionKind.RuntimeOpenFileAsync
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync);
@@ -702,6 +706,11 @@ internal sealed partial class LlvmEmitter
         {
             throw new SollangException("child processes are unavailable on the current target");
         }
+        if (_usesAsyncFile && !_platform.SupportsAsync)
+        {
+            throw new SollangException(
+                "asynchronous file I/O is unavailable on wasm32-browser; use a host-provided file adapter");
+        }
         if (_usesAsync && !_platform.SupportsAsync)
         {
             throw new SollangException("async functions are unavailable on the current target");
@@ -873,6 +882,7 @@ internal sealed partial class LlvmEmitter
 
         EmitDynTraitTables();
         EmitOwnedDropHelpers();
+        EmitAsyncFileBufferCancelFunctions();
         EmitStreamJoinRuntimeCallbacks();
         EmitParallelBranchCallbacks();
         EmitParallelCallbacks();

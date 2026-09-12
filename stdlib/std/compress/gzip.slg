@@ -18,7 +18,7 @@ public struct Limits {
 }
 
 public struct Codec {
-    public limits: Limits
+    limits: Limits
 }
 
 public struct DecoderLimits {
@@ -27,54 +27,56 @@ public struct DecoderLimits {
 }
 
 public struct Encoder {
-    public maxOutputBytes: Int
-    public produced: Int
-    public checksum: UInt32
-    public inputSize: UInt32
-    public started: Bool
+    maxOutputBytes: Int
+    produced: Int
+    checksum: UInt32
+    inputSize: UInt32
+    started: Bool
+    dynamic: Bool
+    bits: BitWriter
 }
 
 public struct Decoder {
-    public codec: Codec
-    public maxInputBytes: Int
-    public maxMembers: Int
-    public totalInputBytes: Int
-    public processedInputBytes: Int
-    public memberStartOffset: Int
-    public memberCount: Int
-    public phase: decoder_phases.Phase
-    public headerPosition: Int
-    public headerFlags: Int
-    public headerRemaining: Int
-    public headerValue: Int
-    public headerChecksum: UInt32
-    public bitBuffer: Int
-    public bitCount: Int
-    public finalBlock: Bool
-    public storedRemaining: Int
-    public dynamicPhase: Int
-    public literalCount: Int
-    public distanceCount: Int
-    public codeLengthCount: Int
-    public dynamicIndex: Int
-    public dynamicRepeatSymbol: Int
-    public codeLengthLengths: [Int; ~]
-    public dynamicLengths: [Int; ~]
-    public codeLengthTree: Huffman
-    public literalTree: Huffman
-    public distanceTree: Huffman
-    public symbolCode: Int
-    public symbolBits: Int
-    public compressedPhase: Int
-    public matchLength: Int
-    public matchDistance: Int
-    public checksum: UInt32
-    public memberSize: UInt32
-    public memberOutput: [UInt8; ~]
-    public verifiedOutput: [UInt8; ~]
-    public trailerChecksum: UInt32
-    public failed: Bool
-    public failure: Error
+    codec: Codec
+    maxInputBytes: Int
+    maxMembers: Int
+    totalInputBytes: Int
+    processedInputBytes: Int
+    memberStartOffset: Int
+    memberCount: Int
+    phase: decoder_phases.Phase
+    headerPosition: Int
+    headerFlags: Int
+    headerRemaining: Int
+    headerValue: Int
+    headerChecksum: UInt32
+    bitBuffer: Int
+    bitCount: Int
+    finalBlock: Bool
+    storedRemaining: Int
+    dynamicPhase: Int
+    literalCount: Int
+    distanceCount: Int
+    codeLengthCount: Int
+    dynamicIndex: Int
+    dynamicRepeatSymbol: Int
+    codeLengthLengths: [Int; ~]
+    dynamicLengths: [Int; ~]
+    codeLengthTree: Huffman
+    literalTree: Huffman
+    distanceTree: Huffman
+    symbolCode: Int
+    symbolBits: Int
+    compressedPhase: Int
+    matchLength: Int
+    matchDistance: Int
+    checksum: UInt32
+    memberSize: UInt32
+    memberOutput: [UInt8; ~]
+    verifiedOutput: [UInt8; ~]
+    trailerChecksum: UInt32
+    failed: Bool
+    failure: Error
 }
 
 public struct EncodePlan {
@@ -482,6 +484,107 @@ fixedCode symbol: Int -> DeflateCode {
     symbol <= 255 -> if { DeflateCode { value: 400 + symbol - 144, bits: 9 } -> return }
     symbol <= 279 -> if { DeflateCode { value: symbol - 256, bits: 7 } -> return }
     DeflateCode { value: 192 + symbol - 280, bits: 8 }
+}
+
+dynamicLiteralCode symbol: Int -> DeflateCode {
+    symbol <= 225 -> if { DeflateCode { value: symbol, bits: 8 } -> return }
+    DeflateCode { value: 452 + symbol - 226, bits: 9 }
+}
+
+dynamicDistanceCode symbol: Int -> DeflateCode {
+    symbol <= 1 -> if { DeflateCode { value: symbol, bits: 4 } -> return }
+    DeflateCode { value: symbol + 2, bits: 5 }
+}
+
+payloadLiteralCode symbol: Int, dynamic: Bool -> DeflateCode {
+    dynamic -> if { symbol -> dynamicLiteralCode -> return }
+    symbol -> fixedCode
+}
+
+payloadDistanceCode symbol: Int, dynamic: Bool -> DeflateCode {
+    dynamic -> if { symbol -> dynamicDistanceCode -> return }
+    DeflateCode { value: symbol, bits: 5 }
+}
+
+dynamicBlockMaximumBytes inputLength: Int, pendingBits: Int -> Int {
+    # The complete dynamic header plus end-of-block code is 1,347 bits. The
+    # literal-only upper bound is nine bits per byte.
+    (pendingBits + 1_347 + inputLength * 9 + 7) / 8
+}
+
+writeDynamicHeader writer: mut BitWriter, output: mut [UInt8; ~], final: Bool, maximum: Int -> Result<Int, Error> {
+    final -> if { 5 } else { 4 } => blockHeader
+    writeBits(writer, output, blockHeader, 3, maximum)? => header
+    writeBits(writer, output, 29, 5, maximum)? => literalCount
+    writeBits(writer, output, 29, 5, maximum)? => distanceCount
+    writeBits(writer, output, 15, 4, maximum)? => codeLengthCount
+
+    # Symbols 0 through 12 use four bits and symbols 13 through 18 use five.
+    # The resulting 13/16 + 6/32 Kraft sum is exactly one, so independent RFC
+    # 1951 readers accept the complete deterministic code-length tree.
+    [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15] => order
+    0 => codeLengthIndex!
+    codeLengthIndex! < 19 -> while {
+        order[codeLengthIndex!] <= 12 -> if { 4 } else { 5 } => length
+        writeBits(writer, output, length, 3, maximum)? => codeLength
+        codeLengthIndex! + 1 => codeLengthIndex!
+    }
+    0 => symbol!
+    symbol! < 286 -> while {
+        symbol! <= 225 -> if { 8 } else { 9 } => literalLength
+        DeflateCode { value: literalLength, bits: 4 } => lengthCode
+        writeCode(writer, output, lengthCode, maximum)? => lengthWritten
+        symbol! + 1 => symbol!
+    }
+    0 => distanceSymbol!
+    distanceSymbol! < 30 -> while {
+        distanceSymbol! <= 1 -> if { 4 } else { 5 } => distanceLength
+        DeflateCode { value: distanceLength, bits: 4 } => lengthCode
+        writeCode(writer, output, lengthCode, maximum)? => lengthWritten
+        distanceSymbol! + 1 => distanceSymbol!
+    }
+    Result<Int, Error>.Ok(1)
+}
+
+writeLz77Payload writer: mut BitWriter, input: [UInt8], output: mut [UInt8; ~], maximum: Int, dynamic: Bool -> Result<Int, Error> {
+    [-1; 4_096] => heads!
+    0 => position!
+    position! < (input -> len) -> while {
+        Match { length: 0, distance: 0 } => matched!
+        position! + 2 < (input -> len) -> if {
+            input -> hashAt(position!) => hash
+            heads![hash] => candidate
+            position! => heads![hash]
+            input -> findMatch(position!, candidate) => matched!
+        }
+        matched!.length >= 3 -> if {
+            matched!.length -> encodeLength => lengthCode
+            lengthCode.symbol -> payloadLiteralCode(dynamic) => literalCode
+            writeCode(writer, output, literalCode, maximum)? => literalWritten
+            writeBits(writer, output, lengthCode.extraValue, lengthCode.extraBits, maximum)? => lengthExtraWritten
+            matched!.distance -> encodeDistance => distanceCode
+            distanceCode.symbol -> payloadDistanceCode(dynamic) => encodedDistance
+            writeCode(writer, output, encodedDistance, maximum)? => distanceWritten
+            writeBits(writer, output, distanceCode.extraValue, distanceCode.extraBits, maximum)? => distanceExtraWritten
+            1 => matchIndex!
+            matchIndex! < matched!.length -> while {
+                position! + matchIndex! + 2 < (input -> len)
+                    -> if {
+                        input -> hashAt(position! + matchIndex!) => hash
+                        position! + matchIndex! => heads![hash]
+                    }
+                matchIndex! + 1 => matchIndex!
+            }
+            position! + matched!.length => position!
+        } else {
+            Int(input[position!]) -> payloadLiteralCode(dynamic) => literalCode
+            writeCode(writer, output, literalCode, maximum)? => literalWritten
+            position! + 1 => position!
+        }
+    }
+    256 -> payloadLiteralCode(dynamic) => endCode
+    writeCode(writer, output, endCode, maximum)? => endWritten
+    Result<Int, Error>.Ok(1)
 }
 
 powerOfTwo exponent: Int -> Int {
@@ -1657,6 +1760,23 @@ impl Codec {
             checksum: 4_294_967_295
             inputSize: 0
             started: false
+            dynamic: false
+            bits: BitWriter { currentByte: 0, bitCount: 0 }
+        })
+    }
+
+    public dynamicEncoder: self -> Result<Encoder, Error> {
+        self.limits.maxOutputBytes >= 187 -> unless {
+            errorEncoder(errors.Kind.OutputLimitExceeded, 0) -> return
+        }
+        Result<Encoder, Error>.Ok(Encoder {
+            maxOutputBytes: self.limits.maxOutputBytes
+            produced: 0
+            checksum: 4_294_967_295
+            inputSize: 0
+            started: false
+            dynamic: true
+            bits: BitWriter { currentByte: 0, bitCount: 0 }
         })
     }
 
@@ -1807,48 +1927,47 @@ impl Codec {
         # BFINAL=1, BTYPE=01. Fixed-width fields are written least-significant
         # bit first, so the packed three-bit value is 0b011.
         writeBits(writer!, output!, 3, 3, payloadMaximum)? => blockHeader
-        [Int; ~] => heads!
-        0 => headIndex!
-        headIndex! < 4_096 -> while {
-            heads! -> push(-1)
-            headIndex! + 1 => headIndex!
+        writeLz77Payload(writer!, input, output!, payloadMaximum, false)? => payloadWritten
+        flushBits(writer!, output!, payloadMaximum)? => flushed
+        input -> crc32 => checksum
+        checksum -> appendLe32(output!)
+        UInt32(input -> len) -> appendLe32(output!)
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public planCompressDynamic: self, inputLength: Int -> Result<EncodePlan, Error> {
+        inputLength >= 0 -> unless {
+            errorEncodePlan(errors.Kind.InvalidLimit, 0) -> return
         }
-        0 => position!
-        position! < (input -> len) -> while {
-            Match { length: 0, distance: 0 } => matched!
-            position! + 2 < (input -> len) -> if {
-                input -> hashAt(position!) => hash
-                heads![hash] => candidate
-                position! => heads![hash]
-                input -> findMatch(position!, candidate) => matched!
+        18 + dynamicBlockMaximumBytes(inputLength, 0) => maximumOutputLength
+        maximumOutputLength <= self.limits.maxOutputBytes
+            -> unless {
+                errorEncodePlan(errors.Kind.OutputLimitExceeded, UIntSize(inputLength)) -> return
             }
-            matched!.length >= 3 -> if {
-                matched!.length -> encodeLength => lengthCode
-                lengthCode.symbol -> fixedCode => literalCode
-                writeCode(writer!, output!, literalCode, payloadMaximum)? => literalWritten
-                writeBits(writer!, output!, lengthCode.extraValue, lengthCode.extraBits, payloadMaximum)? => lengthExtraWritten
-                matched!.distance -> encodeDistance => distanceCode
-                DeflateCode { value: distanceCode.symbol, bits: 5 } => fixedDistanceCode
-                writeCode(writer!, output!, fixedDistanceCode, payloadMaximum)? => distanceWritten
-                writeBits(writer!, output!, distanceCode.extraValue, distanceCode.extraBits, payloadMaximum)? => distanceExtraWritten
-                1 => matchIndex!
-                matchIndex! < matched!.length -> while {
-                    position! + matchIndex! + 2 < (input -> len)
-                        -> if {
-                            input -> hashAt(position! + matchIndex!) => hash
-                            position! + matchIndex! => heads![hash]
-                        }
-                    matchIndex! + 1 => matchIndex!
-                }
-                position! + matched!.length => position!
-            } else {
-                Int(input[position!]) -> fixedCode => literalCode
-                writeCode(writer!, output!, literalCode, payloadMaximum)? => literalWritten
-                position! + 1 => position!
-            }
-        }
-        256 -> fixedCode => endCode
-        writeCode(writer!, output!, endCode, payloadMaximum)? => endWritten
+        Result<EncodePlan, Error>.Ok(EncodePlan {
+            inputLength: inputLength
+            outputLength: maximumOutputLength
+            blockCount: 1
+        })
+    }
+
+    public compressDynamic: self, input: [UInt8] -> Result<[UInt8; ~], Error> {
+        self -> planCompressDynamic(input -> len)? => plan
+        self.limits.maxOutputBytes - 8 => payloadMaximum
+        [UInt8; ~] => output!
+        appendChecked(output!, 31, payloadMaximum)? => header0
+        appendChecked(output!, 139, payloadMaximum)? => header1
+        appendChecked(output!, 8, payloadMaximum)? => header2
+        appendChecked(output!, 0, payloadMaximum)? => header3
+        appendChecked(output!, 0, payloadMaximum)? => header4
+        appendChecked(output!, 0, payloadMaximum)? => header5
+        appendChecked(output!, 0, payloadMaximum)? => header6
+        appendChecked(output!, 0, payloadMaximum)? => header7
+        appendChecked(output!, 4, payloadMaximum)? => header8
+        appendChecked(output!, 255, payloadMaximum)? => header9
+        BitWriter { currentByte: 0, bitCount: 0 } => writer!
+        writeDynamicHeader(writer!, output!, true, payloadMaximum)? => dynamicHeader
+        writeLz77Payload(writer!, input, output!, payloadMaximum, true)? => payloadWritten
         flushBits(writer!, output!, payloadMaximum)? => flushed
         input -> crc32 => checksum
         checksum -> appendLe32(output!)
@@ -1901,6 +2020,32 @@ impl Codec {
 
 impl Encoder {
     public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.dynamic -> if {
+            self.started -> if { 0 } else { 10 } => headerLength
+            input -> len -> dynamicBlockMaximumBytes(self.bits.bitCount) => blockMaximum
+            headerLength + blockMaximum <= self.maxOutputBytes - self.produced - 178
+                -> unless {
+                    errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.inputSize)) -> return
+                }
+            output -> len => before
+            output -> reserve(before + headerLength + blockMaximum)
+            not self.started -> if {
+                output -> appendStoredHeader
+                true => self.started
+            }
+            self.bits => bits!
+            writeDynamicHeader(bits!, output, false, self.maxOutputBytes - 8)? => dynamicHeader
+            writeLz77Payload(bits!, input, output, self.maxOutputBytes - 8, true)? => payloadWritten
+            self.checksum -> crc32Update(input) => checksum
+            self.inputSize + UInt32(input -> len) => inputSize
+            (output -> len) - before => added
+            self.produced + added => produced
+            checksum => self.checksum
+            inputSize => self.inputSize
+            produced => self.produced
+            bits! => self.bits
+            Result<Int, Error>.Ok(added) -> return
+        }
         (input -> len) == 0 -> if { 0 } else { ((input -> len) + 65_534) / 65_535 } => blocks
         self.started -> if { 0 } else { 10 } => headerLength
         headerLength + blocks * 5 + (input -> len) => added
@@ -1930,6 +2075,25 @@ impl Encoder {
     }
 
     public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.dynamic -> if {
+            self.started -> if { 0 } else { 10 } => headerLength
+            dynamicBlockMaximumBytes(0, self.bits.bitCount) => blockMaximum
+            headerLength + blockMaximum + 8 <= self.maxOutputBytes - self.produced
+                -> unless {
+                    errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.inputSize)) -> return
+                }
+            output -> len => before
+            output -> reserve(before + headerLength + blockMaximum + 8)
+            not self.started -> if { output -> appendStoredHeader }
+            [UInt8; ~] => empty
+            self.bits => bits!
+            writeDynamicHeader(bits!, output, true, self.maxOutputBytes - 8)? => dynamicHeader
+            writeLz77Payload(bits!, empty, output, self.maxOutputBytes - 8, true)? => payloadWritten
+            flushBits(bits!, output, self.maxOutputBytes - 8)? => flushed
+            self.checksum -> xor32(4_294_967_295) -> appendLe32(output)
+            self.inputSize -> appendLe32(output)
+            Result<Int, Error>.Ok((output -> len) - before) -> return
+        }
         self.started -> if { 0 } else { 10 } => headerLength
         headerLength + 13 => added
         added <= self.maxOutputBytes - self.produced

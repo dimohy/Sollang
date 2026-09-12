@@ -229,11 +229,11 @@ internal sealed partial class LlvmEmitter
             if (cfgPlan is not null)
             {
                 var point = cfgPlan.Points[stateIndex - 1];
-                if (point.OwnsInput)
+                if (point.OwnsPrimaryInput)
                 {
                     DropCancelledAsyncInput(function);
-                    DropCancelledAsyncAdditionalInputs(function);
                 }
+                DropCancelledAsyncAdditionalInputs(function, point.OwnedAdditionalInputIndexes);
                 if (!point.IsYield)
                 {
                     CancelStoredChild(function);
@@ -560,11 +560,18 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<AsyncSpillPlan> spillPlans)
     {
         var inputName = lowering.Function.InputName ?? "it";
-        var ownsInput = lowering.Function.InputOwnership == BoundFunctionInputOwnership.Move
+        var ownsPrimaryInput = lowering.Function.InputOwnership == BoundFunctionInputOwnership.Move
             && lowering.Function.InputType is { } inputType
             && _program.Types.ContainsOwnedStorage(inputType)
             && _locals.ContainsKey(inputName);
-        point.SetRuntimeShape(spillPlans, ownsInput);
+        var ownedAdditionalInputIndexes = (lowering.Function.AdditionalParameters ?? [])
+            .Select((parameter, index) => (parameter, index))
+            .Where(item => item.parameter.Ownership == BoundFunctionInputOwnership.Move
+                && _program.Types.ContainsOwnedStorage(item.parameter.Type)
+                && _locals.ContainsKey(item.parameter.Name))
+            .Select(static item => item.index)
+            .ToArray();
+        point.SetRuntimeShape(spillPlans, ownsPrimaryInput, ownedAdditionalInputIndexes);
         var spills = BuildRuntimeAsyncSpills(point.Spills);
         StoreAsyncSpills(lowering.Function, spills);
         foreach (var spill in spills)
@@ -583,9 +590,21 @@ internal sealed partial class LlvmEmitter
         if (lowering.Function.InputOwnership == BoundFunctionInputOwnership.Move
             && lowering.Function.InputType is { } resumedInputType
             && _program.Types.ContainsOwnedStorage(resumedInputType)
-            && !point.OwnsInput)
+            && !point.OwnsPrimaryInput)
         {
             RemoveLocal(inputName);
+        }
+        var ownedAdditionalInputIndexSet = point.OwnedAdditionalInputIndexes.ToHashSet();
+        var additionalParameters = lowering.Function.AdditionalParameters ?? [];
+        for (var index = 0; index < additionalParameters.Count; index++)
+        {
+            var parameter = additionalParameters[index];
+            if (parameter.Ownership == BoundFunctionInputOwnership.Move
+                && _program.Types.ContainsOwnedStorage(parameter.Type)
+                && !ownedAdditionalInputIndexSet.Contains(index))
+            {
+                RemoveLocal(parameter.Name);
+            }
         }
         EmitLabel(point.ResumeLabel);
         _currentBlockLabel = point.ResumeLabel;
@@ -1270,6 +1289,24 @@ internal sealed partial class LlvmEmitter
         }
         else if (task.RuntimeFunction is
                  {
+                     Kind: BoundFunctionKind.RuntimeReadBytesAtAsync
+                         or BoundFunctionKind.RuntimeWriteBytesAtAsync
+                 } fileBuffer)
+        {
+            var fileResult = EmitRuntimeCompletedFileBuffer(
+                fileBuffer,
+                task.HandleName,
+                task.ContextName);
+            var fileResultAddress = AsyncContextField(
+                task.ContextName, task.InputType, task.ResultType, 6, "file_buffer_task_result_address");
+            EmitStore(
+                LlvmEnumType(fileResult.Type),
+                fileResult.ValueName,
+                fileResultAddress,
+                RuntimeAlignment(fileResult.Type));
+        }
+        else if (task.RuntimeFunction is
+                 {
                      Kind: BoundFunctionKind.RuntimeOpenFileAsync
                          or BoundFunctionKind.RuntimeOpenWriteFileAsync
                  } fileOpen)
@@ -1438,19 +1475,22 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private void DropCancelledAsyncAdditionalInputs(BoundFunction function)
+    private void DropCancelledAsyncAdditionalInputs(
+        BoundFunction function,
+        IReadOnlyCollection<int>? ownedInputIndexes = null)
     {
         var parameters = function.AdditionalParameters ?? [];
         for (var index = 0; index < parameters.Count; index++)
         {
             var parameter = parameters[index];
             if (parameter.Ownership != BoundFunctionInputOwnership.Move
-                || !_program.Types.ContainsOwnedStorage(parameter.Type))
+                || !_program.Types.ContainsOwnedStorage(parameter.Type)
+                || (ownedInputIndexes is not null && !ownedInputIndexes.Contains(index)))
             {
                 continue;
             }
 
-            var value = $"%cancel_arg_{index}";
+            var value = NextTemp($"cancel_arg_{index}");
             EmitAsyncFunctionContextLoad(
                 value,
                 "%context",
@@ -1534,12 +1574,18 @@ internal sealed partial class LlvmEmitter
 
         public IReadOnlyList<AsyncSpillPlan> Spills { get; private set; } = [];
 
-        public bool OwnsInput { get; private set; }
+        public bool OwnsPrimaryInput { get; private set; }
 
-        public void SetRuntimeShape(IReadOnlyList<AsyncSpillPlan> spills, bool ownsInput)
+        public IReadOnlyList<int> OwnedAdditionalInputIndexes { get; private set; } = [];
+
+        public void SetRuntimeShape(
+            IReadOnlyList<AsyncSpillPlan> spills,
+            bool ownsPrimaryInput,
+            IReadOnlyList<int> ownedAdditionalInputIndexes)
         {
             Spills = spills;
-            OwnsInput = ownsInput;
+            OwnsPrimaryInput = ownsPrimaryInput;
+            OwnedAdditionalInputIndexes = ownedAdditionalInputIndexes;
         }
     }
 

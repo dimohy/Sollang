@@ -319,6 +319,19 @@ function Wait-ContractResult {
     return $json | ConvertFrom-Json
 }
 
+$plainFailureResultPath = Join-Path $scratchRoot "$runId-plain-failure.result.json"
+& $launcherPath -Verification Probe -ProbeOutcome PlainFail -RunId "$runId-plain-failure" `
+    -CompletionRecordPath $plainFailureResultPath | Out-Null
+$plainFailureResult = Wait-ContractResult $plainFailureResultPath
+if ($plainFailureResult.status -cne 'failed' -or $plainFailureResult.targetExitCode -ne 9 -or
+    @($plainFailureResult.failureIds).Count -ne 1 -or
+    $plainFailureResult.failureIds[0] -cne 'TARGET_PROCESS_FAILED' -or
+    @($plainFailureResult.orphanProcessIds).Count -ne 0) {
+    throw 'Unidentified target failure did not preserve the canonical fallback failure ID'
+}
+$contractChecks.Add('unidentified-target-failure-id')
+Write-Host '[detached selfhost verification] PASS unidentified non-zero target exit preserves TARGET_PROCESS_FAILED.'
+
 foreach ($outcome in @('ChildPass', 'ChildOrphan')) {
     $childResultPath = Join-Path $scratchRoot "$runId-$outcome.result.json"
     try {
@@ -485,7 +498,7 @@ foreach ($entry in $inputHashes) {
         throw "Harness source changed during its contract test: $($entry.Path)"
     }
 }
-if ($contractChecks.Count -ne 12) { throw "Incomplete harness groups: $($contractChecks.Count)/12" }
+if ($contractChecks.Count -ne 13) { throw "Incomplete harness groups: $($contractChecks.Count)/13" }
 $contractStatus = 'passed'
 } catch {
     $contractError = $_.Exception.Message
@@ -493,7 +506,7 @@ $contractStatus = 'passed'
 } finally {
     [ordered]@{
         schemaVersion = 1; state = $contractStatus; runId = $runId
-        passed = $contractChecks.Count; total = 12; groups = @($contractChecks)
+        passed = $contractChecks.Count; total = 13; groups = @($contractChecks)
         error = $contractError; inputHashes = $inputHashes
         durationMilliseconds = [math]::Round(([DateTimeOffset]::UtcNow - $contractStarted).TotalMilliseconds)
         scope = 'Detached harness and input dispatch only; no compiler build or Stage execution'
@@ -501,4 +514,4 @@ $contractStatus = 'passed'
         Set-Content -LiteralPath (Join-Path $scratchRoot "$runId.contract-result.json") -Encoding utf8
     Stop-Transcript | Out-Null
 }
-Write-Host "[detached selfhost verification] PASS 12/12 groups: $(Join-Path $scratchRoot "$runId.contract-result.json")"
+Write-Host "[detached selfhost verification] PASS 13/13 groups: $(Join-Path $scratchRoot "$runId.contract-result.json")"

@@ -740,22 +740,28 @@ writeSyntaxDiagnostic source: file.SourceText -> Unit uses Console {
                     message! -> appendText(": unterminated character literal")
                 }
             } else {
-                sourceView -> diagnostics.expectedCodes => expected
-                expected[(expected -> len) - 1] => expectedCode
                 message! -> appendText("sollang: parse error at ")
                 message! -> appendPositiveInt(position.line)
                 message! -> appendText(":")
                 message! -> appendPositiveInt(position.column)
-                message! -> appendText(": expected ")
-                expectedCode >= 0 -> if {
-                    grammar.tokenNames() => tokenNames
-                    message! -> appendText(tokenNames[expectedCode])
+                diagnostic.code == 6 -> if {
+                    message! -> appendText(": duplicate product field label '")
+                    source -> slice(diagnostic.span.start, diagnostic.span.length) => duplicateLabel
+                    message! -> appendText(duplicateLabel)
+                    message! -> appendText("'")
                 } else {
-                    grammar.keywordTexts() => keywordTexts
-                    0 - expectedCode - 1 => keywordIndex
-                    message! -> appendText("'")
-                    message! -> appendText(keywordTexts[keywordIndex])
-                    message! -> appendText("'")
+                    sourceView -> diagnostics.preferredExpectedCode(diagnostic) => expectedCode
+                    message! -> appendText(": expected ")
+                    expectedCode >= 0 -> if {
+                        grammar.tokenNames() => tokenNames
+                        message! -> appendText(tokenNames[expectedCode])
+                    } else {
+                        grammar.keywordTexts() => keywordTexts
+                        0 - expectedCode - 1 => keywordIndex
+                        message! -> appendText("'")
+                        message! -> appendText(keywordTexts[keywordIndex])
+                        message! -> appendText("'")
+                    }
                 }
             }
         }

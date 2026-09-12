@@ -1613,14 +1613,50 @@ resolvedCallRuntimeParameterCount call: ref TypedIrNode, prepared: ref semanticC
     count!
 }
 
+# Late exact-receiver repair is valid only when the source has an explicit
+# receiver: a flow call or a dotted direct call. The first operand of an
+# ordinary global call is an argument, never a receiver. Treating it as one can
+# reinterpret `scanValue(self, depth)` as `self.depth()` after types settle.
+callHasExplicitReceiverSyntax call: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    call.sourceModule >= 0
+        and call.sourceModule < (prepared.package.ranges -> len)
+        and call.astNode >= 0
+        -> unless { false -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    call.astNode < range.astCount -> unless { false -> return }
+    prepared.package.nodes[range.astStart + call.astNode] => callAst
+    callAst.kind == 10 -> if { true -> return }
+    callAst.kind == 11 -> unless { false -> return }
+    -1 => leftParenToken!
+    0 => parenthesisDepth!
+    callAst.firstToken => tokenIndex!
+    tokenIndex! < callAst.firstToken + callAst.tokenCount
+        -> while {
+            prepared.package.tokens[range.tokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdLeftParen()
+                -> if {
+                    parenthesisDepth! == 0 -> if { tokenIndex! => leftParenToken! }
+                    parenthesisDepth! + 1 => parenthesisDepth!
+                }
+            token.kind == grammar.tokenIdRightParen() and parenthesisDepth! > 0
+                -> if { parenthesisDepth! - 1 => parenthesisDepth! }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    leftParenToken! >= callAst.firstToken + 2
+        and prepared.package.tokens[range.tokenStart + leftParenToken! - 1].kind == grammar.tokenIdIdentifier()
+        and prepared.package.tokens[range.tokenStart + leftParenToken! - 2].kind == grammar.tokenIdDot()
+}
+
 # Preliminary name lookup can bind an instance call before the receiver reaches
-# its final nominal type. A same-name global function is only a provisional
-# candidate: exact receiver lookup may replace it when that nominal owner has a
-# matching inherent method. Existing methods stay on the fast path unless their
-# canonical nominal owner or concrete arity disagrees with the receiver/call chain. A global remains intact
-# when the receiver owns no exact method, preserving free-function flow syntax.
+# its final nominal type. A same-name global function on explicit receiver
+# syntax is only a provisional candidate: exact receiver lookup may replace it
+# when that nominal owner has a matching inherent method. Existing methods stay
+# on the fast path unless their canonical nominal owner or concrete arity
+# disagrees with the receiver/call chain. Ordinary global calls remain intact.
 resolvedCallNeedsExactReceiver callIndex: Int, nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, ownerTypes: [Int], types: ref [typeIds.SemanticType; ~] -> Bool {
     nodes[callIndex] => call
+    call -> callHasExplicitReceiverSyntax(prepared)
+        -> unless { false -> return }
     call.targetModule >= 0
         and call.targetModule < (prepared.package.ranges -> len)
         and call.symbol >= 0
@@ -2963,7 +2999,10 @@ sealFinalIndexTypes nodes: mut [TypedIrNode; ~], frozenRecursiveSemanticTypes: r
                             frozenRecursiveSemanticTypes[containerType!.first] => containerType!
                         }
                     -1 => elementTypeId!
-                    containerType!.kind == 2 or containerType!.kind == 3 or containerType!.kind == 4
+                    containerType!.kind == 2
+                        or containerType!.kind == 3
+                        or containerType!.kind == 4
+                        or containerType!.kind == 12
                         -> if { containerType!.first => elementTypeId! }
                     containerType!.kind == 5 -> if { containerType!.second => elementTypeId! }
                     elementTypeId! >= 0 -> if {
@@ -3094,13 +3133,15 @@ resolveFinalProjectedMethods nodes: mut [TypedIrNode; ~], prepared: ref semantic
                 }
             finalProjectedMethod!.kind == 6 or finalProjectedMethod!.kind == 9
                 => finalProjectedCall
+            finalProjectedMethod! -> callHasExplicitReceiverSyntax(prepared)
+                => finalProjectedHasExplicitReceiver
             finalProjectedMethod!.symbol < 0 and finalProjectedMethod!.targetModule < 0
                 => finalProjectedUnresolved
             finalProjectedMethodIndex! -> resolvedCallNeedsExactReceiver(nodes, prepared, ownerTypes!, frozenRecursiveSemanticTypes)
                 => finalProjectedArityMismatch
             finalProjectedUnresolved or finalProjectedArityMismatch
                 => finalProjectedNeedsResolution
-            finalProjectedCall and finalProjectedNeedsResolution
+            finalProjectedCall and finalProjectedHasExplicitReceiver and finalProjectedNeedsResolution
                 and not finalProjectedControlProducerWrapper!
                 and (finalProjectedMethod!.opcode == -1
                 or finalProjectedMethod!.opcode == -225
@@ -3328,7 +3369,30 @@ resolveFinalProjectedMethods nodes: mut [TypedIrNode; ~], prepared: ref semantic
                                             finalProjectedModuleSearch! + 1 => finalProjectedModuleSearch!
                                         }
                                 }
+                            false => finalProjectedCandidateArityMatches!
                             finalProjectedMethodFound! and not finalProjectedMethodAmbiguous!
+                                -> if {
+                                    finalProjectedMethod! => finalProjectedCandidateCall!
+                                    finalProjectedTargetSource! => finalProjectedCandidateCall!.targetModule
+                                    finalProjectedTargetSymbol! => finalProjectedCandidateCall!.symbol
+                                    finalProjectedCandidateCall! -> resolvedCallRuntimeParameterCount(prepared)
+                                        => finalProjectedCandidateParameterCount
+                                    0 => finalProjectedCandidateArgumentCount!
+                                    finalProjectedCandidateCall!.operand0 => finalProjectedCandidateArgumentIndex!
+                                    finalProjectedCandidateArgumentIndex! >= 0
+                                        and finalProjectedCandidateArgumentIndex! < (nodes -> len)
+                                        and finalProjectedCandidateArgumentCount! <= finalProjectedCandidateParameterCount
+                                        -> while {
+                                            finalProjectedCandidateArgumentCount! + 1
+                                                => finalProjectedCandidateArgumentCount!
+                                            nodes[finalProjectedCandidateArgumentIndex!].nextOperand
+                                                => finalProjectedCandidateArgumentIndex!
+                                        }
+                                    finalProjectedCandidateArgumentCount! == finalProjectedCandidateParameterCount
+                                        => finalProjectedCandidateArityMatches!
+                                }
+                            finalProjectedMethodFound! and not finalProjectedMethodAmbiguous!
+                                and finalProjectedCandidateArityMatches!
                                 -> if {
                                     6 => finalProjectedMethod!.kind
                                     finalProjectedTargetSource! => finalProjectedMethod!.targetModule

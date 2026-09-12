@@ -1085,7 +1085,9 @@ internal sealed partial class SemanticCompiler
             && function.Name is "std.time.Duration.sleep"
                 or "sys.file.readAsync"
                 or "sys.file.openReadAsync"
-                or "sys.file.openWriteAsync";
+                or "sys.file.openWriteAsync"
+                or "sys.file.File.readIntoAtAsync"
+                or "sys.file.FileWriter.writeRangeAtAsync";
         if (function.IsAsync
             && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
                 || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
@@ -3091,8 +3093,10 @@ internal sealed partial class SemanticCompiler
                 isAsync: true),
             "sys.file.sync" => RequireOwnedFileSyncSignature(function, inputType, returnType),
             "sys.file.atomicReplace" => RequireAtomicReplaceSignature(function, inputType, returnType),
-            "sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature(function, inputType, returnType),
-            "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType),
+            "sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: false),
+            "sys.file.File.readIntoAtAsync" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: true),
+            "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: false),
+            "sys.file.FileWriter.writeRangeAtAsync" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: true),
             "std.net.socket.Reactor.waitInto" => RequireSocketReactorWaitSignature(function, inputType, returnType),
             "std.net.socket.ListenOptions.listen" => RequireSocketListenSignature(function, inputType, returnType),
             "std.net.socket.TcpListener.accept" => RequireSocketOwnerResultSignature(
@@ -5266,11 +5270,34 @@ internal sealed partial class SemanticCompiler
     private BoundFunctionKind RequireFileReadIntoAtSignature(
         FunctionDeclaration function,
         BoundType? inputType,
-        BoundType returnType)
+        BoundType returnType,
+        bool isAsync)
     {
         var parameters = function.AdditionalParameters ?? [];
+        if (isAsync)
+        {
+            if (inputType is not { } asyncFileType
+                || !IsNamedStructType(asyncFileType, "sys.file.File")
+                || function.InputOwnership != FunctionInputOwnership.Move
+                || parameters.Count != 3
+                || parameters[0].TypeName != "[UInt8; ~]"
+                || parameters[0].Ownership != FunctionInputOwnership.Move
+                || parameters[1].TypeName != "UInt64"
+                || parameters[2].TypeName != "Bool"
+                || !function.IsAsync
+                || !_types.TryGetResultTypes(returnType, out var asyncResultTypes)
+                || !IsNamedStructType(asyncResultTypes.Ok, "sys.file.ReadAtSuccess")
+                || !IsNamedStructType(asyncResultTypes.Error, "sys.file.ReadAtFailure"))
+            {
+                throw Error(function.Line, function.Column,
+                    $"intrinsic '{function.Name}' must have signature move File, move [UInt8; ~], UInt64, Bool -> "
+                    + "async Result<ReadAtSuccess, ReadAtFailure>");
+            }
+            return BoundFunctionKind.RuntimeReadBytesAtAsync;
+        }
         if (inputType is not { } fileType
             || !IsNamedStructType(fileType, "sys.file.File")
+            || function.IsAsync != isAsync
             || parameters.Count != 2
             || parameters[0].TypeName != "[UInt8; ~]"
             || parameters[0].Ownership != FunctionInputOwnership.MutableBorrow
@@ -5280,19 +5307,48 @@ internal sealed partial class SemanticCompiler
             || resultTypes.Error != BoundType.Text)
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature File, mut [UInt8; ~], UInt64 -> Result<UIntSize, Text>");
+                $"intrinsic '{function.Name}' must have signature File, mut [UInt8; ~], UInt64 -> "
+                + (isAsync ? "async " : "")
+                + "Result<UIntSize, Text>");
         }
-        return BoundFunctionKind.RuntimeReadBytesAt;
+        return isAsync
+            ? BoundFunctionKind.RuntimeReadBytesAtAsync
+            : BoundFunctionKind.RuntimeReadBytesAt;
     }
 
     private BoundFunctionKind RequireFileWriteRangeAtSignature(
         FunctionDeclaration function,
         BoundType? inputType,
-        BoundType returnType)
+        BoundType returnType,
+        bool isAsync)
     {
         var parameters = function.AdditionalParameters ?? [];
+        if (isAsync)
+        {
+            if (inputType is not { } asyncWriterType
+                || !IsNamedStructType(asyncWriterType, "sys.file.FileWriter")
+                || function.InputOwnership != FunctionInputOwnership.Move
+                || parameters.Count != 5
+                || parameters[0].TypeName != "[UInt8; ~]"
+                || parameters[0].Ownership != FunctionInputOwnership.Move
+                || parameters[1].TypeName != "UIntSize"
+                || parameters[2].TypeName != "UIntSize"
+                || parameters[3].TypeName != "UInt64"
+                || parameters[4].TypeName != "Bool"
+                || !function.IsAsync
+                || !_types.TryGetResultTypes(returnType, out var asyncResultTypes)
+                || !IsNamedStructType(asyncResultTypes.Ok, "sys.file.WriteAtSuccess")
+                || !IsNamedStructType(asyncResultTypes.Error, "sys.file.WriteAtFailure"))
+            {
+                throw Error(function.Line, function.Column,
+                    $"intrinsic '{function.Name}' must have signature move FileWriter, move [UInt8; ~], UIntSize, UIntSize, UInt64, Bool -> "
+                    + "async Result<WriteAtSuccess, WriteAtFailure>");
+            }
+            return BoundFunctionKind.RuntimeWriteBytesAtAsync;
+        }
         if (inputType is not { } writerType
             || !IsNamedStructType(writerType, "sys.file.FileWriter")
+            || function.IsAsync != isAsync
             || parameters.Count != 4
             || parameters[0].TypeName != "ref [UInt8; ~]"
             || parameters[1].TypeName != "UIntSize"
@@ -5303,9 +5359,13 @@ internal sealed partial class SemanticCompiler
             || resultTypes.Error != BoundType.Text)
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature FileWriter, ref [UInt8; ~], UIntSize, UIntSize, UInt64 -> Result<UIntSize, Text>");
+                $"intrinsic '{function.Name}' must have signature FileWriter, ref [UInt8; ~], UIntSize, UIntSize, UInt64 -> "
+                + (isAsync ? "async " : "")
+                + "Result<UIntSize, Text>");
         }
-        return BoundFunctionKind.RuntimeWriteBytesAt;
+        return isAsync
+            ? BoundFunctionKind.RuntimeWriteBytesAtAsync
+            : BoundFunctionKind.RuntimeWriteBytesAt;
     }
     private void BindBlockFunctionCall(
         BlockFunctionCallStatement call,
@@ -10134,6 +10194,8 @@ internal sealed partial class SemanticCompiler
                         or BoundFunctionKind.RuntimeMouseEvents
                         or BoundFunctionKind.RuntimeReadBytesAt
                         or BoundFunctionKind.RuntimeWriteBytesAt
+                        or BoundFunctionKind.RuntimeReadBytesAtAsync
+                        or BoundFunctionKind.RuntimeWriteBytesAtAsync
                         or BoundFunctionKind.RuntimeSocketReceive
                         or BoundFunctionKind.RuntimeSocketReceiveAppend
                         or BoundFunctionKind.RuntimeSocketReceiveVectored
@@ -10343,6 +10405,20 @@ internal sealed partial class SemanticCompiler
                             path);
                         _resolvedGenericCalls[target] = function;
                         currentType = function.ReturnType;
+                        continue;
+                    case BoundFunctionKind.RuntimeReadBytesAtAsync:
+                    case BoundFunctionKind.RuntimeWriteBytesAtAsync:
+                        EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        ValidateAdditionalFunctionArguments(
+                            function,
+                            target.Arguments,
+                            functions,
+                            bindings,
+                            allowReadIntCall,
+                            mutableBindings,
+                            path);
+                        _resolvedGenericCalls[target] = function;
+                        currentType = AsyncCallType(function);
                         continue;
                     case BoundFunctionKind.RuntimeSocketListen:
                     case BoundFunctionKind.RuntimeReadBytesAt:
@@ -11967,6 +12043,40 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeWriteScalar:
                 return InferGenericCallExpression(
                     expression, function, functions, bindings, allowReadIntCall);
+            case BoundFunctionKind.RuntimeReadBytesAtAsync:
+            case BoundFunctionKind.RuntimeWriteBytesAtAsync:
+                var fileArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
+                if (expression.Arguments.Count != fileArgumentCount)
+                {
+                    throw Error(
+                        expression.Line,
+                        expression.Column,
+                        $"{path} expects {fileArgumentCount} argument(s)");
+                }
+                var fileOwnerType = InferExpression(
+                    expression.Arguments[0],
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
+                EnsureRuntimeInput(
+                    fileOwnerType,
+                    function,
+                    expression.Arguments[0].Line,
+                    expression.Arguments[0].Column,
+                    path);
+                ValidateAdditionalFunctionArguments(
+                    function,
+                    expression.Arguments.Skip(1).ToArray(),
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    mutableBindings,
+                    path);
+                _resolvedGenericCalls[expression] = function;
+                return AsyncCallType(function);
             case BoundFunctionKind.RuntimeSocketListen:
             case BoundFunctionKind.RuntimeReadBytesAt:
             case BoundFunctionKind.RuntimeWriteBytesAt:
@@ -13579,6 +13689,8 @@ internal sealed partial class SemanticCompiler
             || function.Kind is BoundFunctionKind.RuntimeSleep
                 or BoundFunctionKind.RuntimeNowMillis
                 or BoundFunctionKind.RuntimeReadScalarAsync
+                or BoundFunctionKind.RuntimeReadBytesAtAsync
+                or BoundFunctionKind.RuntimeWriteBytesAtAsync
                 or BoundFunctionKind.RuntimeOpenFile
                 or BoundFunctionKind.RuntimeOpenWriteFile
                 or BoundFunctionKind.RuntimeOpenFileAsync
@@ -13660,6 +13772,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
                 or BoundFunctionKind.RuntimeReadBytesAt
                 or BoundFunctionKind.RuntimeWriteBytesAt
+                or BoundFunctionKind.RuntimeReadBytesAtAsync
+                or BoundFunctionKind.RuntimeWriteBytesAtAsync
                 or BoundFunctionKind.RuntimeSyncFileAsync
                 or BoundFunctionKind.RuntimeSyncFile
                 or BoundFunctionKind.RuntimeAtomicReplaceFile
@@ -13924,12 +14038,50 @@ internal sealed partial class SemanticCompiler
         var optionsByValue = new Dictionary<TypeId, TypeId>();
         var declaredResults = new Dictionary<TypeId, (TypeId Ok, TypeId Error)>();
         var resultsByShape = new Dictionary<(TypeId Ok, TypeId Error), TypeId>();
+        var structs = new Dictionary<TypeId, BoundStructDefinition>
+        {
+            [TypeId.Range] = new BoundStructDefinition(
+                TypeId.Range,
+                "Range",
+                [
+                    new BoundStructField("start", TypeId.Int, 0, 0, 0),
+                    new BoundStructField("endInclusive", TypeId.Int, 1, 0, 0)
+                ],
+                0,
+                0,
+                IsPublic: true)
+        };
+        var declaredProducts = new Dictionary<string, TypeId>(StringComparer.Ordinal);
 
         TypeId ResolveDefinitionType(string typeName, int line, int column)
         {
             if (names.TryGetValue(typeName, out var known))
             {
                 return known;
+            }
+            if (typeName.StartsWith('(') && typeName.EndsWith(')'))
+            {
+                var fields = ParseProductTypeFields(
+                    typeName,
+                    field => ResolveDefinitionType(field, line, column),
+                    line,
+                    column);
+                var shape = TypeDefinitionTable.ProductShape(fields);
+                if (declaredProducts.TryGetValue(shape, out var existing))
+                {
+                    names.TryAdd(typeName, existing);
+                    return existing;
+                }
+
+                var product = (TypeId)nextTypeId++;
+                var boundFields = fields.Select((field, index) => new BoundStructField(
+                    field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
+                structs.Add(product, new BoundStructDefinition(
+                    product, typeName, boundFields, line, column,
+                    ModuleName: string.Empty, IsPublic: true, IsProduct: true));
+                declaredProducts.Add(shape, product);
+                names.TryAdd(typeName, product);
+                return product;
             }
             if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
             {
@@ -13985,11 +14137,11 @@ internal sealed partial class SemanticCompiler
             if (typeName.StartsWith("ref ", StringComparison.Ordinal))
             {
                 var elementName = typeName[4..].Trim();
-                if (!names.TryGetValue(elementName, out var elementType)
-                    || elementType == BoundType.Unit
+                var elementType = ResolveDefinitionType(elementName, line, column);
+                if (elementType == BoundType.Unit
                     || references.ContainsKey(elementType))
                 {
-                    throw Error(line, column, "ref requires a known non-reference value type");
+                    throw Error(line, column, "ref requires a non-reference value type");
                 }
                 if (referencesByElement.TryGetValue(elementType, out var existing))
                 {
@@ -14019,19 +14171,6 @@ internal sealed partial class SemanticCompiler
                 ResolveDefinitionType(error.PayloadType!, error.Line, error.Column)), enumTypes[declaration]);
         }
 
-        var structs = new Dictionary<TypeId, BoundStructDefinition>
-        {
-            [TypeId.Range] = new BoundStructDefinition(
-                TypeId.Range,
-                "Range",
-                [
-                    new BoundStructField("start", TypeId.Int, 0, 0, 0),
-                    new BoundStructField("endInclusive", TypeId.Int, 1, 0, 0)
-                ],
-                0,
-                0,
-                IsPublic: true)
-        };
         foreach (var declaration in structDeclarations)
         {
             _currentModuleName = declaration.ModuleName;
@@ -14183,7 +14322,8 @@ internal sealed partial class SemanticCompiler
             references,
             _pointerBitWidth / 8,
             declaredOptions,
-            declaredResults);
+            declaredResults,
+            declaredProducts);
         result.RegisterFixedStaticArrays(predeclaredFixedStaticArrays);
         result.RegisterDynamicArrays(predeclaredDynamicArrays);
         result.RegisterBoundedArrays(predeclaredBoundedArrays);
@@ -14895,15 +15035,28 @@ internal sealed partial class SemanticCompiler
         int line,
         int column)
     {
-        var contents = typeName[1..^1];
-        var parts = SplitTopLevelProductFields(contents);
+        var fields = ParseProductTypeFields(typeName, parseFieldType, line, column);
+        var displayName = "(" + string.Join(", ", fields.Select(field =>
+            field.Label is null
+                ? FormatType(field.Type)
+                : field.Label + ": " + FormatType(field.Type))) + ")";
+        return _types.GetOrAddProduct(fields, displayName, line, column);
+    }
+
+    private IReadOnlyList<(string? Label, T Type)> ParseProductTypeFields<T>(
+        string typeName,
+        Func<string, T> parseFieldType,
+        int line,
+        int column)
+    {
+        var parts = SplitTopLevelProductFields(typeName[1..^1]);
         if (parts.Count < 2)
         {
             throw Error(line, column, "product types require at least two fields");
         }
 
         var labels = new HashSet<string>(StringComparer.Ordinal);
-        var fields = new List<(string? Label, BoundType Type)>(parts.Count);
+        var fields = new List<(string? Label, T Type)>(parts.Count);
         foreach (var part in parts)
         {
             var separator = FindTopLevelTypeColon(part.AsSpan());
@@ -14920,12 +15073,7 @@ internal sealed partial class SemanticCompiler
             }
             fields.Add((label, parseFieldType(fieldText)));
         }
-
-        var displayName = "(" + string.Join(", ", fields.Select(field =>
-            field.Label is null
-                ? FormatType(field.Type)
-                : field.Label + ": " + FormatType(field.Type))) + ")";
-        return _types.GetOrAddProduct(fields, displayName, line, column);
+        return fields;
     }
 
     private static IReadOnlyList<string> SplitTopLevelProductFields(string text)
@@ -16185,6 +16333,14 @@ internal sealed partial class SemanticCompiler
 
         var transferred = new List<OwnedLiteralTransfer>();
         CollectOwnedLiteralSourceNames(expression, resultType, bodyBindings, transferred);
+        var duplicate = FindOverlappingOwnedLiteralTransfer(transferred);
+        if (duplicate is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"owned binding '{duplicate}' cannot initialize more than one aggregate position");
+        }
         foreach (var sourceName in transferred.Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal))
         {
             if (!outerBindings.ContainsKey(sourceName)

@@ -13,7 +13,8 @@ sourceError message: Text -> Result<[path.Path; ~], Text> {
 public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
     [path.Path; ~] => directories!
     root -> pathText => rootText
-    directories! -> push(path.fromText(rootText, root.style))
+    root -> styleKind => style
+    directories! -> push(path.fromText(rootText, style))
     [path.Path; ~] => sources!
     UIntSize(directories! -> len) > 0 -> while {
         directories! -> take(0) => current
@@ -40,14 +41,16 @@ public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
                 nameIndex! + 1 => nameIndex!
             }
             cursor! + nameLength => cursor!
-            path.Path { bytes: nameBytes!, style: current.style } => name
+            path.fromBytes(nameBytes!, style)? => name
             kind == 0 -> if {
                 name -> endsWithText(".slg") -> if {
-                    sources! -> push(current -> joinDiscovered(name))
+                    current -> joinPath(name)? => sourcePath
+                    sources! -> push(sourcePath)
                 }
             } else {
                 kind == 1 -> if {
-                    directories! -> push(current -> joinDiscovered(name))
+                    current -> joinPath(name)? => directoryPath
+                    directories! -> push(directoryPath)
                 }
             }
             entryIndex! + 1 => entryIndex!
@@ -66,12 +69,13 @@ public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
 public discoverDirect root: ref path.Path -> [path.Path; ~] uses File {
     [path.Path; ~] => directories!
     root -> pathText => rootText
-    directories! -> push(path.fromText(rootText, root.style))
+    root -> styleKind => style
+    directories! -> push(path.fromText(rootText, style))
     [path.Path; ~] => sources!
     0 => directoryIndex!
     directoryIndex! < (directories! -> len) -> while {
         directories![directoryIndex!] -> pathText => currentText
-        currentText -> path.fromText(root.style) => current
+        currentText -> path.fromText(style) => current
         directory.readRawSnapshot(current) => raw
         raw.count == 0 and (raw.bytes -> len) == 1 -> if {
             [path.Path; ~] => empty
@@ -95,14 +99,33 @@ public discoverDirect root: ref path.Path -> [path.Path; ~] uses File {
                 nameIndex! + 1 => nameIndex!
             }
             cursor! + nameLength => cursor!
-            path.Path { bytes: nameBytes!, style: current.style } => name
-            kind == 0 -> if {
-                name -> endsWithText(".slg") -> if {
-                    sources! -> push(current -> joinDiscovered(name))
+            path.fromBytes(nameBytes!, style) -> when {
+                Ok(name) {
+                    kind == 0 -> if {
+                        name -> endsWithText(".slg") -> if {
+                            current -> joinPath(name) -> when {
+                                Ok(sourcePath) { sources! -> push(sourcePath) }
+                                Err(_) {
+                                    [path.Path; ~] => empty
+                                    empty -> return
+                                }
+                            }
+                        }
+                    } else {
+                        kind == 1 -> if {
+                            current -> joinPath(name) -> when {
+                                Ok(directoryPath) { directories! -> push(directoryPath) }
+                                Err(_) {
+                                    [path.Path; ~] => empty
+                                    empty -> return
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                kind == 1 -> if {
-                    directories! -> push(current -> joinDiscovered(name))
+                Err(_) {
+                    [path.Path; ~] => empty
+                    empty -> return
                 }
             }
             entryIndex! + 1 => entryIndex!

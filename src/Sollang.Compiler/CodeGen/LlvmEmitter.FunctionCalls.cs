@@ -1192,7 +1192,9 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
         if (function.Kind is BoundFunctionKind.RuntimeReadBytesAt
-            or BoundFunctionKind.RuntimeWriteBytesAt)
+            or BoundFunctionKind.RuntimeWriteBytesAt
+            or BoundFunctionKind.RuntimeReadBytesAtAsync
+            or BoundFunctionKind.RuntimeWriteBytesAtAsync)
         {
             if (argument is not RuntimeStruct file)
             {
@@ -2866,12 +2868,22 @@ internal sealed partial class LlvmEmitter
         }
 
         _reachableFunctions.Add(function);
-
-        var scope = FunctionScope(function);
-        ScanStatementsForStandaloneStandardLibraryFunctions(function.BlockBody, scope, function, visited);
-        if (function.Body is not null)
+        if (!_activeStandardLibraryFunctionScans.Add(function))
         {
-            ScanExpressionForStandaloneStandardLibraryFunctions(function.Body, scope, function, visited);
+            return;
+        }
+        try
+        {
+            var scope = FunctionScope(function);
+            ScanStatementsForStandaloneStandardLibraryFunctions(function.BlockBody, scope, function, visited);
+            if (function.Body is not null)
+            {
+                ScanExpressionForStandaloneStandardLibraryFunctions(function.Body, scope, function, visited);
+            }
+        }
+        finally
+        {
+            _activeStandardLibraryFunctionScans.Remove(function);
         }
     }
 
@@ -3025,7 +3037,8 @@ internal sealed partial class LlvmEmitter
                 return;
             }
 
-            if (RequiresStandaloneStandardLibraryEmission(target))
+            if (RequiresStandaloneStandardLibraryEmission(target)
+                || _activeStandardLibraryFunctionScans.Contains(target))
             {
                 _standaloneStandardLibraryFunctions.Add(target);
             }

@@ -1,0 +1,321 @@
+namespace std.io.async
+
+import std.io as io
+
+# Async byte operations consume their affine endpoint and caller-owned buffer,
+# suspend cooperatively, then return both owners in every ordinary completion.
+# Cancelling the Task itself deterministically drops both owners; cooperative
+# cancellation returns them through the typed failure value.
+public enum Error {
+    Io(io.Error)
+    Cancelled
+    Backpressure
+    WriteZero
+}
+
+public struct Cancellation {
+    public requested: Bool
+}
+
+public struct ReadSuccess {
+    public reader: io.MemoryReader
+    public buffer: [UInt8; ~]
+    public count: Int
+    public end: Bool
+}
+
+public struct ReadFailure {
+    public reader: io.MemoryReader
+    public buffer: [UInt8; ~]
+    public error: Error
+}
+
+public struct WriteSuccess {
+    public writer: io.MemoryWriter
+    public buffer: [UInt8; ~]
+    public count: Int
+}
+
+public struct WriteFailure {
+    public writer: io.MemoryWriter
+    public buffer: [UInt8; ~]
+    public error: Error
+}
+
+# BufferQueue owns a bounded byte window. Once the high watermark is reached,
+# producers remain paused until consumers drain the queue to the low watermark.
+public struct BufferQueue {
+    bytes: [UInt8; ~]
+    start: Int
+    highWatermark: Int
+    lowWatermark: Int
+    producerPaused: Bool
+}
+
+public struct OfferSuccess {
+    public queue: BufferQueue
+    public input: [UInt8; ~]
+    public count: Int
+    public backpressured: Bool
+}
+
+public struct OfferFailure {
+    public queue: BufferQueue
+    public input: [UInt8; ~]
+    public error: Error
+}
+
+public struct DrainSuccess {
+    public queue: BufferQueue
+    public output: [UInt8; ~]
+    public count: Int
+    public end: Bool
+}
+
+public struct DrainFailure {
+    public queue: BufferQueue
+    public output: [UInt8; ~]
+    public error: Error
+}
+
+impl OfferSuccess {
+    public intoQueue: move self -> BufferQueue {
+        self.queue => queue
+        queue
+    }
+}
+
+impl OfferFailure {
+    public intoQueue: move self -> BufferQueue {
+        self.queue => queue
+        queue
+    }
+}
+
+impl DrainSuccess {
+    public intoQueue: move self -> BufferQueue {
+        self.queue => queue
+        queue
+    }
+}
+
+impl DrainFailure {
+    public intoQueue: move self -> BufferQueue {
+        self.queue => queue
+        queue
+    }
+}
+
+public bufferQueue highWatermark: Int, lowWatermark: Int -> Result<BufferQueue, io.Error> {
+    highWatermark > 0 and lowWatermark >= 0 and lowWatermark < highWatermark
+        -> if {
+            [UInt8; ~] => bytes!
+            bytes! -> reserve(highWatermark)
+            Result<BufferQueue, io.Error>.Ok(BufferQueue {
+                bytes: bytes!
+                start: 0
+                highWatermark: highWatermark
+                lowWatermark: lowWatermark
+                producerPaused: false
+            })
+        } else {
+            Result<BufferQueue, io.Error>.Err(io.Error {
+                kind: io.ErrorKind.InvalidLimit
+                offset: 0
+            })
+        }
+}
+
+append source: [UInt8], offset: Int, count: Int, output: mut [UInt8; ~] -> Unit {
+    0 => index!
+    index! < count -> while {
+        output -> push(source[offset + index!])
+        index! + 1 => index!
+    }
+}
+
+compactBytes bytes: mut [UInt8; ~], start: Int -> Unit {
+    (bytes -> len) - start => retained
+    0 => index!
+    index! < retained -> while {
+        bytes[start + index!] => bytes[index!]
+        index! + 1 => index!
+    }
+    (bytes -> len) > retained -> while {
+        bytes -> take((bytes -> len) - 1) => discarded
+    }
+}
+
+public readMemoryInto reader: move io.MemoryReader, output: move [UInt8; ~], cancellation: Cancellation -> async Result<ReadSuccess, ReadFailure> {
+    reader => active!
+    output => buffer!
+    yield
+    cancellation.requested -> if {
+        Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+            reader: active!
+            buffer: buffer!
+            error: Error.Cancelled
+        })
+    } else {
+        (buffer! -> len) <= active!.maxReadBytes -> if {
+            (active!.bytes -> len) - active!.offset => available
+            (buffer! -> len) < available -> if { buffer! -> len } else { available } => count
+            0 => index!
+            index! < count -> while {
+                active!.bytes[active!.offset + index!] => buffer![index!]
+                index! + 1 => index!
+            }
+            active!.offset + count => active!.offset
+            count == 0 and active!.offset == (active!.bytes -> len) => end
+            Result<ReadSuccess, ReadFailure>.Ok(ReadSuccess {
+                reader: active!
+                buffer: buffer!
+                count: count
+                end: end
+            })
+        } else {
+            UIntSize(active!.offset) => failureOffset
+            Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+                reader: active!
+                buffer: buffer!
+                error: Error.Io(io.Error {
+                    kind: io.ErrorKind.InvalidLimit
+                    offset: failureOffset
+                })
+            })
+        }
+    }
+}
+
+public writeMemoryRange writer: move io.MemoryWriter, input: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: Cancellation -> async Result<WriteSuccess, WriteFailure> {
+    writer => active!
+    input => buffer
+    yield
+    cancellation.requested -> if {
+        Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+            writer: active!
+            buffer: buffer
+            error: Error.Cancelled
+        })
+    } else {
+        UIntSize(buffer -> len) => inputLength
+        offset <= inputLength and length <= inputLength - offset
+            -> if {
+                active!.maxOutputBytes - (active!.bytes -> len) => capacity
+                Int(length) < capacity -> if { Int(length) } else { capacity } => count
+                count == 0 and length > 0 -> if {
+                    Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                        writer: active!
+                        buffer: buffer
+                        error: Error.WriteZero
+                    })
+                } else {
+                    append(buffer, Int(offset), count, active!.bytes)
+                    Result<WriteSuccess, WriteFailure>.Ok(WriteSuccess {
+                        writer: active!
+                        buffer: buffer
+                        count: count
+                    })
+                }
+            } else {
+                Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                    writer: active!
+                    buffer: buffer
+                    error: Error.Io(io.Error {
+                        kind: io.ErrorKind.InvalidPosition
+                        offset: offset
+                    })
+                })
+            }
+    }
+}
+
+impl BufferQueue {
+    public bufferedBytes: self -> Int => (self.bytes -> len) - self.start
+
+    public isBackpressured: self -> Bool => self.producerPaused
+
+    public offer: move self, input: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: Cancellation -> async Result<OfferSuccess, OfferFailure> {
+        self => queue!
+        input => source
+        yield
+        cancellation.requested -> if {
+            Result<OfferSuccess, OfferFailure>.Err(OfferFailure {
+                queue: queue!
+                input: source
+                error: Error.Cancelled
+            })
+        } else {
+            UIntSize(source -> len) => inputLength
+            offset <= inputLength and length <= inputLength - offset
+                -> if {
+                    queue! -> bufferedBytes => buffered
+                    queue!.producerPaused and buffered > queue!.lowWatermark
+                        -> if {
+                            Result<OfferSuccess, OfferFailure>.Err(OfferFailure {
+                                queue: queue!
+                                input: source
+                                error: Error.Backpressure
+                            })
+                        } else {
+                            false => queue!.producerPaused
+                            queue!.highWatermark - buffered => capacity
+                            Int(length) < capacity -> if { Int(length) } else { capacity } => count
+                            append(source, Int(offset), count, queue!.bytes)
+                            (queue! -> bufferedBytes) >= queue!.highWatermark => queue!.producerPaused
+                            queue!.producerPaused => backpressured
+                            Result<OfferSuccess, OfferFailure>.Ok(OfferSuccess {
+                                queue: queue!
+                                input: source
+                                count: count
+                                backpressured: backpressured
+                            })
+                        }
+                } else {
+                    Result<OfferSuccess, OfferFailure>.Err(OfferFailure {
+                        queue: queue!
+                        input: source
+                        error: Error.Io(io.Error {
+                            kind: io.ErrorKind.InvalidPosition
+                            offset: offset
+                        })
+                    })
+                }
+        }
+    }
+
+    public drain: move self, output: move [UInt8; ~], cancellation: Cancellation -> async Result<DrainSuccess, DrainFailure> {
+        self => queue!
+        output => destination!
+        yield
+        cancellation.requested -> if {
+            Result<DrainSuccess, DrainFailure>.Err(DrainFailure {
+                queue: queue!
+                output: destination!
+                error: Error.Cancelled
+            })
+        } else {
+            queue! -> bufferedBytes => available
+            (destination! -> len) < available -> if { destination! -> len } else { available } => count
+            0 => index!
+            index! < count -> while {
+                queue!.bytes[queue!.start + index!] => destination![index!]
+                index! + 1 => index!
+            }
+            queue!.start + count => queue!.start
+            queue! -> bufferedBytes => retained
+            retained <= queue!.lowWatermark -> if { false => queue!.producerPaused }
+            queue!.start > 0 and (queue!.start == (queue!.bytes -> len) or queue!.start >= queue!.lowWatermark)
+                -> if {
+                    compactBytes(queue!.bytes, queue!.start)
+                    0 => queue!.start
+                }
+            Result<DrainSuccess, DrainFailure>.Ok(DrainSuccess {
+                queue: queue!
+                output: destination!
+                count: count
+                end: count == 0
+            })
+        }
+    }
+}

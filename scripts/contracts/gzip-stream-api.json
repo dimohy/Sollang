@@ -1,26 +1,52 @@
 {
   "$schema": "gzip-stream-api.schema.json",
-  "version": 3,
+  "version": 4,
   "module": "std.compress.gzip",
-  "source": "stdlib/std/compress/gzip.slg",
-  "fixture": "1214-gzip-transactional-streaming-decoder",
-  "boundaryFixture": "1215-gzip-incremental-byte-boundaries",
-  "surfaces": [
-    "DecoderLimits.maxInputBytes",
-    "DecoderLimits.maxMembers",
-    "Codec.decoder",
-    "Codec.decompressMembers",
-    "Decoder.write",
-    "Decoder.finish"
-  ],
+  "sources": ["stdlib/std/compress/gzip.slg", "stdlib/std/compress/gzip/error.slg", "stdlib/std/compress/gzip/decoder_phase.slg"],
+  "surfaces": ["Limits.codec", "Codec.encoder", "Codec.dynamicEncoder", "Codec.planCompress", "Codec.planCompressFixed", "Codec.planCompressDynamic", "Codec.compress", "Codec.compressFixed", "Codec.compressDynamic", "Codec.decoder", "Codec.decompressMembers", "Decoder.write", "Decoder.finish"],
   "invariants": [
-    "caller output changes only after every accepted member validates",
-    "input and member limits fail before caller-output mutation",
-    "member boundaries come from the aligned final DEFLATE block cursor",
-    "single-member decompress retains exact trailing-data rejection",
-    "decoder state is affine and finish consumes the instance",
-    "write carries bit Huffman history checksum and member state without retaining complete compressed input",
-    "stored fixed dynamic and concatenated members pass one-byte write boundaries",
-    "decompressMembers retains the measured bulk path while fixture 1214 enforces one-shot and streaming semantic parity"
-  ]
+    "Codec Encoder and Decoder mutable implementation state is private",
+    "Codec factories validate limits before returning affine owners",
+    "encoder write failures do not mutate encoder state or caller output",
+    "decoder failures do not publish an unverified member to caller output",
+    "errors carry an exact typed kind and byte offset",
+    "input output expansion member checksum and malformed-stream limits fail closed",
+    "stored fixed and dynamic readers and concatenated members remain supported",
+    "dynamic one-shot output is an RFC 1951 BTYPE 2 stream accepted by an independent reader",
+    "dynamic streaming retains bounded bit checksum and size state without retaining complete input",
+    "dynamic streaming emits deterministic bounded blocks and is reusable across writes until affine finish",
+    "the measured bulk member decoder remains the one-shot implementation",
+    "the private GZIP CRC remains until public checksum throughput parity is proved"
+  ],
+  "errorKinds": ["InvalidLimit", "InputLimitExceeded", "OutputLimitExceeded", "ExpansionRatioExceeded", "MemberLimitExceeded", "TruncatedInput", "InvalidHeader", "InvalidHeaderChecksum", "UnsupportedCompressionMethod", "UnsupportedDeflateBlock", "InvalidHuffmanTree", "InvalidDeflateCode", "InvalidDistance", "InvalidStoredLength", "ChecksumMismatch", "SizeMismatch", "TrailingData"],
+  "offsetPolicies": {
+    "InvalidLimit": "zero or invalid range start",
+    "InputLimitExceeded": "accepted compressed input byte count before the rejected write",
+    "OutputLimitExceeded": "input length for planning encoder accepted input count for streaming or current deflate cursor for decoding",
+    "ExpansionRatioExceeded": "current deflate cursor",
+    "MemberLimitExceeded": "next member start byte",
+    "TruncatedInput": "end of available input",
+    "ChecksumMismatch": "member CRC32 trailer start",
+    "SizeMismatch": "member ISIZE trailer start",
+    "TrailingData": "aligned first member end"
+  },
+  "positiveCases": [
+    { "id": "stored-roundtrip", "source": "examples/regression/1049-gzip-stored-roundtrip.slg", "expected": "examples/regression/expected/1049-gzip-stored-roundtrip.stdout.txt" },
+    { "id": "fixed-dynamic-decode", "source": "examples/regression/1050-gzip-fixed-dynamic-decode.slg", "expected": "examples/regression/expected/1050-gzip-fixed-dynamic-decode.stdout.txt" },
+    { "id": "rejection-limits", "source": "examples/regression/1051-gzip-deflate-rejection-limits.slg", "expected": "examples/regression/expected/1051-gzip-deflate-rejection-limits.stdout.txt" },
+    { "id": "fixed-writer", "source": "examples/regression/1053-gzip-fixed-compression.slg", "expected": "examples/regression/expected/1053-gzip-fixed-compression.stdout.txt" },
+    { "id": "stored-streaming-encoder", "source": "examples/regression/1055-gzip-streaming-encoder.slg", "expected": "examples/regression/expected/1055-gzip-streaming-encoder.stdout.txt" },
+    { "id": "crc-parity", "source": "examples/regression/1090-gzip-public-crc32-parity.slg", "expected": "examples/regression/expected/1090-gzip-public-crc32-parity.stdout.txt" },
+    { "id": "transactional-concatenated", "source": "examples/regression/1214-gzip-transactional-streaming-decoder.slg", "expected": "examples/regression/expected/1214-gzip-transactional-streaming-decoder.stdout.txt" },
+    { "id": "one-byte-boundaries", "source": "examples/regression/1215-gzip-incremental-byte-boundaries.slg", "expected": "examples/regression/expected/1215-gzip-incremental-byte-boundaries.stdout.txt" },
+    { "id": "error-offsets", "source": "scripts/probes/gzip-stream-api/error-offsets.slg", "expected": "scripts/probes/gzip-stream-api/error-offsets.stdout.txt" },
+    { "id": "dynamic-writer", "source": "scripts/probes/gzip-stream-api/dynamic-writer.slg", "expectedFirstLine": "dynamic=true,true,true,192,531,181,173,177", "referenceText": "ABCABCABCABC" }
+  ],
+  "negativeCases": [
+    { "id": "private-codec-state", "source": "scripts/probes/gzip-stream-api/private-codec-state.slg", "diagnostic": "sollang: semantic error at 5:5: [module '<main>'] cannot read private field 'limits' of struct 'std.compress.gzip.Codec' outside module 'std.compress.gzip'; use its public factory or public instance methods" },
+    { "id": "private-encoder-state", "source": "scripts/probes/gzip-stream-api/private-encoder-state.slg", "diagnostic": "sollang: semantic error at 6:5: [module '<main>'] cannot read private field 'produced' of struct 'std.compress.gzip.Encoder' outside module 'std.compress.gzip'; use its public factory or public instance methods" },
+    { "id": "private-decoder-state", "source": "scripts/probes/gzip-stream-api/private-decoder-state.slg", "diagnostic": "sollang: semantic error at 7:5: [module '<main>'] cannot read private field 'phase' of struct 'std.compress.gzip.Decoder' outside module 'std.compress.gzip'; use its public factory or public instance methods" }
+  ],
+  "managedOptimizations": ["O0", "O2"],
+  "pending": ["rebuilt-selfhost", "final-stage-integration"]
 }

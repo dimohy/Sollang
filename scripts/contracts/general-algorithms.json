@@ -1,7 +1,7 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "module": "stdlib/std/algorithm.slg",
-  "scope": "caller-owned-growable-arrays-and-copyable-values",
+  "scope": "caller-owned-growable-arrays-copyable-selection-and-readonly-generic-sequences",
   "receiver": "Ordering",
   "comparison": {
     "trait": "Comparison",
@@ -24,10 +24,37 @@
   "binarySearch": {
     "precondition": "sorted by the same Ordering direction and Comparison",
     "comparisons": "O(log n)",
-    "ownership": "readonly borrowed growable storage",
+    "ownership": "readonly generic slice plus borrowed needle; binarySearch retains a literal-friendly copyable-needle wrapper",
     "result": "first equal index, otherwise insertion index; found flag",
     "heapAllocations": 0,
     "wholeStorageCopies": 0
+  },
+  "readonlySequence": {
+    "methods": ["isSorted", "lowerBound", "upperBound", "equalRange", "binarySearchRef"],
+    "storage": "generic readonly slice [T]",
+    "needle": "explicit ref T for every boundary/search method except the copyable compatibility wrapper",
+    "elementSupport": "copyable and noncopyable elements; no element is copied, moved, allocated, or retained",
+    "bounds": "half-open EqualRange [start, end); duplicate values retain their complete contiguous range",
+    "comparisons": "isSorted O(n); every bound/search operation O(log n)",
+    "heapAllocations": 0,
+    "wholeStorageCopies": 0
+  },
+  "noncopyablePermutation": {
+    "status": "blocked-on-general-collection-primitive",
+    "requiredPrimitive": "move-safe indexed exchange of two initialized elements while preserving the same array owner, length, capacity, and exactly-once drop state",
+    "forbiddenWorkarounds": [
+      "copying an owned element into a temporary",
+      "take plus reallocation or order-changing push",
+      "constructing a generic sentinel value",
+      "heap wrappers or dynamic dispatch"
+    ],
+    "existingNegativeEvidence": "algorithm-ordering-owned-negative"
+  },
+  "remainingSequence": {
+    "stableSort": "unimplemented; first freeze caller-supplied scratch ownership and a deterministic insufficient-scratch error",
+    "partition": "blocked on the same move-safe indexed permutation primitive; predicate effects and returned partition boundary remain to be frozen",
+    "merge": "unimplemented; first freeze caller-owned destination capacity, source overlap, partial-progress, and comparison-failure behavior",
+    "iteratorTransforms": "unimplemented here; first separate lazy std.sequence adapters from explicitly bounded materializing collectors"
   },
   "selection": {
     "methods": ["min", "max", "clamp"],
@@ -49,15 +76,32 @@
     "algorithm-comparison-item-negative",
     "algorithm-selection-owned-negative"
   ],
-  "reference": "System.Array.Sort, System.Array.FindIndex, System.Math.Min/Max/Clamp",
-  "acceptance": "managed Windows focused slice only; selfhost and platform closure pending",
-  "unresolved": [
-    "generic readonly slice [T] parameter resolution",
-    "generic explicit ref T and ref [T; ~] parameter resolution",
-    "noncopyable element permutation primitive",
-    "remaining general algorithms backlog"
+  "managedProbes": [
+    {
+      "id": "generic-readonly-slice",
+      "source": "scripts/probes/general-algorithms/generic-readonly-slice.slg",
+      "stdout": "2"
+    },
+    {
+      "id": "generic-explicit-reference",
+      "source": "scripts/probes/general-algorithms/generic-explicit-reference.slg",
+      "stdout": "1"
+    },
+    {
+      "id": "readonly-sequence",
+      "source": "scripts/probes/general-algorithms/readonly-sequence.slg",
+      "stdout": "true\nfalse\nsearch=1,true\nlower=1\nupper=3\nrange=1,3\nreuse=1,3"
+    }
   ],
-  "unresolvedProbes": [
+  "reference": "System.Array.Sort, System.Array.FindIndex, System.Math.Min/Max/Clamp",
+  "acceptance": "managed Windows focused slice plus managed generic readonly/ref/owned-sequence probes only; selfhost and platform closure pending",
+  "unresolved": [
+    "stable selfhost candidate validation of generic readonly slice and explicit reference specialization",
+    "move-safe noncopyable indexed permutation primitive",
+    "stable sorting, partitioning, merging, and iterator-style transform coverage",
+    "Windows/Linux/browser and final fixed-point closure"
+  ],
+  "selfhostPendingProbes": [
     "scripts/probes/general-algorithms/generic-readonly-slice.slg",
     "scripts/probes/general-algorithms/generic-explicit-reference.slg"
   ]

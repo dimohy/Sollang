@@ -55,7 +55,7 @@ failedRaw: -> Raw {
 # native directory encoding and therefore preserves the read-failure state.
 public readRawSnapshot directory: ref path.Path -> Raw {
     directory -> pathText => directoryText
-    path.fromText(directoryText, directory.style) => ownedDirectory
+    path.fromText(directoryText, directory -> styleKind) => ownedDirectory
     readRaw(ownedDirectory) -> when {
         Ok(raw) { raw -> copyRaw }
         Err(error) { failedRaw() }
@@ -78,7 +78,7 @@ entryKind code: UInt8 -> kinds.Kind {
 # A directory read is an owned, deterministic snapshot. Entries are sorted by
 # raw UTF-8 name bytes, exclude `.` and `..`, and never retain an OS handle.
 public read directory: path.Path -> ReadResult {
-    directory.style => style
+    directory -> styleKind => style
     readRawSnapshot(directory) => raw
     raw.count == 0 and (raw.bytes -> len) == 1 -> if {
         "io" -> readError => failure
@@ -104,10 +104,10 @@ public read directory: path.Path -> ReadResult {
             nameIndex! + 1 => nameIndex!
         }
         cursor! + nameLength => cursor!
-        entries! -> push(Entry {
-            name: path.Path { bytes: nameBytes!, style: style }
-            kind: kind
-        })
+        path.fromBytes(nameBytes!, style) -> when {
+            Ok(name) { entries! -> push(Entry { name: name, kind: kind }) }
+            Err(error) { error -> readError -> return }
+        }
         entryIndex! + 1 => entryIndex!
     }
     sys.directory.ReadResult.Ok(entries!)

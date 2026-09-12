@@ -22,7 +22,7 @@ param(
     [switch]$ValidateInputsOnly,
     [ValidateSet("windows", "linux")]
     [string]$IncrementalTarget = "windows",
-    [ValidateSet("Pass", "Fail", "Wait", "ChildPass", "ChildOrphan")]
+    [ValidateSet("Pass", "Fail", "PlainFail", "Wait", "ChildPass", "ChildOrphan")]
     [string]$ProbeOutcome = "Fail",
     [switch]$Supervisor
 )
@@ -425,6 +425,14 @@ finally {
                     $failureIds.Add($match.Value)
                 }
             }
+        }
+    }
+    if (-not $cancelled -and $null -ne $targetExitCode -and $targetExitCode -ne 0) {
+        $specificTargetFailureIds = @($failureIds | Where-Object {
+            $_ -cne 'ORPHAN_PROCESSES_REMAIN' -and $_ -cne 'SUPERVISOR_EXECUTION_FAILURE'
+        })
+        if ($specificTargetFailureIds.Count -eq 0) {
+            $failureIds.Add('TARGET_PROCESS_FAILED')
         }
     }
 

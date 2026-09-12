@@ -729,7 +729,14 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     earlyTextFieldIndex! < (context.fields -> len)
         -> while {
             context.fields[earlyTextFieldIndex!] => earlyTextField
-            earlyTextField.status == 0 and earlyTextField.ownerType >= 0 and earlyTextField.ownerType < (dropTypeActive! -> len) and dropTypeActive![earlyTextField.ownerType] == 1 and earlyTextField.fieldType >= 0 and earlyTextField.fieldType < (context.types -> len)
+            # A declared aggregate is itself an LLVM type consumer even when no
+            # executable IR node reads the field and the aggregate owns no drop
+            # path.  Scan the canonical declaration fields directly so products
+            # such as ((x: Int, y: Text), Int) cannot reference %sollang.text
+            # before its primitive named-type declaration.
+            earlyTextField.status == 0
+                and earlyTextField.fieldType >= 0
+                and earlyTextField.fieldType < (context.types -> len)
                 -> if {
                     context.types[earlyTextField.fieldType] => earlyTextFieldType
                     earlyTextFieldType.kind == 1 and earlyTextFieldType.origin == 1 and earlyTextFieldType.symbol == 1

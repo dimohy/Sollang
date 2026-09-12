@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "version", "module", "sources", "fixtures", "surfaces", "invariants", "unsupported"],
+  "required": ["$schema", "version", "module", "sources", "fixtures", "surfaces", "invariants", "unsupported", "completion", "focusedProbes", "blockers"],
   "properties": {
     "$schema": { "const": "portable-memory-io.schema.json" },
-    "version": { "const": 6 },
+    "version": { "const": 7 },
     "module": { "const": "std.io" },
     "sources": {
       "type": "array",
@@ -33,9 +33,72 @@
     },
     "unsupported": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
+    },
+    "completion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "requiredUnsupportedCount"],
+      "properties": {
+        "status": { "enum": ["blocked", "complete"] },
+        "requiredUnsupportedCount": { "const": 0 }
+      }
+    },
+    "focusedProbes": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "source", "expectation", "expected"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "source": { "type": "string", "minLength": 1 },
+          "target": { "enum": ["windows-x64", "linux-x64", "wasm32-browser"] },
+          "expectation": { "enum": ["exact-stdout", "compiler-rejected", "native-rejected"] },
+          "expected": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "layer", "capability", "evidence"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+          "layer": { "enum": ["managed-codegen", "file-runtime", "socket-runtime"] },
+          "capability": { "type": "string", "minLength": 1 },
+          "evidence": { "type": "string", "minLength": 1 }
+        }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "completion": { "properties": { "status": { "const": "complete" } } } } },
+      "then": {
+        "properties": {
+          "unsupported": { "maxItems": 0 },
+          "blockers": { "maxItems": 0 }
+        }
+      },
+      "else": {
+        "properties": {
+          "unsupported": { "minItems": 1 },
+          "blockers": { "minItems": 1 }
+        }
+      }
+    }
+  ]
 }

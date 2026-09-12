@@ -1407,6 +1407,33 @@ workerTransferType typeId: Int, context: ref emitterContext.EmitContext, state: 
         }
     supported!
 }
+directWorkerSourceTextType typeId: Int, context: ref emitterContext.EmitContext -> Bool {
+    false => supported!
+    typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            context.types[typeId] => candidate
+            candidate.status == 0 and candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
+                -> if { true => supported! }
+        }
+    supported!
+}
+workerTryParallelResultType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => supported!
+    typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            context.types[typeId] => resultType
+            resultType.status == 0 and resultType.kind == 7 and resultType.origin == 4 and resultType.symbol == 1
+                and resultType.first >= 0 and resultType.second >= 0
+                -> if {
+                    (resultType.first -> workerTransferType(context, state))
+                        or (resultType.first -> directWorkerSourceTextType(context)) => okTransferable
+                    (resultType.second -> workerTransferType(context, state))
+                        or (resultType.second -> directWorkerSourceTextType(context)) => errorTransferable
+                    okTransferable and errorTransferable -> if { true => supported! }
+                }
+        }
+    supported!
+}
 hasWorkerTransferArrayElement nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => supported!
     context.ir[nodeIndex] => arrayNode
@@ -1428,7 +1455,7 @@ parallelUsesComputePool expressionIndex: Int, context: ref emitterContext.EmitCo
                 parallelExpression.opcode == -207 -> if {
                     expressionIndex -> hasWorkerTransferArrayElement(context, state) => transferableOutput!
                 } else {
-                    parallelCall.typeId >= 0 -> if { parallelCall.typeId -> workerTransferType(context, state) => transferableOutput! }
+                    parallelCall.typeId >= 0 -> if { parallelCall.typeId -> workerTryParallelResultType(context, state) => transferableOutput! }
                 }
                 scalarInput and transferableOutput! -> if { true => supported! }
                 # Copyable nominal request records and recursively transferable

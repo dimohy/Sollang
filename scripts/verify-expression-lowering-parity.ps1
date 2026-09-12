@@ -213,13 +213,48 @@ foreach ($policy in $sharedTypedPolicies) {
         throw "Shared self-host expression policy must have exactly one authority: $policy (actual $definitionCount)"
     }
 }
-$coveredManagedExpressions = @($contract.families.managedExpressions | ForEach-Object { $_ } | Sort-Object -Unique)
-foreach ($expression in $coveredManagedExpressions) {
+$policyFamilyExpressions = @($contract.families.managedExpressions | ForEach-Object { $_ } | Sort-Object -Unique)
+foreach ($expression in $policyFamilyExpressions) {
     if ($expression -notin $managedExpressionTypes) {
-        throw "Parity contract names an unknown managed expression: $expression"
+        throw "Parity policy family names an unknown managed expression: $expression"
     }
 }
-if ($contract.status -eq 'complete' -and $coveredManagedExpressions.Count -ne $managedExpressionTypes.Count) {
+
+$fixtureCoveredExpressions = @($contract.fixtureCoverage.managedExpression | Sort-Object -Unique)
+if ($fixtureCoveredExpressions.Count -ne $contract.fixtureCoverage.Count) {
+    throw 'Expression fixture coverage contains duplicate managed expression rows'
+}
+$fixtureCoverageDifference = @(Compare-Object -ReferenceObject $managedExpressionTypes -DifferenceObject $fixtureCoveredExpressions)
+if ($fixtureCoverageDifference.Count -ne 0) {
+    throw "Expression fixture coverage differs from the managed declaration inventory: $($fixtureCoverageDifference | ConvertTo-Json -Compress)"
+}
+foreach ($coverage in $contract.fixtureCoverage) {
+    $expression = [string]$coverage.managedExpression
+    $fixture = [string]$coverage.fixture
+    if ($fixture -notin @($contract.representativeFixtures)) {
+        throw "Expression fixture coverage is outside the representative batch: $expression -> $fixture"
+    }
+    $fixturePath = Join-Path $root "examples/regression/$fixture.slg"
+    $expectedPath = Join-Path $root "examples/regression/expected/$fixture.stdout.txt"
+    foreach ($path in @($fixturePath, $expectedPath)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "Expression fixture coverage input is missing: $path"
+        }
+    }
+    $fixtureSource = [IO.File]::ReadAllText($fixturePath)
+    foreach ($fragment in $coverage.sourceFragments) {
+        if (-not $fixtureSource.Contains([string]$fragment, [StringComparison]::Ordinal)) {
+            throw "Expression fixture source evidence is absent: $expression -> $fixture -> $fragment"
+        }
+    }
+    $expectedLines = @([IO.File]::ReadAllLines($expectedPath))
+    foreach ($fragment in $coverage.expectedOutputFragments) {
+        if ([string]$fragment -cnotin $expectedLines) {
+            throw "Expression fixture expected-output evidence is absent: $expression -> $fixture -> $fragment"
+        }
+    }
+}
+if ($contract.status -eq 'complete' -and $fixtureCoveredExpressions.Count -ne $managedExpressionTypes.Count) {
     throw "A complete expression lowering parity contract must cover every managed expression type"
 }
 
@@ -399,8 +434,8 @@ foreach ($fixture in @($contract.focusedFixtures) + @($contract.representativeFi
     }
 }
 
-$coveragePercent = [math]::Round(100 * $coveredManagedExpressions.Count / $managedExpressionTypes.Count, 1)
+$coveragePercent = [math]::Round(100 * $fixtureCoveredExpressions.Count / $managedExpressionTypes.Count, 1)
 $sharedPolicyCount = @($contract.mappings | Where-Object policyStatus -eq 'shared').Count
 $sharedPolicyPercent = [math]::Round(100 * $sharedPolicyCount / $managedExpressionTypes.Count, 1)
 $endToEndPercent = [math]::Round(100 * [int]$contract.endToEndImplementedTotal / $managedExpressionTypes.Count, 1)
-Write-Host "[expression lowering parity] PASS declaration mapping inventory $($mappedManagedExpressions.Count)/$($managedExpressionTypes.Count) (100%), end-to-end $($contract.endToEndImplementedTotal)/$($managedExpressionTypes.Count) ($endToEndPercent%), shared policy $sharedPolicyCount/$($managedExpressionTypes.Count) ($sharedPolicyPercent%), and focused scalar families $($coveredManagedExpressions.Count)/$($managedExpressionTypes.Count) ($coveragePercent%); S059/S060/S061 pre-LLVM coverage connected."
+Write-Host "[expression lowering parity] PASS declaration mapping inventory $($mappedManagedExpressions.Count)/$($managedExpressionTypes.Count) (100%), end-to-end $($contract.endToEndImplementedTotal)/$($managedExpressionTypes.Count) ($endToEndPercent%), shared policy $sharedPolicyCount/$($managedExpressionTypes.Count) ($sharedPolicyPercent%), and source-linked representative fixture coverage $($fixtureCoveredExpressions.Count)/$($managedExpressionTypes.Count) ($coveragePercent%); S059/S060/S061 pre-LLVM coverage connected."

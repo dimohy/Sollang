@@ -27,6 +27,37 @@ public struct SourceText {
     public token: UInt64
 }
 
+public enum AsyncTransferError {
+    Io(Text)
+    InvalidRange
+    Cancelled
+}
+
+public struct ReadAtSuccess {
+    public file: File
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+    public end: Bool
+}
+
+public struct ReadAtFailure {
+    public file: File
+    public buffer: [UInt8; ~]
+    public error: AsyncTransferError
+}
+
+public struct WriteAtSuccess {
+    public writer: FileWriter
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+}
+
+public struct WriteAtFailure {
+    public writer: FileWriter
+    public buffer: [UInt8; ~]
+    public error: AsyncTransferError
+}
+
 # User-defined values opt into binary serialization by constructing their own
 # canonical byte representation. This deliberately avoids writing a struct's
 # target-dependent in-memory ABI layout.
@@ -65,12 +96,21 @@ impl File {
     # The visible buffer length is unchanged; the returned count identifies the
     # authoritative prefix written by the platform.
     public readIntoAt: self, output: mut [UInt8; ~], offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic
+
+    # Both affine owners move into the Task. Ordinary completion returns them
+    # in either branch; Task cancellation drops them only after the native
+    # request has stopped observing the caller buffer.
+    public readIntoAtAsync: move self, output: move [UInt8; ~], offset: UInt64, cancelled: Bool -> async Result<ReadAtSuccess, ReadAtFailure> uses File = intrinsic
 }
 
 impl FileWriter {
     # Writes a validated caller-owned byte range at an explicit byte offset.
     # Invalid source ranges fail before the platform observes any write.
     public writeRangeAt: self, input: ref [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic
+
+    # Invalid ranges and cooperative cancellation complete without issuing a
+    # platform write while preserving both affine owners in the failure value.
+    public writeRangeAtAsync: move self, input: move [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64, cancelled: Bool -> async Result<WriteAtSuccess, WriteAtFailure> uses File = intrinsic
 }
 
 # Synchronous compiler/cache durability primitives. The affine writer closes

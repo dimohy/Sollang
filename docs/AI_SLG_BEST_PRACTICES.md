@@ -285,6 +285,10 @@ Unicode scalar or a supported escape and adopts an integer context such as
 `$name` and `$(expression)` interpolation. Triple-quoted strings are raw and do
 not interpolate.
 
+Use underscores inside long decimal literals only between digits. Leading,
+trailing, consecutive, or underscore-only spellings are invalid; do not rely on
+the backend to normalize malformed numeric text.
+
 Keep binary wire values, compression lookup-table boundaries, lengths, and
 state identifiers numeric even when a value happens to equal an ASCII code.
 
@@ -836,6 +840,14 @@ Arms may complete in any order, but result fields retain declaration order.
 The compiler must prove that borrows, moves, mutable access, and effects can
 overlap. Do not use parallelism for tiny work, effect ordering, or as a way to
 duplicate an owner. Measure task setup and callback shape on hot paths.
+
+An affine `SourceText` may be a direct payload of the top-level `Result` returned
+by `tryParallel` when the callback moves its complete representation into the
+joined result. Keep the structured join as the ownership boundary: unselected
+results are destroyed exactly once according to whether their storage is
+borrowed, heap-backed, or mapped. Do not place it in a plain `parallel` result or
+inside an array, `Option`, or nested `Result` until recursive worker cleanup for
+that carrier is implemented.
 
 ## 15. Build lazy Stream and bounded EventStream pipelines
 

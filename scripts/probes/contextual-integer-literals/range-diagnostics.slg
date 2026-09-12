@@ -1,0 +1,47 @@
+namespace sollang.compiler.llvm.emitter.diagnostics
+
+import c394.analysis as analysis
+import c394.ast as ast
+import c394.constant as constantLowering
+import c394.context as emitterContext
+import c394.typed as typedIr
+import c394.type_ids as typeIds
+import syntax.generated.slg as grammar
+
+literalNode kind: Int, astNode: Int, operand: Int -> typedIr.TypedIrNode {
+    typedIr.TypedIrNode {
+        kind: kind
+        sourceModule: 0
+        astNode: astNode
+        opcode: grammar.tokenIdMinus()
+        operand0: operand
+    }
+}
+
+public sourceLiteralFits spelling: Text, typeSymbol: Int, pointerBitWidth: Int, negative: Bool -> Bool {
+    [typeIds.SemanticType; ~] => types!
+    types! -> push(typeIds.SemanticType { kind: 1, origin: 1, symbol: typeSymbol })
+    [ast.AstNode; ~] => nodes!
+    nodes! -> push(ast.AstNode { start: 0, length: spelling -> len })
+    [typedIr.TypedIrNode; ~] => ir!
+    ir! -> push(literalNode(3, 0, -1))
+    0 => valueIndex!
+    negative -> if {
+        ir! -> push(literalNode(7, 0, 0))
+        1 => valueIndex!
+    }
+    [analysis.SourceRange; ~] => ranges!
+    ranges! -> push(analysis.SourceRange { astStart: 0, literalStart: 0, literalCount: 0 })
+    [Text; ~] => sources!
+    sources! -> push(spelling)
+    emitterContext.EmitContext {
+        sources: sources!
+        ranges: ranges!
+        nodes: nodes!
+        constantLiterals: [constantLowering.Literal; ~]
+        ir: ir!
+        types: types!
+        pointerBitWidth: pointerBitWidth
+    } => context
+    0 -> initializerIntegerLiteralFits(context.ir[valueIndex!], context)
+}

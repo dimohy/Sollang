@@ -4,49 +4,54 @@ import sollang.compiler.semantic.calls as calls
 # Verifies that a qualified move call is the enum subject of a following when.
 main {
     [
-        """
-        namespace consumer
-        import sys.path as path
+    """
+    namespace consumer
+    import sys.path as path
 
-        inspect: -> Int {
-            path.Path { bytes: [UInt8(1); ~], style: path.Style.Posix } => unresolved!
-            0 => status!
-            status! == 0 -> if {
-                unresolved! -> path.normalizeConfined -> when {
-                    Ok(normalized) { Int(normalized.bytes -> len) }
-                    Err(error) { 0 }
-                }
+    inspect: -> Int {
+            path.fromText("x", path.Style.Posix) => unresolved!
+        0 => status!
+        status! == 0 -> if {
+            unresolved! -> path.normalizeConfined -> when {
+                Ok(normalized) { Int(normalized -> byteCount) }
+                Err(error) { 0 }
             }
-            0
         }
-        """,
-        """
-        namespace sys.path
+        0
+    }
+    """,
+    """
+    namespace sys.path
 
-        public enum Style {
-            Posix
-            Windows
-        }
+    public enum Style {
+        Posix
+        Windows
+    }
 
-        public struct Path {
-            public bytes: [UInt8; ~]
-            public style: Style
-        }
-        """,
-        """
-        namespace sys.path
+    public struct Path {
+        bytes: [UInt8; ~]
+        style: Style
+    }
 
-        public normalizeConfined path: move Path -> Result<Path, Text> {
-            Result<Path, Text>.Ok(path)
-        }
-        """; ~
+        public fromText value: Text, style: Style -> Path => Path { bytes: [1; ~], style: style }
+    impl Path {
+        public byteCount: self -> UIntSize => UIntSize(self.bytes -> len)
+    }
+    """,
+    """
+    namespace sys.path
+
+    public normalizeConfined path: move Path -> Result<Path, Text> {
+        Result<Path, Text>.Ok(path)
+    }
+    """; ~
     ] => sources
     sources -> calls.resolveModules => resolvedCalls
     resolvedCalls -> each call {
-        (call.sourceModule == 0 and call.targetSourceModule == 2)
+        call.sourceModule == 0 and call.targetSourceModule == 2
             -> if {
-            "resolved = $(call.status),$(call.functionSymbol)" -> println
-        }
+                "resolved = $(call.status),$(call.functionSymbol)" -> println
+            }
     }
     sources -> typedIr.lower => ir
     0 => index!

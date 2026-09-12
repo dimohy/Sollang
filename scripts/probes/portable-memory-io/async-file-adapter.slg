@@ -1,0 +1,47 @@
+import sys.file as file
+import std.io.async as asyncio
+import std.io.file as fileio
+
+summarizeWrite result: move Result<fileio.AsyncWriteSuccess, fileio.AsyncWriteFailure> -> Int => result -> when {
+    Result<fileio.AsyncWriteSuccess, fileio.AsyncWriteFailure>.Ok(success) {
+        (success.writer -> position) * 10 + UInt64(success.count) => code
+        Int(code)
+    }
+    Result<fileio.AsyncWriteSuccess, fileio.AsyncWriteFailure>.Err(failure) => -1
+}
+
+summarizeRead result: move Result<fileio.AsyncReadSuccess, fileio.AsyncReadFailure> -> Int => result -> when {
+    Result<fileio.AsyncReadSuccess, fileio.AsyncReadFailure>.Ok(success) {
+        success.end -> if { 1 } else { 0 } => end
+        success.count * 10000 => countCode
+        Int(success.reader -> position) * 1000 => positionCode
+        Int(success.buffer[0]) * 10 => firstCode
+        countCode + positionCode + firstCode + Int(success.buffer[1]) + end
+    }
+    Result<fileio.AsyncReadSuccess, fileio.AsyncReadFailure>.Err(failure) => -1
+}
+
+main {
+    file.openWrite("artifacts/scratch/portable-memory-io/file-adapter.bin") -> when {
+        Result<file.FileWriter, Text>.Ok(rawWriter) {
+            [UInt8; ~] => input!
+            input! -> push(10)
+            input! -> push(20)
+            input! -> push(30)
+            rawWriter -> fileio.byteWriter -> writeRangeAsync(input!, 1, 2, asyncio.Cancellation { requested: false }) -> await -> summarizeWrite => writeCode
+
+            file.openRead("artifacts/scratch/portable-memory-io/file-adapter.bin") -> when {
+                Result<file.File, Text>.Ok(rawReader) {
+                    [UInt8; ~] => output!
+                    output! -> push(0)
+                    output! -> push(0)
+                    output! -> push(0)
+                    rawReader -> fileio.byteReader -> readIntoAsync(output!, asyncio.Cancellation { requested: false }) -> await -> summarizeRead => readCode
+                    "file-async=$writeCode,$readCode" -> println
+                }
+                Result<file.File, Text>.Err(error) { error -> println }
+            }
+        }
+        Result<file.FileWriter, Text>.Err(error) { error -> println }
+    }
+}

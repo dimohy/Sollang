@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "contract": "Binary and checksum codecs",
+  "status": "in-progress",
+  "modules": [
+    "std.encoding.binary",
+    "std.hash.crc32",
+    "std.hash.xxhash64"
+  ],
+  "invariants": [
+    "ByteOrder is immutable policy and creates Reader and bounded Writer instances",
+    "Reader advances only after a complete integer or canonical unsigned varint",
+    "Writer checks its cumulative byte limit before changing caller-owned output",
+    "Unsigned varints accept at most ten bytes and report exact source-relative error offsets",
+    "CRC32 Polynomial creates reusable mutable IEEE or Castagnoli Hasher state",
+    "XXH64 Seed creates reusable mutable streaming Hasher state with at most one 32-byte retained stripe",
+    "Mutable cursor and checksum implementation state is private outside its logical module",
+    "The focused managed gate executes exact outputs on Windows Linux under WSL and a bounded Node-hosted browser ABI"
+  ],
+  "positiveFixtures": [
+    "1085-binary-reader-writer-instances",
+    "1086-crc32-policy-hasher-instances",
+    "1087-crc32-fixed-input-instance-o0",
+    "1228-xxhash64-streaming"
+  ],
+  "negativeProbes": [
+    {
+      "id": "binary-reader-private-state",
+      "source": "scripts/probes/binary-checksum-codecs/binary-reader-private-state.slg",
+      "diagnostic": "sollang: semantic error at 6:5: [module '<main>'] cannot read private field 'offset' of struct 'std.encoding.binary.Reader' outside module 'std.encoding.binary'; use its public factory or public instance methods"
+    },
+    {
+      "id": "crc32-hasher-private-state",
+      "source": "scripts/probes/binary-checksum-codecs/crc32-hasher-private-state.slg",
+      "diagnostic": "sollang: semantic error at 6:5: [module '<main>'] cannot read private field 'state' of struct 'std.hash.crc32.Hasher' outside module 'std.hash.crc32'; use its public factory or public instance methods"
+    },
+    {
+      "id": "xxhash64-hasher-private-state",
+      "source": "scripts/probes/binary-checksum-codecs/xxhash64-hasher-private-state.slg",
+      "diagnostic": "sollang: semantic error at 6:5: [module '<main>'] cannot read private field 'buffered' of struct 'std.hash.xxhash64.Hasher' outside module 'std.hash.xxhash64'; use its public factory or public instance methods"
+    }
+  ],
+  "executionMatrix": {
+    "positiveCases": 4,
+    "targets": ["windows-x64", "linux-x64", "wasm32-browser"],
+    "optimizations": ["O0", "O2"],
+    "positiveTotal": 24,
+    "negativeTotal": 3,
+    "overallTotal": 27,
+    "unsupported": []
+  },
+  "independentReferences": [
+    "CRC-32/IEEE check value for ASCII 123456789 is CBF43926",
+    "CRC-32C/Castagnoli check value for ASCII 123456789 is E3069283",
+    "xxHash64 seed-zero canonical empty and ASCII vectors are fixed in fixture 1228"
+  ],
+  "limitations": [
+    "This gate uses the managed compiler and does not establish rebuilt selfhost or Stage2/Stage3 fixed point.",
+    "Browser proof is Node-hosted WebAssembly capability validation rather than browser-engine E2E.",
+    "GZIP keeps its private CRC implementation until same-input throughput parity permits removal."
+  ]
+}

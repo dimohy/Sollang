@@ -1,20 +1,26 @@
 import std.time as time
 
-delayed value: Int -> async Int uses Clock {
-    time.Duration { millis: 25 } => duration
-    duration -> sleep -> await
+delayed value: Int -> async Int uses Clock, Console {
+    time.milliseconds(25) -> when {
+        Ok(duration) { duration -> sleep -> await }
+        Err(error) { "duration-error" -> println }
+    }
     value
 }
 
-quick value: Int -> async Int uses Clock {
-    time.Duration { millis: 1 } => duration
-    duration -> sleep -> await
+quick value: Int -> async Int uses Clock, Console {
+    time.milliseconds(1) -> when {
+        Ok(duration) { duration -> sleep -> await }
+        Err(error) { "duration-error" -> println }
+    }
     value
 }
 
-veryDelayed value: Int -> async Int uses Clock {
-    time.Duration { millis: 1000 } => duration
-    duration -> sleep -> await
+veryDelayed value: Int -> async Int uses Clock, Console {
+    time.milliseconds(1000) -> when {
+        Ok(duration) { duration -> sleep -> await }
+        Err(error) { "duration-error" -> println }
+    }
     value
 }
 
@@ -24,22 +30,30 @@ main {
     1 -> delayed => slow
     2 -> quick => fast
 
-    time.Duration { millis: 1000 } => cancelDuration
-    cancelDuration -> sleep => cancelled
-    3 -> veryDelayed => cancelledParent
-    time.Duration { millis: 0 } => zeroDuration
-    zeroDuration -> sleep -> await
-    cancelled -> cancel
-    cancelledParent -> cancel
+    time.milliseconds(1000) -> when {
+        Ok(cancelDuration) {
+            cancelDuration -> sleep => cancelled
+            3 -> veryDelayed => cancelledParent
+            time.milliseconds(0) -> when {
+                Ok(zeroDuration) { zeroDuration -> sleep -> await }
+                Err(error) { "duration-error" -> println }
+            }
+            cancelled -> cancel
+            cancelledParent -> cancel
+        }
+        Err(error) { "duration-error" -> println }
+    }
 
     fast -> await => fastValue
     slow -> await => slowValue
-    time.Duration { millis: 0 } => finalZeroDuration
-    finalZeroDuration -> sleep -> await
+    time.milliseconds(0) -> when {
+        Ok(finalZeroDuration) { finalZeroDuration -> sleep -> await }
+        Err(error) { "duration-error" -> println }
+    }
     clock -> now => finished
     finished -> durationSince(started) -> when {
         Ok(elapsed) {
-            elapsed.millis >= 20 -> if {
+            (elapsed -> asMilliseconds) >= 20 -> if {
                 "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=true" -> println
             } else {
                 "fast=$fastValue,slow=$slowValue,cancelled=true,parent=true,elapsed=false" -> println

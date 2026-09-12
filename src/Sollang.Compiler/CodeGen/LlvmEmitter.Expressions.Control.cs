@@ -892,19 +892,17 @@ internal sealed partial class LlvmEmitter
         BoundType type,
         IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
     {
-        if (type == BoundType.Unit)
+        if (incoming.Any(item => item.Value.Type != type))
         {
-            return RuntimeUnit.Instance;
+            throw new SollangException(
+                $"async branch binding '{prefix}' has inconsistent runtime types");
         }
-        var materialized = incoming
-            .Select(item => (Value: MaterializeAggregateValue(item.Value), item.Label))
-            .ToArray();
-        var result = NextTemp(prefix);
-        EmitPhi(
-            result,
-            materialized[0].Value.TypeName,
-            materialized.Select(item => (item.Value.ValueName, item.Label)).ToArray());
-        return DematerializeAggregateValue(type, result);
+
+        // A join block must start with all PHI instructions. Materializing an
+        // aggregate here emits insertvalue/extractvalue instructions before the
+        // PHI and produces invalid LLVM. Merge the existing runtime components
+        // directly; predecessor blocks already own their concrete values.
+        return EmitPhiValue(prefix, incoming);
     }
 
     private RuntimeValue EmitPhiValue(
@@ -926,12 +924,16 @@ internal sealed partial class LlvmEmitter
             RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
+            RuntimeTask task => EmitTaskPhi(prefix, task, incoming),
+            RuntimeBox box => EmitBoxPhi(prefix, box, incoming),
+            RuntimeReference reference => EmitReferencePhi(prefix, reference, incoming),
             RuntimeInlineSlice slice => EmitInlineSlicePhi(prefix, slice, incoming),
             RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray =>
                 EmitStaticArrayPhi(prefix, incoming),
             RuntimeDynamicIntArray => EmitDynamicArrayPhi(prefix, incoming),
             RuntimeDynamicInlineArray array => EmitDynamicInlineArrayPhi(prefix, array, incoming),
             RuntimeIntDictionary => EmitIntDictionaryPhi(prefix, incoming),
+            RuntimeInlineDictionary dictionary => EmitInlineDictionaryPhi(prefix, dictionary, incoming),
             RuntimeStruct structure => EmitStructPhi(prefix, structure.Type, incoming),
             RuntimeEnum enumeration => EmitEnumPhi(prefix, enumeration.Type, incoming),
             RuntimeUnit => RuntimeUnit.Instance,
@@ -1018,6 +1020,58 @@ internal sealed partial class LlvmEmitter
         return new RuntimeText(pointer, length);
     }
 
+    private RuntimeTask EmitTaskPhi(
+        string prefix,
+        RuntimeTask first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeTask task
+            || task.TaskType != first.TaskType
+            || task.InputType != first.InputType
+            || task.ResultType != first.ResultType
+            || task.RuntimeFunction != first.RuntimeFunction))
+        {
+            throw new SollangException("Task phi inputs disagree on runtime shape");
+        }
+        var handle = NextTemp(prefix + "_handle");
+        EmitPhi(handle, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeTask)value).HandleName));
+        var context = NextTemp(prefix + "_context");
+        EmitPhi(context, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeTask)value).ContextName));
+        return first with { HandleName = handle, ContextName = context };
+    }
+
+    private RuntimeBox EmitBoxPhi(
+        string prefix,
+        RuntimeBox first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeBox box
+            || box.BoxType != first.BoxType
+            || box.ElementType != first.ElementType))
+        {
+            throw new SollangException("Box phi inputs disagree on runtime shape");
+        }
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeBox)value).PointerName));
+        return first with { PointerName = pointer };
+    }
+
+    private RuntimeReference EmitReferencePhi(
+        string prefix,
+        RuntimeReference first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeReference reference
+            || reference.ReferenceType != first.ReferenceType
+            || reference.ElementType != first.ElementType))
+        {
+            throw new SollangException("reference phi inputs disagree on runtime shape");
+        }
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeReference)value).PointerName));
+        return first with { PointerName = pointer };
+    }
+
     private RuntimeInlineSlice EmitInlineSlicePhi(
         string prefix,
         RuntimeInlineSlice first,
@@ -1093,6 +1147,28 @@ internal sealed partial class LlvmEmitter
         EmitPhi(capacity, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeIntDictionary)value).CapacityName));
 
         return new RuntimeIntDictionary(pointer, length, capacity);
+    }
+
+    private RuntimeInlineDictionary EmitInlineDictionaryPhi(
+        string prefix,
+        RuntimeInlineDictionary first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeInlineDictionary dictionary
+            || dictionary.DictionaryType != first.DictionaryType
+            || dictionary.KeyType != first.KeyType
+            || dictionary.ValueType != first.ValueType
+            || dictionary.Storage != first.Storage))
+        {
+            throw new SollangException("dictionary phi inputs disagree on type or storage");
+        }
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeInlineDictionary)value).PointerName));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeInlineDictionary)value).LengthName));
+        var capacity = NextTemp(prefix + "_capacity");
+        EmitPhi(capacity, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeInlineDictionary)value).CapacityName));
+        return first with { PointerName = pointer, LengthName = length, CapacityName = capacity };
     }
 
     private RuntimeStruct EmitStructPhi(

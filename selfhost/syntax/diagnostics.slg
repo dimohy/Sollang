@@ -2,6 +2,7 @@ namespace sollang.compiler.diagnostics
 
 import sollang.compiler.lexer as lexer
 import sollang.compiler.parser as parser
+import sollang.compiler.ast as ast
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
@@ -14,8 +15,9 @@ public struct SyntaxDiagnostic {
 
 # Code 1 is an invalid source byte. Code 2 is an unexpected token at the
 # furthest point reached by any parser alternative. Code 3 is an unterminated
-# string literal, code 4 is an invalid character literal, and code 5 is an
-# unterminated character literal.
+# string literal, code 4 is an invalid character literal, code 5 is an
+# unterminated character literal, and code 6 is a duplicate structural-product
+# field label within one product root.
 public analyze source: Text -> [SyntaxDiagnostic; ~] {
     source -> lexer.lex => tokens
     source -> parser.parseEvents => events
@@ -56,6 +58,83 @@ public analyze source: Text -> [SyntaxDiagnostic; ~] {
         diagnostics! -> push(diagnostic)
     }
 
+    # Product labels are semantic names inside one structural type rather than
+    # grammar alternatives.  Preserve the lossless accepted CST, then reject a
+    # duplicate at the second label token before semantic or LLVM lowering.
+    outcome.value == 1 -> if {
+        source -> ast.lower => nodes
+        false => duplicateFound!
+        0 => fieldIndex!
+        fieldIndex! < (nodes -> len) and not duplicateFound!
+            -> while {
+                nodes[fieldIndex!] => field
+                field.cstRuleId == grammar.ruleIdProductTypeField()
+                    -> if {
+                        -1 => labelToken!
+                        false => colonSeen!
+                        field.firstToken => tokenIndex!
+                        tokenIndex! < field.firstToken + field.tokenCount
+                            -> while {
+                                tokens[tokenIndex!].kind == grammar.tokenIdColon()
+                                    -> if { true => colonSeen! }
+                                not colonSeen!
+                                    and labelToken! < 0
+                                    and tokens[tokenIndex!].kind == grammar.tokenIdIdentifier()
+                                    -> if { tokenIndex! => labelToken! }
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                        colonSeen! and labelToken! >= 0 -> if {
+                            0 => priorIndex!
+                            priorIndex! < fieldIndex! and not duplicateFound!
+                                -> while {
+                                    nodes[priorIndex!] => prior
+                                    prior.parent == field.parent
+                                        and prior.cstRuleId == grammar.ruleIdProductTypeField()
+                                        -> if {
+                                            -1 => priorLabelToken!
+                                            false => priorColonSeen!
+                                            prior.firstToken => priorTokenIndex!
+                                            priorTokenIndex! < prior.firstToken + prior.tokenCount
+                                                -> while {
+                                                    tokens[priorTokenIndex!].kind == grammar.tokenIdColon()
+                                                        -> if { true => priorColonSeen! }
+                                                    not priorColonSeen!
+                                                        and priorLabelToken! < 0
+                                                        and tokens[priorTokenIndex!].kind == grammar.tokenIdIdentifier()
+                                                        -> if { priorTokenIndex! => priorLabelToken! }
+                                                    priorTokenIndex! + 1 => priorTokenIndex!
+                                                }
+                                            priorColonSeen! and priorLabelToken! >= 0 -> if {
+                                                tokens[labelToken!] => label
+                                                tokens[priorLabelToken!] => priorLabel
+                                                label.span.length == priorLabel.span.length => equal!
+                                                UIntSize(0) => byteIndex!
+                                                equal! and byteIndex! < label.span.length -> while {
+                                                    source -> byte(label.span.start + byteIndex!) => labelByte
+                                                    source -> byte(priorLabel.span.start + byteIndex!) => priorLabelByte
+                                                    labelByte != priorLabelByte -> if { false => equal! }
+                                                    byteIndex! + 1 => byteIndex!
+                                                }
+                                                equal! -> if {
+                                                    SyntaxDiagnostic {
+                                                        code: 6
+                                                        span: label.span
+                                                        foundKind: label.kind
+                                                        tokenIndex: labelToken!
+                                                    } => duplicateDiagnostic
+                                                    diagnostics! -> push(duplicateDiagnostic)
+                                                    true => duplicateFound!
+                                                }
+                                            }
+                                        }
+                                    priorIndex! + 1 => priorIndex!
+                                }
+                        }
+                    }
+                fieldIndex! + 1 => fieldIndex!
+            }
+    }
+
     diagnostics!
 }
 
@@ -73,4 +152,41 @@ public expectedCodes source: Text -> [Int; ~] {
         eventIndex! + 1 => eventIndex!
     }
     expected!
+}
+
+# The parser can retain several alternatives at the same furthest token.  The
+# default remains its deterministic final alternative.  Only the exact empty
+# product-label shape `(: Type` or `, : Type` selects Identifier, matching the
+# canonical product-field contract without changing unrelated dictionary or
+# missing-field-type diagnostics.
+public preferredExpectedCode source: Text, diagnostic: SyntaxDiagnostic -> Int {
+    source -> expectedCodes => expected
+    expected[(expected -> len) - 1] => selected!
+    source -> lexer.lex => tokens
+    diagnostic.foundKind == grammar.tokenIdColon()
+        and diagnostic.tokenIndex > 0
+        and diagnostic.tokenIndex + 1 < (tokens -> len)
+        -> if {
+            diagnostic.tokenIndex - 1 => previous!
+            previous! >= 0 and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+                -> while { previous! - 1 => previous! }
+            diagnostic.tokenIndex + 1 => following!
+            following! < (tokens -> len)
+                and tokens[following!].kind >= grammar.triviaIdWhitespace()
+                -> while { following! + 1 => following! }
+            previous! >= 0
+                and following! < (tokens -> len)
+                and (tokens[previous!].kind == grammar.tokenIdLeftParen()
+                or tokens[previous!].kind == grammar.tokenIdComma())
+                and tokens[following!].kind == grammar.tokenIdIdentifier()
+                -> if {
+                    0 => expectedIndex!
+                    expectedIndex! < (expected -> len) -> while {
+                        expected[expectedIndex!] == grammar.tokenIdIdentifier()
+                            -> if { grammar.tokenIdIdentifier() => selected! }
+                        expectedIndex! + 1 => expectedIndex!
+                    }
+                }
+        }
+    selected!
 }

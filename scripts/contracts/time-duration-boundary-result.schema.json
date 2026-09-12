@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "contract",
+    "status",
+    "startedAtUtc",
+    "finishedAtUtc",
+    "supervisorPid",
+    "exitCode",
+    "completed",
+    "total",
+    "failureIds",
+    "orphanProcessIds",
+    "compiler",
+    "toolHashes",
+    "inputHashes",
+    "checks",
+    "unsupported",
+    "blockers"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "contract": { "const": "time-duration-boundary" },
+    "status": { "enum": ["running", "passed", "failed"] },
+    "startedAtUtc": { "type": "string", "format": "date-time" },
+    "finishedAtUtc": { "type": ["string", "null"], "format": "date-time" },
+    "supervisorPid": { "type": "integer", "minimum": 1 },
+    "exitCode": { "type": ["integer", "null"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 30 },
+    "total": { "const": 30 },
+    "failureIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" }
+    },
+    "orphanProcessIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "compiler": { "$ref": "#/$defs/hashedPath" },
+    "toolHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dotnet", "pwsh", "node", "wsl", "clang", "wasmLd", "browserRunner"],
+      "properties": {
+        "dotnet": { "$ref": "#/$defs/hashedPath" },
+        "pwsh": { "$ref": "#/$defs/hashedPath" },
+        "node": { "$ref": "#/$defs/hashedPath" },
+        "wsl": { "$ref": "#/$defs/hashedPath" },
+        "clang": { "$ref": "#/$defs/hashedPath" },
+        "wasmLd": { "$ref": "#/$defs/hashedPath" },
+        "browserRunner": { "$ref": "#/$defs/hashedPath" }
+      }
+    },
+    "inputHashes": {
+      "type": "object",
+      "minProperties": 20,
+      "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+    },
+    "checks": {
+      "type": "array",
+      "maxItems": 30,
+      "items": { "$ref": "#/$defs/check" }
+    },
+    "unsupported": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "blockers": {
+      "const": ["transitive-sys-path-semantic-compatibility", "rebuilt-selfhost", "stage2", "stage3"]
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } } },
+      "then": {
+        "properties": {
+          "finishedAtUtc": { "type": "string", "format": "date-time" },
+          "exitCode": { "const": 0 },
+          "completed": { "const": 30 },
+          "failureIds": { "maxItems": 0 },
+          "orphanProcessIds": { "maxItems": 0 },
+          "checks": { "minItems": 30, "maxItems": 30 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": {
+        "properties": {
+          "finishedAtUtc": { "type": "string", "format": "date-time" },
+          "exitCode": { "type": "integer", "not": { "const": 0 } },
+          "failureIds": { "minItems": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hashedPath": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "target", "optimization", "status", "exitCode", "stdoutSha256", "stderrSha256", "artifact", "observation"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]+$" },
+        "kind": { "enum": ["exact-execution", "exact-diagnostic", "unavailable-diagnostic"] },
+        "target": { "enum": ["windows-x64", "linux-x64", "wasm32-browser"] },
+        "optimization": { "enum": ["O0", "O2", "diagnostic"] },
+        "status": { "const": "passed" },
+        "exitCode": { "type": "integer" },
+        "stdoutSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "stderrSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "artifact": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/hashedPath" }
+          ]
+        },
+        "observation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["exactOutput", "diagnostic", "capabilities"],
+          "properties": {
+            "exactOutput": { "type": ["string", "null"] },
+            "diagnostic": { "type": ["string", "null"] },
+            "capabilities": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

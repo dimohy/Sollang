@@ -22,18 +22,27 @@ appendLine bytes: mut [UInt8; ~], value: Text -> Unit {
 }
 
 appendPath bytes: mut [UInt8; ~], value: ref path.Path -> Unit {
-    0 => index!
-    index! < (value.bytes -> len) -> while {
-        value.bytes[index!] == 34 -> if {
+    UIntSize(0) => index!
+    index! < (value -> byteCount) -> while {
+        value -> byteAt(index!) => current
+        current == 34 -> if {
             bytes -> push(92)
             bytes -> push(34)
         } else {
-            value.bytes[index!] == 92 -> if {
+            current == 92 -> if {
                 bytes -> push(47)
             } else {
-                bytes -> push(value.bytes[index!])
+                bytes -> push(current)
             }
         }
+        index! + 1 => index!
+    }
+}
+
+appendBytes output: mut [UInt8; ~], value: [UInt8; ~] -> Unit {
+    0 => index!
+    index! < (value -> len) -> while {
+        output -> push(value[index!])
         index! + 1 => index!
     }
 }
@@ -80,7 +89,7 @@ sameComponent left: Text, leftStart: UIntSize, leftLength: UIntSize, right: Text
     same!
 }
 
-relativeDirectory root: Text, target: Text, style: path.Style -> path.Path {
+relativeDirectory root: Text, target: Text, style: path.Style -> [UInt8; ~] {
     [UIntSize; ~] => rootStarts!
     [UIntSize; ~] => rootLengths!
     [UIntSize; ~] => targetStarts!
@@ -148,19 +157,20 @@ relativeDirectory root: Text, target: Text, style: path.Style -> path.Path {
         targetIndex! + 1 => targetIndex!
     }
     (bytes! -> len) == 0 -> if { bytes! -> push(46) }
-    path.Path { bytes: bytes!, style: path.Style.Posix } => result
-    result
+    bytes!
 }
 
 comparePath left: ref path.Path, right: ref path.Path -> Int {
-    left.bytes -> len => leftLength
-    right.bytes -> len => rightLength
+    Int(left -> byteCount) => leftLength
+    Int(right -> byteCount) => rightLength
     leftLength < rightLength -> if { leftLength } else { rightLength } => shared
     0 => result!
     0 => index!
     result! == 0 and index! < shared -> while {
-        left.bytes[index!] < right.bytes[index!] -> if { -1 => result! }
-        left.bytes[index!] > right.bytes[index!] -> if { 1 => result! }
+        left -> byteAt(UIntSize(index!)) => leftByte
+        right -> byteAt(UIntSize(index!)) => rightByte
+        leftByte < rightByte -> if { -1 => result! }
+        leftByte > rightByte -> if { 1 => result! }
         index! + 1 => index!
     }
     result! == 0 and leftLength < rightLength -> if { -1 => result! }
@@ -214,7 +224,7 @@ public render packageManifests: [path.Path; ~], packageNames: [path.Path; ~], pa
         bytes! -> appendText("            source: ")
         bytes! -> push(34)
         bytes! -> appendText("path:")
-        bytes! -> appendPath(relative)
+        bytes! -> appendBytes(relative)
         bytes! -> push(34)
         bytes! -> push(10)
 
@@ -341,32 +351,16 @@ writeBytes destination: Text, temporary: Text, bytes: [UInt8; ~] -> Bool uses Fi
 lockPath manifest: ref path.Path, style: path.Style -> path.Path {
     manifest -> pathText => manifestText
     manifestText -> directoryOf => directory
-    [UInt8; ~] => bytes!
-    bytes! -> appendText(directory)
-    (bytes! -> len) > 0 -> if {
-        style -> when {
-            Windows { bytes! -> push(92) }
-            Posix { bytes! -> push(47) }
-        }
+    style -> when {
+        Windows { path.fromText("$directory\\sollang.lock", style) }
+        Posix { path.fromText("$directory/sollang.lock", style) }
     }
-    bytes! -> appendText("sollang.lock")
-    path.Path { bytes: bytes!, style: style } => result
-    result
 }
 
 temporaryPath destination: ref path.Path -> path.Path {
-    [UInt8; ~] => bytes!
-    0 => index!
-    index! < (destination.bytes -> len) -> while {
-        bytes! -> push(destination.bytes[index!])
-        index! + 1 => index!
-    }
-    bytes! -> push(46)
-    bytes! -> push(116)
-    bytes! -> push(109)
-    bytes! -> push(112)
-    path.Path { bytes: bytes!, style: destination.style } => result
-    result
+    destination -> pathText => destinationText
+    destination -> styleKind => style
+    path.fromText("$destinationText.tmp", style)
 }
 
 public destination packageManifests: [path.Path; ~], style: path.Style -> path.Path {

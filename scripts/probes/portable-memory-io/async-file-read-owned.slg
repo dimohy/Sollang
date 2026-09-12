@@ -1,0 +1,32 @@
+import sys.file as file
+
+describe result: Result<file.ReadAtSuccess, file.ReadAtFailure> -> Int => result -> when {
+    Result<file.ReadAtSuccess, file.ReadAtFailure>.Ok(success) {
+        success.end -> if { 1000 } else { 0 } => end
+        Int(success.count) * 100 + end + Int(success.buffer[0])
+    }
+    Result<file.ReadAtSuccess, file.ReadAtFailure>.Err(failure) => failure.error -> when {
+        Io(message) => -1
+        InvalidRange => -2
+        Cancelled => -3
+    }
+}
+
+main {
+    "artifacts/scratch/portable-memory-io/file-read-owned.bin" -> file.openWriter
+    UInt8(65) -> file.write
+    UInt8(66) -> file.write
+    UInt8(67) -> file.write
+    file.closeWriter()
+
+    file.openRead("artifacts/scratch/portable-memory-io/file-read-owned.bin") -> when {
+        Result<file.File, Text>.Ok(reader) {
+            [UInt8; ~] => buffer!
+            buffer! -> push(0)
+            buffer! -> push(0)
+            reader -> readIntoAtAsync(buffer!, 1, false) -> await -> describe => code
+            "file-read=$code" -> println
+        }
+        Result<file.File, Text>.Err(error) { error -> println }
+    }
+}

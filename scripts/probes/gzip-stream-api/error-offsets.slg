@@ -1,0 +1,69 @@
+import std.compress.gzip as gzip
+
+inputBytes: -> [UInt8] => [65]
+truncatedBytes: -> [UInt8] => [31]
+
+invalidLimit: -> Bool {
+    gzip.Limits { maxOutputBytes: -1, maxExpansionRatio: 1 } -> codec() -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            InvalidLimit { error.offset == 0 }
+            else { false }
+        }
+    }
+}
+
+plannedLimit: -> Bool {
+    gzip.Limits { maxOutputBytes: 18, maxExpansionRatio: 1 } -> codec() -> when {
+        Err(_) { false }
+        Ok(codec) => codec -> planCompressDynamic(0) -> when {
+            Ok(_) { false }
+            Err(error) => error.kind -> when {
+                OutputLimitExceeded { error.offset == 0 }
+                else { false }
+            }
+        }
+    }
+}
+
+transactionalWrite: -> Result<Bool, gzip.Error> {
+    gzip.Limits { maxOutputBytes: 187, maxExpansionRatio: 1 } -> codec()? => codec
+    codec -> dynamicEncoder()? => encoder!
+    [UInt8; ~] => output!
+    encoder! -> write(inputBytes(), output!) -> when {
+        Ok(_) { Result<Bool, gzip.Error>.Ok(false) -> return }
+        Err(error) => error.kind -> when {
+            OutputLimitExceeded {
+                error.offset == 0 and (output! -> len) == 0 -> unless {
+                    Result<Bool, gzip.Error>.Ok(false) -> return
+                }
+            }
+            else { Result<Bool, gzip.Error>.Ok(false) -> return }
+        }
+    }
+    encoder! -> finish(output!)? => finished
+    Result<Bool, gzip.Error>.Ok(finished == 187 and (output! -> len) == 187)
+}
+
+truncatedOffset: -> Bool {
+    gzip.Limits { maxOutputBytes: 1_024, maxExpansionRatio: 64 } -> codec() -> when {
+        Err(_) { false }
+        Ok(codec) => codec -> decompress(truncatedBytes()) -> when {
+            Ok(_) { false }
+            Err(error) => error.kind -> when {
+                TruncatedInput { error.offset == 1 }
+                else { false }
+            }
+        }
+    }
+}
+
+run: -> Result<Unit, gzip.Error> uses Console {
+    transactionalWrite()? => transactional
+    "errors=$(invalidLimit()),$(plannedLimit()),$transactional,$(truncatedOffset())" -> println
+    Result<Unit, gzip.Error>.Ok
+}
+
+main {
+    run() -> when { Ok(done) { } Err(error) { "unexpected=$(error.offset)" -> println } }
+}

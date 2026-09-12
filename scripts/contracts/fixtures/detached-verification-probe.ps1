@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("Pass", "Fail", "Wait", "ChildPass", "ChildOrphan", "ChildWorker")]
+    [ValidateSet("Pass", "Fail", "PlainFail", "Wait", "ChildPass", "ChildOrphan", "ChildWorker")]
     [string]$Outcome = "Fail",
     [string]$EvidencePath = '',
     [string]$ReleasePath = '',
@@ -41,6 +41,10 @@ Start-Sleep -Milliseconds 1200
 if ($Outcome -eq "Pass") {
     Write-Output "probe completed successfully"
     exit 0
+}
+if ($Outcome -eq "PlainFail") {
+    Write-Output "probe stopped without a structured diagnostic identifier"
+    exit 9
 }
 Write-Output "probe output before controlled failure E999"
 Write-Output "sollang compiler error S015: controlled diagnostic"

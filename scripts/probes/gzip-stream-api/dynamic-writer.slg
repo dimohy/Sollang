@@ -1,0 +1,52 @@
+import std.compress.gzip as gzip
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+sourceBytes: -> [UInt8] => [65, 66, 67, 65, 66, 67, 65, 66, 67, 65, 66, 67]
+firstChunk: -> [UInt8] => [65, 66, 67]
+secondChunk: -> [UInt8] => [65, 66, 67, 65, 66, 67, 65, 66, 67]
+
+run: -> Result<Unit, gzip.Error> uses Console {
+    gzip.Limits {
+        maxOutputBytes: 4_096
+        maxExpansionRatio: 128
+    } -> codec()? => codec
+    sourceBytes() => input
+
+    codec -> compressDynamic(input)? => oneShot
+    codec -> decompress(oneShot)? => oneShotRestored
+
+    codec -> dynamicEncoder()? => encoder!
+    [UInt8; ~] => streamed!
+    encoder! -> write(firstChunk(), streamed!)? => firstWritten
+    encoder! -> write(secondChunk(), streamed!)? => secondWritten
+    encoder! -> finish(streamed!)? => finalWritten
+    codec -> decompress(streamed!)? => streamedRestored
+
+    (Int(oneShot[10]) / 2 % 4) == 2 => dynamicBlock
+    input -> matches(oneShotRestored) => oneShotOk
+    input -> matches(streamedRestored) => streamedOk
+    "dynamic=$dynamicBlock,$oneShotOk,$streamedOk,$(oneShot -> len),$(streamed! -> len),$firstWritten,$secondWritten,$finalWritten" -> println
+
+    0 => index!
+    index! < (oneShot -> len) -> while {
+        "$(oneShot[index!])" -> println
+        index! + 1 => index!
+    }
+    Result<Unit, gzip.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "error=$(error.offset)" -> println }
+    }
+}

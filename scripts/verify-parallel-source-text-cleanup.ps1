@@ -9,8 +9,13 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'runtime-llvm-probe.ps1')
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 $sourcePath = Join-Path $root 'selfhost/llvm/text/ownership.slg'
+$transferPath = Join-Path $root 'selfhost/llvm/text/core_calls.slg'
 $runtimePath = Join-Path $root 'selfhost/llvm/runtime.slg'
 $harnessPath = Join-Path $PSScriptRoot 'contracts/fixtures/parallel-source-text-cleanup.c'
+$transferHarnessPath = Join-Path $PSScriptRoot 'contracts/fixtures/c402-worker-transfer-type.slg.in'
+$compilerPath = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+$closureVerifierPath = Join-Path $PSScriptRoot 'verify-llvm-direct-call-closure.ps1'
+$llvmHome = Join-Path $root '.tools/llvm-22.1.8'
 $baselineCommit = 'baf9f8cb897c0971077823c4d4f4ec20ea85f1de'
 
 function Get-PayloadBranch {
@@ -54,14 +59,55 @@ function Get-StringHash {
 }
 
 $inputHashes = [ordered]@{}
-foreach ($path in @($sourcePath, $runtimePath, $harnessPath, $PSCommandPath,
+foreach ($path in @($sourcePath, $transferPath, $runtimePath, $harnessPath, $transferHarnessPath,
+    $compilerPath, $closureVerifierPath, $PSCommandPath,
     (Join-Path $PSScriptRoot 'runtime-llvm-probe.ps1'))) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Probe input is missing: $path" }
     $inputHashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }
 $baseline = (& git -C $root show "${baselineCommit}:selfhost/llvm/text/ownership.slg") -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Frozen selfhost payload cleanup baseline is unavailable.' }
 $candidate = [IO.File]::ReadAllText($sourcePath)
+$transferSource = [IO.File]::ReadAllText($transferPath).Replace("`r`n", "`n")
 $runtime = [IO.File]::ReadAllText($runtimePath).Replace("`r`n", "`n")
+$workerTransferMatches = [regex]::Matches(
+    $transferSource,
+    '(?ms)^workerTransferType typeId:.*?^\}')
+if ($workerTransferMatches.Count -ne 1) {
+    throw "Expected one production workerTransferType declaration; found $($workerTransferMatches.Count)."
+}
+$workerTransferBody = $workerTransferMatches[0].Value
+if (-not $workerTransferBody.Contains(
+        '(currentType.symbol >= 19 and currentType.symbol <= 23)',
+        [StringComparison]::Ordinal) -or
+    $workerTransferBody.Contains('currentType.symbol <= 24', [StringComparison]::Ordinal)) {
+    throw 'General recursive worker transfer policy must keep SourceText containers and nested enums closed.'
+}
+$directTransferMatches = [regex]::Matches(
+    $transferSource,
+    '(?ms)^directWorkerSourceTextType typeId:.*?^\}')
+$tryResultTransferMatches = [regex]::Matches(
+    $transferSource,
+    '(?ms)^workerTryParallelResultType typeId:.*?^\}')
+if ($directTransferMatches.Count -ne 1 -or $tryResultTransferMatches.Count -ne 1) {
+    throw 'Expected one direct SourceText and one tryParallel Result worker-transfer authority.'
+}
+$directTransferBody = $directTransferMatches[0].Value
+$tryResultTransferBody = $tryResultTransferMatches[0].Value
+foreach ($required in @(
+    'candidate.symbol == 24',
+    'resultType.symbol == 1',
+    'resultType.first -> directWorkerSourceTextType(context)',
+    'resultType.second -> directWorkerSourceTextType(context)')) {
+    if (-not ($directTransferBody + $tryResultTransferBody).Contains($required, [StringComparison]::Ordinal)) {
+        throw "Direct SourceText tryParallel worker-transfer authority lost: $required"
+    }
+}
+if (-not $transferSource.Contains(
+        'parallelCall.typeId -> workerTryParallelResultType(context, state)',
+        [StringComparison]::Ordinal)) {
+    throw 'tryParallel compute-pool admission no longer uses the direct Result transfer authority.'
+}
 $sourceBranches = [ordered]@{ baseline = (Get-PayloadBranch $baseline source) }
 if (-not $BaselineOnly) { $sourceBranches.candidate = Get-PayloadBranch $candidate source }
 $arrayBaseline = Get-PayloadBranch $baseline array
@@ -80,19 +126,30 @@ foreach ($platform in @('windows', 'linux')) {
 
 $probe = New-RuntimeLlvmProbe -RepositoryRoot $root -Name 'parallel-source-text-cleanup' -Harness $harnessPath
 $resultPath = Join-Path $probe.Output 'result.json'
+$transferGeneratedPath = Join-Path $probe.Output 'c402-worker-transfer-type.slg'
+$transferExecutablePath = Join-Path $probe.Output 'c402-worker-transfer-type.exe'
+$transferLlvmPath = Join-Path $probe.Output 'c402-worker-transfer-type.ll'
+$transferRunLogPath = Join-Path $probe.Output 'c402-worker-transfer-type.stdout.txt'
 $record = [ordered]@{
     schemaVersion = 1
     status = 'running'
-    scope = 'production-payload-instructions-and-runtime-cfg-native-execution-with-observed-terminals'
+    scope = 'production-worker-transfer-policy-payload-instructions-and-runtime-cfg-native-execution-with-observed-terminals'
     completed = 0
     total = 8
     baselineCommit = $baselineCommit
     baselineOnly = [bool]$BaselineOnly
     inputHashes = $inputHashes
     modes = @()
+    transferPolicy = [ordered]@{
+        status = 'pending'
+        completed = 0
+        total = 45
+        rows = 15
+        stdout = $transferRunLogPath
+    }
     observedTerminalSymbols = @('free', 'UnmapViewOfFile', 'munmap')
-    fixedExtractionInputs = @('SourceText builtin kind=1/origin=1/symbol=24', 'array kind=3', 'payload alignment=8', 'nameRoot=pointerRoot=1')
-    excluded = @('SLG emitter/type lookup execution', 'tryParallel scheduling and initialized-slot selection', 'real allocator and OS unmap execution', 'Linux target execution', 'whole selfhost compiler integration', 'Stage2/Stage3')
+    fixedExtractionInputs = @('tryParallel Result admits direct SourceText builtin symbol=24', 'general recursive workerTransferType excludes SourceText', 'SourceText builtin kind=1/origin=1/symbol=24', 'array kind=3', 'payload alignment=8', 'nameRoot=pointerRoot=1')
+    excluded = @('whole SLG LLVM emitter execution', 'tryParallel scheduling and initialized-slot selection', 'real allocator and OS unmap execution', 'Linux target execution', 'whole selfhost compiler integration', 'Stage2/Stage3')
     compilerIntegration = 'pending'
 }
 function Save-Result { [IO.File]::WriteAllText($resultPath, (($record | ConvertTo-Json -Depth 7) + "`n")) }
@@ -123,6 +180,67 @@ __ARRAY_PAYLOAD__
 }
 '@
 try {
+    Save-Result
+    $transferTemplate = [IO.File]::ReadAllText($transferHarnessPath).Replace("`r`n", "`n")
+    $transferReplacements = [ordered]@{
+        '__WORKER_TRANSFER_TYPE__' = $workerTransferBody.Replace('emitterContext.EmitContext', 'EmitContext')
+        '__DIRECT_SOURCE_TEXT_TYPE__' = $directTransferBody.Replace('emitterContext.EmitContext', 'EmitContext')
+        '__TRY_PARALLEL_RESULT_TYPE__' = $tryResultTransferBody.Replace('emitterContext.EmitContext', 'EmitContext')
+    }
+    foreach ($placeholder in $transferReplacements.Keys) {
+        if ([regex]::Matches($transferTemplate, [regex]::Escape($placeholder)).Count -ne 1) {
+            throw "C402 transfer fixture must contain exactly one $placeholder placeholder."
+        }
+        $transferTemplate = $transferTemplate.Replace($placeholder, $transferReplacements[$placeholder])
+    }
+    [IO.File]::WriteAllText($transferGeneratedPath, $transferTemplate, [Text.UTF8Encoding]::new($false))
+    & dotnet $compilerPath format --check $transferGeneratedPath
+    if ($LASTEXITCODE -ne 0) { throw 'Generated C402 worker-transfer fixture is not authoritative-format clean.' }
+
+    $transferActual = (& dotnet $compilerPath run $transferGeneratedPath --llvm $llvmHome -o $transferExecutablePath --keep-temps 2>&1) -join "`n"
+    $transferExitCode = $LASTEXITCODE
+    [IO.File]::WriteAllText($transferRunLogPath, $transferActual + "`n", [Text.UTF8Encoding]::new($false))
+    $transferExpected = @(
+        'int=true,false,false',
+        'source-text=false,true,false',
+        'dynamic-source-text=false,false,false',
+        'fixed-source-text=false,false,false',
+        'option-source-text=false,false,false',
+        'direct-result-source-text-ok=false,false,true',
+        'direct-result-source-text-error=false,false,true',
+        'direct-result-source-text-both=false,false,true',
+        'result-dynamic-source-text=false,false,false',
+        'result-fixed-source-text=false,false,false',
+        'result-option-source-text=false,false,false',
+        'result-nested-result=false,false,false',
+        'invalid-source-text=false,false,false',
+        'result-missing-error=true,false,false',
+        'out-of-range=false,false,false',
+        'C402 worker transfer matrix=true: 15/15,45/45'
+    ) -join "`n"
+    if ($transferExitCode -ne 0 -or $transferActual.Replace("`r`n", "`n").TrimEnd("`n") -cne $transferExpected) {
+        throw "C402 worker-transfer matrix output mismatch (exit=$transferExitCode)."
+    }
+    if (-not (Test-Path -LiteralPath $transferLlvmPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $transferExecutablePath -PathType Leaf)) {
+        throw 'C402 worker-transfer probe did not produce LLVM and executable outputs.'
+    }
+    & (Join-Path $llvmHome 'bin/llvm-as.exe') $transferLlvmPath -o (Join-Path $probe.Output 'c402-worker-transfer-type.bc')
+    if ($LASTEXITCODE -ne 0) { throw 'C402 worker-transfer probe LLVM assembly failed.' }
+    & $closureVerifierPath -LlvmPath $transferLlvmPath
+    if ($LASTEXITCODE -ne 0) { throw 'C402 worker-transfer probe direct-call closure failed.' }
+    $record.transferPolicy.status = 'passed'
+    $record.transferPolicy.completed = 45
+    $record.transferPolicy.warningCount = 0
+    $record.transferPolicy.stdoutSha256 = Get-StringHash ($transferActual.Replace("`r`n", "`n").TrimEnd("`n") + "`n")
+    $record.transferPolicy.generatedSourceSha256 = (Get-FileHash -LiteralPath $transferGeneratedPath -Algorithm SHA256).Hash
+    $record.transferPolicy.llvmSha256 = (Get-FileHash -LiteralPath $transferLlvmPath -Algorithm SHA256).Hash
+    $record.transferPolicy.executableSha256 = (Get-FileHash -LiteralPath $transferExecutablePath -Algorithm SHA256).Hash
+    $record.transferPolicy.productionFunctionsSha256 = [ordered]@{
+        workerTransferType = Get-StringHash $workerTransferBody
+        directWorkerSourceTextType = Get-StringHash $directTransferBody
+        workerTryParallelResultType = Get-StringHash $tryResultTransferBody
+    }
     Save-Result
     foreach ($mode in $sourceBranches.Keys) {
         $sourceInstructions = Convert-PayloadInstructions $sourceBranches[$mode].Groups['body'].Value
@@ -159,6 +277,11 @@ try {
     $record.baselineMappedMisdispatchObserved = $true
     $record.arrayBranchUnchanged = $true
     $record.inputsStable = $true
-} catch { $record.status = 'failed'; $record.failure = $_.Exception.Message; throw }
+} catch {
+    $record.status = 'failed'
+    if ($record.transferPolicy.status -ne 'passed') { $record.transferPolicy.status = 'failed' }
+    $record.failure = $_.Exception.Message
+    throw
+}
 finally { Save-Result }
-Write-Host "[parallel SourceText cleanup] PASS 8/8 per mode; $resultPath"
+Write-Host "[parallel SourceText cleanup] PASS 8/8 per mode; worker transfer 45/45; $resultPath"

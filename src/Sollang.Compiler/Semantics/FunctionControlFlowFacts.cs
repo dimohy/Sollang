@@ -61,7 +61,12 @@ internal static class FunctionControlFlowFacts
 
     public static bool RequiresStandaloneStandardLibraryEmission(BoundFunction function)
     {
-        return HasEarlyReturn(function)
+        // Async calls must always cross a real function boundary so their Task
+        // context, suspension state and affine owners outlive the caller frame.
+        // Inlining an otherwise simple stdlib async body bypasses the async CFG
+        // emitter and turns a bare `yield` into an ordinary expression statement.
+        return function.IsAsync
+            || HasEarlyReturn(function)
             || function.BlockBody.Any(ContainsStackCandidate)
             || (function.Body is not null && ContainsStackCandidate(function.Body));
     }

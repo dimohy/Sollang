@@ -31,6 +31,10 @@ $binaryPass = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg'
 $node = Read-Declaration 'selfhost/ir/typed.slg' 'public struct TypedIrNode'
 $rank = Read-Declaration 'selfhost/ir/typed.slg' 'integerTypeRank'
 $type = Read-Declaration 'selfhost/semantic/type_ids.slg' 'public struct SemanticType'
+$rangeHelper = Read-Declaration 'selfhost/llvm/emitter/diagnostics.slg' 'initializerIntegerLiteralFits'
+$characterSpan = Read-Declaration 'selfhost/syntax/source.slg' 'public struct SourceSpan'
+$characterDecoder = Read-Declaration 'selfhost/syntax/source.slg' 'public decodeCharacterLiteral'
+$constantFind = Read-Declaration 'selfhost/semantic/constant_collection_lowering.slg' 'public find'
 $grammarSource = Get-Content -LiteralPath (Join-Path $repo 'syntax/generated/sollang_grammar.slg') -Raw
 $grammarDeclarations = @('Minus', 'Plus', 'Percent', 'EqualEqual', 'BangEqual', 'LessEqual', 'Greater') | ForEach-Object {
     $declaration = [regex]::Match($grammarSource, ('(?m)^public tokenId' + $_ + ':[^\r\n]+')).Value
@@ -157,6 +161,195 @@ $expected = @(
 if ($nativeExpected) { $expected += "`n$nativeExpected" }
 if ($actual.Replace("`r`n", "`n").TrimEnd() -cne $expected) { throw "contextual integer helper output mismatch: $actual" }
 
+$rangeContractPath = Join-Path $repo 'scripts/contracts/fixtures/c394-contextual-integer-range.json'
+$rangeContract = Get-Content -LiteralPath $rangeContractPath -Raw | ConvertFrom-Json
+if ($rangeContract.schemaVersion -ne 1 -or @($rangeContract.cases).Count -eq 0) {
+    throw 'invalid C394 contextual integer range contract'
+}
+$authoritativeRangeTuples = @'
+int-alias-min|2|64|2147483648|true|true
+int-alias-underflow|2|64|2147483649|true|false
+int-alias-max|2|64|2147483647|false|true
+int-alias-overflow|2|64|2147483648|false|false
+int8-min|3|64|128|true|true
+int8-underflow|3|64|129|true|false
+int8-max|3|64|127|false|true
+int8-overflow|3|64|128|false|false
+int16-min|4|64|32768|true|true
+int16-underflow|4|64|32769|true|false
+int16-max|4|64|32767|false|true
+int16-overflow|4|64|32768|false|false
+int32-min|5|64|2147483648|true|true
+int32-underflow|5|64|2147483649|true|false
+int32-max|5|64|2147483647|false|true
+int32-overflow|5|64|2147483648|false|false
+int64-min|6|64|9223372036854775808|true|true
+int64-underflow|6|64|9223372036854775809|true|false
+int64-max|6|64|9223372036854775807|false|true
+int64-overflow|6|64|9223372036854775808|false|false
+long-alias-min|7|64|9223372036854775808|true|true
+long-alias-underflow|7|64|9223372036854775809|true|false
+long-alias-max|7|64|9223372036854775807|false|true
+long-alias-overflow|7|64|9223372036854775808|false|false
+int64-min-underscores|6|64|9_223_372_036_854_775_808|true|true
+signed-negative-zero|6|64|0|true|true
+uint8-max|8|64|255|false|true
+uint8-overflow|8|64|256|false|false
+uint8-negative|8|64|1|true|false
+unsigned-negative-zero|8|64|0|true|true
+uint16-max|9|64|65535|false|true
+uint16-overflow|9|64|65536|false|false
+uint32-max|10|64|4294967295|false|true
+uint32-overflow|10|64|4294967296|false|false
+uint64-max|11|64|18446744073709551615|false|true
+uint64-overflow|11|64|18446744073709551616|false|false
+size32-min|12|32|2147483648|true|true
+size32-underflow|12|32|2147483649|true|false
+size32-max|12|32|2147483647|false|true
+size32-overflow|12|32|2147483648|false|false
+usize32-max|13|32|4294967295|false|true
+usize32-overflow|13|32|4294967296|false|false
+size64-min|12|64|9223372036854775808|true|true
+size64-underflow|12|64|9223372036854775809|true|false
+size64-max|12|64|9223372036854775807|false|true
+size64-overflow|12|64|9223372036854775808|false|false
+usize64-max|13|64|18446744073709551615|false|true
+usize64-overflow|13|64|18446744073709551616|false|false
+codepoint-before-surrogate|14|64|55295|false|true
+codepoint-surrogate-start|14|64|55296|false|false
+codepoint-surrogate-end|14|64|57343|false|false
+codepoint-after-surrogate|14|64|57344|false|true
+codepoint-max|14|64|1114111|false|true
+codepoint-overflow|14|64|1114112|false|false
+codepoint-negative|14|64|1|true|false
+lexeme-only-underscore|6|64|_|false|false
+lexeme-letter|6|64|12x|false|false
+lexeme-empty|6|64||false|false
+lexeme-leading-underscore|6|64|_1|false|false
+lexeme-trailing-underscore|6|64|1_|false|false
+lexeme-double-underscore|6|64|1__0|false|false
+lexeme-valid-underscore|6|64|1_0|false|true
+'@ -split '\r?\n' | Where-Object { $_ -ne '' }
+$expectedRangeCaseProperties = @('name', 'typeSymbol', 'pointerBitWidth', 'spelling', 'negative', 'fits')
+foreach ($case in $rangeContract.cases) {
+    $caseProperties = @($case.PSObject.Properties.Name)
+    if (($caseProperties -join '|') -cne ($expectedRangeCaseProperties -join '|')) {
+        throw 'C394 contextual integer range cases require the exact ordered property schema'
+    }
+    if ($case.name -isnot [string] -or $case.typeSymbol -isnot [long] -or $case.pointerBitWidth -isnot [long] `
+        -or $case.spelling -isnot [string] -or $case.negative -isnot [bool] -or $case.fits -isnot [bool]) {
+        throw "C394 contextual integer range case has an invalid property type: $($case.name)"
+    }
+}
+$actualRangeTuples = @($rangeContract.cases | ForEach-Object {
+    @(
+        $_.name,
+        [string]$_.typeSymbol,
+        [string]$_.pointerBitWidth,
+        [string]$_.spelling,
+        ([bool]$_.negative).ToString().ToLowerInvariant(),
+        ([bool]$_.fits).ToString().ToLowerInvariant()
+    ) -join '|'
+})
+if (($actualRangeTuples -join "`n") -cne ($authoritativeRangeTuples -join "`n")) {
+    throw 'C394 contextual integer range contract must exactly match the authoritative ordered tuple matrix'
+}
+$rangeNames = @($rangeContract.cases | ForEach-Object { $_.name })
+if (@($rangeNames | Sort-Object -Unique).Count -ne $rangeNames.Count) {
+    throw 'C394 contextual integer range case names must be unique'
+}
+foreach ($case in $rangeContract.cases) {
+    if ($case.name -notmatch '^[a-z0-9-]+$' -or $case.spelling -notmatch '^[A-Za-z0-9_]*$') {
+        throw "unsafe C394 contextual integer range case text: $($case.name)"
+    }
+    if ($case.typeSymbol -lt 2 -or $case.typeSymbol -gt 14 -or $case.pointerBitWidth -notin @(32, 64)) {
+        throw "invalid C394 contextual integer range target: $($case.name)"
+    }
+}
+
+$rangeSources = @(
+    @{ Name = 'range-types.slg'; Text = @"
+namespace c394.type_ids
+public struct SemanticType { public kind: Int, public origin: Int, public symbol: Int }
+"@ },
+    @{ Name = 'range-analysis.slg'; Text = @"
+namespace c394.analysis
+public struct SourceRange { public astStart: Int, public literalStart: Int, public literalCount: Int }
+"@ },
+    @{ Name = 'range-ast.slg'; Text = @"
+namespace c394.ast
+public struct AstNode { public start: UIntSize, public length: UIntSize }
+"@ },
+    @{ Name = 'range-typed.slg'; Text = @"
+namespace c394.typed
+public struct TypedIrNode { public kind: Int, public sourceModule: Int, public astNode: Int, public opcode: Int, public operand0: Int }
+"@ },
+    @{ Name = 'range-constant.slg'; Text = @"
+namespace c394.constant
+public struct Literal { public astNode: Int, public value: Long }
+$constantFind
+"@ },
+    @{ Name = 'range-syntax.slg'; Text = @"
+namespace c394.syntax
+$characterSpan
+$characterDecoder
+"@ },
+    @{ Name = 'range-context.slg'; Text = @"
+namespace c394.context
+import c394.analysis as analysis
+import c394.ast as ast
+import c394.constant as constantLowering
+import c394.typed as typedIr
+import c394.type_ids as typeIds
+public struct EmitContext {
+    public sources: [Text; ~]
+    public ranges: [analysis.SourceRange; ~]
+    public nodes: [ast.AstNode; ~]
+    public constantLiterals: [constantLowering.Literal; ~]
+    public ir: [typedIr.TypedIrNode; ~]
+    public types: [typeIds.SemanticType; ~]
+    public pointerBitWidth: Int
+}
+"@ },
+    @{ Name = 'range-grammar.slg'; Text = "namespace syntax.generated.slg`n$($grammarDeclarations[0])`n" },
+    @{ Name = 'range-helper.slg'; Text = @"
+namespace sollang.compiler.llvm.emitter.diagnostics
+import c394.constant as constantLowering
+import c394.context as emitterContext
+import c394.syntax as syntax
+import c394.typed as typedIr
+import syntax.generated.slg as grammar
+$rangeHelper
+"@ },
+    @{ Name = 'range-entry.slg'; Text = @"
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+main {
+$(@($rangeContract.cases | ForEach-Object -Begin { $caseIndex = 0 } -Process {
+    $negative = if ($_.negative) { 'true' } else { 'false' }
+    $lines = @(
+        '    "' + $_.spelling + '" -> diagnostics.sourceLiteralFits(' + $_.typeSymbol + ', ' + $_.pointerBitWidth + ', ' + $negative + ') => rangeCase' + $caseIndex
+        '    "' + $_.name + '=$rangeCase' + $caseIndex + '" -> println'
+    )
+    $caseIndex++
+    $lines -join "`n"
+}) -join "`n")
+}
+"@ }
+)
+$rangePaths = @()
+foreach ($source in $rangeSources) {
+    $path = Join-Path $output $source.Name
+    [IO.File]::WriteAllText($path, $source.Text)
+    $rangePaths += $path
+}
+$rangePaths += Join-Path $repo 'scripts/probes/contextual-integer-literals/range-diagnostics.slg'
+$rangeActual = (& dotnet $compiler run @rangePaths --llvm (Join-Path $repo '.tools/llvm-22.1.8') -o (Join-Path $output 'range-probe.exe') 2>&1) -join "`n"
+if ($LASTEXITCODE -ne 0) { throw "contextual integer lexical range execution failed: $rangeActual" }
+$rangeExpected = @($rangeContract.cases | ForEach-Object { $_.name + '=' + ([bool]$_.fits).ToString().ToLowerInvariant() }) -join "`n"
+if ($rangeActual.Replace("`r`n", "`n").TrimEnd() -cne $rangeExpected) {
+    throw "contextual integer lexical range output mismatch: $rangeActual"
+}
+
 $callsites = @('selfhost/ir/typed/resolved_context_normalize_phases.slg', 'selfhost/ir/typed/resolved_context_seal.slg')
 foreach ($callsite in $callsites) {
     $body = Get-Content -LiteralPath (Join-Path $repo $callsite) -Raw
@@ -180,14 +373,34 @@ $evidence = [ordered]@{
     peerHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($peerHelper)))
     nativeHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($nativeHelper)))
     binaryPassSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($binaryPass)))
+    rangeHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($rangeHelper)))
     stdout = $actual
     selfhostCandidateExecution = if ($RequireCandidateSealed) { 'actual-candidate-native-context-sealed' } else { 'pending-accumulated-compiler-verification' }
     candidateSealingRequired = [bool]$RequireCandidateSealed
-    signedAndRangeDiagnostics = 'pending-source-semantic-integration-including-negative-zero'
-    sourceDecimalClassification = 'not-proven-by-metadata-probe-initial-semantic-seed-uses-int-for-number-ast'
+    signedAndRangeDiagnostics = [ordered]@{
+        status = 'passed-production-bounds-predicate-execution'
+        completed = @($rangeContract.cases).Count
+        total = @($rangeContract.cases).Count
+        countUnit = 'source-lexical-boundary-cases'
+        classifications = [ordered]@{
+            signed = 26
+            unsigned = 10
+            size = 12
+            codePoint = 7
+            lexeme = 7
+        }
+        contract = 'scripts/contracts/fixtures/c394-contextual-integer-range.json'
+        contractSha256 = (Get-FileHash -LiteralPath $rangeContractPath -Algorithm SHA256).Hash
+        probeSha256 = (Get-FileHash -LiteralPath (Join-Path $repo 'scripts/probes/contextual-integer-literals/range-diagnostics.slg') -Algorithm SHA256).Hash
+        characterDecoderSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($characterDecoder)))
+        constantFindSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($constantFind)))
+        diagnosticIntegration = 'pending-whole-selfhost-source-to-diagnostic'
+        stdout = $rangeActual
+    }
+    sourceDecimalClassification = 'production lexical bounds proven independently; whole selfhost source-to-diagnostic integration pending'
     nativeFloatTopology = 'integer-and-float-share-canonical-operand0-leaf-carrier-context'
     nativeCandidateTopology = $nativeTopology
 }
 [IO.File]::WriteAllText((Join-Path $output 'result.json'), ($evidence | ConvertTo-Json -Depth 4))
-Write-Output "Contextual integer literals: production integer/native helpers and final binary pass PASS $($evidence.completed)/$($evidence.total) assertion groups; rebuilt selfhost and signed/range diagnostics pending."
+Write-Output "Contextual integer literals: metadata helpers PASS $($evidence.completed)/$($evidence.total) assertion groups; production lexical bounds PASS $($evidence.signedAndRangeDiagnostics.completed)/$($evidence.signedAndRangeDiagnostics.total) cases (signed 26, unsigned 10, Size/USize 12, CodePoint 7, lexeme 7); rebuilt whole selfhost pending."
 Write-Output (Join-Path $output 'result.json')

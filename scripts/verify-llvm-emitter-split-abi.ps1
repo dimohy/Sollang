@@ -51,8 +51,8 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 329) {
-    throw "Expected 329 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 330) {
+    throw "Expected 330 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredStatefulHelpers = @(
     "isImportedLibraryFunction"
@@ -65,6 +65,7 @@ $requiredStatefulHelpers = @(
     "emitAwaitTaskValue"
     "emitDurationSleepTask"
     "emitAsyncFunction"
+    "workerTryParallelResultType"
 )
 foreach ($requiredStatefulHelper in $requiredStatefulHelpers) {
     if ($requiredStatefulHelper -notin $helperNames) {
@@ -91,10 +92,12 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 101) {
-    throw "Expected 101 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 103) {
+    throw "Expected 103 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredDiagnosticReadonlyHelpers = @(
+    "arrayElementLayoutDiagnosticCount"
+    "emitArrayElementLayoutDiagnostics"
     "libraryImportDiagnosticCount"
     "emitLibraryImportDiagnostics"
     "emitOpenImportAmbiguity"

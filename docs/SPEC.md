@@ -912,7 +912,9 @@ The generated grammar must retain the numeric alternative even though array
 expressions have their own repeat and bounded-storage alternatives.
 
 Numeric separators are source syntax and are removed when an integer literal
-is printed into LLVM text. Resolved integer call arguments are converted to the
+is printed into LLVM text. An underscore is valid only between two decimal
+digits; an empty spelling and a leading, trailing, or consecutive underscore
+are rejected before LLVM emission. Resolved integer call arguments are converted to the
 declared parameter width before the call with signedness-aware extension or
 truncation. Integer return literals have no SSA producer; the emitter prints
 them directly using the declared return type instead of creating a conversion
@@ -1297,6 +1299,14 @@ freed, and mapped storage is unmapped through the target runtime. Lowering must
 delegate the intact `SourceText` aggregate to that representation-aware cleanup;
 extracting its owner pointer and treating every non-array payload as heap
 storage is invalid.
+
+`SourceText` is admitted as a direct payload of the top-level `Result` returned by
+a `tryParallel` callback. The callback moves its intact representation into the
+joined result slot; no worker or submitting scope may retain a second owner.
+Collection occurs only after the structured join and follows the
+representation-aware rule above. Plain `parallel` results and nested carriers
+such as arrays, `Option`, or another `Result` remain rejected until their
+recursive worker-side cleanup is implemented.
 
 Normal drop lowering may elide `SourceText` cleanup only when the complete value
 is proven to come directly from a borrowing intrinsic, possibly through

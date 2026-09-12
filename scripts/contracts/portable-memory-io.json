@@ -1,9 +1,10 @@
 {
   "$schema": "portable-memory-io.schema.json",
-  "version": 6,
+  "version": 7,
   "module": "std.io",
   "sources": [
     "stdlib/std/io.slg",
+    "stdlib/std/io/async.slg",
     "stdlib/std/io/file.slg",
     "stdlib/std/net/socket.slg"
   ],
@@ -42,7 +43,31 @@
     "ByteWriter.intoFileWriter",
     "File.readIntoAt",
     "FileWriter.writeRangeAt",
-    "TransferPolicy.readAll"
+    "TransferPolicy.readAll",
+    "Async.readMemoryInto",
+    "Async.writeMemoryRange",
+    "Async.bufferQueue",
+    "BufferQueue.bufferedBytes",
+    "BufferQueue.isBackpressured",
+    "BufferQueue.offer",
+    "BufferQueue.drain",
+    "OfferSuccess.intoQueue",
+    "OfferFailure.intoQueue",
+    "DrainSuccess.intoQueue",
+    "DrainFailure.intoQueue",
+    "AsyncTransferError.Io(Text)",
+    "ReadAtSuccess",
+    "ReadAtFailure",
+    "WriteAtSuccess",
+    "WriteAtFailure",
+    "File.readIntoAtAsync",
+    "FileWriter.writeRangeAtAsync",
+    "AsyncReadSuccess",
+    "AsyncReadFailure",
+    "AsyncWriteSuccess",
+    "AsyncWriteFailure",
+    "ByteReader.readIntoAsync",
+    "ByteWriter.writeRangeAsync"
   ],
   "invariants": [
     "reader and writer protocols each expose one caller-buffer partial-transfer primitive",
@@ -88,10 +113,224 @@
     "bounded read-all observes end before publishing its owned aggregate",
     "bounded read-all retains an over-limit probe in ReplayBuffer for a lossless larger-limit retry",
     "bounded read-all rejects insufficient replay capacity before source access",
-    "bounded read-all uses TransferPolicy bufferBytes as its reusable read chunk ceiling"
+    "bounded read-all uses TransferPolicy bufferBytes as its reusable read chunk ceiling",
+    "async memory operations cross a real cooperative suspension point",
+    "async memory operations consume affine endpoints and caller buffers into the Task",
+    "ordinary async success returns the exact endpoint and caller buffer owners",
+    "typed async failure and cooperative cancellation return the exact endpoint and caller buffer owners",
+    "Task cancellation drops transferred owners instead of exposing aliases",
+    "async reads distinguish EOF from an empty caller buffer",
+    "async reads and writes preserve exact partial progress",
+    "successful zero write progress is an asynchronous typed WriteZero failure",
+    "BufferQueue allocation is bounded by its validated high watermark",
+    "producers pause at the high watermark and stay paused above the low watermark",
+    "draining to the low watermark resumes producers without unbounded buffering",
+    "buffer offer and drain operations return queue and caller buffer ownership",
+    "asynchronous file reads and writes submit one native request per caller range",
+    "file and caller buffer owners move into the asynchronous Task together",
+    "native file workers observe only a duplicate handle and the moved caller buffer",
+    "ordinary file success returns the exact endpoint and caller buffer owners",
+    "I/O failure preserves its Text payload while returning both owners",
+    "invalid ranges and cooperative cancellation remain distinct typed failures",
+    "cooperative cancellation performs no native file request",
+    "Task cancellation drops context owners and closes the duplicate handle exactly once",
+    "file adapter positions advance only on successful asynchronous completion",
+    "asynchronous browser file capability fails explicitly without synchronous fallback"
   ],
   "unsupported": [
-    "reactor protocol implementations",
-    "asynchronous buffering and backpressure"
+    "socket completion reactor protocol implementation"
+  ],
+  "completion": {
+    "status": "blocked",
+    "requiredUnsupportedCount": 0
+  },
+  "focusedProbes": [
+    {
+      "id": "owned-buffer-suspension",
+      "source": "scripts/probes/portable-memory-io/owned-buffer-suspension.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "count=2,len=3,end=false",
+        "failed-len=2",
+        "count=0,len=0,end=true"
+      ]
+    },
+    {
+      "id": "async-nested-owner-result",
+      "source": "scripts/probes/portable-memory-io/async-nested-owner-result.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "nested=1,buffer=1,count=0"
+      ]
+    },
+    {
+      "id": "async-mutable-owner-alias",
+      "source": "scripts/probes/portable-memory-io/async-mutable-owner-alias.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "endpoint=1,offset=1,buffer=1,value=1"
+      ]
+    },
+    {
+      "id": "async-memory-transfer",
+      "source": "scripts/probes/portable-memory-io/async-memory-transfer.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "read=count:2,first:1,last:2,end:false,remaining:1",
+        "cancel=returned-buffer:1,remaining:1",
+        "zero=returned-buffer:1,stored:0"
+      ]
+    },
+    {
+      "id": "async-result-branch",
+      "source": "scripts/probes/portable-memory-io/async-result-branch.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "value=7,offset=1"
+      ]
+    },
+    {
+      "id": "async-yield-loop",
+      "source": "scripts/probes/portable-memory-io/async-yield-loop.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "2"
+      ]
+    },
+    {
+      "id": "async-buffer-watermarks",
+      "source": "scripts/probes/portable-memory-io/async-buffer-watermarks.slg",
+      "expectation": "exact-stdout",
+      "expected": [
+        "first=count:4,paused:true,buffered:4",
+        "second=backpressure,buffered:4",
+        "drain=count:3,first:10,last:12,buffered:1,paused:false",
+        "resume=count:1,buffered:2,paused:false"
+      ]
+    },
+    {
+      "id": "c424-owned-sibling-rewrap",
+      "source": "scripts/probes/portable-memory-io/c424-owned-sibling-rewrap.slg",
+      "expectation": "exact-stdout",
+      "expected": ["rewrap=1,2"]
+    },
+    {
+      "id": "c424-moved-field-reuse",
+      "source": "scripts/probes/portable-memory-io/c424-moved-field-reuse.slg",
+      "expectation": "compiler-rejected",
+      "expected": ["owned binding 'pair' cannot initialize more than one aggregate position"]
+    },
+    {
+      "id": "c424-moved-payload-reuse",
+      "source": "scripts/probes/portable-memory-io/c424-moved-payload-reuse.slg",
+      "expectation": "compiler-rejected",
+      "expected": ["owned binding 'pair' cannot initialize more than one aggregate position"]
+    },
+    {
+      "id": "async-file-read-owned",
+      "source": "scripts/probes/portable-memory-io/async-file-read-owned.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-read=266"]
+    },
+    {
+      "id": "async-file-write-owned",
+      "source": "scripts/probes/portable-memory-io/async-file-write-owned.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-write=23"]
+    },
+    {
+      "id": "async-file-adapter",
+      "source": "scripts/probes/portable-memory-io/async-file-adapter.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-async=22,22230"]
+    },
+    {
+      "id": "async-file-cooperative-cancel",
+      "source": "scripts/probes/portable-memory-io/async-file-cooperative-cancel.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-cancel=91,1"]
+    },
+    {
+      "id": "async-file-invalid-range",
+      "source": "scripts/probes/portable-memory-io/async-file-invalid-range.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-range=2,2"]
+    },
+    {
+      "id": "async-file-task-cancel",
+      "source": "scripts/probes/portable-memory-io/async-file-task-cancel.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-task-cancel=-1"]
+    },
+    {
+      "id": "async-file-platform-error",
+      "source": "scripts/probes/portable-memory-io/async-file-platform-error.slg",
+      "expectation": "exact-stdout",
+      "expected": ["file-io=io,1"]
+    },
+    {
+      "id": "async-file-browser-unavailable",
+      "source": "scripts/probes/portable-memory-io/async-file-read-owned.slg",
+      "target": "wasm32-browser",
+      "expectation": "compiler-rejected",
+      "expected": ["asynchronous file I/O is unavailable on wasm32-browser; use a host-provided file adapter"]
+    },
+    {
+      "id": "async-file-read-owned-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-read-owned.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-read=266"]
+    },
+    {
+      "id": "async-file-write-owned-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-write-owned.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-write=23"]
+    },
+    {
+      "id": "async-file-adapter-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-adapter.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-async=22,22230"]
+    },
+    {
+      "id": "async-file-cooperative-cancel-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-cooperative-cancel.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-cancel=91,1"]
+    },
+    {
+      "id": "async-file-invalid-range-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-invalid-range.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-range=2,2"]
+    },
+    {
+      "id": "async-file-task-cancel-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-task-cancel.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-task-cancel=-1"]
+    },
+    {
+      "id": "async-file-platform-error-linux",
+      "source": "scripts/probes/portable-memory-io/async-file-platform-error.slg",
+      "target": "linux-x64",
+      "expectation": "exact-stdout",
+      "expected": ["file-io=io,1"]
+    }
+  ],
+  "blockers": [
+    {
+      "id": "PORTABLE_SOCKET_COMPLETION_SUBMISSION",
+      "layer": "socket-runtime",
+      "capability": "submit, cancel, and dequeue a moved socket buffer through CompletionReactor",
+      "evidence": "CompletionReactorOptions and OperationSlot exist without public submission, dequeue, cancellation, or runtime lowering"
+    }
   ]
 }
