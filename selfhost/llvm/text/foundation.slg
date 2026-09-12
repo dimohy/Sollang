@@ -637,7 +637,9 @@ controlResultShapeComplete controlIndex: Int, depth: Int, context: ref emitterCo
 directEachElementTypeId source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     source.kind == 31 -> if { 2 } else {
         source -> isArgumentsType -> if { 1 } else {
-            source -> arrayElementTypeId(context, state)
+            source -> isDirectTextEachSource(context) -> if { 14 } else {
+                source -> arrayElementTypeId(context, state)
+            }
         }
     }
 }
@@ -1233,6 +1235,16 @@ interpolationNodeIntegerWidth nodeIndex: Int, nodes: ref [interpolation.Interpol
         bindingWidth! <= 0 -> if { binding -> integerNodeWidth(context, state) => bindingWidth! }
         bindingWidth! > 0 -> if { bindingWidth! => width! }
     }
+    node.kind == 1 and bindingIndex < 0 -> if {
+        node -> directEachRoleTypeId(sourceModule, context, state) => roleTypeId
+        roleTypeId >= 0 and roleTypeId < (context.types -> len)
+            -> if {
+                context.types[roleTypeId].symbol -> integerWidth(context, state) => roleWidth!
+                context.types[roleTypeId].symbol == 12 or context.types[roleTypeId].symbol == 13
+                    -> if { context.pointerBitWidth => roleWidth! }
+                roleWidth! > 0 -> if { roleWidth! => width! }
+            }
+    }
     node.kind == 2 and node.operand0 >= 0 -> if {
         node.operand0 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => width!
     }
@@ -1273,6 +1285,11 @@ interpolationNodeSigned nodeIndex: Int, nodes: ref [interpolation.InterpolationN
                 -> if {
                     context.types[binding.typeId].symbol -> integerSigned(context, state) => signed!
                 } else { binding -> integerNodeSigned(context, state) => signed! }
+        }
+        bindingIndex < 0 -> if {
+            node -> directEachRoleTypeId(sourceModule, context, state) => roleTypeId
+            roleTypeId >= 0 and roleTypeId < (context.types -> len)
+                -> if { context.types[roleTypeId].symbol -> integerSigned(context, state) => signed! }
         }
     }
     (node.kind == 2 or node.kind == 3) and node.operand0 >= 0

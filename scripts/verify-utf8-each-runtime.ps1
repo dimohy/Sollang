@@ -15,6 +15,18 @@ $bodyLines = @([regex]::Matches($fragment.Groups['body'].Value, '(?m)^\s*"(?<tex
 if ($bodyLines.Count -ne 9) { throw "Text each decode materializer inventory changed: $($bodyLines.Count)" }
 $nextLine = [regex]::Matches($foundation, '(?m)^\s*"(?<text>  %each\$\(eachIndex\)_next = add i64 %each\$\(eachIndex\)_index, %each\$\(eachIndex\)_width)" -> println\s*$')
 if ($nextLine.Count -ne 1) { throw 'Text each must advance by the decoded byte width.' }
+$textRoleType = [regex]::Matches(
+    $foundation,
+    '(?s)directEachElementTypeId source:.*?source -> isDirectTextEachSource\(context\) -> if \{ 14 \} else \{\s*source -> arrayElementTypeId\(context, state\)')
+if ($textRoleType.Count -ne 1) {
+    throw 'Text each role must have the canonical CodePoint type before interpolation lowering.'
+}
+$textRoleConversion = [regex]::Matches(
+    $foundation,
+    '(?s)interpolationNodeIntegerWidth nodeIndex:.*?node\.kind == 1 and bindingIndex < 0 -> if \{\s*node -> directEachRoleTypeId\(sourceModule, context, state\) => roleTypeId.*?roleWidth! > 0 -> if \{ roleWidth! => width! \}.*?interpolationNodeSigned nodeIndex:.*?bindingIndex < 0 -> if \{\s*node -> directEachRoleTypeId\(sourceModule, context, state\) => roleTypeId.*?integerSigned\(context, state\) => signed!')
+if ($textRoleConversion.Count -ne 1) {
+    throw 'Text each role conversion must derive integer width and signedness from the canonical role type.'
+}
 $next = $nextLine[0].Groups['text'].Value.Replace('$(eachIndex)', '0')
 $body = $bodyLines -join "`n"
 # The decoder body and Text-loop decode/advance instructions below are extracted
@@ -71,8 +83,8 @@ foreach ($authority in $sources.Keys) {
     if ($null -eq $normalizedReference) { $normalizedReference = $normalized }
     elseif ($normalized -cne $normalizedReference) { throw 'Managed/self-host UTF-8 decoder implementations drifted.' }
     $result = Invoke-RuntimeLlvmProbe -Probe $probe -Authority $authority -Llvm "$decoder`n$wrapper" -ExpectedOutput 'utf8 decoder 28/28; each fragments 2/2'
-    $results += [ordered]@{ authority = $authority; sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash; extractedLlvmHash = $result.LlvmHash; executableHash = $result.ExecutableHash; decoderPassed = 28; decoderTotal = 28; eachPassed = 2; eachTotal = 2 }
-    Write-Host "[UTF-8 runtime] PASS $authority decoder 28/28; extracted each fragments 2/2"
+    $results += [ordered]@{ authority = $authority; sourceHash = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash; extractedLlvmHash = $result.LlvmHash; executableHash = $result.ExecutableHash; decoderPassed = 28; decoderTotal = 28; eachPassed = 4; eachTotal = 4 }
+    Write-Host "[UTF-8 runtime] PASS $authority decoder 28/28; extracted each fragments, CodePoint role typing, and conversion typing 4/4"
 }
 [IO.File]::WriteAllText((Join-Path $probe.Output 'result.json'), (([ordered]@{
     schemaVersion = 1
