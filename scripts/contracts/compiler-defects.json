@@ -6968,16 +6968,22 @@
     {
       "id": "C2026-09-13-418",
       "classification": "latent-defect",
-      "state": "open",
+      "state": "candidate-fixed",
       "owner": "selfhost direct async-call await flow topology with affine additional input",
-      "rootCause": "Isolation is pending. In a direct flow from an async call with a moved additional Dictionary argument into await, selfhost emits the Task-producing call but no Task join/release and binds the Task value as the awaited Int result. The equivalent explicitly owned Task followed by await executes correctly, so the defect is in direct flow topology or await source/result association rather than the parameter context ABI.",
-      "focusedFixture": "c418-direct-owned-async-await isolates 30 -> consumeOwned(scores!) -> await => result and must print owned=31. c415-async-owned-parameter is the explicit-Task positive control; regression 234 retains direct scalar await and regression 406 retains the original broader case.",
+      "rootCause": "Await source indexing recorded only kind-15 name children of a flow. A direct async call is instead a nested kind-10 source child of the outer await flow, so no await source identity survived into LLVM. Typed IR retained the Task-producing call but bound that call directly as the Int result, leaving no value node on which the existing join/release emitter could run. Finalization now recognizes only an async call that is the exact same-start direct child of a flow whose canonical target is await, inserts the same kind-5 producer edge used by an explicit Task name, and rewires the result binding before LLVM. The shared await-source index now accepts any exact direct source child rather than names only.",
+      "focusedFixture": "c418-direct-owned-async-await isolates 30 -> consumeOwned(scores!) -> await => result and must print owned=31. Regression 406 jointly retains scalar direct await, affine Dictionary direct await, and the C417 method surface. The focused verifier requires a pre-LLVM kind-5 edge to the async call and exact one-for-one Task join/release counts.",
       "closureGate": "Preserve an explicit async-call stage and an await stage for direct flows with scalar and affine additional arguments, associate await with the exact Task producer, transfer ownership once, and emit join/release before consuming the underlying result. Require managed/selfhost exact execution, Typed IR topology, warning and note zero, llvm-as, direct-call closure, positive explicit-Task and direct-scalar controls, cancellation ownership follow-up, and final accumulated Stage2/Stage3 promotion.",
-      "closedEvidence": [],
+      "closedEvidence": [
+        "Detached incremental run c418-direct-owned-await-v2 passed with exit code 0, failureIds [], orphanProcessIds [], and a freshly rebuilt current-source self-host compiler.",
+        "Typed IR for c418 retains async call node 20 and a distinct kind-5 await value node 21 whose operand0 is exactly node 20; the result binding consumes node 21.",
+        "Focused C417/C418 verification passed 4/4 with managed exact execution, self-host llvm-as, direct-call closure, native exact output, and zero warning/note diagnostics.",
+        "C418 emits exactly one Task join and release; regression 406 emits exactly two joins and releases for its scalar and affine direct-await calls."
+      ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-13-418/as-us-001.json",
         "inputFingerprint": "4D0C44A1D9EC702A9BAA6972A946C08129843E1B0CC3B58B85A30B5A3394ACE3",
-        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-418/baseline.json"
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-418/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-418/candidate.json"
       }
     }
   ]

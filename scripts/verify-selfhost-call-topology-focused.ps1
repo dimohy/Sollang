@@ -25,6 +25,8 @@ $cases = @(
         Id = 'C417'
         DefectId = 'C417'
         RequireResolvedCalls = $true
+        RequireDirectAwaitProxy = $false
+        ExpectedAwaitCount = 0
         Source = 'scripts/contracts/fixtures/c417-instance-method-additional-arguments.slg'
         Expected = 'scripts/contracts/fixtures/c417-instance-method-additional-arguments.stdout.txt'
     },
@@ -32,6 +34,8 @@ $cases = @(
         Id = 'C417-arity-controls'
         DefectId = 'C417'
         RequireResolvedCalls = $true
+        RequireDirectAwaitProxy = $false
+        ExpectedAwaitCount = 0
         Source = 'scripts/contracts/fixtures/c417-instance-method-arity-controls.slg'
         Expected = 'scripts/contracts/fixtures/c417-instance-method-arity-controls.stdout.txt'
     },
@@ -39,8 +43,19 @@ $cases = @(
         Id = 'C418'
         DefectId = 'C418'
         RequireResolvedCalls = $false
+        RequireDirectAwaitProxy = $true
+        ExpectedAwaitCount = 1
         Source = 'scripts/contracts/fixtures/c418-direct-owned-async-await.slg'
         Expected = 'scripts/contracts/fixtures/c418-direct-owned-async-await.stdout.txt'
+    },
+    [pscustomobject]@{
+        Id = 'C418-regression-406'
+        DefectId = 'C418'
+        RequireResolvedCalls = $false
+        RequireDirectAwaitProxy = $true
+        ExpectedAwaitCount = 2
+        Source = 'examples/regression/406-multi-argument-functions.slg'
+        Expected = 'examples/regression/expected/406-multi-argument-functions.stdout.txt'
     }
 )
 if ($Case -ne 'All') { $cases = @($cases | Where-Object DefectId -ceq $Case) }
@@ -88,6 +103,26 @@ try {
             }
         }
 
+        if ($item.RequireDirectAwaitProxy) {
+            $typedNodes = (& $candidate typed-ir-nodes $source 2>&1) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "$($item.Id) Typed IR node topology failed: $typedNodes" }
+            $asyncCalls = [Collections.Generic.HashSet[int]]::new()
+            foreach ($nodeLine in @($typedNodes -split "`r?`n")) {
+                if ($nodeLine -match '^node (?<index>\d+) kind (?<kind>6|9) .* flags (?<flags>\d+)$' -and ([int]$Matches.flags / 8) % 2 -eq 1) {
+                    $null = $asyncCalls.Add([int]$Matches.index)
+                }
+            }
+            $hasDirectAwaitProxy = $false
+            foreach ($nodeLine in @($typedNodes -split "`r?`n")) {
+                if ($nodeLine -match '^node \d+ kind 5 .* operands (?<operand0>-?\d+)/' -and $asyncCalls.Contains([int]$Matches.operand0)) {
+                    $hasDirectAwaitProxy = $true
+                }
+            }
+            if (-not $hasDirectAwaitProxy) {
+                throw "$($item.Id) lacks a pre-LLVM direct async await value edge: $typedNodes"
+            }
+        }
+
         $llvmPath = Join-Path $caseOutput 'candidate.ll'
         $stderrPath = Join-Path $caseOutput 'candidate.stderr.txt'
         $emit = Start-Process -FilePath $candidate -ArgumentList @('windows', '--jobs', '1', $source) `
@@ -99,6 +134,12 @@ try {
         }
         if ($stderr -match '(?m)^(warning|note) ') { throw "$($item.Id) selfhost emitted diagnostics: $stderr" }
         if ((Get-Item -LiteralPath $llvmPath).Length -eq 0) { throw "$($item.Id) selfhost emitted empty LLVM" }
+        $candidateLlvmText = [IO.File]::ReadAllText($llvmPath)
+        $joinCount = [regex]::Matches($candidateLlvmText, 'call i1 @sollang_task_join\(').Count
+        $releaseCount = [regex]::Matches($candidateLlvmText, 'call i1 @sollang_task_release\(').Count
+        if ($joinCount -ne $item.ExpectedAwaitCount -or $releaseCount -ne $item.ExpectedAwaitCount) {
+            throw "$($item.Id) await lifecycle differs: expected $($item.ExpectedAwaitCount), join $joinCount, release $releaseCount"
+        }
 
         $bitcode = Join-Path $caseOutput 'candidate.bc'
         & $llvmAs $llvmPath -o $bitcode

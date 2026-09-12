@@ -2571,6 +2571,93 @@ repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
     }
 }
 
+# A direct async call can itself be the source of a following `await` flow.
+# Named Task flows already retain a kind-5 value node between the producer call
+# and the result binding. Preserve the same pre-LLVM topology for the direct
+# form so scheduling emits the Task first and await owns exactly one join and
+# release. Match the direct source child and contextual await target in the
+# canonical AST; no function or fixture spelling participates in the repair.
+repairDirectAsyncAwaitBindings results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    results -> len => originalNodeCount
+    0 => bindingIndex!
+    bindingIndex! < originalNodeCount -> while {
+        results[bindingIndex!] => binding!
+        binding!.kind == 17
+            and binding!.operand0 >= 0
+            and binding!.operand0 < originalNodeCount
+            -> if {
+                binding!.operand0 => callIndex
+                results[callIndex] => call
+                (call.kind == 6 or call.kind == 9)
+                    and (call.flags / 8) % 2 == 1
+                    and call.sourceModule >= 0
+                    and call.sourceModule < (prepared.package.ranges -> len)
+                    -> if {
+                        prepared.package.ranges[call.sourceModule] => sourceRange
+                        call.astNode >= 0 and call.astNode < sourceRange.astCount
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
+                                callAst.kind == 10
+                                    and callAst.parent >= 0
+                                    and callAst.parent < sourceRange.astCount
+                                    -> if {
+                                        prepared.package.nodes[sourceRange.astStart + callAst.parent] => awaitFlowAst
+                                        false => directAwaitFlow!
+                                        awaitFlowAst.kind == 10
+                                            and callAst.firstToken == awaitFlowAst.firstToken
+                                            and callAst.start == awaitFlowAst.start
+                                            -> if {
+                                                0 => awaitTargetSearch!
+                                                awaitTargetSearch! < sourceRange.astCount and not directAwaitFlow!
+                                                    -> while {
+                                                        prepared.package.nodes[sourceRange.astStart + awaitTargetSearch!] => awaitTarget
+                                                        awaitTarget.kind == 16
+                                                            and awaitTarget.parent == callAst.parent
+                                                            and awaitTarget.payloadToken >= 0
+                                                            and awaitTarget.payloadToken < sourceRange.tokenCount
+                                                            -> if {
+                                                                prepared.package.tokens[sourceRange.tokenStart + awaitTarget.payloadToken] => awaitToken
+                                                                prepared.package.sources[call.sourceModule] -> len => awaitSourceLength
+                                                                prepared.package.sources[call.sourceModule] -> slice(UIntSize(0), awaitSourceLength) => awaitSourceText
+                                                                awaitSourceText -> sourceMatches(awaitToken.span.start, awaitToken.span.length, "await")
+                                                                    -> if { true => directAwaitFlow! }
+                                                            }
+                                                        awaitTargetSearch! + 1 => awaitTargetSearch!
+                                                    }
+                                            }
+                                        directAwaitFlow! -> if {
+                                            results -> len => awaitValueIndex
+                                            results -> push(TypedIrNode {
+                                                kind: 5
+                                                parent: bindingIndex!
+                                                sourceModule: call.sourceModule
+                                                astNode: call.astNode
+                                                symbol: -1
+                                                targetModule: -1
+                                                typeOrigin: call.typeOrigin
+                                                typeModule: call.typeModule
+                                                typeSymbol: call.typeSymbol
+                                                typeId: call.typeId
+                                                typeKind: call.typeKind
+                                                typeFlags: call.typeFlags
+                                                payloadToken: -1
+                                                opcode: -1
+                                                operand0: callIndex
+                                                operand1: -1
+                                                nextOperand: -1
+                                                flags: 0
+                                            })
+                                            awaitValueIndex => binding!.operand0
+                                            binding! => results[bindingIndex!]
+                                        }
+                                    }
+                            }
+                    }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+}
+
 appendFunctionResult results: mut [TypedIrNode; ~], functionResult: ref SourceTypedIr -> Unit {
     results -> len => offset
     0 => index!
