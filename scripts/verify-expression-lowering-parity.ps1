@@ -160,6 +160,9 @@ $managedExpressionTypes = @([regex]::Matches(
 if ($managedExpressionTypes.Count -ne $contract.managedExpressionInventoryTotal) {
     throw "Managed expression inventory drifted: expected $($contract.managedExpressionInventoryTotal), actual $($managedExpressionTypes.Count)"
 }
+if ([int]$contract.endToEndImplementedTotal + @($contract.endToEndPending).Count -ne $managedExpressionTypes.Count) {
+    throw 'Implemented and pending end-to-end expression totals must exactly partition the managed inventory'
+}
 $mappedManagedExpressions = @($contract.mappings.managedExpression | Sort-Object -Unique)
 if ($mappedManagedExpressions.Count -ne $contract.mappings.Count) {
     throw 'Expression lowering parity mappings contain duplicate managed expression types'
@@ -265,9 +268,19 @@ foreach ($source in @($ordinary, $entry)) {
     if ($source -match 'kind == 13 -> if \{ 2 => \w*ExpressionKind!') {
         throw 'Entry and ordinary lowering still duplicate the static AST-to-Typed-IR mapping'
     }
+    if ($source -notmatch 'mapExpressionOpcode! -> mapExpressionTypeSymbolForOpcode' -and
+        $source -notmatch 'entryMapExpressionOpcode! -> mapExpressionTypeSymbolForOpcode') {
+        throw 'Entry and ordinary lowering must consume the shared mapped-byte result type policy'
+    }
+    if ($source -match 'MapExpressionOpcode! == -306 -> if') {
+        throw 'Entry and ordinary lowering still duplicate mapped-byte result type selection'
+    }
 }
 if ($typed -notmatch 'kind -> defaultExpressionIrKindForAstKind => irKind!') {
     throw 'The shared contextual expression policy must refine the shared base shape policy'
+}
+if ($typed -notmatch '(?s)public mapExpressionTypeSymbolForOpcode opcode: Int -> Int => opcode -> when \{\s*== -306 \{ 17 \}\s*== -307 \{ 18 \}\s*else \{ -1 \}\s*\}') {
+    throw 'The shared mapped-byte result type policy is missing or has drifted'
 }
 if ($invariants -notmatch 'typedIr\.isBinaryValueAstKind' -or $diagnostics -notmatch 'compiler error S059') {
     throw "The pre-LLVM AST-to-Typed-IR coverage invariant is not connected"
@@ -290,9 +303,9 @@ $mapMapping = @($contract.mappings | Where-Object managedExpression -eq $contrac
 if ($mapMapping.Count -ne 1 -or
     [int]$contract.mapLowering.astKind -notin @($mapMapping[0].selfhostAstKinds) -or
     [int]$contract.mapLowering.typedIrKind -notin @($mapMapping[0].typedIrKinds) -or
-    [string]$mapMapping[0].policyStatus -ne 'shape-only' -or
-    [string]$contract.mapLowering.managedExpression -notin $pendingEndToEnd) {
-    throw 'MapExpression must remain explicitly pending until semantic, Typed IR, and LLVM lowering are end-to-end'
+    [string]$mapMapping[0].policyStatus -ne 'shared' -or
+    [string]$contract.mapLowering.managedExpression -in $pendingEndToEnd) {
+    throw 'MapExpression semantic, Typed IR, and LLVM lowering must remain end-to-end under shared policies'
 }
 foreach ($fixture in $contract.mapLowering.focusedFixtures) {
     if ([string]$fixture -notin @($contract.focusedFixtures)) {
