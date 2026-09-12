@@ -312,6 +312,16 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                             callScanToken! + 1 => callScanToken!
                         }
                 }
+            local.nameToken => exactCallNameToken!
+            false => dottedDirectReceiver!
+            localCallNode.kind == 11
+                and callLeftParenToken! >= localCallNode.firstToken + 2
+                and package.tokens[sourceRange.tokenStart + callLeftParenToken! - 1].kind == grammar.tokenIdIdentifier()
+                and package.tokens[sourceRange.tokenStart + callLeftParenToken! - 2].kind == grammar.tokenIdDot()
+                -> if {
+                    callLeftParenToken! - 1 => exactCallNameToken!
+                    true => dottedDirectReceiver!
+                }
             -1 => importedIndex!
             0 => qualifiedIndex!
             qualifiedIndex! < (qualifiedResults -> len) -> while {
@@ -344,7 +354,17 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
             sourceIndex => resolvedTargetSource!
             local.functionSymbol => resolvedFunctionSymbol!
             local.status => resolvedStatus!
-            importedIndex! >= 0 -> if {
+            # A dotted direct call may begin with a runtime value
+            # (`counter.weighted(...)`). Only that unresolved shape falls
+            # through to exact receiver lookup. Flow calls keep their existing
+            # qualified trait/module resolution, including its diagnostic
+            # status, instead of being reinterpreted as receiver calls.
+            importedIndex! >= 0
+                and dottedDirectReceiver!
+                and qualifiedResults[importedIndex!].status != 0
+                => unresolvedDottedReceiver
+            importedIndex! >= 0 and not unresolvedDottedReceiver => useQualifiedCall
+            useQualifiedCall -> if {
                 qualifiedResults[importedIndex!] => imported
                 -1 => targetSourceModule!
                 imported.targetModule >= 0 -> if {
@@ -516,7 +536,7 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                             2 => resolvedStatus!
                         }
                     }
-                # A flow receiver may be a local binding whose nominal type was
+                # A flow or dotted direct-call receiver may be a local binding whose nominal type was
                 # declared in one fragment while its impl lives in another.
                 # Recover that binding's qualified initializer type, then search
                 # only impls for the same owner inside the logical module.
@@ -527,8 +547,10 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                 -1 => openReceiverTypeModule!
                 -1 => openReceiverTypeSymbol!
                 localCallNode.kind == 10
+                    or dottedDirectReceiver!
                     -> if {
                         local.nameToken => receiverCallNameToken!
+                        dottedDirectReceiver! -> if { exactCallNameToken! => receiverCallNameToken! }
                         moduleFlowNameTokens![local.callAst] >= 0 -> if {
                             moduleFlowNameTokens![local.callAst] => receiverCallNameToken!
                         }
@@ -1851,7 +1873,7 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                         # binding and must not pay an O(all calls) fallback cost.
                         false => receiverHasImmediateCall!
                         localCallNode.firstToken => receiverCallSyntaxTokenIndex!
-                        receiverCallSyntaxTokenIndex! < local.nameToken
+                        receiverCallSyntaxTokenIndex! < receiverCallNameToken!
                             -> while {
                                 package.tokens[sourceRange.tokenStart + receiverCallSyntaxTokenIndex!]
                                     => receiverCallSyntaxToken
@@ -2101,7 +2123,7 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                         receiverSymbol! >= 0 and receiverTypeId! >= 0
                             -> if {
                                 localCallNode.firstToken => receiverProjectionTokenIndex!
-                                receiverProjectionTokenIndex! < local.nameToken
+                                receiverProjectionTokenIndex! < receiverCallNameToken!
                                     -> while {
                                         package.tokens[sourceRange.tokenStart + receiverProjectionTokenIndex!]
                                             => receiverProjectionToken

@@ -23,16 +23,27 @@ foreach ($path in @($candidate, $managed, $llvmAs, $clang)) {
 $cases = @(
     [pscustomobject]@{
         Id = 'C417'
+        DefectId = 'C417'
+        RequireResolvedCalls = $true
         Source = 'scripts/contracts/fixtures/c417-instance-method-additional-arguments.slg'
         Expected = 'scripts/contracts/fixtures/c417-instance-method-additional-arguments.stdout.txt'
     },
     [pscustomobject]@{
+        Id = 'C417-arity-controls'
+        DefectId = 'C417'
+        RequireResolvedCalls = $true
+        Source = 'scripts/contracts/fixtures/c417-instance-method-arity-controls.slg'
+        Expected = 'scripts/contracts/fixtures/c417-instance-method-arity-controls.stdout.txt'
+    },
+    [pscustomobject]@{
         Id = 'C418'
+        DefectId = 'C418'
+        RequireResolvedCalls = $false
         Source = 'scripts/contracts/fixtures/c418-direct-owned-async-await.slg'
         Expected = 'scripts/contracts/fixtures/c418-direct-owned-async-await.stdout.txt'
     }
 )
-if ($Case -ne 'All') { $cases = @($cases | Where-Object Id -ceq $Case) }
+if ($Case -ne 'All') { $cases = @($cases | Where-Object DefectId -ceq $Case) }
 
 $record = [ordered]@{
     schemaVersion = 1
@@ -69,6 +80,14 @@ try {
             throw "$($item.Id) managed exact execution failed: $managedLog"
         }
 
+        if ($item.RequireResolvedCalls) {
+            $callTopology = (& $candidate typed-ir-calls $source 2>&1) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "$($item.Id) Typed IR call topology failed: $callTopology" }
+            if ($callTopology -match '(?m)^resolution .* status [^0]\s*$') {
+                throw "$($item.Id) retains an unresolved call before LLVM: $callTopology"
+            }
+        }
+
         $llvmPath = Join-Path $caseOutput 'candidate.ll'
         $stderrPath = Join-Path $caseOutput 'candidate.stderr.txt'
         $emit = Start-Process -FilePath $candidate -ArgumentList @('windows', '--jobs', '1', $source) `
@@ -88,7 +107,7 @@ try {
         if (-not $?) { throw "$($item.Id) direct-call closure failed" }
 
         $candidateExe = Join-Path $caseOutput 'candidate.exe'
-        & $clang $llvmPath -O0 -o $candidateExe
+        & $clang $llvmPath -O0 -Werror -Wno-override-module -o $candidateExe
         if ($LASTEXITCODE -ne 0) { throw "$($item.Id) native link failed" }
         $candidateLog = (& $candidateExe 2>&1) -join "`n"
         if ($LASTEXITCODE -ne 0 -or (Normalized $candidateLog) -cne $expected) {

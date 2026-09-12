@@ -424,76 +424,80 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             }
         false => knownLocalBindingReference!
         -1 => knownLocalBindingSymbol!
-        expression.kind == 15 -> if {
-            0 => localBindingNameSearch!
-            localBindingNameSearch! < (resolvedNames -> len)
-                -> while {
-                    resolvedNames[localBindingNameSearch!] => localBindingName
-                    localBindingName.astNode == expressionAstIndex
-                        -> if {
-                            prepared.package.symbols[sourceRange.symbolStart + localBindingName.symbol] => localBindingSymbol
-                            localBindingSymbol.kind == 9
-                                or localBindingSymbol.kind == 61
-                                or localBindingSymbol.kind == 35
-                                -> if {
-                                    true => knownLocalBindingReference!
-                                    localBindingName.symbol => knownLocalBindingSymbol!
-                                }
-                        }
-                    localBindingNameSearch! + 1 => localBindingNameSearch!
-                }
-            # Stream state names are mutable local bindings. Their
-            # uses can be absent from the general resolved-name
-            # table, so resolve them against the nearest preceding
-            # state binding in this function's canonical IR.
-            not knownLocalBindingReference! and expression.payloadToken >= 0
-                -> if {
-                    prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => localStateUseName
-                    nodes -> len => localStateBindingSearch!
-                    localStateBindingSearch! > 0 and not knownLocalBindingReference!
-                        -> while {
-                            localStateBindingSearch! - 1 => localStateBindingSearch!
-                            nodes[localStateBindingSearch!] => localStateBinding
-                            localStateBinding.kind == 17
-                                and localStateBinding.sourceModule == sourceIndex
-                                and localStateBinding.symbol >= 0
-                                and localStateBinding.payloadToken >= 0
-                                and prepared.package.symbols[sourceRange.symbolStart + localStateBinding.symbol].kind == 61
-                                -> if {
-                                    prepared.package.tokens[sourceRange.tokenStart + localStateBinding.payloadToken] => localStateBindingName
-                                    localStateUseName.span.length == localStateBindingName.span.length => localStateNamesEqual!
-                                    UIntSize(0) => localStateNameByte!
-                                    localStateNamesEqual! and localStateNameByte! < localStateUseName.span.length
-                                        -> while {
-                                            (source -> byte(localStateUseName.span.start + localStateNameByte!)) != (source -> byte(localStateBindingName.span.start + localStateNameByte!))
-                                                -> if { false => localStateNamesEqual! }
-                                            localStateNameByte! + 1 => localStateNameByte!
-                                        }
-                                    localStateNamesEqual! -> if {
+        expression.kind == 15
+            or (expression.kind == 16
+            and expression.parent >= 0
+            and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 11)
+            -> if {
+                0 => localBindingNameSearch!
+                localBindingNameSearch! < (resolvedNames -> len)
+                    -> while {
+                        resolvedNames[localBindingNameSearch!] => localBindingName
+                        localBindingName.astNode == expressionAstIndex
+                            -> if {
+                                prepared.package.symbols[sourceRange.symbolStart + localBindingName.symbol] => localBindingSymbol
+                                localBindingSymbol.kind == 9
+                                    or localBindingSymbol.kind == 61
+                                    or localBindingSymbol.kind == 35
+                                    -> if {
                                         true => knownLocalBindingReference!
-                                        localStateBinding.symbol => knownLocalBindingSymbol!
+                                        localBindingName.symbol => knownLocalBindingSymbol!
                                     }
-                                }
-                        }
-                }
-            knownLocalBindingReference! -> if {
-                nodes -> len => localBindingIrLimit
-                0 => localBindingIrSearch!
-                localBindingIrSearch! < localBindingIrLimit -> while {
-                    nodes[localBindingIrSearch!] => localBindingIr
-                    localBindingIr.kind == 17
-                        and localBindingIr.sourceModule == sourceIndex
-                        and localBindingIr.symbol == knownLocalBindingSymbol!
-                        -> if {
-                            localBindingIr.typeOrigin => expressionTypeOrigin!
-                            localBindingIr.typeModule => expressionTypeModule!
-                            localBindingIr.typeSymbol => expressionTypeSymbol!
-                            localBindingIr.typeId => recursiveExpressionTypeId!
-                        }
-                    localBindingIrSearch! + 1 => localBindingIrSearch!
+                            }
+                        localBindingNameSearch! + 1 => localBindingNameSearch!
+                    }
+                # Stream state names are mutable local bindings. Their
+                # uses can be absent from the general resolved-name
+                # table, so resolve them against the nearest preceding
+                # state binding in this function's canonical IR.
+                not knownLocalBindingReference! and expression.payloadToken >= 0
+                    -> if {
+                        prepared.package.tokens[sourceRange.tokenStart + expression.payloadToken] => localStateUseName
+                        nodes -> len => localStateBindingSearch!
+                        localStateBindingSearch! > 0 and not knownLocalBindingReference!
+                            -> while {
+                                localStateBindingSearch! - 1 => localStateBindingSearch!
+                                nodes[localStateBindingSearch!] => localStateBinding
+                                localStateBinding.kind == 17
+                                    and localStateBinding.sourceModule == sourceIndex
+                                    and localStateBinding.symbol >= 0
+                                    and localStateBinding.payloadToken >= 0
+                                    and prepared.package.symbols[sourceRange.symbolStart + localStateBinding.symbol].kind == 61
+                                    -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + localStateBinding.payloadToken] => localStateBindingName
+                                        localStateUseName.span.length == localStateBindingName.span.length => localStateNamesEqual!
+                                        UIntSize(0) => localStateNameByte!
+                                        localStateNamesEqual! and localStateNameByte! < localStateUseName.span.length
+                                            -> while {
+                                                (source -> byte(localStateUseName.span.start + localStateNameByte!)) != (source -> byte(localStateBindingName.span.start + localStateNameByte!))
+                                                    -> if { false => localStateNamesEqual! }
+                                                localStateNameByte! + 1 => localStateNameByte!
+                                            }
+                                        localStateNamesEqual! -> if {
+                                            true => knownLocalBindingReference!
+                                            localStateBinding.symbol => knownLocalBindingSymbol!
+                                        }
+                                    }
+                            }
+                    }
+                knownLocalBindingReference! -> if {
+                    nodes -> len => localBindingIrLimit
+                    0 => localBindingIrSearch!
+                    localBindingIrSearch! < localBindingIrLimit -> while {
+                        nodes[localBindingIrSearch!] => localBindingIr
+                        localBindingIr.kind == 17
+                            and localBindingIr.sourceModule == sourceIndex
+                            and localBindingIr.symbol == knownLocalBindingSymbol!
+                            -> if {
+                                localBindingIr.typeOrigin => expressionTypeOrigin!
+                                localBindingIr.typeModule => expressionTypeModule!
+                                localBindingIr.typeSymbol => expressionTypeSymbol!
+                                localBindingIr.typeId => recursiveExpressionTypeId!
+                            }
+                        localBindingIrSearch! + 1 => localBindingIrSearch!
+                    }
                 }
             }
-        }
         false => knownCallExpression!
         false => unresolvedCallExpression!
         prepared.callIndexByAst[sourceRange.astStart + expressionAstIndex] => knownCallIndex
@@ -1254,6 +1258,8 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                     -> if { true => expressionIsPropertyCall! }
                             }
                             resolvedExpressionIrKindForAstKind(expression.kind, expressionIsBoolLiteral!, expressionIsCallLike, contextualNullaryOption!, expressionIsPropertyCall!) => expressionKind!
+                            knownLocalBindingReference! and expression.kind == 16
+                                -> if { 5 => expressionKind! }
                             false => transparentExpression!
                             expression.kind >= 18 and expression.kind <= 21
                                 -> if {
