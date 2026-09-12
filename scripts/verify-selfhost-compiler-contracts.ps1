@@ -58,8 +58,8 @@ foreach ($name in @(
 }
 Invoke-CheckedContract -Name "verify-native-exact-source-closure-contract.ps1"
 
-# Execute the small current-source probes before the expensive compiler build.
-# These extract production functions; they never rebuild the compiler itself.
+# Execute small production-method and focused-source probes before the
+# expensive compiler build. These never rebuild the compiler itself.
 if ($IsWindows) {
     Invoke-CheckedContract -Name "verify-mapped-layout-traits.ps1" -Parameters $repositoryParameters
     Invoke-CheckedContract -Name "verify-mapped-resize-failure.ps1" -Parameters $repositoryParameters
@@ -68,6 +68,7 @@ if ($IsWindows) {
     Invoke-CheckedContract -Name "verify-generic-type-contexts.ps1" -Parameters @{ RepositoryRoot = $RepositoryRoot; TypeDelimiters = $true; ReadonlyTextSlice = $true }
     Invoke-CheckedContract -Name "verify-borrowed-source-text-return-carriers.ps1" -Parameters $repositoryParameters
     Invoke-CheckedContract -Name "verify-deferred-text-storage.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-source-text-borrowed-drop.ps1" -Parameters $repositoryParameters
 }
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)

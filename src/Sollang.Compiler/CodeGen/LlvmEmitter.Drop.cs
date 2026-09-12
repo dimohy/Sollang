@@ -626,6 +626,13 @@ internal sealed partial class LlvmEmitter
 
     private void EmitSourceTextUnmap(string basePointer, string mappedLength)
     {
+        // A borrowed view has no owner. Preserve that known representation
+        // without emitting a dead release CFG or introducing allocator edges.
+        if (basePointer == "null")
+        {
+            return;
+        }
+
         var owned = NextTemp("source_text_owned");
         EmitCompare(owned, "ne", "ptr", basePointer, "null");
         var releaseLabel = NextLabel("source_text_release");

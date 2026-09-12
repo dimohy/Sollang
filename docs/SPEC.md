@@ -1612,6 +1612,40 @@ lexical normalization does not claim to resolve symbolic links. The migration
 must not introduce a reverse `sys -> std` dependency or leave two public path
 types after the replacement is verified.
 
+`std.path.components(text, style, limits)` creates a bounded lexical
+`Components` iterator over borrowed UTF-8 input. It reuses the existing
+`sys.path.Style` identity; it neither introduces a second owned `Path` nor
+performs filesystem access. `Limits` explicitly bounds input bytes, component
+count, and bytes per component. All limits are nonnegative, and zero is a real
+ceiling. Construction rejects an overlong input, its first NUL byte, and
+unsupported or malformed prefixes before exposing any component.
+
+`Components.next(mut self)` returns `Result<Option<Component>, Error>`.
+Each component contains only its `Kind`, original byte offset, and byte length.
+The iterator retains a private source loan; component metadata does not retain
+that loan. Count and size checks precede cursor mutation, so a failed call
+preserves the iterator and repeated calls report the same error. Roots and
+prefixes count toward both limits. `offset` points immediately after the last
+returned span; end-of-input consumes remaining separators once and stays stable.
+
+The lexical profile preserves dots, dot-dots, byte spelling, case, whitespace,
+and Unicode. POSIX style splits only on slash and represents a leading slash
+sequence with one root component; it does not interpret the special resolution
+meaning an implementation may assign to exactly two leading slashes. Windows
+style accepts slash and backslash separators. Drive prefixes preserve their
+two bytes, with a separate root component when followed by a separator, so
+drive-relative and rooted paths remain distinguishable. A UNC root includes
+its server and share; empty or dot/dot-dot server/share, missing shares, and
+three or more leading separators are malformed. Device and extended namespace
+prefixes are explicitly unsupported. These namespace distinctions follow the
+[Windows path naming model](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file),
+but this API is not a Windows filename validator or an OS path resolver.
+Ordinary colons after byte offset one remain component data. Repeated
+separators and a trailing separator produce no empty or phantom component.
+The precise prefix, error precedence, and byte-span contract is
+`scripts/contracts/path-components.json`; this API performs no normalization,
+confinement, symlink lookup, allocation, source copy, or asynchronous work.
+
 `std.io.Reader` and `std.io.Writer` are public static protocols over one
 caller-buffer partial-transfer primitive. Both operations return exact `Int`
 progress and preserve an associated failure type without a wrapper object,

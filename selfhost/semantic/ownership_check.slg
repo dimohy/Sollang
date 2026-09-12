@@ -24,6 +24,136 @@ public struct OwnershipDiagnostic {
     public span: syntax.SourceSpan
 }
 
+# Deferred interpolation is a value representation, not an allocating Text.
+# Consume canonical value edges after lowering, before any target emits LLVM.
+# The caller seeds only Text constants identified by the interpolation parser.
+deferredTextStorageConsumes parent: typedIr.TypedIrNode, valueIndex: Int, nodes: ref [typedIr.TypedIrNode; ~] -> Bool {
+    parent.kind == 17 or parent.kind == 25
+        -> if { parent.operand0 == valueIndex -> return }
+    parent.kind == 24
+        -> if { parent.operand0 == valueIndex or parent.operand1 == valueIndex -> return }
+    parent.kind == 12 or parent.kind == 14
+        or parent.kind == 16 or parent.kind == 35
+        -> if { true -> return }
+    parent.kind != 6 and parent.kind != 9 -> if { false -> return }
+    # Both statement and value-producing intrinsic forms share these opcodes.
+    parent.opcode == -204 or parent.opcode == -246
+        or parent.opcode == -247 or parent.opcode == -255
+        -> if { parent.operand1 == valueIndex -> return }
+    parent.opcode == -223 or parent.opcode == -303
+        -> if {
+            parent.operand1 == valueIndex -> if { true -> return }
+            parent.operand1 >= 0 and parent.operand1 < (nodes -> len)
+                -> if { nodes[parent.operand1].nextOperand == valueIndex -> return }
+        }
+    false
+}
+
+preservesDeferredText parent: typedIr.TypedIrNode, valueIndex: Int, nodes: ref [typedIr.TypedIrNode; ~] -> Bool {
+    # Calls (including materialize and immediate sinks) end this representation.
+    # A transparent flow wrapper and the selected result of a control do not.
+    parent.kind == 9 and parent.opcode == -1 -> if { true -> return }
+    parent.kind == 23 -> if { parent.operand0 == valueIndex -> return }
+    parent.kind == 19 -> if {
+        parent.operand1 == valueIndex or nodes[valueIndex].kind == 23 -> return
+    }
+    parent.kind == 18 or parent.kind == 27
+        or parent.kind == 33 or parent.kind == 34
+        -> if { nodes[valueIndex].kind == 19 -> return }
+    false
+}
+
+deferredTextStringSeeds nodes: ref [typedIr.TypedIrNode; ~], tokenStarts: ref [Int; ~], tokenCounts: ref [Int; ~], interpolationModules: ref [Int; ~], interpolationTokens: ref [Int; ~] -> [Bool; ~] {
+    0 => tokenCount!
+    0 => moduleIndex!
+    moduleIndex! < (tokenStarts -> len) -> while {
+        tokenStarts[moduleIndex!] + tokenCounts[moduleIndex!] => end
+        end > tokenCount! -> if { end => tokenCount! }
+        moduleIndex! + 1 => moduleIndex!
+    }
+    [Bool; ~] => tokens!
+    0 => tokenIndex!
+    tokenIndex! < tokenCount! -> while {
+        tokens! -> push(false)
+        tokenIndex! + 1 => tokenIndex!
+    }
+    0 => interpolationIndex!
+    interpolationIndex! < (interpolationModules -> len)
+        -> while {
+            interpolationModules[interpolationIndex!] => sourceModule
+            interpolationTokens[interpolationIndex!] => sourceToken
+            sourceModule >= 0 and sourceModule < (tokenStarts -> len)
+                -> if {
+                    sourceToken >= 0 and sourceToken < tokenCounts[sourceModule]
+                        -> if { true => tokens![tokenStarts[sourceModule] + sourceToken] }
+                }
+            interpolationIndex! + 1 => interpolationIndex!
+        }
+    [Bool; ~] => result!
+    nodes -> each node {
+        false => deferred!
+        node.kind == 2 and node.sourceModule >= 0
+            and node.sourceModule < (tokenStarts -> len)
+            -> if {
+                node.payloadToken >= 0 and node.payloadToken < tokenCounts[node.sourceModule]
+                    -> if { tokens![tokenStarts[node.sourceModule] + node.payloadToken] => deferred! }
+            }
+        result! -> push(deferred!)
+    }
+    result!
+}
+
+analyzeDeferredTextStorage nodes: ref [typedIr.TypedIrNode; ~], deferredStrings: ref [Bool; ~] -> [Int; ~] {
+    nodes -> len => nodeCount
+    [Bool; ~] => reached!
+    [Bool; ~] => reported!
+    [Int; ~] => failures!
+    0 => index!
+    index! < nodeCount -> while {
+        reached! -> push(false)
+        reported! -> push(false)
+        index! + 1 => index!
+    }
+    0 => stringIndex!
+    stringIndex! < nodeCount -> while {
+        nodes[stringIndex!].kind == 2 and deferredStrings[stringIndex!]
+            -> if {
+                stringIndex! => valueIndex!
+                0 => depth!
+                true => following!
+                following! and depth! < nodeCount -> while {
+                    reached![valueIndex!] -> if { false => following! } else {
+                        true => reached![valueIndex!]
+                        nodes[valueIndex!].parent => parentIndex
+                        parentIndex < 0 or parentIndex >= nodeCount -> if {
+                            false => following!
+                        } else {
+                            nodes[parentIndex] => parent
+                            parent -> deferredTextStorageConsumes(valueIndex!, nodes)
+                                -> if {
+                                    not reported![parentIndex] -> if {
+                                        failures! -> push(stringIndex!)
+                                        true => reported![parentIndex]
+                                    }
+                                    false => following!
+                                } else {
+                                    parent -> preservesDeferredText(valueIndex!, nodes)
+                                        -> if {
+                                            parentIndex => valueIndex!
+                                        } else {
+                                            false => following!
+                                        }
+                                }
+                        }
+                    }
+                    depth! + 1 => depth!
+                }
+            }
+        stringIndex! + 1 => stringIndex!
+    }
+    failures!
+}
+
 struct BorrowedTextReturn {
     sourceModule: Int
     functionSymbol: Int
@@ -1409,6 +1539,40 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
 
     typed -> typedIr.movesFrom => moves
     [OwnershipDiagnostic; ~] => diagnostics!
+    # Reuse the parser's interpolation identity; never infer it from '$' text.
+    [Int; ~] => deferredTokenStarts!
+    [Int; ~] => deferredTokenCounts!
+    prepared.package.ranges -> each range {
+        deferredTokenStarts! -> push(range.tokenStart)
+        deferredTokenCounts! -> push(range.tokenCount)
+    }
+    [Int; ~] => deferredInterpolationTokens!
+    analysisInterpolations! -> each node { deferredInterpolationTokens! -> push(node.sourceToken) }
+    typed -> deferredTextStringSeeds(deferredTokenStarts!, deferredTokenCounts!, analysisInterpolationModules!, deferredInterpolationTokens!) => deferredStrings
+    typed -> analyzeDeferredTextStorage(deferredStrings) -> each failure {
+        typed[failure] => failedValue
+        prepared.package.ranges[failedValue.sourceModule] => sourceRange
+        # A seed exists only after this exact source/token pair was validated.
+        # Generated IR may have no AST node; the parser token remains authority.
+        prepared.package.tokens[sourceRange.tokenStart + failedValue.payloadToken] => failedToken
+        diagnostics! -> push(OwnershipDiagnostic {
+            code: 35
+            sourceModule: failedValue.sourceModule
+            functionSymbol: -1
+            expectedOrigin: -1
+            expectedModule: -1
+            expectedSymbol: -1
+            actualOrigin: failedValue.typeOrigin
+            actualModule: failedValue.typeModule
+            actualSymbol: failure
+            actualBuiltin: failedValue.typeSymbol
+            span: syntax.SourceSpan {
+                fileId: failedValue.sourceModule
+                start: failedToken.span.start
+                length: failedToken.span.length
+            }
+        })
+    }
     # A plain binding from an existing affine value would copy its storage and
     # create two owners. Only independently copyable values may use this form;
     # ownership transfer remains explicit through a consuming operation.

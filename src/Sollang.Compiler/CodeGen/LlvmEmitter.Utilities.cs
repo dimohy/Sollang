@@ -592,7 +592,7 @@ internal sealed partial class LlvmEmitter
     private void DropOwnedRuntimeValue(RuntimeValue value)
     {
         if (IsCustomOwnedType(value.Type)
-            && value is not (RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray))
+            && value is not (RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray or RuntimeSourceText))
         {
             var materialized = MaterializeAggregateValue(value);
             EmitOwnedDropCall(value.Type, materialized.ValueName);

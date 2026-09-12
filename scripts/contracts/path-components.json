@@ -1,0 +1,82 @@
+{
+  "$schema": "./path-components.schema.json",
+  "schemaVersion": 1,
+  "module": "stdlib/std/path.slg",
+  "scope": "bounded-utf8-lexical-components-over-borrowed-text",
+  "styleAuthority": "sys.path.Style",
+  "reference": "https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file",
+  "surfaces": ["components", "Components.next", "Components.offset"],
+  "limits": ["maxInputBytes", "maxComponents", "maxComponentBytes"],
+  "componentKinds": ["PosixRoot", "WindowsRoot", "DrivePrefix", "UncRoot", "CurrentDirectory", "ParentDirectory", "Normal"],
+  "errorKinds": ["InvalidLimits", "InputLimit", "InvalidNul", "InvalidPrefix", "UnsupportedNamespace", "ComponentLimit", "ComponentSizeLimit"],
+  "factoryErrorPrecedence": ["InvalidLimits", "InputLimit", "InvalidNul", "UnsupportedNamespace", "InvalidPrefix"],
+  "nextErrorPrecedence": ["ComponentLimit", "ComponentSizeLimit"],
+  "errorOffsets": {
+    "InvalidLimits": "zero",
+    "InputLimit": "zero",
+    "InvalidNul": "first NUL byte",
+    "InvalidPrefix": "zero",
+    "UnsupportedNamespace": "zero",
+    "ComponentLimit": "candidate component start",
+    "ComponentSizeLimit": "candidate component start"
+  },
+  "semantics": {
+    "encoding": "Valid UTF-8 Text; offsets and lengths count original bytes. No BOM removal, trimming, case folding or Unicode normalization.",
+    "limits": "All limits are nonnegative Int; zero is a real ceiling. Input bytes include separators. Root and drive-prefix components count toward both component limits; component size is its complete raw span.",
+    "lifetime": "Components retains a private borrowed SourceText view; the source owner must outlive the iterator and cannot be mutated or moved while the loan is live. Returned Component contains only kind and integer offset/length metadata, no retained source view.",
+    "factory": "Validate limits and total byte count, then scan the entire input for NUL before classifying the prefix. Thus a later NUL fails before any component is exposed.",
+    "posix": "Only slash separates components. Any leading slash sequence emits one PosixRoot at offset zero, length one; subsequent separators are skipped. Exactly two leading slashes have no resolution interpretation here: the original input remains unchanged.",
+    "windows": "Slash and backslash, including mixed occurrences, are separators. ASCII-letter colon emits DrivePrefix length two, retaining original drive case. A following separator emits a separate WindowsRoot of length one. A single leading separator emits WindowsRoot without implying a drive selection.",
+    "unc": "Exactly two leading separators require nonempty server and share names separated by exactly one separator. Their complete original prefix through the share end is one UncRoot. Three or more leading separators, missing/empty server or share, and a server/share equal to dot or dot-dot are InvalidPrefix. Subsequent repeated separators are skipped.",
+    "namespaces": "Two separators followed by question-mark or dot and a separator, and one separator followed by two question-marks and a separator, fail UnsupportedNamespace before UNC validation. Separator spellings may be mixed. Only colon at byte offset one denotes a drive candidate: byte zero must then be an ASCII letter, otherwise InvalidPrefix. Colon at a later byte offset, including foo:bar and multibyte Unicode followed by colon, remains ordinary segment data; this is not Windows name or alternate-data-stream validation.",
+    "segments": "Dot and dot-dot remain CurrentDirectory and ParentDirectory components; no component is resolved or removed. Other nonempty segments are Normal. Repeated separators create no empty components, empty input yields none, and trailing separators create no phantom component.",
+    "transaction": "next scans without mutation, then checks component count before component byte size. Any error preserves the cursor and count; immutable limits make repeated calls return the same error. Previously returned components remain valid metadata.",
+    "offset": "After Some, offset is exactly component.offset plus component.length, before subsequent separator skipping. None consumes only remaining separators and leaves offset at input length; repeated None is unchanged.",
+    "cost": "No source allocation/copy, materialized component array, output buffer, pointer exposure, filesystem/OS query, async task or hidden normalization. Initial NUL validation plus iteration is linear in bounded input bytes; retries may rescan one bounded candidate.",
+    "nonGoals": "Not filesystem name validation, reserved-device-name validation, alternate-data-stream validation, canonicalization, root confinement, globbing or regex. Acceptance does not authorize OS access. This adds lexical vocabulary only; it does not complete migration of the existing owned sys.path.Path."
+  },
+  "referenceCases": [
+    { "label": "empty", "style": "Posix", "input": "", "components": [] },
+    { "label": "unicode", "style": "Posix", "input": "/한/😀", "components": [
+      { "kind": "PosixRoot", "offset": 0, "length": 1 },
+      { "kind": "Normal", "offset": 1, "length": 3 },
+      { "kind": "Normal", "offset": 5, "length": 4 }
+    ] },
+    { "label": "dots", "style": "Posix", "input": "a//./../b/", "components": [
+      { "kind": "Normal", "offset": 0, "length": 1 },
+      { "kind": "CurrentDirectory", "offset": 3, "length": 1 },
+      { "kind": "ParentDirectory", "offset": 5, "length": 2 },
+      { "kind": "Normal", "offset": 8, "length": 1 }
+    ] },
+    { "label": "posix-backslash", "style": "Posix", "input": "a\\b/c", "components": [
+      { "kind": "Normal", "offset": 0, "length": 3 },
+      { "kind": "Normal", "offset": 4, "length": 1 }
+    ] },
+    { "label": "drive-absolute", "style": "Windows", "input": "C:\\dir\\..\\file", "components": [
+      { "kind": "DrivePrefix", "offset": 0, "length": 2 },
+      { "kind": "WindowsRoot", "offset": 2, "length": 1 },
+      { "kind": "Normal", "offset": 3, "length": 3 },
+      { "kind": "ParentDirectory", "offset": 7, "length": 2 },
+      { "kind": "Normal", "offset": 10, "length": 4 }
+    ] },
+    { "label": "drive-relative", "style": "Windows", "input": "c:foo\\bar", "components": [
+      { "kind": "DrivePrefix", "offset": 0, "length": 2 },
+      { "kind": "Normal", "offset": 2, "length": 3 },
+      { "kind": "Normal", "offset": 6, "length": 3 }
+    ] },
+    { "label": "rooted", "style": "Windows", "input": "\\dir", "components": [
+      { "kind": "WindowsRoot", "offset": 0, "length": 1 },
+      { "kind": "Normal", "offset": 1, "length": 3 }
+    ] },
+    { "label": "unc", "style": "Windows", "input": "\\\\server\\share\\file", "components": [
+      { "kind": "UncRoot", "offset": 0, "length": 14 },
+      { "kind": "Normal", "offset": 15, "length": 4 }
+    ] },
+    { "label": "mixed-unc", "style": "Windows", "input": "\\/server/share\\leaf", "components": [
+      { "kind": "UncRoot", "offset": 0, "length": 14 },
+      { "kind": "Normal", "offset": 15, "length": 4 }
+    ] }
+  ],
+  "fixture": "1726-path-components",
+  "acceptance": "Format, schema and bounded semantic probes precede exact managed/native, independent reference, ownership/privacy negatives and reachable allocation audit. Selfhost and required target closure remain separate; no full Stage run is required during this stdlib slice."
+}

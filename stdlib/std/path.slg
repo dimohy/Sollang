@@ -1,0 +1,209 @@
+namespace std.path
+
+import sys.file as file
+import sys.path as legacy
+
+# Lexical UTF-8 components, not filesystem resolution or name validation.
+# The existing owned Path and Style remain the only legacy value identities.
+public enum Kind {
+    PosixRoot
+    WindowsRoot
+    DrivePrefix
+    UncRoot
+    CurrentDirectory
+    ParentDirectory
+    Normal
+}
+public enum ErrorKind {
+    InvalidLimits
+    InputLimit
+    InvalidNul
+    InvalidPrefix
+    UnsupportedNamespace
+    ComponentLimit
+    ComponentSizeLimit
+}
+public struct Error {
+    public kind: ErrorKind
+    public offset: UIntSize
+}
+public struct Limits {
+    public maxInputBytes: Int
+    public maxComponents: Int
+    public maxComponentBytes: Int
+}
+public struct Component {
+    public kind: Kind
+    public offset: UIntSize
+    public length: UIntSize
+}
+struct Header {
+    kind: Kind
+    length: UIntSize
+    hasDriveRoot: Bool
+}
+public struct Components {
+    source: file.SourceText
+    end: UIntSize
+    index: UIntSize
+    count: Int
+    windows: Bool
+    limits: Limits
+    header: Header
+}
+
+failure kind: ErrorKind, offset: UIntSize -> Error => Error { kind: kind, offset: offset }
+
+isSeparator byte: UInt8, windows: Bool -> Bool => byte == 47 or windows and byte == 92
+
+isDriveLetter byte: UInt8 -> Bool => byte >= 65 and byte <= 90 or byte >= 97 and byte <= 122
+
+isDotPart source: file.SourceText, start: UIntSize, length: UIntSize -> Bool {
+    length == 1 and source -> byte(start) == 46
+        or length == 2 and source -> byte(start) == 46 and source -> byte(start + 1) == 46
+}
+
+readHeader source: file.SourceText, length: UIntSize, windows: Bool -> Result<Header, Error> {
+    length == 0 -> if {
+        Result<Header, Error>.Ok(Header { kind: Kind.Normal, length: 0, hasDriveRoot: false }) -> return
+    }
+    not windows -> if {
+        source -> byte(0) == 47 -> if {
+            Result<Header, Error>.Ok(Header { kind: Kind.PosixRoot, length: 1, hasDriveRoot: false }) -> return
+        }
+        Result<Header, Error>.Ok(Header { kind: Kind.Normal, length: 0, hasDriveRoot: false }) -> return
+    }
+
+    # Extended Win32, device and NT namespace prefixes are outside this profile.
+    length >= 4 and isSeparator(source -> byte(0), true)
+        -> if {
+            isSeparator(source -> byte(1), true)
+                and (source -> byte(2) == 63 or source -> byte(2) == 46)
+                and isSeparator(source -> byte(3), true)
+                -> if {
+                    Result<Header, Error>.Err(failure(ErrorKind.UnsupportedNamespace, 0)) -> return
+                }
+            source -> byte(1) == 63 and source -> byte(2) == 63
+                and isSeparator(source -> byte(3), true)
+                -> if {
+                    Result<Header, Error>.Err(failure(ErrorKind.UnsupportedNamespace, 0)) -> return
+                }
+        }
+
+    length >= 2 and source -> byte(1) == 58 -> if {
+        isDriveLetter(source -> byte(0)) -> unless {
+            Result<Header, Error>.Err(failure(ErrorKind.InvalidPrefix, 0)) -> return
+        }
+        length >= 3 and isSeparator(source -> byte(2), true) => rooted
+        Result<Header, Error>.Ok(Header { kind: Kind.DrivePrefix, length: 2, hasDriveRoot: rooted }) -> return
+    }
+    length >= 2 and isSeparator(source -> byte(0), true)
+        and isSeparator(source -> byte(1), true)
+        -> if {
+            UIntSize(2) => serverStart
+            serverStart => cursor!
+            cursor! < length and not isSeparator(source -> byte(cursor!), true)
+                -> while { cursor! + 1 => cursor! }
+            cursor! => serverEnd
+            serverEnd > serverStart and serverEnd < length
+                -> unless { Result<Header, Error>.Err(failure(ErrorKind.InvalidPrefix, 0)) -> return }
+            serverEnd + 1 => shareStart
+            shareStart => cursor!
+            cursor! < length and not isSeparator(source -> byte(cursor!), true)
+                -> while { cursor! + 1 => cursor! }
+            cursor! => shareEnd
+            shareEnd > shareStart
+                -> unless { Result<Header, Error>.Err(failure(ErrorKind.InvalidPrefix, 0)) -> return }
+            isDotPart(source, serverStart, serverEnd - serverStart)
+                or isDotPart(source, shareStart, shareEnd - shareStart)
+                -> if { Result<Header, Error>.Err(failure(ErrorKind.InvalidPrefix, 0)) -> return }
+            Result<Header, Error>.Ok(Header { kind: Kind.UncRoot, length: shareEnd, hasDriveRoot: false }) -> return
+        }
+    isSeparator(source -> byte(0), true) -> if {
+        Result<Header, Error>.Ok(Header { kind: Kind.WindowsRoot, length: 1, hasDriveRoot: false }) -> return
+    }
+    Result<Header, Error>.Ok(Header { kind: Kind.Normal, length: 0, hasDriveRoot: false })
+}
+
+# The input's backing owner must outlive the iterator. No input bytes are copied.
+public components text: Text, style: legacy.Style, limits: Limits -> Result<Components, Error> {
+    limits.maxInputBytes >= 0 and limits.maxComponents >= 0 and limits.maxComponentBytes >= 0
+        -> unless { Result<Components, Error>.Err(failure(ErrorKind.InvalidLimits, 0)) -> return }
+    text -> len => length
+    length <= UIntSize(limits.maxInputBytes)
+        -> unless { Result<Components, Error>.Err(failure(ErrorKind.InputLimit, 0)) -> return }
+    text -> file.borrowText => source
+    UIntSize(0) => index!
+    index! < length -> while {
+        source -> byte(index!) != 0 -> unless {
+            Result<Components, Error>.Err(failure(ErrorKind.InvalidNul, index!)) -> return
+        }
+        index! + 1 => index!
+    }
+    style -> when {
+        Posix => false
+        Windows => true
+    } => windows
+    readHeader(source, length, windows)? => header
+    Result<Components, Error>.Ok(Components {
+        source: source
+        end: length
+        index: 0
+        count: 0
+        windows: windows
+        limits: limits
+        header: header
+    })
+}
+
+impl Components {
+    public offset: self -> UIntSize => self.index
+
+    scan: self -> Option<Component> {
+        self.index == 0 and self.header.length > 0 -> if {
+            Option<Component>.Some(Component { kind: self.header.kind, offset: 0, length: self.header.length }) -> return
+        }
+        self.header.hasDriveRoot and self.index == 2 -> if {
+            Option<Component>.Some(Component { kind: Kind.WindowsRoot, offset: 2, length: 1 }) -> return
+        }
+        self.index => cursor!
+        cursor! < self.end and isSeparator(self.source -> byte(cursor!), self.windows)
+            -> while { cursor! + 1 => cursor! }
+        cursor! == self.end -> if { Option<Component>.None -> return }
+        cursor! => start
+        cursor! < self.end and not isSeparator(self.source -> byte(cursor!), self.windows)
+            -> while { cursor! + 1 => cursor! }
+        cursor! - start => length
+        length == 1 and self.source -> byte(start) == 46
+            -> if {
+                Kind.CurrentDirectory
+            } else {
+                length == 2 and self.source -> byte(start) == 46 and self.source -> byte(start + 1) == 46
+                    -> if { Kind.ParentDirectory } else { Kind.Normal }
+            } => kind
+        Option<Component>.Some(Component { kind: kind, offset: start, length: length })
+    }
+
+    # Validation precedes the only state writes. Failed retries are identical.
+    # Success stops exactly after the returned span; EOF skips trailing separators.
+    public next: mut self -> Result<Option<Component>, Error> {
+        self -> scan -> when {
+            None {
+                self.end => self.index
+                Result<Option<Component>, Error>.Ok(Option<Component>.None)
+            }
+            Some(component) {
+                self.count < self.limits.maxComponents -> unless {
+                    Result<Option<Component>, Error>.Err(failure(ErrorKind.ComponentLimit, component.offset)) -> return
+                }
+                component.length <= UIntSize(self.limits.maxComponentBytes)
+                    -> unless {
+                        Result<Option<Component>, Error>.Err(failure(ErrorKind.ComponentSizeLimit, component.offset)) -> return
+                    }
+                component.offset + component.length => self.index
+                self.count + 1 => self.count
+                Result<Option<Component>, Error>.Ok(Option<Component>.Some(component))
+            }
+        }
+    }
+}

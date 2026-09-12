@@ -403,6 +403,7 @@ param(
         "1723-owned-match-payload-mutable-binding",
         "1724-csv-bounded-writer",
         "1725-materialized-text-storage-boundaries",
+        "1726-path-components",
         "1690-selfhost-associated-type-specialization-isolation",
         "1686-selfhost-trait-associated-result",
         "1687-selfhost-chained-call-local-precedence",
