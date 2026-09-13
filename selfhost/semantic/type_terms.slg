@@ -37,7 +37,9 @@ public struct SubstitutionResult {
     public status: Int
 }
 
-# Lowers every TypeAnnotation, including nested children, into one arena.
+# Lowers every TypeAnnotation, including nested children, into one arena. An
+# impl's direct nominal Path also becomes a term so every impl owner publishes
+# a canonical TypeReference without changing the bootstrap-compatible AST.
 public lower source: Text -> [TypeTerm; ~] {
     source -> ast.lower => nodes
     source -> lexer.lex => tokens
@@ -56,147 +58,149 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
     0 => astIndex!
     astIndex! < (nodes -> len) -> while {
         nodes[astIndex!] => node
-        node.kind == 12 -> if {
-            node.firstToken => firstToken!
-            true => findingFirst!
-            firstToken! < node.firstToken + node.tokenCount and findingFirst!
-                -> while {
-                    tokens[firstToken!].kind == grammar.triviaIdWhitespace() or tokens[firstToken!].kind == grammar.triviaIdComment()
-                        -> if {
-                            firstToken! + 1 => firstToken!
-                        } else {
-                            false => findingFirst!
-                        }
-                }
-            1 => kind!
-            -1 => nameToken!
-            -1 => lengthToken!
-            node.cstRuleId == grammar.ruleIdProductType()
-                -> if {
-                    10 => kind!
-                }
-            node.cstRuleId == grammar.ruleIdProductTypeField()
-                -> if {
-                    11 => kind!
-                    node.firstToken => productFieldToken!
-                    false => productFieldColon!
-                    productFieldToken! < node.firstToken + node.tokenCount
-                        -> while {
-                            tokens[productFieldToken!].kind == grammar.tokenIdColon()
-                                -> if { true => productFieldColon! }
-                            not productFieldColon! and nameToken! < 0 and tokens[productFieldToken!].kind == grammar.tokenIdIdentifier()
-                                -> if {
-                                    productFieldToken! => nameToken!
-                                }
-                            productFieldToken! + 1 => productFieldToken!
-                        }
-                    not productFieldColon! -> if { -1 => nameToken! }
-                }
-            kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBracket()
-                -> if {
-                    2 => kind!
-                    0 => depth!
-                    false => outerSemicolon!
-                    false => outerTilde!
-                    false => outerBounded!
-                    firstToken! => shapeToken!
-                    shapeToken! < node.firstToken + node.tokenCount
-                        -> while {
-                            tokens[shapeToken!].kind == grammar.tokenIdLeftBracket()
-                                -> if { depth! + 1 => depth! }
-                            tokens[shapeToken!].kind == grammar.tokenIdRightBracket()
-                                -> if { depth! - 1 => depth! }
-                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdSemicolon()
-                                -> if { true => outerSemicolon! }
-                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdTilde()
-                                -> if { true => outerTilde! }
-                            depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdLessEqual()
-                                -> if { true => outerBounded! }
-                            outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or tokens[shapeToken!].kind == grammar.tokenIdNumber())
-                                -> if {
-                                    shapeToken! => lengthToken!
-                                }
-                            shapeToken! + 1 => shapeToken!
-                        }
-                    outerSemicolon! -> if {
-                        outerBounded! -> if { 12 => kind! } else {
-                            outerTilde! -> if { 3 => kind! } else { 4 => kind! }
-                        }
+        node.kind == 12
+            or (node.kind == 16 and node.parent >= 0 and nodes[node.parent].kind == 6)
+            -> if {
+                node.firstToken => firstToken!
+                true => findingFirst!
+                firstToken! < node.firstToken + node.tokenCount and findingFirst!
+                    -> while {
+                        tokens[firstToken!].kind == grammar.triviaIdWhitespace() or tokens[firstToken!].kind == grammar.triviaIdComment()
+                            -> if {
+                                firstToken! + 1 => firstToken!
+                            } else {
+                                false => findingFirst!
+                            }
                     }
-                } else {
-                    kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBrace()
-                        -> if {
-                            5 => kind!
-                            false => dictionaryBounded!
-                            firstToken! => dictionaryShapeToken!
-                            dictionaryShapeToken! < node.firstToken + node.tokenCount
-                                -> while {
-                                    tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual()
-                                        -> if { true => dictionaryBounded! }
-                                    dictionaryBounded! and lengthToken! < 0 and tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber()
-                                        -> if {
-                                            dictionaryShapeToken! => lengthToken!
-                                        }
-                                    dictionaryShapeToken! + 1 => dictionaryShapeToken!
-                                }
-                            dictionaryBounded! -> if { 13 => kind! }
-                        } else {
-                            kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdIdentifier()
-                                -> if {
-                                    firstToken! => nameToken!
-                                    tokens[firstToken!] => firstName
-                                    firstName.span.length == 3 -> if {
-                                        source -> byte(firstName.span.start) => keywordByte0
-                                        source -> byte(firstName.span.start + 1) => keywordByte1
-                                        source -> byte(firstName.span.start + 2) => keywordByte2
-                                        keywordByte0 == 98 and keywordByte1 == 111 and keywordByte2 == 120
-                                            -> if {
-                                                6 => kind!
-                                                -1 => nameToken!
-                                            }
-                                        keywordByte0 == 114 and keywordByte1 == 101 and keywordByte2 == 102
-                                            -> if {
-                                                8 => kind!
-                                                -1 => nameToken!
-                                            }
+                1 => kind!
+                -1 => nameToken!
+                -1 => lengthToken!
+                node.cstRuleId == grammar.ruleIdProductType()
+                    -> if {
+                        10 => kind!
+                    }
+                node.cstRuleId == grammar.ruleIdProductTypeField()
+                    -> if {
+                        11 => kind!
+                        node.firstToken => productFieldToken!
+                        false => productFieldColon!
+                        productFieldToken! < node.firstToken + node.tokenCount
+                            -> while {
+                                tokens[productFieldToken!].kind == grammar.tokenIdColon()
+                                    -> if { true => productFieldColon! }
+                                not productFieldColon! and nameToken! < 0 and tokens[productFieldToken!].kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        productFieldToken! => nameToken!
                                     }
-                                    firstName.span.length == 6 -> if {
-                                        source -> byte(firstName.span.start) => keywordByte0
-                                        source -> byte(firstName.span.start + 1) => keywordByte1
-                                        source -> byte(firstName.span.start + 2) => keywordByte2
-                                        source -> byte(firstName.span.start + 3) => keywordByte3
-                                        source -> byte(firstName.span.start + 4) => keywordByte4
-                                        source -> byte(firstName.span.start + 5) => keywordByte5
-                                        keywordByte0 == 66 and keywordByte1 == 105 and keywordByte2 == 116 and keywordByte3 == 83 and keywordByte4 == 101 and keywordByte5 == 116
-                                            -> if {
-                                                14 => kind!
-                                                firstToken! + 1 => bitSetToken!
-                                                bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0
-                                                    -> while {
-                                                        tokens[bitSetToken!].kind == grammar.tokenIdNumber()
-                                                            -> if { bitSetToken! => lengthToken! }
-                                                        bitSetToken! + 1 => bitSetToken!
-                                                    }
-                                            }
+                                productFieldToken! + 1 => productFieldToken!
+                            }
+                        not productFieldColon! -> if { -1 => nameToken! }
+                    }
+                kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBracket()
+                    -> if {
+                        2 => kind!
+                        0 => depth!
+                        false => outerSemicolon!
+                        false => outerTilde!
+                        false => outerBounded!
+                        firstToken! => shapeToken!
+                        shapeToken! < node.firstToken + node.tokenCount
+                            -> while {
+                                tokens[shapeToken!].kind == grammar.tokenIdLeftBracket()
+                                    -> if { depth! + 1 => depth! }
+                                tokens[shapeToken!].kind == grammar.tokenIdRightBracket()
+                                    -> if { depth! - 1 => depth! }
+                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdSemicolon()
+                                    -> if { true => outerSemicolon! }
+                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdTilde()
+                                    -> if { true => outerTilde! }
+                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdLessEqual()
+                                    -> if { true => outerBounded! }
+                                outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or tokens[shapeToken!].kind == grammar.tokenIdNumber())
+                                    -> if {
+                                        shapeToken! => lengthToken!
                                     }
-                                }
+                                shapeToken! + 1 => shapeToken!
+                            }
+                        outerSemicolon! -> if {
+                            outerBounded! -> if { 12 => kind! } else {
+                                outerTilde! -> if { 3 => kind! } else { 4 => kind! }
+                            }
                         }
-                }
-            TypeTerm {
-                astNode: astIndex!
-                canonical: -1
-                kind: kind!
-                nameToken: nameToken!
-                nameId: -1
-                firstArgument: -1
-                secondArgument: -1
-                lengthToken: lengthToken!
-                lengthId: -1
-            } => term
-            terms! -> len => termIndex
-            terms! -> push(term)
-            termIndex => astToTerm![astIndex!]
-        }
+                    } else {
+                        kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBrace()
+                            -> if {
+                                5 => kind!
+                                false => dictionaryBounded!
+                                firstToken! => dictionaryShapeToken!
+                                dictionaryShapeToken! < node.firstToken + node.tokenCount
+                                    -> while {
+                                        tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual()
+                                            -> if { true => dictionaryBounded! }
+                                        dictionaryBounded! and lengthToken! < 0 and tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber()
+                                            -> if {
+                                                dictionaryShapeToken! => lengthToken!
+                                            }
+                                        dictionaryShapeToken! + 1 => dictionaryShapeToken!
+                                    }
+                                dictionaryBounded! -> if { 13 => kind! }
+                            } else {
+                                kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdIdentifier()
+                                    -> if {
+                                        firstToken! => nameToken!
+                                        tokens[firstToken!] => firstName
+                                        firstName.span.length == 3 -> if {
+                                            source -> byte(firstName.span.start) => keywordByte0
+                                            source -> byte(firstName.span.start + 1) => keywordByte1
+                                            source -> byte(firstName.span.start + 2) => keywordByte2
+                                            keywordByte0 == 98 and keywordByte1 == 111 and keywordByte2 == 120
+                                                -> if {
+                                                    6 => kind!
+                                                    -1 => nameToken!
+                                                }
+                                            keywordByte0 == 114 and keywordByte1 == 101 and keywordByte2 == 102
+                                                -> if {
+                                                    8 => kind!
+                                                    -1 => nameToken!
+                                                }
+                                        }
+                                        firstName.span.length == 6 -> if {
+                                            source -> byte(firstName.span.start) => keywordByte0
+                                            source -> byte(firstName.span.start + 1) => keywordByte1
+                                            source -> byte(firstName.span.start + 2) => keywordByte2
+                                            source -> byte(firstName.span.start + 3) => keywordByte3
+                                            source -> byte(firstName.span.start + 4) => keywordByte4
+                                            source -> byte(firstName.span.start + 5) => keywordByte5
+                                            keywordByte0 == 66 and keywordByte1 == 105 and keywordByte2 == 116 and keywordByte3 == 83 and keywordByte4 == 101 and keywordByte5 == 116
+                                                -> if {
+                                                    14 => kind!
+                                                    firstToken! + 1 => bitSetToken!
+                                                    bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0
+                                                        -> while {
+                                                            tokens[bitSetToken!].kind == grammar.tokenIdNumber()
+                                                                -> if { bitSetToken! => lengthToken! }
+                                                            bitSetToken! + 1 => bitSetToken!
+                                                        }
+                                                }
+                                        }
+                                    }
+                            }
+                    }
+                TypeTerm {
+                    astNode: astIndex!
+                    canonical: -1
+                    kind: kind!
+                    nameToken: nameToken!
+                    nameId: -1
+                    firstArgument: -1
+                    secondArgument: -1
+                    lengthToken: lengthToken!
+                    lengthId: -1
+                } => term
+                terms! -> len => termIndex
+                terms! -> push(term)
+                termIndex => astToTerm![astIndex!]
+            }
         astIndex! + 1 => astIndex!
     }
 

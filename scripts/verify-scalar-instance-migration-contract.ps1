@@ -73,6 +73,10 @@ function Assert-Contract([string]$Bits, [string]$Recovery, [string]$Fixture, [st
         '-> handshake.encode(', '-> handshake.encodeExtension(', '-> auth.encodeCertificateVerify(',
         '-> streams.validatePeerOpened(', '-> packet.encodeInitialHeader(', '-> encodeHandshakeHeader(', '-> handshakeEngine.encode('
     )) { Assert-Contains $AllSources $evidence "second scalar caller evidence $evidence" }
+    Assert-Contains $SecondSources['tls_auth'] `
+        'ed25519SignatureScheme() -> encodeCertificateVerify(signature)' `
+        'TLS CertificateVerify local instance caller'
+    Assert-NoDirectCalls $AllSources 'encodeCertificateVerify'
 
     $frame = $SecondSources['frame']
     $protection = $SecondSources['protection']
@@ -96,6 +100,26 @@ function Assert-Contract([string]$Bits, [string]$Recovery, [string]$Fixture, [st
         'protector.packet -> open(')) {
         Assert-Contains $AllSources $evidence "third slice caller evidence $evidence"
     }
+
+    $hkdf = $SecondSources['hkdf_sha256']
+    $sha512 = $SecondSources['sha512']
+    Assert-Contains $hkdf 'impl [UInt8] {' 'array receiver HKDF instance surface'
+    foreach ($method in @('extract', 'expand12', 'expand16', 'expand32', 'expand42')) {
+        Assert-Contains $hkdf "public ${method}: self" "array receiver HKDF method $method"
+        if ($hkdf -match "(?m)^public\s+$method\s+[^:]") { throw "HKDF global wrapper remains: $method" }
+    }
+    Assert-Contains $sha512 'impl [UInt8] {' 'array receiver SHA-512 instance surface'
+    Assert-Contains $sha512 'public digest: self' 'array receiver SHA-512 digest method'
+    if ($sha512 -match '(?m)^public\s+digest\s+[^:]') { throw 'SHA-512 global wrapper remains: digest' }
+    foreach ($evidence in @(
+        '-> hkdf.extract(', '-> hkdf.expand12(', '-> hkdf.expand16(', '-> hkdf.expand32(',
+        '-> hkdf.expand42(', '-> sha512.digest')) {
+        Assert-Contains $AllSources $evidence "array receiver caller evidence $evidence"
+    }
+    foreach ($method in @('extract', 'expand12', 'expand16', 'expand32', 'expand42')) {
+        Assert-NoDirectCalls $AllSources "hkdf.$method"
+    }
+    Assert-NoDirectCalls $AllSources 'sha512.digest'
 }
 
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
@@ -109,6 +133,8 @@ $secondSources = @{}
 foreach ($module in @('packet_number', 'varint', 'version_negotiation', 'transport_parameters', 'tls_handshake', 'tls_auth', 'stream_state', 'packet', 'handshake_engine', 'frame', 'protection', 'initial_engine')) {
     $secondSources[$module] = [IO.File]::ReadAllText((Join-Path $root "stdlib/std/net/quic/$module.slg"))
 }
+$secondSources['hkdf_sha256'] = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/crypto/hkdf_sha256.slg'))
+$secondSources['sha512'] = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/crypto/sha512.slg'))
 $sourceFiles = @(
     Get-ChildItem -LiteralPath (Join-Path $root 'stdlib') -Recurse -File -Filter '*.slg'
     Get-ChildItem -LiteralPath (Join-Path $root 'examples') -Recurse -File -Filter '*.slg'
@@ -120,4 +146,4 @@ Assert-Rejected { Assert-Contract ($bits -replace 'public xor: self', 'public xo
 Assert-Rejected { Assert-Contract $bits $recovery ($fixture -replace '-> bits.not64', '-> bits.not') $allSources $secondSources } 'fixture call decoy'
 Assert-Rejected { Assert-Contract $bits $recovery $fixture ($allSources + "`nbits.xor(left, right)") $secondSources } 'direct global-form caller decoy'
 
-Write-Host '[instance migration contract] PASS 37/37 (34 methods + 3 mutation controls)'
+Write-Host '[instance migration contract] PASS 44/44 (40 methods + 1 local callsite + 3 mutation controls)'

@@ -111,6 +111,48 @@ public struct SemanticTypeSet {
     public fields: [NominalField; ~]
 }
 
+# Impl owners are direct nominal Path or structural TypeAnnotation children.
+# For trait impls the final child is the concrete target after `for`; inherent
+# impls have one. This is the single owner lookup used by semantic and Typed IR.
+public implOwnerTypeAst package: ref analysis.PackageAnalysis, sourceIndex: Int, implAst: Int -> Int {
+    package.ranges[sourceIndex] => sourceRange
+    -1 => ownerTypeAst!
+    UIntSize(0) => ownerTypeStart!
+    0 => candidateAst!
+    candidateAst! < sourceRange.astCount -> while {
+        package.nodes[sourceRange.astStart + candidateAst!] => candidate
+        (candidate.kind == 12 or candidate.kind == 16) and candidate.parent == implAst
+            and (ownerTypeAst! < 0 or candidate.start > ownerTypeStart!)
+            -> if {
+                candidateAst! => ownerTypeAst!
+                candidate.start => ownerTypeStart!
+            }
+        candidateAst! + 1 => candidateAst!
+    }
+    ownerTypeAst!
+}
+
+# Resolve an impl owner through the canonical TypeReference arena. Returning
+# -1 is fail-closed: callers must not invent nominal or structural identities.
+public implOwnerTypeId package: ref analysis.PackageAnalysis, references: ref [TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], sourceIndex: Int, implAst: Int -> Int {
+    package -> implOwnerTypeAst(sourceIndex, implAst) => ownerTypeAst
+    -1 => ownerTypeId!
+    ownerTypeAst >= 0 -> if {
+        package.ranges[sourceIndex] => sourceRange
+        sourceRange.astStart + ownerTypeAst => globalOwnerAst
+        globalOwnerAst >= 0 and globalOwnerAst < Int(referenceIndexByTypeAst -> len)
+            -> if {
+                referenceIndexByTypeAst[globalOwnerAst] => ownerReferenceIndex
+                ownerReferenceIndex >= 0 and ownerReferenceIndex < Int(references -> len)
+                    -> if {
+                        references[ownerReferenceIndex] => ownerReference
+                        ownerReference.status == 0 -> if { ownerReference.typeId => ownerTypeId! }
+                    }
+            }
+    }
+    ownerTypeId!
+}
+
 struct SpanNameRequest {
     source: Text
     start: UIntSize

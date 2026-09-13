@@ -42,7 +42,7 @@ int main(void) {
     if (signaled == 0) { for (;;) pause(); }
     if (signaled < 0 || kill(signaled, SIGTERM) != 0) return 5;
     uint64_t signal_result = await_exit(signaled);
-    if (state(signal_result) != 3 || code(signal_result) != 0) return 6;
+    if (state(signal_result) != 3 || code(signal_result) != SIGTERM) return 6;
     if (state(sollang_probe_poll((uint64_t)signaled)) != 2) return 7;
 
     int direct = fork();
@@ -50,6 +50,6 @@ int main(void) {
     if (direct < 0 || kill(direct, SIGTERM) != 0) return 8;
     uint64_t direct_result = sollang_probe_wait((uint64_t)direct);
     if (state(direct_result) != 3 || code(direct_result) != 0) return 9;
-    puts("process tryWait linux runtime: 8/8");
+    puts("process tryWait linux runtime: 9/9");
     return 0;
 }

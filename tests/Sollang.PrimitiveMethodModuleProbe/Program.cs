@@ -1,16 +1,21 @@
 using System.Collections;
 using System.Reflection;
 
-if (args.Length != 2)
+if (args.Length != 3)
 {
-    Console.Error.WriteLine("expected the two primitive-method module fixture paths");
+    Console.Error.WriteLine("expected two primitive-method and one array-method module fixture paths");
     return 2;
 }
 
 var compiler = Assembly.Load("Sollang.Compiler");
 var lexerType = compiler.GetType("Sollang.Compiler.Lexing.Lexer", throwOnError: true)!;
 var parserType = compiler.GetType("Sollang.Compiler.Parsing.Parser", throwOnError: true)!;
-var expected = new[] { "std.alpha.UInt64.encode", "std.beta.UInt64.encode" };
+var expected = new[]
+{
+    "std.alpha.UInt64.encode",
+    "std.beta.UInt64.encode",
+    "std.gamma.[UInt8].firstPlus"
+};
 
 for (var index = 0; index < args.Length; index++)
 {
@@ -42,5 +47,5 @@ for (var index = 0; index < args.Length; index++)
     }
 }
 
-Console.WriteLine("[primitive method parser identity] PASS 2/2");
+Console.WriteLine("[builtin method parser identity] PASS 3/3");
 return 0;

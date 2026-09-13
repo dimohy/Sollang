@@ -2372,6 +2372,113 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                                 receiverTypeModule! => openReceiverTypeModule!
                                 receiverTypeSymbol! => openReceiverTypeSymbol!
                             }
+                        # Structural impl owners have no nominal module/symbol
+                        # identity. Resolve their methods in the receiver's
+                        # current logical module by the same canonical type id
+                        # used by declarations and expression typing.
+                        receiverTypeId! >= 0
+                            and (receiverTypeModule! < 0 or receiverTypeSymbol! < 0)
+                            -> if {
+                                false => structuralReceiverMethodFound!
+                                false => structuralReceiverMethodAmbiguous!
+                                0 => structuralReceiverMethodModule!
+                                structuralReceiverMethodModule! < (identities -> len)
+                                    -> while {
+                                        identities[structuralReceiverMethodModule!]
+                                            => structuralReceiverMethodIdentity
+                                        structuralReceiverMethodIdentity.pathHash == identities[sourceIndex].pathHash
+                                            -> if {
+                                                structuralReceiverMethodIdentity.sourceIndex
+                                                    => structuralReceiverMethodSource
+                                                package.ranges[structuralReceiverMethodSource]
+                                                    => structuralReceiverMethodRange
+                                                package.sources[structuralReceiverMethodSource]
+                                                    -> len => structuralReceiverMethodLength
+                                                package.sources[structuralReceiverMethodSource]
+                                                    -> slice(UIntSize(0), structuralReceiverMethodLength)
+                                                    => structuralReceiverMethodText
+                                                0 => structuralReceiverMethodSymbol!
+                                                structuralReceiverMethodSymbol! < structuralReceiverMethodRange.symbolCount
+                                                    -> while {
+                                                        package.symbols[structuralReceiverMethodRange.symbolStart + structuralReceiverMethodSymbol!]
+                                                            => structuralReceiverMethod
+                                                        structuralReceiverMethod.kind == 31
+                                                            and structuralReceiverMethod.parent >= 0
+                                                            and (localCallNode.kind != 48
+                                                            or structuralReceiverMethod.blockNameToken >= 0)
+                                                            -> if {
+                                                                package.symbols[structuralReceiverMethodRange.symbolStart + structuralReceiverMethod.parent]
+                                                                    => structuralReceiverImpl
+                                                                false => structuralReceiverOwnerEqual!
+                                                                structuralReceiverImpl.typeNode >= 0 -> if {
+                                                                    0 => structuralReceiverOwnerReferenceIndex!
+                                                                    structuralReceiverOwnerReferenceIndex! < (semantic.references -> len)
+                                                                        and not structuralReceiverOwnerEqual!
+                                                                        -> while {
+                                                                            semantic.references[structuralReceiverOwnerReferenceIndex!]
+                                                                                => structuralReceiverOwnerReference
+                                                                            structuralReceiverOwnerReference.sourceModule == structuralReceiverMethodSource
+                                                                                and structuralReceiverOwnerReference.typeAst == structuralReceiverImpl.typeNode
+                                                                                and structuralReceiverOwnerReference.typeId == receiverTypeId!
+                                                                                and structuralReceiverOwnerReference.status == 0
+                                                                                -> if {
+                                                                                    true => structuralReceiverOwnerEqual!
+                                                                                }
+                                                                            structuralReceiverOwnerReferenceIndex! + 1
+                                                                                => structuralReceiverOwnerReferenceIndex!
+                                                                        }
+                                                                }
+                                                                package.tokens[structuralReceiverMethodRange.tokenStart + structuralReceiverMethod.nameToken]
+                                                                    => structuralReceiverMethodName
+                                                                structuralReceiverMethodName.span.length == receiverCallName.span.length
+                                                                    => structuralReceiverMethodNameEqual!
+                                                                UIntSize(0) => structuralReceiverMethodNameByte!
+                                                                structuralReceiverMethodNameEqual!
+                                                                    and structuralReceiverMethodNameByte! < receiverCallName.span.length
+                                                                    -> while {
+                                                                        (structuralReceiverMethodText -> byte(structuralReceiverMethodName.span.start + structuralReceiverMethodNameByte!)) != (source -> byte(receiverCallName.span.start + structuralReceiverMethodNameByte!))
+                                                                            -> if {
+                                                                                false => structuralReceiverMethodNameEqual!
+                                                                            }
+                                                                        structuralReceiverMethodNameByte! + 1
+                                                                            => structuralReceiverMethodNameByte!
+                                                                    }
+                                                                structuralReceiverOwnerEqual!
+                                                                    and structuralReceiverMethodNameEqual!
+                                                                    -> if {
+                                                                        structuralReceiverMethodFound! -> if {
+                                                                            true => structuralReceiverMethodAmbiguous!
+                                                                        } else {
+                                                                            true => structuralReceiverMethodFound!
+                                                                            0 => resolvedOrigin!
+                                                                            structuralReceiverMethodModule!
+                                                                                => resolvedTargetModule!
+                                                                            structuralReceiverMethodSource
+                                                                                => resolvedTargetSource!
+                                                                            structuralReceiverMethodSymbol!
+                                                                                => resolvedFunctionSymbol!
+                                                                            0 => resolvedStatus!
+                                                                        }
+                                                                    }
+                                                            }
+                                                        structuralReceiverMethodSymbol! + 1
+                                                            => structuralReceiverMethodSymbol!
+                                                    }
+                                            }
+                                        structuralReceiverMethodModule! + 1
+                                            => structuralReceiverMethodModule!
+                                    }
+                                structuralReceiverMethodFound!
+                                    and not structuralReceiverMethodAmbiguous!
+                                    -> if { true => siblingFound! }
+                                structuralReceiverMethodAmbiguous! -> if {
+                                    true => siblingAmbiguous!
+                                    sourceIndex => resolvedTargetModule!
+                                    sourceIndex => resolvedTargetSource!
+                                    -1 => resolvedFunctionSymbol!
+                                    2 => resolvedStatus!
+                                }
+                            }
                     }
                 # A qualified inherent block method still uses the exact
                 # runtime receiver as dispatch authority. The qualifier may

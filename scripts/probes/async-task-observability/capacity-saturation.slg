@@ -2,35 +2,50 @@ namespace probes.async_task_observability.capacity_saturation
 
 import std.async.diagnostics as diagnostics
 
-unit: -> async Unit { yield }
+public unit: -> async Unit {
+    yield
+    1 => completed
+}
 
 main {
     diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) => opened
     opened -> when {
         Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
-            unit() => firstTask
-            unit() => secondTask
-            session! -> track(firstTask) => firstResult
+            session => active!
+            probes.async_task_observability.capacity_saturation.unit() => firstTask
+            probes.async_task_observability.capacity_saturation.unit() => secondTask
+            active! -> track(firstTask) => firstResult
             firstResult -> when {
                 Ok(first) {
-                    session! -> track(secondTask) => secondResult
+                    active! -> track(secondTask) => secondResult
                     secondResult -> when {
                         Ok(second) {
                             second -> await
+                            first -> await
+                            active! -> close => unexpectedClose
                             "unexpected-second-track" -> println
                         }
                         Err(failure) {
                             # The product error preserves both the unchanged Task
                             # owner and the Capacity reason without a generic user ADT.
-                            failure._1 -> println
+                            failure._1 -> when {
+                                diagnostics.TrackFailureKind.Capacity { "Capacity" -> println }
+                                diagnostics.TrackFailureKind.AlreadyTracked { "AlreadyTracked" -> println }
+                                diagnostics.TrackFailureKind.CrossSession { "CrossSession" -> println }
+                            }
                             first -> await
                             failure._0 -> await
-                            session! -> close -> println
+                            active! -> close -> when {
+                                Ok(summary) { "close sessionId=$(summary.sessionId) trackedTasks=$(summary.trackedTasks) untrackedTasks=$(summary.untrackedTasks)" -> println }
+                                Err(closeFailure) { "close-error" -> println }
+                            }
                         }
                     }
                 }
                 Err(failure) {
                     failure._0 -> await
+                    secondTask -> await
+                    active! -> close => recoveredClose
                     "first-track-error" -> println
                 }
             }

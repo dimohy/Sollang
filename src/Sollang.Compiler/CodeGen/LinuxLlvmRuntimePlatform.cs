@@ -2062,7 +2062,9 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_poll_result %exited1
 
             poll_signaled:
-              ret %sollang.process_poll_result { i32 0, i32 3 }
+              %signal0 = insertvalue %sollang.process_poll_result poison, i32 %term_bits, 0
+              %signal1 = insertvalue %sollang.process_poll_result %signal0, i32 3, 1
+              ret %sollang.process_poll_result %signal1
 
             poll_running:
               ret %sollang.process_poll_result { i32 0, i32 0 }

@@ -441,114 +441,31 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                     }
                 }
                 # Inherent impl methods spell only `self`; their receiver type
-                # is the impl owner. Resolve that owner across every fragment
-                # of the same logical namespace and reuse its canonical nominal
-                # type directly. This changes only compile-time tables: the
-                # generated method remains an ordinary direct function call.
+                # is the impl owner's direct TypeAnnotation. Resolve that node
+                # through the canonical TypeReference arena shared with semantic
+                # expression typing, so nominal and structural owners have one
+                # identity and one zero-cost ABI path.
                 parameterSymbol! >= 0 and parameterOrigin! < 0 and function.kind == 31 and function.parent >= 0
                     -> if {
                         prepared.package.symbols[sourceRange.symbolStart + function.parent] => receiverImpl
-                        # ImplDeclaration owns one Path for inherent impls and
-                        # two for trait impls. The final header Path is the
-                        # concrete receiver; the first may name the trait.
-                        -1 => receiverOwnerPath!
-                        receiverImpl.astNode + 1 => receiverPathSearch!
-                        true => receiverHeaderOpen!
-                        receiverHeaderOpen! and receiverPathSearch! < sourceRange.astCount
-                            -> while {
-                                prepared.package.nodes[sourceRange.astStart + receiverPathSearch!] => receiverPathCandidate
-                                receiverPathCandidate.parent == receiverImpl.astNode
-                                    -> if {
-                                        receiverPathCandidate.kind == 16 -> if {
-                                            receiverPathSearch! => receiverOwnerPath!
-                                        } else { false => receiverHeaderOpen! }
-                                    }
-                                receiverPathSearch! + 1 => receiverPathSearch!
-                            }
-                        prepared.package.nodes[sourceRange.astStart + receiverOwnerPath!].payloadToken => receiverOwnerNameToken
-                        prepared.package.tokens[sourceRange.tokenStart + receiverOwnerNameToken] => receiverImplName
-                        prepared.modules[sourceIndex] => receiverModuleIdentity
-                        -1 => receiverOwnerModule!
-                        -1 => receiverOwnerSymbol!
-                        false => receiverOwnerAmbiguous!
-                        0 => receiverQualifiedSearch!
-                        receiverQualifiedSearch! < (prepared.qualified -> len)
-                            and receiverOwnerModule! < 0
-                            -> while {
-                                prepared.qualified[receiverQualifiedSearch!] => receiverQualified
-                                receiverQualified.sourceModule == sourceIndex
-                                    and receiverQualified.status == 0
-                                    and receiverQualified.pathAst == receiverOwnerPath!
-                                    and receiverQualified.targetModule >= 0
-                                    and receiverQualified.targetModule < (prepared.modules -> len)
-                                    -> if {
-                                        prepared.modules[receiverQualified.targetModule].sourceIndex
-                                            => receiverOwnerModule!
-                                        receiverQualified.targetSymbol => receiverOwnerSymbol!
-                                    }
-                                receiverQualifiedSearch! + 1 => receiverQualifiedSearch!
-                            }
-                        0 => receiverModuleSearch!
-                        receiverModuleSearch! < (prepared.modules -> len) and receiverOwnerModule! < 0
-                            -> while {
-                                prepared.modules[receiverModuleSearch!] => receiverCandidateIdentity
-                                receiverCandidateIdentity.pathHash == receiverModuleIdentity.pathHash
-                                    -> if {
-                                        receiverCandidateIdentity.sourceIndex => receiverCandidateSource
-                                        prepared.package.ranges[receiverCandidateSource] => receiverCandidateRange
-                                        prepared.package.sources[receiverCandidateSource] -> len => receiverCandidateLength
-                                        prepared.package.sources[receiverCandidateSource] -> slice(UIntSize(0), receiverCandidateLength) => receiverCandidateText
-                                        0 => receiverSymbolSearch!
-                                        receiverSymbolSearch! < receiverCandidateRange.symbolCount
-                                            -> while {
-                                                prepared.package.symbols[receiverCandidateRange.symbolStart + receiverSymbolSearch!] => receiverCandidate
-                                                receiverCandidate.parent < 0 and (receiverCandidate.kind == 3 or receiverCandidate.kind == 4)
-                                                    -> if {
-                                                        prepared.package.tokens[receiverCandidateRange.tokenStart + receiverCandidate.nameToken] => receiverCandidateName
-                                                        receiverCandidateName.span.length == receiverImplName.span.length => receiverNameEqual!
-                                                        UIntSize(0) => receiverNameByte!
-                                                        receiverNameEqual! and receiverNameByte! < receiverImplName.span.length
-                                                            -> while {
-                                                                (receiverCandidateText -> byte(receiverCandidateName.span.start + receiverNameByte!)) != (source -> byte(receiverImplName.span.start + receiverNameByte!))
-                                                                    -> if {
-                                                                        false => receiverNameEqual!
-                                                                    }
-                                                                receiverNameByte! + 1 => receiverNameByte!
-                                                            }
-                                                        receiverNameEqual! -> if {
-                                                            receiverOwnerModule! >= 0 -> if {
-                                                                true => receiverOwnerAmbiguous!
-                                                            } else {
-                                                                receiverCandidateSource => receiverOwnerModule!
-                                                                receiverSymbolSearch! => receiverOwnerSymbol!
-                                                            }
-                                                        }
-                                                    }
-                                                receiverSymbolSearch! + 1 => receiverSymbolSearch!
-                                            }
-                                    }
-                                receiverModuleSearch! + 1 => receiverModuleSearch!
-                            }
-                        receiverOwnerModule! >= 0 and not receiverOwnerAmbiguous!
+                        prepared.package -> typeIds.implOwnerTypeId(recursiveTypes.references, recursiveTypes.referenceIndexByTypeAst, sourceIndex, receiverImpl.astNode) => receiverOwnerTypeId
+                        receiverOwnerTypeId >= 0 and receiverOwnerTypeId < (frozenRecursiveSemanticTypes -> len)
                             -> if {
-                                0 => receiverTypeSearch!
-                                receiverTypeSearch! < (frozenRecursiveSemanticTypes -> len)
-                                    -> while {
-                                        frozenRecursiveSemanticTypes[receiverTypeSearch!] => receiverType
-                                        receiverType.kind == 1
-                                            and (receiverType.origin == 0
-                                            or receiverType.origin == 2)
-                                            and receiverType.module == receiverOwnerModule!
-                                            and receiverType.symbol == receiverOwnerSymbol!
-                                            and receiverType.status == 0
-                                            -> if {
-                                                receiverTypeSearch! => parameterTypeId!
-                                                receiverType.origin => parameterOrigin!
-                                                receiverType.module => parameterModule!
-                                                receiverType.symbol => parameterTypeSymbol!
-                                            }
-                                        receiverTypeSearch! + 1 => receiverTypeSearch!
-                                    }
+                                receiverOwnerTypeId => parameterTypeId!
+                                frozenRecursiveSemanticTypes[parameterTypeId!] => receiverOwnerType
+                                receiverOwnerType.origin => parameterOrigin!
+                                receiverOwnerType.module => parameterModule!
+                                receiverOwnerType.symbol => parameterTypeSymbol!
+                                receiverOwnerType.kind != 1 -> if {
+                                    10 + receiverOwnerType.kind => parameterOrigin!
+                                    receiverOwnerType.first >= 0
+                                        and receiverOwnerType.first < (frozenRecursiveSemanticTypes -> len)
+                                        -> if {
+                                            frozenRecursiveSemanticTypes[receiverOwnerType.first] => receiverOwnerElement
+                                            receiverOwnerElement.module => parameterModule!
+                                            receiverOwnerElement.symbol => parameterTypeSymbol!
+                                        }
+                                }
                             }
                     }
                 results! -> len => functionIr

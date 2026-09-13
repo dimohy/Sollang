@@ -1,0 +1,88 @@
+# Verifies that the typed terminal API preserves ordinary Windows exit status
+# after forced termination and reuses the cached single-reap observation.
+import std.time as time
+import sys.process as process
+
+main {
+    process.arguments() => args
+    args -> len > 1 -> if {
+        30_000 -> time.milliseconds -> when {
+            Result<time.Duration, time.Error>.Ok(delay) { delay -> sleep -> await }
+            Result<time.Duration, time.Error>.Err(error) { process.exit(99) }
+        }
+    } else {
+        process.command(args[0]) => command!
+        command! -> arg("--child")
+        command! -> spawn -> when {
+            Result<process.Child, Text>.Err(error) { "spawn-error=$error" -> println }
+            Result<process.Child, Text>.Ok(child) {
+                child => owner!
+                owner! -> kill -> when {
+                    Result<Unit, Text>.Ok(done) { "kill=true" -> println }
+                    Result<Unit, Text>.Err(error) { "kill-error=$error" -> println }
+                }
+
+                false => completed!
+                0 => attempts!
+                not completed! and attempts! < 400 -> while {
+                    owner! -> tryWaitTermination -> when {
+                        Result<Option<process.TerminationStatus>, Text>.Err(error) {
+                            "poll-error=$error" -> println
+                            true => completed!
+                        }
+                        Result<Option<process.TerminationStatus>, Text>.Ok(status) {
+                            status -> when {
+                                Option<process.TerminationStatus>.None {
+                                    5 -> time.milliseconds -> when {
+                                        Result<time.Duration, time.Error>.Ok(delay) { delay -> sleep -> await }
+                                        Result<time.Duration, time.Error>.Err(error) { true => completed! }
+                                    }
+                                }
+                                Option<process.TerminationStatus>.Some(termination) {
+                                    termination -> when {
+                                        process.TerminationStatus.Exited(status) {
+                                            "exit=$(status -> exitCode)" -> println
+                                        }
+                                        process.TerminationStatus.Signaled(signal) {
+                                            "unexpected-signal=$(signal -> signalNumber)" -> println
+                                        }
+                                    }
+                                    true => completed!
+                                }
+                            }
+                        }
+                    }
+                    attempts! + 1 => attempts!
+                }
+
+                owner! -> tryWaitTermination -> when {
+                    Result<Option<process.TerminationStatus>, Text>.Err(error) {
+                        "cached-error=$error" -> println
+                    }
+                    Result<Option<process.TerminationStatus>, Text>.Ok(status) {
+                        status -> when {
+                            Option<process.TerminationStatus>.None { "cached=missing" -> println }
+                            Option<process.TerminationStatus>.Some(termination) {
+                                termination -> when {
+                                    process.TerminationStatus.Exited(exit) {
+                                        "cached-exit=$(exit -> exitCode)" -> println
+                                    }
+                                    process.TerminationStatus.Signaled(signal) {
+                                        "cached-signal=$(signal -> signalNumber)" -> println
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                owner! -> wait -> when {
+                    Result<process.ExitStatus, Text>.Ok(status) {
+                        "compat=$(status -> exitCode)" -> println
+                    }
+                    Result<process.ExitStatus, Text>.Err(error) { "compat-error=$error" -> println }
+                }
+            }
+        }
+    }
+}

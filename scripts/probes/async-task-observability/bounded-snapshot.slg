@@ -2,32 +2,63 @@ namespace probes.async_task_observability.bounded_snapshot
 
 import std.async.diagnostics as diagnostics
 
-pending: -> async Unit { yield }
+public pending: -> async Unit {
+    yield
+    1 => completed
+}
 
-main {
-    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 3 }) => opened
-    opened -> when {
-        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
-            pending() => task
-            session! -> track(task) => trackedResult
-            trackedResult -> when {
-                Ok(tracked) {
-                    [diagnostics.TaskSnapshot; 0] => empty!
-                    session! -> snapshot(empty!) => first
-                    # Expected: written=0, available=1, truncated=true. The caller
-                    # buffer is retained by the caller and snapshot allocates nothing.
-                    first.written -> println
-                    first.available -> println
-                    first.truncated -> println
-                    tracked -> await
-                    session! -> close
+emptySnapshot: -> diagnostics.TaskSnapshot => diagnostics.TaskSnapshot {
+    taskId: 0,
+    parentTaskId: Option<UInt64>.None,
+    lifecycle: diagnostics.Lifecycle.Pending,
+    waitState: diagnostics.WaitState.None,
+    awaitedTaskId: Option<UInt64>.None,
+    timerDeadlineMillis: 0,
+    suspension: Option<diagnostics.SuspensionLocator>.None
+}
+
+public observe: -> async Unit uses Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 2 }) -> when {
+        Ok(session) {
+            session => active!
+            probes.async_task_observability.bounded_snapshot.pending() => firstPending
+            probes.async_task_observability.bounded_snapshot.pending() => secondPending
+            active! -> track(firstPending) -> when {
+                Ok(first) {
+                    active! -> track(secondPending) -> when {
+                        Ok(second) {
+                            [emptySnapshot()] => output!
+                            active! -> snapshot<1>(output!) => captured
+                            "snapshot sessionId=$(captured.sessionId) written=$(captured.written) available=$(captured.available) truncated=$(captured.truncated)" -> println
+                            "first taskId=$(output![0].taskId)" -> println
+                            first -> await
+                            second -> await
+                            active! -> close -> when {
+                                Ok(summary) { "close sessionId=$(summary.sessionId) trackedTasks=$(summary.trackedTasks) untrackedTasks=$(summary.untrackedTasks)" -> println }
+                                Err(failure) { "close-error" -> println }
+                            }
+                        }
+                        Err(failure) {
+                            failure._0 -> await
+                            first -> await
+                            active! -> close => recoveredClose
+                            "second-track-error" -> println
+                        }
+                    }
                 }
                 Err(failure) {
                     failure._0 -> await
-                    "track-error" -> println
+                    secondPending -> await
+                    active! -> close => recoveredClose
+                    "first-track-error" -> println
                 }
             }
         }
-        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+        Err(error) { "open-error" -> println }
     }
+}
+
+main {
+    probes.async_task_observability.bounded_snapshot.observe() => observation
+    observation -> await
 }

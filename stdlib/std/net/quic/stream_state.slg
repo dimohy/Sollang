@@ -343,11 +343,12 @@ impl StreamRegistry {
     public discoverPeerBidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
         streamId -> validatePeerOpened(self.localIsServer, self.localBidirectionalLimit, 0)? => identified
         identified.direction -> when {
-            Unidirectional {
-                Result<Unit, errors.Error>.Err(
-                transportError(errors.streamStateError())) -> return
-            }
-            Bidirectional {}
+            Bidirectional { true }
+            Unidirectional { false }
+        } => isBidirectional
+        isBidirectional -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamStateError())) -> return
         }
         self.peerBidirectionalSeen and identified.sequence <= self.highestPeerBidirectional
             -> if { Result<Unit, errors.Error>.Ok -> return }
@@ -383,11 +384,12 @@ impl StreamRegistry {
     public discoverPeerUnidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
         streamId -> validatePeerOpened(self.localIsServer, 0, self.localUnidirectionalLimit)? => identified
         identified.direction -> when {
-            Bidirectional {
-                Result<Unit, errors.Error>.Err(
-                transportError(errors.streamStateError())) -> return
-            }
-            Unidirectional {}
+            Bidirectional { false }
+            Unidirectional { true }
+        } => isUnidirectional
+        isUnidirectional -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamStateError())) -> return
         }
         self.peerUnidirectionalSeen and identified.sequence <= self.highestPeerUnidirectional
             -> if { Result<Unit, errors.Error>.Ok -> return }
@@ -427,11 +429,12 @@ impl StreamRegistry {
         }
         identity(streamId) => identified
         identified.direction -> when {
-            Unidirectional {
-                Result<Unit, errors.Error>.Err(
-                transportError(errors.streamStateError())) -> return
-            }
-            Bidirectional {}
+            Bidirectional { true }
+            Unidirectional { false }
+        } => isBidirectional
+        isBidirectional -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamStateError())) -> return
         }
         identified.initiator -> when {
             Client { self.localIsServer }
@@ -457,11 +460,12 @@ impl StreamRegistry {
         }
         identity(streamId) => identified
         identified.direction -> when {
-            Bidirectional {
-                Result<Unit, errors.Error>.Err(
-                transportError(errors.streamStateError())) -> return
-            }
-            Unidirectional {}
+            Bidirectional { false }
+            Unidirectional { true }
+        } => isUnidirectional
+        isUnidirectional -> unless {
+            Result<Unit, errors.Error>.Err(
+            transportError(errors.streamStateError())) -> return
         }
         identified.initiator -> when {
             Client { self.localIsServer }

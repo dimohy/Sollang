@@ -1,6 +1,92 @@
 # Sollang session handoff
 
-Updated: 2026-09-05 (Asia/Seoul)
+Updated: 2026-09-13 21:47 (Asia/Seoul)
+
+## 2026-09-13 STOP CHECKPOINT — READ THIS BEFORE OLDER SECTIONS
+
+The user requested a clean stop after the current focused work so another
+session can resume it. The authoritative branch is `v0.5`; do not create a tag.
+The lower historical sections remain useful provenance but are not the current
+status.
+
+### Current measured axes
+
+- Compiler stabilization: **424/436 (97.25%)**, open **12**. The 08:28 KST
+  baseline was 405/418 with 13 open, so the current delta is +19 stabilized,
+  +18 registered denominator, and -1 open.
+- Current focused Stage2/Stage3: **0/2**. Do not start the accumulated stages
+  until focused source defects and planned source changes are complete.
+- Frozen stdlib/runtime: **5/22 (22.73%) fully accepted**, **17/22 in
+  progress**, **0 blocked**, **22/22 started**. Intermediate progress is tracked
+  separately in `scripts/contracts/active-goal-progress.json`.
+
+### Completed focused work in this checkpoint
+
+- Instance-first migration advanced from 34/97 to **40/97**, leaving 57 debt
+  entries. Concrete array owners such as `impl [UInt8]` are supported without a
+  marker wrapper, allocation, copy, or name allowlist. HKDF five methods and
+  SHA-512 digest migrated to natural array receivers. Managed/module-qualified
+  receiver checks pass 6/6; migration contract passes 44/44; stdlib inventory
+  passes 261 globals = 204 exceptions + 57 debt.
+- Self-host array-owner support now shares `implOwnerTypeAst/implOwnerTypeId`
+  across expression typing and ordinary-function lowering, and structural
+  receiver lookup uses the canonical receiver type ID. Static self-host contract
+  passes 11/11. The actual focused self-host gate remains **7/8**; fixture 1759
+  must be rerun after disk space is recovered.
+- QUIC QS6 natural direction/Result cleanup passes 5/5, natural Result contract
+  18/18, and stream contract 20/20 fixtures. Actual current-source 1291/1297 is
+  still 0/2 until a stable current compiler is available. A stale UInt16
+  `encodeCertificateVerify` call was migrated to the instance form.
+- ZIP `Decoder.deflate` now moves through one `takeDeflate` helper that repairs
+  the field to `None` before transfer. ZIP analysis passed that old ownership
+  failure; method-8 remains **5/8** until current-source semantic/O0 execution.
+  No golden was fabricated.
+- Child processes gained typed `SignalStatus`,
+  `TerminationStatus.Exited/Signaled`, and
+  `Child.tryWaitTermination(mut)`. The existing `tryWait` is a projection over
+  the same single poll/reap authority. Focused Child gate passes 6/6, contract
+  37/37, extracted kill/runtime gates 24/24 and 12/12, Windows tryWait runtime
+  10/10, and Linux runtime 16/16. Remaining capability gaps are wait/I/O
+  timeout, forced-request attribution, and public pipe handles.
+- Async task observability gained a 13-case managed matrix, result schema, and
+  corrected bounded/capacity/Busy-close/session-reuse/use-after-close fixtures.
+  Input/schema validation passes 13/13 with positive 1/1 and mutation controls
+  7/7. Official current-source single-run progress remains **4/13**; distributed
+  current-source evidence is 9/13 and isolated behavior is 13/13. Do not raise
+  the official numerator until one stable-input run completes all 13 cases.
+
+### Fail-closed execution records and exact resume order
+
+1. Recover disk space first. P: had only about **108 MiB free** at stop. Large
+   disposable failed-run work directories include
+   `artifacts/scratch/selfhost-array-inherent-1260ab692362452187281123ec06809a`
+   and `artifacts/scratch/selfhost-array-inherent-00e2b6ba98cc469dab2792ba476d4bae`.
+   Preserve their sibling durable `.log`, `.log.stderr`, `.result.json`, and
+   `.launch.json` files before deleting only the verified scratch directories.
+2. Run exactly one new-ID focused array gate for fixture 1759 through
+   `scripts/invoke-detached-selfhost-verification.ps1 -Verification ArrayInherent`.
+   The latest v8 supervisor ended without publishing its required result JSON;
+   its durable log/stderr/launch files make that run invalid, not passed.
+3. Independently repair the pre-existing portable-memory focused defect
+   `binding 'available' has inconsistent ownership across async branch paths in
+   'std.io.async.readMemoryInto'`. Do not rerun broad Incremental verification
+   until its narrow probe passes.
+4. With one stable current managed compiler/input fingerprint, complete the
+   async observability 13-case matrix in one structured run.
+5. Reuse that stable compiler for ZIP semantic/O0 and QUIC 1291/1297 focused
+   actual gates. Only then continue the remaining stdlib/runtime capabilities.
+6. Final accumulated Stage2/Stage3 remains the last promotion step, after all
+   focused defects and source changes are complete.
+
+### Last integrated lightweight verification
+
+- PASS: self-host array contract 11/11; module-qualified receiver 6/6;
+  instance migration 44/44; stdlib instance policy 261/261 with stale 0;
+  QUIC natural Result 18/18; QUIC stream contract 20/20 fixtures; Child
+  termination/tryWait contract 37/37; Child kill contract 24/24; async static
+  contract 14/14; async managed matrix inputs/schema 13/13; project-progress
+  contract; `git diff --check`.
+- No full Stage2/Stage3 was run. No tag was created.
 
 ## LATEST CHECKPOINT — READ THIS FIRST
 

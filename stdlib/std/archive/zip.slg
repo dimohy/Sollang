@@ -270,8 +270,14 @@ failDeflate decoder: mut Decoder, failure: gzip.Error, baseOffset: Int -> Unit {
     }
 }
 
+takeDeflate decoder: mut Decoder -> Option<gzip.RawDeflateDecoder> {
+    decoder.deflate => stored
+    Option<gzip.RawDeflateDecoder>.None => decoder.deflate
+    stored
+}
+
 completeDeflatedPayload decoder: mut Decoder, payloadOffset: Int -> Unit {
-    decoder.deflate -> when {
+    decoder -> takeDeflate -> when {
         None {
             decoder -> fail(errors.Kind.InvalidDeflate, payloadOffset)
             return
@@ -633,7 +639,7 @@ processByte decoder: mut Decoder, byte: UInt8 -> Unit {
         }
         phases.Phase.Payload {
             decoder.method == 8 -> if {
-                decoder.deflate -> when {
+                decoder -> takeDeflate -> when {
                     None {
                         decoder -> fail(errors.Kind.InvalidDeflate, decoder.totalInputBytes)
                         return

@@ -57,10 +57,20 @@ public struct Command {
 }
 
 # Normal process termination is a domain value rather than an unlabelled Int.
-# Signal and forced-termination detail will extend this value in the bounded
-# lifecycle slice; current primitives produce ordinary exit codes.
+# POSIX signal termination uses the separate typed SignalStatus value.
 public struct ExitStatus {
     public code: Int
+}
+
+# POSIX signal termination is a terminal process outcome, not a wait failure.
+# The number is the exact host signal reported by waitpid.
+public struct SignalStatus {
+    public number: Int
+}
+
+public enum TerminationStatus {
+    Exited(ExitStatus)
+    Signaled(SignalStatus)
 }
 
 # Stable domain value for the operating-system identifier assigned at spawn.
@@ -72,9 +82,10 @@ public struct ProcessId {
 }
 
 # A child is an affine operating-system resource. Its private token and cached
-# completion cannot be forged by user code. `tryWait(mut)` preserves a running
-# owner and caches one terminal observation; `kill(mut)` requests forced
-# termination without reaping; `wait(move)` consumes that state.
+# completion cannot be forged by user code. `tryWaitTermination(mut)` preserves
+# a running owner and caches one typed terminal observation; `tryWait(mut)` is
+# its compatibility projection. `kill(mut)` requests forced termination without
+# reaping; `wait(move)` consumes that state.
 # Abandoning a live owner kills and reaps the attached process.
 public struct Child {
     token: UInt64
@@ -185,6 +196,10 @@ impl ExitStatus {
     public succeeded: self -> Bool => self.code == 0
 
     public exitCode: self -> Int => self.code
+}
+
+impl SignalStatus {
+    public signalNumber: self -> Int => self.number
 }
 
 # Runtime bindings for this public process model live in

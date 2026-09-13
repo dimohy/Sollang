@@ -1686,6 +1686,14 @@ from that module, while a bare member name selects only the current module's
 extension. The compiler must reject neither pair as a global duplicate and must
 not choose one through an unrelated lexical fallback.
 
+Concrete array storage types are also valid inherent owners. `impl [UInt8]`
+defines a readonly byte-view receiver without introducing a nominal wrapper;
+matching fixed, growable, and bounded byte arrays borrow that view with no copy
+or allocation. An exact storage owner such as `[UInt8; 32]` is considered before
+the compatible `[UInt8]` view. Array method identity includes the declaring
+module and canonical storage spelling, so imported qualified calls resolve the
+same way as module-qualified primitive methods.
+
 The library layering contract is `std -> sys`. `std` owns portable public APIs,
 domain values, and pure algorithms; `sys` owns only irreducible target and OS
 primitives. `sys` must not import `std`, and a public feature must not remain in
@@ -3327,15 +3335,22 @@ scope exit kills and reaps it before releasing the platform handle or PID.
 without waiting, reaping, closing, clearing, or copying its native token.
 Windows uses `TerminateProcess`; Linux sends `SIGKILL`. Success means that the
 host accepted the termination request, not that terminal state has already been
-observed. `tryWait(mut)` or `wait(move)` remains the single reap authority. A
-terminal state already cached by `tryWait` makes a later `kill` an idempotent
+observed. `tryWaitTermination(mut)` or `wait(move)` remains the single reap
+authority. `tryWaitTermination` returns `Ok(None)` while the process is live,
+`Ok(Some(TerminationStatus.Exited(ExitStatus)))` for ordinary exit, and
+`Ok(Some(TerminationStatus.Signaled(SignalStatus)))` for POSIX signal exit.
+`SignalStatus.signalNumber` preserves the exact host signal; observing it clears
+the native token and caches both the terminal kind and number so repeated polls
+never reap twice. The older `tryWait(mut)` is a compatibility projection over
+that same observation and maps `Signaled` to `Err("signal")`; it does not issue a
+second host poll. A terminal state already cached by either poll makes a later `kill` an idempotent
 success without another host call. An invalid token or rejected request returns
 `Err("kill")` and leaves the owner available for a later wait or lexical cleanup.
 After `wait(move)`, a second use is a compile-time ownership error with guidance
 to retain a returned owner, borrow before moving, or create a new owner.
-`Err("spawn")`, `Err("kill")`, `Err("wait")`,
-and `Err("signal")` distinguish host launch failure, wait failure, and POSIX
-signal termination. The argv owner remains valid and is dropped normally after
+`Err("spawn")`, `Err("kill")`, and `Err("wait")` distinguish host launch and
+process-operation failures. `Err("signal")` remains only on the compatibility
+`tryWait`/`wait` surface; typed nonblocking consumers use `Signaled`. The argv owner remains valid and is dropped normally after
 the runtime call; the `Command` itself is consumed. `statusToFile` has the same
 result contract while directing standard output to an explicit path. The raw
 `run` and `runToFile` intrinsics are compatibility boundaries for the current

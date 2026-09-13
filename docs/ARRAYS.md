@@ -124,6 +124,10 @@ Supported now:
 - `array -> len`, `array -> capacity`, `array -> push(value)`,
   `dictionary -> len`, `dictionary -> capacity`, and
   `dictionary -> put(key, value)` are implemented as receiver-flow operations.
+- A concrete array type may declare ordinary inherent behavior, for example
+  `impl [UInt8] { digest: self -> Digest { ... } }`. Matching fixed, growable,
+  and bounded owners borrow the readonly view without a wrapper, copy, or
+  allocation; an exact storage-owner method takes precedence.
 - `array -> append(value)` consumes the source growable array owner and returns
   the moved owner with the appended value.
 - `container -> updated(keyOrIndex, value)` consumes the source growable array

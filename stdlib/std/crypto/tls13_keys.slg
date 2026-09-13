@@ -40,7 +40,7 @@ public deriveSecret secret: [UInt8], label: Text, transcript: [UInt8] -> [UInt8;
 }
 
 public extractEarlySecret psk: [UInt8] -> [UInt8; 32] {
-    hkdf.extract(zeros(), psk)
+    zeros() -> hkdf.extract(psk)
 }
 
 public deriveExternalBinderKey psk: [UInt8] -> [UInt8; 32] {
@@ -83,11 +83,11 @@ public deriveEarly psk: [UInt8], clientHelloTranscript: [UInt8] -> EarlySecrets 
 public deriveHandshakeWithPskFromHash psk: [UInt8], sharedSecret: [UInt8], helloTranscriptHash: [UInt8] -> HandshakeSecrets {
     psk -> extractEarlySecret => earlySecret
     earlySecret -> deriveSecret("derived", empty()) => derivedEarlySecret
-    hkdf.extract(derivedEarlySecret, sharedSecret) => handshakeSecret
+    derivedEarlySecret -> hkdf.extract(sharedSecret) => handshakeSecret
     handshakeSecret -> deriveSecretFromHash("c hs traffic", helloTranscriptHash) => clientTrafficSecret
     handshakeSecret -> deriveSecretFromHash("s hs traffic", helloTranscriptHash) => serverTrafficSecret
     handshakeSecret -> deriveSecret("derived", empty()) => derivedHandshakeSecret
-    hkdf.extract(derivedHandshakeSecret, zeros()) => mainSecret
+    derivedHandshakeSecret -> hkdf.extract(zeros()) => mainSecret
     HandshakeSecrets {
         handshakeSecret: handshakeSecret
         clientTrafficSecret: clientTrafficSecret

@@ -11,6 +11,7 @@ foreach ($required in @(
     (Join-Path $fixtureRoot 'Sollang.slnx'),
     (Join-Path $fixtureRoot 'stdlib/std/alpha.slg'),
     (Join-Path $fixtureRoot 'stdlib/std/beta.slg'),
+    (Join-Path $fixtureRoot 'stdlib/std/gamma.slg'),
     (Join-Path $fixtureRoot 'main.slg'),
     $probeProject)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
@@ -20,7 +21,8 @@ foreach ($required in @(
 
 & dotnet run --project $probeProject -c Release -- `
     (Join-Path $fixtureRoot 'stdlib/std/alpha.slg') `
-    (Join-Path $fixtureRoot 'stdlib/std/beta.slg')
+    (Join-Path $fixtureRoot 'stdlib/std/beta.slg') `
+    (Join-Path $fixtureRoot 'stdlib/std/gamma.slg')
 if ($LASTEXITCODE -ne 0) {
     throw "module-qualified primitive-method parser probe failed with exit code $LASTEXITCODE"
 }
@@ -33,5 +35,17 @@ if (-not $generator.Contains('QualifyMethodOwner(methodOwner)', [StringCompariso
 if (-not $semantic.Contains('_currentModuleName + "." + inherentName', [StringComparison]::Ordinal)) {
     throw 'current-module bare primitive-method resolution invariant is missing'
 }
+$hasReceiverOwnerCandidates = $semantic.Contains(
+    'var receiverOwners = InherentReceiverOwners(receiverType);',
+    [StringComparison]::Ordinal)
+$hasCanonicalExactOwner = $semantic.Contains(
+    'Name: FormatType(receiverType)',
+    [StringComparison]::Ordinal)
+if (-not $hasReceiverOwnerCandidates -or -not $hasCanonicalExactOwner) {
+    throw 'canonical exact receiver-owner resolution invariant is missing'
+}
+if (-not $generator.Contains("ownerType.StartsWith('[', StringComparison.Ordinal)", [StringComparison]::Ordinal)) {
+    throw 'module-qualified structural array-owner identity invariant is missing'
+}
 
-Write-Host '[module-qualified primitive methods] PASS 3/3 (two parser identities + current-module resolution guard)'
+Write-Host '[module-qualified builtin methods] PASS 6/6 (three parser identities + module qualification + exact receiver identity + structural array identity)'

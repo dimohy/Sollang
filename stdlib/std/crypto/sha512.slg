@@ -84,91 +84,93 @@ smallSigma1 value: UInt64 -> UInt64 {
     xor3(value -> bits.rotateRight64(19), value -> bits.rotateRight64(61), value -> bits.shiftRight64(6))
 }
 
-public digest source: [UInt8] -> [UInt8; 64] {
-    roundConstants() => constants
-    initialState() => hash!
-    UInt64(source -> len) * 8 => bitLength
-    UIntSize(source -> len) + 1 => paddedWithoutLength
-    ((paddedWithoutLength + 16 + 127) / 128) * 128 => paddedLength
-    zeroSize() => blockStart!
-    blockStart! < paddedLength -> while {
-        scheduleZeros() => words!
-        0 => wordIndex!
-        wordIndex! < 16 -> while {
-            zero64() => word!
-            0 => byteIndex!
-            byteIndex! < 8 -> while {
-                blockStart! + UIntSize(wordIndex! * 8 + byteIndex!) => sourceIndex
-                zero64() => byteValue!
-                sourceIndex < UIntSize(source -> len) -> if {
-                    UInt64(source[Int(sourceIndex)]) => byteValue!
-                } else {
-                    sourceIndex == UIntSize(source -> len) -> if {
-                        128 => byteValue!
+impl [UInt8] {
+    public digest: self -> [UInt8; 64] {
+        roundConstants() => constants
+        initialState() => hash!
+        UInt64(self -> len) * 8 => bitLength
+        UIntSize(self -> len) + 1 => paddedWithoutLength
+        ((paddedWithoutLength + 16 + 127) / 128) * 128 => paddedLength
+        zeroSize() => blockStart!
+        blockStart! < paddedLength -> while {
+            scheduleZeros() => words!
+            0 => wordIndex!
+            wordIndex! < 16 -> while {
+                zero64() => word!
+                0 => byteIndex!
+                byteIndex! < 8 -> while {
+                    blockStart! + UIntSize(wordIndex! * 8 + byteIndex!) => sourceIndex
+                    zero64() => byteValue!
+                    sourceIndex < UIntSize(self -> len) -> if {
+                        UInt64(self[Int(sourceIndex)]) => byteValue!
                     } else {
-                        sourceIndex >= paddedLength - 8 -> if {
-                            UInt64(paddedLength - 1 - sourceIndex) * 8 => shift
-                            (bitLength / (shift -> bits.powerOfTwo64)) % 256 => byteValue!
+                        sourceIndex == UIntSize(self -> len) -> if {
+                            128 => byteValue!
+                        } else {
+                            sourceIndex >= paddedLength - 8 -> if {
+                                UInt64(paddedLength - 1 - sourceIndex) * 8 => shift
+                                (bitLength / (shift -> bits.powerOfTwo64)) % 256 => byteValue!
+                            }
                         }
                     }
+                    word! * 256 + byteValue! => word!
+                    byteIndex! + 1 => byteIndex!
                 }
-                word! * 256 + byteValue! => word!
-                byteIndex! + 1 => byteIndex!
+                word! => words![wordIndex!]
+                wordIndex! + 1 => wordIndex!
             }
-            word! => words![wordIndex!]
-            wordIndex! + 1 => wordIndex!
+            16 => scheduleIndex!
+            scheduleIndex! < 80 -> while {
+                smallSigma1(words![scheduleIndex! - 2]) + words![scheduleIndex! - 7] => scheduleTail
+                smallSigma0(words![scheduleIndex! - 15]) + words![scheduleIndex! - 16] => scheduleHead
+                scheduleTail + scheduleHead => words![scheduleIndex!]
+                scheduleIndex! + 1 => scheduleIndex!
+            }
+            hash![0] => a!
+            hash![1] => b!
+            hash![2] => c!
+            hash![3] => d!
+            hash![4] => e!
+            hash![5] => f!
+            hash![6] => g!
+            hash![7] => h!
+            0 => round!
+            round! < 80 -> while {
+                h! + largeSigma1(e!) + choose(e!, f!, g!) + constants[round!] + words![round!] => temporary1
+                largeSigma0(a!) + majority(a!, b!, c!) => temporary2
+                g! => h!
+                f! => g!
+                e! => f!
+                d! + temporary1 => e!
+                c! => d!
+                b! => c!
+                a! => b!
+                temporary1 + temporary2 => a!
+                round! + 1 => round!
+            }
+            hash![0] + a! => hash![0]
+            hash![1] + b! => hash![1]
+            hash![2] + c! => hash![2]
+            hash![3] + d! => hash![3]
+            hash![4] + e! => hash![4]
+            hash![5] + f! => hash![5]
+            hash![6] + g! => hash![6]
+            hash![7] + h! => hash![7]
+            blockStart! + 128 => blockStart!
         }
-        16 => scheduleIndex!
-        scheduleIndex! < 80 -> while {
-            smallSigma1(words![scheduleIndex! - 2]) + words![scheduleIndex! - 7] => scheduleTail
-            smallSigma0(words![scheduleIndex! - 15]) + words![scheduleIndex! - 16] => scheduleHead
-            scheduleTail + scheduleHead => words![scheduleIndex!]
-            scheduleIndex! + 1 => scheduleIndex!
+        digestZeros() => output!
+        0 => outputIndex!
+        0 => hashIndex!
+        hashIndex! < 8 -> while {
+            7 => byteIndex!
+            byteIndex! >= 0 -> while {
+                UInt64(byteIndex! * 8) => shift
+                UInt8(hash![hashIndex!] / (shift -> bits.powerOfTwo64) % 256) => output![outputIndex!]
+                outputIndex! + 1 => outputIndex!
+                byteIndex! - 1 => byteIndex!
+            }
+            hashIndex! + 1 => hashIndex!
         }
-        hash![0] => a!
-        hash![1] => b!
-        hash![2] => c!
-        hash![3] => d!
-        hash![4] => e!
-        hash![5] => f!
-        hash![6] => g!
-        hash![7] => h!
-        0 => round!
-        round! < 80 -> while {
-            h! + largeSigma1(e!) + choose(e!, f!, g!) + constants[round!] + words![round!] => temporary1
-            largeSigma0(a!) + majority(a!, b!, c!) => temporary2
-            g! => h!
-            f! => g!
-            e! => f!
-            d! + temporary1 => e!
-            c! => d!
-            b! => c!
-            a! => b!
-            temporary1 + temporary2 => a!
-            round! + 1 => round!
-        }
-        hash![0] + a! => hash![0]
-        hash![1] + b! => hash![1]
-        hash![2] + c! => hash![2]
-        hash![3] + d! => hash![3]
-        hash![4] + e! => hash![4]
-        hash![5] + f! => hash![5]
-        hash![6] + g! => hash![6]
-        hash![7] + h! => hash![7]
-        blockStart! + 128 => blockStart!
+        output!
     }
-    digestZeros() => output!
-    0 => outputIndex!
-    0 => hashIndex!
-    hashIndex! < 8 -> while {
-        7 => byteIndex!
-        byteIndex! >= 0 -> while {
-            UInt64(byteIndex! * 8) => shift
-            UInt8(hash![hashIndex!] / (shift -> bits.powerOfTwo64) % 256) => output![outputIndex!]
-            outputIndex! + 1 => outputIndex!
-            byteIndex! - 1 => byteIndex!
-        }
-        hashIndex! + 1 => hashIndex!
-    }
-    output!
 }

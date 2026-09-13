@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "ExpressionBatch", "PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ArrayInherent", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "ExpressionBatch", "PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -968,6 +968,7 @@ try {
         "Stage3Linux" { Join-Path $PSScriptRoot "verify-selfhost-stage3-linux.ps1" }
         "BrowserStage2" { Join-Path $PSScriptRoot "build-stage2-browser.ps1" }
         "Incremental" { Join-Path $PSScriptRoot "verify-selfhost-incremental.ps1" }
+        "ArrayInherent" { Join-Path $PSScriptRoot "verify-selfhost-array-inherent-methods.ps1" }
         "C341Focused" { Join-Path $PSScriptRoot "verify-selfhost-direct-owned-field-binding.ps1" }
         "C341FinalSelfhost" { Join-Path $PSScriptRoot "verify-c341-final-selfhost-candidate.ps1" }
         "C394FinalCandidate" { Join-Path $PSScriptRoot "verify-c394-final-candidate.ps1" }

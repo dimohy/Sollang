@@ -89,6 +89,23 @@ function Assert-ApplicationFrameContract([string]$Source) {
     )) { Assert-Contains $pump $expected 'QUIC application-frame pump body' }
 }
 
+function Assert-StreamDirectionContract([string]$Source) {
+    $checks = @(
+        @{ Signature = 'public discoverPeerBidirectional: mut self'; Expected = 'Bidirectional { true }'; Guard = 'isBidirectional -> unless' },
+        @{ Signature = 'public discoverPeerUnidirectional: mut self'; Expected = 'Unidirectional { true }'; Guard = 'isUnidirectional -> unless' },
+        @{ Signature = 'public observeInboundBidirectional: mut self'; Expected = 'Bidirectional { true }'; Guard = 'isBidirectional -> unless' },
+        @{ Signature = 'public observeInboundUnidirectional: mut self'; Expected = 'Unidirectional { true }'; Guard = 'isUnidirectional -> unless' }
+    )
+    foreach ($check in $checks) {
+        $body = Get-SlgFunctionBody $Source $check.Signature
+        Assert-Contains $body $check.Expected "$($check.Signature) direction value"
+        Assert-Contains $body $check.Guard "$($check.Signature) failure-only guard"
+        if ($body -match '(?s)\b(?:Bidirectional|Unidirectional)\s*\{\s*\}') {
+            throw "$($check.Signature) retains an empty direction arm"
+        }
+    }
+}
+
 function Assert-Rejects([scriptblock]$Check, [string]$Label) {
     try { & $Check; throw "negative control accepted: $Label" }
     catch {
@@ -98,6 +115,7 @@ function Assert-Rejects([scriptblock]$Check, [string]$Label) {
 
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 $quic = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/quic.slg'))
+$streamState = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/quic/stream_state.slg'))
 $negotiation = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/quic/version_negotiation.slg'))
 $reassembly = [IO.File]::ReadAllText((Join-Path $root 'stdlib/std/net/quic/reassembly.slg'))
 $negotiationFixture = [IO.File]::ReadAllText((Join-Path $root 'examples/regression/915-quic-version-negotiation.slg'))
@@ -107,6 +125,7 @@ Assert-NegotiationContract $negotiation $negotiationFixture
 Assert-HandshakeCandidateContract $quic
 Assert-ReassemblyContract $reassembly $reassemblyFixture
 Assert-ApplicationFrameContract $quic
+Assert-StreamDirectionContract $streamState
 
 $negotiationDecoy = $negotiation.Replace(
     'Result<Unit, errors.Error>.Err(error(errors.versionNegotiationError())) -> return',
@@ -119,11 +138,16 @@ Assert-Rejects { Assert-HandshakeCandidateContract $handshakeDecoy } 'handshakeC
 $reassemblyDecoy = $reassembly.Replace('Option<frames.Stream>.None', 'Option<frames.Stream>.Some(value!)') + "`n# Option<frames.Stream>.None"
 Assert-Rejects { Assert-ReassemblyContract $reassemblyDecoy $reassemblyFixture } 'takeContiguous body decoy'
 
+$streamDirectionDecoy = $streamState.Replace('Bidirectional { true }', 'Bidirectional {}') + "`n# Bidirectional { true }"
+Assert-Rejects { Assert-StreamDirectionContract $streamDirectionDecoy } 'stream direction empty-arm decoy'
+
 $emptyArmFiles = @(
     'stdlib/std/net/quic.slg',
+    'stdlib/std/net/quic/stream_state.slg',
     'stdlib/std/net/quic/version_negotiation.slg',
     'stdlib/std/net/quic/reassembly.slg',
     'stdlib/std/net/quic/tls_client_state.slg',
+    'examples/regression/1291-quic-unidirectional-stream-registry.slg',
     'stdlib/std/net/http/client.slg',
     'stdlib/std/net/http/server.slg',
     'stdlib/std/archive/zip.slg'

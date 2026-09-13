@@ -24,29 +24,69 @@ impl Child {
     # aggregate; it is not an operating-system call or wrapper frame.
     public id: self -> ProcessId = intrinsic
 
-    # Observes completion without blocking. A terminal result is cached so
-    # repeated polls and a later consuming wait never reap or close twice.
-    public tryWait: mut self -> Result<Option<ExitStatus>, Text> uses Process {
+    # Observes completion without blocking and preserves the exact terminal
+    # domain. A signal is successful observation rather than a wait failure.
+    public tryWaitTermination: mut self -> Result<Option<TerminationStatus>, Text> uses Process {
         self.completionState -> when {
-            == 1 { Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode })) }
-            == 2 { Result<Option<ExitStatus>, Text>.Err("signal") }
+            == 1 {
+                TerminationStatus.Exited(ExitStatus { code: self.exitCode })
+                    -> Option<TerminationStatus>.Some
+                    -> Result<Option<TerminationStatus>, Text>.Ok
+            }
+            == 2 {
+                TerminationStatus.Signaled(SignalStatus { number: self.exitCode })
+                    -> Option<TerminationStatus>.Some
+                    -> Result<Option<TerminationStatus>, Text>.Ok
+            }
             else {
                 self.token -> pollChild => polled
                 polled.state -> when {
-                    == 2 { Result<Option<ExitStatus>, Text>.Err("wait") }
-                    == 0 { Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.None) }
+                    == 2 { Result<Option<TerminationStatus>, Text>.Err("wait") }
+                    == 0 { Result<Option<TerminationStatus>, Text>.Ok(Option<TerminationStatus>.None) }
                     == 3 {
                         0 => self.token
+                        polled.exitCode => self.exitCode
                         2 => self.completionState
-                        Result<Option<ExitStatus>, Text>.Err("signal")
+                        TerminationStatus.Signaled(SignalStatus { number: self.exitCode })
+                            -> Option<TerminationStatus>.Some
+                            -> Result<Option<TerminationStatus>, Text>.Ok
                     }
                     == 1 {
                         0 => self.token
                         polled.exitCode => self.exitCode
                         1 => self.completionState
-                        Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(ExitStatus { code: self.exitCode }))
+                        TerminationStatus.Exited(ExitStatus { code: self.exitCode })
+                            -> Option<TerminationStatus>.Some
+                            -> Result<Option<TerminationStatus>, Text>.Ok
                     }
-                    else { Result<Option<ExitStatus>, Text>.Err("wait") }
+                    else { Result<Option<TerminationStatus>, Text>.Err("wait") }
+                }
+            }
+        }
+    }
+
+    # Compatibility projection for callers that have not yet adopted the typed
+    # terminal outcome. It delegates to the same single poll/reap authority.
+    public tryWait: mut self -> Result<Option<ExitStatus>, Text> uses Process {
+        self -> tryWaitTermination -> when {
+            Result<Option<TerminationStatus>, Text>.Err(error) {
+                Result<Option<ExitStatus>, Text>.Err(error)
+            }
+            Result<Option<TerminationStatus>, Text>.Ok(status) {
+                status -> when {
+                    Option<TerminationStatus>.None {
+                        Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.None)
+                    }
+                    Option<TerminationStatus>.Some(termination) {
+                        termination -> when {
+                            TerminationStatus.Exited(exit) {
+                                Result<Option<ExitStatus>, Text>.Ok(Option<ExitStatus>.Some(exit))
+                            }
+                            TerminationStatus.Signaled(signal) {
+                                Result<Option<ExitStatus>, Text>.Err("signal")
+                            }
+                        }
+                    }
                 }
             }
         }

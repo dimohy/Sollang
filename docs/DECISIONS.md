@@ -21737,3 +21737,25 @@ signature diagnostics passing under both self-host generations. Generic
 transactional exact reads, bounded replay/read-all/copy adapters, file/socket
 implementations, and async buffering remain pending; the portable memory I/O
 backlog therefore remains in progress.
+
+## D644 — Concrete arrays may own zero-cost inherent methods
+
+Status: accepted; managed focused implementation in progress
+Date: 2026-09-13
+
+A raw byte view is already the natural receiver for hashing, key derivation,
+encoding, and validation. Requiring a marker record merely to place behavior on
+that value would add an abstraction and potential ownership tax, while keeping
+the operation global obscures the instance-first flow. Sollang therefore permits
+concrete array storage spellings in an inherent impl header, including
+`impl [UInt8]` and exact fixed or growable forms.
+
+Receiver selection first considers the exact storage type and then a compatible
+readonly slice of the same element type. The latter is a borrow conversion only:
+it creates no wrapper, copy, allocation, branch, or indirect dispatch. The
+declaring module and canonical array spelling remain part of method identity so
+unrelated modules may define the same member name and imported qualified calls
+remain exact. A wrong element type or incompatible ownership is rejected before
+LLVM. Managed parsing, semantics, ownership, direct LLVM shape, and execution
+must pass focused positive and negative fixtures before the syntax is applied to
+self-host sources; final Stage2/Stage3 remains the cumulative promotion gate.

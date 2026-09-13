@@ -76,7 +76,7 @@ function owner's `-1` parent as a function index.
 | Primary flow and additional inputs | `value -> operation(other)` |
 | Zero-input declaration and call | `answer: -> Int => 42`; `answer()` |
 | Function | `square value: Int -> Int => value * value` |
-| Inherent method | `impl Point { value: self -> Int => self.x }` |
+| Inherent method | `impl Point { value: self -> Int => self.x }`; `impl [UInt8] { digest: self -> Digest { ... } }` |
 | Type parameters and constraint | `read<T> value: T -> Int where T: Measure { ... }` |
 | Generic inherent method | `identity<T>: self, value: T -> T => value` inside `impl` |
 | Branching | `value -> when { ... }`; `condition -> if { ... }` |
@@ -577,6 +577,14 @@ Instance syntax must not impose an abstraction tax. Keep receiver lowering
 direct, caller-owned buffers visible, and hot paths allocation-free where the
 contract permits it. Measure before replacing a proven fast path.
 
+A concrete array storage type may own inherent behavior directly, including a
+readonly view such as `impl [UInt8]`. Fixed, growable, and bounded owners may
+borrow that view when their element type matches; exact storage-owner methods
+win before the readonly-view candidate. Keep the declaring module in the
+method identity, so equal method names in unrelated modules remain distinct.
+This is direct static dispatch and must not create a wrapper, copy, or
+allocation.
+
 ## 10. Keep storage and cost explicit
 
 Choose the collection form that states the intended storage:
@@ -1076,6 +1084,13 @@ For every new module, write down before implementation:
 Do not expose an easy one-shot API by keeping a second parser or protocol engine
 beside the streaming implementation. Convenience should route through the same
 bounded instance or a measured shared core.
+
+For nonblocking child observation, call `child! -> tryWaitTermination` when the
+termination domain matters. Treat `Exited(ExitStatus)` and
+`Signaled(SignalStatus)` as terminal values and reserve `Err` for a failed host
+poll. The older `tryWait` spelling may project a signal to `Err("signal")` for
+compatibility, but it must delegate to the same single poll/reap authority and
+must not discard an exact signal number before typed callers can observe it.
 
 For a reusable async I/O owner, validate every capacity relation before the
 first effect, move caller storage into one affine operation value, keep native

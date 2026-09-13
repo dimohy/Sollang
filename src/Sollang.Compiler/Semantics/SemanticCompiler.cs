@@ -13853,24 +13853,19 @@ internal sealed partial class SemanticCompiler
         out BoundFunction function)
     {
         function = null!;
-        var typeName = _types.IsStruct(receiverType)
-            ? _types.GetStruct(receiverType).Name
-            : _types.IsEnum(receiverType)
-                ? _types.GetEnum(receiverType).Name
-                : null;
-        if (typeName is null)
-        {
-            return false;
-        }
+        var receiverOwners = InherentReceiverOwners(receiverType);
         if (methodName.Contains('.', StringComparison.Ordinal))
         {
             var separator = methodName.LastIndexOf('.');
             var traitName = methodName[..separator];
             var memberName = methodName[(separator + 1)..];
-            if (functions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
-                && function.InputType == receiverType)
+            foreach (var owner in receiverOwners)
             {
-                return true;
+                if (functions.TryGetValue(traitName + "." + owner.Name + "." + memberName, out function!)
+                    && function.InputType == owner.Type)
+                {
+                    return true;
+                }
             }
 
             // Open-import resolution can canonicalize an unqualified flow
@@ -13880,28 +13875,31 @@ internal sealed partial class SemanticCompiler
             methodName = memberName;
         }
 
-        var inherentName = typeName + "." + methodName;
-        if (functions.TryGetValue(inherentName, out function!) && function.InputType == receiverType)
+        foreach (var owner in receiverOwners)
         {
-            return true;
-        }
-        if (_currentModuleName.Length > 0
-            && functions.TryGetValue(_currentModuleName + "." + inherentName, out function!)
-            && function.InputType == receiverType)
-        {
-            return true;
+            var inherentName = owner.Name + "." + methodName;
+            if (functions.TryGetValue(inherentName, out function!) && function.InputType == owner.Type)
+            {
+                return true;
+            }
+            if (_currentModuleName.Length > 0
+                && functions.TryGetValue(_currentModuleName + "." + inherentName, out function!)
+                && function.InputType == owner.Type)
+            {
+                return true;
+            }
         }
 
         var candidates = functions.Values
             .Where(candidate => candidate.TraitName is not null
-                && candidate.InputType == receiverType
+                && receiverOwners.Any(owner => candidate.InputType == owner.Type)
                 && candidate.Name.EndsWith("." + methodName, StringComparison.Ordinal))
             .Distinct()
             .ToArray();
         if (candidates.Length > 1)
         {
             throw new SollangException(
-                $"ambiguous trait member '{typeName}.{methodName}'; use 'value -> Trait.{methodName}'");
+                $"ambiguous trait member '{FormatType(receiverType)}.{methodName}'; use 'value -> Trait.{methodName}'");
         }
         if (candidates.Length == 1)
         {
@@ -13910,6 +13908,21 @@ internal sealed partial class SemanticCompiler
         }
 
         return false;
+    }
+
+    private (BoundType Type, string Name)[] InherentReceiverOwners(BoundType receiverType)
+    {
+        var exact = (Type: receiverType, Name: FormatType(receiverType));
+        if (_types.IsSlice(receiverType))
+        {
+            return [exact];
+        }
+        if (TryGetContextualArrayElementType(receiverType, out var elementType))
+        {
+            var sliceType = _types.GetOrAddSlice(elementType);
+            return [exact, (sliceType, FormatType(sliceType))];
+        }
+        return [exact];
     }
 
     private static bool TryFindTraitImplementation(

@@ -78,7 +78,7 @@ foreach ($authority in $authorities.Keys) {
     if ($build.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($build.Stderr)) { throw "$authority Linux build failed: $($build.Stderr)" }
     $run = Invoke-VerificationProcessCapture -FilePath 'wsl.exe' -ArgumentList @('-d', 'Ubuntu', '--', $executableWsl) -Description "$authority Linux poll run" -TimeoutMilliseconds 20000
     [IO.File]::WriteAllText((Join-Path $output "$authority.run.log"), $run.Stdout + $run.Stderr)
-    if ($run.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($run.Stderr) -or $run.Stdout.Trim() -cne 'process tryWait linux runtime: 8/8') {
+    if ($run.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($run.Stderr) -or $run.Stdout.Trim() -cne 'process tryWait linux runtime: 9/9') {
         throw "$authority Linux execution failed: $($run.Stdout)$($run.Stderr)"
     }
     $results += [ordered]@{
@@ -87,8 +87,8 @@ foreach ($authority in $authorities.Keys) {
         sourceSha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
         llvmSha256 = (Get-FileHash -LiteralPath $llvmPath -Algorithm SHA256).Hash
         executableSha256 = (Get-FileHash -LiteralPath $executablePath -Algorithm SHA256).Hash
-        passed = 8
-        total = 8
+        passed = 9
+        total = 9
     }
 }
 
@@ -99,4 +99,4 @@ foreach ($authority in $authorities.Keys) {
     harnessSha256 = (Get-FileHash -LiteralPath $harness -Algorithm SHA256).Hash
     authorities = $results
 } | ConvertTo-Json -Depth 5) + "`n")))
-Write-Host "[process tryWait Linux runtime] PASS 16/16; $output/result.json"
+Write-Host "[process tryWait Linux runtime] PASS 18/18; $output/result.json"
