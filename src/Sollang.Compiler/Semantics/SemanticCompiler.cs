@@ -13885,6 +13885,12 @@ internal sealed partial class SemanticCompiler
         {
             return true;
         }
+        if (_currentModuleName.Length > 0
+            && functions.TryGetValue(_currentModuleName + "." + inherentName, out function!)
+            && function.InputType == receiverType)
+        {
+            return true;
+        }
 
         var candidates = functions.Values
             .Where(candidate => candidate.TraitName is not null

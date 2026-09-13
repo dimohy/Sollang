@@ -73,6 +73,29 @@ function Assert-Contract([string]$Bits, [string]$Recovery, [string]$Fixture, [st
         '-> handshake.encode(', '-> handshake.encodeExtension(', '-> auth.encodeCertificateVerify(',
         '-> streams.validatePeerOpened(', '-> packet.encodeInitialHeader(', '-> encodeHandshakeHeader(', '-> handshakeEngine.encode('
     )) { Assert-Contains $AllSources $evidence "second scalar caller evidence $evidence" }
+
+    $frame = $SecondSources['frame']
+    $protection = $SecondSources['protection']
+    $initial = $SecondSources['initial_engine']
+    Assert-Contains $frame 'impl Value {' 'third slice frame Value instance surface'
+    Assert-Contains $frame 'public encodeValue: move self' 'third slice consuming frame encoder'
+    Assert-Contains $frame 'value -> encodeValue? => encoded' 'third slice internal frame caller'
+    Assert-Contains $protection 'impl PacketKey {' 'third slice PacketKey instance surface'
+    Assert-Contains $protection 'public seal: self' 'third slice PacketKey seal method'
+    Assert-Contains $protection 'public open: self' 'third slice PacketKey open method'
+    Assert-Contains $initial 'impl AcceptedClientInitial {' 'third slice accepted Initial instance surface'
+    Assert-Contains $initial 'public encodeServerInitial: self' 'third slice accepted Initial encoder'
+    if ($frame -match '(?m)^public encodeValue frame:') { throw 'third slice frame global wrapper remains' }
+    if ($initial -match '(?m)^public encodeServerInitial accepted:') { throw 'third slice Initial global wrapper remains' }
+    if ($protection -match '(?m)^public seal packetKey:') { throw 'third slice PacketKey seal global wrapper remains' }
+    if ($protection -match '(?m)^public open packetKey:') { throw 'third slice PacketKey open global wrapper remains' }
+    foreach ($evidence in @(
+        '-> frames.encodeValue',
+        '-> initial.encodeServerInitial(',
+        'protector.packet -> seal(',
+        'protector.packet -> open(')) {
+        Assert-Contains $AllSources $evidence "third slice caller evidence $evidence"
+    }
 }
 
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
@@ -83,7 +106,7 @@ $bits = [IO.File]::ReadAllText($bitsPath)
 $recovery = [IO.File]::ReadAllText($recoveryPath)
 $fixture = [IO.File]::ReadAllText($fixturePath)
 $secondSources = @{}
-foreach ($module in @('packet_number', 'varint', 'version_negotiation', 'transport_parameters', 'tls_handshake', 'tls_auth', 'stream_state', 'packet', 'handshake_engine')) {
+foreach ($module in @('packet_number', 'varint', 'version_negotiation', 'transport_parameters', 'tls_handshake', 'tls_auth', 'stream_state', 'packet', 'handshake_engine', 'frame', 'protection', 'initial_engine')) {
     $secondSources[$module] = [IO.File]::ReadAllText((Join-Path $root "stdlib/std/net/quic/$module.slg"))
 }
 $sourceFiles = @(
@@ -97,4 +120,4 @@ Assert-Rejected { Assert-Contract ($bits -replace 'public xor: self', 'public xo
 Assert-Rejected { Assert-Contract $bits $recovery ($fixture -replace '-> bits.not64', '-> bits.not') $allSources $secondSources } 'fixture call decoy'
 Assert-Rejected { Assert-Contract $bits $recovery $fixture ($allSources + "`nbits.xor(left, right)") $secondSources } 'direct global-form caller decoy'
 
-Write-Host '[scalar instance migration contract] PASS 33/33 (30 methods + 3 mutation controls)'
+Write-Host '[instance migration contract] PASS 37/37 (34 methods + 3 mutation controls)'

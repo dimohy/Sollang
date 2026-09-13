@@ -40,22 +40,20 @@ $expectedInputs=[ordered]@{
     contractSchema=(Join-Path $root 'scripts/contracts/zip-deflate-method8.schema.json')
     resultSchema=(Join-Path $root 'scripts/contracts/zip-deflate-method8-result.schema.json')
     resultVerifier=(Join-Path $root 'scripts/verify-zip-deflate-method8-result.ps1')
+    contractVerifier=(Join-Path $root 'scripts/verify-zip-deflate-method8-contract.ps1')
     fixture=(Join-Path $root 'examples/regression/1756-zip-deflate-method8.slg')
-    expected=(Join-Path $root 'examples/regression/expected/1756-zip-deflate-method8.stdout.txt')
-    oracle=(Join-Path $root 'scripts/probes/zip-deflate-method8/verify_python_oracle.py')
     formatter=(Join-Path $root 'scripts/format-authoritative-slg.ps1')
-    closure=(Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1')
-    browserRunner=(Join-Path $root 'scripts/verify-browser-program.mjs')
-    llvmAs=(Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe')
 }
+if($record.mode-cne'semantic-preflight'){$expectedInputs.expected=Join-Path $root 'examples/regression/expected/1756-zip-deflate-method8.stdout.txt';$expectedInputs.oracle=Join-Path $root 'scripts/probes/zip-deflate-method8/verify_python_oracle.py';$expectedInputs.closure=Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1';$expectedInputs.browserRunner=Join-Path $root 'scripts/verify-browser-program.mjs';$expectedInputs.llvmAs=Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe'}
 foreach($id in @('affine-writer-reuse','affine-decoder-reuse')){$expectedInputs["negative:$id"]=Join-Path $root "scripts/probes/zip-deflate-method8/$id.slg";$expectedInputs["negativeExpected:$id"]=Join-Path $root "scripts/probes/zip-deflate-method8/$id.stderr.contains.txt"}
 foreach($source in @(Get-ChildItem -LiteralPath (Join-Path $root 'stdlib') -Recurse -File -Filter '*.slg'|Sort-Object FullName)){$relative=[IO.Path]::GetRelativePath($root,$source.FullName).Replace('\','/');$expectedInputs["stdlib:$relative"]=$source.FullName}
 $observedInputNames=@($record.inputs.start.PSObject.Properties.Name|Sort-Object);$expectedInputNames=@($expectedInputs.Keys|Sort-Object);if(($observedInputNames-join"`n")-cne($expectedInputNames-join"`n")){throw 'input key topology mismatch'}
 foreach($entry in $expectedInputs.GetEnumerator()){if(-not(Test-Path -LiteralPath $entry.Value -PathType Leaf)-or(Hash $entry.Value)-cne$record.inputs.start.($entry.Key)){throw "current input identity mismatch: $($entry.Key)"}}
 foreach($item in $record.processAudit.invocations){Verify-Invocation $item}
-$invocationRoots=@($record.processAudit.invocations.processId);if(-not(Equal-Set $record.processAudit.rootProcessIds $invocationRoots)){throw 'root process audit mismatch'}
-$invocationDescendants=@($record.processAudit.invocations|ForEach-Object{$_.descendantProcessIds});if(-not(Equal-Set $record.processAudit.descendantProcessIds $invocationDescendants)){throw 'descendant process audit mismatch'}
-$invocationOrphans=@($record.processAudit.invocations|ForEach-Object{$_.orphanProcessIds});if(-not(Equal-Set $record.processAudit.orphanProcessIds $invocationOrphans)){throw 'orphan process audit mismatch'}
+$invocations=@($record.processAudit.invocations)
+$invocationRoots=@($invocations|ForEach-Object{$_.processId});if(-not(Equal-Set $record.processAudit.rootProcessIds $invocationRoots)){throw 'root process audit mismatch'}
+$invocationDescendants=@($invocations|ForEach-Object{$_.descendantProcessIds});if(-not(Equal-Set $record.processAudit.descendantProcessIds $invocationDescendants)){throw 'descendant process audit mismatch'}
+$invocationOrphans=@($invocations|ForEach-Object{$_.orphanProcessIds});if(-not(Equal-Set $record.processAudit.orphanProcessIds $invocationOrphans)){throw 'orphan process audit mismatch'}
 
 if($record.status-ceq'passed'){
     $expectedInvocationIds=[Collections.Generic.List[string]]::new()
@@ -69,6 +67,10 @@ if($record.status-ceq'passed'){
     foreach($platformName in @('windows','linux')){foreach($check in $record.$platformName.checks){$compile=Invocation "1756-$platformName-$($check.optimization)-compile";$compileText=[IO.File]::ReadAllText((Join-Path $root $compile.stdoutPath));if($compileText-match'(?im)(?:^|\r?\n)\s*(?:warning|note)\b'){throw "compiler diagnostic contract mismatch: $platformName/$($check.optimization)"};$runtime=Invocation "1756-$platformName-$($check.optimization)-runtime";if($check.stdoutSha256-cne$expectedHash-or$check.stdoutBytes-ne$expectedBytes-or$runtime.stdoutSha256-cne$expectedHash-or$runtime.stdoutBytes-ne$expectedBytes){throw "native exact output mismatch: $platformName/$($check.optimization)"};$artifact=Join-Path (Split-Path -Parent $result) "1756-$platformName-$($check.optimization)$(if($platformName-ceq'windows'){'.exe'}else{'.linux'})";$stem=[IO.Path]::GetFileNameWithoutExtension($artifact);$ll=Join-Path (Split-Path -Parent $result) "$stem.slg-tmp/$stem.ll";$bc=Join-Path (Split-Path -Parent $result) "$stem.bc";if((Hash $artifact)-cne$check.artifactSha256-or(Hash $ll)-cne$check.llvmSha256-or(Hash $bc)-cne$check.bitcodeSha256){throw "native artifact identity mismatch: $platformName/$($check.optimization)"}}}
     $browser=Invocation '1756-browser-node-exact';if($browser.stdoutSha256-cne$record.browser.stdoutSha256-or$browser.stdoutBytes-ne$record.browser.stdoutBytes){throw 'browser runtime evidence mismatch'}
     $python=Invocation '1756-python-zipfile-oracle';if($python.stdoutSha256-cne$record.python.stdoutSha256-or$python.stdoutBytes-ne$record.python.stdoutBytes){throw 'Python oracle evidence mismatch'}
+}elseif($record.status-ceq'validated-semantic-negatives'){
+    $expectedInvocationIds=@('format-1756-zip-deflate-method8','format-affine-writer-reuse','format-affine-decoder-reuse','negative-affine-writer-reuse','negative-affine-decoder-reuse')
+    $actualInvocationIds=@($record.processAudit.invocations.id);if($actualInvocationIds.Count-ne$expectedInvocationIds.Count-or-not(Equal-Set $actualInvocationIds $expectedInvocationIds)){throw 'semantic preflight invocation topology mismatch'}
+    foreach($id in @('affine-writer-reuse','affine-decoder-reuse')){$item=Invocation "negative-$id";if($item.exitCode-eq0-or$item.orphanProcessIds.Count-ne0){throw "semantic preflight process mismatch: $id"};$diagnosticPath=Join-Path $root "scripts/probes/zip-deflate-method8/$id.stderr.contains.txt";$diagnostic=[IO.File]::ReadAllText((Join-Path $root $item.stdoutPath))+[IO.File]::ReadAllText((Join-Path $root $item.stderrPath));if(-not$diagnostic.Contains([IO.File]::ReadAllText($diagnosticPath).Trim(),[StringComparison]::Ordinal)-or(Test-Path -LiteralPath (Join-Path (Split-Path -Parent $result) "$id.exe"))){throw "semantic preflight evidence mismatch: $id"}}
 }elseif($record.status-ceq'validated-inputs'-and$record.processAudit.invocations.Count-ne 0){
     throw 'validate-inputs result unexpectedly contains process invocations'
 }

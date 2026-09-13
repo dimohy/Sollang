@@ -58,17 +58,17 @@ roundtrip: -> Result<Bool, errors.Error> uses Network {
     net.loopback(0) -> unified -> bindQuic? => client
 
     hello.encodeClientHello(
-        randomBytes(),
-        [115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114],
-        [104, 51],
-        clientKeyShare(),
-        [1])? => clientHello
+    randomBytes(),
+    [115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114],
+    [104, 51],
+    clientKeyShare(),
+    [1])? => clientHello
     initial.encodeClientInitial(
-        keys.version2(),
-        originalDestinationConnectionId(),
-        clientSourceConnectionId(),
-        0,
-        clientHello)? => clientPacket
+    keys.version2(),
+    originalDestinationConnectionId(),
+    clientSourceConnectionId(),
+    0,
+    clientHello)? => clientPacket
     net.loopback(serverPort) -> unified => serverEndpoint
     sendQuic(client, serverEndpoint, clientPacket)? => clientSent
     requireFullDatagram(clientSent, UIntSize(clientPacket -> len))?
@@ -76,23 +76,23 @@ roundtrip: -> Result<Bool, errors.Error> uses Network {
     receiveQuic(server, 2_048)? => request
     initial.acceptClientInitial(request.bytes, 0)? => accepted
     hello.encodeServerHello(randomBytes(), serverKeyShare())? => serverHello
-    initial.encodeServerInitial(accepted, serverSourceConnectionId(), 0, serverHello)? => serverPacket
+    accepted -> initial.encodeServerInitial(serverSourceConnectionId(), 0, serverHello)? => serverPacket
     sendQuic(server, request.source, serverPacket)? => serverSent
     requireFullDatagram(serverSent, UIntSize(serverPacket -> len))?
 
     receiveQuic(client, 2_048)? => response
     initial.openServerInitial(
-        response.bytes,
-        keys.version2(),
-        originalDestinationConnectionId(),
-        clientSourceConnectionId(),
-        0)? => opened
+    response.bytes,
+    keys.version2(),
+    originalDestinationConnectionId(),
+    clientSourceConnectionId(),
+    0)? => opened
     Result<Bool, errors.Error>.Ok(
-        (request.bytes -> len) >= 1_200
-            and accepted.packetNumber == 0
-            and opened.packetNumber == 0
-            and opened.serverSourceConnectionId[0] == 33
-            and opened.serverSourceConnectionId[7] == 40)
+    (request.bytes -> len) >= 1_200
+        and accepted.packetNumber == 0
+        and opened.packetNumber == 0
+        and opened.serverSourceConnectionId[0] == 33
+        and opened.serverSourceConnectionId[7] == 40)
 }
 
 main {

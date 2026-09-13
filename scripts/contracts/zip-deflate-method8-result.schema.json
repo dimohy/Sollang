@@ -3,11 +3,12 @@
   "$id": "zip-deflate-method8-result.schema.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "capabilityId", "status", "planned", "completed", "compiler", "inputs", "windows", "linux", "browser", "python", "semanticNegatives", "processAudit", "failureIds", "startedUtc", "finishedUtc"],
+  "required": ["schemaVersion", "capabilityId", "mode", "status", "planned", "completed", "compiler", "inputs", "windows", "linux", "browser", "python", "semanticNegatives", "processAudit", "failureIds", "startedUtc", "finishedUtc"],
   "properties": {
     "schemaVersion": { "const": 1 },
     "capabilityId": { "const": "zip-deflate-method8" },
-    "status": { "enum": ["validated-inputs", "passed", "failed"] },
+    "mode": { "enum": ["input-validation", "semantic-preflight", "full"] },
+    "status": { "enum": ["validated-inputs", "validated-semantic-negatives", "passed", "failed"] },
     "planned": { "const": 6 },
     "completed": { "type": "integer", "minimum": 0, "maximum": 6 },
     "compiler": {
@@ -88,6 +89,18 @@
   },
   "allOf": [
     {
+      "if": { "properties": { "mode": { "const": "input-validation" } } },
+      "then": { "properties": { "status": { "enum": ["validated-inputs", "failed"] } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "semantic-preflight" } } },
+      "then": { "properties": { "status": { "enum": ["validated-semantic-negatives", "failed"] } } }
+    },
+    {
+      "if": { "properties": { "mode": { "const": "full" } } },
+      "then": { "properties": { "status": { "enum": ["passed", "failed"] } } }
+    },
+    {
       "if": { "properties": { "status": { "const": "validated-inputs" } } },
       "then": {
         "properties": {
@@ -98,6 +111,21 @@
           "linux": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
           "browser": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
           "python": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "validated-semantic-negatives" } } },
+      "then": {
+        "properties": {
+          "completed": { "const": 0 },
+          "failureIds": { "maxItems": 0 },
+          "compiler": { "properties": { "sha256Start": { "$ref": "#/$defs/sha256" }, "sha256End": { "$ref": "#/$defs/sha256" } } },
+          "windows": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
+          "linux": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
+          "browser": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
+          "python": { "properties": { "status": { "const": "not-run" }, "completed": { "const": 0 } } },
+          "semanticNegatives": { "properties": { "completed": { "const": 2 }, "failureIds": { "maxItems": 0 } } }
         }
       }
     },

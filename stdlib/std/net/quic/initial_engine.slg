@@ -149,19 +149,21 @@ public acceptClientInitial datagram: [UInt8], expectedPacketNumber: UInt64 -> Re
     }
 }
 
-public encodeServerInitial accepted: ref AcceptedClientInitial, serverSourceConnectionId: [UInt8], packetNumber: UInt64, serverHello: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    hello.decodeServerHello(serverHello)? => decodedHello
-    keys.deriveInitial(accepted.version, accepted.originalDestinationConnectionId) => initialKeys
-    packet.prepare(initialKeys.serverKey, initialKeys.serverIv, initialKeys.serverHeaderProtection) => protector
-    serverHello -> cryptoPayload? => plaintext
-    protector -> sealInitial(
-    accepted.version,
-    accepted.clientSourceConnectionId,
-    serverSourceConnectionId,
-    [],
-    packetNumber,
-    4,
-    plaintext)
+impl AcceptedClientInitial {
+    public encodeServerInitial: self, serverSourceConnectionId: [UInt8], packetNumber: UInt64, serverHello: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+        hello.decodeServerHello(serverHello)? => decodedHello
+        keys.deriveInitial(self.version, self.originalDestinationConnectionId) => initialKeys
+        packet.prepare(initialKeys.serverKey, initialKeys.serverIv, initialKeys.serverHeaderProtection) => protector
+        serverHello -> cryptoPayload? => plaintext
+        protector -> sealInitial(
+        self.version,
+        self.clientSourceConnectionId,
+        serverSourceConnectionId,
+        [],
+        packetNumber,
+        4,
+        plaintext)
+    }
 }
 
 public openServerInitial datagram: [UInt8], version: UInt32, originalDestinationConnectionId: [UInt8], clientSourceConnectionId: [UInt8], expectedPacketNumber: UInt64 -> Result<OpenedServerInitial, errors.Error> {

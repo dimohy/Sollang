@@ -1679,6 +1679,12 @@ varint and typed framing encoders, reserved-version classification, transport
 parameter emission, stream-identity validation, and Initial/Handshake header
 construction as qualified instance methods. These migrations retain their
 existing result, ownership, and wire-byte contracts without adapter functions.
+An inherent method on a built-in receiver retains its declaring module in its
+semantic identity. Thus separate modules may define the same member name on
+`UInt64`; a qualified flow such as `value -> varint.encode` selects the method
+from that module, while a bare member name selects only the current module's
+extension. The compiler must reject neither pair as a global duplicate and must
+not choose one through an unrelated lexical fallback.
 
 The library layering contract is `std -> sys`. `std` owns portable public APIs,
 domain values, and pure algorithms; `sys` owns only irreducible target and OS

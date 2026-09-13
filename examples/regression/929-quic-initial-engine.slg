@@ -12,35 +12,35 @@ serverSourceConnectionId: -> [UInt8] => [33, 34, 35, 36, 37, 38, 39, 40]
 
 check: -> Result<Bool, errors.Error> {
     hello.encodeClientHello(
-        randomBytes(),
-        [115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114],
-        [104, 51],
-        clientKeyShare(),
-        [1])? => clientHello
+    randomBytes(),
+    [115, 111, 108, 108, 97, 110, 103, 45, 112, 101, 101, 114],
+    [104, 51],
+    clientKeyShare(),
+    [1])? => clientHello
     initial.encodeClientInitial(
-        keys.version2(),
-        originalDestinationConnectionId(),
-        clientSourceConnectionId(),
-        0,
-        clientHello)? => clientPacket
+    keys.version2(),
+    originalDestinationConnectionId(),
+    clientSourceConnectionId(),
+    0,
+    clientHello)? => clientPacket
     initial.acceptClientInitial(clientPacket, 0)? => accepted
     hello.encodeServerHello(randomBytes(), serverKeyShare())? => serverHello
-    initial.encodeServerInitial(accepted, serverSourceConnectionId(), 0, serverHello)? => serverPacket
+    accepted -> initial.encodeServerInitial(serverSourceConnectionId(), 0, serverHello)? => serverPacket
     initial.openServerInitial(
-        serverPacket,
-        keys.version2(),
-        originalDestinationConnectionId(),
-        clientSourceConnectionId(),
-        0)? => opened
+    serverPacket,
+    keys.version2(),
+    originalDestinationConnectionId(),
+    clientSourceConnectionId(),
+    0)? => opened
     Result<Bool, errors.Error>.Ok(
-        (clientPacket -> len) >= 1_200
-            and accepted.version == keys.version2()
-            and accepted.packetNumber == 0
-            and (accepted.clientHello -> len) == (clientHello -> len)
-            and opened.packetNumber == 0
-            and (opened.serverHello -> len) == (serverHello -> len)
-            and opened.serverSourceConnectionId[0] == 33
-            and opened.serverSourceConnectionId[7] == 40)
+    (clientPacket -> len) >= 1_200
+        and accepted.version == keys.version2()
+        and accepted.packetNumber == 0
+        and (accepted.clientHello -> len) == (clientHello -> len)
+        and opened.packetNumber == 0
+        and (opened.serverHello -> len) == (serverHello -> len)
+        and opened.serverSourceConnectionId[0] == 33
+        and opened.serverSourceConnectionId[7] == 40)
 }
 
 main {

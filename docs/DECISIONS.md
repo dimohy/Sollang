@@ -21347,6 +21347,13 @@ lists, and the rebuilt self-host compiler passes 1352 plus 1361, 1382, 1379,
 link, and exact execution. Formal Stage2/Stage3 fixed-point promotion remains
 pending.
 
+A function or arm body may itself be the source-final control rather than a
+synthetic region containing that control. `regionReturns` therefore applies the
+same `terminatingControlReturns` authority to its input before searching region
+children. Subject-`when` emission suppresses its merge only under that shared
+all-paths-return and no-later-sibling decision; a wrapper is transparent only
+for the canonical kind-9/opcode--1 owned operand edge.
+
 ## D633 — Struct fields are private by default without changing layout
 
 Status: candidate fixed; focused 7/7 passed; formal promotion pending

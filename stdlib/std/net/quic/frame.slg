@@ -322,28 +322,30 @@ encodeNewConnectionId value: move NewConnectionId -> Result<[UInt8; ~], errors.E
     Result<[UInt8; ~], errors.Error>.Ok(output!)
 }
 
-public encodeValue frame: move Value -> Result<[UInt8; ~], errors.Error> {
-    frame -> when {
-        Padding(count) => encodePadding(count)
-        Ping => encodePing()
-        Ack(ack) => encodeAck(ack)
-        ResetStream(value) => encodeResetStream(value)
-        StopSending(value) => encodeStopSending(value)
-        Crypto(crypto) => encodeCrypto(crypto)
-        Stream(streamFrame) => encodeStream(streamFrame)
-        Datagram(datagram) => encodeDatagram(datagram)
-        MaxData(maximum) => encodeLimit(16, maximum)
-        MaxStreamData(limit) => encodeStreamLimit(17, limit.id, limit.maximum)
-        MaxStreams(limit) => encodeStreamCountLimit(limit.bidirectional
-            -> if { 18 } else { 19 }, limit.maximum)
-        DataBlocked(limit) => encodeLimit(20, limit)
-        StreamDataBlocked(blocked) => encodeStreamLimit(21, blocked.id, blocked.limit)
-        StreamsBlocked(blocked) => encodeStreamCountLimit(blocked.bidirectional
-            -> if { 22 } else { 23 }, blocked.limit)
-        NewConnectionId(value) => encodeNewConnectionId(value)
-        RetireConnectionId(sequence) => encodeLimit(25, sequence)
-        ConnectionClose(close) => encodeConnectionClose(close)
-        HandshakeDone => UInt64(30) -> varint.encode
+impl Value {
+    public encodeValue: move self -> Result<[UInt8; ~], errors.Error> {
+        self -> when {
+            Padding(count) => encodePadding(count)
+            Ping => encodePing()
+            Ack(ack) => encodeAck(ack)
+            ResetStream(value) => encodeResetStream(value)
+            StopSending(value) => encodeStopSending(value)
+            Crypto(crypto) => encodeCrypto(crypto)
+            Stream(streamFrame) => encodeStream(streamFrame)
+            Datagram(datagram) => encodeDatagram(datagram)
+            MaxData(maximum) => encodeLimit(16, maximum)
+            MaxStreamData(limit) => encodeStreamLimit(17, limit.id, limit.maximum)
+            MaxStreams(limit) => encodeStreamCountLimit(limit.bidirectional
+                -> if { 18 } else { 19 }, limit.maximum)
+            DataBlocked(limit) => encodeLimit(20, limit)
+            StreamDataBlocked(blocked) => encodeStreamLimit(21, blocked.id, blocked.limit)
+            StreamsBlocked(blocked) => encodeStreamCountLimit(blocked.bidirectional
+                -> if { 22 } else { 23 }, blocked.limit)
+            NewConnectionId(value) => encodeNewConnectionId(value)
+            RetireConnectionId(sequence) => encodeLimit(25, sequence)
+            ConnectionClose(close) => encodeConnectionClose(close)
+            HandshakeDone => UInt64(30) -> varint.encode
+        }
     }
 }
 
@@ -352,7 +354,7 @@ public encodeAll frames: mut [Value; ~] -> Result<[UInt8; ~], errors.Error> {
     frames -> len => remaining!
     remaining! > 0 -> while {
         frames -> take(0) => value
-        encodeValue(value)? => encoded
+        value -> encodeValue? => encoded
         output! -> appendBytes(encoded)
         remaining! - 1 => remaining!
     }
