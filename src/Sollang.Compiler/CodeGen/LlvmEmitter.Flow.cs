@@ -145,6 +145,10 @@ internal sealed partial class LlvmEmitter
                         or BoundFunctionKind.RuntimeWriteBytesAt
                         or BoundFunctionKind.RuntimeReadBytesAtAsync
                         or BoundFunctionKind.RuntimeWriteBytesAtAsync
+                        or BoundFunctionKind.RuntimeDiagnosticSessionStart
+                        or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+                        or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+                        or BoundFunctionKind.RuntimeDiagnosticSessionClose
                         or BoundFunctionKind.RuntimeSocketReceive
                         or BoundFunctionKind.RuntimeSocketReceiveAppend
                         or BoundFunctionKind.RuntimeSocketReceiveVectored
@@ -175,6 +179,13 @@ internal sealed partial class LlvmEmitter
                         or BoundFunctionKind.RuntimeSocketSetNonblocking
                         or BoundFunctionKind.RuntimeSocketPoll
                         or BoundFunctionKind.RuntimeSocketReactorWait
+                        or BoundFunctionKind.RuntimeSocketCompletionCreate
+                        or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                        or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                        or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                        or BoundFunctionKind.RuntimeSocketCompletionCancel
+                        or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                        or BoundFunctionKind.RuntimeSocketCompletionClose
                         or BoundFunctionKind.RuntimeDnsLookup
                         or BoundFunctionKind.RuntimeRunProcess
                         or BoundFunctionKind.RuntimeRunProcessToFile
@@ -367,6 +378,13 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeSocketSetNonblocking:
                     case BoundFunctionKind.RuntimeSocketPoll:
                     case BoundFunctionKind.RuntimeSocketReactorWait:
+                    case BoundFunctionKind.RuntimeSocketCompletionCreate:
+                    case BoundFunctionKind.RuntimeSocketCompletionRegisterStream:
+                    case BoundFunctionKind.RuntimeSocketCompletionRemoveStream:
+                    case BoundFunctionKind.RuntimeSocketCompletionSubmit:
+                    case BoundFunctionKind.RuntimeSocketCompletionCancel:
+                    case BoundFunctionKind.RuntimeSocketCompletionDequeue:
+                    case BoundFunctionKind.RuntimeSocketCompletionClose:
                     case BoundFunctionKind.RuntimeDnsLookup:
                     case BoundFunctionKind.RuntimeRunProcess:
                     case BoundFunctionKind.RuntimeRunProcessToFile:
@@ -377,6 +395,10 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeKillChildProcess:
                     case BoundFunctionKind.RuntimeChildProcessId:
                     case BoundFunctionKind.RuntimeProcessIdValue:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionStart:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionTrack:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionSnapshot:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionClose:
                         current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments, i == 0, ownsFlowTemporary);
                         ownsFlowTemporary = IsOwnedContainerRuntimeValue(current);
                         continue;
@@ -415,6 +437,16 @@ internal sealed partial class LlvmEmitter
         out RuntimeFlowResult result)
     {
         result = new RuntimeFlowResult(null, null, _mainOk);
+
+        if (_program.ContainerIntrinsics.TryGetValue(target, out var intrinsic))
+        {
+            result = intrinsic switch
+            {
+                ContainerIntrinsicKind.ArrayExchange => EmitArrayExchange(source, target, current),
+                _ => throw new SollangException($"unsupported container intrinsic '{intrinsic}'")
+            };
+            return true;
+        }
 
         if (current is RuntimeStruct writer
             && _program.Types.IsStruct(writer.Type)
@@ -486,7 +518,14 @@ internal sealed partial class LlvmEmitter
                 {
                     throw new SollangException("await does not accept arguments");
                 }
-                result = new RuntimeFlowResult(EmitAwaitTask(task), null, _mainOk);
+                var awaited = EmitAwaitTask(task);
+                if (source is NameExpression awaitedSource
+                    && _locals.TryGetValue(awaitedSource.Name, out var sourceValue)
+                    && ReferenceEquals(sourceValue, task))
+                {
+                    RemoveLocal(awaitedSource.Name);
+                }
+                result = new RuntimeFlowResult(awaited, null, _mainOk);
                 return true;
             case "cancel" when current is RuntimeTask task:
                 if (!isLast || target.Arguments.Count != 0)

@@ -1,12 +1,34 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$OutputDirectory = 'artifacts/scratch/portable-memory-io/contract'
+    [string]$OutputDirectory = 'artifacts/scratch/portable-memory-io/contract',
+    [string]$Compiler = '',
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$ExpectedCompilerSha256 = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+$compilerWasExplicit = -not [string]::IsNullOrWhiteSpace($Compiler)
+if ([string]::IsNullOrWhiteSpace($Compiler)) {
+    $Compiler = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+} elseif (-not [IO.Path]::IsPathRooted($Compiler)) {
+    $Compiler = Join-Path $root $Compiler
+}
+$compilerPath = [IO.Path]::GetFullPath($Compiler)
+if ($compilerWasExplicit -and [string]::IsNullOrWhiteSpace($ExpectedCompilerSha256)) {
+    throw 'Portable memory I/O explicit -Compiler requires -ExpectedCompilerSha256'
+}
+$ExpectedCompilerSha256 = $ExpectedCompilerSha256.ToUpperInvariant()
+if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
+    throw 'Managed compiler is missing for portable memory I/O focused probes'
+}
+$compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
+if (-not [string]::IsNullOrWhiteSpace($ExpectedCompilerSha256) -and
+    $compilerSha256 -cne $ExpectedCompilerSha256) {
+    throw "Portable memory I/O compiler hash mismatch: expected=$ExpectedCompilerSha256 actual=$compilerSha256"
+}
 $contractPath = Join-Path $root 'scripts/contracts/portable-memory-io.json'
 $schemaPath = Join-Path $root 'scripts/contracts/portable-memory-io.schema.json'
 $contractText = [IO.File]::ReadAllText($contractPath)
@@ -367,12 +389,8 @@ foreach ($gateName in @(
     }
 }
 
-$compilerPath = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 $llvmAsPath = Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe'
 $closureVerifierPath = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
-    throw 'Managed compiler is missing for portable memory I/O focused probes'
-}
 foreach ($toolPath in @($llvmAsPath, $closureVerifierPath)) {
     if (-not (Test-Path -LiteralPath $toolPath -PathType Leaf)) {
         throw "Portable memory I/O independent LLVM gate is missing: $toolPath"
@@ -386,6 +404,24 @@ $resolvedOutput = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
 [IO.Directory]::CreateDirectory($resolvedOutput) | Out-Null
 
 $formatSources = @($asyncSourcePath, $sysFilePath, $fileSourcePath) + @($contract.focusedProbes | ForEach-Object { Join-Path $root $_.source })
+$inputPaths = @(
+    $contractPath,
+    $schemaPath,
+    $asyncSourcePath,
+    $sysFilePath,
+    $fileSourcePath,
+    $managedStructsPath,
+    $compilerPath,
+    $llvmAsPath,
+    $closureVerifierPath,
+    $PSCommandPath
+) + $formatSources
+$inputPaths = @($inputPaths | Select-Object -Unique)
+$inputHashes = [ordered]@{}
+foreach ($path in $inputPaths) {
+    $relative = [IO.Path]::GetRelativePath($root, $path).Replace('\', '/')
+    $inputHashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+}
 $formatLog = (& dotnet $compilerPath format --check @formatSources 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) {
     throw "Portable memory I/O authoritative format failed:`n$formatLog"
@@ -484,11 +520,19 @@ foreach ($probe in $contract.focusedProbes) {
     }
 }
 
-$inputHashes = [ordered]@{}
-foreach ($path in @($contractPath, $schemaPath, $asyncSourcePath, $sysFilePath, $fileSourcePath, $managedStructsPath, $compilerPath, $llvmAsPath, $closureVerifierPath) + $formatSources) {
+$inputDrift = @()
+foreach ($path in $inputPaths) {
     $relative = [IO.Path]::GetRelativePath($root, $path).Replace('\', '/')
-    $inputHashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $inputHashes[$relative]) {
+        $inputDrift += $relative
+    }
 }
+$endingCompilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
+if ($endingCompilerSha256 -cne $compilerSha256 -and
+    ([IO.Path]::GetRelativePath($root, $compilerPath).Replace('\', '/') -cnotin $inputDrift)) {
+    $inputDrift += [IO.Path]::GetRelativePath($root, $compilerPath).Replace('\', '/')
+}
+$inputDrift = @($inputDrift | Select-Object -Unique)
 $result = [ordered]@{
     schemaVersion = 1
     status = $contract.completion.status
@@ -505,7 +549,10 @@ $result = [ordered]@{
     fixtures = $contract.fixtures.Count
     unsupported = $contract.unsupported.Count
     blockerIds = @($contract.blockers | ForEach-Object { $_.id })
-    compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
+    compilerSha256 = $compilerSha256
+    expectedCompilerSha256 = if ([string]::IsNullOrWhiteSpace($ExpectedCompilerSha256)) { $null } else { $ExpectedCompilerSha256 }
+    inputStable = $inputDrift.Count -eq 0
+    inputDrift = $inputDrift
     probes = $probeResults
     inputHashes = $inputHashes
 }
@@ -514,5 +561,9 @@ $resultPath = Join-Path $resolvedOutput 'result.json'
     $resultPath,
     ($result | ConvertTo-Json -Depth 8) + "`n",
     [Text.UTF8Encoding]::new($false))
+
+if ($inputDrift.Count -gt 0) {
+    throw "Portable memory I/O inputs drifted during verification: $($inputDrift -join ', '); result=$resultPath"
+}
 
 Write-Host "[portable memory I/O contract] $($contract.completion.status.ToUpperInvariant()) $($contract.surfaces.Count) surfaces, $($contract.invariants.Count) invariants, $($contract.fixtures.Count) fixtures, $($contract.unsupported.Count) unsupported. Result: $resultPath"

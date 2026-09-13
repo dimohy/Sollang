@@ -117,13 +117,19 @@ internal sealed partial class LlvmEmitter
                 && !_mutableLocals.Contains(local.Key)
                 && _program.Types.ContainsOwnedStorage(local.Value.Type))
             .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal);
-        var transfersAnyPayload = armTransfers.Values.Any(static transfers => transfers);
+        var bindsAnyOwnedPayload = expression.Arms.Any(arm =>
+            arm.Condition is EnumPatternExpression { BindingName: not null } pattern
+            && definition.Variants.First(candidate => candidate.Name == pattern.VariantName)
+                .PayloadType is { } payloadType
+            && _program.Types.ContainsOwnedStorage(payloadType));
         var removedNamedSubject = false;
         RuntimeStruct? removedProjectedOwner = null;
         BoundStructField? projectedSubjectField = null;
         if (ownsStorage
-            && transfersAnyPayload
-            && expression.Subject is NameExpression subjectName)
+            && bindsAnyOwnedPayload
+            && armTransfers.Values.Any(static transfers => transfers)
+            && expression.Subject is NameExpression subjectName
+            && !_borrowedOwnedLocals.Contains(subjectName.Name))
         {
             foreach (var alias in _locals
                 .Where(local => local.Value == subject)
@@ -137,7 +143,7 @@ internal sealed partial class LlvmEmitter
             removedNamedSubject = true;
         }
         else if (ownsStorage
-            && transfersAnyPayload
+            && bindsAnyOwnedPayload
             && expression.Subject is FieldAccessExpression
             {
                 Source: NameExpression ownerName,
@@ -180,12 +186,15 @@ internal sealed partial class LlvmEmitter
             _currentBlockLabel = armLabel;
             RuntimeValue? payload = null;
             string? payloadTransferFlag = null;
+            var armOwnsPayload = false;
             if (variant.PayloadType is { } payloadType)
             {
                 payload = ExtractEnumPayload(subject, payloadType);
                 if (pattern.BindingName is not null
                     && _program.Types.ContainsOwnedStorage(payloadType))
                 {
+                    armOwnsPayload = ownsStorage
+                        && (anonymousSubject || removedNamedSubject || removedProjectedOwner is not null);
                     payloadTransferFlag = NextTemp("enum_payload_owned");
                     EmitAlloca(payloadTransferFlag, "i1", 1);
                     EmitStore("i1", "true", payloadTransferFlag, 1);
@@ -197,7 +206,17 @@ internal sealed partial class LlvmEmitter
                 pattern.BindingName,
                 payload,
                 payloadTransferFlag,
+                armOwnsPayload,
+                removedProjectedOwner,
+                projectedSubjectField,
                 expectedResultType);
+            if (pattern.BindingName is not null
+                && armResult.ExitScope.BorrowedOwnedTransferFlags.TryGetValue(
+                    pattern.BindingName,
+                    out var exitingPayloadTransferFlag))
+            {
+                payloadTransferFlag = exitingPayloadTransferFlag;
+            }
             var armTerminated = _currentBlockTerminated;
             if (!armTerminated && removedProjectedOwner is not null)
             {
@@ -233,12 +252,20 @@ internal sealed partial class LlvmEmitter
             {
                 if (!armTransfers[arm])
                 {
-                    DropOwnedRuntimeValueIfRetained(payloadTransferFlag, subject);
+                    var retainedPayload = pattern.BindingName is not null
+                        && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var exitingPayload)
+                            ? exitingPayload
+                            : _activeAsyncCfg is not null
+                                ? PoisonRuntimeValue(payload!)
+                                : payload!;
+                    DropOwnedRuntimeValueIfRetained(payloadTransferFlag, retainedPayload);
                 }
             }
             else if (!armTerminated
                 && ownsStorage
                 && (anonymousSubject || removedNamedSubject)
+                && variant.PayloadType is { } selectedPayloadType
+                && _program.Types.ContainsOwnedStorage(selectedPayloadType)
                 && !armTransfers[arm])
             {
                 DropOwnedRuntimeValue(subject);
@@ -399,7 +426,14 @@ internal sealed partial class LlvmEmitter
             scope.ReadonlyCaptureBorrowPointers
                 .Where(pointer => !removed.Contains(pointer.Key))
                 .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
-            scope.ReadonlyValueSlots);
+            scope.ReadonlyValueSlots,
+            scope.BorrowedOwnedTransferFlags
+                .Where(flag => !removed.Contains(flag.Key))
+                .ToDictionary(static flag => flag.Key, static flag => flag.Value, StringComparer.Ordinal),
+            scope.TerminatingOwnedCleanupObligations
+                .Where(obligation => obligation.BindingName is null
+                    || !removed.Contains(obligation.BindingName))
+                .ToList());
     }
 
     private void DropOwnedStructFieldsExcept(RuntimeStruct owner, params string[] excludedFieldNames)
@@ -423,12 +457,15 @@ internal sealed partial class LlvmEmitter
         string? bindingName,
         RuntimeValue? payload,
         string? payloadTransferFlag,
+        bool ownsPayload,
+        RuntimeStruct? projectedOwner,
+        BoundStructField? projectedField,
         BoundType? expectedResultType = null)
     {
         var outerLocals = CaptureLocals();
-        string? previousTransferFlag = null;
-        var hadPreviousTransferFlag = bindingName is not null
-            && _borrowedOwnedTransferFlags.TryGetValue(bindingName, out previousTransferFlag);
+        var cleanupBindingId = ownsPayload || projectedOwner is not null
+            ? ++_nextOwnedCleanupBindingId
+            : 0;
         try
         {
             if (bindingName is not null && payload is not null)
@@ -437,27 +474,34 @@ internal sealed partial class LlvmEmitter
                 if (_program.Types.ContainsOwnedStorage(payload.Type))
                 {
                     _borrowedOwnedLocals.Add(bindingName);
+                    if (ownsPayload)
+                    {
+                        _terminatingOwnedCleanupObligations.Add(new TerminatingOwnedCleanupObligation(
+                            cleanupBindingId,
+                            bindingName,
+                            payload,
+                            payloadTransferFlag,
+                            ExcludedProjectedField: null));
+                    }
                     if (payloadTransferFlag is not null)
                     {
                         _borrowedOwnedTransferFlags[bindingName] = payloadTransferFlag;
                     }
                 }
             }
+            if (projectedOwner is not null)
+            {
+                _terminatingOwnedCleanupObligations.Add(new TerminatingOwnedCleanupObligation(
+                    cleanupBindingId,
+                    ownsPayload ? bindingName : null,
+                    projectedOwner,
+                    RetainedFlag: null,
+                    ownsPayload ? projectedField!.Name : null));
+            }
             return EmitScopedBlockBody(body, expectedResultType);
         }
         finally
         {
-            if (bindingName is not null)
-            {
-                if (hadPreviousTransferFlag)
-                {
-                    _borrowedOwnedTransferFlags[bindingName] = previousTransferFlag!;
-                }
-                else
-                {
-                    _borrowedOwnedTransferFlags.Remove(bindingName);
-                }
-            }
             RestoreLocals(outerLocals);
         }
     }

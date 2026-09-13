@@ -1,0 +1,261 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+
+struct Setup {
+    listener: socket.TcpListener
+    sender: socket.TcpStream
+    receiver: socket.TcpStream
+}
+
+setup: -> Result<Setup, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> connect? => sender
+    listener -> accept? => receiver
+    Result<Setup, socket.SocketError>.Ok(Setup {
+        listener: listener
+        sender: sender
+        receiver: receiver
+    })
+}
+
+main {
+    setup() -> when {
+        Err(error) { "setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value.listener => listener
+            value.sender => sender
+            value.receiver => receiver
+            socket.CompletionReactorOptions {
+                registrations: 1
+                pendingOperations: 1
+                completionBatch: 1
+            } -> socket.completionReactor -> when {
+                Err(error) {
+                    sender -> close
+                    receiver -> close
+                    listener -> close
+                    "create-error=$(error.code)" -> println
+                }
+                Ok(reactor) {
+                    reactor -> registerStream(receiver, 11) -> when {
+                        Err(failure) {
+                            failure.reactor => failedReactor
+                            failure.connection => returnedReceiver
+                            failure.error => error
+                            failedReactor -> close
+                            returnedReceiver -> close
+                            sender -> close
+                            listener -> close
+                            "register-error=$(error.code)" -> println
+                        }
+                        Ok(registered) {
+                            sender -> sendText("abc") -> when {
+                                Err(error) {
+                                    registered -> close
+                                    sender -> close
+                                    listener -> close
+                                    "send-error=$(error.code)" -> println
+                                }
+                                Ok(_) {
+                                    [0, 0, 0; ~] -> socket.operationSlot(101, socket.OperationDirection.Receive) => initialSlot
+                                    registered -> submit(11, initialSlot) -> when {
+                                        Err(failure) {
+                                            failure.reactor => failedReactor
+                                            failure.slot => returnedSlot
+                                            failure.error => error
+                                            returnedSlot -> intoBytes => returnedBytes
+                                            failedReactor -> close
+                                            sender -> close
+                                            listener -> close
+                                            "submit-error=$(error.code),len=$(returnedBytes -> len)" -> println
+                                        }
+                                        Ok(submission) {
+                                            submission -> when {
+                                                socket.CompletionSubmission.Completed(completion) {
+                                                    "sync=true" -> println
+                                                    Result<socket.SocketCompletion, socket.CompletionWaitFailure>.Ok(completion)
+                                                }
+                                                socket.CompletionSubmission.Pending(pendingReactor) {
+                                                    "sync=false" -> println
+                                                    pendingReactor -> dequeue(asyncio.Cancellation { requested: false }) => directTask
+                                                    directTask -> await
+                                                }
+                                            } -> when {
+                                                Err(failure) {
+                                                    failure.reactor => failedReactor
+                                                    failure.error => error
+                                                    failedReactor -> close
+                                                    sender -> close
+                                                    listener -> close
+                                                    "dequeue-error=$(error.code)" -> println
+                                                }
+                                                Ok(firstCompletion) {
+                                                    firstCompletion.reactor => firstReactor
+                                                    firstCompletion.slot => firstSlot
+                                                    firstSlot -> transferredCount -> when {
+                                                        None { UIntSize(999) }
+                                                        Some(count) { count }
+                                                    } => firstCount
+                                                    firstSlot -> operationState -> when {
+                                                        Completed { true }
+                                                        else { false }
+                                                    } => firstCompleted
+                                                    firstSlot -> byteAt(0) => first0
+                                                    firstSlot -> byteAt(2) => first2
+                                                    firstSlot -> recycle -> when {
+                                                        Err(failure) {
+                                                            failure.slot => returnedSlot
+                                                            failure.error => error
+                                                            returnedSlot -> intoBytes => returnedBytes
+                                                            firstReactor -> close
+                                                            sender -> close
+                                                            listener -> close
+                                                            "recycle-error=$(error.code),len=$(returnedBytes -> len)" -> println
+                                                        }
+                                                        Ok(recycled) {
+                                                            firstReactor -> submit(11, recycled) -> when {
+                                                                Err(failure) {
+                                                                    failure.reactor => failedReactor
+                                                                    failure.slot => returnedSlot
+                                                                    failedReactor -> close
+                                                                    returnedSlot -> intoBytes => returnedBytes
+                                                                    sender -> close
+                                                                    listener -> close
+                                                                    "pending-submit-error=$(failure.error.code),len=$(returnedBytes -> len)" -> println
+                                                                }
+                                                                Ok(pendingSubmission) {
+                                                                    pendingSubmission -> when {
+                                                                        socket.CompletionSubmission.Completed(unexpected) {
+                                                                            unexpected.reactor => unexpectedReactor
+                                                                            unexpected.slot => unexpectedSlot
+                                                                            unexpectedSlot -> intoBytes => unexpectedBytes
+                                                                            unexpectedReactor -> close
+                                                                            sender -> close
+                                                                            listener -> close
+                                                                            "pending=false,len=$(unexpectedBytes -> len)" -> println
+                                                                        }
+                                                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                                                            pendingReactor -> dequeue(asyncio.Cancellation { requested: false }) => pendingTask
+                                                                            sender -> sendText("de") -> when {
+                                                                                Err(error) { "pending-send-error=$(error.code)" -> println }
+                                                                                Ok(_) { }
+                                                                            }
+                                                                            pendingTask -> await -> when {
+                                                                                Err(failure) {
+                                                                                    failure.reactor => failedReactor
+                                                                                    failedReactor -> close
+                                                                                    sender -> close
+                                                                                    listener -> close
+                                                                                    "pending-dequeue-error=$(failure.error.code)" -> println
+                                                                                }
+                                                                                Ok(secondCompletion) {
+                                                                                    secondCompletion.reactor => secondReactor
+                                                                                    secondCompletion.slot => secondSlot
+                                                                                    secondSlot -> transferredCount -> when {
+                                                                                        None { UIntSize(999) }
+                                                                                        Some(count) { count }
+                                                                                    } => secondCount
+                                                                                    secondSlot -> byteAt(0) => second0
+                                                                                    secondSlot -> byteAt(1) => second1
+                                                                                    secondSlot -> recycle -> when {
+                                                                                        Err(failure) {
+                                                                                            failure.slot => returnedSlot
+                                                                                            failure.error => error
+                                                                                            returnedSlot -> intoBytes => returnedBytes
+                                                                                            secondReactor -> close
+                                                                                            sender -> close
+                                                                                            listener -> close
+                                                                                            "second-recycle-error=$(error.code),len=$(returnedBytes -> len)" -> println
+                                                                                        }
+                                                                                        Ok(cancelSlot) {
+                                                                                            secondReactor -> submit(11, cancelSlot) -> when {
+                                                                                                Err(failure) {
+                                                                                                    failure.reactor => failedReactor
+                                                                                                    failure.slot => returnedSlot
+                                                                                                    failedReactor -> close
+                                                                                                    returnedSlot -> intoBytes => returnedBytes
+                                                                                                    sender -> close
+                                                                                                    listener -> close
+                                                                                                    "cancel-submit-error=$(failure.error.code),len=$(returnedBytes -> len)" -> println
+                                                                                                }
+                                                                                                Ok(cancelSubmission) {
+                                                                                                    cancelSubmission -> when {
+                                                                                                        socket.CompletionSubmission.Completed(unexpected) {
+                                                                                                            unexpected.reactor => unexpectedReactor
+                                                                                                            unexpected.slot => unexpectedSlot
+                                                                                                            unexpectedSlot -> intoBytes => unexpectedBytes
+                                                                                                            unexpectedReactor -> close
+                                                                                                            sender -> close
+                                                                                                            listener -> close
+                                                                                                            "cancel-pending=false,len=$(unexpectedBytes -> len)" -> println
+                                                                                                        }
+                                                                                                        socket.CompletionSubmission.Pending(cancelReactor) {
+                                                                                                            cancelReactor -> cancelOperation(101) -> when {
+                                                                                                                Err(failure) {
+                                                                                                                    failure.reactor => failedReactor
+                                                                                                                    failedReactor -> close
+                                                                                                                    sender -> close
+                                                                                                                    listener -> close
+                                                                                                                    "cancel-error=$(failure.error.code)" -> println
+                                                                                                                }
+                                                                                                                Ok(cancelledReactor) {
+                                                                                                                    cancelledReactor -> dequeue(asyncio.Cancellation { requested: false }) => cancelTask
+                                                                                                                    cancelTask -> await -> when {
+                                                                                                                        Err(failure) {
+                                                                                                                            failure.reactor => failedReactor
+                                                                                                                            failedReactor -> close
+                                                                                                                            sender -> close
+                                                                                                                            listener -> close
+                                                                                                                            "cancel-dequeue-error=$(failure.error.code)" -> println
+                                                                                                                        }
+                                                                                                                        Ok(cancelCompletion) {
+                                                                                                                            cancelCompletion.reactor => finalReactor
+                                                                                                                            cancelCompletion.slot => cancelledSlot
+                                                                                                                            cancelledSlot -> operationState -> when {
+                                                                                                                                Cancelled { true }
+                                                                                                                                else { false }
+                                                                                                                            } => cancelled
+                                                                                                                            cancelledSlot -> intoBytes => bytes
+                                                                                                                            "direct=$firstCompleted,$firstCount,$first0,$first2" -> println
+                                                                                                                            "pending=true,$secondCount,$second0,$second1" -> println
+                                                                                                                            "cancelled=$cancelled,len=$(bytes -> len)" -> println
+                                                                                                                            finalReactor -> close
+                                                                                                                            sender -> close
+                                                                                                                            listener -> close
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

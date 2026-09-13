@@ -1,0 +1,85 @@
+import std.algorithm as algorithm
+
+struct Entry { key: Int, ordinal: Int }
+struct EntryComparison { }
+
+impl algorithm.Comparison for EntryComparison {
+    type Item = Entry
+    public compare: self, left: ref Entry, right: ref Entry -> Int {
+        left.key < right.key -> if { -1 } else {
+            left.key > right.key -> if { 1 } else { 0 }
+        }
+    }
+}
+
+struct IntComparison { }
+impl algorithm.Comparison for IntComparison {
+    type Item = Int
+    public compare: self, left: ref Int, right: ref Int -> Int {
+        left < right -> if { -1 } else { left > right
+                -> if { 1 } else { 0 } }
+    }
+}
+
+main {
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    algorithm.Ordering { direction: algorithm.Direction.Descending } => descending
+    EntryComparison { } => comparison
+    [Entry;
+    { key: 2, ordinal: 0 },
+    { key: 1, ordinal: 1 },
+    { key: 2, ordinal: 2 },
+    { key: 1, ordinal: 3 },
+    { key: 3, ordinal: 4 };
+    ~
+    ] => values!
+    [Entry;
+    { key: 0, ordinal: 0 },
+    { key: 0, ordinal: 0 },
+    { key: 0, ordinal: 0 },
+    { key: 0, ordinal: 0 },
+    { key: 0, ordinal: 0 };
+    ~
+    ] => scratch!
+    values! -> capacity => valuesCapacity
+    scratch! -> capacity => scratchCapacity
+
+    ascending -> stableSort(values!, scratch!, comparison) -> when {
+        Ok(done) {
+            values! -> each entry { "$(entry.key):$(entry.ordinal)" -> println }
+            "storage=$(values! -> len),$(values! -> capacity),$(scratch! -> len),$(scratch! -> capacity)" -> println
+            "capacity=$valuesCapacity,$scratchCapacity" -> println
+        }
+        Err(error) { "unexpected-error" -> println }
+    }
+
+    descending -> stableSort(values!, scratch!, comparison) -> when {
+        Ok(done) { values! -> each entry { "$(entry.key):$(entry.ordinal)" -> println } }
+        Err(error) { "unexpected-error" -> println }
+    }
+
+    [Int; ~] => empty!
+    [Int; ~] => emptyScratch!
+    ascending -> stableSort(empty!, emptyScratch!, IntComparison { }) -> when {
+        Ok(done) { "empty=$(empty! -> len),$(emptyScratch! -> len)" -> println }
+        Err(error) { "unexpected-error" -> println }
+    }
+
+    [7; ~] => single!
+    [0; ~] => singleScratch!
+    ascending -> stableSort(single!, singleScratch!, IntComparison { }) -> when {
+        Ok(done) { "single=$(single![0]),$(single! -> len),$(singleScratch! -> len)" -> println }
+        Err(error) { "unexpected-error" -> println }
+    }
+
+    [3, 1, 2; ~] => unchanged!
+    [0, 0; ~] => shortScratch!
+    ascending -> stableSort(unchanged!, shortScratch!, IntComparison { }) -> when {
+        Ok(done) { "unexpected-success" -> println }
+        Err(error) {
+            error -> when {
+                InsufficientScratch { "short=$(unchanged![0]),$(unchanged![1]),$(unchanged![2]),$(shortScratch![0]),$(shortScratch![1])" -> println }
+            }
+        }
+    }
+}

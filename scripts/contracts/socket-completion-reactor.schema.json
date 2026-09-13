@@ -6,19 +6,37 @@
     "$schema",
     "schemaVersion",
     "module",
+    "blockerId",
+    "status",
+    "api",
     "capacity",
     "states",
     "transitions",
     "ownership",
+    "registration",
     "completion",
     "platforms",
     "forbidden",
-    "milestones"
+    "milestones",
+    "verificationMatrix",
+    "baseline"
   ],
   "properties": {
     "$schema": { "const": "socket-completion-reactor.schema.json" },
     "schemaVersion": { "const": 1 },
     "module": { "const": "std.net.socket" },
+    "blockerId": { "const": "PORTABLE_SOCKET_COMPLETION_SUBMISSION" },
+    "status": { "enum": ["blocked", "complete"] },
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["globalConstructor", "reactorMethods", "slotMethods"],
+      "properties": {
+        "globalConstructor": { "type": "string", "minLength": 1 },
+        "reactorMethods": { "type": "array", "minItems": 5, "maxItems": 5, "uniqueItems": true, "items": { "type": "string" } },
+        "slotMethods": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "type": "string" } }
+      }
+    },
     "capacity": {
       "type": "object",
       "additionalProperties": false,
@@ -59,6 +77,7 @@
       }
     },
     "ownership": { "type": "array", "minItems": 6, "items": { "type": "string", "minLength": 1 } },
+    "registration": { "type": "array", "minItems": 7, "items": { "type": "string", "minLength": 1 } },
     "completion": { "type": "array", "minItems": 5, "items": { "type": "string", "minLength": 1 } },
     "platforms": {
       "type": "object",
@@ -83,6 +102,45 @@
           "id": { "enum": ["configuration", "slot", "submission", "completion", "cancellation", "platformExecution"] },
           "status": { "enum": ["planned", "contracted", "implemented", "verified"] },
           "evidence": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "verificationMatrix": {
+      "type": "array",
+      "minItems": 22,
+      "maxItems": 22,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "target", "kind", "expectation", "status"],
+        "properties": {
+          "id": { "pattern": "^(W0[1-7]|L0[1-8]|B0[1-2]|X0[1-5])$" },
+          "target": { "enum": ["windows-x64", "linux-x64", "wasm32-browser", "semantic", "all-positive-native", "windows-x64+linux-x64"] },
+          "kind": { "type": "string", "minLength": 1 },
+          "expectation": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["pending", "passed"] }
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gitCommit", "sourceHashes"],
+      "properties": {
+        "gitCommit": { "const": "37f524b4" },
+        "sourceHashes": {
+          "type": "array",
+          "minItems": 12,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "sha256": { "pattern": "^[A-F0-9]{64}$" }
+            }
+          }
         }
       }
     }

@@ -209,6 +209,11 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             SetLastError
             LoadLibraryA
             GetProcAddress
+            CreateIoCompletionPort
+            GetQueuedCompletionStatusEx
+            PostQueuedCompletionStatus
+            CancelIoEx
+            SetFileCompletionNotificationModes
             FreeLibrary
             CreateDirectoryA
             GetFileAttributesA

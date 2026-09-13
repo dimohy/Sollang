@@ -302,12 +302,20 @@ internal static class StoragePlacementAnalyzer
                 break;
                 case BlockFunctionCallStatement blockCall:
                     IndexNestedScopes(blockCall.Source, positions, ref next);
+                    foreach (var argument in blockCall.Arguments ?? [])
+                    {
+                        IndexNestedScopes(argument, positions, ref next);
+                    }
                     IndexStatements(blockCall.Body, positions, ref next);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
                     foreach (var blockCall in pipeline.Calls)
                     {
                         IndexNestedScopes(blockCall.Source, positions, ref next);
+                        foreach (var argument in blockCall.Arguments ?? [])
+                        {
+                            IndexNestedScopes(argument, positions, ref next);
+                        }
                         IndexStatements(blockCall.Body, positions, ref next);
                     }
                     break;
@@ -547,12 +555,20 @@ internal static class StoragePlacementAnalyzer
                 break;
             case BlockFunctionCallStatement blockCall:
                 CollectNestedScopeCandidates(blockCall.Source, functions, positions, candidates);
+                foreach (var argument in blockCall.Arguments ?? [])
+                {
+                    CollectNestedScopeCandidates(argument, functions, positions, candidates);
+                }
                 CollectScopeCandidates(blockCall.Body, result: null, functions, positions, candidates);
                 break;
             case BlockFunctionPipelineStatement pipeline:
                 foreach (var blockCall in pipeline.Calls)
                 {
                     CollectNestedScopeCandidates(blockCall.Source, functions, positions, candidates);
+                    foreach (var argument in blockCall.Arguments ?? [])
+                    {
+                        CollectNestedScopeCandidates(argument, functions, positions, candidates);
+                    }
                     CollectScopeCandidates(blockCall.Body, result: null, functions, positions, candidates);
                 }
                 break;
@@ -1204,9 +1220,11 @@ internal static class StoragePlacementAnalyzer
             FieldAssignmentStatement assignment => StringComparer.Ordinal.Equals(assignment.Name, ownerName)
                 || ContainsOwner(assignment.Value, ownerName),
             BlockFunctionCallStatement call => ContainsOwner(call.Source, ownerName)
+                || (call.Arguments?.Any(argument => ContainsOwner(argument, ownerName)) ?? false)
                 || call.Body.Any(nested => ContainsOwner(nested, ownerName)),
             BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(
                 call => ContainsOwner(call.Source, ownerName)
+                    || (call.Arguments?.Any(argument => ContainsOwner(argument, ownerName)) ?? false)
                     || call.Body.Any(nested => ContainsOwner(nested, ownerName))),
             ExpressionStatement expression => ContainsOwner(expression.Expression, ownerName),
             ReturnStatement { Value: { } value } => ContainsOwner(value, ownerName),

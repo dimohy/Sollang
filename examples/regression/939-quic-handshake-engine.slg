@@ -12,42 +12,40 @@ clientHandshake: -> [UInt8] => [20, 0, 0, 3, 1, 2, 3]
 
 roundtrip version: UInt32 -> Result<Bool, errors.Error> {
     tls13.deriveHandshake(sharedSecret(), helloTranscript()) => secrets
-    handshake.encode(
-        version,
-        clientConnectionId(),
-        serverConnectionId(),
-        5,
-        0,
-        serverHandshake(),
-        secrets.serverTrafficSecret)? => serverPacket
+    version -> handshake.encode(
+    clientConnectionId(),
+    serverConnectionId(),
+    5,
+    0,
+    serverHandshake(),
+    secrets.serverTrafficSecret)? => serverPacket
     handshake.open(
-        serverPacket,
-        clientConnectionId(),
-        5,
-        secrets.serverTrafficSecret)? => openedServer
-    handshake.encode(
-        version,
-        serverConnectionId(),
-        clientConnectionId(),
-        9,
-        6,
-        clientHandshake(),
-        secrets.clientTrafficSecret)? => clientPacket
+    serverPacket,
+    clientConnectionId(),
+    5,
+    secrets.serverTrafficSecret)? => openedServer
+    version -> handshake.encode(
+    serverConnectionId(),
+    clientConnectionId(),
+    9,
+    6,
+    clientHandshake(),
+    secrets.clientTrafficSecret)? => clientPacket
     handshake.open(
-        clientPacket,
-        serverConnectionId(),
-        9,
-        secrets.clientTrafficSecret)? => openedClient
+    clientPacket,
+    serverConnectionId(),
+    9,
+    secrets.clientTrafficSecret)? => openedClient
     Result<Bool, errors.Error>.Ok(
-        openedServer.version == version
-            and openedServer.packetNumber == 5
-            and openedServer.cryptoOffset == 0
-            and openedServer.handshakeBytes[0] == 8
-            and openedServer.handshakeBytes[5] == 0
-            and openedClient.packetNumber == 9
-            and openedClient.cryptoOffset == 6
-            and openedClient.handshakeBytes[0] == 20
-            and openedClient.handshakeBytes[6] == 3)
+    openedServer.version == version
+        and openedServer.packetNumber == 5
+        and openedServer.cryptoOffset == 0
+        and openedServer.handshakeBytes[0] == 8
+        and openedServer.handshakeBytes[5] == 0
+        and openedClient.packetNumber == 9
+        and openedClient.cryptoOffset == 6
+        and openedClient.handshakeBytes[0] == 20
+        and openedClient.handshakeBytes[6] == 3)
 }
 
 verify version: UInt32, label: Text -> Unit uses Console {

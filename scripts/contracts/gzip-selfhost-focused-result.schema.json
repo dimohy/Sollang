@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "mode", "status", "platform", "executionMode", "processAuditAuthority", "orphanProcessIds", "phase", "attempted", "completed", "total", "positive", "negative", "expectedCompilerSha256", "compilerSha256Start", "compilerSha256End", "inputStable", "inputDrift", "inputHashesStart", "inputHashesEnd", "toolHashes", "dynamic", "cases", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "selfhost-native-gzip-focused" },
+    "status": { "enum": ["passed", "failed"] },
+    "platform": { "const": "windows-x64" },
+    "executionMode": { "const": "detached-supervisor-worker" },
+    "processAuditAuthority": { "const": "scripts/invoke-detached-selfhost-verification.ps1 completion record" },
+    "orphanProcessIds": { "type": "null" },
+    "phase": { "enum": ["preflight", "execution"] },
+    "attempted": { "type": "integer", "minimum": 0, "maximum": 23 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 23 },
+    "total": { "const": 23 },
+    "positive": { "$ref": "#/$defs/positiveCount" },
+    "negative": { "$ref": "#/$defs/negativeCount" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/nullableSha256" },
+    "compilerSha256Start": { "$ref": "#/$defs/nullableSha256" },
+    "compilerSha256End": { "$ref": "#/$defs/nullableSha256" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashesStart": { "$ref": "#/$defs/hashes" },
+    "inputHashesEnd": { "$ref": "#/$defs/hashes" },
+    "toolHashes": {
+      "type": "object", "additionalProperties": false, "required": ["compiler", "llvmAs", "clang", "closureVerifier"],
+      "properties": { "compiler": { "$ref": "#/$defs/nullableSha256" }, "llvmAs": { "$ref": "#/$defs/nullableSha256" }, "clang": { "$ref": "#/$defs/nullableSha256" }, "closureVerifier": { "$ref": "#/$defs/nullableSha256" } }
+    },
+    "dynamic": {
+      "type": "object", "additionalProperties": false, "required": ["caseId", "btype", "independentReader", "decodedExact", "deterministicAcrossOptimizations", "stdoutSha256O0", "stdoutSha256O2"],
+      "properties": {
+        "caseId": { "const": "dynamic-writer" }, "btype": { "type": ["integer", "null"] }, "independentReader": { "const": "System.IO.Compression.GZipStream" },
+        "decodedExact": { "type": "boolean" }, "deterministicAcrossOptimizations": { "type": "boolean" },
+        "stdoutSha256O0": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }, "stdoutSha256O2": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }
+      }
+    },
+    "cases": { "type": "array", "maxItems": 23, "items": { "$ref": "#/$defs/case" } },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [{
+    "if": { "properties": { "phase": { "const": "execution" } } },
+    "then": { "properties": { "attempted": { "const": 23 }, "cases": { "minItems": 23, "maxItems": 23 } } },
+    "else": { "properties": { "status": { "const": "failed" }, "attempted": { "const": 0 }, "completed": { "const": 0 }, "positive": { "properties": { "completed": { "const": 0 } } }, "negative": { "properties": { "completed": { "const": 0 } } }, "cases": { "maxItems": 0 }, "failureIds": { "contains": { "const": "GZIP_SELFHOST_PREFLIGHT_FAILED" } } } }
+  }, {
+    "if": { "properties": { "status": { "const": "failed" } } },
+    "then": { "properties": { "failureIds": { "minItems": 1 } } }
+  }, {
+    "if": { "properties": { "status": { "const": "passed" } } },
+    "then": { "properties": {
+      "completed": { "const": 23 }, "inputStable": { "const": true }, "inputDrift": { "maxItems": 0 }, "failureIds": { "maxItems": 0 },
+      "cases": { "minItems": 23, "maxItems": 23, "items": { "properties": { "passed": { "const": true }, "exact": { "const": true }, "failure": { "type": "null" } } } },
+      "expectedCompilerSha256": { "$ref": "#/$defs/sha256" }, "compilerSha256Start": { "$ref": "#/$defs/sha256" }, "compilerSha256End": { "$ref": "#/$defs/sha256" },
+      "inputHashesStart": { "minProperties": 25 }, "inputHashesEnd": { "minProperties": 25 },
+      "toolHashes": { "properties": { "compiler": { "$ref": "#/$defs/sha256" }, "llvmAs": { "$ref": "#/$defs/sha256" }, "clang": { "$ref": "#/$defs/sha256" }, "closureVerifier": { "$ref": "#/$defs/sha256" } } },
+      "positive": { "properties": { "completed": { "const": 20 } } }, "negative": { "properties": { "completed": { "const": 3 } } },
+      "dynamic": { "properties": { "btype": { "const": 2 }, "decodedExact": { "const": true }, "deterministicAcrossOptimizations": { "const": true } } }
+    } }
+  }],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "nullableSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+    "hashes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/sha256" } },
+    "positiveCount": { "type": "object", "additionalProperties": false, "required": ["completed", "total"], "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 20 }, "total": { "const": 20 } } },
+    "negativeCount": { "type": "object", "additionalProperties": false, "required": ["completed", "total"], "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 3 }, "total": { "const": 3 } } },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "optimization", "passed", "compileExit", "diagnosticFree", "llvmProduced", "llvmAsExit", "closureExit", "linkExit", "nativeExit", "exact", "stdoutSha256", "failure"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+(?:-(?:o0|o2))?$" }, "kind": { "enum": ["positive", "negative"] }, "optimization": { "type": ["string", "null"], "enum": ["O0", "O2", null] },
+        "passed": { "type": "boolean" }, "compileExit": { "type": "integer" }, "diagnosticFree": { "type": "boolean" }, "llvmProduced": { "type": "boolean" },
+        "llvmAsExit": { "type": ["integer", "null"] }, "closureExit": { "type": ["integer", "null"] }, "linkExit": { "type": ["integer", "null"] }, "nativeExit": { "type": ["integer", "null"] },
+        "exact": { "type": "boolean" }, "stdoutSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }, "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "passed": { "const": true }, "kind": { "const": "positive" } }, "required": ["passed", "kind"] }, "then": { "properties": { "compileExit": { "const": 0 }, "diagnosticFree": { "const": true }, "llvmProduced": { "const": true }, "llvmAsExit": { "const": 0 }, "closureExit": { "const": 0 }, "linkExit": { "const": 0 }, "nativeExit": { "const": 0 }, "exact": { "const": true }, "stdoutSha256": { "$ref": "#/$defs/sha256" }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "passed": { "const": true }, "kind": { "const": "negative" } }, "required": ["passed", "kind"] }, "then": { "properties": { "compileExit": { "const": 1 }, "diagnosticFree": { "const": false }, "llvmProduced": { "const": false }, "llvmAsExit": { "type": "null" }, "closureExit": { "type": "null" }, "linkExit": { "type": "null" }, "nativeExit": { "type": "null" }, "exact": { "const": true }, "stdoutSha256": { "type": "null" }, "failure": { "type": "null" } } } }
+      ]
+    }
+  }
+}

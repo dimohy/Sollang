@@ -62,10 +62,9 @@ foreach ($required in @(
     "public write: mut self, input: [UInt8], output: mut [UInt8; ~]",
     "public finish: move self, output: mut [UInt8; ~]",
     "public write: mut self, input: [UInt8]",
-    "errors.Kind.UnsupportedCompressedBlock",
     "decodeCompressedBlock",
     "decodeHuffmanStreams",
-    "huffman.parseDirectDescription",
+    "huffman.parseDescription",
     "import std.compress.zstd.fse as fse",
     "import std.compress.zstd.sequence as sequence",
     "hasHuffmanTable: Bool",
@@ -174,7 +173,8 @@ foreach ($required in @(
     "public struct Table",
     "symbolsByCode: [Int; ~]",
     "maxBits: Int",
-    "public parseDirectDescription",
+    "public parseDescription",
+    "decodeFseWeights",
     "public decodeStream",
     "lastWeight",
     "highestSetBit",
@@ -188,6 +188,10 @@ if ($huffmanSource -cmatch '(?m)^public\s+decodeStream\s+table:') {
 }
 if ($huffmanSource -notmatch '(?m)^\s+public\s+decodeStream:\s+self,') {
     throw "Zstandard Huffman Table instance decoder is missing"
+}
+if ($huffmanSource.Contains('UnsupportedFseWeights', [System.StringComparison]::Ordinal) -or
+    $source.Contains('errors.Kind.UnsupportedCompressedBlock', [System.StringComparison]::Ordinal)) {
+    throw "Zstandard FSE-compressed Huffman weights regressed to an unsupported capability"
 }
 if ($fseSource -cmatch '(?m)^public\s+reverse\s+') {
     throw "Zstandard reverse bitstream parser retained its ambiguous old name"

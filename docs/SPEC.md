@@ -585,9 +585,9 @@ There is no `let`, `var`, or declaration keyword.
 Initial binding rules:
 
 - `expression => name` introduces an immutable binding.
-- `expression => name!` introduces a mutable owner binding. The `!` suffix is
-  part of the local name, so later reads and mutating calls also show mutation
-  capability at the use site.
+- `expression => name!` introduces a local mutable owner binding. The `!`
+  suffix is part of that local binding and its rooted accesses; it is not added
+  to an input parameter declared with the `mut` ownership mode.
 - Name-first `name = expression` is not part of Sollang; every binding uses
   `expression => name`.
 - A binding is visible after its declaration statement.
@@ -965,6 +965,13 @@ Each input independently accepts the existing readonly, `mut`, or `move`
 ownership mode. Compile-time generic parameters remain in angle brackets and
 are not counted as runtime inputs. Additional runtime arguments are statically
 checked for count, type, ownership, and duplicate parameter names.
+
+`mut` is an input ownership mode, not an identifier suffix. Inside the callee,
+a named mutable-borrow input is spelled with its bare declared name, and
+`mut self` is spelled `self`. The `!` suffix remains on the caller's local
+mutable owner expression supplied to that input. Thus an input declared
+`values: mut [T; ~]` uses `values -> exchange(...)` in its body, while its call
+site passes `values!`.
 
 An ownership, lifetime, scope, or affine violation that can be proven from the
 program is a blocking compile error. Diagnostics identify the offending owner
@@ -1514,10 +1521,23 @@ the `Vacant` state. The slot exposes its application key, direction, state,
 exact byte length, optional terminal transfer count, and optional error through
 instance methods, so an absent result is distinct from a real zero-byte completion;
 consuming `intoBytes` returns the original buffer without a payload copy.
-Native identity and state-transition fields remain private. Submission,
-completion dequeue, cancellation, and platform runtime integration are not yet
-public: the existing `Reactor.waitInto` remains a bounded `WSAPoll`/`poll`
-readiness operation and is not described as IOCP/epoll completion.
+Native identity and state-transition fields remain private. The public
+`completionReactor` constructor creates one affine reactor with bounded,
+preallocated registration, pending-operation, and completion storage.
+`CompletionReactor.registerStream` consumes both the reactor and `TcpStream`;
+success retains the exact stream owner in the reactor, while duplicate,
+capacity, or native-table validation failure returns the exact reactor and stream owners in
+`SocketRegistrationFailure`. Registration itself only updates the bounded
+owner table. It deliberately postpones IOCP association on Windows and
+nonblocking plus epoll registration on Linux until the first submission, so an
+unsubmitted registration can be removed and returned as an independently
+usable `TcpStream`. Once submitted or associated, `removeStream` rejects the
+transition and retains reactor authority. Linux epoll payloads use tagged native
+registration identities rather than reserving any user `UInt64` key; the key is
+resolved from the owner table. Submission, completion dequeue, and cancellation
+remain unavailable until their affine Task transitions are implemented. The
+existing `Reactor.waitInto` remains the separate bounded `WSAPoll`/`poll`
+readiness operation.
 
 Programs flatten sequential failure with postfix `?`:
 
@@ -1649,7 +1669,16 @@ global or retaining a stale exception after an instance migration fails
 `scripts/verify-stdlib-instance-policy.ps1`.
 The same gate permits only the `sys.path.fromText` factory and
 `sys.path.nativeStyle` raw boundary as public globals. Path operations are
-instance methods; new migration-debt globals are not permitted.
+instance methods; new migration-debt globals are not permitted. Fixed-width
+crypto bit operations are qualified `UInt32` or `UInt64` instance methods, and
+QUIC packet-threshold and congestion-window arithmetic are qualified `UInt64`
+instance methods. Their scalar receivers add no owner, allocation, copy, or
+compatibility wrapper.
+QUIC scalar wire values likewise own packet-number restoration/truncation,
+varint and typed framing encoders, reserved-version classification, transport
+parameter emission, stream-identity validation, and Initial/Handshake header
+construction as qualified instance methods. These migrations retain their
+existing result, ownership, and wire-byte contracts without adapter functions.
 
 The library layering contract is `std -> sys`. `std` owns portable public APIs,
 domain values, and pure algorithms; `sys` owns only irreducible target and OS
@@ -1881,6 +1910,25 @@ caller only when consuming `finish` at a validated frame boundary. Invalid
 magic, header, block, size, truncation, and every limit fail explicitly.
 Entropy-compressed blocks, dictionaries, and content checksums are not yet
 implemented and return distinct unsupported errors rather than a fallback.
+
+`std.archive.zip` provides bounded stored-method ZIP reading and writing without
+ambient file access. `Codec.writer(WriterLimits)` creates an affine `Writer`;
+`beginStored` emits one deterministic local header, `write` streams caller-owned
+payload bytes without retaining them, `finishEntry` validates the declared size
+and CRC32, and consuming `finish` publishes the retained bounded central
+directory and EOCD. Limits independently bound encoded bytes, entry bytes and
+count, name, extra, comment, central-directory storage, and work. Every failing
+call leaves its supplied output unchanged. Capacity checks use subtraction-first
+arithmetic, and the 65,536th entry is rejected before mutation even when the
+configured entry limit is larger. Names used as textual bytes are written with
+character literals; wire signatures, lengths, and binary payload octets remain
+numeric. The focused contract requires deterministic two-entry agreement with
+Python `zipfile`, exact Windows and Linux O0/O2 execution, LLVM assembly and
+direct-call closure, affine/privacy rejection, and exact execution of the
+produced wasm artifact through the repository browser harness. DEFLATE method 8,
+data descriptors, ZIP64, encryption, and fixed-point promotion remain separate
+gates.
+
 Brotli follows as a separate bounded codec/encoder/decoder contract over
 caller-owned buffers or portable `std.io` streams; neither format adds ambient
 file APIs or unbounded allocating globals.
@@ -2613,6 +2661,14 @@ and reuse identical instantiations. Other recursive type shapes
 require further target verification.
 Parsing alone does not establish target support.
 
+An inherent method may also declare a typed block role. Unqualified block-call
+syntax resolves the exact nominal type of the flowed receiver before considering
+a top-level block function with the same name. An explicit qualified owner must
+match that receiver and never falls back by stripping the qualifier. `self`
+selects the method only; it does not infer a method type parameter or replace
+the declared callback role. For `block item: ref T`, infer `T` from the matching
+explicit method arguments and borrow the yielded element as `ref T`.
+
 Flow-call method lookup uses the exact nominal type of the immediate receiver,
 including the result of a preceding call in the same chain. An imported
 inherent method is eligible only when its `impl` header names that receiver
@@ -2639,6 +2695,10 @@ this creates a new mutable owner by one explicit move, not a copy or a wholesale
 replacement of an existing mutable container. The old payload and consumed
 subject cannot subsequently be reused. A borrowed subject grants no such
 transfer authority, including through a nested match or shadowed binding.
+When an arm terminates, an owned payload extracted from a fresh or consumed
+subject participates in that terminating cleanup even though continuing arms
+treat the binding as a borrow until an explicit transfer. A genuinely borrowed
+subject remains excluded from payload cleanup and is released only by its owner.
 
 The same transfer rule applies when an aggregate containing a borrowed owned
 value enters owned container storage through `push`, `put`, heap insertion, or
@@ -2711,6 +2771,9 @@ its specialized length name is a compile-time integer in ordinary expressions
 as well as in array type and repeat positions. Returning a fixed array from a
 function preserves this concrete type and length across the call boundary; the
 lowered pointer/length representation does not weaken `[T; N]` into `[T]`.
+Copying a named fixed-array result into a returned aggregate creates independent
+backing for the destination; an inline callee still drops the named source
+backing at its own scope exit rather than classifying that copy as a move.
 
 Dynamic arrays:
 
@@ -2841,6 +2904,16 @@ Container rules:
   `capacity == N`; its payload allocation is performed once at construction.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys
   trap in the current runtime slice.
+- A mutable growable-array owner exposes the canonical atomic operation
+  `values! -> exchange(left, right)`, where both indices are `Int`. The
+  receiver, left index, and right index are evaluated exactly once in that
+  order. Both bounds are validated before either element is loaded or stored;
+  an out-of-bounds index traps without beginning the exchange. Equal valid
+  indices are a no-op. Distinct valid indices exchange the complete element
+  representations without copying, allocating, dropping, changing length or
+  capacity, or exposing a partially initialized place. The operation returns
+  `Unit`, must be the final flow target, and is not available on fixed arrays,
+  bounded arrays, `BinaryHeap`, or `Deque`.
 - An indexed element that recursively owns storage is a place, not a copied
   value. Field and nested-index projections preserve that place identity, so
   `symbols![key].payload -> inspect` and `symbols![key].payload![0] -> inspect`
@@ -2848,6 +2921,12 @@ Container rules:
   lasts only for the call expression. Binding, returning, storing, or mutating
   through the indexed result or one of its projections is rejected. Use
   `owner! -> take(indexOrKey) => value!` to transfer ownership out explicitly.
+  A readonly call through one or more field/index projections rooted in a named
+  owner never schedules the indexed element for independent cleanup; the root
+  owner remains live and performs the one final recursive drop. When the same
+  projection is rooted in a fresh anonymous factory result, the complete
+  factory owner instead remains alive through the call and is dropped exactly
+  once afterward. Scalar sibling projections do not change either rule.
 - Extracting a stored field whose type reaches heap-backed storage partially
   deinitializes that exact move path. Sibling fields remain usable, while the
   whole owner, the same path, and descendants of that path are unavailable
@@ -2858,6 +2937,13 @@ Container rules:
   extraction/call/assignment violations as E17 before printing an LLVM target
   header. Implicit owned projections nested inside readonly request literals
   retain drop-tracking metadata but are not classified as explicit E17 moves.
+  A local affine aggregate or a `move` input may transfer one of these exact
+  paths directly; a readonly receiver, readonly parameter, or captured outer
+  owner may not. Extracting an owned path through a mutable binding or mutable
+  borrow is valid only when the immediately following statement infallibly
+  reinitializes that same path. No call, branch, fallible expression, or access
+  to another path may intervene, because the mutable owner must never be
+  observable or returned in a partially initialized state.
 - A function may return `Text` produced by `slice` from one or more
   default-borrowed `sys.file.SourceText` inputs. The compiler infers the union
   of every possible input origin; no lifetime parameter is written in the

@@ -1,0 +1,41 @@
+{
+  "$schema": "general-algorithms-partition.schema.json",
+  "schemaVersion": 2,
+  "status": "implemented-static-managed-pending",
+  "module": "stdlib/std/algorithm.slg",
+  "api": {
+    "owner": "Algorithms",
+    "method": "partitionInPlace",
+    "signature": "public partitionInPlace<T>: self, values: mut [T; ~] -> Int block item: ref T -> Bool",
+    "callShape": "algorithms -> partitionInPlace(values!) item { predicate }",
+    "receiverDecision": "exact Algorithms inherent receiver with typed block",
+    "forbiddenAlternatives": ["Predicate trait", "array-primary wrapper", "copying helper", "same-index branch"]
+  },
+  "semantics": {
+    "kind": "single forward scan with boundary exchange",
+    "predicateEvaluation": "exactly once per original element in original index order",
+    "partition": "true prefix followed by false suffix",
+    "stability": "unstable",
+    "result": "first false boundary in the inclusive range zero through original length",
+    "time": "O(n)",
+    "additionalStorage": "O(1)"
+  },
+  "ownership": {
+    "values": "mutable borrow of caller-owned growable array",
+    "item": "readonly ref T block role",
+    "mutation": "values -> exchange(boundary!, index!)",
+    "preserves": ["owner", "length", "capacity", "element multiset"],
+    "noncopyable": "complete owned element representations move only through exchange",
+    "heapAllocationsInsideMethod": 0,
+    "bulkStorageCopiesInsideMethod": 0,
+    "elementDropsInsideMethod": 0
+  },
+  "fixtures": [
+    { "id": "P-BOUNDARIES", "kind": "native-success", "source": "scripts/probes/general-algorithms/partition-boundaries.slg", "expected": "scripts/probes/general-algorithms/partition-boundaries.stdout.txt", "assertion": "empty, all-true, all-false, and mixed boundaries with exact predicate order/count and owner reuse" },
+    { "id": "P-NONCOPYABLE", "kind": "native-success-audit", "source": "scripts/probes/general-algorithms/partition-noncopyable.slg", "expected": "scripts/probes/general-algorithms/partition-noncopyable.stdout.txt", "assertion": "box payloads partition without copies and retain balanced exactly-once cleanup" },
+    { "id": "N-CALLBACK-RESULT", "kind": "compile-failure", "source": "scripts/probes/general-algorithms/partition-callback-result-negative.slg", "expected": "scripts/probes/general-algorithms/partition-callback-result-negative.stderr.contains.txt", "assertion": "typed block must return Bool before LLVM" },
+    { "id": "N-WRONG-OWNER", "kind": "compile-failure", "source": "scripts/probes/general-algorithms/partition-wrong-owner-negative.slg", "expected": "scripts/probes/general-algorithms/partition-wrong-owner-negative.stderr.contains.txt", "assertion": "qualified block method owner must match Algorithms before LLVM" },
+    { "id": "N-READONLY-OWNER", "kind": "compile-failure", "source": "scripts/probes/general-algorithms/partition-readonly-owner-negative.slg", "expected": "scripts/probes/general-algorithms/partition-readonly-owner-negative.stderr.contains.txt", "assertion": "mutable array input requires a mutable owner place before LLVM" }
+  ],
+  "acceptance": "five exact managed Windows cases; positives require warning-note-free LLVM, llvm-as, V004, exact native output, no forbidden partition body calls, owner reuse, and balanced noncopyable cleanup; negatives require one expected semantic diagnostic and no LLVM"
+}

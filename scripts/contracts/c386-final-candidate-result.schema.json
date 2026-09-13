@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defectId", "status", "compilerSha256", "expectedCompilerSha256", "candidateShaMatched", "inputStable", "inputDrift", "inputHashesStart", "inputHashesEnd", "canonicalOwnerControls", "modeParity", "checkedWindows", "fixture1702", "failureIds", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-12-386" },
+    "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "$ref": "#/$defs/sha" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "candidateShaMatched": { "type": "boolean" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashesStart": { "type": "object", "minProperties": 14, "additionalProperties": { "$ref": "#/$defs/sha" } },
+    "inputHashesEnd": { "type": "object", "minProperties": 14, "additionalProperties": { "$ref": "#/$defs/sha" } },
+    "canonicalOwnerControls": { "$ref": "#/$defs/canonical" },
+    "modeParity": { "$ref": "#/$defs/parity" },
+    "checkedWindows": { "$ref": "#/$defs/checked" },
+    "fixture1702": { "$ref": "#/$defs/fixture" },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [{
+    "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+    "then": { "properties": {
+      "candidateShaMatched": { "const": true }, "inputStable": { "const": true }, "inputDrift": { "maxItems": 0 }, "failureIds": { "maxItems": 0 }, "failure": { "type": "null" },
+      "canonicalOwnerControls": { "$ref": "#/$defs/canonicalPassed" }, "modeParity": { "$ref": "#/$defs/parityPassed" },
+      "checkedWindows": { "$ref": "#/$defs/checkedPassed" }, "fixture1702": { "$ref": "#/$defs/fixturePassed" }
+    } },
+    "else": { "properties": { "failureIds": { "minItems": 1 }, "failure": { "type": "string", "minLength": 1 } } }
+  }],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "canonical": { "type": "object", "additionalProperties": false, "required": ["completed", "total", "exitCode"], "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 5 }, "total": { "const": 5 }, "exitCode": { "type": ["integer", "null"] } } },
+    "parity": { "type": "object", "additionalProperties": false, "required": ["completed", "total", "nodeCount", "exitCode"], "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 2 }, "total": { "const": 2 }, "nodeCount": { "type": "integer", "minimum": 0 }, "exitCode": { "type": ["integer", "null"] } } },
+    "checked": { "type": "object", "additionalProperties": false, "required": ["compileExit", "stderrSha256", "warningNoteCount", "s059Count", "llvmAsExit", "v004Exit", "llvmSha256"], "properties": { "compileExit": { "type": ["integer", "null"] }, "stderrSha256": { "$ref": "#/$defs/sha" }, "warningNoteCount": { "type": "integer", "minimum": 0 }, "s059Count": { "type": "integer", "minimum": 0 }, "llvmAsExit": { "type": ["integer", "null"] }, "v004Exit": { "type": ["integer", "null"] }, "llvmSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" } } },
+    "fixture": { "type": "object", "additionalProperties": false, "required": ["id", "compileExit", "llvmAsExit", "v004Exit", "linkExit", "nativeExit", "stdoutSha256", "expectedStdoutSha256", "stdoutExact", "stderrSha256", "llvmSha256", "executableSha256"], "properties": { "id": { "const": "1702-selfhost-parallel-comparison-materialization" }, "compileExit": { "type": ["integer", "null"] }, "llvmAsExit": { "type": ["integer", "null"] }, "v004Exit": { "type": ["integer", "null"] }, "linkExit": { "type": ["integer", "null"] }, "nativeExit": { "type": ["integer", "null"] }, "stdoutSha256": { "$ref": "#/$defs/sha" }, "expectedStdoutSha256": { "$ref": "#/$defs/sha" }, "stdoutExact": { "type": "boolean" }, "stderrSha256": { "$ref": "#/$defs/sha" }, "llvmSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }, "executableSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" } } },
+    "canonicalPassed": { "allOf": [{ "$ref": "#/$defs/canonical" }, { "properties": { "completed": { "const": 5 }, "exitCode": { "const": 0 } } }] },
+    "parityPassed": { "allOf": [{ "$ref": "#/$defs/parity" }, { "properties": { "completed": { "const": 2 }, "nodeCount": { "const": 942 }, "exitCode": { "const": 0 } } }] },
+    "checkedPassed": { "allOf": [{ "$ref": "#/$defs/checked" }, { "properties": { "compileExit": { "const": 0 }, "warningNoteCount": { "const": 0 }, "s059Count": { "const": 0 }, "llvmAsExit": { "const": 0 }, "v004Exit": { "const": 0 }, "llvmSha256": { "type": "string" } } }] },
+    "fixturePassed": { "allOf": [{ "$ref": "#/$defs/fixture" }, { "properties": { "compileExit": { "const": 0 }, "llvmAsExit": { "const": 0 }, "v004Exit": { "const": 0 }, "linkExit": { "const": 0 }, "nativeExit": { "const": 0 }, "stdoutExact": { "const": true }, "stderrSha256": { "const": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" }, "llvmSha256": { "type": "string" }, "executableSha256": { "type": "string" } } }] }
+  }
+}

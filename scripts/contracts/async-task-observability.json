@@ -1,0 +1,203 @@
+{
+  "$schema": "async-task-observability.schema.json",
+  "schemaVersion": 1,
+  "capabilityId": "async-task-observability",
+  "implementationStatus": "contract-frozen",
+  "module": "std.async.diagnostics",
+  "authority": {
+    "spec": "docs/SPEC.md#structured-async-functions",
+    "managedTaskControl": "src/Sollang.Compiler/CodeGen/LlvmEmitter.cs",
+    "managedAsyncLowering": "src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs",
+    "managedAsyncRuntime": "src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs",
+    "managedSemantics": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
+    "managedSuspensionLocator": "src/Sollang.Compiler/Semantics/AsyncSuspensionLocator.cs",
+    "selfhostRuntime": "selfhost/llvm/emitter/async_runtime.slg",
+    "selfhostTaskControl": "selfhost/llvm/text/core_prepare.slg",
+    "selfhostSuspensions": "selfhost/ir/typed.slg"
+  },
+  "activation": {
+    "kind": "explicit-affine-instance",
+    "owner": "DiagnosticSession",
+    "entry": "startDiagnosticSession(DiagnosticLimits) -> Result<DiagnosticSession, DiagnosticError>",
+    "attachment": "DiagnosticSession.track<T>(mut self, move T) -> Result<T, (T, TrackFailureKind)> where the compiler requires T to be Task<U>; every failure returns the unchanged Task owner and a typed reason in the product error",
+    "propagation": "a successfully tracked root and every subsequently created structured child inherit the same session without an ambient lookup",
+    "validation": "tracking an already tracked or cross-session Task fails before metadata mutation and returns its owner",
+    "capacityOutcome": "capacity exhaustion returns UntrackedCapacity with the Task owner; execution and scheduling remain unchanged and untrackedTasks increments",
+    "default": "off",
+    "ambientRegistry": false,
+    "schedulerSemanticChanges": false
+  },
+  "identity": {
+    "sessionId": "opaque nonzero UInt64, process-lifetime monotonic, never reused; exhaustion rejects session creation",
+    "taskId": "nonzero UInt64, monotonically assigned and stable within one session",
+    "taskKey": "SessionId plus TaskId",
+    "parent": "Option<TaskId>; None only for a tracked root",
+    "reuseAfterClose": "TaskId values may restart at 1 only in a later session; SessionId never reuses, so stale TaskKey values never identify new tasks"
+  },
+  "snapshot": {
+    "ownership": "caller-owned mutable fixed-length output; runtime neither retains nor resizes it",
+    "ordering": "ascending TaskId",
+    "result": "SnapshotResult { sessionId, written, available, truncated }",
+    "allocation": "zero allocations per snapshot",
+    "consistency": "one scheduler-quiescent point-in-time view; snapshot neither pumps ready work nor wakes timers",
+    "terminalRetention": "terminal task records remain stable and addressable in snapshots until successful session close",
+    "locatorPresence": "Some for the active coroutine await/yield or intrinsic suspension call-site; None for initial Ready, Running, and terminal records",
+    "recordFields": [
+      "taskId",
+      "parentTaskId",
+      "lifecycle",
+      "waitState",
+      "awaitedTaskId",
+      "timerDeadlineMillis",
+      "suspension"
+    ],
+    "suspensionLocator": [
+      "sourceModule",
+      "functionSymbol",
+      "resumeState",
+      "byteOffset",
+      "line",
+      "column"
+    ]
+  },
+  "stateModel": {
+    "lifecycle": ["Pending", "Running", "Completed", "Cancelled"],
+    "waitState": ["None", "Ready", "Timer", "AwaitBlocked"],
+    "validPairs": [
+      "Pending/Ready",
+      "Pending/Timer",
+      "Pending/AwaitBlocked",
+      "Running/None",
+      "Completed/None",
+      "Cancelled/None"
+    ],
+    "runtimeStatusMapping": {
+      "0": "Pending/Ready",
+      "1": "Running/None",
+      "2": "Completed/None",
+      "3": "Cancelled/None",
+      "4": "Pending/Timer",
+      "5": "Pending/AwaitBlocked"
+    }
+  },
+  "bounds": {
+    "minimumTrackedTasks": 1,
+    "maximumTrackedTasks": 65535,
+    "sessionAllocation": "one fixed-capacity record table allocated only by successful explicit session creation",
+    "saturation": "new tasks continue with unchanged scheduling and are counted as untracked; existing records and IDs remain stable",
+    "snapshotBound": "writes at most output length and reports available plus truncated",
+    "unboundedAllocation": false
+  },
+  "close": {
+    "operation": "DiagnosticSession.close(move self) -> Result<DiagnosticSummary, DiagnosticCloseFailure>",
+    "activeTaskRule": "Busy returns the same session owner inside DiagnosticCloseFailure",
+    "successRule": "all tracked tasks are terminal, record storage is released exactly once, and the session becomes unusable",
+    "staleIdentityRule": "snapshots remain plain values but cannot be used to query or control any task"
+  },
+  "productionOffGate": {
+    "fixture": "scripts/probes/async-task-observability/production-off.slg",
+    "taskControlBytes": 152,
+    "allocationCount": 2,
+    "releaseCount": 2,
+    "invalidReleaseCount": 0,
+    "required": [
+      "exact stdout matches the non-observability baseline",
+      "managed and selfhost task-control layout remains 152 bytes",
+      "zero emitted diagnostic session globals, calls, branches, stores, and allocations",
+      "runtime allocation audit matches the non-observability baseline exactly"
+    ]
+  },
+  "focusedInitialGate": {
+    "total": 4,
+    "canonicalLineFormat": "space-separated key=value fields in the declared order; Option values use None or Some(value); timerDeadlineMillis prints zero or nonzero while the record retains the exact UInt64 deadline",
+    "cases": [
+      {
+        "id": "normal-parent-child-states",
+        "source": "scripts/probes/async-task-observability/parent-child-states.slg",
+        "expectedOutput": "scripts/probes/async-task-observability/parent-child-states.expected.txt",
+        "observationAuthority": "runtime-exact-stdout",
+        "requiredEvidence": ["exact-output", "session-id", "task-id", "parent-child", "ready", "terminal"]
+      },
+      {
+        "id": "normal-stable-id-transitions",
+        "source": "scripts/probes/async-task-observability/stable-id-transitions.slg",
+        "expectedOutput": "scripts/probes/async-task-observability/stable-id-transitions.expected.txt",
+        "observationAuthority": "runtime-exact-stdout",
+        "requiredEvidence": ["exact-output", "stable-id", "ascending-task-id", "ready-to-terminal"]
+      },
+      {
+        "id": "normal-suspension-locator",
+        "source": "scripts/probes/async-task-observability/unicode-suspension-locator.slg",
+        "expectedOutput": "scripts/probes/async-task-observability/unicode-suspension-locator.expected.txt",
+        "observationAuthority": "llvm-metadata-plus-runtime-exact-stdout",
+        "locatorExpectation": { "token": "await", "utf8ByteOffset": 2897, "line": 78, "column": 39 },
+        "requiredEvidence": ["exact-output", "source-module", "function-symbol", "resume-state", "utf8-byte-offset", "one-based-line", "one-based-column"]
+      },
+      {
+        "id": "production-off-zero-overhead",
+        "source": "scripts/probes/async-task-observability/production-off.slg",
+        "expectedOutput": "scripts/probes/async-task-observability/production-off.expected.txt",
+        "observationAuthority": "runtime-exact-stdout-plus-ir-and-allocation-audit",
+        "requiredEvidence": ["exact-output", "task-control-152", "zero-diagnostic-ir", "exact-allocation-baseline"]
+      }
+    ]
+  },
+  "publicSurface": {
+    "types": [
+      "Lifecycle", "WaitState", "DiagnosticError", "TrackFailureKind", "DiagnosticCloseFailureKind",
+      "DiagnosticLimits", "SuspensionLocator", "TaskSnapshot", "SnapshotResult", "DiagnosticSummary",
+      "DiagnosticSession", "DiagnosticCloseFailure"
+    ],
+    "signatures": [
+      "startDiagnosticSession(DiagnosticLimits) -> Result<DiagnosticSession, DiagnosticError>",
+      "DiagnosticSession.track<T>(mut self, move T) -> Result<T, (T, TrackFailureKind)> where T is Task<U>",
+      "DiagnosticSession.snapshot(self, mut [TaskSnapshot; ~]) -> SnapshotResult",
+      "DiagnosticSession.close(move self) -> Result<DiagnosticSummary, DiagnosticCloseFailure>"
+    ],
+    "trackFailureType": "(T, TrackFailureKind) where T is Task<U>",
+    "genericUserAdtRequired": false,
+    "probeCanonicalFormatterPublic": false
+  },
+  "forbidden": [
+    "ambient process-global mutable task registry",
+    "production-on default",
+    "unbounded record or snapshot allocation",
+    "scheduler queue reordering or extra scheduler progress",
+    "task cancellation, resume, wake, or priority control through diagnostics",
+    "raw context, function pointer, queue link, or native handle exposure",
+    "cross-session task lookup",
+    "snapshot buffer retention"
+  ],
+  "probeMatrix": [
+    { "id": "normal-parent-child-states", "class": "normal", "source": "scripts/probes/async-task-observability/parent-child-states.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "normal-stable-id-transitions", "class": "normal", "source": "scripts/probes/async-task-observability/stable-id-transitions.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "normal-suspension-locator", "class": "normal", "source": "scripts/probes/async-task-observability/unicode-suspension-locator.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "boundary-caller-buffer-truncation", "class": "boundary", "source": "scripts/probes/async-task-observability/bounded-snapshot.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "boundary-record-capacity", "class": "boundary", "source": "scripts/probes/async-task-observability/capacity-saturation.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "boundary-close-busy-owner-return", "class": "boundary", "source": "scripts/probes/async-task-observability/session-close-reuse.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "boundary-session-id-no-reuse", "class": "boundary", "source": "scripts/probes/async-task-observability/session-close-reuse.slg", "expectation": "exact-stdout", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "negative-affine-session-copy", "class": "authority-negative", "source": "scripts/probes/async-task-observability/affine-copy-negative.slg", "expectation": "compiler-rejected", "managed": true, "selfhost": true, "platforms": [] },
+    { "id": "negative-use-after-close", "class": "authority-negative", "source": "scripts/probes/async-task-observability/use-after-close-negative.slg", "expectation": "compiler-rejected", "managed": true, "selfhost": true, "platforms": [] },
+    { "id": "negative-ambient-registry", "class": "authority-negative", "source": "scripts/probes/async-task-observability/ambient-registry-negative.slg", "expectation": "compiler-rejected", "managed": true, "selfhost": true, "platforms": [] },
+    { "id": "negative-scheduler-control", "class": "authority-negative", "source": "scripts/probes/async-task-observability/scheduler-control-negative.slg", "expectation": "compiler-rejected", "managed": true, "selfhost": true, "platforms": [] },
+    { "id": "production-off-zero-overhead", "class": "production-off", "source": "scripts/probes/async-task-observability/production-off.slg", "expectation": "exact-stdout-and-allocation-audit", "managed": true, "selfhost": true, "platforms": ["windows-x64", "linux-x64"] },
+    { "id": "browser-async-actionable-rejection", "class": "boundary", "source": "scripts/probes/async-task-observability/production-off.slg", "expectation": "compiler-rejected", "managed": true, "selfhost": true, "platforms": ["wasm32-browser"] }
+  ],
+  "denominators": {
+    "contractStatic": 14,
+    "managed": 13,
+    "selfhost": 13,
+    "platform": 17,
+    "platformByTarget": {
+      "windows-x64": 8,
+      "linux-x64": 8,
+      "wasm32-browser": 1
+    },
+    "classes": {
+      "normal": 3,
+      "boundary": 5,
+      "authority-negative": 4,
+      "production-off": 1
+    }
+  }
+}

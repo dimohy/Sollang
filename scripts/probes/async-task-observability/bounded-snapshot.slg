@@ -1,0 +1,33 @@
+namespace probes.async_task_observability.bounded_snapshot
+
+import std.async.diagnostics as diagnostics
+
+pending: -> async Unit { yield }
+
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 3 }) => opened
+    opened -> when {
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
+            pending() => task
+            session! -> track(task) => trackedResult
+            trackedResult -> when {
+                Ok(tracked) {
+                    [diagnostics.TaskSnapshot; 0] => empty!
+                    session! -> snapshot(empty!) => first
+                    # Expected: written=0, available=1, truncated=true. The caller
+                    # buffer is retained by the caller and snapshot allocates nothing.
+                    first.written -> println
+                    first.available -> println
+                    first.truncated -> println
+                    tracked -> await
+                    session! -> close
+                }
+                Err(failure) {
+                    failure._0 -> await
+                    "track-error" -> println
+                }
+            }
+        }
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+    }
+}

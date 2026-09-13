@@ -51,8 +51,8 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 330) {
-    throw "Expected 330 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 331) {
+    throw "Expected 331 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredStatefulHelpers = @(
     "isImportedLibraryFunction"
@@ -66,6 +66,7 @@ $requiredStatefulHelpers = @(
     "emitDurationSleepTask"
     "emitAsyncFunction"
     "workerTryParallelResultType"
+    "emitExchange"
 )
 foreach ($requiredStatefulHelper in $requiredStatefulHelpers) {
     if ($requiredStatefulHelper -notin $helperNames) {

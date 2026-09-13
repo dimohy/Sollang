@@ -82,6 +82,7 @@ internal abstract class LlvmRuntimePlatform
     public bool UsesComputePool { get; set; }
     public bool UsesDirectoryTraversal { get; set; }
     public bool UsesNetwork { get; set; }
+    public bool UsesSocketCompletion { get; set; }
     public bool UsesSecureRandom { get; set; }
     public bool UsesMouseEvents { get; set; }
     public bool UsesConcurrentStreamJoins { get; set; }
@@ -857,15 +858,15 @@ internal abstract class LlvmRuntimePlatform
               ret void
             }
 
-            define internal void @sollang_file_push_completion(ptr %control) #0 {
+            define internal void @sollang_io_push_completion(ptr %control) #0 {
             entry:
               %next_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 16
               br label %push
 
             push:
-              %head = load atomic ptr, ptr @sollang_file_completion_head acquire, align 8
+              %head = load atomic ptr, ptr @sollang_io_completion_head acquire, align 8
               store ptr %head, ptr %next_slot, align 8
-              %exchange = cmpxchg ptr @sollang_file_completion_head, ptr %head, ptr %control release monotonic
+              %exchange = cmpxchg ptr @sollang_io_completion_head, ptr %head, ptr %control release monotonic
               %pushed = extractvalue { ptr, i1 } %exchange, 1
               br i1 %pushed, label %done, label %push
 
@@ -1077,7 +1078,7 @@ internal abstract class LlvmRuntimePlatform
               br label %push_completed_request
 
             push_completed_request:
-              call void @sollang_file_push_completion(ptr %request)
+              call void @sollang_io_push_completion(ptr %request)
               br label %next_request
 
             next_request:
@@ -1092,21 +1093,21 @@ internal abstract class LlvmRuntimePlatform
               br label %process
 
             signal:
-              call void @sollang_platform_file_worker_signal_completion()
+              call void @sollang_platform_io_signal_completion()
               br label %wait
 
             stopped:
               ret void
             }
 
-            define internal i1 @sollang_file_drain_completions() #0 {
+            define internal i1 @sollang_io_drain_completions() #0 {
             entry:
-              %batch = atomicrmw xchg ptr @sollang_file_completion_head, ptr null acq_rel
+              %batch = atomicrmw xchg ptr @sollang_io_completion_head, ptr null acq_rel
               %has_batch = icmp ne ptr %batch, null
               br i1 %has_batch, label %clear_signal, label %none
 
             clear_signal:
-              call void @sollang_platform_file_worker_clear_completion()
+              call void @sollang_platform_io_clear_completion()
               br label %reverse
 
             reverse:
@@ -1147,7 +1148,7 @@ internal abstract class LlvmRuntimePlatform
               br label %continue
 
             continue:
-              %remaining = atomicrmw sub ptr @sollang_file_outstanding, i64 1 acq_rel
+              %remaining = atomicrmw sub ptr @sollang_io_outstanding, i64 1 acq_rel
               br label %drain
 
             done:
@@ -1177,7 +1178,7 @@ internal abstract class LlvmRuntimePlatform
               store atomic i32 1, ptr %phase_slot release, align 4
               %status_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 4
               store i32 6, ptr %status_slot, align 4
-              %old_count = atomicrmw add ptr @sollang_file_outstanding, i64 1 acq_rel
+              %old_count = atomicrmw add ptr @sollang_io_outstanding, i64 1 acq_rel
               call void @sollang_file_push_request(ptr %control)
               ret void
 
@@ -1191,13 +1192,13 @@ internal abstract class LlvmRuntimePlatform
               br label %check
 
             check:
-              %outstanding = load atomic i64, ptr @sollang_file_outstanding acquire, align 8
+              %outstanding = load atomic i64, ptr @sollang_io_outstanding acquire, align 8
               %idle = icmp eq i64 %outstanding, 0
               br i1 %idle, label %done, label %wait
 
             wait:
-              call void @sollang_platform_file_worker_wait_completion(i64 -1)
-              %progress = call i1 @sollang_file_drain_completions()
+              call void @sollang_platform_io_wait_completion(i64 -1)
+              %progress = call i1 @sollang_io_drain_completions()
               br label %check
 
             done:
@@ -1218,6 +1219,7 @@ internal abstract class LlvmRuntimePlatform
               br label %done
 
             done:
+              call void @sollang_platform_io_shutdown()
               ret void
             }
 
@@ -1265,12 +1267,12 @@ internal abstract class LlvmRuntimePlatform
         else
         {
             functions.AppendLine("""
-            define internal i1 @sollang_file_drain_completions() #0 {
+            define internal i1 @sollang_io_drain_completions() #0 {
             entry:
               ret i1 false
             }
 
-            define internal void @sollang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            define internal void @sollang_platform_io_wait_completion(i64 %requested) #0 {
             entry:
               ret void
             }
@@ -1433,7 +1435,7 @@ internal abstract class LlvmRuntimePlatform
 
             define internal i1 @sollang_timer_wait_next() #0 {
             entry:
-              %file_progress = call i1 @sollang_file_drain_completions()
+              %file_progress = call i1 @sollang_io_drain_completions()
               call void @sollang_timer_wake_due()
               %ready = load ptr, ptr @sollang_task_ready_head, align 8
               %has_ready = icmp ne ptr %ready, null
@@ -1442,7 +1444,7 @@ internal abstract class LlvmRuntimePlatform
             inspect_timer:
               %timer = load ptr, ptr @sollang_task_timer_head, align 8
               %has_timer = icmp ne ptr %timer, null
-              %file_outstanding = load atomic i64, ptr @sollang_file_outstanding acquire, align 8
+              %file_outstanding = load atomic i64, ptr @sollang_io_outstanding acquire, align 8
               %has_file = icmp ne i64 %file_outstanding, 0
               br i1 %has_timer, label %timer_timeout, label %inspect_file
 
@@ -1459,14 +1461,14 @@ internal abstract class LlvmRuntimePlatform
               br i1 %has_file, label %wait_file_or_timer, label %wait_timer_only
 
             wait_file_or_timer:
-              call void @sollang_platform_file_worker_wait_completion(i64 %remaining)
-              %file_timer_progress = call i1 @sollang_file_drain_completions()
+              call void @sollang_platform_io_wait_completion(i64 %remaining)
+              %file_timer_progress = call i1 @sollang_io_drain_completions()
               call void @sollang_timer_wake_due()
               br label %progress
 
             wait_file_only:
-              call void @sollang_platform_file_worker_wait_completion(i64 -1)
-              %file_only_progress = call i1 @sollang_file_drain_completions()
+              call void @sollang_platform_io_wait_completion(i64 -1)
+              %file_only_progress = call i1 @sollang_io_drain_completions()
               br label %progress
 
             wait_timer_only:

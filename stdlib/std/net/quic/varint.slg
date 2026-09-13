@@ -16,35 +16,37 @@ encodedLength value: UInt64 -> Int {
     }
 }
 
-public encode value: UInt64 -> Result<[UInt8; ~], errors.Error> {
-    value > 4_611_686_018_427_387_903 -> if {
-        Result<[UInt8; ~], errors.Error>.Err(errors.Error { kind: errors.Kind.Encoding, code: value }) -> return
+impl UInt64 {
+    public encode: self -> Result<[UInt8; ~], errors.Error> {
+        self > 4_611_686_018_427_387_903 -> if {
+            Result<[UInt8; ~], errors.Error>.Err(errors.Error { kind: errors.Kind.Encoding, code: self }) -> return
+        }
+        encodedLength(self) => length
+        length -> when {
+            == 1 { UInt64(0) }
+            == 2 { UInt64(64) }
+            == 4 { UInt64(128) }
+            else { UInt64(192) }
+        } => prefix
+        UInt64(1) => divisor!
+        1 => divisorIndex!
+        divisorIndex! < length -> while {
+            divisor! * 256 => divisor!
+            divisorIndex! + 1 => divisorIndex!
+        }
+        self => remaining!
+        [UInt8; ~] => bytes!
+        0 => byteIndex!
+        byteIndex! < length -> while {
+            remaining! / divisor! => byteValue
+            byteIndex! == 0 -> if { byteValue + prefix } else { byteValue } => encodedByte
+            bytes! -> push(UInt8(encodedByte))
+            remaining! % divisor! => remaining!
+            divisor! > 1 -> if { divisor! / 256 => divisor! }
+            byteIndex! + 1 => byteIndex!
+        }
+        Result<[UInt8; ~], errors.Error>.Ok(bytes!)
     }
-    encodedLength(value) => length
-    length -> when {
-        == 1 { UInt64(0) }
-        == 2 { UInt64(64) }
-        == 4 { UInt64(128) }
-        else { UInt64(192) }
-    } => prefix
-    UInt64(1) => divisor!
-    1 => divisorIndex!
-    divisorIndex! < length -> while {
-        divisor! * 256 => divisor!
-        divisorIndex! + 1 => divisorIndex!
-    }
-    value => remaining!
-    [UInt8; ~] => bytes!
-    0 => byteIndex!
-    byteIndex! < length -> while {
-        remaining! / divisor! => byteValue
-        byteIndex! == 0 -> if { byteValue + prefix } else { byteValue } => encodedByte
-        bytes! -> push(UInt8(encodedByte))
-        remaining! % divisor! => remaining!
-        divisor! > 1 -> if { divisor! / 256 => divisor! }
-        byteIndex! + 1 => byteIndex!
-    }
-    Result<[UInt8; ~], errors.Error>.Ok(bytes!)
 }
 
 public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {

@@ -1,0 +1,72 @@
+import std.io.async as asyncio
+import std.io.socket as ioSocket
+import std.net as net
+import std.net.socket as socket
+
+struct Setup {
+    listener: socket.TcpListener
+    sender: socket.TcpStream
+    receiver: socket.TcpStream
+}
+
+setup: -> Result<Setup, socket.SocketError> uses Network {
+    socket.ListenOptions { endpoint: net.loopback(0) -> unified, backlog: 1, reuseAddress: true } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> connect? => sender
+    listener -> accept? => receiver
+    Result<Setup, socket.SocketError>.Ok(Setup { listener: listener, sender: sender, receiver: receiver })
+}
+
+main {
+    setup() -> when {
+        Err(error) { "setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value.listener => listener
+            value.sender => sender
+            value.receiver => receiver
+            receiver -> ioSocket.asyncStream -> when {
+                Err(failure) {
+                    failure.error.code => errorCode
+                    failure.connection -> close
+                    sender -> close
+                    listener -> close
+                    "create-error=$errorCode" -> println
+                }
+                Ok(channel) {
+                    channel -> readIntoAsync([0, 0, 0; ~], asyncio.Cancellation { requested: false }) => readTask
+                    sender -> sendText("de") -> when {
+                        Err(error) {
+                            readTask -> cancel
+                            sender -> close
+                            listener -> close
+                            "send-error=$(error.code)" -> println
+                        }
+                        Ok(_) {
+                            readTask -> await -> when {
+                                Err(failure) {
+                                    UIntSize(failure.buffer -> len) => length
+                                    failure.error.code => errorCode
+                                    failure.channel => channel
+                                    channel -> close
+                                    sender -> close
+                                    listener -> close
+                                    "read-error=$errorCode,len=$length" -> println
+                                }
+                                Ok(success) {
+                                    success.buffer[0] => first
+                                    success.buffer[1] => last
+                                    UIntSize(success.buffer -> len) => length
+                                    success.channel => channel
+                                    channel -> close
+                                    sender -> close
+                                    listener -> close
+                                    "pending=true,count=$(success.count),first=$first,last=$last,len=$length" -> println
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,55 @@
+namespace probes.async_task_observability.completed_unawaited_close
+
+import std.async.diagnostics as diagnostics
+
+emptySnapshot: -> diagnostics.TaskSnapshot => diagnostics.TaskSnapshot {
+    taskId: 0,
+    parentTaskId: Option<UInt64>.None,
+    lifecycle: diagnostics.Lifecycle.Pending,
+    waitState: diagnostics.WaitState.None,
+    awaitedTaskId: Option<UInt64>.None,
+    timerDeadlineMillis: 0,
+    suspension: Option<diagnostics.SuspensionLocator>.None
+}
+
+value: -> async Int { 42 }
+
+public observe: -> async Unit uses Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) -> when {
+        Ok(session) {
+            session => active!
+            value() => pending
+            active! -> track(pending) -> when {
+                Ok(tracked) {
+                    [emptySnapshot()] => output!
+                    yield
+                    active! -> snapshot<1>(output!) => captured
+                    "snapshot sessionId=$(captured.sessionId) written=$(captured.written) available=$(captured.available) truncated=$(captured.truncated)" -> println
+                    "task taskId=$(output![0].taskId)" -> println
+                    active! -> close -> when {
+                        Ok(summary) {
+                            "close sessionId=$(summary.sessionId) trackedTasks=$(summary.trackedTasks) untrackedTasks=$(summary.untrackedTasks)" -> println
+                            tracked -> await -> println
+                        }
+                        Err(failure) {
+                            tracked -> await => recoveredValue
+                            failure.session -> close => recoveredClose
+                            "close-error" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => recoveredValue
+                    active! -> close => recoveredClose
+                    "track-error" -> println
+                }
+            }
+        }
+        Err(error) { "open-error" -> println }
+    }
+}
+
+main {
+    probes.async_task_observability.completed_unawaited_close.observe() => observation
+    observation -> await
+}

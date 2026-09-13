@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "fixture", "reference", "limits", "malformedMatrix", "recompression", "allocationAudit", "negativeTreeHeaders", "expectedStdout", "unsupported"],
+  "properties": {
+    "$schema": { "const": "zstd-fse-huffman-weights.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "fixture": { "const": "1753-zstd-fse-huffman-weights" },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "command", "encodedBase64", "encodedLength", "encodedSha256", "decodedLength", "decodedSha256", "decodedGenerator", "treeHeaderOffset", "fseDescriptionBytes"],
+      "properties": {
+        "producer": { "const": "zstd 1.5.7" },
+        "command": { "const": "zstd -3" },
+        "encodedBase64": { "type": "string", "minLength": 1 },
+        "encodedLength": { "const": 350 },
+        "encodedSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "decodedLength": { "const": 4096 },
+        "decodedSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "decodedGenerator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["phraseAscii", "highBytePeriod", "highByteBase", "highByteModulus"],
+          "properties": {
+            "phraseAscii": { "const": "the quick brown fox jumps over the lazy dog. " },
+            "highBytePeriod": { "const": 47 },
+            "highByteBase": { "const": 128 },
+            "highByteModulus": { "const": 127 }
+          }
+        },
+        "treeHeaderOffset": { "const": 13 },
+        "fseDescriptionBytes": { "const": 57 }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumWeights", "maximumWeight", "maximumAccuracyLog"],
+      "properties": {
+        "maximumWeights": { "const": 255 },
+        "maximumWeight": { "const": 11 },
+        "maximumAccuracyLog": { "const": 6 }
+      }
+    },
+    "malformedMatrix": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "prefixItems": [
+        { "$ref": "#/$defs/acceptedCase", "properties": { "id": { "const": "terminal-zero-bit-state" }, "layer": { "const": "fse" }, "expected": { "const": "accepted-complete" } } },
+        { "$ref": "#/$defs/acceptedCase", "properties": { "id": { "const": "even-symbol-termination" }, "layer": { "const": "huffman" }, "expected": { "const": "accepted-bytes-2" } } },
+        { "$ref": "#/$defs/acceptedCase", "properties": { "id": { "const": "odd-symbol-termination" }, "layer": { "const": "huffman" }, "expected": { "const": "accepted-bytes-2" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "normalized-count-corruption" }, "layer": { "const": "fse" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "end-marker-corruption" }, "layer": { "const": "fse" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "truncation" }, "layer": { "const": "huffman" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "trailing-bits" }, "layer": { "const": "huffman" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "weight-12-overflow" }, "layer": { "const": "huffman" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "weight-count-255-bound" }, "layer": { "const": "fse" } } },
+        { "$ref": "#/$defs/failureCase", "properties": { "id": { "const": "table-accuracy-bound" }, "layer": { "const": "fse" } } },
+        {
+          "allOf": [{ "$ref": "#/$defs/case" }],
+          "properties": {
+            "id": { "const": "zstd-invalid-tree-headers" },
+            "layer": { "const": "zstd" },
+            "expected": { "const": "Error.InvalidBlock" },
+            "offset": { "const": 13 }
+          },
+          "required": ["offset"]
+        }
+      ],
+      "items": false
+    },
+    "recompression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["producer", "arguments", "deterministicRuns", "expectedLength", "expectedSha256"],
+      "properties": {
+        "producer": { "const": "zstd 1.5.7" },
+        "arguments": { "prefixItems": [{ "const": "-q" }, { "const": "-3" }, { "const": "-f" }], "items": false, "minItems": 3, "maxItems": 3 },
+        "deterministicRuns": { "const": 2 },
+        "expectedLength": { "const": 350 },
+        "expectedSha256": { "const": "FA3C63CF6CEBC92F39F5A30FDCD4FD938ACFBADDAA3F67E7D0A2D01740E01F1E" }
+      }
+    },
+    "allocationAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "maximumAllocations", "expectedAllocations", "expectedReleases", "expectedInvalidReleases"],
+      "properties": {
+        "scope": { "const": "malformed-boundary-matrix" },
+        "maximumAllocations": { "const": 2048 },
+        "expectedAllocations": { "const": 1339 },
+        "expectedReleases": { "const": 1339 },
+        "expectedInvalidReleases": { "const": 0 }
+      }
+    },
+    "negativeTreeHeaders": {
+      "type": "array",
+      "prefixItems": [{ "const": 0 }, { "const": 58 }, { "const": 127 }],
+      "items": false,
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "expectedStdout": { "const": "zstd-fse-huffman=true\nzstd-fse-huffman-malformed=true,true,true\nzstd-fse-terminal=true,true,true\nzstd-fse-bounds=true,true,true,true,true,true,true,true,true,true,true\n" },
+    "unsupported": {
+      "type": "array",
+      "prefixItems": [{ "const": "dictionaries" }],
+      "items": false,
+      "minItems": 1,
+      "maxItems": 1
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "layer", "expected"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "layer": { "enum": ["fse", "huffman", "zstd"] },
+        "expected": { "type": "string", "minLength": 1 },
+        "offset": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "acceptedCase": {
+      "allOf": [{ "$ref": "#/$defs/case" }],
+      "not": { "required": ["offset"] }
+    },
+    "failureCase": {
+      "allOf": [{ "$ref": "#/$defs/case" }],
+      "properties": { "expected": { "const": "Failure.Invalid" }, "offset": { "type": "null" } },
+      "required": ["offset"]
+    }
+  }
+}

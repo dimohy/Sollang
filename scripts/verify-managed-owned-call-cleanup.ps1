@@ -73,7 +73,12 @@ $cases = @(
     @{name='1578-borrowed-named-enum-reuse';allocations=1},
     @{name='1579-borrowed-record-literal-cleanup';allocations=1},
     @{name='1580-borrowed-array-literal-cleanup';allocations=1},
-    @{name='1581-borrowed-enum-literal-cleanup';allocations=1}
+    @{name='1581-borrowed-enum-literal-cleanup';allocations=1},
+    @{name='1741-readonly-projected-factory-parent-cleanup';allocations=1},
+    @{name='1742-readonly-named-nested-index-retention';allocations=2},
+    @{name='1743-readonly-anonymous-factory-index-cleanup';allocations=2},
+    @{name='1744-inline-named-fixed-copy-return-cleanup';allocations=2},
+    @{name='1745-readonly-same-indexed-item-scalar-projections';allocations=2;forbidDynamicIndexedItemDrop=$true}
 )
 if ($Fixture.Count -gt 0) {
     $unknown = @($Fixture | Where-Object { $_ -notin $cases.name })
@@ -102,11 +107,18 @@ function Invoke-CheckedCleanupProcess {
 }
 $results = foreach ($case in $cases) {
     $prefix = Join-Path $output $case.name
-    $item = [ordered]@{fixture=$case.name;sourceSha256=(Get-FileHash $case.source).Hash;expectedSha256=(Get-FileHash $case.expected).Hash;allocations=$case.allocations;passed=$false;output='';error=$null}
+    $item = [ordered]@{fixture=$case.name;sourceSha256=(Get-FileHash $case.source).Hash;expectedSha256=(Get-FileHash $case.expected).Hash;allocations=$case.allocations;structuralChecks=@();passed=$false;output='';error=$null}
     try {
         $null = Invoke-CheckedCleanupProcess 'dotnet' @($compiler,'build',$case.source,'-o',"$prefix.exe",'--target','windows-x64','--llvm',$LlvmRoot,'-O1','--keep-temps') "$($case.name) managed build"
         $llvm = Get-Content -LiteralPath "$prefix.ll" -Raw
         if ($llvm -notmatch 'define dso_local i32 @sollang_start\(\)') { throw 'Missing managed Windows program entry' }
+        if ($case.ContainsKey('forbidDynamicIndexedItemDrop') -and $case.forbidDynamicIndexedItemDrop) {
+            $program = [regex]::Match($llvm, '(?s)define dso_local i32 @sollang_start\(\).*?^}', 'Multiline').Value
+            if ($program -match 'call void @sollang_drop_\d+\([^\r\n]*%dynamic_inline_item') {
+                throw 'Stable indexed scalar projection scheduled its loaded item for independent cleanup'
+            }
+            $item.structuralChecks += 'no-dynamic-indexed-item-drop'
+        }
         # Replace only the generated program allocation wrappers. The same C
         # shim used by the native ownership gate audits balanced program drops.
         $audit = $llvm.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(').Replace('@sollang_start()', '@slg_program_main()')

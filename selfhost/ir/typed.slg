@@ -309,6 +309,18 @@ public isSetMutationCall node: TypedIrNode -> Bool {
         and (node.opcode == -255 or node.opcode == -257)
 }
 
+# `collection.array.exchange` is one compiler-owned mutation across both call
+# shapes. Keep the opcode predicate authoritative so scheduling, invariants and
+# every LLVM scope consume the same identity rather than the source spelling.
+public isArrayExchangeOpcode opcode: Int -> Bool => opcode == -310
+
+public isArrayExchangeIntrinsicCall node: TypedIrNode -> Bool {
+    (node.kind == 6 or node.kind == 9)
+        and (node.opcode -> isArrayExchangeOpcode)
+        and node.operand0 >= 0
+        and node.operand1 >= 0
+}
+
 # Builtin numeric conversions and Arena construction have no module function
 # target. Their -1/-1 identity is consumed by direct LLVM lowering and must not
 # be confused with an unresolved general call.
@@ -508,6 +520,8 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
             -> if { -236 => opcode! }
         request.source -> sourceMatches(request.token.span.start, request.token.span.length, "contains")
             -> if { -243 => opcode! }
+        request.source -> sourceMatches(request.token.span.start, request.token.span.length, "exchange")
+            -> if { -310 => opcode! }
         request.source -> sourceMatches(request.token.span.start, request.token.span.length, "pushBack")
             -> if { -247 => opcode! }
         request.source -> sourceMatches(request.token.span.start, request.token.span.length, "popFront")

@@ -1,0 +1,296 @@
+import std.net as net
+import std.net.socket as socket
+
+struct Setup {
+    listener: socket.TcpListener
+    clientA: socket.TcpStream
+    clientB: socket.TcpStream
+    clientC: socket.TcpStream
+    peerA: socket.TcpStream
+    peerB: socket.TcpStream
+    peerC: socket.TcpStream
+    portA: UInt16
+    portB: UInt16
+    portC: UInt16
+}
+
+setup: -> Result<Setup, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 4
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => listenerPort
+    net.loopback(listenerPort) -> unified -> connect? => clientA
+    listener -> accept? => peerA
+    clientA -> localPort? => portA
+    net.loopback(listenerPort) -> unified -> connect? => clientB
+    listener -> accept? => peerB
+    clientB -> localPort? => portB
+    net.loopback(listenerPort) -> unified -> connect? => clientC
+    listener -> accept? => peerC
+    clientC -> localPort? => portC
+    Result<Setup, socket.SocketError>.Ok(Setup {
+        listener: listener
+        clientA: clientA
+        clientB: clientB
+        clientC: clientC
+        peerA: peerA
+        peerB: peerB
+        peerC: peerC
+        portA: portA
+        portB: portB
+        portC: portC
+    })
+}
+
+invalidArgument: -> socket.SocketError => socket.SocketError {
+    kind: socket.SocketErrorKind.InvalidArgument
+    code: 0
+}
+
+duplicateCase value: move Setup -> Result<Unit, socket.SocketError> uses Network, Console {
+    value.listener => listener
+    value.clientA => clientA
+    value.clientB => clientB
+    value.clientC => clientC
+    value.peerA => peerA
+    value.peerB => peerB
+    value.peerC => peerC
+    value.portA => portA
+    value.portB => portB
+    value.portC => portC
+    socket.CompletionReactorOptions { registrations: 2, pendingOperations: 2, completionBatch: 1 } -> socket.completionReactor? => reactor
+    reactor -> registerStream(clientA, 11) -> when {
+        Ok(next) { next }
+        Err(failure) {
+            failure.error => error
+            failure.connection => returned
+            failure.reactor => retained
+            returned -> close
+            retained -> close
+            listener -> close
+            clientB -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => one
+    one -> registerStream(clientB, 11) -> when {
+        Ok(unexpected) {
+            unexpected -> close
+            listener -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            invalidArgument() => error
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+        Err(failure) { failure }
+    } => duplicateFailure
+    duplicateFailure.error.kind -> when {
+        socket.SocketErrorKind.InvalidArgument { true }
+        else { false }
+    } => typed
+    duplicateFailure.error.code => code
+    duplicateFailure.connection => returnedB
+    duplicateFailure.reactor => retained
+    returnedB -> localPort? => returnedBPort
+    retained -> registerStream(returnedB, 22) -> when {
+        Ok(next) { next }
+        Err(failure) {
+            failure.error => error
+            failure.connection => returned
+            failure.reactor => failedReactor
+            returned -> close
+            failedReactor -> close
+            listener -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => full
+    full -> removeStream(11) -> when {
+        Ok(removed) { removed }
+        Err(failure) {
+            failure.error => error
+            failure.reactor => failedReactor
+            failedReactor -> close
+            listener -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => removedA
+    removedA.connection => returnedA
+    removedA.reactor => remaining
+    returnedA -> localPort? => returnedAPort
+    remaining -> removeStream(22) -> when {
+        Ok(removed) { removed }
+        Err(failure) {
+            failure.error => error
+            failure.reactor => failedReactor
+            failedReactor -> close
+            returnedA -> close
+            listener -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => removedB
+    removedB.connection => finalB
+    removedB.reactor => empty
+    finalB -> localPort? => finalBPort
+    "duplicate=$typed,code=$code,portsDistinct=$(portA != portB and portA != portC and portB != portC),returnedB=$(returnedBPort == portB),removedA=$(returnedAPort == portA),removedB=$(finalBPort == portB)" -> println
+    returnedA -> close
+    finalB -> close
+    empty -> close
+    listener -> close
+    clientC -> close
+    peerA -> close
+    peerB -> close
+    peerC -> close
+    Result<Unit, socket.SocketError>.Ok
+}
+
+capacityCase value: move Setup -> Result<Unit, socket.SocketError> uses Network, Console {
+    value.listener => listener
+    value.clientA => clientA
+    value.clientB => clientB
+    value.clientC => clientC
+    value.peerA => peerA
+    value.peerB => peerB
+    value.peerC => peerC
+    value.portA => portA
+    value.portB => portB
+    value.portC => portC
+    socket.CompletionReactorOptions { registrations: 2, pendingOperations: 2, completionBatch: 1 } -> socket.completionReactor? => reactor
+    reactor -> registerStream(clientA, 11) -> when {
+        Ok(next) { next }
+        Err(failure) {
+            failure.error => error
+            failure.connection => returned
+            failure.reactor => retained
+            returned -> close
+            retained -> close
+            listener -> close
+            clientB -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => one
+    one -> registerStream(clientB, 22) -> when {
+        Ok(next) { next }
+        Err(failure) {
+            failure.error => error
+            failure.connection => returned
+            failure.reactor => retained
+            returned -> close
+            retained -> close
+            listener -> close
+            clientC -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => full
+    full -> registerStream(clientC, 33) -> when {
+        Ok(unexpected) {
+            unexpected -> close
+            listener -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            invalidArgument() => error
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+        Err(failure) { failure }
+    } => capacityFailure
+    capacityFailure.error.kind -> when {
+        socket.SocketErrorKind.Other { true }
+        else { false }
+    } => typed
+    capacityFailure.error.code => code
+    capacityFailure.connection => returnedC
+    capacityFailure.reactor => retained
+    returnedC -> localPort? => returnedCPort
+    retained -> removeStream(11) -> when {
+        Ok(removed) { removed }
+        Err(failure) {
+            failure.error => error
+            failure.reactor => failedReactor
+            failedReactor -> close
+            returnedC -> close
+            listener -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => removedA
+    removedA.connection => returnedA
+    removedA.reactor => remaining
+    returnedA -> localPort? => returnedAPort
+    remaining -> removeStream(22) -> when {
+        Ok(removed) { removed }
+        Err(failure) {
+            failure.error => error
+            failure.reactor => failedReactor
+            failedReactor -> close
+            returnedA -> close
+            returnedC -> close
+            listener -> close
+            peerA -> close
+            peerB -> close
+            peerC -> close
+            Result<Unit, socket.SocketError>.Err(error) -> return
+        }
+    } => removedB
+    removedB.connection => returnedB
+    removedB.reactor => empty
+    returnedB -> localPort? => returnedBPort
+    "capacity=$typed,code=$code,portsDistinct=$(portA != portB and portA != portC and portB != portC),returnedC=$(returnedCPort == portC),removedA=$(returnedAPort == portA),removedB=$(returnedBPort == portB)" -> println
+    returnedA -> close
+    returnedB -> close
+    returnedC -> close
+    empty -> close
+    listener -> close
+    peerA -> close
+    peerB -> close
+    peerC -> close
+    Result<Unit, socket.SocketError>.Ok
+}
+
+main {
+    setup() -> when {
+        Err(error) { "duplicate-setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value -> duplicateCase -> when {
+                Ok(_) { }
+                Err(error) { "duplicate-case-error=$(error.code)" -> println }
+            }
+        }
+    }
+    setup() -> when {
+        Err(error) { "capacity-setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value -> capacityCase -> when {
+                Ok(_) { "w01=complete" -> println }
+                Err(error) { "capacity-case-error=$(error.code)" -> println }
+            }
+        }
+    }
+}

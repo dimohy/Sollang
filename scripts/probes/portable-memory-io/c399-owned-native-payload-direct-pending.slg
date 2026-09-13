@@ -1,0 +1,48 @@
+native c399Owner from "c399_owner" {
+    handle Owner drop "c399_owner_drop"
+    create value: Int32 -> c399Owner.Owner as "c399_owner_create"
+    value self: ref c399Owner.Owner -> Int32 as "c399_owner_value"
+    allocations: -> Int32 as "c399_owner_allocations"
+    releases: -> Int32 as "c399_owner_releases"
+    invalidReleases: -> Int32 as "c399_owner_invalid_releases"
+}
+
+struct Setup {
+    listener: c399Owner.Owner
+    sender: c399Owner.Owner
+    receiver: c399Owner.Owner
+}
+
+setup base: Int32 -> Setup => Setup {
+    listener: c399Owner.create(base + 1)
+    sender: c399Owner.create(base + 2)
+    receiver: c399Owner.create(base + 3)
+}
+
+direct: -> Result<Setup, Text> => Result<Setup, Text>.Ok(setup(10))
+
+pending value: move Setup -> async Result<Setup, Text> {
+    yield
+    Result<Setup, Text>.Ok(value)
+}
+
+observe result: move Result<Setup, Text>, label: Text -> Unit uses Console {
+    result -> when {
+        Err(error) { "$label:error=$error" -> println }
+        Ok(value) {
+            value.listener => listener
+            value.sender => sender
+            value.receiver => receiver
+            "$label:listener=$(c399Owner.value(listener)),sender=$(c399Owner.value(sender)),receiver=$(c399Owner.value(receiver))" -> println
+        }
+    }
+}
+
+main {
+    direct() -> observe("direct")
+    "direct:alloc=$(c399Owner.allocations()),release=$(c399Owner.releases())" -> println
+    setup(20) -> pending => pendingResult
+    pendingResult -> await -> observe("pending")
+    "pending:alloc=$(c399Owner.allocations()),release=$(c399Owner.releases())" -> println
+    "invalid=$(c399Owner.invalidReleases())" -> println
+}

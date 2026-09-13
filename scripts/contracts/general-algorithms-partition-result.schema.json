@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "compilerSha256", "inputHashes", "completed", "total", "cases", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "$ref": "#/$defs/sha256" },
+    "inputHashes": { "type": "object", "minProperties": 15, "additionalProperties": { "$ref": "#/$defs/sha256" } },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "total": { "const": 5 },
+    "cases": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "kind", "passed", "sourceSha256", "expectedSha256", "compileExit", "warningNoteFree", "llvmProduced", "diagnosticCount", "diagnosticMatched", "llvmAsExit", "closureExit", "nativeExit", "stdoutMatched", "observedStdout", "partitionBodyCount", "forbiddenBodyCallCount", "predicateOrderMatched", "ownerPreserved", "allocationBalanced", "invalidAllocationCount", "failure"],
+        "properties": {
+          "id": { "enum": ["P-BOUNDARIES", "P-NONCOPYABLE", "N-CALLBACK-RESULT", "N-WRONG-OWNER", "N-READONLY-OWNER"] },
+          "kind": { "enum": ["native-success", "native-success-audit", "compile-failure"] },
+          "passed": { "type": "boolean" },
+          "sourceSha256": { "$ref": "#/$defs/sha256" },
+          "expectedSha256": { "$ref": "#/$defs/sha256" },
+          "compileExit": { "type": "integer" },
+          "warningNoteFree": { "type": "boolean" },
+          "llvmProduced": { "type": "boolean" },
+          "diagnosticCount": { "type": "integer", "minimum": 0, "maximum": 1 },
+          "diagnosticMatched": { "type": ["boolean", "null"] },
+          "llvmAsExit": { "type": ["integer", "null"] },
+          "closureExit": { "type": ["integer", "null"] },
+          "nativeExit": { "type": ["integer", "null"] },
+          "stdoutMatched": { "type": ["boolean", "null"] },
+          "observedStdout": { "type": ["string", "null"] },
+          "partitionBodyCount": { "type": ["integer", "null"], "minimum": 0 },
+          "forbiddenBodyCallCount": { "type": ["integer", "null"], "minimum": 0 },
+          "predicateOrderMatched": { "type": ["boolean", "null"] },
+          "ownerPreserved": { "type": ["boolean", "null"] },
+          "allocationBalanced": { "type": ["boolean", "null"] },
+          "invalidAllocationCount": { "type": ["integer", "null"], "minimum": 0 },
+          "failure": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": { "properties": { "completed": { "const": 5 }, "failureIds": { "maxItems": 0 }, "cases": { "items": { "properties": { "passed": { "const": true }, "warningNoteFree": { "const": true }, "failure": { "type": "null" } } } } } }
+    }
+  ],
+  "$defs": { "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" } }
+}

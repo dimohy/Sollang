@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defectId", "target", "total", "caseIds", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-13-424" },
+    "target": { "const": "windows-x64" },
+    "total": { "const": 6 },
+    "caseIds": { "const": ["P1", "R424A", "N1", "N2", "R424N1", "R424N2"] },
+    "cases": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/p1" },
+        { "$ref": "#/$defs/r424a" },
+        { "$ref": "#/$defs/n1" },
+        { "$ref": "#/$defs/n2" },
+        { "$ref": "#/$defs/r424n1" },
+        { "$ref": "#/$defs/r424n2" }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "positive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source", "expectedExitCode", "expectedStdout", "expectedAllocations", "dropStructure"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "const": "positive" },
+        "source": { "type": "string", "pattern": "^(scripts/probes|examples/regression)/.+\\.slg$" },
+        "expectedExitCode": { "const": 0 },
+        "expectedStdout": { "type": "string", "minLength": 1 },
+        "expectedAllocations": { "type": "integer", "minimum": 1 },
+        "dropStructure": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["childDropCallsInParent", "independentChildDropCalls", "parentDropCalls"],
+          "properties": {
+            "childDropCallsInParent": { "const": 1 },
+            "independentChildDropCalls": { "const": 0 },
+            "parentDropCalls": { "const": 1 }
+          }
+        }
+      }
+    },
+    "negative": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "source", "expectedExitCode", "expectedDiagnosticPayload"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "const": "negative" },
+        "source": { "type": "string", "pattern": "^(scripts/probes|examples/regression)/.+\\.slg$" },
+        "expectedExitCode": { "const": 1 },
+        "expectedDiagnosticPayload": { "type": "string", "minLength": 1 }
+      }
+    },
+    "p1": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "P1" }, "expectedStdout": { "const": "nested=1,128,256\n" }, "expectedAllocations": { "const": 1 }, "dropStructure": { "type": "object" } } }] },
+    "r424a": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "R424A" }, "expectedStdout": { "const": "rewrap=1,2\n" }, "expectedAllocations": { "const": 2 }, "dropStructure": { "type": "null" } } }] },
+    "n1": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "N1" }, "expectedDiagnosticPayload": { "const": "owned field 'pair.first' overlaps an already moved field" } } }] },
+    "n2": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "N2" }, "expectedDiagnosticPayload": { "const": "owned binding 'branch' is partially moved; use only live sibling fields" } } }] },
+    "r424n1": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "R424N1" }, "expectedDiagnosticPayload": { "const": "owned binding 'pair' cannot initialize more than one aggregate position" } } }] },
+    "r424n2": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "R424N2" }, "expectedDiagnosticPayload": { "const": "owned binding 'pair' cannot initialize more than one aggregate position" } } }] }
+  }
+}

@@ -270,7 +270,8 @@ internal sealed record NumberExpression(string Text, int Line, int Column) : Exp
 
 internal sealed record BoolExpression(bool Value, int Line, int Column) : Expression(Line, Column);
 
-internal sealed record NameExpression(string Name, int Line, int Column) : Expression(Line, Column);
+internal sealed record NameExpression(string Name, int Line, int Column, int ByteOffset = -1)
+    : Expression(Line, Column);
 
 internal sealed record AddExpression(Expression Left, Expression Right, int Line, int Column)
     : Expression(Line, Column);
@@ -365,7 +366,8 @@ internal sealed record FlowTarget(
     int? CompileTimeValueArgument,
     int Line,
     int Column,
-    IReadOnlyList<OpenImportCandidate>? OpenImportCandidates = null);
+    IReadOnlyList<OpenImportCandidate>? OpenImportCandidates = null,
+    int ByteOffset = -1);
 
 internal enum BranchInputMode
 {

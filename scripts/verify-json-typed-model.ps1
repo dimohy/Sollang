@@ -14,6 +14,21 @@ $compiler = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Co
 $llvm = Join-Path $root '.tools/llvm-22.1.8'
 $formatter = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closure = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
+$candidateSchema = Join-Path $root 'scripts/contracts/json-capability-candidate.schema.json'
+$candidateNegative = Join-Path $root 'scripts/contracts/fixtures/json-capability-production-forgery.json'
+$candidateIdMismatchNegative = Join-Path $root 'scripts/contracts/fixtures/json-capability-id-mismatch.json'
+$candidateUnknownCompletionNegative = Join-Path $root 'scripts/contracts/fixtures/json-capability-unknown-completion.json'
+$candidateVerifierUnknownNegative = Join-Path $root 'scripts/contracts/fixtures/json-capability-verifier-unknown.json'
+$candidateContracts = @(
+    (Join-Path $root 'scripts/contracts/json-schema-mapping.json'),
+    (Join-Path $root 'scripts/contracts/json-float-conversion.json'),
+    (Join-Path $root 'scripts/contracts/json-fixed-decimal.json')
+)
+$candidateVerifiers = @(
+    (Join-Path $root 'scripts/verify-json-schema-mapping.ps1'),
+    (Join-Path $root 'scripts/verify-json-float-conversion.ps1'),
+    (Join-Path $root 'scripts/verify-json-fixed-decimal.ps1')
+)
 $output = Join-Path $root ('artifacts/scratch/json-typed-model-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $resultPath = Join-Path $output 'result.json'
@@ -27,6 +42,17 @@ function Complete-Check([string]$Name) {
     $record.completed++
     $record.checks += $Name
     Write-Record
+}
+
+function Test-CandidateLinkage(
+    [object]$Candidate,
+    [object]$Expected,
+    [string]$CandidatePath,
+    [string]$ExpectedVerifierPath
+) {
+    $Candidate.capabilityId -ceq $Expected.capabilityId -and
+        [IO.Path]::GetFullPath($CandidatePath) -ceq [IO.Path]::GetFullPath((Join-Path $root $Expected.contract)) -and
+        [IO.Path]::GetFullPath((Join-Path $root $Candidate.verifier.path)) -ceq [IO.Path]::GetFullPath($ExpectedVerifierPath)
 }
 
 function Read-CanonicalExpected([string]$Path) {
@@ -47,7 +73,7 @@ function Normalize-ActualOutput([string]$Text) {
 }
 
 $expectedContract = [ordered]@{
-    schemaVersion = 4
+    schemaVersion = 5
     scope = 'owned-flat-json-model-and-lossless-number-lexemes'
     module = 'stdlib/std/text/json.slg'
     fixture = 'scripts/probes/json-typed-model/model-mapping.slg'
@@ -56,7 +82,7 @@ $expectedContract = [ordered]@{
     writerExpected = 'scripts/probes/json-typed-model/model-writing.stdout.txt'
     typedModel = [ordered]@{
         storage = 'flat-value-arena-with-indexed-array-items-and-object-members'
-        userDefinedMapping = 'not-provided; this is an owned typed JSON value model, not schema-driven mapping into caller structs or enums'
+        userDefinedMapping = 'not-provided-in-production'
         variants = @('Null', 'Boolean', 'Number', 'String', 'Array', 'Object')
         strings = 'decoded-owned-utf8-bytes'
         publicTokenAuthentication = 'source span, quote, content span, decoded length, UTF-8, escapes, and surrogate pairs are revalidated before reserve or decode'
@@ -81,19 +107,28 @@ $expectedContract = [ordered]@{
             'lossless RFC 8259 number lexemes',
             'exact int64 and uint64 opt-in conversions'
         )
-        pending = @(
-            'schema-driven mapping into user structs and enums',
-            'Float32 and Float64 conversion policy and APIs',
-            'fixed-decimal type, scale, rounding, overflow policy and APIs'
-        )
     }
+    candidateContracts = @(
+        [ordered]@{
+            capabilityId = 'schema-driven-user-mapping'
+            contract = 'scripts/contracts/json-schema-mapping.json'
+            verifier = 'scripts/verify-json-schema-mapping.ps1'
+        },
+        [ordered]@{
+            capabilityId = 'float32-float64-conversion'
+            contract = 'scripts/contracts/json-float-conversion.json'
+            verifier = 'scripts/verify-json-float-conversion.ps1'
+        },
+        [ordered]@{
+            capabilityId = 'fixed-decimal-conversion'
+            contract = 'scripts/contracts/json-fixed-decimal.json'
+            verifier = 'scripts/verify-json-fixed-decimal.ps1'
+        }
+    )
     numbers = [ordered]@{
         modelRepresentation = 'owned-exact-rfc8259-utf8-lexeme'
         int64 = 'explicit-exact-range-checked-integer-lexeme-only'
         uint64 = 'explicit-exact-range-checked-nonnegative-integer-lexeme-only'
-        float32 = 'not-provided-without-explicit-rounding-overflow-and-negative-zero-policy'
-        float64 = 'not-provided-without-explicit-rounding-overflow-and-negative-zero-policy'
-        decimal = 'lossless-lexeme-is-authoritative-no-implicit-scale-or-rounding'
         nonFinite = 'rejected-by-rfc8259-lexer'
     }
     existingFixtureAssessment = @(
@@ -118,7 +153,9 @@ $expectedContract = [ordered]@{
 }
 
 try {
-    $inputs = @($contractPath, $module, $fixture, $expectedPath, $writerFixture, $writerExpectedPath, $compiler, $formatter, $closure, $PSCommandPath)
+    $inputs = @($contractPath, $module, $fixture, $expectedPath, $writerFixture, $writerExpectedPath,
+        $compiler, $formatter, $closure, $candidateSchema, $candidateNegative, $candidateIdMismatchNegative,
+        $candidateUnknownCompletionNegative, $candidateVerifierUnknownNegative, $PSCommandPath) + $candidateContracts + $candidateVerifiers
     $distinctInputs = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $hashes = [ordered]@{}
     foreach ($path in $inputs) {
@@ -139,6 +176,29 @@ try {
     $actualContract = $contract | ConvertTo-Json -Depth 8 -Compress
     $canonicalExpected = $expectedContract | ConvertTo-Json -Depth 8 -Compress
     if ($actualContract -cne $canonicalExpected) { throw 'JSON typed-model contract differs from the independent authoritative matrix' }
+    for ($candidateIndex = 0; $candidateIndex -lt $candidateContracts.Count; $candidateIndex++) {
+        $candidate = Get-Content -Raw -LiteralPath $candidateContracts[$candidateIndex] | ConvertFrom-Json
+        $expectedCandidate = $expectedContract.candidateContracts[$candidateIndex]
+        if (-not (Test-Json -LiteralPath $candidateContracts[$candidateIndex] -SchemaFile $candidateSchema -ErrorAction SilentlyContinue) -or
+            $candidate.productionImplemented -ne $false -or
+            -not (Test-CandidateLinkage $candidate $expectedCandidate $candidateContracts[$candidateIndex] $candidateVerifiers[$candidateIndex])) {
+            throw "JSON candidate capability contract is invalid or claims production completion: $($candidateContracts[$candidateIndex])"
+        }
+    }
+    if (Test-Json -LiteralPath $candidateNegative -SchemaFile $candidateSchema -ErrorAction SilentlyContinue) {
+        throw 'JSON candidate schema accepted a forged productionImplemented=true contract'
+    }
+    if (Test-Json -LiteralPath $candidateUnknownCompletionNegative -SchemaFile $candidateSchema -ErrorAction SilentlyContinue) {
+        throw 'JSON candidate schema accepted an unknown production completion alias'
+    }
+    if (Test-Json -LiteralPath $candidateVerifierUnknownNegative -SchemaFile $candidateSchema -ErrorAction SilentlyContinue) {
+        throw 'JSON candidate schema accepted an unknown nested verifier completion alias'
+    }
+    $mismatchedCandidate = Get-Content -Raw -LiteralPath $candidateIdMismatchNegative | ConvertFrom-Json
+    if (-not (Test-Json -LiteralPath $candidateIdMismatchNegative -SchemaFile $candidateSchema -ErrorAction SilentlyContinue) -or
+        (Test-CandidateLinkage $mismatchedCandidate $expectedContract.candidateContracts[0] $candidateContracts[0] $candidateVerifiers[0])) {
+        throw 'JSON candidate parent/detail capability mismatch negative control failed'
+    }
     $reference = @(
         'root=object',
         'values=8,members=4',

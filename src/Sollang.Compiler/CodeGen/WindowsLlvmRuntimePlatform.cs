@@ -29,10 +29,13 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         {
             globals.AppendLine("@sollang_winsock_state = internal global i32 0");
         }
+        if (UsesAsyncFile || UsesSocketCompletion)
+        {
+            globals.AppendLine("@sollang_io_completion_event = internal global ptr null");
+        }
         if (UsesAsyncFile)
         {
             globals.AppendLine("@sollang_file_request_event = internal global ptr null");
-            globals.AppendLine("@sollang_file_completion_event = internal global ptr null");
             globals.AppendLine("@sollang_file_worker_handle = internal global ptr null");
         }
         if (UsesComputePool)
@@ -108,6 +111,14 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetLastError()");
         functions.AppendLine("declare dllimport void @SetLastError(i32)");
+        if (UsesSocketCompletion)
+        {
+            functions.AppendLine("declare dllimport ptr @CreateIoCompletionPort(ptr, ptr, i64, i32)");
+            functions.AppendLine("declare dllimport i32 @GetQueuedCompletionStatusEx(ptr, ptr, i32, ptr, i32, i32)");
+            functions.AppendLine("declare dllimport i32 @PostQueuedCompletionStatus(ptr, i32, i64, ptr)");
+            functions.AppendLine("declare dllimport i32 @CancelIoEx(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @SetFileCompletionNotificationModes(ptr, i8)");
+        }
         if (UsesDirectoryTraversal)
         {
             functions.AppendLine("declare dllimport i32 @CreateDirectoryA(ptr, ptr)");
@@ -974,16 +985,14 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %request_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
               %request_ok = icmp ne ptr %request_event, null
-              br i1 %request_ok, label %completion, label %fail
+              br i1 %request_ok, label %ensure_completion, label %fail
 
-            completion:
+            ensure_completion:
               store ptr %request_event, ptr @sollang_file_request_event, align 8
-              %completion_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
-              %completion_ok = icmp ne ptr %completion_event, null
+              %completion_ok = call i1 @sollang_platform_io_ensure_signal()
               br i1 %completion_ok, label %thread, label %fail
 
             thread:
-              store ptr %completion_event, ptr @sollang_file_completion_event, align 8
               %worker = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_file_worker, ptr null, i32 0, ptr null)
               %worker_ok = icmp ne ptr %worker, null
               br i1 %worker_ok, label %ready, label %fail
@@ -992,6 +1001,24 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store ptr %worker, ptr @sollang_file_worker_handle, align 8
               ret i1 true
 
+            fail:
+              ret i1 false
+            }
+
+            define internal i1 @sollang_platform_io_ensure_signal() #0 {
+            entry:
+              %existing = load ptr, ptr @sollang_io_completion_event, align 8
+              %ready = icmp ne ptr %existing, null
+              br i1 %ready, label %success, label %create
+            create:
+              %event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+              %created = icmp ne ptr %event, null
+              br i1 %created, label %publish, label %fail
+            publish:
+              store ptr %event, ptr @sollang_io_completion_event, align 8
+              br label %success
+            success:
+              ret i1 true
             fail:
               ret i1 false
             }
@@ -1010,26 +1037,26 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_signal_completion() #0 {
+            define internal void @sollang_platform_io_signal_completion() #0 {
             entry:
-              %event = load ptr, ptr @sollang_file_completion_event, align 8
+              %event = load ptr, ptr @sollang_io_completion_event, align 8
               %ignored = call i32 @SetEvent(ptr %event)
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_clear_completion() #0 {
+            define internal void @sollang_platform_io_clear_completion() #0 {
             entry:
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            define internal void @sollang_platform_io_wait_completion(i64 %requested) #0 {
             entry:
               %infinite = icmp slt i64 %requested, 0
               %too_large = icmp ugt i64 %requested, 4294967294
               %bounded = select i1 %too_large, i64 4294967294, i64 %requested
               %finite = trunc i64 %bounded to i32
               %timeout = select i1 %infinite, i32 -1, i32 %finite
-              %event = load ptr, ptr @sollang_file_completion_event, align 8
+              %event = load ptr, ptr @sollang_io_completion_event, align 8
               %ignored = call i32 @WaitForSingleObject(ptr %event, i32 %timeout)
               ret void
             }
@@ -1041,11 +1068,21 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %closed_worker = call i32 @CloseHandle(ptr %worker)
               %request_event = load ptr, ptr @sollang_file_request_event, align 8
               %closed_request = call i32 @CloseHandle(ptr %request_event)
-              %completion_event = load ptr, ptr @sollang_file_completion_event, align 8
-              %closed_completion = call i32 @CloseHandle(ptr %completion_event)
               store ptr null, ptr @sollang_file_worker_handle, align 8
               store ptr null, ptr @sollang_file_request_event, align 8
-              store ptr null, ptr @sollang_file_completion_event, align 8
+              ret void
+            }
+
+            define internal void @sollang_platform_io_shutdown() #0 {
+            entry:
+              %event = load ptr, ptr @sollang_io_completion_event, align 8
+              %present = icmp ne ptr %event, null
+              br i1 %present, label %close, label %done
+            close:
+              %closed = call i32 @CloseHandle(ptr %event)
+              store ptr null, ptr @sollang_io_completion_event, align 8
+              br label %done
+            done:
               ret void
             }
 

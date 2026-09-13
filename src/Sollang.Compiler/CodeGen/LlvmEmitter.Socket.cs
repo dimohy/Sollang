@@ -16,6 +16,34 @@ internal sealed partial class LlvmEmitter
             BoundFunctionKind.RuntimeSocketListen => EmitSocketListen(
                 function,
                 RequireSocketStruct(argument, function.Name, "std.net.socket.ListenOptions")),
+            BoundFunctionKind.RuntimeSocketCompletionCreate => EmitSocketCompletionCreate(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactorOptions"),
+                additionalArguments),
+            BoundFunctionKind.RuntimeSocketCompletionRegisterStream => EmitSocketCompletionRegisterStream(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor"),
+                RequireSocketAdditional<RuntimeStruct>(additionalArguments, function.Name, 0),
+                RequireSocketAdditional<RuntimeInt>(additionalArguments, function.Name, 1)),
+            BoundFunctionKind.RuntimeSocketCompletionRemoveStream => EmitSocketCompletionRemoveStream(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor"),
+                RequireSocketAdditional<RuntimeInt>(additionalArguments, function.Name)),
+            BoundFunctionKind.RuntimeSocketCompletionSubmit => EmitSocketCompletionSubmit(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor"),
+                RequireSocketAdditional<RuntimeInt>(additionalArguments, function.Name, 0),
+                RequireSocketAdditional<RuntimeStruct>(additionalArguments, function.Name, 1)),
+            BoundFunctionKind.RuntimeSocketCompletionCancel => EmitSocketCompletionCancel(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor"),
+                RequireSocketAdditional<RuntimeInt>(additionalArguments, function.Name)),
+            BoundFunctionKind.RuntimeSocketCompletionDequeue => EmitSocketCompletionDequeue(
+                function,
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor"),
+                RequireSocketAdditional<RuntimeStruct>(additionalArguments, function.Name)),
+            BoundFunctionKind.RuntimeSocketCompletionClose => EmitSocketCompletionClose(
+                RequireSocketStruct(argument, function.Name, "std.net.socket.CompletionReactor")),
             BoundFunctionKind.RuntimeSocketAccept => EmitSocketAccept(
                 function,
                 RequireSocketStruct(argument, function.Name, "std.net.socket.TcpListener")),
@@ -153,6 +181,213 @@ internal sealed partial class LlvmEmitter
         var handle = ExtractSocketHandle(owner, ownerName);
         EmitCall(target: null, "void", "sollang_platform_close_socket", $"i64 {handle}");
         return RuntimeUnit.Instance;
+    }
+
+    private RuntimeEnum EmitSocketCompletionCreate(
+        BoundFunction function,
+        RuntimeStruct options,
+        IReadOnlyList<RuntimeValue> additionalArguments)
+    {
+        if (additionalArguments.Count != 0)
+        {
+            throw new SollangException("socket completion reactor creation expects no additional arguments");
+        }
+        var registrations = SocketStructField(options, "registrations") as RuntimeInt
+            ?? throw new SollangException("socket completion registrations must be UIntSize");
+        var pending = SocketStructField(options, "pendingOperations") as RuntimeInt
+            ?? throw new SollangException("socket completion pendingOperations must be UIntSize");
+        var batch = SocketStructField(options, "completionBatch") as RuntimeInt
+            ?? throw new SollangException("socket completion completionBatch must be UIntSize");
+        var raw = EmitSocketPlatformResult(
+            "sollang_platform_socket_completion_create",
+            $"i64 {registrations.ValueName}, i64 {pending.ValueName}, i64 {batch.ValueName}");
+        return EmitSocketOwnerResult(function, raw, "std.net.socket.CompletionReactor");
+    }
+
+    private RuntimeValue EmitSocketCompletionClose(RuntimeStruct reactor)
+    {
+        var handle = ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor");
+        EmitCall(target: null, "void", "sollang_platform_socket_completion_close", $"i64 {handle}");
+        return RuntimeUnit.Instance;
+    }
+
+    private RuntimeValue EmitSocketCompletionRegisterStream(
+        BoundFunction function,
+        RuntimeStruct reactor,
+        RuntimeStruct connection,
+        RuntimeInt key)
+    {
+        var reactorToken = ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor");
+        var connectionToken = ExtractSocketHandle(connection, "std.net.socket.TcpStream");
+        var raw = EmitSocketPlatformResult(
+            "sollang_platform_socket_completion_register_stream",
+            $"i64 {reactorToken}, i64 {connectionToken}, i64 {key.ValueName}");
+        return EmitSocketRegistrationResult(function, raw, reactor, connection);
+    }
+
+    private RuntimeValue EmitSocketCompletionRemoveStream(
+        BoundFunction function,
+        RuntimeStruct reactor,
+        RuntimeInt key)
+    {
+        var reactorToken = ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor");
+        var raw = EmitSocketPlatformResult(
+            "sollang_platform_socket_completion_remove_stream",
+            $"i64 {reactorToken}, i64 {key.ValueName}");
+        return EmitSocketRemovalResult(function, raw, reactor);
+    }
+
+    private RuntimeValue EmitSocketCompletionSubmit(
+        BoundFunction function,
+        RuntimeStruct reactor,
+        RuntimeInt registrationKey,
+        RuntimeStruct slot)
+    {
+        if (!IsRuntimeNamedStruct(slot.Type, "std.net.socket.OperationSlot"))
+        {
+            throw new SollangException($"{function.Name} expects an OperationSlot");
+        }
+        var slotKey = SocketStructField(slot, "key") as RuntimeInt
+            ?? throw new SollangException("OperationSlot.key must be UInt64");
+        var direction = SocketStructField(slot, "direction") as RuntimeEnum
+            ?? throw new SollangException("OperationSlot.direction must be OperationDirection");
+        var bytes = SocketStructField(slot, "bytes") as RuntimeDynamicInlineArray
+            ?? throw new SollangException("OperationSlot.bytes must be [UInt8; ~]");
+        var offset = SocketStructField(slot, "offset") as RuntimeInt
+            ?? throw new SollangException("OperationSlot.offset must be UIntSize");
+        var length = SocketStructField(slot, "length") as RuntimeInt
+            ?? throw new SollangException("OperationSlot.length must be UIntSize");
+        var state = SocketStructField(slot, "state") as RuntimeEnum
+            ?? throw new SollangException("OperationSlot.state must be OperationState");
+        var directionTag = NextTemp("socket_completion_direction");
+        EmitAssign(directionTag, $"extractvalue {LlvmEnumType(direction.Type)} {direction.ValueName}, 0");
+        var stateTag = NextTemp("socket_completion_state");
+        EmitAssign(stateTag, $"extractvalue {LlvmEnumType(state.Type)} {state.ValueName}, 0");
+        var raw = EmitSocketPlatformResult(
+            "sollang_platform_socket_completion_submit",
+            $"i64 {ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor")}, "
+            + $"i64 {registrationKey.ValueName}, i64 {slotKey.ValueName}, i32 {directionTag}, "
+            + $"ptr {bytes.PointerName}, i64 {bytes.LengthName}, i64 {bytes.CapacityName}, "
+            + $"i64 {offset.ValueName}, i64 {length.ValueName}, i32 {stateTag}");
+        return EmitSocketSubmissionResult(function, raw, reactor, slot);
+    }
+
+    private RuntimeValue EmitSocketCompletionCancel(
+        BoundFunction function,
+        RuntimeStruct reactor,
+        RuntimeInt applicationKey)
+    {
+        var raw = EmitSocketPlatformResult(
+            "sollang_platform_socket_completion_cancel",
+            $"i64 {ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor")}, i64 {applicationKey.ValueName}");
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !IsRuntimeNamedStruct(resultTypes.Ok, "std.net.socket.CompletionReactor")
+            || !IsRuntimeNamedStruct(resultTypes.Error, "std.net.socket.CompletionWaitFailure"))
+        {
+            throw new SollangException($"{function.Name} has an invalid cancellation result type");
+        }
+        return EmitSocketOwnedTransitionResult(
+            function,
+            raw,
+            () => reactor,
+            () =>
+            {
+                var errorType = _program.Types.GetStruct(resultTypes.Error).GetField("error").Type;
+                return EmitSocketStructValue(resultTypes.Error,
+                    [("reactor", reactor), ("error", EmitSocketError(errorType, raw.Kind, raw.Code))]);
+            });
+    }
+
+    private RuntimeTask EmitSocketCompletionDequeue(
+        BoundFunction function,
+        RuntimeStruct reactor,
+        RuntimeStruct cancellation)
+    {
+        if (!IsRuntimeNamedStruct(cancellation.Type, "std.io.async.Cancellation"))
+        {
+            throw new SollangException($"{function.Name} expects std.io.async.Cancellation");
+        }
+        var requested = SocketStructField(cancellation, "requested") as RuntimeBool
+            ?? throw new SollangException("Cancellation.requested must be Bool");
+        var contextSize = AsyncContextSize(function);
+        var context = NextTemp("socket_completion_dequeue_context");
+        EmitCall(context, "ptr", "sollang_alloc", $"i64 {contextSize}");
+        var contextAllocated = NextTemp("socket_completion_dequeue_context_allocated");
+        EmitCompare(contextAllocated, "ne", "ptr", context, "null");
+        var allocateDescriptorLabel = NextLabel("socket_completion_dequeue_allocate_descriptor");
+        var allocationFailedLabel = NextLabel("socket_completion_dequeue_allocation_failed");
+        EmitConditionalBranch(contextAllocated, allocateDescriptorLabel, allocationFailedLabel);
+        EmitLabel(allocationFailedLabel);
+        EmitTrap();
+
+        EmitLabel(allocateDescriptorLabel);
+        var descriptor = NextTemp("socket_completion_dequeue_descriptor");
+        EmitCall(descriptor, "ptr", "sollang_alloc", "i64 88");
+        var descriptorAllocated = NextTemp("socket_completion_dequeue_descriptor_allocated");
+        EmitCompare(descriptorAllocated, "ne", "ptr", descriptor, "null");
+        var startLabel = NextLabel("socket_completion_dequeue_start");
+        var descriptorFailedLabel = NextLabel("socket_completion_dequeue_descriptor_failed");
+        EmitConditionalBranch(descriptorAllocated, startLabel, descriptorFailedLabel);
+        EmitLabel(descriptorFailedLabel);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {context}");
+        EmitTrap();
+
+        EmitLabel(startLabel);
+        EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {descriptor}, i8 0, i64 88, i1 false");
+        var handle = NextTemp("socket_completion_dequeue_handle");
+        EmitCall(
+            handle,
+            "ptr",
+            "sollang_task_start",
+            $"ptr @sollang_socket_completion_dequeue_task_worker, ptr @sollang_free, "
+            + $"ptr @sollang_socket_completion_dequeue_task_cancel, ptr {context}");
+        var started = NextTemp("socket_completion_dequeue_started");
+        EmitCompare(started, "ne", "ptr", handle, "null");
+        var readyLabel = NextLabel("socket_completion_dequeue_ready");
+        var startFailedLabel = NextLabel("socket_completion_dequeue_start_failed");
+        EmitConditionalBranch(started, readyLabel, startFailedLabel);
+        EmitLabel(startFailedLabel);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {descriptor}");
+        EmitCall(target: null, "void", "sollang_free", $"ptr {context}");
+        EmitTrap();
+
+        EmitLabel(readyLabel);
+        var reactorValue = MaterializeAggregateValue(reactor);
+        EmitAsyncFunctionContextStore(
+            context,
+            function,
+            5,
+            reactorValue.TypeName,
+            reactorValue.ValueName,
+            RuntimeAlignment(reactor.Type));
+        EmitAsyncFunctionContextStore(
+            context,
+            function,
+            6,
+            AsyncStorageLlvmType(function.ReturnType),
+            "zeroinitializer",
+            RuntimeAlignment(function.ReturnType));
+        var descriptorValue = NextTemp("socket_completion_dequeue_descriptor_value");
+        EmitAssign(descriptorValue, $"ptrtoint ptr {descriptor} to i64");
+        var descriptorSlot = NextTemp("socket_completion_dequeue_descriptor_slot");
+        EmitAssign(descriptorSlot, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 13");
+        EmitStore("i64", descriptorValue, descriptorSlot, 8);
+        var identity = ExtractSocketHandle(reactor, "std.net.socket.CompletionReactor");
+        var identitySlot = NextTemp("socket_completion_dequeue_identity_slot");
+        EmitAssign(identitySlot, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 17");
+        EmitStore("i64", identity, identitySlot, 8);
+        var requested32 = NextTemp("socket_completion_dequeue_requested32");
+        EmitAssign(requested32, $"zext i1 {requested.ValueName} to i32");
+        var requestedSlot = NextTemp("socket_completion_dequeue_requested_slot");
+        EmitAssign(requestedSlot, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
+        EmitStore("i32", requested32, requestedSlot, 4);
+        return new RuntimeTask(
+            _program.Types.GetOrAddTask(function.ReturnType),
+            function.InputType,
+            function.ReturnType,
+            handle,
+            context,
+            function);
     }
 
     private RuntimeEnum EmitSocketSetNonblocking(
@@ -1058,6 +1293,446 @@ internal sealed partial class LlvmEmitter
         return EmitSocketResult(function, raw, new RuntimeStruct(resultTypes.Ok, aggregate));
     }
 
+    private RuntimeEnum EmitSocketRegistrationResult(
+        BoundFunction function,
+        SocketPlatformResult raw,
+        RuntimeStruct reactor,
+        RuntimeStruct connection)
+    {
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !IsRuntimeNamedStruct(resultTypes.Ok, "std.net.socket.CompletionReactor")
+            || !IsRuntimeNamedStruct(resultTypes.Error, "std.net.socket.SocketRegistrationFailure"))
+        {
+            throw new SollangException($"{function.Name} has an invalid registration result type");
+        }
+        return EmitSocketOwnedTransitionResult(
+            function,
+            raw,
+            () => reactor,
+            () =>
+            {
+                var errorType = _program.Types.GetStruct(resultTypes.Error).GetField("error").Type;
+                var error = EmitSocketError(errorType, raw.Kind, raw.Code);
+                return EmitSocketStructValue(resultTypes.Error,
+                    [("reactor", reactor), ("connection", connection), ("error", error)]);
+            });
+    }
+
+    private RuntimeEnum EmitSocketRemovalResult(
+        BoundFunction function,
+        SocketPlatformResult raw,
+        RuntimeStruct reactor)
+    {
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !IsRuntimeNamedStruct(resultTypes.Ok, "std.net.socket.RemovedStream")
+            || !IsRuntimeNamedStruct(resultTypes.Error, "std.net.socket.CompletionWaitFailure"))
+        {
+            throw new SollangException($"{function.Name} has an invalid removal result type");
+        }
+        return EmitSocketOwnedTransitionResult(
+            function,
+            raw,
+            () =>
+            {
+                var connectionType = _program.Types.GetStruct(resultTypes.Ok).GetField("connection").Type;
+                var connection = EmitSocketStructValue(connectionType,
+                    [("token", new RuntimeInt(BoundType.UInt64, raw.Value))]);
+                return EmitSocketStructValue(resultTypes.Ok,
+                    [("reactor", reactor), ("connection", connection)]);
+            },
+            () =>
+            {
+                var errorType = _program.Types.GetStruct(resultTypes.Error).GetField("error").Type;
+                var error = EmitSocketError(errorType, raw.Kind, raw.Code);
+                return EmitSocketStructValue(resultTypes.Error,
+                    [("reactor", reactor), ("error", error)]);
+            });
+    }
+
+    private RuntimeEnum EmitSocketSubmissionResult(
+        BoundFunction function,
+        SocketPlatformResult raw,
+        RuntimeStruct reactor,
+        RuntimeStruct slot)
+    {
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !IsRuntimeNamedEnum(resultTypes.Ok, "std.net.socket.CompletionSubmission")
+            || !IsRuntimeNamedStruct(resultTypes.Error, "std.net.socket.CompletionSubmissionFailure"))
+        {
+            throw new SollangException($"{function.Name} has an invalid submission result type");
+        }
+
+        var resultDefinition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = resultDefinition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = resultDefinition.Variants.First(variant => variant.Name == "Err");
+        var submissionDefinition = _program.Types.GetEnum(resultTypes.Ok);
+        var pendingVariant = submissionDefinition.Variants.First(variant => variant.Name == "Pending");
+        var completedVariant = submissionDefinition.Variants.First(variant => variant.Name == "Completed");
+
+        var succeeded = NextTemp("socket_submission_succeeded");
+        EmitCompare(succeeded, "slt", "i32", raw.Kind, "0");
+        var classifyLabel = NextLabel("socket_submission_classify");
+        var failureLabel = NextLabel("socket_submission_failure");
+        var pendingLabel = NextLabel("socket_submission_pending");
+        var completedLabel = NextLabel("socket_submission_completed");
+        var successEndLabel = NextLabel("socket_submission_success_end");
+        var endLabel = NextLabel("socket_submission_end");
+        EmitConditionalBranch(succeeded, classifyLabel, failureLabel);
+
+        EmitLabel(classifyLabel);
+        _currentBlockLabel = classifyLabel;
+        var pending = NextTemp("socket_submission_is_pending");
+        EmitCompare(pending, "eq", "i32", raw.Kind, "-2");
+        EmitConditionalBranch(pending, pendingLabel, completedLabel);
+
+        EmitLabel(pendingLabel);
+        _currentBlockLabel = pendingLabel;
+        var pendingSubmission = EmitEnumValue(resultTypes.Ok, pendingVariant, reactor);
+        EmitBranch(successEndLabel);
+        var pendingExit = _currentBlockLabel;
+
+        EmitLabel(completedLabel);
+        _currentBlockLabel = completedLabel;
+        var completedSlot = EmitCompletedSocketSlot(slot, raw.Value, cancelled: false, raw.Kind, raw.Code);
+        var completionType = completedVariant.PayloadType
+            ?? throw new SollangException("CompletionSubmission.Completed must carry SocketCompletion");
+        var completion = EmitSocketStructValue(completionType,
+            [("reactor", reactor), ("slot", completedSlot)]);
+        var completedSubmission = EmitEnumValue(resultTypes.Ok, completedVariant, completion);
+        EmitBranch(successEndLabel);
+        var completedExit = _currentBlockLabel;
+
+        EmitLabel(successEndLabel);
+        _currentBlockLabel = successEndLabel;
+        var successfulSubmission = EmitEnumPhi(
+            "socket_submission_state",
+            resultTypes.Ok,
+            [(pendingSubmission, pendingExit), (completedSubmission, completedExit)]);
+        var success = EmitEnumValue(function.ReturnType, okVariant, successfulSubmission);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(failureLabel);
+        _currentBlockLabel = failureLabel;
+        var errorType = _program.Types.GetStruct(resultTypes.Error).GetField("error").Type;
+        var failurePayload = EmitSocketStructValue(resultTypes.Error,
+            [("reactor", reactor), ("slot", slot), ("error", EmitSocketError(errorType, raw.Kind, raw.Code))]);
+        var failure = EmitEnumValue(function.ReturnType, errVariant, failurePayload);
+        EmitBranch(endLabel);
+        var failureExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi("socket_submission_result", function.ReturnType,
+            [(success, successExit), (failure, failureExit)]);
+    }
+
+    private RuntimeEnum EmitRuntimeCompletedSocketDequeue(
+        BoundFunction function,
+        string completedTaskControl,
+        string context)
+    {
+        var reactorAggregate = NextTemp("socket_completion_reactor_owner");
+        EmitAsyncFunctionContextLoad(
+            reactorAggregate,
+            context,
+            function,
+            5,
+            AsyncStorageLlvmType(function.InputType),
+            RuntimeAlignment(function.InputType!.Value));
+        var reactor = new RuntimeStruct(function.InputType.Value, reactorAggregate);
+        var descriptorValueSlot = NextTemp("socket_completion_descriptor_value_slot");
+        EmitAssign(descriptorValueSlot,
+            $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 13");
+        var descriptorValue = NextTemp("socket_completion_descriptor_value");
+        EmitLoad(descriptorValue, "i64", descriptorValueSlot, 8);
+        var descriptor = NextTemp("socket_completion_descriptor");
+        EmitAssign(descriptor, $"inttoptr i64 {descriptorValue} to ptr");
+        var kindSlot = NextTemp("socket_completion_dequeue_kind_slot");
+        EmitAssign(kindSlot, $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 15");
+        var kind = NextTemp("socket_completion_dequeue_kind");
+        EmitLoad(kind, "i32", kindSlot, 4);
+        var codeSlot = NextTemp("socket_completion_dequeue_code_slot");
+        EmitAssign(codeSlot, $"getelementptr %sollang.task_control, ptr {completedTaskControl}, i32 0, i32 11");
+        var code = NextTemp("socket_completion_dequeue_code");
+        EmitLoad(code, "i32", codeSlot, 4);
+
+        var terminalOnly = IsRuntimeNamedEnum(function.ReturnType, "std.net.socket.SocketTerminalOutcome");
+        var hasResultTypes = _program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes);
+        if (!terminalOnly
+            && (!hasResultTypes
+                || !IsRuntimeNamedStruct(resultTypes.Ok, "std.net.socket.SocketCompletion")
+                || !IsRuntimeNamedStruct(resultTypes.Error, "std.net.socket.CompletionWaitFailure")))
+        {
+            throw new SollangException($"{function.Name} has an invalid dequeue result type");
+        }
+        var completionResultType = terminalOnly
+            ? _program.Types.GetEnum(function.ReturnType).Variants[0].PayloadType!.Value
+            : resultTypes.Ok;
+        var succeeded = NextTemp("socket_completion_dequeue_succeeded");
+        EmitCompare(succeeded, "slt", "i32", kind, "0");
+        var successLabel = NextLabel("socket_completion_dequeue_success");
+        var failureLabel = NextLabel("socket_completion_dequeue_failure");
+        var endLabel = NextLabel("socket_completion_dequeue_end");
+        EmitConditionalBranch(succeeded, successLabel, failureLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var slotType = _program.Types.GetStruct(completionResultType).GetField("slot").Type;
+        var slotDefinition = _program.Types.GetStruct(slotType);
+        var bytesType = slotDefinition.GetField("bytes").Type;
+        var pointer = LoadSocketDescriptor(descriptor, 16, "ptr", 8, "completion_buffer");
+        var length = LoadSocketDescriptor(descriptor, 24, "i64", 8, "completion_buffer_length");
+        var capacity = LoadSocketDescriptor(descriptor, 32, "i64", 8, "completion_buffer_capacity");
+        var bytes = new RuntimeDynamicInlineArray(bytesType, BoundType.UInt8, pointer, length, capacity);
+        var directionTag = LoadSocketDescriptor(descriptor, 8, "i32", 4, "completion_direction");
+        var directionType = slotDefinition.GetField("direction").Type;
+        var direction = EmitRuntimeEnumTag(directionType, directionTag, "socket_completion_direction");
+        var stateTag = LoadSocketDescriptor(descriptor, 64, "i32", 4, "completion_state");
+        var stateType = slotDefinition.GetField("state").Type;
+        var state = EmitRuntimeEnumTag(stateType, stateTag, "socket_completion_state");
+        var transferred = LoadSocketDescriptor(descriptor, 56, "i64", 8, "completion_transferred");
+        var transferredType = slotDefinition.GetField("transferred").Type;
+        var transferredSome = _program.Types.GetEnum(transferredType).Variants.First(variant => variant.Name == "Some");
+        var transferredValue = EmitEnumValue(
+            transferredType,
+            transferredSome,
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(transferred)));
+        var terminalKind = LoadSocketDescriptor(descriptor, 68, "i32", 4, "completion_error_kind");
+        var terminalCode = LoadSocketDescriptor(descriptor, 72, "i32", 4, "completion_error_code");
+        var errorType = slotDefinition.GetField("error").Type;
+        var errorDefinition = _program.Types.GetEnum(errorType);
+        var noError = NextTemp("socket_completion_no_error");
+        EmitCompare(noError, "slt", "i32", terminalKind, "0");
+        var noErrorLabel = NextLabel("socket_completion_no_error");
+        var hasErrorLabel = NextLabel("socket_completion_has_error");
+        var errorEndLabel = NextLabel("socket_completion_error_end");
+        EmitConditionalBranch(noError, noErrorLabel, hasErrorLabel);
+        EmitLabel(noErrorLabel);
+        _currentBlockLabel = noErrorLabel;
+        var noneError = EmitEnumValue(
+            errorType,
+            errorDefinition.Variants.First(variant => variant.Name == "None"),
+            null);
+        EmitBranch(errorEndLabel);
+        var noErrorExit = _currentBlockLabel;
+        EmitLabel(hasErrorLabel);
+        _currentBlockLabel = hasErrorLabel;
+        var someError = errorDefinition.Variants.First(variant => variant.Name == "Some");
+        var terminalError = EmitEnumValue(
+            errorType,
+            someError,
+            EmitSocketError(someError.PayloadType!.Value, terminalKind, terminalCode));
+        EmitBranch(errorEndLabel);
+        var hasErrorExit = _currentBlockLabel;
+        EmitLabel(errorEndLabel);
+        _currentBlockLabel = errorEndLabel;
+        var error = EmitEnumPhi("socket_completion_error", errorType,
+            [(noneError, noErrorExit), (terminalError, hasErrorExit)]);
+        var nativeIdentity = LoadSocketDescriptor(descriptor, 80, "i64", 8, "completion_native_identity");
+        var identityType = slotDefinition.GetField("nativeIdentity").Type;
+        var identitySome = _program.Types.GetEnum(identityType).Variants.First(variant => variant.Name == "Some");
+        var identity = EmitEnumValue(
+            identityType,
+            identitySome,
+            new RuntimeInt(BoundType.UInt64, nativeIdentity));
+        var slot = EmitSocketStructValue(slotType,
+            [
+                ("key", new RuntimeInt(BoundType.UInt64, LoadSocketDescriptor(descriptor, 0, "i64", 8, "completion_key"))),
+                ("direction", direction),
+                ("bytes", bytes),
+                ("offset", new RuntimeInt(BoundType.UIntSize, LoadSocketDescriptor(descriptor, 40, "i64", 8, "completion_offset"))),
+                ("length", new RuntimeInt(BoundType.UIntSize, LoadSocketDescriptor(descriptor, 48, "i64", 8, "completion_requested"))),
+                ("state", state),
+                ("transferred", transferredValue),
+                ("error", error),
+                ("nativeIdentity", identity)
+            ]);
+        var completion = EmitSocketStructValue(completionResultType,
+            [("reactor", reactor), ("slot", slot)]);
+        var success = terminalOnly
+            ? EmitSocketTerminalOutcome(function.ReturnType, completion, stateTag, terminalKind)
+            : EmitEnumValue(
+                function.ReturnType,
+                _program.Types.GetEnum(function.ReturnType).Variants.First(variant => variant.Name == "Ok"),
+                completion);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(failureLabel);
+        _currentBlockLabel = failureLabel;
+        RuntimeEnum? failure = null;
+        string? failureExit = null;
+        if (terminalOnly)
+        {
+            EmitTrap();
+        }
+        else
+        {
+            var failureErrorType = _program.Types.GetStruct(resultTypes.Error).GetField("error").Type;
+            var failurePayload = EmitSocketStructValue(resultTypes.Error,
+                [("reactor", reactor), ("error", EmitSocketError(failureErrorType, kind, code))]);
+            failure = EmitEnumValue(
+                function.ReturnType,
+                _program.Types.GetEnum(function.ReturnType).Variants.First(variant => variant.Name == "Err"),
+                failurePayload);
+            EmitBranch(endLabel);
+            failureExit = _currentBlockLabel;
+        }
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        var result = terminalOnly
+            ? success
+            : EmitEnumPhi("socket_completion_dequeue_result", function.ReturnType,
+                [(success, successExit), (failure!, failureExit!)]);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {descriptor}");
+        return result;
+    }
+
+    private RuntimeEnum EmitSocketTerminalOutcome(
+        BoundType outcomeType,
+        RuntimeStruct completion,
+        string stateTag,
+        string errorKind)
+    {
+        var definition = _program.Types.GetEnum(outcomeType);
+        var cancelled = NextTemp("socket_terminal_cancelled");
+        EmitCompare(cancelled, "eq", "i32", stateTag, "3");
+        var cancelledLabel = NextLabel("socket_terminal_cancelled");
+        var classifyFailureLabel = NextLabel("socket_terminal_classify_failure");
+        var failedLabel = NextLabel("socket_terminal_failed");
+        var succeededLabel = NextLabel("socket_terminal_succeeded");
+        var endLabel = NextLabel("socket_terminal_end");
+        EmitConditionalBranch(cancelled, cancelledLabel, classifyFailureLabel);
+
+        EmitLabel(cancelledLabel);
+        _currentBlockLabel = cancelledLabel;
+        var cancelledValue = EmitEnumValue(
+            outcomeType,
+            definition.Variants.First(variant => variant.Name == "Cancelled"),
+            completion);
+        EmitBranch(endLabel);
+        var cancelledExit = _currentBlockLabel;
+
+        EmitLabel(classifyFailureLabel);
+        _currentBlockLabel = classifyFailureLabel;
+        var failed = NextTemp("socket_terminal_has_error");
+        EmitCompare(failed, "sge", "i32", errorKind, "0");
+        EmitConditionalBranch(failed, failedLabel, succeededLabel);
+
+        EmitLabel(failedLabel);
+        _currentBlockLabel = failedLabel;
+        var failedValue = EmitEnumValue(
+            outcomeType,
+            definition.Variants.First(variant => variant.Name == "Failed"),
+            completion);
+        EmitBranch(endLabel);
+        var failedExit = _currentBlockLabel;
+
+        EmitLabel(succeededLabel);
+        _currentBlockLabel = succeededLabel;
+        var succeededValue = EmitEnumValue(
+            outcomeType,
+            definition.Variants.First(variant => variant.Name == "Succeeded"),
+            completion);
+        EmitBranch(endLabel);
+        var succeededExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi("socket_terminal_outcome", outcomeType,
+            [(cancelledValue, cancelledExit), (failedValue, failedExit), (succeededValue, succeededExit)]);
+    }
+
+    private RuntimeStruct EmitCompletedSocketSlot(
+        RuntimeStruct slot,
+        string transferred,
+        bool cancelled,
+        string errorKind,
+        string errorCode)
+    {
+        var definition = _program.Types.GetStruct(slot.Type);
+        var state = SocketStructField(slot, "state") as RuntimeEnum
+            ?? throw new SollangException("OperationSlot.state must be OperationState");
+        var stateDefinition = _program.Types.GetEnum(state.Type);
+        var stateVariant = stateDefinition.Variants.First(variant =>
+            variant.Name == (cancelled ? "Cancelled" : "Completed"));
+        var terminalState = EmitRuntimeEnumTag(
+            state.Type,
+            stateVariant.Tag.ToString(CultureInfo.InvariantCulture),
+            "socket_completion_terminal_state");
+        var transferredType = definition.GetField("transferred").Type;
+        var transferredDefinition = _program.Types.GetEnum(transferredType);
+        var someVariant = transferredDefinition.Variants.First(variant => variant.Name == "Some");
+        var transferredValue = EmitEnumValue(
+            transferredType,
+            someVariant,
+            new RuntimeInt(BoundType.UIntSize, EmitUIntSizeFromI64(transferred)));
+        var errorType = definition.GetField("error").Type;
+        var errorDefinition = _program.Types.GetEnum(errorType);
+        RuntimeEnum errorValue;
+        if (cancelled)
+        {
+            var someError = errorDefinition.Variants.First(variant => variant.Name == "Some");
+            var socketErrorType = someError.PayloadType
+                ?? throw new SollangException("OperationSlot.error Some must carry SocketError");
+            errorValue = EmitEnumValue(errorType, someError, EmitSocketError(socketErrorType, errorKind, errorCode));
+        }
+        else
+        {
+            errorValue = EmitEnumValue(
+                errorType,
+                errorDefinition.Variants.First(variant => variant.Name == "None"),
+                null);
+        }
+        return EmitSocketStructValue(slot.Type,
+            [
+                ("key", SocketStructField(slot, "key")),
+                ("direction", SocketStructField(slot, "direction")),
+                ("bytes", SocketStructField(slot, "bytes")),
+                ("offset", SocketStructField(slot, "offset")),
+                ("length", SocketStructField(slot, "length")),
+                ("state", terminalState),
+                ("transferred", transferredValue),
+                ("error", errorValue),
+                ("nativeIdentity", SocketStructField(slot, "nativeIdentity"))
+            ]);
+    }
+
+    private RuntimeEnum EmitSocketOwnedTransitionResult(
+        BoundFunction function,
+        SocketPlatformResult raw,
+        Func<RuntimeStruct> successPayloadFactory,
+        Func<RuntimeStruct> failurePayloadFactory)
+    {
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        var succeeded = NextTemp("socket_transition_succeeded");
+        EmitCompare(succeeded, "slt", "i32", raw.Kind, "0");
+        var successLabel = NextLabel("socket_transition_success");
+        var failureLabel = NextLabel("socket_transition_failure");
+        var endLabel = NextLabel("socket_transition_end");
+        EmitConditionalBranch(succeeded, successLabel, failureLabel);
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var successPayload = successPayloadFactory();
+        var success = EmitEnumValue(function.ReturnType, okVariant, successPayload);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+        EmitLabel(failureLabel);
+        _currentBlockLabel = failureLabel;
+        var failurePayload = failurePayloadFactory();
+        var failure = EmitEnumValue(function.ReturnType, errVariant, failurePayload);
+        EmitBranch(endLabel);
+        var failureExit = _currentBlockLabel;
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi("socket_transition_result", function.ReturnType,
+            [(success, successExit), (failure, failureExit)]);
+    }
+
     private RuntimeEnum EmitSocketCountResult(BoundFunction function, SocketPlatformResult raw)
     {
         var resultTypes = ValidateSocketResult(function);
@@ -1434,6 +2109,16 @@ internal sealed partial class LlvmEmitter
         if (values.Count != 1 || values[0] is not T value)
         {
             throw new SollangException($"{operation} expects exactly one additional argument");
+        }
+        return value;
+    }
+
+    private T RequireSocketAdditional<T>(IReadOnlyList<RuntimeValue> values, string operation, int index)
+        where T : RuntimeValue
+    {
+        if (values.Count != 2 || index < 0 || index >= values.Count || values[index] is not T value)
+        {
+            throw new SollangException($"{operation} expects exactly two additional arguments");
         }
         return value;
     }

@@ -1,0 +1,42 @@
+namespace probes.async_task_observability.session_close_reuse
+
+import std.async.diagnostics as diagnostics
+
+unit: -> async Unit { yield }
+
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) => firstOpen
+    firstOpen -> when {
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(first) {
+            unit() => task
+            first! -> track(task) => trackedResult
+            trackedResult -> when {
+                Ok(tracked) {
+                    # Closing while tracked is pending returns the same affine owner.
+                    first! -> close => busyResult
+                    busyResult -> when {
+                        Result<diagnostics.DiagnosticSummary, diagnostics.DiagnosticCloseFailure>.Err(busy) {
+                            tracked -> await
+                            busy.session! -> close => firstClose
+                            firstClose -> when {
+                                Result<diagnostics.DiagnosticSummary, diagnostics.DiagnosticCloseFailure>.Ok(firstSummary) {
+                                    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) => secondOpen
+                                    # TaskId may restart at 1; SessionId must differ forever.
+                                    firstSummary.sessionId -> println
+                                    secondOpen -> println
+                                }
+                                Result<diagnostics.DiagnosticSummary, diagnostics.DiagnosticCloseFailure>.Err(stillBusy) { "unexpected-busy" -> println }
+                            }
+                        }
+                        Result<diagnostics.DiagnosticSummary, diagnostics.DiagnosticCloseFailure>.Ok(summary) { "unexpected-close" -> println }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await
+                    "track-error" -> println
+                }
+            }
+        }
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+    }
+}

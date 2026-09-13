@@ -17,6 +17,7 @@ var updateExpected = false;
 var compareCompilers = false;
 var testTarget = TestTarget.WindowsX64;
 var wslDistribution = "Ubuntu";
+string? explicitCompilerPath = null;
 // LLVM-backed cases spend a meaningful part of their lifetime in child
 // processes, so leaving half of a 24-core workstation idle lengthens the
 // repository feedback loop. Keep the cap bounded for memory predictability,
@@ -67,6 +68,14 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
         case "--compare-compilers":
             compareCompilers = true;
             break;
+        case "--compiler":
+            if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
+            {
+                Console.Error.WriteLine("--compiler requires a compiler assembly path.");
+                return 2;
+            }
+            explicitCompilerPath = args[argumentIndex];
+            break;
         case "--target":
             if (++argumentIndex >= args.Length
                 || !TryParseTestTarget(args[argumentIndex], out testTarget))
@@ -94,7 +103,7 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
             break;
         default:
             Console.Error.WriteLine($"Unknown test option: {args[argumentIndex]}");
-            Console.Error.WriteLine("Usage: dotnet run --project tests/Sollang.ExampleTests -- [--filter <fragment>]... [--exact <name>]... [--affected <path>]... [--suite fast|reference|semantic|selfhost|llvm|full] [--target windows-x64|linux-x64] [--wsl-distribution <name>] [--skip-bootstrap] [--update-expected] [--compare-compilers] [--jobs <count>]");
+            Console.Error.WriteLine("Usage: dotnet run --project tests/Sollang.ExampleTests -- [--filter <fragment>]... [--exact <name>]... [--affected <path>]... [--suite fast|reference|semantic|selfhost|llvm|full] [--target windows-x64|linux-x64] [--wsl-distribution <name>] [--compiler <path>] [--skip-bootstrap] [--update-expected] [--compare-compilers] [--jobs <count>]");
             return 2;
     }
 }
@@ -106,6 +115,33 @@ if (testTarget == TestTarget.LinuxX64 && updateExpected)
 }
 
 var repoRoot = FindRepositoryRoot(AppContext.BaseDirectory);
+var compilerProject = Path.Combine(repoRoot, "src", "Sollang.Compiler", "Sollang.Compiler.csproj");
+var compilerDll = Path.Combine(
+    repoRoot,
+    "src",
+    "Sollang.Compiler",
+    "bin",
+    "Release",
+    "net11.0",
+    "Sollang.Compiler.dll");
+if (explicitCompilerPath is not null)
+{
+    try
+    {
+        compilerDll = Path.GetFullPath(explicitCompilerPath, repoRoot);
+    }
+    catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        Console.Error.WriteLine($"--compiler path is invalid: {exception.Message}");
+        return 2;
+    }
+
+    if (!File.Exists(compilerDll))
+    {
+        Console.Error.WriteLine($"Compiler path does not exist: {compilerDll}");
+        return 2;
+    }
+}
 var expectedDir = Path.Combine(repoRoot, "examples", "regression", "expected");
 var baseArtifactsDir = Path.Combine(repoRoot, "artifacts", "example-tests");
 var artifactsDir = testTarget == TestTarget.WindowsX64
@@ -132,16 +168,7 @@ if (testTarget == TestTarget.LinuxX64)
     }
 }
 
-var compilerProject = Path.Combine(repoRoot, "src", "Sollang.Compiler", "Sollang.Compiler.csproj");
-var compilerDll = Path.Combine(
-    repoRoot,
-    "src",
-    "Sollang.Compiler",
-    "bin",
-    "Release",
-    "net11.0",
-    "Sollang.Compiler.dll");
-if (!skipBootstrap)
+if (!skipBootstrap && explicitCompilerPath is null)
 {
     Console.WriteLine("[bootstrap 1/2] Building the Release compiler...");
     Console.Out.Flush();

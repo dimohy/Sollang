@@ -1,0 +1,88 @@
+{
+  "$schema": "zip-stored-writer.schema.json",
+  "schemaVersion": 1,
+  "capabilityId": "zip-stored-streaming-writer",
+  "module": "std.archive.zip",
+  "implementationStatus": "implemented-focused",
+  "sources": [
+    "stdlib/std/archive/zip.slg",
+    "stdlib/std/archive/zip/error.slg",
+    "stdlib/std/archive/zip/encoder_phase.slg",
+    "stdlib/std/hash/crc32.slg"
+  ],
+  "fixture": "examples/regression/1755-zip-stored-streaming-writer.slg",
+  "expectedOutput": "examples/regression/expected/1755-zip-stored-streaming-writer.stdout.txt",
+  "browserFixture": "scripts/probes/zip-stored-writer/browser-focused.slg",
+  "browserExpectedOutput": "scripts/probes/zip-stored-writer/browser-focused.stdout.txt",
+  "expectedStdout": "zip-writer=true\nzip-writer-entries=true,true\nzip-writer-transactional=true,true,true,true\nzip-writer-limits=true,true,true,true,true,true,true,true\nzip-writer-errors=true,true,true,true,true\nzip-writer-runtime-limits=true,true,true,true,true,true,true,true\nzip-writer-boundaries=true,true\n",
+  "publicSurface": [
+    "WriterLimits",
+    "Codec.writer(WriterLimits) -> Result<Writer, Error>",
+    "Writer.beginStored(mut self, name: [UInt8], extra: [UInt8], declaredBytes: Int, declaredChecksum: UInt32, output: mut [UInt8; ~]) -> Result<Int, Error>",
+    "Writer.write(mut self, input: [UInt8], output: mut [UInt8; ~]) -> Result<Int, Error>",
+    "Writer.finishEntry(mut self) -> Result<Unit, Error>",
+    "Writer.finish(move self, comment: [UInt8], output: mut [UInt8; ~]) -> Result<Int, Error>"
+  ],
+  "limits": [
+    "maxEncodedBytes", "maxEntryBytes", "maxEntries", "maxNameBytes",
+    "maxExtraBytes", "maxCommentBytes", "maxDirectoryBytes", "maxWorkUnits"
+  ],
+  "ownership": [
+    "Codec is immutable and Writer is affine",
+    "Writer never retains payload input or caller output",
+    "Writer retains only bounded entry metadata and central-directory bytes",
+    "finish consumes Writer and compiler semantics reject later reuse",
+    "no file global native call or ambient archive registry"
+  ],
+  "transactionality": [
+    "every failing beginStored write finishEntry or finish call leaves output unchanged for that call",
+    "successful write calls publish only their accepted payload prefix and are not rolled back by a later archive error",
+    "central directory and EOCD publish only from finish after every entry checksum and size validates",
+    "limits and ZIP32 representability are checked before the first affected output mutation"
+  ],
+  "errors": [
+    "InvalidLimit", "InvalidState", "InputLimitExceeded", "OutputLimitExceeded",
+    "EntryLimitExceeded", "NameLimitExceeded", "ExtraLimitExceeded", "CommentLimitExceeded",
+    "DirectoryLimitExceeded", "WorkLimitExceeded", "ChecksumMismatch", "SizeMismatch",
+    "UnsupportedZip64", "UnsupportedEncryption", "UnsupportedDataDescriptor", "UnsupportedMethod"
+  ],
+  "unsupported": ["DEFLATE method 8", "data descriptors", "ZIP64", "encryption"],
+  "reference": {
+    "producer": "Python zipfile deterministic two-entry ZIP_STORED oracle",
+    "pythonMinimum": "3.11",
+    "encodedBase64": "UEsDBBQAAAAAAAAAIQAAAAAAAAAAAAAAAAAJAAAAZW1wdHkuYmluUEsDBBQAAAAAAAAAIQBP+OhgBwAAAAcAAAAIAAAAZGF0YS5iaW4AAQID/woUUEsBAhQAFAAAAAAAAAAhAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAIABAAAAAGVtcHR5LmJpblBLAQIUABQAAAAAAAAAIQBP+OhgBwAAAAcAAAAIAAAAAAAAAAAAAACAAScAAABkYXRhLmJpblBLBQYAAAAAAgACAG0AAABUAAAAAwB6aXA=",
+    "encodedLength": 218,
+    "encodedSha256": "1268A6E25014B25BE7857846E7167DFEE9F59BA09F6DD885B97EA9F904B146AC",
+    "archiveCommentAscii": "zip",
+    "entries": [
+      { "name": "empty.bin", "size": 0, "crc32": "00000000", "sha256": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855", "bytes": [] },
+      { "name": "data.bin", "size": 7, "crc32": "60E8F84F", "sha256": "9ED0B969D4374C0CBA8BDEE755225E9E70F91B50C6C235697A2147D6C8C51511", "bytes": [0, 1, 2, 3, 255, 10, 20] }
+    ]
+  },
+  "requiredFixtureCases": [
+    "bulk-and-one-byte-identical-archive", "empty-and-binary-entry", "central-offsets-and-eocd",
+    "checksum-mismatch", "declared-size-mismatch", "write-past-declared-size",
+    "all-eight-limits-pre-effect", "finish-with-active-entry", "zip64-pre-effect",
+    "per-call-output-transactionality", "eight-runtime-limit-errors-pre-effect",
+    "int-max-overflow-rejection-unchanged-and-retry", "65536th-entry-rejection-pre-effect",
+    "affine-finish-reuse-semantic-rejection", "private-state-semantic-rejection"
+  ],
+  "semanticNegatives": [
+    { "id": "affine-finish-reuse", "source": "scripts/probes/zip-stored-writer/affine-finish-reuse.slg", "expected": "scripts/probes/zip-stored-writer/affine-finish-reuse.stderr.contains.txt" },
+    { "id": "private-state", "source": "scripts/probes/zip-stored-writer/private-state.slg", "expected": "scripts/probes/zip-stored-writer/private-state.stderr.contains.txt" }
+  ],
+  "executionMatrix": {
+    "windowsO0O2": 2,
+    "linuxO0O2": 2,
+    "browserExactExecution": 1,
+    "independentPython": 1,
+    "total": 6,
+    "browserHarness": "scripts/verify-browser-program.mjs",
+    "browserExpectedOutput": "scripts/probes/zip-stored-writer/browser-focused.stdout.txt"
+  },
+  "schemaNegativeControls": [
+    "passed-with-orphan", "passed-with-wrong-stdout-hash", "passed-with-incomplete-platform-denominator",
+    "failed-with-empty-failureIds", "browser-success-without-artifact", "failed-with-malformed-compiler-sha",
+    "attempted-browser-with-not-run-status"
+  ]
+}

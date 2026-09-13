@@ -11,10 +11,16 @@ $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $compilerPath = Join-Path $RepositoryRoot 'scripts\contracts\compiler-defects.json'
 $stdlibPath = Join-Path $RepositoryRoot 'scripts\contracts\stdlib-evolution-progress.json'
 $stabilizationPath = Join-Path $RepositoryRoot 'scripts\contracts\stabilization-progress.json'
+$activeGoalPath = Join-Path $RepositoryRoot 'scripts\contracts\active-goal-progress.json'
 
 $compiler = Get-Content -LiteralPath $compilerPath -Raw | ConvertFrom-Json
 $stdlib = Get-Content -LiteralPath $stdlibPath -Raw | ConvertFrom-Json
 $stabilization = Get-Content -LiteralPath $stabilizationPath -Raw | ConvertFrom-Json
+$activeGoal = if (Test-Path -LiteralPath $activeGoalPath -PathType Leaf) {
+    Get-Content -LiteralPath $activeGoalPath -Raw | ConvertFrom-Json
+} else {
+    $null
+}
 . (Join-Path $PSScriptRoot 'collaboration-evidence.ps1')
 Assert-CollaborationEvidence -RepositoryRoot $RepositoryRoot -Gates @($stabilization.collaborationGates)
 
@@ -58,6 +64,7 @@ $additionalDefects = @($compiler.defects | Where-Object { -not $baselineIds.Cont
 $additionalClosed = @($additionalDefects | Where-Object state -ceq 'closed').Count
 
 $stdlibStarted = $stdlibComplete + $stdlibInProgress
+$compilerStabilized = $compilerClosed + $compilerCandidate
 $focusedTotal = @($stabilization.focusedFixtures).Count
 $focusedPassed = @($stabilization.focusedFixtures | Where-Object status -ceq 'passed').Count
 $focusedTimeout = @($stabilization.focusedFixtures | Where-Object status -ceq 'timeout').Count
@@ -133,6 +140,79 @@ $progress = [ordered]@{
     }
 }
 
+if ($null -ne $activeGoal) {
+    if ($activeGoal.schemaVersion -ne 1) { throw 'active goal progress schemaVersion must be 1' }
+    $activeStages = @($activeGoal.stageGates)
+    if ($activeStages.Count -ne 2 -or
+        (@($activeStages.name | Sort-Object -Unique) -join ',') -cne 'stage2,stage3') {
+        throw 'active goal must contain exactly stage2 and stage3'
+    }
+    foreach ($stage in $activeStages) {
+        if ($stage.status -cnotin @('pending', 'running', 'complete')) {
+            throw "unsupported active stage status '$($stage.status)': $($stage.name)"
+        }
+    }
+    $activeFocused = @($activeGoal.focusedGates)
+    if (@($activeFocused.name | Sort-Object -Unique).Count -ne $activeFocused.Count) {
+        throw 'active goal contains duplicate focused gate names'
+    }
+    foreach ($gate in $activeFocused) {
+        if ($gate.total -le 0 -or $gate.completed -lt 0 -or $gate.completed -gt $gate.total) {
+            throw "invalid active focused gate count: $($gate.name)"
+        }
+        if ($gate.status -cnotin @('pending', 'active', 'complete', 'blocked', 'stale-failed')) {
+            throw "unsupported active focused gate status '$($gate.status)': $($gate.name)"
+        }
+    }
+    $activeStageComplete = @($activeStages | Where-Object status -ceq 'complete').Count
+    $baselineCompiler = $activeGoal.baseline.compiler
+    $baselineStdlib = $activeGoal.baseline.stdlib
+    $baselineInstant = [DateTimeOffset]$activeGoal.baseline.observedLocal
+    if ($baselineInstant.ToOffset([TimeSpan]::FromHours(9)).ToString('yyyy-MM-ddTHH:mm:sszzz', [Globalization.CultureInfo]::InvariantCulture) -cne
+        '2026-09-13T08:28:00+09:00') {
+        throw 'active goal baseline must remain the 2026-09-13 08:28 KST checkpoint'
+    }
+    $baselineDisplay = $baselineInstant.ToOffset([TimeSpan]::FromHours(9)).ToString(
+        'yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' KST'
+    if ($baselineCompiler.total -lt 0 -or $baselineCompiler.stabilized -lt 0 -or
+        $baselineCompiler.stabilized -gt $baselineCompiler.total -or $baselineCompiler.open -lt 0) {
+        throw 'active goal compiler baseline counts are invalid'
+    }
+    if ($baselineStdlib.total -le 0 -or $baselineStdlib.complete -lt 0 -or
+        $baselineStdlib.complete -gt $baselineStdlib.total) {
+        throw 'active goal stdlib baseline counts are invalid'
+    }
+    $progress.currentGoal = [ordered]@{
+        id = $activeGoal.goalId
+        baseline = $activeGoal.baseline
+        baselineDisplay = $baselineDisplay
+        compiler = [ordered]@{
+            stabilized = $compilerStabilized
+            total = $compilerTotal
+            stabilizedPercent = Get-Percent $compilerStabilized $compilerTotal
+            stabilizedDelta = $compilerStabilized - $baselineCompiler.stabilized
+            totalDelta = $compilerTotal - $baselineCompiler.total
+            open = $compilerOpen
+            openDelta = $compilerOpen - $baselineCompiler.open
+        }
+        stages = [ordered]@{
+            complete = $activeStageComplete
+            total = $activeStages.Count
+            completePercent = Get-Percent $activeStageComplete $activeStages.Count
+            gates = $activeStages
+        }
+        stdlib = [ordered]@{
+            complete = $stdlibComplete
+            total = $stdlibTotal
+            completePercent = Get-Percent $stdlibComplete $stdlibTotal
+            completeDelta = $stdlibComplete - $baselineStdlib.complete
+            inProgress = $stdlibInProgress
+            blocked = $stdlibBlocked
+        }
+        focusedGates = $activeFocused
+    }
+}
+
 if ($AsJson) {
     $progress | ConvertTo-Json -Depth 5
     return
@@ -156,7 +236,7 @@ Write-Host ("[focused progress] passed {0}/{1} ({2:N1}%); timeout {3}/{1} ({4:N1
     $progress.focused.passedPercent,
     $progress.focused.timeout,
     $progress.focused.timeoutPercent)
-Write-Host ("[stage progress] complete {0}/{1} ({2:N1}%); pending {3}/{1}." -f `
+Write-Host ("[historical cohort stages] complete {0}/{1} ({2:N1}%); pending {3}/{1}." -f `
     $progress.stages.complete,
     $progress.stages.total,
     $progress.stages.completePercent,
@@ -174,3 +254,34 @@ Write-Host ("[collaboration progress] complete {0}/{1} ({2:N1}%); pending {3}/{1
     $progress.collaboration.total,
     $progress.collaboration.completePercent,
     $progress.collaboration.pending)
+if ($null -ne $progress.currentGoal) {
+    Write-Host ("[current goal compiler; baseline {0}] stabilized {1}/{2} ({3:N1}%); delta {4:+0;-0;0} stabilized, {5:+0;-0;0} denominator; open {6} ({7:+0;-0;0})." -f `
+        $progress.currentGoal.baselineDisplay,
+        $progress.currentGoal.compiler.stabilized,
+        $progress.currentGoal.compiler.total,
+        $progress.currentGoal.compiler.stabilizedPercent,
+        $progress.currentGoal.compiler.stabilizedDelta,
+        $progress.currentGoal.compiler.totalDelta,
+        $progress.currentGoal.compiler.open,
+        $progress.currentGoal.compiler.openDelta)
+    Write-Host ("[current goal stages] complete {0}/{1} ({2:N1}%)." -f `
+        $progress.currentGoal.stages.complete,
+        $progress.currentGoal.stages.total,
+        $progress.currentGoal.stages.completePercent)
+    Write-Host ("[current goal stdlib; baseline {0}] fully accepted {1}/{2} ({3:N1}%); delta {4:+0;-0;0}; in progress {5}/{2}; blocked {6}/{2}." -f `
+        $progress.currentGoal.baselineDisplay,
+        $progress.currentGoal.stdlib.complete,
+        $progress.currentGoal.stdlib.total,
+        $progress.currentGoal.stdlib.completePercent,
+        $progress.currentGoal.stdlib.completeDelta,
+        $progress.currentGoal.stdlib.inProgress,
+        $progress.currentGoal.stdlib.blocked)
+    foreach ($gate in $progress.currentGoal.focusedGates) {
+        Write-Host ("[current focused gate] {0}: {1}/{2} ({3:N1}%); {4}." -f `
+            $gate.name,
+            $gate.completed,
+            $gate.total,
+            (Get-Percent $gate.completed $gate.total),
+            $gate.status)
+    }
+}

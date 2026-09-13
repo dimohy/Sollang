@@ -5,6 +5,10 @@ import std.net.quic.stream_state as streams
 
 run: -> Result<Bool, errors.Error> {
     reassembly.initial() => queue!
+    queue! -> takeContiguous(0, 0, 3) -> when {
+        None { true }
+        Some(value) { false }
+    } => missing
     queue! -> push(frames.Stream {
         id: 0
         offset: 4
@@ -23,40 +27,41 @@ run: -> Result<Bool, errors.Error> {
     firstAccount.flow => flow!
     false => firstCorrect!
     queue! -> takeContiguous(0, flow!.consumed, 3) -> when {
-        Ok(value) {
+        Some(value) {
             (value.data -> len) == 3
                 and value.data[0] == 1
                 and value.data[2] == 3 => firstCorrect!
             flow! -> onConsumed(UInt64(value.data -> len))? => flow!
         }
-        Err(error) {}
+        None { false => firstCorrect! }
     }
 
     queue! -> account(0, flow!)? => secondAccount
     secondAccount.flow => flow!
     false => secondCorrect!
     queue! -> takeContiguous(0, flow!.consumed, 8) -> when {
-        Ok(value) {
+        Some(value) {
             (value.data -> len) == 2
                 and value.data[0] == 4
                 and value.data[1] == 5 => secondCorrect!
             flow! -> onConsumed(UInt64(value.data -> len))? => flow!
         }
-        Err(error) {}
+        None { false => secondCorrect! }
     }
 
     false => finalFrame!
     false => thirdCorrect!
     queue! -> takeContiguous(0, flow!.consumed, 8) -> when {
-        Ok(value) {
+        Some(value) {
             value.fin => finalFrame!
             (value.data -> len) == 1 and value.data[0] == 6 => thirdCorrect!
             flow! -> onConsumed(UInt64(value.data -> len))? => flow!
         }
-        Err(error) {}
+        None { false => thirdCorrect! }
     }
 
-    firstAccount.newlyReceived == 6
+    missing
+        and firstAccount.newlyReceived == 6
         and secondAccount.newlyReceived == 0
         and firstCorrect!
         and secondCorrect!

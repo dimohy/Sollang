@@ -1,0 +1,46 @@
+# Nested pattern bindings may reuse a source name. Cleanup follows the exact
+# owned binding identity, never the spelling shared by an outer/inner payload.
+struct Holder {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+make: -> Result<Holder, Int> {
+    Result<Holder, Int>.Ok(Holder { first: [5; ~], second: [8; ~] })
+}
+
+borrowedShadow: -> Result<Int, Int> {
+    make() -> when {
+        Ok(payload) {
+            make() => innerOwner
+            innerOwner -> when {
+                Ok(payload) { Result<Int, Int>.Err(payload.first[0] + 10) -> return }
+                Err(error) { Result<Int, Int>.Err(error) -> return }
+            }
+        }
+        Err(error) { Result<Int, Int>.Err(error) -> return }
+    }
+}
+
+ownedShadow: -> Result<Int, Int> {
+    make() -> when {
+        Ok(payload) {
+            make() -> when {
+                Ok(payload) { Result<Int, Int>.Err(payload.second[0] + 20) -> return }
+                Err(error) { Result<Int, Int>.Err(error) -> return }
+            }
+        }
+        Err(error) { Result<Int, Int>.Err(error) -> return }
+    }
+}
+
+value result: Result<Int, Int> -> Int => result -> when {
+    Ok(number) { number }
+    Err(error) { error }
+}
+
+main {
+    borrowedShadow() -> value => borrowed
+    ownedShadow() -> value => owned
+    "$borrowed,$owned" -> println
+}

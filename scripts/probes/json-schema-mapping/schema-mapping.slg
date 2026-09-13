@@ -1,0 +1,308 @@
+import std.text.json as json
+import std.text.json.error as jsonErrors
+import sys.file as file
+
+enum UnknownMemberPolicy {
+    Reject
+    Skip
+}
+
+enum Role {
+    Admin
+    Viewer
+}
+
+enum MappingErrorKind {
+    WrongRoot
+    MissingRequired
+    DuplicateField
+    UnknownField
+    UnknownEnumTag
+    WrongKind
+    OwnedByteLimitExceeded
+}
+
+struct UserSchema {
+    name: Text
+    active: Text
+    role: Text
+    adminTag: Text
+    viewerTag: Text
+    unknownMembers: UnknownMemberPolicy
+}
+
+struct User {
+    name: [UInt8; ~]
+    active: Bool
+    role: Role
+}
+
+enum UserDecodeResult {
+    Ok(User)
+    Err(MappingErrorKind)
+}
+
+bytesMatch value: ref [UInt8; ~], expected: Text -> Bool {
+    (value -> len) == Int(expected -> len) -> unless { false -> return }
+    0 => index!
+    index! < (value -> len) -> while {
+        value[index!] == (expected -> byte(UIntSize(index!)))
+            -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+copyBytes value: ref [UInt8; ~] -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    output! -> reserve(value -> len)
+    0 => index!
+    index! < (value -> len) -> while {
+        output! -> push(value[index!])
+        index! + 1 => index!
+    }
+    output!
+}
+
+textBytes value: Text -> [UInt8; ~] {
+    [UInt8; ~] => output!
+    output! -> reserve(Int(value -> len))
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output! -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+    output!
+}
+
+decodeUser document: ref json.Document, schema: UserSchema, maxOwnedBytes: Int -> UserDecodeResult {
+    document.root >= 0 and document.root < (document.values -> len)
+        -> unless { UserDecodeResult.Err(MappingErrorKind.WrongRoot) -> return }
+    document.values[document.root].kind -> when {
+        Object { }
+        else { UserDecodeResult.Err(MappingErrorKind.WrongRoot) -> return }
+    }
+
+    -1 => nameIndex!
+    -1 => activeIndex!
+    -1 => roleIndex!
+    0 => memberIndex!
+    memberIndex! < (document.values[document.root].members -> len)
+        -> while {
+        document.values[document.root].members[memberIndex!].value => valueIndex
+        document.values[document.root].members[memberIndex!].name -> bytesMatch(schema.name)
+            -> if {
+            nameIndex! < 0 -> unless { UserDecodeResult.Err(MappingErrorKind.DuplicateField) -> return }
+            valueIndex => nameIndex!
+        } else {
+            document.values[document.root].members[memberIndex!].name -> bytesMatch(schema.active)
+                -> if {
+                activeIndex! < 0 -> unless { UserDecodeResult.Err(MappingErrorKind.DuplicateField) -> return }
+                valueIndex => activeIndex!
+            } else {
+                document.values[document.root].members[memberIndex!].name -> bytesMatch(schema.role)
+                    -> if {
+                    roleIndex! < 0 -> unless { UserDecodeResult.Err(MappingErrorKind.DuplicateField) -> return }
+                    valueIndex => roleIndex!
+                } else {
+                    schema.unknownMembers -> when {
+                        Reject { UserDecodeResult.Err(MappingErrorKind.UnknownField) -> return }
+                        Skip { }
+                    }
+                }
+            }
+        }
+        memberIndex! + 1 => memberIndex!
+    }
+
+    nameIndex! >= 0 and roleIndex! >= 0
+        -> unless { UserDecodeResult.Err(MappingErrorKind.MissingRequired) -> return }
+    nameIndex! < (document.values -> len) and roleIndex! < (document.values -> len)
+        and activeIndex! < (document.values -> len)
+        -> unless { UserDecodeResult.Err(MappingErrorKind.WrongKind) -> return }
+    document.values[nameIndex!].kind -> when {
+        String { }
+        else { UserDecodeResult.Err(MappingErrorKind.WrongKind) -> return }
+    }
+    document.values[roleIndex!].kind -> when {
+        String { }
+        else { UserDecodeResult.Err(MappingErrorKind.WrongKind) -> return }
+    }
+    activeIndex! >= 0 -> if {
+        document.values[activeIndex!].kind -> when {
+            Boolean { }
+            else { UserDecodeResult.Err(MappingErrorKind.WrongKind) -> return }
+        }
+    }
+
+    document.values[roleIndex!].bytes -> bytesMatch(schema.adminTag)
+        -> if {
+        Role.Admin
+    } else {
+        document.values[roleIndex!].bytes -> bytesMatch(schema.viewerTag)
+            -> if {
+            Role.Viewer
+        } else {
+            UserDecodeResult.Err(MappingErrorKind.UnknownEnumTag) -> return
+        }
+    } => role
+    maxOwnedBytes >= 0 and (document.values[nameIndex!].bytes -> len) <= maxOwnedBytes
+        -> unless { UserDecodeResult.Err(MappingErrorKind.OwnedByteLimitExceeded) -> return }
+    document.values[nameIndex!].bytes -> copyBytes => name
+    activeIndex! >= 0 -> if { document.values[activeIndex!].boolean } else { false } => active
+    UserDecodeResult.Ok(User { name: name, active: active, role: role })
+}
+
+stringValue bytes: move [UInt8; ~] -> json.Value => json.Value {
+    kind: json.ValueKind.String
+    boolean: false
+    bytes: bytes
+    items: [Int; ~]
+    members: [json.Member; ~]
+}
+
+booleanValue value: Bool -> json.Value => json.Value {
+    kind: json.ValueKind.Boolean
+    boolean: value
+    bytes: [UInt8; ~]
+    items: [Int; ~]
+    members: [json.Member; ~]
+}
+
+stageUserDocument user: ref User, schema: UserSchema, maxStagingBytes: Int -> Result<json.Document, MappingErrorKind> {
+    (user.name -> len) <= maxStagingBytes and maxStagingBytes >= 0
+        -> unless { Result<json.Document, MappingErrorKind>.Err(MappingErrorKind.OwnedByteLimitExceeded) -> return }
+    json.Document { values: [json.Value; ~], root: 3 } => document!
+    user.name -> copyBytes => nameBytes
+    nameBytes -> stringValue => nameValue
+    document!.values -> push(nameValue)
+    document!.values -> push(booleanValue(user.active))
+    user.role -> when {
+        Admin { schema.adminTag }
+        Viewer { schema.viewerTag }
+    } -> textBytes => roleBytes
+    roleBytes -> stringValue => roleValue
+    document!.values -> push(roleValue)
+    [json.Member; ~] => members!
+    members! -> push(json.Member { name: textBytes(schema.name), value: 0 })
+    members! -> push(json.Member { name: textBytes(schema.active), value: 1 })
+    members! -> push(json.Member { name: textBytes(schema.role), value: 2 })
+    document!.values -> push(json.Value {
+        kind: json.ValueKind.Object
+        boolean: false
+        bytes: [UInt8; ~]
+        items: [Int; ~]
+        members: members!
+    })
+    Result<json.Document, MappingErrorKind>.Ok(document!)
+}
+
+readDocument text: Text, limits: json.Limits -> Result<json.Document, json.Error> {
+    json.reader(text, limits)? => reader!
+    reader! -> document
+}
+
+run: -> Result<Unit, json.Error> uses Console {
+    json.limits(256, 8, 64, 64)? => limits
+    UserSchema {
+        name: "name"
+        active: "active"
+        role: "role"
+        adminTag: "admin"
+        viewerTag: "viewer"
+        unknownMembers: UnknownMemberPolicy.Reject
+    } => rejectSchema
+    UserSchema {
+        name: "name"
+        active: "active"
+        role: "role"
+        adminTag: "admin"
+        viewerTag: "viewer"
+        unknownMembers: UnknownMemberPolicy.Skip
+    } => skipSchema
+
+    readDocument("""{"role":"admin","active":true,"name":"Sol"}""", limits)? => positive
+    positive -> decodeUser(rejectSchema, 3) -> when {
+        Ok(user) {
+            user.role -> when {
+                Admin { "positive=$(user.name -> len),$(user.active),admin" -> println }
+                Viewer { "positive=wrong-role" -> println }
+            }
+            json.writer(128, 8)? => writer!
+            stageUserDocument(user, rejectSchema, 64) -> when {
+                Ok(document) {
+                    writer! -> document(document) -> when {
+                        Ok(done) { }
+                        Err(error) { "write-error=$(error.offset)" -> println }
+                    }
+                }
+                Err(error) { "stage-error" -> println }
+            }
+            writer! -> intoBytes? => encoded
+            encoded -> file.borrowBytes => encodedSource
+            "write=$(encodedSource -> slice(0, encodedSource -> len))" -> println
+        }
+        Err(error) { "positive=failed" -> println }
+    }
+
+    readDocument("""{"active":true}""", limits)? => missingDocument
+    missingDocument -> decodeUser(rejectSchema, 64) -> when {
+        Ok(user) { "missing=accepted" -> println }
+        Err(error) { error -> when { MissingRequired { "missing=MissingRequired" -> println } else { "missing=wrong" -> println } } }
+    }
+    readDocument("""{"name":"a","name":"b","role":"admin"}""", limits)? => duplicateDocument
+    duplicateDocument -> decodeUser(rejectSchema, 64) -> when {
+        Ok(user) { "duplicate=accepted" -> println }
+        Err(error) { error -> when { DuplicateField { "duplicate=DuplicateField" -> println } else { "duplicate=wrong" -> println } } }
+    }
+    readDocument("""{"name":"Sol","role":"admin","extra":1}""", limits)? => unknown
+    unknown -> decodeUser(rejectSchema, 64) -> when {
+        Ok(user) { "unknown-reject=accepted" -> println }
+        Err(error) { error -> when { UnknownField { "unknown-reject=UnknownField" -> println } else { "unknown-reject=wrong" -> println } } }
+    }
+    unknown -> decodeUser(skipSchema, 64) -> when {
+        Ok(user) { "unknown-skip=ok" -> println }
+        Err(error) { "unknown-skip=failed" -> println }
+    }
+    readDocument("""{"name":"Sol","role":"owner"}""", limits)? => enumDocument
+    enumDocument -> decodeUser(rejectSchema, 64) -> when {
+        Ok(user) { "enum=accepted" -> println }
+        Err(error) { error -> when { UnknownEnumTag { "enum=UnknownEnumTag" -> println } else { "enum=wrong" -> println } } }
+    }
+    readDocument("""{"name":7,"role":"admin"}""", limits)? => kindDocument
+    kindDocument -> decodeUser(rejectSchema, 64) -> when {
+        Ok(user) { "kind=accepted" -> println }
+        Err(error) { error -> when { WrongKind { "kind=WrongKind" -> println } else { "kind=wrong" -> println } } }
+    }
+    positive -> decodeUser(rejectSchema, 2) -> when {
+        Ok(user) { "reader-bound=accepted" -> println }
+        Err(error) { error -> when { OwnedByteLimitExceeded { "reader-bound=OwnedByteLimitExceeded" -> println } else { "reader-bound=wrong" -> println } } }
+    }
+    "reader-unchanged=$((positive.values -> len) == 4 and (positive.values[2].bytes -> len) == 3)" -> println
+
+    json.writer(8, 8)? => shortWriter!
+    User { name: [83, 111, 108; ~], active: true, role: Role.Admin } => boundedUser
+    stageUserDocument(boundedUser, rejectSchema, 64) -> when {
+        Ok(document) {
+            shortWriter! -> document(document) -> when {
+                Ok(done) { "writer-bound=accepted" -> println }
+                Err(error) {
+                    error.kind -> when {
+                        OutputLimitExceeded { "writer-bound=OutputLimitExceeded" -> println }
+                        else { "writer-bound=wrong" -> println }
+                    }
+                }
+            }
+        }
+        Err(error) { "writer-bound=stage" -> println }
+    }
+    "writer-unchanged=$((shortWriter! -> byteCount) == 0 and (shortWriter! -> depth) == 0)" -> println
+    Result<Unit, json.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(done) { }
+        Err(error) { "unexpected=$(error.offset)" -> println }
+    }
+}

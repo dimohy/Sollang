@@ -1355,17 +1355,59 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                     prepared.calls[roleCallIndex!] => roleCall
                                     prepared.package.ranges[roleCall.targetSourceModule] => roleTargetRange
                                     prepared.package.symbols[roleTargetRange.symbolStart + roleCall.functionSymbol] => roleFunction
-                                    roleFunction.secondaryTypeNode >= 0 and roleFunction.blockTypeNode >= 0
+                                    roleFunction.blockTypeNode >= 0
                                         -> if {
+                                            # The receiver of an inherent method is dispatch
+                                            # authority, not a generic callback substitution.
+                                            # Match the declared caller-supplied input instead.
+                                            # Ordinary block functions keep their primary input;
+                                            # inherent block methods use their first explicit
+                                            # additional parameter in source order.
+                                            roleFunction.typeNode => roleInputTypeAst!
+                                            roleFunction.kind == 31 -> if {
+                                                -1 => roleInputNameToken!
+                                                0 => roleParameterSearch!
+                                                roleParameterSearch! < roleTargetRange.symbolCount
+                                                    -> while {
+                                                        prepared.package.symbols[roleTargetRange.symbolStart + roleParameterSearch!]
+                                                            => roleParameter
+                                                        roleParameter.kind == 35
+                                                            and roleParameter.parent == roleCall.functionSymbol
+                                                            and roleParameter.astNode != roleFunction.astNode
+                                                            and roleParameter.typeNode >= 0
+                                                            and (roleInputNameToken! < 0
+                                                            or roleParameter.nameToken < roleInputNameToken!)
+                                                            -> if {
+                                                                roleParameter.typeNode => roleInputTypeAst!
+                                                                roleParameter.nameToken => roleInputNameToken!
+                                                            }
+                                                        roleParameterSearch! + 1 => roleParameterSearch!
+                                                    }
+                                            }
                                             -1 => roleSourceTypeIndex!
                                             1000000 => roleSourceDistance!
+                                            UIntSize(0) => roleSourceStart!
                                             0 => roleSourceSearch!
                                             roleSourceSearch! < (inferred! -> len) -> while {
                                                 inferred![roleSourceSearch!] => roleSourceTypeCandidate
                                                 roleSourceTypeCandidate.sourceModule == sourceIndex
                                                     -> if {
                                                         prepared.package.nodes[sourceRange.astStart + roleSourceTypeCandidate.astNode] => roleSourceNode
-                                                        roleSourceNode.start + roleSourceNode.length <= prepared.package.tokens[sourceRange.tokenStart + prepared.package.nodes[sourceRange.astStart + roleCall.callAst].payloadToken].span.start
+                                                        prepared.package.nodes[sourceRange.astStart + roleCall.callAst] => roleCallAst
+                                                        prepared.package.tokens[sourceRange.tokenStart + roleCallAst.payloadToken].span.start
+                                                            => roleTargetStart
+                                                        roleCallAst.start + roleCallAst.length => roleBodyStart!
+                                                        roleCallAst.tertiaryToken >= 0 -> if {
+                                                            prepared.package.tokens[sourceRange.tokenStart + roleCallAst.tertiaryToken].span.start
+                                                                => roleBodyStart!
+                                                        }
+                                                        roleSourceNode.start + roleSourceNode.length <= roleTargetStart
+                                                            => roleSourceBeforeTarget
+                                                        roleFunction.kind == 31
+                                                            and roleSourceNode.start > roleTargetStart
+                                                            and roleSourceNode.start < roleBodyStart!
+                                                            => roleSourceAfterTarget
+                                                        roleSourceBeforeTarget or roleSourceAfterTarget
                                                             -> if {
                                                                 roleSourceNode.parent => roleSourceAncestor!
                                                                 1 => roleDistance!
@@ -1379,10 +1421,19 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                                                             roleDistance! + 1 => roleDistance!
                                                                         }
                                                                     }
-                                                                belongsToRole! and roleDistance! < roleSourceDistance!
+                                                                belongsToRole!
+                                                                    and ((roleFunction.kind != 31
+                                                                    and roleDistance! < roleSourceDistance!)
+                                                                    or (roleFunction.kind == 31
+                                                                    and roleSourceAfterTarget
+                                                                    and (roleSourceTypeIndex! < 0
+                                                                    or roleSourceNode.start < roleSourceStart!
+                                                                    or (roleSourceNode.start == roleSourceStart!
+                                                                    and roleDistance! < roleSourceDistance!))))
                                                                     -> if {
                                                                         roleSourceSearch! => roleSourceTypeIndex!
                                                                         roleDistance! => roleSourceDistance!
+                                                                        roleSourceNode.start => roleSourceStart!
                                                                     }
                                                             }
                                                     }
@@ -1396,7 +1447,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                                 roleNominalSearch! < (prepared.nominal -> len)
                                                     -> while {
                                                         prepared.nominal[roleNominalSearch!] => roleNominal
-                                                        roleNominal.sourceModule == roleCall.targetSourceModule and roleNominal.typeAst == roleFunction.typeNode
+                                                        roleNominal.sourceModule == roleCall.targetSourceModule and roleNominal.typeAst == roleInputTypeAst!
                                                             -> if { roleNominalSearch! => roleInputNominalIndex! }
                                                         roleNominal.sourceModule == roleCall.targetSourceModule and roleNominal.typeAst == roleFunction.blockTypeNode
                                                             -> if { roleNominalSearch! => roleBlockNominalIndex! }
@@ -1408,7 +1459,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                                 roleCompositeSearch! < (prepared.composite -> len)
                                                     -> while {
                                                         prepared.composite[roleCompositeSearch!] => roleComposite
-                                                        roleComposite.sourceModule == roleCall.targetSourceModule and roleComposite.typeAst == roleFunction.typeNode
+                                                        roleComposite.sourceModule == roleCall.targetSourceModule and roleComposite.typeAst == roleInputTypeAst!
                                                             -> if { roleCompositeSearch! => roleInputCompositeIndex! }
                                                         roleComposite.sourceModule == roleCall.targetSourceModule and roleComposite.typeAst == roleFunction.blockTypeNode
                                                             -> if { roleCompositeSearch! => roleBlockCompositeIndex! }

@@ -1,0 +1,85 @@
+namespace std.async.diagnostics
+
+public enum Lifecycle {
+    Pending
+    Running
+    Completed
+    Cancelled
+}
+
+public enum WaitState {
+    None
+    Ready
+    Timer
+    AwaitBlocked
+}
+
+public enum DiagnosticError {
+    InvalidCapacity
+    SessionIdExhausted
+    AllocationFailed
+}
+
+public enum TrackFailureKind {
+    AlreadyTracked
+    CrossSession
+    Capacity
+}
+
+public enum DiagnosticCloseFailureKind { Busy }
+
+public struct DiagnosticLimits { public maximumTrackedTasks: Int }
+
+public struct SuspensionLocator {
+    public sourceModule: Text
+    public functionSymbol: Text
+    public resumeState: Int
+    public byteOffset: UIntSize
+    public line: Int
+    public column: Int
+}
+
+public struct TaskSnapshot {
+    public taskId: UInt64
+    public parentTaskId: Option<UInt64>
+    public lifecycle: Lifecycle
+    public waitState: WaitState
+    public awaitedTaskId: Option<UInt64>
+    public timerDeadlineMillis: UInt64
+    public suspension: Option<SuspensionLocator>
+}
+
+public struct SnapshotResult {
+    public sessionId: UInt64
+    public written: UIntSize
+    public available: UIntSize
+    public truncated: Bool
+}
+
+public struct DiagnosticSummary {
+    public sessionId: UInt64
+    public trackedTasks: UIntSize
+    public untrackedTasks: UIntSize
+}
+
+# The token is private and compiler-owned. DiagnosticSession is an affine
+# resource even though its public representation is intentionally opaque.
+public struct DiagnosticSession { token: UInt64 }
+
+public struct DiagnosticCloseFailure {
+    public session: DiagnosticSession
+    public kind: DiagnosticCloseFailureKind
+}
+
+public startDiagnosticSession limits: DiagnosticLimits -> Result<DiagnosticSession, DiagnosticError> = intrinsic
+
+impl DiagnosticSession {
+    # Source type annotations do not spell the compiler-owned Task<U> type.
+    # This generic owner surface is accepted only when T is a Task by the
+    # intrinsic signature checker, and returns that exact affine T on both arms.
+    public track<T>: mut self, task: move T -> Result<T, (T, TrackFailureKind)> = intrinsic
+
+    public snapshot<N>: self, output: mut [TaskSnapshot; N] -> SnapshotResult where N: Int = intrinsic
+
+    public close: move self -> Result<DiagnosticSummary, DiagnosticCloseFailure> = intrinsic
+}

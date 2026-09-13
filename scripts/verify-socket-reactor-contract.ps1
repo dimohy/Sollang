@@ -16,6 +16,62 @@ function Require([string]$Text, [string]$Needle, [string]$Description) {
     }
 }
 
+function Require-CompletionRegisterPreEffect([string]$Text, [string]$Platform) {
+    $match = [regex]::Match(
+        $Text,
+        'define internal %sollang\.socket_result @sollang_platform_socket_completion_register_stream\([^\r\n]+\) #0 \{(?<body>.*?)\r?\n        \}',
+        [Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $match.Success) { throw "$Platform completion register definition is missing" }
+    $body = $match.Groups['body'].Value
+    foreach ($forbiddenEffect in @('CreateIoCompletionPort', '@epoll_ctl', '@fcntl')) {
+        if ($body.Contains($forbiddenEffect, [StringComparison]::Ordinal)) {
+            throw "$Platform completion register must remain pre-effect but contains $forbiddenEffect"
+        }
+    }
+    if ($body.IndexOf('duplicate_loop:', [StringComparison]::Ordinal) -ge
+        $body.IndexOf('free_loop:', [StringComparison]::Ordinal)) {
+        throw "$Platform completion register must classify duplicate keys before capacity"
+    }
+    $activePublish = 'store i64 1, ptr %free_entry, align 8'
+    if ($body.IndexOf($activePublish, [StringComparison]::Ordinal) -lt
+        $body.IndexOf('store i64 %next_count, ptr %count_slot, align 8', [StringComparison]::Ordinal)) {
+        throw "$Platform completion register must publish active only after every entry field and count"
+    }
+}
+
+function Get-GitBlobSha256([string]$Commit, [string]$Path) {
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = 'git'
+    $start.WorkingDirectory = $RepositoryRoot
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    $start.UseShellExecute = $false
+    $start.ArgumentList.Add('show')
+    $start.ArgumentList.Add("${Commit}:$Path")
+    $process = [Diagnostics.Process]::Start($start)
+    $memory = [IO.MemoryStream]::new()
+    try {
+        $process.StandardOutput.BaseStream.CopyTo($memory)
+        $errorText = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "git show failed for ${Commit}:$Path`: $errorText"
+        }
+        $memory.Position = 0
+        $sha = [Security.Cryptography.SHA256]::Create()
+        try {
+            return [Convert]::ToHexString($sha.ComputeHash($memory))
+        }
+        finally {
+            $sha.Dispose()
+        }
+    }
+    finally {
+        $memory.Dispose()
+        $process.Dispose()
+    }
+}
+
 $publicSocket = Read-Authority "stdlib/std/net/socket.slg"
 $runtimeSocket = Read-Authority "stdlib/sys/runtime/socket.slg"
 $semantic = Read-Authority "src/Sollang.Compiler/Semantics/SemanticCompiler.cs"
@@ -44,6 +100,9 @@ Require $publicSocket "public clear: mut self -> Unit" "explicit borrow release"
 Require $runtimeSocket "public waitInto: self, events: mut [ReadyEvent; ~], timeout: Option<std.time.Duration> -> Result<UIntSize, SocketError> uses Network = intrinsic" "caller-buffer wait"
 Require $semantic "RequireSocketReactorWaitSignature" "typed intrinsic signature"
 Require $emitter "sollang_platform_socket_reactor_wait" "managed direct reactor call"
+if ($emitter.Contains('"@sollang_platform_socket_completion_', [StringComparison]::Ordinal)) {
+    throw "completion platform symbols must be passed without a leading @ to EmitSocketPlatformResult"
+}
 Require $windowsRuntime "call i32 @WSAPoll(ptr %descriptors" "single Windows readiness primitive"
 Require $linuxRuntime "call i32 @poll(ptr %descriptors" "single Linux readiness primitive"
 Require $selfhostTyped "opcode <= -297 and opcode >= -302" "self-host socket opcode range"
@@ -84,9 +143,30 @@ if (@($completionContract.capacity.fields) -join ',' -cne 'registrations,pending
     throw "socket completion reactor bounded-capacity relations are incomplete"
 }
 if ($completionContract.platforms.'windows-x64'.primitive -cne 'IOCP with GetQueuedCompletionStatusEx' -or
-    $completionContract.platforms.'linux-x64'.primitive -cne 'epoll with nonblocking sockets' -or
+    $completionContract.platforms.'linux-x64'.primitive -cne 'epoll with nonblocking sockets and eventfd cancellation wakeup' -or
     $completionContract.platforms.'wasm32-browser'.capability -cne 'unsupported') {
     throw "socket completion reactor platform specialization is incomplete"
+}
+$matrix = @($completionContract.verificationMatrix)
+if ($matrix.Count -ne 22 -or @($matrix.id | Sort-Object -Unique).Count -ne 22) {
+    throw "socket completion reactor verification matrix must contain 22 unique cases"
+}
+if (@($matrix | Where-Object target -CEQ 'windows-x64').Count -ne 7 -or
+    @($matrix | Where-Object target -CEQ 'linux-x64').Count -ne 8 -or
+    @($matrix | Where-Object target -CEQ 'wasm32-browser').Count -ne 2 -or
+    @($matrix | Where-Object { $_.target -cnotin @('windows-x64', 'linux-x64', 'wasm32-browser') }).Count -ne 5) {
+    throw "socket completion reactor verification matrix denominators drifted"
+}
+if ($completionContract.api.globalConstructor -notmatch '^completionReactor\(' -or
+    @($completionContract.api.reactorMethods | Where-Object { $_ -match '^dequeue\(.+std\.io\.async\.Cancellation' }).Count -ne 1 -or
+    @($completionContract.api.slotMethods | Where-Object { $_ -match '^recycle\(' }).Count -ne 1) {
+    throw "socket completion reactor affine inherent API shape drifted"
+}
+foreach ($entry in $completionContract.baseline.sourceHashes) {
+    $baselineHash = Get-GitBlobSha256 $completionContract.baseline.gitCommit $entry.path
+    if ($baselineHash -cne $entry.sha256) {
+        throw "socket completion reactor immutable baseline source drifted: $($entry.path)"
+    }
 }
 $milestones = @($completionContract.milestones)
 if ($milestones.Count -ne 6 -or @($milestones.id | Sort-Object -Unique).Count -ne 6) {
@@ -119,6 +199,8 @@ if ([regex]::Matches($windowsRuntime, 'call i32 @WSAPoll\(ptr %descriptors').Cou
 if ([regex]::Matches($linuxRuntime, 'call i32 @poll\(ptr %descriptors').Count -ne 1) {
     throw "Linux reactor wait must issue exactly one poll"
 }
+Require-CompletionRegisterPreEffect $windowsRuntime 'Windows'
+Require-CompletionRegisterPreEffect $linuxRuntime 'Linux'
 if ([regex]::Matches($selfhostRuntime, 'define internal %sollang\.socket_result @sollang_platform_socket_reactor_wait').Count -ne 2) {
     throw "self-host Windows and Linux runtimes must each define reactor_wait exactly once"
 }

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "completed", "total", "managedCompleted", "managedTotal", "inputStable", "inputHashes", "caseIds", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["static-passed-managed-pending", "failed"] },
+    "completed": { "enum": [0, 3] },
+    "total": { "const": 3 },
+    "managedCompleted": { "const": 0 },
+    "managedTotal": { "const": 3 },
+    "inputStable": { "type": "boolean" },
+    "inputHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "contractSchema", "staticResultSchema", "managedResultSchema", "compilerSource", "verifier", "verificationProcess", "formatter", "expected", "source:P-PRIMARY-MUT", "source:P-ADDITIONAL-MUT", "source:N-ADDITIONAL-READONLY", "stdlibSourceSet"],
+      "properties": {
+        "contract": { "$ref": "#/$defs/sha256" },
+        "contractSchema": { "$ref": "#/$defs/sha256" },
+        "staticResultSchema": { "$ref": "#/$defs/sha256" },
+        "managedResultSchema": { "$ref": "#/$defs/sha256" },
+        "compilerSource": { "$ref": "#/$defs/sha256" },
+        "verifier": { "$ref": "#/$defs/sha256" },
+        "verificationProcess": { "$ref": "#/$defs/sha256" },
+        "formatter": { "$ref": "#/$defs/sha256" },
+        "expected": { "$ref": "#/$defs/sha256" },
+        "source:P-PRIMARY-MUT": { "$ref": "#/$defs/sha256" },
+        "source:P-ADDITIONAL-MUT": { "$ref": "#/$defs/sha256" },
+        "source:N-ADDITIONAL-READONLY": { "$ref": "#/$defs/sha256" },
+        "stdlibSourceSet": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "caseIds": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        { "const": "P-PRIMARY-MUT" },
+        { "const": "P-ADDITIONAL-MUT" },
+        { "const": "N-ADDITIONAL-READONLY" }
+      ],
+      "items": false
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "const": "INPUT_DRIFT" } }
+  },
+  "$defs": { "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" } },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "static-passed-managed-pending" } }, "required": ["status"] },
+      "then": { "properties": { "completed": { "const": 3 }, "inputStable": { "const": true }, "failureIds": { "maxItems": 0 } } },
+      "else": { "properties": { "completed": { "const": 0 }, "inputStable": { "const": false }, "failureIds": { "minItems": 1, "maxItems": 1 } } }
+    }
+  ]
+}

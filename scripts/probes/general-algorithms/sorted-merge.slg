@@ -1,0 +1,114 @@
+import std.algorithm as algorithm
+
+struct Entry { key: Int, origin: Int, ordinal: Int }
+struct EntryComparison { }
+
+impl algorithm.Comparison for EntryComparison {
+    type Item = Entry
+    public compare: self, left: ref Entry, right: ref Entry -> Int {
+        left.key < right.key -> if { -1 } else {
+            left.key > right.key -> if { 1 } else { 0 }
+        }
+    }
+}
+
+printEntries values: [Entry], count: Int -> Unit uses Console {
+    0 => index!
+    index! < count -> while {
+        values[index!] => entry
+        "$(entry.key):$(entry.origin):$(entry.ordinal)" -> println
+        index! + 1 => index!
+    }
+}
+
+printError error: algorithm.MergeError -> Unit uses Console {
+    error -> when {
+        LengthOverflow { "length-overflow" -> println }
+        InsufficientOutputCapacity { "short-capacity" -> println }
+        InsufficientOutputLength { "short-length" -> println }
+    }
+}
+
+main {
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    algorithm.Ordering { direction: algorithm.Direction.Descending } => descending
+    EntryComparison { } => comparison
+
+    [Entry;
+    { key: 1, origin: 0, ordinal: 0 },
+    { key: 2, origin: 0, ordinal: 1 },
+    { key: 2, origin: 0, ordinal: 2 },
+    { key: 5, origin: 0, ordinal: 3 }
+    ] => ascendingLeft
+    [Entry;
+    { key: 2, origin: 1, ordinal: 0 },
+    { key: 2, origin: 1, ordinal: 1 },
+    { key: 3, origin: 1, ordinal: 2 }
+    ] => ascendingRight
+    [Entry;
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 },
+    { key: 0, origin: 9, ordinal: 9 };
+    ~
+    ] => ascendingOutput!
+    ascendingOutput! -> capacity => ascendingCapacity
+    ascending -> mergeSorted(ascendingLeft, ascendingRight, ascendingOutput!, comparison) -> when {
+        Ok(count) {
+            "ascending=$count" -> println
+            ascendingOutput! -> printEntries(count)
+            "storage=$(ascendingOutput! -> len),$(ascendingOutput! -> capacity),$ascendingCapacity" -> println
+            "inputs=$(ascendingLeft -> len),$(ascendingRight -> len)" -> println
+        }
+        Err(error) { error -> printError }
+    }
+
+    [Entry;
+    { key: 5, origin: 0, ordinal: 3 },
+    { key: 2, origin: 0, ordinal: 1 },
+    { key: 2, origin: 0, ordinal: 2 },
+    { key: 1, origin: 0, ordinal: 0 }
+    ] => descendingLeft
+    [Entry;
+    { key: 3, origin: 1, ordinal: 2 },
+    { key: 2, origin: 1, ordinal: 0 },
+    { key: 2, origin: 1, ordinal: 1 }
+    ] => descendingRight
+    descending -> mergeSorted(descendingLeft, descendingRight, ascendingOutput!, comparison) -> when {
+        Ok(count) {
+            "descending=$count" -> println
+            ascendingOutput! -> printEntries(count)
+        }
+        Err(error) { error -> printError }
+    }
+
+    [Entry; ~] => empty
+    [Entry; ~] => emptyOutput!
+    ascending -> mergeSorted(empty, empty, emptyOutput!, comparison) -> when {
+        Ok(count) { "empty=$count,$(emptyOutput! -> len),$(emptyOutput! -> capacity)" -> println }
+        Err(error) { error -> printError }
+    }
+
+    [Entry; { key: 1, origin: 0, ordinal: 0 }] => one
+    [Entry; { key: 2, origin: 1, ordinal: 0 }] => two
+    [Entry; { key: 99, origin: 9, ordinal: 9 }; ~] => shortCapacity!
+    ascending -> mergeSorted(one, two, shortCapacity!, comparison) -> when {
+        Ok(count) { "unexpected-success" -> println }
+        Err(error) {
+            error -> printError
+            "capacity-unchanged=$(shortCapacity![0].key),$(shortCapacity! -> len),$(shortCapacity! -> capacity)" -> println
+        }
+    }
+
+    [Entry; 4~] => shortLength!
+    ascending -> mergeSorted(one, two, shortLength!, comparison) -> when {
+        Ok(count) { "unexpected-success" -> println }
+        Err(error) {
+            error -> printError
+            "length-unchanged=$(shortLength! -> len),$(shortLength! -> capacity)" -> println
+        }
+    }
+}

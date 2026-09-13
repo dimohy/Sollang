@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "module": "stdlib/std/sequence.slg",
+  "scope": "existing-lazy-sequence-adapters-and-stream-combinator-evidence",
+  "methods": ["map", "mapArray", "filter", "tap", "take", "skip", "scan", "beforeEach", "afterEach", "flatMap"],
+  "invariants": {
+    "evaluation": "pull-fused at each; no eager adapter execution",
+    "materialization": "no adapter-owned element collection, realloc, memcpy, or memmove; bounded first-class producer contexts are not element materialization",
+    "earlyStop": "take stops the complete upstream pipeline, including nested and concurrent producers",
+    "state": "take, skip, and scan state persists once per pipeline instance",
+    "callbacks": "compile-time typed blocks with concrete input and output types; no indirect callback dispatch",
+    "firstClassStreams": "zip stops at the shortest input; latest retains one bounded current value per input and downstream cancellation joins producers"
+  },
+  "cases": [
+    {
+      "id": "source-contract",
+      "sources": ["stdlib/std/sequence.slg"],
+      "proves": ["exact existing public adapter set", "no adapter-owned growable collection", "take stop", "persistent state declarations"]
+    },
+    {
+      "id": "composition",
+      "sources": ["scripts/probes/sequence-iterator-transforms/composition.slg"],
+      "proves": ["mapArray", "filter", "tap", "skip", "scan", "afterEach", "beforeEach", "flatMap", "take", "no hidden element materialization"]
+    },
+    {
+      "id": "lazy-billion-early-stop",
+      "sources": ["examples/regression/582-billion-sensor-alerts.slg"],
+      "proves": ["map", "tap", "filter", "take", "finite upstream visits over a billion-item range"]
+    },
+    {
+      "id": "nested-state-early-stop",
+      "sources": ["examples/regression/583-stream-state-take-skip.slg"],
+      "proves": ["beforeEach", "flatMap", "tap", "skip", "take", "state persists", "nested stop propagation"]
+    },
+    {
+      "id": "scan-state",
+      "sources": ["examples/regression/585-stream-transaction-risk-scan.slg"],
+      "proves": ["typed aggregate scan state", "filter after scan", "early stop after finite visits"]
+    },
+    {
+      "id": "first-class-stream",
+      "sources": ["examples/regression/586-first-class-stream.slg"],
+      "proves": ["deferred first-class stream", "map and filter retain laziness"]
+    },
+    {
+      "id": "function-boundary",
+      "sources": ["examples/regression/587-stream-library-boundary.slg"],
+      "proves": ["typed producer survives a function boundary", "bounded producer context"]
+    },
+    {
+      "id": "typed-callback-matrix",
+      "sources": [
+        "examples/regression/1602-stream-mapped-text-flatmap-input.slg",
+        "examples/regression/1605-stream-mapped-bool-flatmap-input.slg",
+        "examples/regression/1606-stream-mapped-uint64-flatmap-input.slg",
+        "examples/regression/1607-stream-bool-map-filter-input.slg"
+      ],
+      "proves": ["Text callback value", "Bool callback value", "UInt64 callback value", "typed Bool predicate", "no indirect callback dispatch"]
+    },
+    {
+      "id": "zip-shortest",
+      "sources": ["examples/regression/798-zip-shortest-stream.slg"],
+      "proves": ["zip input order", "zip shortest-input stop"]
+    },
+    {
+      "id": "latest-policy",
+      "sources": ["examples/regression/801-concat-and-latest-policies.slg"],
+      "proves": ["latest after all initial values", "latest on every update", "bounded current state"]
+    },
+    {
+      "id": "concurrent-merge-cancellation",
+      "sources": ["examples/regression/813-concurrent-merge-early-cancellation.slg"],
+      "proves": ["downstream take cancellation", "bounded fan-in wake and join"]
+    },
+    {
+      "id": "concurrent-latest-cancellation",
+      "sources": ["examples/regression/814-concurrent-latest-early-cancellation.slg"],
+      "proves": ["latest downstream cancellation", "bounded fan-in wake and join"]
+    }
+  ],
+  "acceptance": "managed Windows focused native and LLVM evidence only; selfhost and other platforms pending",
+  "unresolved": [
+    "selfhost candidate validation of the existing sequence adapter set",
+    "Linux and browser native/runtime closure",
+    "noncopyable growable-array mapArray and flatMap ownership coverage"
+  ]
+}

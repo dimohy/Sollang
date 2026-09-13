@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schemaVersion",
+    "canonicalIdentity",
+    "status",
+    "feasibility",
+    "surface",
+    "semantics",
+    "compilerChange",
+    "forbiddenWorkarounds",
+    "fixtures",
+    "specImpact",
+    "acceptance"
+  ],
+  "properties": {
+    "$schema": { "const": "indexed-owned-exchange.schema.json" },
+    "schemaVersion": { "const": 2 },
+    "canonicalIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "managedKind", "selfhostOpcode"],
+      "properties": {
+        "id": { "const": "collection.array.exchange" },
+        "managedKind": { "const": "ArrayExchange" },
+        "selfhostOpcode": { "const": -310 }
+      }
+    },
+    "status": { "const": "static-ready-execution-deferred-c424-c341" },
+    "feasibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currentNaturalSyntax", "indexedOwnedRead", "take", "indexedWrite", "verdict"],
+      "properties": {
+        "currentNaturalSyntax": { "const": true },
+        "indexedOwnedRead": { "const": "readonly direct-call borrow only; binding or transfer is rejected" },
+        "take": { "const": "transfers one element but changes collection membership and cannot preserve both initialized slots atomically" },
+        "indexedWrite": { "const": "accepts a replacement value but current source cannot first own both displaced values" },
+        "verdict": { "const": "the compiler-owned atomic collection primitive is integrated; dynamic promotion remains gated" }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["syntax", "receiver", "indices", "result", "evaluation"],
+      "properties": {
+        "syntax": { "const": "values! -> exchange(left, right)" },
+        "receiver": { "const": "named or projected mutable growable-array owner [T; ~]" },
+        "indices": { "const": "Int; both checked before mutation" },
+        "result": { "const": "Unit" },
+        "evaluation": { "const": "receiver, left, and right evaluate exactly once in source order" }
+      }
+    },
+    "semantics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "sameIndex", "boundsFailure", "preserves", "ownership", "cost"],
+      "properties": {
+        "operation": { "const": "atomically exchange two initialized element places without exposing an uninitialized collection" },
+        "sameIndex": { "const": "validated no-op with no move, drop, allocation, or copy" },
+        "boundsFailure": { "const": "existing indexed-access trap after validating both indices and before any load, store, move, or drop" },
+        "preserves": { "const": ["array owner", "length", "capacity", "element multiset"] },
+        "ownership": { "const": "each element drop obligation moves with its complete representation; neither element is copied or dropped during exchange" },
+        "cost": { "const": "O(1), zero heap allocation, zero memcpy/memmove, zero dynamic dispatch" }
+      }
+    },
+    "compilerChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["grammar", "semantic", "typedIr", "lowering", "targets"],
+      "properties": {
+        "grammar": { "const": "none; existing flow call syntax is sufficient" },
+        "semantic": { "const": "resolve exchange only for mutable [T; ~], require two Int inputs, retain caller ownership, and authorize the two indexed moves only inside this atomic operation" },
+        "typedIr": { "const": "one canonical collection-exchange identity carrying receiver and two evaluated indices; no synthesized ordinary call or indexed-owner escape" },
+        "lowering": { "const": "precheck both bounds, return on equal indices, move complete element representations through compiler-owned temporary storage, and emit no element drop" },
+        "targets": { "const": ["managed compiler", "selfhost compiler", "Windows LLVM", "Linux LLVM", "browser linear-memory backend when growable owned arrays are supported"] }
+      }
+    },
+    "forbiddenWorkarounds": {
+      "const": [
+        "bind an indexed owned element as a second owner",
+        "copy the owned representation through an ordinary temporary",
+        "take then push, insert, append, or reallocate",
+        "construct a generic sentinel or default value",
+        "use a heap box, reference-counted wrapper, dynamic dispatch, or bytewise public unsafe API",
+        "relax ordinary indexed-owned escape diagnostics"
+      ]
+    },
+    "fixtures": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verifier", "reclassifier", "resultSchema", "auditShim", "cases", "manualWorkaroundNegative", "manualWorkaroundDiagnostic"],
+      "properties": {
+        "verifier": { "const": "scripts/verify-indexed-owned-exchange-focused.ps1" },
+        "reclassifier": { "const": "scripts/reclassify-indexed-owned-exchange-result.ps1" },
+        "resultSchema": { "const": "scripts/contracts/indexed-owned-exchange-result.schema.json" },
+        "auditShim": { "const": "tests/native-interop/indexed_owned_exchange_audit.c" },
+        "cases": {
+          "type": "array",
+          "minItems": 9,
+          "maxItems": 9,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "kind", "source", "expected", "assertion"],
+            "properties": {
+              "id": { "enum": ["P-DISTINCT", "P-SAME", "N-LEFT-BOUNDS", "N-RIGHT-BOUNDS", "P-NESTED-CLEANUP", "N-HEAP", "N-DEQUE", "N-ARITY", "N-INDEX-TYPE"] },
+              "kind": { "enum": ["native-success", "native-trap", "compile-failure"] },
+              "source": { "type": "string", "minLength": 1 },
+              "expected": { "type": "string", "minLength": 1 },
+              "assertion": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "manualWorkaroundNegative": { "const": "scripts/probes/general-algorithms/indexed-owned-exchange-manual-negative.slg" },
+        "manualWorkaroundDiagnostic": { "const": "scripts/probes/general-algorithms/indexed-owned-exchange-manual-negative.stderr.contains.txt" }
+      }
+    },
+    "specImpact": {
+      "const": [
+        "docs/SPEC.md:859-883 precedence and checked invariant inventory",
+        "docs/SPEC.md:2805-2856 container layout, mutation, and bounds rules",
+        "docs/SPEC.md:2857-2880 indexed owned places and partial initialization",
+        "docs/SPEC.md:2921-2925 mutable indexed assignment and owned iteration",
+        "docs/SPEC.md:2973-2979 mutable container borrow authority"
+      ]
+    },
+    "acceptance": {
+      "const": "after C424/C341 closure only: freeze input hashes; require managed and selfhost early-negative parity; positive exact native execution with same-index and distinct-index cases; llvm-as and V004; zero warnings/notes; exchange body contains no alloc, free, memcpy, memmove, or element drop; owner length/capacity and exactly-once final drop remain intact"
+    }
+  }
+}

@@ -65,18 +65,20 @@ copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~
     Result<[UInt8; ~], errors.Error>.Ok(output!)
 }
 
-public encode messageType: UInt8, body: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    (body -> len) <= 16_777_215 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(body -> len))) -> return
+impl UInt8 {
+    public encode: self, body: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+        (body -> len) <= 16_777_215 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(body -> len))) -> return
+        }
+        UInt32(body -> len) => length
+        [UInt8; ~] => output!
+        output! -> push(self)
+        output! -> push(UInt8(length / 65_536))
+        output! -> push(UInt8(length / 256 % 256))
+        output! -> push(UInt8(length % 256))
+        output! -> appendBytes(body)
+        Result<[UInt8; ~], errors.Error>.Ok(output!)
     }
-    UInt32(body -> len) => length
-    [UInt8; ~] => output!
-    output! -> push(messageType)
-    output! -> push(UInt8(length / 65_536))
-    output! -> push(UInt8(length / 256 % 256))
-    output! -> push(UInt8(length % 256))
-    output! -> appendBytes(body)
-    Result<[UInt8; ~], errors.Error>.Ok(output!)
 }
 
 public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {
@@ -95,15 +97,17 @@ public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> 
     })
 }
 
-public encodeExtension extensionType: UInt16, data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    (data -> len) <= 65_535 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(data -> len))) -> return
+impl UInt16 {
+    public encodeExtension: self, data: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+        (data -> len) <= 65_535 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(data -> len))) -> return
+        }
+        [UInt8; ~] => output!
+        output! -> appendUInt16(self)
+        output! -> appendUInt16(UInt16(data -> len))
+        output! -> appendBytes(data)
+        Result<[UInt8; ~], errors.Error>.Ok(output!)
     }
-    [UInt8; ~] => output!
-    output! -> appendUInt16(extensionType)
-    output! -> appendUInt16(UInt16(data -> len))
-    output! -> appendBytes(data)
-    Result<[UInt8; ~], errors.Error>.Ok(output!)
 }
 
 public decodeExtension bytes: [UInt8], offset: UIntSize -> Result<DecodedExtension, errors.Error> {

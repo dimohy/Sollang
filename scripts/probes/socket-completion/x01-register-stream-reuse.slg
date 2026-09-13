@@ -1,0 +1,20 @@
+import std.net as net
+import std.net.socket as socket
+
+probe: -> Result<Unit, socket.SocketError> uses Network {
+    socket.ListenOptions { endpoint: net.loopback(0) -> unified, backlog: 1, reuseAddress: true } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> connect? => client
+    listener -> accept? => peer
+    socket.CompletionReactorOptions { registrations: 1, pendingOperations: 1, completionBatch: 1 } -> socket.completionReactor? => reactor
+    reactor -> registerStream(client, 11) => transition
+    client -> localPort => reusedPort
+    transition => ignored
+    peer -> close
+    listener -> close
+    Result<Unit, socket.SocketError>.Ok
+}
+
+main {
+    probe() => ignored
+}

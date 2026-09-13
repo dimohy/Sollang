@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "evidenceMode",
+    "priorResultSha256",
+    "compilerSha256",
+    "inputHashes",
+    "completed",
+    "total",
+    "cases",
+    "failureIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed", "cancelled"] },
+    "evidenceMode": { "enum": ["fresh", "reclassified-immutable-artifacts"] },
+    "priorResultSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+    "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "inputHashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+    },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 9 },
+    "total": { "const": 9 },
+    "cases": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "passed",
+          "reusedImmutableArtifact",
+          "sourceSha256",
+          "compileExit",
+          "diagnosticMatched",
+          "llvmProduced",
+          "llvmAsExit",
+          "closureExit",
+          "nativeExit",
+          "stdoutMatched",
+          "observedStdout",
+          "artifactHashes",
+          "boundsBeforeMutation",
+          "sameIndexNoMemory",
+          "exchangeBodyNoForbidden",
+          "allocationBalanced",
+          "invalidAllocationCount",
+          "failure"
+        ],
+        "properties": {
+          "id": { "enum": ["P-DISTINCT", "P-SAME", "N-LEFT-BOUNDS", "N-RIGHT-BOUNDS", "P-NESTED-CLEANUP", "N-HEAP", "N-DEQUE", "N-ARITY", "N-INDEX-TYPE"] },
+          "passed": { "type": "boolean" },
+          "reusedImmutableArtifact": { "type": "boolean" },
+          "sourceSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+          "compileExit": { "type": "integer" },
+          "diagnosticMatched": { "type": ["boolean", "null"] },
+          "llvmProduced": { "type": "boolean" },
+          "llvmAsExit": { "type": ["integer", "null"] },
+          "closureExit": { "type": ["integer", "null"] },
+          "nativeExit": { "type": ["integer", "null"] },
+          "stdoutMatched": { "type": ["boolean", "null"] },
+          "observedStdout": { "type": ["string", "null"] },
+          "artifactHashes": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["llvm", "native"],
+            "properties": {
+              "llvm": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+              "native": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }
+            }
+          },
+          "boundsBeforeMutation": { "type": ["boolean", "null"] },
+          "sameIndexNoMemory": { "type": ["boolean", "null"] },
+          "exchangeBodyNoForbidden": { "type": ["boolean", "null"] },
+          "allocationBalanced": { "type": ["boolean", "null"] },
+          "invalidAllocationCount": { "type": ["integer", "null"], "minimum": 0 },
+          "failure": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "failureIds": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "evidenceMode": { "const": "fresh" } }, "required": ["evidenceMode"] },
+      "then": { "properties": { "priorResultSha256": { "type": "null" } } },
+      "else": { "properties": { "priorResultSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" } } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "completed": { "const": 9 },
+          "failureIds": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}

@@ -106,6 +106,13 @@ nominal type written in an `impl` header owns those methods. A qualified type
 mentioned inside an impl method signature is not an owner and must not shadow a
 matching lexical function.
 
+Apply the same receiver-first rule to inherent block methods. Keep `self` as the
+dispatch receiver and infer generic callback roles from their declared explicit
+inputs: `partitionPoint<T>: self, values: [T] -> Int block item: ref T -> Bool`
+borrows each yielded `T` as `ref T`; it must not specialize `T` to the type of
+`self`. Do not introduce a global helper or strip a wrong qualified owner to
+make such a call compile.
+
 ### What makes code beautiful
 
 | Criterion | What a reviewer should be able to see |
@@ -255,7 +262,9 @@ compiler-model code. Use `Option<T>` for present/absent and `Result<T, E>` for
 success/failure; do not replace either with a sentinel scalar, empty text, or
 nullable-looking convention. An owned payload pattern borrows unless the match
 subject is a named owner or fresh owned temporary; moving that payload must be
-explicit and must leave one cleanup path.
+explicit and must leave one cleanup path. On an early-returning arm, a payload
+from a fresh or consumed subject is cleaned there; a genuinely borrowed subject
+is still released only by its outer owner.
 
 Use products for short structural joins whose fields do not need a nominal
 type. Prefer labels when downstream meaning matters:
@@ -465,8 +474,8 @@ without changing evaluation order.
 
 ## 7. Bind and mutate value-first
 
-Immutable names have no suffix. Mutable owner bindings use `!` at declaration
-and every access:
+Immutable names have no suffix. A local mutable owner introduced with
+`=> name!` uses `!` at declaration and every access rooted in that local owner:
 
 ```sollang
 [10, 20, 30; ~] => values!
@@ -474,8 +483,25 @@ and every access:
 values! -> len => count
 ```
 
+The `!` suffix belongs to a local mutable owner binding; it is not added to a
+function input merely because that input has the `mut` ownership mode. Inside a
+function or block function, write a parameter declared `name: mut Type` as bare
+`name`, and write `mut self` as bare `self`. The caller supplies the writable
+local owner, such as `values!`:
+
+```sollang
+partitionInPlace<T>: self, values: mut [T; ~] -> Int block item: ref T -> Bool {
+    values -> exchange(0, 1)
+    values -> len
+}
+
+algorithms -> partitionInPlace(values!) item {
+    item > 0
+} => boundary
+```
+
 Do not use assignment forms imported from other languages. Do not drop `!`
-from a mutable access. Bind an owned container once; choose the producing branch
+from an access rooted in a local mutable owner. Bind an owned container once; choose the producing branch
 first, then bind its single result. Mutate its contents through instance methods
 instead of replacing the complete owner through a second `=> owner!`.
 This does not prohibit a single transfer into a new owner: matching a fresh

@@ -87,6 +87,16 @@ httpError kind: errors.Kind, offset: UIntSize -> Error {
     model.Error.Http(http.Error { kind: kind, offset: offset })
 }
 
+socketSuccess outcome: Result<Unit, socket.SocketError> -> Result<Unit, Error> => outcome -> when {
+    Err(error) { Result<Unit, Error>.Err(model.Error.Socket(error)) }
+    Ok(_) { Result<Unit, Error>.Ok }
+}
+
+bodyComplete outcome: Result<Unit, http.Error> -> Result<Unit, Error> => outcome -> when {
+    Err(_) { Result<Unit, Error>.Err(model.Error.BodyNotComplete) }
+    Ok(_) { Result<Unit, Error>.Ok }
+}
+
 responseAllowsPersistence head: ref http.ResponseHead -> Result<Bool, Error> {
     false => closes!
     false => keepsAlive!
@@ -203,15 +213,9 @@ impl Client {
         head -> responseSemantics => semantics
         head.connection => requestConnection
         head -> intoBytes => headBytes
-        self.transport -> sendAll(headBytes) -> when {
-            Err(error) { Result<Exchange, Error>.Err(model.Error.Socket(error)) -> return }
-            Ok(_) { }
-        }
+        self.transport -> sendAll(headBytes) -> socketSuccess?
         (content -> len) > 0 -> if {
-            self.transport -> sendAll(content) -> when {
-                Err(error) { Result<Exchange, Error>.Err(model.Error.Socket(error)) -> return }
-                Ok(_) { }
-            }
+            self.transport -> sendAll(content) -> socketSuccess?
         }
         Result<Exchange, Error>.Ok(Exchange {
             transport: self.transport
@@ -357,10 +361,7 @@ impl ResponseBody {
     }
 
     public finish: move self -> Result<ResponseOutcome, Error> uses Network {
-        self.decoder -> completion -> when {
-            Err(_) { Result<ResponseOutcome, Error>.Err(model.Error.BodyNotComplete) -> return }
-            Ok(_) { }
-        }
+        self.decoder -> completion -> bodyComplete?
         self.untilClose and not self.eof -> if {
             Result<ResponseOutcome, Error>.Err(model.Error.BodyNotComplete) -> return
         }

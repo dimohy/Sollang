@@ -2,6 +2,19 @@
   "$schema": "socket-completion-reactor.schema.json",
   "schemaVersion": 1,
   "module": "std.net.socket",
+  "blockerId": "PORTABLE_SOCKET_COMPLETION_SUBMISSION",
+  "status": "blocked",
+  "api": {
+    "globalConstructor": "completionReactor(options) -> Result<CompletionReactor, SocketError>",
+    "reactorMethods": [
+      "registerStream(move self, move stream, registrationKey)",
+      "removeStream(move self, registrationKey)",
+      "submit(move self, registrationKey, move slot)",
+      "cancelOperation(move self, applicationKey)",
+      "dequeue(move self, cancellation: std.io.async.Cancellation) -> async"
+    ],
+    "slotMethods": ["recycle(move self)"]
+  },
   "capacity": {
     "fields": ["registrations", "pendingOperations", "completionBatch"],
     "minimum": 1,
@@ -18,8 +31,8 @@
     { "from": "Vacant", "to": "Completed", "cause": "synchronous completion" },
     { "from": "Pending", "to": "Completed", "cause": "one native completion wins" },
     { "from": "Pending", "to": "Cancelled", "cause": "one cancellation wins" },
-    { "from": "Completed", "to": "Vacant", "cause": "caller reclaims completion" },
-    { "from": "Cancelled", "to": "Vacant", "cause": "caller reclaims cancellation" }
+    { "from": "Completed", "to": "Vacant", "cause": "OperationSlot.recycle consumes completion" },
+    { "from": "Cancelled", "to": "Vacant", "cause": "OperationSlot.recycle consumes cancellation" }
   ],
   "ownership": [
     "one affine slot owns one application key and one native operation identity",
@@ -29,12 +42,23 @@
     "completion returns the original slot and buffer without payload copying",
     "reclaim consumes one terminal slot and rejects double reclaim"
   ],
+  "registration": [
+    "registerStream consumes the reactor and stream and publishes the stream only into the bounded owner table",
+    "duplicate-key detection precedes capacity failure so a full table still reports an existing key as InvalidArgument",
+    "registration performs no IOCP association, fcntl mutation, epoll registration, or other socket effect",
+    "the first submit performs platform association and nonblocking setup with rollback before publishing Pending",
+    "removeStream succeeds only before the registration has been submitted and returns the exact reactor and stream owners",
+    "submitted or associated registrations reject removeStream and retain reactor authority",
+    "Linux epoll data stores a tagged native registration identity; user UInt64 keys remain unrestricted and are read from the owner table"
+  ],
   "completion": [
     "synchronous completion returns directly without recording a wake target",
     "only a genuinely pending operation records its Task wake target",
     "completion preserves the exact transferred byte count or SocketError",
     "completion and cancellation race through one atomic terminal-state winner",
-    "callbacks schedule ready Tasks and never execute user continuations"
+    "callbacks schedule ready Tasks and never execute user continuations",
+    "EOF is Completed with Some(0) and remains distinct from no completion None",
+    "cooperative dequeue cancellation returns the reactor while Task cancellation drains then drops every retained owner exactly once"
   ],
   "platforms": {
     "windows-x64": {
@@ -43,22 +67,25 @@
       "semantics": [
         "one OVERLAPPED identity per reusable slot",
         "bounded batched dequeue",
-        "exact transferred byte count and native error"
+        "exact transferred byte count and native error",
+        "CancelIoEx requests cancellation but IOCP dequeue decides the terminal winner"
       ]
     },
     "linux-x64": {
       "capability": "readiness",
-      "primitive": "epoll with nonblocking sockets",
+      "primitive": "epoll with nonblocking sockets and eventfd cancellation wakeup",
       "semantics": [
         "bounded event batch",
         "perform the requested operation until completion or EAGAIN",
-        "acknowledge only the direction that reached EAGAIN"
+        "acknowledge only the direction that reached EAGAIN",
+        "EPOLLONESHOT false readiness rearms without terminal publication",
+        "eventfd cancellation and completion share one terminal winner"
       ]
     },
     "wasm32-browser": {
       "capability": "unsupported",
       "primitive": "actionable target diagnostic",
-      "semantics": ["raw socket Reactor creation is rejected without fallback"]
+      "semantics": ["raw socket completion creation is rejected without readiness or synchronous fallback"]
     }
   },
   "forbidden": [
@@ -77,5 +104,46 @@
     { "id": "completion", "status": "planned", "evidence": [] },
     { "id": "cancellation", "status": "planned", "evidence": [] },
     { "id": "platformExecution", "status": "planned", "evidence": [] }
-  ]
+  ],
+  "verificationMatrix": [
+    { "id": "W01", "target": "windows-x64", "kind": "capacity-registration-pre-effect", "expectation": "typed failure and exact owners", "status": "passed" },
+    { "id": "W02", "target": "windows-x64", "kind": "direct-receive", "expectation": "Completed, exact bytes/count/owners, no Task", "status": "pending" },
+    { "id": "W03", "target": "windows-x64", "kind": "pending-receive", "expectation": "Pending then exact IOCP dequeue", "status": "pending" },
+    { "id": "W04", "target": "windows-x64", "kind": "partial-send", "expectation": "exact prefix count and unchanged buffer", "status": "pending" },
+    { "id": "W05", "target": "windows-x64", "kind": "platform-error", "expectation": "exact SocketError kind/code and owners", "status": "pending" },
+    { "id": "W06", "target": "windows-x64", "kind": "cancel-completion-race", "expectation": "one terminal winner and one slot return", "status": "pending" },
+    { "id": "W07", "target": "windows-x64", "kind": "task-cancel", "expectation": "terminal drain then exactly-once owner cleanup", "status": "pending" },
+    { "id": "L01", "target": "linux-x64", "kind": "direct-receive", "expectation": "Completed, exact bytes/count/owners, no Task", "status": "pending" },
+    { "id": "L02", "target": "linux-x64", "kind": "pending-receive", "expectation": "Pending then exact epoll dequeue", "status": "pending" },
+    { "id": "L03", "target": "linux-x64", "kind": "partial-send", "expectation": "exact prefix count and unchanged buffer", "status": "pending" },
+    { "id": "L04", "target": "linux-x64", "kind": "false-readiness", "expectation": "EAGAIN rearm without terminal publication or spin", "status": "pending" },
+    { "id": "L05", "target": "linux-x64", "kind": "platform-error", "expectation": "exact SocketError kind/code and owners", "status": "pending" },
+    { "id": "L06", "target": "linux-x64", "kind": "cancel-completion-race", "expectation": "one terminal winner and one slot return", "status": "pending" },
+    { "id": "L07", "target": "linux-x64", "kind": "task-cancel", "expectation": "epoll removal and drain then exactly-once cleanup", "status": "pending" },
+    { "id": "L08", "target": "linux-x64", "kind": "bounded-fair-batch", "expectation": "bounded dequeue and later-operation progress", "status": "pending" },
+    { "id": "B01", "target": "wasm32-browser", "kind": "capability", "expectation": "exact compiler diagnostic", "status": "passed" },
+    { "id": "B02", "target": "wasm32-browser", "kind": "fallback-audit", "expectation": "no native artifact and no sync/readiness fallback", "status": "passed" },
+    { "id": "X01", "target": "semantic", "kind": "moved-owner-reuse", "expectation": "compile reject", "status": "passed" },
+    { "id": "X02", "target": "semantic", "kind": "invalid-slot-transition", "expectation": "pre-effect reject", "status": "passed" },
+    { "id": "X03", "target": "all-positive-native", "kind": "llvm-structure", "expectation": "llvm-as and V004 pass", "status": "pending" },
+    { "id": "X04", "target": "windows-x64+linux-x64", "kind": "allocation-copy-audit", "expectation": "zero steady-state allocation and payload copy", "status": "pending" },
+    { "id": "X05", "target": "windows-x64+linux-x64", "kind": "close-pending-reactor", "expectation": "cancel, drain, close, and drop exactly once", "status": "pending" }
+  ],
+  "baseline": {
+    "gitCommit": "37f524b4",
+    "sourceHashes": [
+      { "path": "stdlib/std/net/socket.slg", "sha256": "ACF77012B2E33C93431B43F78EFC2BA3CC67FD616850569E5D997756B3101DBF" },
+      { "path": "stdlib/sys/runtime/socket.slg", "sha256": "707D4394A623706A18A9A424E39E69C4E3E8BF3618EF1982D9371F692E7ABA4F" },
+      { "path": "src/Sollang.Compiler/Semantics/BoundProgram.cs", "sha256": "E86D89417975B214A0E5B52D9F049CF5EAB26B2AF74C8EEC7F6EDD0CFBEAF605" },
+      { "path": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs", "sha256": "78AA7F667D8E0F4B1154DCFAD39BF8CC859E76356F94F4253100C7094ABCCD7F" },
+      { "path": "src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs", "sha256": "3A8BA3739A4633AC1B25ABE7E106C281066D0E2137D6AF1157F423E72D0AC0E7" },
+      { "path": "src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs", "sha256": "4A31B484696F4EAC3D161EF16B8A08468A30FBCC06857C2CD0C58F3CE9A43CEE" },
+      { "path": "src/Sollang.Compiler/CodeGen/LlvmEmitter.cs", "sha256": "3E654A295466864ED45822D3FEA8A97BA3244CA70F4E1F486CB1E65E058B2F90" },
+      { "path": "src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs", "sha256": "86F2771CDD5FF705C60F6976A38802EDCCEB52C64266F98897D66BB14D7171C8" },
+      { "path": "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Socket.cs", "sha256": "9ADF4D340C309E3F5F49686788C4A1ABE16D232456FABD763A95EDF2F9A85376" },
+      { "path": "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.Socket.cs", "sha256": "A90CBB5F191C43B32A59276980C1EE01560239ADD9C365F70559D84BCA7603E3" },
+      { "path": "src/Sollang.Compiler/CodeGen/WasmBrowserLlvmRuntimePlatform.cs", "sha256": "E345B5A4D32491BE73163C07DDA55CAD36538CCB059F500307054678E2B77966" },
+      { "path": "src/Sollang.Compiler/Tooling/WindowsLinker.cs", "sha256": "C4119C52B1E03CCE960D5AFF58974926C2CF32521D44D420CC368CC8A6B73A70" }
+    ]
+  }
 }

@@ -603,6 +603,7 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
         false => knownPushExpression!
         false => knownTakeExpression!
         -1 => takeElementTypeId!
+        false => knownExchangeExpression!
         false => knownPutExpression!
         -223 => putOpcode!
         false => knownCapacityExpression!
@@ -656,6 +657,24 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                             }
                         takeReceiverSearch! + 1 => takeReceiverSearch!
                     }
+                }
+                flowOpcode == -310 -> if {
+                    0 => exchangeReceiverSearch!
+                    exchangeReceiverSearch! < sourceRange.astCount
+                        -> while {
+                            prepared.package.nodes[sourceRange.astStart + exchangeReceiverSearch!] => exchangeReceiverCandidate
+                            frozenRecursiveTypeByAst[sourceRange.astStart + exchangeReceiverSearch!] => exchangeReceiverTypeId!
+                            exchangeReceiverCandidate.parent == expressionAstIndex and exchangeReceiverTypeId! >= 0
+                                -> if {
+                                    frozenRecursiveSemanticTypes[exchangeReceiverTypeId!] => exchangeReceiverType!
+                                    exchangeReceiverType!.kind == 8 -> if {
+                                        exchangeReceiverType!.first => exchangeReceiverTypeId!
+                                        frozenRecursiveSemanticTypes[exchangeReceiverTypeId!] => exchangeReceiverType!
+                                    }
+                                    exchangeReceiverType!.kind == 3 -> if { true => knownExchangeExpression! }
+                                }
+                            exchangeReceiverSearch! + 1 => exchangeReceiverSearch!
+                        }
                 }
                 flowOpcode == -223 or flowOpcode == -303 -> if {
                     true => knownPutExpression!
@@ -964,6 +983,12 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
             takeElementType.module => expressionTypeModule!
             takeElementType.symbol => expressionTypeSymbol!
         }
+        knownExchangeExpression! -> if {
+            -1 => recursiveExpressionTypeId!
+            1 => expressionTypeOrigin!
+            -1 => expressionTypeModule!
+            0 => expressionTypeSymbol!
+        }
         knownMapTextExpression! or knownMapPathExpression!
             -> if {
                 1 => expressionTypeOrigin!
@@ -1235,8 +1260,10 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                     # is the sole lowering authority; do not also emit the
                     # spelling-based intrinsic for the same expression.
                     knownCallExpression! -> if { -1 => flowEmissionOpcode! }
+                    flowEmissionOpcode! == -310 and not knownExchangeExpression!
+                        -> if { -1 => flowEmissionOpcode! }
                     prepared.controlProducerWrapperByAst[sourceRange.astStart + expressionAstIndex] => knownControlProducerWrapperExpression
-                    (not resolvedQualifiedLeaf! or knownCallResultMemberExpression! or knownPartitionItem! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression) and (contextualNullaryOption! or expressionTypeIndex >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownLocalBindingReference! or knownPatternReference! or unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling! or flowEmissionOpcode! == -213 or knownControlProducerWrapperExpression or mapExpressionOpcode! == -306 or mapExpressionOpcode! == -307 or expression.kind == 22 or knownLocalMemberExpression! or knownIndexedMemberExpression! or knownCallResultMemberExpression! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or expression.kind == 59 or expression.kind == 71 or expression.kind == 73 or expression.kind == 74 or expression.kind == 75 or expression.kind == 76 or expression.kind == 78 or expression.kind == 79 or expression.kind == 80 or expression.kind == 81 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownTakeExpression! or knownPutExpression! or knownCapacityExpression! or knownReserveExpression! or knownBitSetExpression! or knownDequeExpression! or knownHeapExpression! or knownSetExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment or knownMemberAssignment)
+                    (not resolvedQualifiedLeaf! or knownCallResultMemberExpression! or knownPartitionItem! or flowEmissionOpcode! == -213 or knownExchangeExpression! or knownControlProducerWrapperExpression) and (contextualNullaryOption! or expressionTypeIndex >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownLocalBindingReference! or knownPatternReference! or unresolvedLibraryInvocation! or unresolvedCallExpression! or insertIntrinsicSpelling! or flowEmissionOpcode! == -213 or knownExchangeExpression! or knownControlProducerWrapperExpression or mapExpressionOpcode! == -306 or mapExpressionOpcode! == -307 or expression.kind == 22 or knownLocalMemberExpression! or knownIndexedMemberExpression! or knownCallResultMemberExpression! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or expression.kind == 59 or expression.kind == 71 or expression.kind == 73 or expression.kind == 74 or expression.kind == 75 or expression.kind == 76 or expression.kind == 78 or expression.kind == 79 or expression.kind == 80 or expression.kind == 81 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownTakeExpression! or knownPutExpression! or knownCapacityExpression! or knownReserveExpression! or knownBitSetExpression! or knownDequeExpression! or knownHeapExpression! or knownSetExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment or knownMemberAssignment)
                         -> if {
                             false => expressionIsBoolLiteral!
                             expression.kind == 15 and expressionTypeOrigin! == 1 and expressionTypeSymbol! == 23
@@ -1336,7 +1363,8 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
                                         knownDynExpression! -> if { -224 => expressionOpcode! }
                                         expression.kind == 10 or expression.kind == 11
                                             -> if {
-                                                flowEmissionOpcode! == -213 -> if { flowEmissionOpcode! => expressionOpcode! }
+                                                flowEmissionOpcode! == -213 or flowEmissionOpcode! == -310
+                                                    -> if { flowEmissionOpcode! => expressionOpcode! }
                                             }
                                         functionNodeStart => intrinsicChildPosition!
                                         intrinsicChildPosition! < functionNodeEnd

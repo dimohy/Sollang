@@ -29,8 +29,10 @@ readUInt32 bytes: [UInt8], offset: UIntSize -> Result<UInt32, errors.Error> {
 public parameterId: -> UInt64 => 17
 
 # Reserved versions have the wire pattern 0x?a?a?a?a and are never selected.
-public isReserved version: UInt32 -> Bool {
-    (version / 16_777_216 % 16 == 10) and (version / 65_536 % 16 == 10) and (version / 256 % 16 == 10) and (version % 16 == 10)
+impl UInt32 {
+    public isReserved: self -> Bool {
+        (self / 16_777_216 % 16 == 10) and (self / 65_536 % 16 == 10) and (self / 256 % 16 == 10) and (self % 16 == 10)
+    }
 }
 
 impl Information {
@@ -76,7 +78,7 @@ public decode bytes: [UInt8] -> Result<Information, errors.Error> {
 }
 
 impl Information {
-    public validateClient: self -> Result<Bool, errors.Error> {
+    public validateClient: self -> Result<Unit, errors.Error> {
         false => includesChosen!
         0 => index!
         index! < (self.available -> len) -> while {
@@ -84,11 +86,9 @@ impl Information {
                 -> if { true => includesChosen! }
             index! + 1 => index!
         }
-        includesChosen! -> if {
-            Result<Bool, errors.Error>.Ok(true)
-        } else {
-            Result<Bool, errors.Error>.Err(error(errors.versionNegotiationError()))
-        }
+        includesChosen!
+            -> unless { Result<Unit, errors.Error>.Err(error(errors.versionNegotiationError())) -> return }
+        Result<Unit, errors.Error>.Ok
     }
 }
 

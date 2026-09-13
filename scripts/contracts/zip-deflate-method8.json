@@ -1,0 +1,79 @@
+{
+  "$schema": "zip-deflate-method8.schema.json",
+  "schemaVersion": 1,
+  "capabilityId": "zip-deflate-method8",
+  "module": "std.archive.zip",
+  "implementationStatus": "implementation-in-progress",
+  "sources": [
+    "stdlib/std/archive/zip.slg",
+    "stdlib/std/archive/zip/error.slg",
+    "stdlib/std/archive/zip/decoder_phase.slg",
+    "stdlib/std/archive/zip/encoder_phase.slg",
+    "stdlib/std/compress/gzip.slg",
+    "stdlib/std/compress/gzip/error.slg",
+    "stdlib/std/hash/crc32.slg"
+  ],
+  "fixture": "examples/regression/1756-zip-deflate-method8.slg",
+  "expectedOutput": "examples/regression/expected/1756-zip-deflate-method8.stdout.txt",
+  "publicSurface": [
+    "DeflateLimits",
+    "Codec.deflateDecoder(DeflateLimits) -> Result<Decoder, Error>",
+    "Writer.addDeflated(mut self, name: [UInt8], extra: [UInt8], input: [UInt8], limits: DeflateLimits, scratch: mut [UInt8; ~], output: mut [UInt8; ~]) -> Result<Int, Error>"
+  ],
+  "engineReuse": [
+    "ZIP method 8 encoding delegates to std.compress.gzip.Codec.compressDeflateFixedInto",
+    "ZIP method 8 decoding advances std.compress.gzip.RawDeflateDecoder for every caller chunk",
+    "raw encoding reuses writeLz77Payload and raw decoding reuses the framed decoder streamStep bit Huffman and LZ state"
+  ],
+  "limits": ["maxCompressedBytes", "maxExpansionRatio", "maxWorkUnits"],
+  "transactionality": [
+    "failed addDeflated leaves caller output and Writer archive state unchanged",
+    "addDeflated performs compression only in an explicit initially-empty caller-owned scratch buffer, which may contain partial work on failure",
+    "decoder finish publishes no bytes until DEFLATE, decoded size, CRC, central directory, and EOCD validate",
+    "caller-owned input and output buffers are never retained"
+  ],
+  "requiredFixtureCases": [
+    "fixed-deflate-writer-reader-roundtrip",
+    "bulk-and-one-byte-reader-parity",
+    "raw-deflate-bulk-and-one-byte-parity",
+    "dynamic-huffman-lz-one-byte-chunk-boundaries",
+    "final-byte-padding",
+    "independent-python-zipfile-decode",
+    "compressed-input-limit-pre-effect",
+    "output-limit-pre-effect",
+    "expansion-ratio-limit-pre-effect",
+    "work-limit-pre-effect",
+    "writer-decoded-over-compressed-ratio-limit",
+    "writer-compression-work-budget",
+    "malformed-deflate-transactional",
+    "checksum-mismatch-transactional",
+    "decoded-size-mismatch-transactional",
+    "affine-reader-writer-semantic-rejection"
+  ],
+  "semanticNegatives": [
+    { "id": "affine-writer-reuse", "source": "scripts/probes/zip-deflate-method8/affine-writer-reuse.slg", "expected": "scripts/probes/zip-deflate-method8/affine-writer-reuse.stderr.contains.txt" },
+    { "id": "affine-decoder-reuse", "source": "scripts/probes/zip-deflate-method8/affine-decoder-reuse.slg", "expected": "scripts/probes/zip-deflate-method8/affine-decoder-reuse.stderr.contains.txt" }
+  ],
+  "executionMatrix": {
+    "managedWindowsO0O2": 2,
+    "linuxO0O2": 2,
+    "browserExactExecution": 1,
+    "independentPython": 1,
+    "total": 6
+  },
+  "independentOracle": "scripts/probes/zip-deflate-method8/verify_python_oracle.py",
+  "resultSchema": "scripts/contracts/zip-deflate-method8-result.schema.json",
+  "resultVerifier": "scripts/verify-zip-deflate-method8-result.ps1",
+  "resultNegativeControls": [
+    "passed-with-orphan",
+    "passed-with-wrong-stdout-hash",
+    "passed-with-incomplete-platform-denominator",
+    "failed-with-empty-failureIds",
+    "browser-attempted-with-not-run-status",
+    "compiler-input-drift",
+    "input-hash-not-current",
+    "missing-required-invocation"
+  ],
+  "remainingBacklog": ["affine incremental DEFLATE writer input streaming", "ZIP data descriptors", "ZIP64", "encryption"],
+  "unsupported": ["ZIP dictionaries", "data descriptors", "ZIP64", "encryption"]
+}

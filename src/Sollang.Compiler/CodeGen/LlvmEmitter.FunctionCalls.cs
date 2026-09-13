@@ -450,6 +450,17 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketSetNonblocking
             or BoundFunctionKind.RuntimeSocketPoll
             or BoundFunctionKind.RuntimeSocketReactorWait
+            or BoundFunctionKind.RuntimeSocketCompletionCreate
+            or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+            or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+            or BoundFunctionKind.RuntimeSocketCompletionSubmit
+            or BoundFunctionKind.RuntimeSocketCompletionCancel
+            or BoundFunctionKind.RuntimeSocketCompletionDequeue
+            or BoundFunctionKind.RuntimeSocketCompletionClose
+            or BoundFunctionKind.RuntimeDiagnosticSessionStart
+            or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+            or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+            or BoundFunctionKind.RuntimeDiagnosticSessionClose
             or BoundFunctionKind.RuntimeDnsLookup
             or BoundFunctionKind.RuntimePollChildProcess
             or BoundFunctionKind.RuntimeKillChildProcess))
@@ -650,8 +661,24 @@ internal sealed partial class LlvmEmitter
 
     private void TrackReadonlyCallTemporary(Expression expression, RuntimeValue value, List<RuntimeValue> temporaries)
     {
-        if (expression is not (NameExpression or FieldAccessExpression or IndexExpression)
-            && IsOwnedContainerRuntimeValue(value))
+        if (_anonymousProjectionOwners.Remove(expression, out var projectedOwner))
+        {
+            if (IsOwnedContainerRuntimeValue(projectedOwner))
+                temporaries.Add(projectedOwner);
+            return;
+        }
+
+        // A field projection without an explicitly recorded anonymous parent
+        // is a stable place. Enum-pattern payload bindings, for example, are
+        // stored outside _locals but remain owned by the matched subject; the
+        // readonly call must not drop the projected payload independently.
+        if (expression is FieldAccessExpression)
+            return;
+
+        if (!IsAnonymousOwnedExpression(expression))
+            return;
+
+        if (IsOwnedContainerRuntimeValue(value))
             temporaries.Add(value);
     }
 
@@ -1081,8 +1108,15 @@ internal sealed partial class LlvmEmitter
         var outerLocals = CaptureLocals();
         var previousFunction = _currentFunction;
         var previousFunctions = _currentFunctions;
+        var previousOwnedStructLiteralDepth = _ownedStructLiteralDepth;
         _currentFunction = function;
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
+        // An inline callee owns a distinct lexical transfer boundary. A call
+        // emitted while evaluating an outer literal field must not make the
+        // callee's return literal look like a syntactic child of that outer
+        // literal, or the callee skips its source-owner accounting and drops
+        // an owner after inserting it into the returned aggregate.
+        _ownedStructLiteralDepth = 0;
         _inlineFunctionStack.Add(function);
         try
         {
@@ -1090,79 +1124,7 @@ internal sealed partial class LlvmEmitter
                 outerLocals,
                 CapturedBindingsForFunction(function).Select(static capture => capture.Key)));
             var functionLocals = CaptureLocals();
-            if (function.InputType is null)
-            {
-                if (argument is not null)
-                {
-                    throw new SollangException($"function '{function.Name}' does not accept arguments");
-                }
-            }
-            else
-            {
-                if (argument is null)
-                {
-                    throw new SollangException($"function '{function.Name}' expects exactly one argument");
-                }
-
-                EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, function.Name);
-                var inputName = function.InputName ?? "it";
-                ClearShadowedLocalBinding(inputName);
-                if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
-                {
-                    BindInlineMutableBorrowFunctionParameter(function, argument);
-                }
-                else
-                {
-                    _locals[inputName] = _program.Types.IsSlice(function.InputType.Value)
-                        ? CreateRuntimeSlice(function.InputType.Value, argument)
-                        : function.InputType switch
-                    {
-                        BoundType.IntSlice => CreateRuntimeIntSlice(argument),
-                        BoundType.IntDictionaryView => CreateRuntimeIntDictionaryView(argument),
-                        _ => argument
-                    };
-                    if (function.InputOwnership == BoundFunctionInputOwnership.Default
-                        && _program.Types.ContainsOwnedStorage(function.InputType.Value))
-                    {
-                        _borrowedOwnedLocals.Add(inputName);
-                    }
-                }
-            }
-
-            var parameters = function.AdditionalParameters ?? [];
-            additionalArguments ??= [];
-            if (parameters.Count != additionalArguments.Count)
-            {
-                throw new SollangException(
-                    $"function '{function.Name}' expects {parameters.Count} additional argument(s)");
-            }
-            for (var index = 0; index < parameters.Count; index++)
-            {
-                var parameter = parameters[index];
-                var parameterValue = additionalArguments[index];
-                EnsureFunctionArgumentRuntimeType(parameterValue, parameter.Type, function.Name);
-                ClearShadowedLocalBinding(parameter.Name);
-                if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
-                {
-                    BindInlineMutableBorrowFunctionParameter(
-                        parameter.Name, parameter.Type, parameterValue, function.Name);
-                    continue;
-                }
-
-                _locals[parameter.Name] = _program.Types.IsSlice(parameter.Type)
-                    ? CreateRuntimeSlice(parameter.Type, parameterValue)
-                    : parameter.Type switch
-                {
-                    BoundType.IntSlice => CreateRuntimeIntSlice(parameterValue),
-                    BoundType.IntDictionaryView => CreateRuntimeIntDictionaryView(parameterValue),
-                    _ => parameterValue
-                };
-                if (parameter.Ownership == BoundFunctionInputOwnership.Default
-                    && _program.Types.ContainsOwnedStorage(parameter.Type))
-                {
-                    _borrowedOwnedLocals.Add(parameter.Name);
-                }
-            }
+            BindInlineFunctionParameters(function, argument, additionalArguments);
 
             EmitStatements(function.BlockBody);
             var value = function.Body is null
@@ -1182,6 +1144,7 @@ internal sealed partial class LlvmEmitter
             _inlineFunctionStack.RemoveAt(_inlineFunctionStack.Count - 1);
             _currentFunction = previousFunction;
             _currentFunctions = previousFunctions;
+            _ownedStructLiteralDepth = previousOwnedStructLiteralDepth;
             RestoreLocals(outerLocals);
         }
     }
@@ -1191,6 +1154,14 @@ internal sealed partial class LlvmEmitter
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
+        if (function.Kind is BoundFunctionKind.RuntimeDiagnosticSessionStart
+            or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+            or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+            or BoundFunctionKind.RuntimeDiagnosticSessionClose)
+        {
+            return EmitAsyncDiagnosticCall(function, argument, additionalArguments ?? []);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeReadBytesAt
             or BoundFunctionKind.RuntimeWriteBytesAt
             or BoundFunctionKind.RuntimeReadBytesAtAsync
@@ -1236,6 +1207,13 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeSocketSetNonblocking
             or BoundFunctionKind.RuntimeSocketPoll
             or BoundFunctionKind.RuntimeSocketReactorWait
+            or BoundFunctionKind.RuntimeSocketCompletionCreate
+            or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+            or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+            or BoundFunctionKind.RuntimeSocketCompletionSubmit
+            or BoundFunctionKind.RuntimeSocketCompletionCancel
+            or BoundFunctionKind.RuntimeSocketCompletionDequeue
+            or BoundFunctionKind.RuntimeSocketCompletionClose
             or BoundFunctionKind.RuntimeDnsLookup)
         {
             return function.Kind == BoundFunctionKind.RuntimeDnsLookup
@@ -1828,6 +1806,9 @@ internal sealed partial class LlvmEmitter
         const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
         var explicitArguments = string.Join(", ", new[]
             {
+                _usesAsyncDiagnostics && function.IsAsync
+                    ? $"ptr {_currentAsyncDiagnosticHeader}"
+                    : string.Empty,
                 CaptureFunctionCallArgumentList(function),
                 ExplicitFunctionCallArgumentList(function, argument, additionalArguments)
             }
@@ -2371,6 +2352,86 @@ internal sealed partial class LlvmEmitter
             function.InputType!.Value,
             argument,
             function.Name);
+    }
+
+    private void BindInlineFunctionParameters(
+        BoundFunction function,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments)
+    {
+        if (function.InputType is null)
+        {
+            if (argument is not null)
+            {
+                throw new SollangException($"function '{function.Name}' does not accept arguments");
+            }
+        }
+        else
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"function '{function.Name}' expects exactly one argument");
+            }
+
+            EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, function.Name);
+            var inputName = function.InputName ?? "it";
+            ClearShadowedLocalBinding(inputName);
+            if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
+            {
+                BindInlineMutableBorrowFunctionParameter(function, argument);
+            }
+            else
+            {
+                _locals[inputName] = _program.Types.IsSlice(function.InputType.Value)
+                    ? CreateRuntimeSlice(function.InputType.Value, argument)
+                    : function.InputType switch
+                {
+                    BoundType.IntSlice => CreateRuntimeIntSlice(argument),
+                    BoundType.IntDictionaryView => CreateRuntimeIntDictionaryView(argument),
+                    _ => argument
+                };
+                if (function.InputOwnership == BoundFunctionInputOwnership.Default
+                    && _program.Types.ContainsOwnedStorage(function.InputType.Value))
+                {
+                    _borrowedOwnedLocals.Add(inputName);
+                }
+            }
+        }
+
+        var parameters = function.AdditionalParameters ?? [];
+        additionalArguments ??= [];
+        if (parameters.Count != additionalArguments.Count)
+        {
+            throw new SollangException(
+                $"function '{function.Name}' expects {parameters.Count} additional argument(s)");
+        }
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var parameter = parameters[index];
+            var parameterValue = additionalArguments[index];
+            EnsureFunctionArgumentRuntimeType(parameterValue, parameter.Type, function.Name);
+            ClearShadowedLocalBinding(parameter.Name);
+            if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
+            {
+                BindInlineMutableBorrowFunctionParameter(
+                    parameter.Name, parameter.Type, parameterValue, function.Name);
+                continue;
+            }
+
+            _locals[parameter.Name] = _program.Types.IsSlice(parameter.Type)
+                ? CreateRuntimeSlice(parameter.Type, parameterValue)
+                : parameter.Type switch
+            {
+                BoundType.IntSlice => CreateRuntimeIntSlice(parameterValue),
+                BoundType.IntDictionaryView => CreateRuntimeIntDictionaryView(parameterValue),
+                _ => parameterValue
+            };
+            if (parameter.Ownership == BoundFunctionInputOwnership.Default
+                && _program.Types.ContainsOwnedStorage(parameter.Type))
+            {
+                _borrowedOwnedLocals.Add(parameter.Name);
+            }
+        }
     }
 
     private void BindInlineMutableBorrowFunctionParameter(

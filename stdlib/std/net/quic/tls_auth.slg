@@ -113,7 +113,7 @@ public encodeCertificate der: [UInt8] -> Result<[UInt8; ~], errors.Error> {
     body! -> appendUInt24(certificateLength)
     body! -> appendBytes(der)
     body! -> appendUInt16(0)
-    handshake.encode(handshake.certificate(), body!)
+    handshake.certificate() -> handshake.encode(body!)
 }
 
 public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
@@ -150,16 +150,18 @@ public decodeCertificate bytes: [UInt8] -> Result<Certificate, errors.Error> {
     Result<Certificate, errors.Error>.Ok(Certificate { der: der })
 }
 
-public encodeCertificateVerify algorithm: UInt16, signature: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    (signature -> len) > 0 and (signature -> len) <= 65_535
-        -> unless {
-            Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
-        }
-    [UInt8; ~] => body!
-    body! -> appendUInt16(algorithm)
-    body! -> appendUInt16(UInt16(signature -> len))
-    body! -> appendBytes(signature)
-    handshake.encode(handshake.certificateVerify(), body!)
+impl UInt16 {
+    public encodeCertificateVerify: self, signature: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+        (signature -> len) > 0 and (signature -> len) <= 65_535
+            -> unless {
+                Result<[UInt8; ~], errors.Error>.Err(error(80)) -> return
+            }
+        [UInt8; ~] => body!
+        body! -> appendUInt16(self)
+        body! -> appendUInt16(UInt16(signature -> len))
+        body! -> appendBytes(signature)
+        handshake.certificateVerify() -> handshake.encode(body!)
+    }
 }
 
 public decodeCertificateVerify bytes: [UInt8] -> Result<CertificateVerify, errors.Error> {
@@ -216,7 +218,7 @@ public encodeFinished verifyData: [UInt8] -> Result<[UInt8; ~], errors.Error> {
     (verifyData -> len) == 32 -> unless {
         Result<[UInt8; ~], errors.Error>.Err(error(47)) -> return
     }
-    handshake.encode(handshake.finished(), verifyData)
+    handshake.finished() -> handshake.encode(verifyData)
 }
 
 public decodeFinished bytes: [UInt8] -> Result<[UInt8; 32], errors.Error> {
@@ -241,7 +243,7 @@ public verifyFinished expected: [UInt8; 32], actual: [UInt8; 32] -> Bool {
     UInt32(0) => difference!
     0 => index!
     index! < 32 -> while {
-        difference! + bits.xor(UInt32(expected[index!]), UInt32(actual[index!])) => difference!
+        difference! + (UInt32(expected[index!]) -> bits.xor(UInt32(actual[index!]))) => difference!
         index! + 1 => index!
     }
     difference! == 0

@@ -527,6 +527,16 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             return;
         }
+        if (_usesSocketCompletion && structure.Name == "std.net.socket.CompletionReactor")
+        {
+            var handle = NextTemp("drop_socket_completion_reactor");
+            EmitAssign(handle, $"extractvalue {llvmType} %value, 0");
+            EmitCall(target: null, "void", "sollang_platform_socket_completion_close", $"i64 {handle}");
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
         if (_usesChildProcesses && structure.Name == "sys.process.Child")
         {
             var handle = NextTemp("drop_process_child_handle");
@@ -597,7 +607,9 @@ internal sealed partial class LlvmEmitter
 
     private void EmitOwnedDropCall(BoundType type, string valueName)
     {
-        if (_program.Types.IsStream(type) || _program.Types.IsEventStream(type))
+        if (_program.Types.IsStream(type)
+            || _program.Types.IsEventStream(type)
+            || _program.Types.TryGetTaskValue(type, out _))
         {
             DropOwnedRuntimeValue(DematerializeAggregateValue(type, valueName));
             return;

@@ -1,0 +1,114 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+import sys.io as io
+import sys.runtime as runtime
+
+ready: -> async Bool {
+    yield
+    true
+}
+
+main {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { "listen-error=$(error.code)" -> io.println }
+        Ok(listener) {
+            listener -> localPort -> when {
+                Err(error) {
+                    listener -> close
+                    "port-error=$(error.code)" -> io.println
+                }
+                Ok(port) {
+                    "peer-port=$port" -> io.println
+                    runtime.flushStandardOutput()
+                    listener -> accept -> when {
+                        Err(error) {
+                            listener -> close
+                            "accept-error=$(error.code)" -> io.println
+                        }
+                        Ok(receiver) {
+                            socket.CompletionReactorOptions {
+                                registrations: 1
+                                pendingOperations: 1
+                                completionBatch: 1
+                            } -> socket.completionReactor -> when {
+                                Err(error) {
+                                    receiver -> close
+                                    listener -> close
+                                    "create-error=$(error.code)" -> io.println
+                                }
+                                Ok(reactor) {
+                                    reactor -> registerStream(receiver, 21) -> when {
+                                        Err(failure) {
+                                            failure.reactor -> close
+                                            failure.connection -> close
+                                            listener -> close
+                                            "register-error=$(failure.error.code)" -> io.println
+                                        }
+                                        Ok(registered) {
+                                            [0, 0, 0; ~] -> socket.operationSlot(201, socket.OperationDirection.Receive) => slot
+                                            registered -> submit(21, slot) -> when {
+                                                Err(failure) {
+                                                    failure.slot => failedSlot
+                                                    failure.reactor => failedReactor
+                                                    failedSlot -> intoBytes => returned
+                                                    failedReactor -> close
+                                                    listener -> close
+                                                    "submit-error=$(failure.error.code),len=$(returned -> len)" -> io.println
+                                                }
+                                                Ok(submission) {
+                                                    submission -> when {
+                                                        socket.CompletionSubmission.Completed(completion) {
+                                                            completion.slot => unexpectedSlot
+                                                            completion.reactor => unexpectedReactor
+                                                            unexpectedSlot -> intoBytes => returned
+                                                            unexpectedReactor -> close
+                                                            listener -> close
+                                                            "pending=false,len=$(returned -> len)" -> io.println
+                                                        }
+                                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                                            pendingReactor -> dequeue(asyncio.Cancellation { requested: false }) => pendingTask
+                                                            ready() => readyTask
+                                                            readyTask -> await => readyRan
+                                                            "ready-task=$readyRan" -> io.println
+                                                            runtime.flushStandardOutput()
+                                                            pendingTask -> await -> when {
+                                                                Err(failure) {
+                                                                    failure.reactor -> close
+                                                                    listener -> close
+                                                                    "dequeue-error=$(failure.error.code)" -> io.println
+                                                                }
+                                                                Ok(completion) {
+                                                                    completion.slot => completedSlot
+                                                                    completion.reactor => completedReactor
+                                                                    completedSlot -> transferredCount -> when {
+                                                                        None { UIntSize(999) }
+                                                                        Some(count) { count }
+                                                                    } => count
+                                                                    completedSlot -> byteAt(0) => first
+                                                                    completedSlot -> byteAt(1) => second
+                                                                    completedSlot -> intoBytes => bytes
+                                                                    "woke=true,$count,$first,$second,len=$(bytes -> len)" -> io.println
+                                                                    completedReactor -> close
+                                                                    listener -> close
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

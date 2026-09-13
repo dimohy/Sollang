@@ -105,6 +105,13 @@ public struct CompletionReactorOptions {
     public completionBatch: UIntSize
 }
 
+# The completion reactor is one affine native owner. Registered TcpStream
+# owners and submitted OperationSlot owners are retained behind this token until
+# an inherent method returns them or terminal cancellation drains them.
+public struct CompletionReactor {
+    token: UInt64
+}
+
 public enum OperationDirection {
     Receive
     Send
@@ -132,6 +139,69 @@ public struct OperationSlot {
     nativeIdentity: Option<UInt64>
 }
 
+public struct SocketRegistrationFailure {
+    public reactor: CompletionReactor
+    public connection: TcpStream
+    public error: SocketError
+}
+
+public struct RemovedStream {
+    public reactor: CompletionReactor
+    public connection: TcpStream
+}
+
+public struct CompletionWaitFailure {
+    public reactor: CompletionReactor
+    public error: SocketError
+}
+
+# Submission either completes synchronously with the exact caller slot or
+# transfers that slot into the bounded reactor table. A pending submission
+# returns only the reactor authority; dequeue is the sole path that returns the
+# retained slot and its original byte-buffer owner.
+public enum CompletionSubmission {
+    Pending(CompletionReactor)
+    Completed(SocketCompletion)
+}
+
+public struct SocketCompletion {
+    public reactor: CompletionReactor
+    public slot: OperationSlot
+}
+
+# A terminal dequeue always returns the exact reactor and submitted slot. Native
+# operation failure and cooperative cancellation are states of that same owner,
+# not reactor-only control failures.
+public enum SocketTerminalOutcome {
+    Succeeded(SocketCompletion)
+    Failed(SocketCompletion)
+    Cancelled(SocketCompletion)
+}
+
+public struct CompletionSubmissionFailure {
+    public reactor: CompletionReactor
+    public slot: OperationSlot
+    public error: SocketError
+}
+
+public struct SlotTransitionFailure {
+    public slot: OperationSlot
+    public error: SocketError
+}
+
+impl SlotTransitionFailure {
+    public failureKind: self -> SocketErrorKind => self.error.kind
+
+    public intoSlot: move self -> OperationSlot {
+        self.slot => slot
+        slot
+    }
+}
+
+impl CompletionSubmissionFailure {
+    public failureKind: self -> SocketErrorKind => self.error.kind
+}
+
 public operationSlot bytes: move [UInt8; ~], key: UInt64, direction: OperationDirection -> OperationSlot {
     UIntSize(bytes -> len) => length
     OperationSlot {
@@ -145,6 +215,17 @@ public operationSlot bytes: move [UInt8; ~], key: UInt64, direction: OperationDi
         error: Option<SocketError>.None
         nativeIdentity: Option<UInt64>.None
     }
+}
+
+validOperationRange state: OperationState, offset: UIntSize, length: UIntSize, byteLength: UIntSize -> Bool => state -> when {
+    OperationState.Vacant { (offset <= byteLength) and (length <= byteLength - offset) }
+    else { false }
+}
+
+isTerminalOperationState state: OperationState -> Bool => state -> when {
+    OperationState.Completed { true }
+    OperationState.Cancelled { true }
+    else { false }
 }
 
 impl CompletionReactorOptions {
@@ -174,6 +255,8 @@ impl OperationSlot {
 
     public byteLength: self -> UIntSize => self.length
 
+    public byteAt: self, index: Int -> UInt8 => self.bytes[index]
+
     public transferredCount: self -> Option<UIntSize> => self.transferred
 
     public completionError: self -> Option<SocketError> => self.error
@@ -181,6 +264,61 @@ impl OperationSlot {
     public intoBytes: move self -> [UInt8; ~] {
         self.bytes => bytes
         bytes
+    }
+
+    # Selects a caller-owned subrange without slicing or copying its backing
+    # storage. The consumed slot is returned unchanged on validation failure.
+    public range: move self, offset: UIntSize, length: UIntSize -> Result<OperationSlot, SlotTransitionFailure> {
+        UIntSize(self.bytes -> len) => byteLength
+        validOperationRange(self.state, offset, length, byteLength)
+            -> unless {
+                Result<OperationSlot, SlotTransitionFailure>.Err(SlotTransitionFailure {
+                    slot: self
+                    error: SocketError { kind: SocketErrorKind.InvalidArgument, code: 0 }
+                }) -> return
+            }
+        self.key => key
+        self.direction => direction
+        self.bytes => bytes
+        Result<OperationSlot, SlotTransitionFailure>.Ok(OperationSlot {
+            key: key
+            direction: direction
+            bytes: bytes
+            offset: offset
+            length: length
+            state: OperationState.Vacant
+            transferred: Option<UIntSize>.None
+            error: Option<SocketError>.None
+            nativeIdentity: Option<UInt64>.None
+        })
+    }
+
+    # Terminal slots are deliberately not resubmittable. recycle is the single
+    # consuming transition back to Vacant and retains the exact caller buffer.
+    public recycle: move self -> Result<OperationSlot, SlotTransitionFailure> {
+        isTerminalOperationState(self.state)
+            -> unless {
+                Result<OperationSlot, SlotTransitionFailure>.Err(SlotTransitionFailure {
+                    slot: self
+                    error: SocketError { kind: SocketErrorKind.InvalidArgument, code: 0 }
+                }) -> return
+            }
+        self.key => key
+        self.direction => direction
+        self.offset => offset
+        self.length => length
+        self.bytes => bytes
+        Result<OperationSlot, SlotTransitionFailure>.Ok(OperationSlot {
+            key: key
+            direction: direction
+            bytes: bytes
+            offset: offset
+            length: length
+            state: OperationState.Vacant
+            transferred: Option<UIntSize>.None
+            error: Option<SocketError>.None
+            nativeIdentity: Option<UInt64>.None
+        })
     }
 }
 

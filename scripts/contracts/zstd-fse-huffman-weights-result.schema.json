@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "mode", "status", "completed", "total", "failureIds",
+    "compilerPath", "expectedCompilerSha256", "compilerSha256Start", "compilerSha256End", "compilerDispatch",
+    "inputStable", "inputDrift", "inputHashesStart", "inputHashesEnd",
+    "managed", "malformedMatrix", "independentZstd", "recompression", "allocationAudit", "processAudit"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "zstd-fse-huffman-weights-focused" },
+    "status": { "enum": ["passed", "failed"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "total": { "const": 5 },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "compilerPath": { "type": "string", "minLength": 1 },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha256" },
+    "compilerSha256Start": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "compilerSha256End": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "compilerDispatch": { "enum": ["dotnet", "direct", "unavailable"] },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashesStart": { "$ref": "#/$defs/hashes" },
+    "inputHashesEnd": { "$ref": "#/$defs/hashes" },
+    "managed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "total", "checks"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "total": { "const": 2 },
+        "checks": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            { "allOf": [{ "$ref": "#/$defs/managedCheck" }, { "properties": { "optimization": { "const": "O0" } } }] },
+            { "allOf": [{ "$ref": "#/$defs/managedCheck" }, { "properties": { "optimization": { "const": "O2" } } }] }
+          ],
+          "items": false
+        }
+      }
+    },
+    "malformedMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "total", "status", "caseIds"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 11 },
+        "total": { "const": 11 },
+        "status": { "enum": ["not-run", "passed", "failed"] },
+        "caseIds": {
+          "type": "array", "minItems": 11, "maxItems": 11,
+          "prefixItems": [
+            { "const": "terminal-zero-bit-state" },
+            { "const": "even-symbol-termination" },
+            { "const": "odd-symbol-termination" },
+            { "const": "normalized-count-corruption" },
+            { "const": "end-marker-corruption" },
+            { "const": "truncation" },
+            { "const": "trailing-bits" },
+            { "const": "weight-12-overflow" },
+            { "const": "weight-count-255-bound" },
+            { "const": "table-accuracy-bound" },
+            { "const": "zstd-invalid-tree-headers" }
+          ],
+          "items": false
+        }
+      }
+    },
+    "independentZstd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "total", "status", "path", "sha256", "version", "decodedSha256"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "total": { "const": 1 },
+        "status": { "enum": ["not-run", "passed", "failed"] },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "version": { "type": ["string", "null"] },
+        "decodedSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+      }
+    },
+    "recompression": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "total", "status", "failureReason", "runs"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "total": { "const": 1 },
+        "status": { "enum": ["not-run", "passed", "failed"] },
+        "failureReason": { "type": ["string", "null"] },
+        "runs": {
+          "type": "array", "minItems": 0, "maxItems": 2,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["index", "encodedBytes", "encodedSha256", "matchesFrozen"],
+            "properties": {
+              "index": { "type": "integer", "minimum": 1, "maximum": 2 },
+              "encodedBytes": { "type": "integer", "minimum": 0 },
+              "encodedSha256": { "$ref": "#/$defs/sha256" },
+              "matchesFrozen": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "allocationAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completed", "total", "status", "expectedAllocations", "maximumAllocations", "allocations", "releases", "invalidReleases"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "total": { "const": 1 },
+        "status": { "enum": ["not-run", "passed", "failed"] },
+        "expectedAllocations": { "const": 1339 },
+        "maximumAllocations": { "const": 2048 },
+        "allocations": { "type": ["integer", "null"], "minimum": 0 },
+        "releases": { "type": ["integer", "null"], "minimum": 0 },
+        "invalidReleases": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "processAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rootProcessIds", "descendantProcessIds", "orphanProcessIds", "invocations"],
+      "properties": {
+        "rootProcessIds": { "$ref": "#/$defs/processIds" },
+        "descendantProcessIds": { "$ref": "#/$defs/processIds" },
+        "orphanProcessIds": { "$ref": "#/$defs/processIds" },
+        "invocations": { "type": "array", "items": { "$ref": "#/$defs/invocation" } }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } } },
+      "then": {
+        "properties": {
+          "completed": { "const": 5 },
+          "compilerSha256Start": { "$ref": "#/$defs/sha256" },
+          "compilerSha256End": { "$ref": "#/$defs/sha256" },
+          "inputStable": { "const": true },
+          "inputDrift": { "maxItems": 0 },
+          "failureIds": { "maxItems": 0 },
+          "managed": {
+            "properties": {
+              "completed": { "const": 2 },
+              "checks": {
+                "items": {
+                  "properties": {
+                    "status": { "const": "passed" },
+                    "nativeStdoutSha256": { "const": "FE459E06260B895523916793E3F8D643D749ABE23630732F5E2C242D35F6E611" },
+                    "nativeStdoutBytes": { "const": 168 }
+                  }
+                }
+              }
+            }
+          },
+          "malformedMatrix": {
+            "properties": {
+              "completed": { "const": 11 },
+              "status": { "const": "passed" }
+            }
+          },
+          "independentZstd": {
+            "properties": {
+              "completed": { "const": 1 },
+              "status": { "const": "passed" },
+              "version": { "pattern": "v1\\.5\\.7\\b" },
+              "decodedSha256": { "const": "C07C8BA983664064D7D6CB37175780C9BA2356F0F681B0D9812E743195CC634B" }
+            }
+          },
+          "recompression": {
+            "properties": {
+              "completed": { "const": 1 },
+              "status": { "const": "passed" },
+              "failureReason": { "type": "null" },
+              "runs": {
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                  "properties": {
+                    "encodedBytes": { "const": 350 },
+                    "encodedSha256": { "const": "FA3C63CF6CEBC92F39F5A30FDCD4FD938ACFBADDAA3F67E7D0A2D01740E01F1E" },
+                    "matchesFrozen": { "const": true }
+                  }
+                }
+              }
+            }
+          },
+          "allocationAudit": {
+            "properties": {
+              "completed": { "const": 1 },
+              "status": { "const": "passed" },
+              "allocations": { "const": 1339 },
+              "releases": { "const": 1339 },
+              "invalidReleases": { "const": 0 }
+            }
+          },
+          "processAudit": {
+            "properties": {
+              "orphanProcessIds": { "maxItems": 0 },
+              "invocations": {
+                "minItems": 18,
+                "maxItems": 18,
+                "items": { "properties": { "exitCode": { "const": 0 }, "stderrBytes": { "const": 0 }, "orphanProcessIds": { "maxItems": 0 } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": { "properties": { "failureIds": { "minItems": 1 } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "nullableSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "hashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }
+    },
+    "processIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "exitCode", "rootProcessId", "descendantProcessIds", "orphanProcessIds", "stdoutPath", "stderrPath", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "exitCode": { "type": "integer" },
+        "rootProcessId": { "type": "integer", "minimum": 1 },
+        "descendantProcessIds": { "$ref": "#/$defs/processIds" },
+        "orphanProcessIds": { "$ref": "#/$defs/processIds" },
+        "stdoutPath": { "type": "string", "minLength": 1 },
+        "stderrPath": { "type": "string", "minLength": 1 },
+        "stdoutSha256": { "$ref": "#/$defs/sha256" },
+        "stderrSha256": { "$ref": "#/$defs/sha256" },
+        "stdoutBytes": { "type": "integer", "minimum": 0 },
+        "stderrBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "managedCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["optimization", "status", "nativeStdoutSha256", "nativeStdoutBytes", "llvmSha256", "bitcodeSha256", "executableSha256"],
+      "properties": {
+        "optimization": { "enum": ["O0", "O2"] },
+        "status": { "enum": ["not-run", "passed", "failed"] },
+        "nativeStdoutSha256": { "$ref": "#/$defs/nullableSha256" },
+        "nativeStdoutBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "llvmSha256": { "$ref": "#/$defs/nullableSha256" },
+        "bitcodeSha256": { "$ref": "#/$defs/nullableSha256" },
+        "executableSha256": { "$ref": "#/$defs/nullableSha256" }
+      }
+    }
+  }
+}

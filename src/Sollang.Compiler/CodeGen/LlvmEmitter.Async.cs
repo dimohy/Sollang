@@ -23,9 +23,11 @@ internal sealed partial class LlvmEmitter
             var workerName = AsyncWorkerSymbol(function);
             var hasCfgSuspension = TryGetCfgSuspendPlan(function, out var cfgSuspendPlan);
             BindingStatement? tailAwaitBinding = null;
+            Expression? tailAwaitExpression = null;
             AsyncStateMachinePlan? statefulAwaitPlan = null;
             var hasTailAwait = !hasCfgSuspension
-                && TryGetTailAwaitBinding(function, out tailAwaitBinding);
+                && (TryGetTailAwaitBinding(function, out tailAwaitBinding)
+                    || TryGetTailAwaitExpression(function, out tailAwaitExpression));
             var hasStatefulAwait = !hasCfgSuspension
                 && TryGetStatefulAwaitPlan(function, out statefulAwaitPlan);
             EmitFunctionLine($"define internal i1 @{workerName}(ptr %control) #0 {{");
@@ -38,6 +40,12 @@ internal sealed partial class LlvmEmitter
                 contextSlot,
                 "getelementptr %sollang.task_control, ptr %control, i32 0, i32 0");
             EmitLoad("%context", "ptr", contextSlot, 8);
+
+            if (_usesAsyncDiagnostics)
+            {
+                _currentAsyncDiagnosticHeader = AsyncFunctionDiagnosticHeader(
+                    "%context", function, "async_diagnostic_header");
+            }
 
             EmitAsyncContextLoad("%stdin", "%context", function.InputType, function.ReturnType, 0, "ptr", 8);
             EmitAsyncContextLoad("%stdout", "%context", function.InputType, function.ReturnType, 1, "ptr", 8);
@@ -62,7 +70,6 @@ internal sealed partial class LlvmEmitter
                     AsyncStorageLlvmType(parameter.Type),
                     RuntimeAlignment(parameter.Type));
             }
-
             BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindAllFunctionParameters(function);
@@ -76,7 +83,14 @@ internal sealed partial class LlvmEmitter
             }
             else if (hasTailAwait)
             {
-                EmitTailAwaitWorker(function, tailAwaitBinding!, functionLocals);
+                if (tailAwaitBinding is not null)
+                {
+                    EmitTailAwaitWorker(function, tailAwaitBinding, functionLocals);
+                }
+                else
+                {
+                    EmitTailAwaitExpressionWorker(function, tailAwaitExpression!, functionLocals);
+                }
             }
             else
             {
@@ -126,6 +140,10 @@ internal sealed partial class LlvmEmitter
                     $"%arg_{parameterIndex}",
                     RuntimeAlignment(parameter.Type));
             }
+            if (_usesAsyncDiagnostics)
+            {
+                EmitInitializeAsyncFunctionDiagnosticHeader(context, function, "%diagnostic_context");
+            }
 
             var handle = NextTemp("async_handle");
             EmitCall(
@@ -144,6 +162,12 @@ internal sealed partial class LlvmEmitter
             EmitCall(target: null, "void", "sollang_free", $"ptr {context}");
             EmitTrap();
             EmitLabel(readyLabel);
+            if (_usesAsyncDiagnostics)
+            {
+                EmitAttachInheritedDiagnosticRecord(
+                    AsyncFunctionDiagnosticHeader(context, function, "async_started_diagnostic_header"),
+                    handle);
+            }
 
             var withHandle = NextTemp("task");
             EmitAssign(withHandle, $"insertvalue %sollang.task poison, ptr {handle}, 0");
@@ -253,6 +277,12 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(cleanupLabel);
         _currentBlockLabel = cleanupLabel;
+        if (_usesAsyncDiagnostics)
+        {
+            var diagnosticHeader = AsyncFunctionDiagnosticHeader("%context", function, "cancel_diagnostic_header");
+            EmitMarkDiagnosticHeaderTerminal(diagnosticHeader, 3);
+            EmitDetachDiagnosticHeader(diagnosticHeader);
+        }
         EmitCall(target: null, "void", "sollang_free", "ptr %context");
         EmitInstruction("ret void");
         _currentBlockTerminated = true;
@@ -374,6 +404,7 @@ internal sealed partial class LlvmEmitter
             : null;
         DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName, function.Body);
         StoreAsyncResult(function, value);
+        EmitMarkCurrentDiagnosticTerminal(2);
         EmitRet("i1", "true");
     }
 
@@ -505,11 +536,79 @@ internal sealed partial class LlvmEmitter
                 $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
 
         var spillPlans = BuildCfgSpillPlans(lowering, excludedName: taskName);
+        EmitRecordCurrentDiagnosticSuspension(point, child, taskExpression: null);
         StoreSuspendedChild(lowering.Function, child);
         RemoveLocal(taskName);
         SuspendAndResumeCfgPoint(lowering, point, spillPlans);
         var resumedValue = EmitStoredChildAwait(lowering.Function, child);
         _locals.Add(binding.Name, resumedValue);
+        return true;
+    }
+
+    private bool TryEmitCfgAwaitExpressionStatement(ExpressionStatement statement)
+    {
+        if (_activeAsyncCfg is not { } lowering
+            || !lowering.Plan.ByAwaitExpressionStatement.TryGetValue(statement, out var point)
+            || !TryGetAwaitTaskExpression(statement.Expression, out var taskExpression))
+        {
+            return false;
+        }
+
+        var child = EmitExpression(taskExpression) as RuntimeTask
+            ?? throw new SollangException(
+                $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
+        var consumedTaskName = taskExpression is NameExpression taskName
+            ? taskName.Name
+            : null;
+        if (consumedTaskName is null && taskExpression is FieldAccessExpression)
+        {
+            ConsumeOwnedFieldProjection(taskExpression, child.Type);
+        }
+        var spillPlans = BuildCfgSpillPlans(lowering, excludedName: consumedTaskName);
+        EmitRecordCurrentDiagnosticSuspension(point, child, taskExpression);
+        StoreSuspendedChild(lowering.Function, child);
+        if (consumedTaskName is not null)
+        {
+            RemoveLocal(consumedTaskName);
+        }
+        SuspendAndResumeCfgPoint(lowering, point, spillPlans);
+        var resumedValue = EmitStoredChildAwait(lowering.Function, child);
+        if (resumedValue.Type != BoundType.Unit)
+        {
+            throw new SollangException("an await expression statement must produce Unit");
+        }
+        return true;
+    }
+
+    private bool TryEmitCfgAwaitExpression(Expression expression, out RuntimeValue value)
+    {
+        value = null!;
+        if (_activeAsyncCfg is not { } lowering
+            || !lowering.Plan.ByAwaitExpression.TryGetValue(expression, out var point)
+            || !TryGetAwaitTaskExpression(expression, out var taskExpression))
+        {
+            return false;
+        }
+
+        var child = EmitExpression(taskExpression) as RuntimeTask
+            ?? throw new SollangException(
+                $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
+        var consumedTaskName = taskExpression is NameExpression taskName
+            ? taskName.Name
+            : null;
+        if (consumedTaskName is null && taskExpression is FieldAccessExpression)
+        {
+            ConsumeOwnedFieldProjection(taskExpression, child.Type);
+        }
+        var spillPlans = BuildCfgSpillPlans(lowering, excludedName: consumedTaskName);
+        EmitRecordCurrentDiagnosticSuspension(point, child, taskExpression);
+        StoreSuspendedChild(lowering.Function, child);
+        if (consumedTaskName is not null)
+        {
+            RemoveLocal(consumedTaskName);
+        }
+        SuspendAndResumeCfgPoint(lowering, point, spillPlans);
+        value = EmitStoredChildAwait(lowering.Function, child);
         return true;
     }
 
@@ -522,6 +621,7 @@ internal sealed partial class LlvmEmitter
         }
 
         var spillPlans = BuildCfgSpillPlans(lowering, excludedName: null);
+        EmitRecordCurrentDiagnosticSuspension(point, child: null, taskExpression: null);
         SuspendAndResumeCfgPoint(lowering, point, spillPlans);
         return true;
     }
@@ -571,6 +671,16 @@ internal sealed partial class LlvmEmitter
                 && _locals.ContainsKey(item.parameter.Name))
             .Select(static item => item.index)
             .ToArray();
+        var movedInputFields = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var name in new[] { inputName }.Concat(
+                     ownedAdditionalInputIndexes.Select(index =>
+                         (lowering.Function.AdditionalParameters ?? [])[index].Name)))
+        {
+            if (_movedOwnedStructFields.TryGetValue(name, out var fields))
+            {
+                movedInputFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+            }
+        }
         point.SetRuntimeShape(spillPlans, ownsPrimaryInput, ownedAdditionalInputIndexes);
         var spills = BuildRuntimeAsyncSpills(point.Spills);
         StoreAsyncSpills(lowering.Function, spills);
@@ -606,6 +716,14 @@ internal sealed partial class LlvmEmitter
                 RemoveLocal(parameter.Name);
             }
         }
+        foreach (var (name, fields) in movedInputFields)
+        {
+            _movedOwnedStructFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+            foreach (var scope in _asyncScopeSnapshots.Where(scope => scope.Locals.ContainsKey(name)))
+            {
+                scope.MovedOwnedStructFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+            }
+        }
         EmitLabel(point.ResumeLabel);
         _currentBlockLabel = point.ResumeLabel;
         LoadAsyncSpills(lowering.Function, spills);
@@ -624,6 +742,23 @@ internal sealed partial class LlvmEmitter
                     continue;
                 }
                 scope.Locals[spill.Name] = value;
+                if (_borrowedOwnedTransferFlags.TryGetValue(spill.Name, out var transferFlag))
+                {
+                    scope.BorrowedOwnedTransferFlags[spill.Name] = transferFlag;
+                    var resumedObligation = _terminatingOwnedCleanupObligations.FirstOrDefault(obligation =>
+                        string.Equals(obligation.BindingName, spill.Name, StringComparison.Ordinal)
+                        && ReferenceEquals(obligation.Value, value)
+                        && string.Equals(obligation.RetainedFlag, transferFlag, StringComparison.Ordinal));
+                    if (resumedObligation is not null)
+                    {
+                        var obligationIndex = scope.TerminatingOwnedCleanupObligations.FindIndex(
+                            obligation => obligation.BindingId == resumedObligation.BindingId);
+                        if (obligationIndex >= 0)
+                        {
+                            scope.TerminatingOwnedCleanupObligations[obligationIndex] = resumedObligation;
+                        }
+                    }
+                }
                 if (!spill.IsMutable)
                 {
                     continue;
@@ -669,11 +804,16 @@ internal sealed partial class LlvmEmitter
             "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
         var childContext = NextTemp("async_child_context");
         EmitLoad(childContext, "ptr", childContextAddress, 8);
-        return EmitAwaitTask(child with
+        var resumedChild = child with
         {
             HandleName = childHandle,
-            ContextName = childContext
-        });
+            ContextName = childContext,
+            DiagnosticHeaderName = child.DiagnosticHeaderName is null
+                ? null
+                : AsyncContextField(
+                    childContext, child.InputType, child.ResultType, 10, "async_child_diagnostic_header")
+        };
+        return EmitAwaitTask(resumedChild);
     }
 
     private IReadOnlyList<RuntimeAsyncSpill> BuildRuntimeAsyncSpills(
@@ -688,16 +828,26 @@ internal sealed partial class LlvmEmitter
             var materialized = MaterializeAggregateValue(value);
             var alignment = RuntimeAlignment(spill.Type);
             offset = AlignAsyncSize(offset, alignment);
+            var valueOffset = offset;
+            offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+            var ownershipFlagPointer = _borrowedOwnedTransferFlags.GetValueOrDefault(spill.Name);
+            int? ownershipFlagOffset = null;
+            if (ownershipFlagPointer is not null)
+            {
+                ownershipFlagOffset = offset;
+                offset = checked(offset + 1);
+            }
             spills.Add(new RuntimeAsyncSpill(
                 spill.Name,
                 spill.Type,
-                offset,
+                valueOffset,
                 alignment,
                 materialized.TypeName,
                 materialized.ValueName,
                 spill.IsMutable,
-                value));
-            offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+                value,
+                ownershipFlagPointer,
+                ownershipFlagOffset));
         }
 
         return spills;
@@ -712,8 +862,9 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        var size = spills.Max(spill =>
-            checked(spill.Offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1)));
+        var size = spills.Max(spill => spill.OwnershipFlagOffset is { } flagOffset
+            ? checked(flagOffset + 1)
+            : checked(spill.Offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1)));
         var frame = NextTemp("async_spill_frame");
         EmitCall(frame, "ptr", "sollang_alloc", $"i64 {size}");
         EmitAsyncContextStore(
@@ -724,6 +875,15 @@ internal sealed partial class LlvmEmitter
             var address = NextTemp("async_spill_address");
             EmitAssign(address, $"getelementptr i8, ptr {frame}, i64 {spill.Offset}");
             EmitStore(spill.LlvmType, spill.ValueName, address, spill.Alignment);
+            if (spill.OwnershipFlagPointer is not null
+                && spill.OwnershipFlagOffset is { } ownershipFlagOffset)
+            {
+                var flag = NextTemp("async_spill_owned_flag");
+                EmitLoad(flag, "i1", spill.OwnershipFlagPointer, 1);
+                var flagAddress = NextTemp("async_spill_owned_flag_address");
+                EmitAssign(flagAddress, $"getelementptr i8, ptr {frame}, i64 {ownershipFlagOffset}");
+                EmitStore("i1", flag, flagAddress, 1);
+            }
         }
     }
 
@@ -750,6 +910,56 @@ internal sealed partial class LlvmEmitter
                 ? DematerializeTask(task, loaded)
                 : DematerializeAggregateValue(spill.Type, loaded);
             _locals[spill.Name] = value;
+            if (spill.OwnershipFlagOffset is { } ownershipFlagOffset)
+            {
+                var storedFlagAddress = NextTemp("async_spill_owned_flag_address");
+                EmitAssign(storedFlagAddress, $"getelementptr i8, ptr {frame}, i64 {ownershipFlagOffset}");
+                var storedFlag = NextTemp("async_spill_owned_flag");
+                EmitLoad(storedFlag, "i1", storedFlagAddress, 1);
+                var resumedFlag = NextTemp("async_spill_owned_flag_slot");
+                EmitAlloca(resumedFlag, "i1", 1);
+                EmitStore("i1", storedFlag, resumedFlag, 1);
+                _borrowedOwnedTransferFlags[spill.Name] = resumedFlag;
+                var obligationIndex = _terminatingOwnedCleanupObligations.FindIndex(obligation =>
+                    string.Equals(obligation.BindingName, spill.Name, StringComparison.Ordinal)
+                    && ReferenceEquals(obligation.Value, spill.Template)
+                    && string.Equals(
+                        obligation.RetainedFlag,
+                        spill.OwnershipFlagPointer,
+                        StringComparison.Ordinal));
+                var suspendedObligation = obligationIndex >= 0
+                    ? _terminatingOwnedCleanupObligations[obligationIndex]
+                    : _asyncScopeSnapshots
+                        .SelectMany(static scope => scope.TerminatingOwnedCleanupObligations)
+                        .FirstOrDefault(obligation =>
+                            string.Equals(obligation.BindingName, spill.Name, StringComparison.Ordinal)
+                            && ReferenceEquals(obligation.Value, spill.Template)
+                            && string.Equals(
+                                obligation.RetainedFlag,
+                                spill.OwnershipFlagPointer,
+                                StringComparison.Ordinal));
+                if (obligationIndex < 0 && suspendedObligation is not null)
+                {
+                    var suspendedGroup = _asyncScopeSnapshots
+                        .SelectMany(static scope => scope.TerminatingOwnedCleanupObligations)
+                        .Where(obligation => obligation.BindingId == suspendedObligation.BindingId)
+                        .Distinct()
+                        .ToArray();
+                    _terminatingOwnedCleanupObligations.AddRange(suspendedGroup);
+                    obligationIndex = _terminatingOwnedCleanupObligations.FindIndex(obligation =>
+                        obligation.BindingId == suspendedObligation.BindingId
+                        && ReferenceEquals(obligation.Value, spill.Template));
+                }
+                if (obligationIndex >= 0)
+                {
+                    _terminatingOwnedCleanupObligations[obligationIndex] =
+                        _terminatingOwnedCleanupObligations[obligationIndex] with
+                        {
+                            Value = value,
+                            RetainedFlag = resumedFlag
+                        };
+                }
+            }
             if (spill.IsMutable)
             {
                 CreateResumedMutableSlot(spill.Name, value);
@@ -768,7 +978,11 @@ internal sealed partial class LlvmEmitter
         return template with
         {
             HandleName = handle,
-            ContextName = context
+            ContextName = context,
+            DiagnosticHeaderName = template.DiagnosticHeaderName is null
+                ? null
+                : AsyncContextField(
+                    context, template.InputType, template.ResultType, 10, "async_spill_task_diagnostic_header")
         };
     }
 
@@ -798,12 +1012,8 @@ internal sealed partial class LlvmEmitter
         var child = ResolveLocal(tailAwaitBinding.Name) as RuntimeTask
             ?? throw new SollangException(
                 $"tail await in async function '{function.Name}' did not produce Task<T>");
-        EmitAsyncContextStore(
-            "%context", function.InputType, function.ReturnType, 7,
-            "ptr", child.HandleName, 8);
-        EmitAsyncContextStore(
-            "%context", function.InputType, function.ReturnType, 8,
-            "ptr", child.ContextName, 8);
+        EmitRecordCurrentDiagnosticSuspension(tailAwaitBinding, 1, child, taskExpression: null);
+        StoreSuspendedChild(function, child);
         RemoveLocal(tailAwaitBinding.Name);
         EmitStore("i32", "1", stateSlot, 4);
         EmitRet("i1", "false");
@@ -820,12 +1030,73 @@ internal sealed partial class LlvmEmitter
         var resumedChild = child with
         {
             HandleName = childHandle,
-            ContextName = childContext
+            ContextName = childContext,
+            DiagnosticHeaderName = child.DiagnosticHeaderName is null
+                ? null
+                : AsyncContextField(
+                    childContext, child.InputType, child.ResultType, 10, "async_tail_child_diagnostic_header")
         };
         var value = EmitAwaitTask(resumedChild);
         EnsureRuntimeType(value, function.ReturnType, function.Name);
         DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
         StoreAsyncResult(function, value);
+        EmitMarkCurrentDiagnosticTerminal(2);
+        EmitRet("i1", "true");
+    }
+
+    private void EmitTailAwaitExpressionWorker(
+        BoundFunction function,
+        Expression taskExpression,
+        LocalScope functionLocals)
+    {
+        var stateSlot = NextTemp("async_resume_state_slot");
+        EmitAssign(
+            stateSlot,
+            "getelementptr %sollang.task_control, ptr %control, i32 0, i32 5");
+        var state = NextTemp("async_resume_state");
+        EmitLoad(state, "i32", stateSlot, 4);
+        var startLabel = NextLabel("async_state_start");
+        var resumeLabel = NextLabel("async_state_resume");
+        var invalidLabel = NextLabel("async_state_invalid");
+        EmitInstruction(
+            $"switch i32 {state}, label %{invalidLabel} [ i32 0, label %{startLabel} i32 1, label %{resumeLabel} ]");
+        _currentBlockTerminated = true;
+
+        EmitLabel(invalidLabel);
+        EmitTrap();
+
+        EmitLabel(startLabel);
+        EmitStatements(function.BlockBody);
+        var child = EmitExpression(taskExpression) as RuntimeTask
+            ?? throw new SollangException(
+                $"tail await in async function '{function.Name}' did not produce Task<T>");
+        EmitRecordCurrentDiagnosticSuspension(function.Body!, 1, child, taskExpression);
+        StoreSuspendedChild(function, child);
+        EmitStore("i32", "1", stateSlot, 4);
+        EmitRet("i1", "false");
+
+        EmitLabel(resumeLabel);
+        var childHandleAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 7, "async_child_handle_address");
+        var childHandle = NextTemp("async_child_handle");
+        EmitLoad(childHandle, "ptr", childHandleAddress, 8);
+        var childContextAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
+        var childContext = NextTemp("async_child_context");
+        EmitLoad(childContext, "ptr", childContextAddress, 8);
+        var value = EmitAwaitTask(child with
+        {
+            HandleName = childHandle,
+            ContextName = childContext,
+            DiagnosticHeaderName = child.DiagnosticHeaderName is null
+                ? null
+                : AsyncContextField(
+                    childContext, child.InputType, child.ResultType, 10, "async_tail_child_diagnostic_header")
+        });
+        EnsureRuntimeType(value, function.ReturnType, function.Name);
+        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
+        StoreAsyncResult(function, value);
+        EmitMarkCurrentDiagnosticTerminal(2);
         EmitRet("i1", "true");
     }
 
@@ -842,6 +1113,7 @@ internal sealed partial class LlvmEmitter
         if (function.IsAsync)
         {
             StoreAsyncResult(function, value);
+            EmitMarkCurrentDiagnosticTerminal(2);
             EmitRet("i1", "true");
             return;
         }
@@ -897,7 +1169,14 @@ internal sealed partial class LlvmEmitter
                     candidates.Add(new AsyncCfgCandidate(yield, nested, IsYield: true));
                     break;
                 case ExpressionStatement expression:
-                    CollectCfgSuspensions(expression.Expression, nested, candidates);
+                    if (TryGetAwaitTaskExpression(expression.Expression, out _))
+                    {
+                        candidates.Add(new AsyncCfgCandidate(expression, nested, IsYield: false));
+                    }
+                    else
+                    {
+                        CollectCfgSuspensions(expression.Expression, nested, candidates);
+                    }
                     break;
                 case BlockFunctionCallStatement block
                     when block.Target.Count == 1
@@ -920,6 +1199,12 @@ internal sealed partial class LlvmEmitter
         bool nested,
         List<AsyncCfgCandidate> candidates)
     {
+        if (TryGetAwaitTaskExpression(expression, out _))
+        {
+            candidates.Add(new AsyncCfgCandidate(expression, nested, IsYield: false));
+            return;
+        }
+
         switch (expression)
         {
             case IfExpression conditional:
@@ -952,6 +1237,24 @@ internal sealed partial class LlvmEmitter
                     CollectCfgSuspensions(selection.Else.Value, nested: true, candidates);
                 }
                 break;
+            case EnumMatchExpression selection:
+                foreach (var arm in selection.Arms)
+                {
+                    CollectCfgSuspensions(arm.Body.Statements, nested: true, candidates);
+                    if (arm.Body.Value is not null)
+                    {
+                        CollectCfgSuspensions(arm.Body.Value, nested: true, candidates);
+                    }
+                }
+                if (selection.Else is not null)
+                {
+                    CollectCfgSuspensions(selection.Else.Statements, nested: true, candidates);
+                    if (selection.Else.Value is not null)
+                    {
+                        CollectCfgSuspensions(selection.Else.Value, nested: true, candidates);
+                    }
+                }
+                break;
         }
     }
 
@@ -973,6 +1276,36 @@ internal sealed partial class LlvmEmitter
 
         taskName = string.Empty;
         return false;
+    }
+
+    private static bool TryGetAwaitTaskExpression(Expression expression, out Expression taskExpression)
+    {
+        if (expression is FlowExpression flow
+            && flow.Targets.Count > 0
+            && flow.Targets[^1].Path.Count == 1
+            && string.Equals(flow.Targets[^1].Path[0], "await", StringComparison.Ordinal)
+            && flow.Targets[^1].Arguments.Count == 0)
+        {
+            taskExpression = flow.Targets.Count == 1
+                ? flow.Source
+                : new FlowExpression(flow.Source, flow.Targets.Take(flow.Targets.Count - 1).ToArray(), flow.Line, flow.Column);
+            return true;
+        }
+
+        taskExpression = null!;
+        return false;
+    }
+
+    private static bool TryGetTailAwaitExpression(BoundFunction function, out Expression? taskExpression)
+    {
+        taskExpression = null;
+        if (function.Body is null
+            || !TryGetAwaitTaskExpression(function.Body, out var candidate))
+        {
+            return false;
+        }
+        taskExpression = candidate;
+        return true;
     }
 
     private bool TryGetTailAwaitBinding(
@@ -1145,6 +1478,7 @@ internal sealed partial class LlvmEmitter
             || _program.Types.IsTask(type)
             || type == BoundType.DynamicIntArray
             || type == BoundType.IntDictionary
+            || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
             || _program.Types.IsDictionary(type))
         {
@@ -1184,6 +1518,7 @@ internal sealed partial class LlvmEmitter
             || _program.Types.IsStruct(type)
             || type == BoundType.DynamicIntArray
             || type == BoundType.IntDictionary
+            || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
             || _program.Types.IsDictionary(type);
     }
@@ -1241,7 +1576,8 @@ internal sealed partial class LlvmEmitter
             function.InputType,
             function.ReturnType,
             handle,
-            context);
+            context,
+            function);
     }
 
     private RuntimeValue EmitAwaitTask(RuntimeTask task, bool discardResult = false)
@@ -1320,6 +1656,20 @@ internal sealed partial class LlvmEmitter
                 fileResultAddress,
                 RuntimeAlignment(fileResult.Type));
         }
+        else if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeSocketCompletionDequeue } socketDequeue)
+        {
+            var socketResult = EmitRuntimeCompletedSocketDequeue(
+                socketDequeue,
+                task.HandleName,
+                task.ContextName);
+            var socketResultAddress = AsyncContextField(
+                task.ContextName, task.InputType, task.ResultType, 6, "socket_completion_task_result_address");
+            EmitStore(
+                LlvmEnumType(socketResult.Type),
+                socketResult.ValueName,
+                socketResultAddress,
+                RuntimeAlignment(socketResult.Type));
+        }
         var resultAddress = AsyncContextField(
             task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
         var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");
@@ -1328,6 +1678,11 @@ internal sealed partial class LlvmEmitter
         if (discardResult && _program.Types.ContainsOwnedStorage(task.ResultType))
         {
             DropOwnedRuntimeValue(value);
+        }
+        if (_usesAsyncDiagnostics && DiagnosticHeaderForTask(task) is { } diagnosticHeader)
+        {
+            EmitMarkDiagnosticHeaderTerminal(diagnosticHeader, 2);
+            EmitDetachDiagnosticHeader(diagnosticHeader);
         }
         var closeSucceeded = NextTemp("task_close_succeeded");
         EmitCall(closeSucceeded, "i1", "sollang_task_release", $"ptr {task.HandleName}");
@@ -1343,6 +1698,11 @@ internal sealed partial class LlvmEmitter
 
     private void EmitCancelTask(RuntimeTask task)
     {
+        if (_usesAsyncDiagnostics && DiagnosticHeaderForTask(task) is { } diagnosticHeader)
+        {
+            EmitMarkDiagnosticHeaderTerminal(diagnosticHeader, 3);
+            EmitDetachDiagnosticHeader(diagnosticHeader);
+        }
         EmitCancelTaskHandle(task.HandleName);
     }
 
@@ -1412,6 +1772,64 @@ internal sealed partial class LlvmEmitter
         return address;
     }
 
+    private string AsyncFunctionDiagnosticHeader(
+        string context,
+        BoundFunction function,
+        string prefix)
+    {
+        var address = NextTemp(prefix);
+        EmitAssign(address,
+            $"getelementptr {AsyncFunctionContextType(function)}, ptr {context}, i32 0, i32 {10 + (function.AdditionalParameters?.Count ?? 0)}");
+        return address;
+    }
+
+    private void EmitInitializeAsyncFunctionDiagnosticHeader(
+        string context,
+        BoundFunction function,
+        string parentHeader)
+    {
+        var header = AsyncFunctionDiagnosticHeader(context, function, "async_diagnostic_header");
+        EmitInitializeAsyncDiagnosticHeader(header, parentHeader);
+    }
+
+    private void EmitInitializeAsyncDiagnosticHeader(string header, string parentHeader)
+    {
+        for (var index = 0; index < 4; index++)
+        {
+            var slot = NextTemp("async_diagnostic_header_slot");
+            EmitAssign(slot,
+                $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 {index}");
+            EmitStore(index < 2 ? "ptr" : "i64", index < 2 ? "null" : "0", slot, 8);
+        }
+
+        var hasParent = NextTemp("async_diagnostic_has_parent");
+        EmitCompare(hasParent, "ne", "ptr", parentHeader, "null");
+        var inheritLabel = NextLabel("async_diagnostic_inherit");
+        var readyLabel = NextLabel("async_diagnostic_ready");
+        EmitConditionalBranch(hasParent, inheritLabel, readyLabel);
+        EmitLabel(inheritLabel);
+        var parentSessionSlot = NextTemp("async_diagnostic_parent_session_slot");
+        EmitAssign(parentSessionSlot,
+            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {parentHeader}, i32 0, i32 0");
+        var parentSession = NextTemp("async_diagnostic_parent_session");
+        EmitLoad(parentSession, "ptr", parentSessionSlot, 8);
+        var childSessionSlot = NextTemp("async_diagnostic_child_session_slot");
+        EmitAssign(childSessionSlot,
+            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 0");
+        EmitStore("ptr", parentSession, childSessionSlot, 8);
+        var parentTaskIdSlot = NextTemp("async_diagnostic_parent_task_id_slot");
+        EmitAssign(parentTaskIdSlot,
+            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {parentHeader}, i32 0, i32 2");
+        var parentTaskId = NextTemp("async_diagnostic_parent_task_id");
+        EmitLoad(parentTaskId, "i64", parentTaskIdSlot, 8);
+        var childParentIdSlot = NextTemp("async_diagnostic_child_parent_id_slot");
+        EmitAssign(childParentIdSlot,
+            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 3");
+        EmitStore("i64", parentTaskId, childParentIdSlot, 8);
+        EmitBranch(readyLabel);
+        EmitLabel(readyLabel);
+    }
+
     private string AsyncContextField(
         string context, BoundType? inputType, BoundType resultType, int field, string prefix)
     {
@@ -1420,8 +1838,18 @@ internal sealed partial class LlvmEmitter
         return address;
     }
 
-    private string AsyncContextType(BoundType? inputType, BoundType resultType) =>
-        $"{{ ptr, ptr, ptr, ptr, ptr, {AsyncStorageLlvmType(inputType)}, {AsyncStorageLlvmType(resultType)}, ptr, ptr, ptr }}";
+    private string AsyncContextType(BoundType? inputType, BoundType resultType)
+    {
+        var fields = new List<string>
+        {
+            "ptr", "ptr", "ptr", "ptr", "ptr",
+            AsyncStorageLlvmType(inputType),
+            AsyncStorageLlvmType(resultType),
+            "ptr", "ptr", "ptr"
+        };
+        AppendAsyncDiagnosticHeaderFields(fields);
+        return $"{{ {string.Join(", ", fields)} }}";
+    }
 
     private string AsyncFunctionContextType(BoundFunction function)
     {
@@ -1434,7 +1862,19 @@ internal sealed partial class LlvmEmitter
         };
         fields.AddRange((function.AdditionalParameters ?? [])
             .Select(parameter => AsyncStorageLlvmType(parameter.Type)));
+        AppendAsyncDiagnosticHeaderFields(fields);
         return $"{{ {string.Join(", ", fields)} }}";
+    }
+
+    private void AppendAsyncDiagnosticHeaderFields(ICollection<string> fields)
+    {
+        if (_usesAsyncDiagnostics)
+        {
+            fields.Add("ptr");
+            fields.Add("ptr");
+            fields.Add("i64");
+            fields.Add("i64");
+        }
     }
 
     private string AsyncStorageLlvmType(BoundType? type) =>
@@ -1504,17 +1944,33 @@ internal sealed partial class LlvmEmitter
 
     private int AsyncContextSize(BoundFunction function)
     {
-        var size = AsyncContextSize(function.InputType, function.ReturnType);
+        var size = AsyncContextSizeCore(function.InputType, function.ReturnType);
         foreach (var parameter in function.AdditionalParameters ?? [])
         {
             var alignment = RuntimeAlignment(parameter.Type);
             size = AlignAsyncSize(size, alignment);
             size += Math.Max(_program.Types.InlineSizeOf(parameter.Type), 1);
         }
+        if (_usesAsyncDiagnostics)
+        {
+            size = AlignAsyncSize(size, 8);
+            size += AsyncDiagnosticHeaderBytes;
+        }
         return size;
     }
 
     private int AsyncContextSize(BoundType? inputType, BoundType resultType)
+    {
+        var size = AsyncContextSizeCore(inputType, resultType);
+        if (_usesAsyncDiagnostics)
+        {
+            size = AlignAsyncSize(size, 8);
+            size += AsyncDiagnosticHeaderBytes;
+        }
+        return size;
+    }
+
+    private int AsyncContextSizeCore(BoundType? inputType, BoundType resultType)
     {
         var inputAlignment = AsyncStorageAlignment(inputType);
         var inputOffset = AlignAsyncSize(40, inputAlignment);
@@ -1551,22 +2007,32 @@ internal sealed partial class LlvmEmitter
             ByYield = points
                 .Where(point => point.Site is ExpressionStatement && point.IsYield)
                 .ToDictionary(point => (ExpressionStatement)point.Site);
+            ByAwaitExpressionStatement = points
+                .Where(point => point.Site is ExpressionStatement && !point.IsYield)
+                .ToDictionary(point => (ExpressionStatement)point.Site);
+            ByAwaitExpression = points
+                .Where(point => point.Site is Expression)
+                .ToDictionary(point => (Expression)point.Site);
         }
 
         public IReadOnlyList<AsyncCfgSuspendPoint> Points { get; }
 
-        public IReadOnlyDictionary<Statement, AsyncCfgSuspendPoint> BySite { get; }
+        public IReadOnlyDictionary<object, AsyncCfgSuspendPoint> BySite { get; }
 
         public IReadOnlyDictionary<BindingStatement, AsyncCfgSuspendPoint> ByBinding { get; }
 
         public IReadOnlyDictionary<ExpressionStatement, AsyncCfgSuspendPoint> ByYield { get; }
+
+        public IReadOnlyDictionary<ExpressionStatement, AsyncCfgSuspendPoint> ByAwaitExpressionStatement { get; }
+
+        public IReadOnlyDictionary<Expression, AsyncCfgSuspendPoint> ByAwaitExpression { get; }
     }
 
-    private sealed class AsyncCfgSuspendPoint(int state, Statement site, bool isYield)
+    private sealed class AsyncCfgSuspendPoint(int state, object site, bool isYield)
     {
         public int State { get; } = state;
 
-        public Statement Site { get; } = site;
+        public object Site { get; } = site;
 
         public bool IsYield { get; } = isYield;
 
@@ -1595,13 +2061,17 @@ internal sealed partial class LlvmEmitter
         LocalScope ResumeBaseLocals,
         string StateSlot);
 
+    private bool HasCurrentFunctionAsyncCfg() =>
+        _activeAsyncCfg is { } lowering
+        && ReferenceEquals(lowering.Function, _currentFunction);
+
     private sealed record AsyncAwaitPoint(
         int StatementIndex,
         string ResultName,
         string TaskName,
         IReadOnlyList<AsyncSpillPlan> Spills);
 
-    private sealed record AsyncCfgCandidate(Statement Site, bool Nested, bool IsYield);
+    private sealed record AsyncCfgCandidate(object Site, bool Nested, bool IsYield);
 
     private sealed record AsyncSpillPlan(string Name, BoundType Type, bool IsMutable);
 
@@ -1613,5 +2083,7 @@ internal sealed partial class LlvmEmitter
         string LlvmType,
         string ValueName,
         bool IsMutable,
-        RuntimeValue Template);
+        RuntimeValue Template,
+        string? OwnershipFlagPointer,
+        int? OwnershipFlagOffset);
 }

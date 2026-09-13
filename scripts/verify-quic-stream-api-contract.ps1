@@ -246,6 +246,7 @@ $frameText = [System.IO.File]::ReadAllText($framePath)
 $transportText = [System.IO.File]::ReadAllText($transportPath)
 $streamStateText = [System.IO.File]::ReadAllText($streamStatePath)
 $reassemblyText = [System.IO.File]::ReadAllText($reassemblyPath)
+$reassemblyFixtureText = [System.IO.File]::ReadAllText($reassemblyFixturePath)
 foreach ($requiredImplementation in @(
     'public struct ReceiveWindowSizes',
     'public struct ConnectionOptions',
@@ -282,7 +283,7 @@ foreach ($requiredImplementation in @(
 foreach ($requiredReassembly in @(
     'public struct Queue',
     'public account: self, streamId: UInt64, flow: streamState.ReceiveFlow',
-    'public takeContiguous: mut self, streamId: UInt64, consumed: UInt64, maxBytes: UIntSize',
+    'public takeContiguous: mut self, streamId: UInt64, consumed: UInt64, maxBytes: UIntSize -> Option<frames.Stream>',
     'newlyReceived: nextFlow!.highestReceived - previousHighest',
     'skipped != 0 or delivered != available',
     'self.byteLength - UInt64(value!.data -> len) => self.byteLength'
@@ -290,6 +291,11 @@ foreach ($requiredReassembly in @(
     if (-not $reassemblyText.Contains($requiredReassembly, [System.StringComparison]::Ordinal)) {
         throw "QUIC bounded reassembly is incomplete: $requiredReassembly"
     }
+}
+if ($reassemblyText.Contains('TakeError', [System.StringComparison]::Ordinal) -or
+    -not $reassemblyFixtureText.Contains('queue! -> takeContiguous(0, 0, 3)', [System.StringComparison]::Ordinal) -or
+    -not $reassemblyFixtureText.Contains('None { true }', [System.StringComparison]::Ordinal)) {
+    throw 'QUIC reassembly must model an absent contiguous segment as typed Option evidence'
 }
 foreach ($requiredUnidirectionalTransport in @(
     'unidirectionalStream: UInt64',

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "capabilityId", "module", "implementationStatus", "sources", "fixture", "expectedOutput", "browserFixture", "browserExpectedOutput", "expectedStdout", "publicSurface", "limits", "ownership", "transactionality", "errors", "unsupported", "reference", "requiredFixtureCases", "semanticNegatives", "executionMatrix", "schemaNegativeControls"],
+  "properties": {
+    "$schema": { "const": "zip-stored-writer.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "capabilityId": { "const": "zip-stored-streaming-writer" },
+    "module": { "const": "std.archive.zip" },
+    "implementationStatus": { "const": "implemented-focused" },
+    "sources": { "const": ["stdlib/std/archive/zip.slg", "stdlib/std/archive/zip/error.slg", "stdlib/std/archive/zip/encoder_phase.slg", "stdlib/std/hash/crc32.slg"] },
+    "fixture": { "const": "examples/regression/1755-zip-stored-streaming-writer.slg" },
+    "expectedOutput": { "const": "examples/regression/expected/1755-zip-stored-streaming-writer.stdout.txt" },
+    "browserFixture": { "const": "scripts/probes/zip-stored-writer/browser-focused.slg" },
+    "browserExpectedOutput": { "const": "scripts/probes/zip-stored-writer/browser-focused.stdout.txt" },
+    "expectedStdout": { "const": "zip-writer=true\nzip-writer-entries=true,true\nzip-writer-transactional=true,true,true,true\nzip-writer-limits=true,true,true,true,true,true,true,true\nzip-writer-errors=true,true,true,true,true\nzip-writer-runtime-limits=true,true,true,true,true,true,true,true\nzip-writer-boundaries=true,true\n" },
+    "publicSurface": { "type": "array", "minItems": 6, "uniqueItems": true, "items": { "type": "string", "minLength": 8 } },
+    "limits": { "type": "array", "minItems": 8, "maxItems": 8, "uniqueItems": true, "items": { "enum": ["maxEncodedBytes", "maxEntryBytes", "maxEntries", "maxNameBytes", "maxExtraBytes", "maxCommentBytes", "maxDirectoryBytes", "maxWorkUnits"] } },
+    "ownership": { "type": "array", "minItems": 5, "uniqueItems": true, "items": { "type": "string", "minLength": 8 } },
+    "transactionality": { "type": "array", "minItems": 4, "uniqueItems": true, "items": { "type": "string", "minLength": 8 } },
+    "errors": { "type": "array", "minItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 3 } },
+    "unsupported": { "const": ["DEFLATE method 8", "data descriptors", "ZIP64", "encryption"] },
+    "reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["producer", "pythonMinimum", "encodedBase64", "encodedLength", "encodedSha256", "archiveCommentAscii", "entries"],
+      "properties": {
+        "producer": { "type": "string", "minLength": 8 }, "pythonMinimum": { "const": "3.11" },
+        "encodedBase64": { "type": "string", "minLength": 200 }, "encodedLength": { "const": 218 },
+        "encodedSha256": { "const": "1268A6E25014B25BE7857846E7167DFEE9F59BA09F6DD885B97EA9F904B146AC" },
+        "archiveCommentAscii": { "const": "zip" },
+        "entries": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "$ref": "#/$defs/entry" } }
+      }
+    },
+    "requiredFixtureCases": { "type": "array", "minItems": 15, "uniqueItems": true, "items": { "type": "string", "minLength": 8 } },
+    "semanticNegatives": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "prefixItems": [
+        { "allOf": [{ "$ref": "#/$defs/semanticNegative" }, { "properties": { "id": { "const": "affine-finish-reuse" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/semanticNegative" }, { "properties": { "id": { "const": "private-state" } } }] }
+      ],
+      "items": false
+    },
+    "executionMatrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["windowsO0O2", "linuxO0O2", "browserExactExecution", "independentPython", "total", "browserHarness", "browserExpectedOutput"],
+      "properties": {
+        "windowsO0O2": { "const": 2 }, "linuxO0O2": { "const": 2 }, "browserExactExecution": { "const": 1 },
+        "independentPython": { "const": 1 }, "total": { "const": 6 },
+        "browserHarness": { "const": "scripts/verify-browser-program.mjs" },
+        "browserExpectedOutput": { "const": "scripts/probes/zip-stored-writer/browser-focused.stdout.txt" }
+      }
+    },
+    "schemaNegativeControls": { "const": ["passed-with-orphan", "passed-with-wrong-stdout-hash", "passed-with-incomplete-platform-denominator", "failed-with-empty-failureIds", "browser-success-without-artifact", "failed-with-malformed-compiler-sha", "attempted-browser-with-not-run-status"] }
+  },
+  "$defs": {
+    "semanticNegative": {
+      "type": "object", "additionalProperties": false, "required": ["id", "source", "expected"],
+      "properties": { "id": { "type": "string", "minLength": 3 }, "source": { "type": "string", "pattern": "^scripts/probes/zip-stored-writer/.+\\.slg$" }, "expected": { "type": "string", "pattern": "^scripts/probes/zip-stored-writer/.+\\.stderr\\.contains\\.txt$" } }
+    },
+    "entry": {
+      "type": "object", "additionalProperties": false, "required": ["name", "size", "crc32", "sha256", "bytes"],
+      "properties": {
+        "name": { "enum": ["empty.bin", "data.bin"] }, "size": { "type": "integer", "minimum": 0, "maximum": 7 },
+        "crc32": { "pattern": "^[A-F0-9]{8}$" }, "sha256": { "pattern": "^[A-F0-9]{64}$" },
+        "bytes": { "type": "array", "maxItems": 7, "items": { "type": "integer", "minimum": 0, "maximum": 255 } }
+      }
+    }
+  }
+}

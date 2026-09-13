@@ -56,31 +56,32 @@ roundConstants: -> [UInt64] => [
 6_902_733_635_092_675_308, 7_801_388_544_844_847_127]
 
 xor3 first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
-    bits.xor64(bits.xor64(first, second), third)
+    (first -> bits.xor64(second)) -> bits.xor64(third)
 }
 
 choose selector: UInt64, whenSet: UInt64, whenClear: UInt64 -> UInt64 {
-    bits.xor64(bits.and64(selector, whenSet), bits.and64(bits.not64(selector), whenClear))
+    (selector -> bits.and64(whenSet))
+        -> bits.xor64((selector -> bits.not64) -> bits.and64(whenClear))
 }
 
 majority first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
-    xor3(bits.and64(first, second), bits.and64(first, third), bits.and64(second, third))
+    xor3(first -> bits.and64(second), first -> bits.and64(third), second -> bits.and64(third))
 }
 
 largeSigma0 value: UInt64 -> UInt64 {
-    xor3(bits.rotateRight64(value, 28), bits.rotateRight64(value, 34), bits.rotateRight64(value, 39))
+    xor3(value -> bits.rotateRight64(28), value -> bits.rotateRight64(34), value -> bits.rotateRight64(39))
 }
 
 largeSigma1 value: UInt64 -> UInt64 {
-    xor3(bits.rotateRight64(value, 14), bits.rotateRight64(value, 18), bits.rotateRight64(value, 41))
+    xor3(value -> bits.rotateRight64(14), value -> bits.rotateRight64(18), value -> bits.rotateRight64(41))
 }
 
 smallSigma0 value: UInt64 -> UInt64 {
-    xor3(bits.rotateRight64(value, 1), bits.rotateRight64(value, 8), bits.shiftRight64(value, 7))
+    xor3(value -> bits.rotateRight64(1), value -> bits.rotateRight64(8), value -> bits.shiftRight64(7))
 }
 
 smallSigma1 value: UInt64 -> UInt64 {
-    xor3(bits.rotateRight64(value, 19), bits.rotateRight64(value, 61), bits.shiftRight64(value, 6))
+    xor3(value -> bits.rotateRight64(19), value -> bits.rotateRight64(61), value -> bits.shiftRight64(6))
 }
 
 public digest source: [UInt8] -> [UInt8; 64] {
@@ -107,7 +108,7 @@ public digest source: [UInt8] -> [UInt8; 64] {
                     } else {
                         sourceIndex >= paddedLength - 8 -> if {
                             UInt64(paddedLength - 1 - sourceIndex) * 8 => shift
-                            (bitLength / bits.powerOfTwo64(shift)) % 256 => byteValue!
+                            (bitLength / (shift -> bits.powerOfTwo64)) % 256 => byteValue!
                         }
                     }
                 }
@@ -163,7 +164,7 @@ public digest source: [UInt8] -> [UInt8; 64] {
         7 => byteIndex!
         byteIndex! >= 0 -> while {
             UInt64(byteIndex! * 8) => shift
-            UInt8(hash![hashIndex!] / bits.powerOfTwo64(shift) % 256) => output![outputIndex!]
+            UInt8(hash![hashIndex!] / (shift -> bits.powerOfTwo64) % 256) => output![outputIndex!]
             outputIndex! + 1 => outputIndex!
             byteIndex! - 1 => byteIndex!
         }

@@ -1,0 +1,249 @@
+# zstd 1.5.7 independently emits an FSE-compressed Huffman weight description.
+import std.compress.zstd as zstd
+import std.compress.zstd.error as zstd_errors
+import std.compress.zstd.fse as fse
+import std.compress.zstd.huffman as huffman
+import std.crypto.sha256 as sha256
+
+kindCode kind: zstd_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    WindowLimitExceeded { 3 }
+    FrameLimitExceeded { 4 }
+    SkippableLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidMagic { 7 }
+    InvalidHeader { 8 }
+    UnsupportedDictionary { 9 }
+    ChecksumMismatch { 10 }
+    UnsupportedCompressedBlock { 11 }
+    InvalidBlock { 12 }
+    SizeMismatch { 13 }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+withTreeHeader input: [UInt8], header: UInt8 -> [UInt8; ~] {
+    [UInt8; ~] => changed!
+    changed! -> reserve(input -> len)
+    0 => index!
+    index! < (input -> len) -> while {
+        index! == 13 -> if { changed! -> push(header) } else { changed! -> push(input[index!]) }
+        index! + 1 => index!
+    }
+    changed!
+}
+
+withByte input: [UInt8], at: Int, value: UInt8 -> [UInt8; ~] {
+    [UInt8; ~] => changed!
+    changed! -> reserve(input -> len)
+    0 => index!
+    index! < (input -> len) -> while {
+        index! == at -> if { changed! -> push(value) } else { changed! -> push(input[index!]) }
+        index! + 1 => index!
+    }
+    changed!
+}
+
+rejectsAt codec: zstd.Codec, input: [UInt8], expectedOffset: UIntSize -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    decoder! -> write(input)? => accepted
+    [UInt8(9); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, zstd.Error>.Ok(false) }
+        Err(error) {
+            Result<Bool, zstd.Error>.Ok(
+            (error.kind -> kindCode) == 12
+                and error.offset == expectedOffset
+                and (output! -> len) == 1
+                and output![0] == 9)
+        }
+    }
+}
+
+huffmanAccepts input: [UInt8], available: Int, expectedBytes: Int -> Bool {
+    huffman.parseDescription(input, 0, available) -> when {
+        Ok(description) { description.bytesRead == expectedBytes }
+        Err(_) { false }
+    }
+}
+
+huffmanRejects input: [UInt8], offset: Int, available: Int -> Bool {
+    huffman.parseDescription(input, offset, available) -> when {
+        Ok(_) { false }
+        Err(_) { true }
+    }
+}
+
+fseRejectsNormalized normalized: [Int], accuracy: Int -> Bool {
+    fse.fromNormalized(normalized, accuracy) -> when {
+        Ok(_) { false }
+        Err(_) { true }
+    }
+}
+
+fseRejectsDescription input: [UInt8], maximumSymbols: Int, maximumAccuracy: Int -> Bool {
+    fse.parseDescription(input, 0, input -> len, maximumSymbols, maximumAccuracy) -> when {
+        Ok(_) { false }
+        Err(_) { true }
+    }
+}
+
+fseRejectsReverse input: [UInt8] -> Bool {
+    fse.decodeReverse(input, 0, input -> len) -> when {
+        Ok(_) { false }
+        Err(_) { true }
+    }
+}
+
+terminalZeroBit: -> Bool {
+    fse.Table {
+        symbols: [7; ~]
+        stateBits: [0; ~]
+        stateBases: [0; ~]
+        accuracyLog: 0
+    } => table
+    fse.ReverseBits { offset: 0, size: 1, bitOffset: 0 } => reader!
+    [UInt8(1)] => input
+    table -> update(0, reader!, input) -> when {
+        Ok(state) { state == 0 and (reader! -> complete) }
+        Err(_) { false }
+    }
+}
+
+rejects codec: zstd.Codec, input: [UInt8] -> Result<Bool, zstd.Error> {
+    codec -> decoder? => decoder!
+    decoder! -> write(input)? => accepted
+    [UInt8(9); ~] => output!
+    decoder! -> finish(output!) -> when {
+        Ok(_) { Result<Bool, zstd.Error>.Ok(false) }
+        Err(error) {
+            Result<Bool, zstd.Error>.Ok(
+            (error.kind -> kindCode) == 12
+                and (output! -> len) == 1
+                and output![0] == 9)
+        }
+    }
+}
+
+decodeBytewise codec: zstd.Codec, input: [UInt8] -> Result<[UInt8; ~], zstd.Error> {
+    codec -> decoder? => decoder!
+    0 => index!
+    index! < (input -> len) -> while {
+        [input[index!]] => chunk
+        decoder! -> write(chunk)? => accepted
+        accepted == 1 -> unless { Result<[UInt8; ~], zstd.Error>.Err(zstd.Error {
+                kind: zstd_errors.Kind.InvalidBlock
+                offset: UIntSize(index!)
+            }) -> return }
+        index! + 1 => index!
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    written == 4_096 -> unless { Result<[UInt8; ~], zstd.Error>.Err(zstd.Error {
+            kind: zstd_errors.Kind.SizeMismatch
+            offset: UIntSize(written)
+        }) -> return }
+    Result<[UInt8; ~], zstd.Error>.Ok(output!)
+}
+
+run: -> Result<Unit, zstd.Error> uses Console {
+    zstd.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 4_096
+        maxWindowBytes: 4_096
+        maxFrames: 1
+        maxSkippableFrameBytes: 0
+    } -> codec(zstd.FrameOptions { checksum: false })? => codec
+
+    [UInt8(
+    40), 181, 47, 253, 100, 0, 15, 133, 10, 0, 134, 211, 73, 57, 0, 101,
+    3, 117, 51, 207, 115, 94, 28, 156, 209, 50, 197, 168, 84, 57, 182, 227,
+    197, 197, 83, 82, 162, 89, 200, 130, 44, 138, 120, 24, 69, 90, 179, 100,
+    55, 183, 81, 74, 43, 177, 37, 220, 82, 232, 255, 255, 255, 255, 255, 185,
+    255, 239, 254, 255, 255, 255, 173, 54, 0, 59, 0, 59, 0, 10, 185, 11,
+    250, 25, 210, 26, 129, 135, 56, 102, 99, 220, 235, 233, 222, 11, 198, 57,
+    228, 177, 232, 181, 196, 226, 87, 91, 103, 71, 83, 235, 123, 181, 248, 183,
+    150, 125, 82, 4, 115, 247, 179, 181, 135, 102, 223, 235, 30, 198, 229, 241,
+    213, 18, 4, 64, 181, 4, 233, 15, 32, 197, 27, 48, 95, 116, 119, 58,
+    219, 69, 123, 67, 104, 18, 245, 37, 185, 126, 192, 195, 118, 184, 188, 49,
+    94, 170, 90, 25, 252, 136, 106, 67, 234, 12, 229, 232, 65, 106, 249, 124,
+    247, 168, 54, 0, 126, 205, 173, 20, 101, 47, 157, 92, 17, 193, 31, 223,
+    5, 84, 107, 131, 111, 113, 107, 83, 217, 45, 39, 25, 68, 112, 40, 119,
+    35, 63, 13, 180, 166, 243, 80, 195, 236, 168, 123, 197, 220, 131, 192, 184,
+    163, 60, 158, 188, 26, 88, 220, 243, 170, 99, 107, 0, 217, 105, 208, 116,
+    194, 250, 148, 94, 85, 44, 78, 248, 13, 248, 213, 214, 89, 5, 154, 50,
+    89, 31, 203, 235, 130, 197, 66, 191, 34, 181, 44, 208, 207, 33, 197, 12,
+    48, 67, 117, 135, 57, 251, 65, 187, 81, 104, 154, 244, 45, 184, 206, 227,
+    97, 28, 92, 158, 26, 63, 83, 173, 4, 126, 82, 181, 165, 116, 134, 112,
+    244, 39, 181, 2, 86, 164, 17, 232, 239, 255, 27, 224, 55, 3, 36, 85,
+    85, 85, 85, 85, 170, 170, 170, 170, 170, 148, 170, 170, 170, 170, 82, 85,
+    85, 85, 85, 165, 74, 4, 128, 96, 170, 2, 234, 74, 168, 4
+    ] => encoded
+
+    codec -> decompress(encoded)? => bulk
+    codec -> decodeBytewise(encoded)? => bytewise
+    sha256.create() => bulkHasher!
+    bulkHasher! -> update(bulk)
+    bulkHasher! -> finish => bulkDigest
+    [UInt8(192), 124, 139, 169, 131, 102, 64, 100,
+    215, 214, 203, 55, 23, 87, 128, 201,
+    186, 35, 86, 240, 246, 129, 176, 217,
+    129, 46, 116, 49, 149, 204, 99, 75] => expectedDigest
+    bulkDigest -> matches(expectedDigest) => digestMatches
+    bulk -> matches(bytewise) => pathsMatch
+
+    encoded -> withTreeHeader(0) => zeroHeader
+    encoded -> withTreeHeader(58) => trailingHeader
+    encoded -> withTreeHeader(127) => oversizedHeader
+    codec -> rejectsAt(zeroHeader, 13)? => zeroRejected
+    codec -> rejectsAt(trailingHeader, 13)? => trailingRejected
+    codec -> rejectsAt(oversizedHeader, 13)? => oversizedRejected
+
+    [UInt8(128), 16] => evenSymbols
+    [UInt8(129), 17] => oddSymbols
+    evenSymbols -> huffmanAccepts(2, 2) => evenTermination
+    oddSymbols -> huffmanAccepts(2, 2) => oddTermination
+    [UInt8(128), 192] => weightTwelve
+    weightTwelve -> huffmanRejects(0, 2) => weightTwelveRejected
+    [UInt8(0)] => zeroMarker
+    zeroMarker -> fseRejectsReverse => endMarkerRejected
+    [16, 15] => wrongNormalizedTotal
+    wrongNormalizedTotal -> fseRejectsNormalized(5) => normalizedRejected
+    [16, 16] => validNormalizedTotal
+    validNormalizedTotal -> fseRejectsNormalized(4) => accuracyLowRejected
+    [16, 16] => validNormalizedTotalHigh
+    validNormalizedTotalHigh -> fseRejectsNormalized(10) => accuracyHighRejected
+    [UInt8(0)] => tinyDescription
+    tinyDescription -> fseRejectsDescription(257, 6) => symbolBoundRejected
+    tinyDescription -> fseRejectsDescription(12, 10) => descriptionAccuracyRejected
+    encoded -> huffmanRejects(13, 57) => truncationRejected
+    encoded -> withByte(14, 255) => normalizedCorrupt
+    normalizedCorrupt -> huffmanRejects(13, 58) => normalizedCorruptRejected
+    encoded -> withByte(70, 0) => markerCorrupt
+    markerCorrupt -> huffmanRejects(13, 58) => markerCorruptRejected
+    encoded -> withByte(70, 255) => trailingBits
+    trailingBits -> huffmanRejects(13, 58) => trailingBitsRejected
+
+    "zstd-fse-huffman=$(digestMatches and pathsMatch and (bulk -> len) == 4_096)" -> println
+    "zstd-fse-huffman-malformed=$zeroRejected,$trailingRejected,$oversizedRejected" -> println
+    "zstd-fse-terminal=$(terminalZeroBit()),$evenTermination,$oddTermination" -> println
+    "zstd-fse-bounds=$normalizedRejected,$endMarkerRejected,$truncationRejected,$trailingBitsRejected,$weightTwelveRejected,$symbolBoundRejected,$accuracyLowRejected,$accuracyHighRejected,$descriptionAccuracyRejected,$normalizedCorruptRejected,$markerCorruptRejected" -> println
+    Result<Unit, zstd.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zstd-fse-huffman-error=$(error.kind -> kindCode),$(error.offset)" -> println }
+    }
+}

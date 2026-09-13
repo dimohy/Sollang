@@ -28,7 +28,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         if (UsesAsyncFile)
         {
             globals.AppendLine("@sollang_file_request_event_fd = internal global i32 -1");
-            globals.AppendLine("@sollang_file_completion_event_fd = internal global i32 -1");
+            globals.AppendLine("@sollang_io_completion_event_fd = internal global i32 -1");
             globals.AppendLine("@sollang_file_worker_thread = internal global i64 0");
         }
         if (UsesComputePool)
@@ -94,7 +94,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
         }
-        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins || UsesSocketCompletion)
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
         }
@@ -744,17 +744,14 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %request_fd = call i32 @eventfd(i32 0, i32 0)
               %request_ok = icmp sge i32 %request_fd, 0
-              br i1 %request_ok, label %completion, label %fail
+              br i1 %request_ok, label %ensure_completion, label %fail
 
-            completion:
+            ensure_completion:
               store i32 %request_fd, ptr @sollang_file_request_event_fd, align 4
-              ; EFD_NONBLOCK keeps a raced signal clear from blocking the completion drain.
-              %completion_fd = call i32 @eventfd(i32 0, i32 2048)
-              %completion_ok = icmp sge i32 %completion_fd, 0
+              %completion_ok = call i1 @sollang_platform_io_ensure_signal()
               br i1 %completion_ok, label %thread, label %fail
 
             thread:
-              store i32 %completion_fd, ptr @sollang_file_completion_event_fd, align 4
               %thread_slot = alloca i64, align 8
               %create = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_file_worker, ptr null)
               %thread_ok = icmp eq i32 %create, 0
@@ -765,6 +762,25 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               store i64 %worker_thread, ptr @sollang_file_worker_thread, align 8
               ret i1 true
 
+            fail:
+              ret i1 false
+            }
+
+            define internal i1 @sollang_platform_io_ensure_signal() #0 {
+            entry:
+              %existing = load i32, ptr @sollang_io_completion_event_fd, align 4
+              %ready = icmp sge i32 %existing, 0
+              br i1 %ready, label %success, label %create
+            create:
+              ; EFD_NONBLOCK keeps a raced signal clear from blocking the completion drain.
+              %completion_fd = call i32 @eventfd(i32 0, i32 2048)
+              %created = icmp sge i32 %completion_fd, 0
+              br i1 %created, label %publish, label %fail
+            publish:
+              store i32 %completion_fd, ptr @sollang_io_completion_event_fd, align 4
+              br label %success
+            success:
+              ret i1 true
             fail:
               ret i1 false
             }
@@ -786,27 +802,27 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_signal_completion() #0 {
+            define internal void @sollang_platform_io_signal_completion() #0 {
             entry:
               %value = alloca i64, align 8
               store i64 1, ptr %value, align 8
-              %fd = load i32, ptr @sollang_file_completion_event_fd, align 4
+              %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
               %ignored = call i64 @write(i32 %fd, ptr %value, i64 8)
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_clear_completion() #0 {
+            define internal void @sollang_platform_io_clear_completion() #0 {
             entry:
               %value = alloca i64, align 8
-              %fd = load i32, ptr @sollang_file_completion_event_fd, align 4
+              %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
               %ignored = call i64 @read(i32 %fd, ptr %value, i64 8)
               ret void
             }
 
-            define internal void @sollang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            define internal void @sollang_platform_io_wait_completion(i64 %requested) #0 {
             entry:
               %pollfd = alloca [8 x i8], align 4
-              %fd = load i32, ptr @sollang_file_completion_event_fd, align 4
+              %fd = load i32, ptr @sollang_io_completion_event_fd, align 4
               store i32 %fd, ptr %pollfd, align 4
               %events_slot = getelementptr i8, ptr %pollfd, i64 4
               store i16 1, ptr %events_slot, align 2
@@ -827,11 +843,21 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %joined = call i32 @pthread_join(i64 %thread, ptr null)
               %request_fd = load i32, ptr @sollang_file_request_event_fd, align 4
               %closed_request = call i32 @close(i32 %request_fd)
-              %completion_fd = load i32, ptr @sollang_file_completion_event_fd, align 4
-              %closed_completion = call i32 @close(i32 %completion_fd)
               store i64 0, ptr @sollang_file_worker_thread, align 8
               store i32 -1, ptr @sollang_file_request_event_fd, align 4
-              store i32 -1, ptr @sollang_file_completion_event_fd, align 4
+              ret void
+            }
+
+            define internal void @sollang_platform_io_shutdown() #0 {
+            entry:
+              %completion_fd = load i32, ptr @sollang_io_completion_event_fd, align 4
+              %present = icmp sge i32 %completion_fd, 0
+              br i1 %present, label %close_completion, label %done
+            close_completion:
+              %closed = call i32 @close(i32 %completion_fd)
+              store i32 -1, ptr @sollang_io_completion_event_fd, align 4
+              br label %done
+            done:
               ret void
             }
 

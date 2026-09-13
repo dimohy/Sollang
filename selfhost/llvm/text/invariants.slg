@@ -1729,10 +1729,22 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         or node.opcode == -254
         or node.opcode == -255
         or node.opcode == -257
-        or node.opcode == -271)
+        or node.opcode == -271
+        or (node -> typedIr.isArrayExchangeIntrinsicCall))
         and node.operand0 >= 0
         and node.operand0 < irCount
         -> if {
+            (node -> typedIr.isArrayExchangeIntrinsicCall)
+                and (node.operand1 < 0
+                or node.operand1 >= irCount
+                or context.ir[node.operand1].nextOperand < 0
+                or context.ir[node.operand1].nextOperand >= irCount
+                or context.ir[context.ir[node.operand1].nextOperand].nextOperand >= 0
+                or context.ir[node.operand1].typeOrigin != 1
+                or context.ir[node.operand1].typeSymbol != 2
+                or context.ir[context.ir[node.operand1].nextOperand].typeOrigin != 1
+                or context.ir[context.ir[node.operand1].nextOperand].typeSymbol != 2)
+                -> if { 56 => code! }
             irIndex => collectionMutationOwner!
             collectionMutationOwner! >= 0
                 and context.ir[collectionMutationOwner!].kind != 0
@@ -1759,6 +1771,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 and context.ir[node.operand0].kind == 13
                 and node.opcode != -204
                 and (node.opcode != -213 or (context.ir[node.operand0] -> isDictionaryType))
+                and not (node -> typedIr.isArrayExchangeIntrinsicCall)
                 -> if { 48 => code! }
         }
     # Builtin output is an ordered runtime effect. If Typed IR changes its

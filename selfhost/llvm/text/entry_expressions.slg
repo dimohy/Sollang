@@ -430,10 +430,18 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                             }
                         entryScheduleReady! and (entryScheduleNode.kind == 9 or entryScheduleNode.kind == 6) and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand - functionIndex - 1]
                             -> if { false => entryScheduleReady! }
-                        entryScheduleReady! and ((entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -241 or entryScheduleNode.opcode == -242 or entryScheduleNode.opcode == -246 or entryScheduleNode.opcode == -247 or entryScheduleNode.opcode == -252)) or (entryScheduleNode -> typedIr.isSetIntrinsicCall)) and entryScheduleNode.operand1 >= 0
+                        entryScheduleReady! and ((entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -241 or entryScheduleNode.opcode == -242 or entryScheduleNode.opcode == -246 or entryScheduleNode.opcode == -247 or entryScheduleNode.opcode == -252)) or (entryScheduleNode -> typedIr.isSetIntrinsicCall) or (entryScheduleNode -> typedIr.isArrayExchangeIntrinsicCall)) and entryScheduleNode.operand1 >= 0
                             -> if {
                                 entryScheduleNode.operand1 -> aggregateValueIndex(context, state) => entrySchedulePushValue
                                 entrySchedulePushValue > functionIndex and entrySchedulePushValue < entryEnd and not entryScheduled![entrySchedulePushValue - functionIndex - 1]
+                                    -> if { false => entryScheduleReady! }
+                            }
+                        entryScheduleReady! and (entryScheduleNode -> typedIr.isArrayExchangeIntrinsicCall)
+                            and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex
+                            and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd
+                            -> if {
+                                context.ir[entryScheduleNode.operand1].nextOperand -> aggregateValueIndex(context, state) => entryScheduleExchangeRightValue
+                                entryScheduleExchangeRightValue > functionIndex and entryScheduleExchangeRightValue < entryEnd and not entryScheduled![entryScheduleExchangeRightValue - functionIndex - 1]
                                     -> if { false => entryScheduleReady! }
                             }
                         entryScheduleReady! and entryScheduleNode.kind == 26 and entryScheduleNode.operand0 >= 0
@@ -1755,6 +1763,10 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
     entryExpression.kind == 9 and entryExpression.opcode == -213 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0
         -> if {
             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: 0 } -> emitTake(context, state)
+        }
+    entryExpression -> typedIr.isArrayExchangeIntrinsicCall
+        -> if {
+            WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: 0 } -> emitExchange(context, state)
         }
     (entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -205 and entryExpression.operand0 >= 0
         -> if {
@@ -4061,12 +4073,27 @@ emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entry
                                             functionIndex + 1 => entryTerminalStreamUseSearch!
                                             entryTerminalStreamUseSearch! < entryEnd -> while {
                                                 context.ir[entryTerminalStreamUseSearch!] => entryTerminalStreamUse
-                                                entryTerminalStreamUse.kind == 5 and entryTerminalStreamUse.symbol == entryTerminalStreamRoleSymbol! and entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] >= 0 and entryTerminalStreamUse.typeSymbol == context.ir[entryStreamCurrentValues[entryStreamBoundaryActiveIndex!]].typeSymbol
+                                                entryTerminalStreamUse.kind == 5 and entryTerminalStreamUse.symbol == entryTerminalStreamRoleSymbol!
                                                     -> if {
-                                                        "  %v$(entryTerminalStreamUseSearch!) = freeze " -> print
-                                                        entryTerminalStreamUse -> writeIrType(context, state)
-                                                        " %v" -> print
-                                                        entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> writeDecimalLine
+                                                        false => entryTerminalStreamUseMatches!
+                                                        entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] >= 0
+                                                            -> if {
+                                                                entryTerminalStreamUse.typeSymbol == context.ir[entryStreamCurrentValues[entryStreamBoundaryActiveIndex!]].typeSymbol
+                                                                    -> if { true => entryTerminalStreamUseMatches! }
+                                                            } else {
+                                                                true => entryTerminalStreamUseMatches!
+                                                            }
+                                                        entryTerminalStreamUseMatches! -> if {
+                                                            "  %v$(entryTerminalStreamUseSearch!) = freeze " -> print
+                                                            entryTerminalStreamUse -> writeIrType(context, state)
+                                                            entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] >= 0
+                                                                -> if {
+                                                                    " %v" -> print
+                                                                    entryStreamCurrentValues[entryStreamBoundaryActiveIndex!] -> writeDecimalLine
+                                                                } else {
+                                                                    " %stream$(entryBoundaryPipeline.terminalIr)_item" -> println
+                                                                }
+                                                        }
                                                     }
                                                 entryTerminalStreamUseSearch! + 1 => entryTerminalStreamUseSearch!
                                             }

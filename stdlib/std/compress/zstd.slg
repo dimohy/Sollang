@@ -12,7 +12,7 @@ import std.hash.xxhash64 as xxhash64
 # raw and RLE blocks plus bounded skippable frames. Compressed blocks with raw
 # or RLE literals and direct-weight Huffman literals with zero sequences decode
 # transactionally, including one/four streams and same-frame treeless reuse.
-# FSE-compressed Huffman weights and dictionaries remain gates.
+# Dictionaries remain an explicit unsupported gate.
 public struct Error {
     public kind: errors.Kind
     public offset: UIntSize
@@ -553,13 +553,9 @@ decodeCompressedBlock input: [UInt8], maxDecodedBytes: Int, blockOffset: Int, hi
         -> unless { errorCompressedBlock(errors.Kind.InvalidBlock, UIntSize(blockOffset + headerBytes!)) -> return }
 
     literalType == 2 -> if {
-        huffman.parseDirectDescription(input, headerBytes!, compressedSize!) -> when {
+        huffman.parseDescription(input, headerBytes!, compressedSize!) -> when {
             Err(failure) {
                 failure -> when {
-                    UnsupportedFseWeights {
-                        errorCompressedBlock(errors.Kind.UnsupportedCompressedBlock,
-                        UIntSize(blockOffset + headerBytes!)) -> return
-                    }
                     Invalid {
                         errorCompressedBlock(errors.Kind.InvalidBlock,
                         UIntSize(blockOffset + headerBytes!)) -> return

@@ -17,6 +17,16 @@ error code: UInt64 -> errors.Error {
     errors.Error { kind: errors.Kind.Tls, code: code }
 }
 
+verifyServerCertificate state: mut State, transcriptHash: [UInt8; 32], message: [UInt8] -> Result<Unit, errors.Error> {
+    auth.verifyCertificateVerify(state.serverPublicKey, true, transcriptHash, message) -> when {
+        Err(verifyError) {
+            phases.Phase.Failed => state.phase
+            Result<Unit, errors.Error>.Err(verifyError)
+        }
+        Ok(_) { Result<Unit, errors.Error>.Ok }
+    }
+}
+
 public create clientHelloMessage: [UInt8] -> Result<State, errors.Error> {
     handshake.decode(clientHelloMessage, 0)? => decoded
     decoded.messageType == handshake.clientHello()
@@ -185,13 +195,7 @@ impl State {
             Result<Unit, errors.Error>.Err(error(10)) -> return
         }
         self.transcript -> hash => transcriptHash
-        auth.verifyCertificateVerify(self.serverPublicKey, true, transcriptHash, message) -> when {
-            Ok(done) {}
-            Err(verifyError) {
-                phases.Phase.Failed => self.phase
-                Result<Unit, errors.Error>.Err(verifyError) -> return
-            }
-        }
+        self -> verifyServerCertificate(transcriptHash, message)?
         phases.Phase.AwaitServerFinished => self.phase
         self.transcript -> append(message)
         Result<Unit, errors.Error>.Ok

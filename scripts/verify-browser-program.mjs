@@ -76,6 +76,10 @@ const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), {
     sollang_browser_eprint(pointer, length) {
       process.stderr.write(decoder.decode(new Uint8Array(memory.buffer, pointer, length)));
       return 1;
+    },
+    sollang_browser_panic(pointer, length) {
+      const message = decoder.decode(new Uint8Array(memory.buffer, pointer, length));
+      throw new Error(`browser program panic: ${message}`);
     }
   }
 });

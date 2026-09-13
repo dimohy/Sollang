@@ -1,0 +1,33 @@
+# A terminating match arm owns the projected payload and must also release
+# every still-owned sibling of the removed outer aggregate.
+struct Holder {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+struct Envelope {
+    outcome: Result<Holder, Int>
+    sibling: [Int; ~]
+}
+
+makeEnvelope: -> Envelope {
+    Envelope {
+        outcome: Result<Holder, Int>.Ok(Holder { first: [3; ~], second: [4; ~] }),
+        sibling: [5; ~]
+    }
+}
+
+fail: -> Result<Int, Int> {
+    makeEnvelope() => envelope
+    envelope.outcome -> when {
+        Ok(payload) { Result<Int, Int>.Err(payload.first[0] + payload.second[0]) -> return }
+        Err(error) { Result<Int, Int>.Err(error) -> return }
+    }
+}
+
+main {
+    fail() -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { error -> println }
+    }
+}

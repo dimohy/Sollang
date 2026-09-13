@@ -1216,15 +1216,17 @@
     {
       "id": "C2026-08-28-92",
       "classification": "latent-defect",
-      "state": "closed",
-      "owner": "managed LLVM enum-arm owned payload transfer through try-wrapped move arguments",
-      "rootCause": "The managed LLVM emitter marked an owned enum-pattern payload as borrowed inside the arm and relied on TransfersOwnerName to decide whether the enclosing enum owner must still be dropped. That analysis recognized only a single consuming primary input. It did not descend through TryExpression and did not inspect additional parameters declared move. A valid enqueue(queue!, frame)? therefore transferred frame into projected owned storage and then dropped the original enum on the success edge, leaving the queued buffer dangling and causing Windows heap corruption when it was taken.",
-      "focusedFixture": "1207-enum-owned-payload-projected-queue takes an enum containing Frame { data: [42] }, passes the payload as the second move argument of a Result-returning enqueue helper through ?, takes it back from a projected growable field, and must print 42 with normal exit. 1206-quic-bidirectional-multi-stream-routing is the originating integration fixture and must route stream IDs 0 and 4 with interleaved traffic without heap corruption.",
-      "closureGate": "Transfer analysis descends through TryExpression, maps every additional move parameter rather than assuming one primary argument, retains a non-move control, and fixtures 1207 and 1206 pass managed plus repaired self-host native exact execution, direct-call closure, LLVM assembly, warning/note zero, and Stage2/Stage3 normalized fixed point.",
+      "state": "candidate-fixed",
+      "owner": "managed semantic and LLVM additional move-parameter ownership transfer",
+      "rootCause": "The managed LLVM enum-arm transfer repair mapped additional move parameters for drop ownership, but semantic binding invalidation still recognized only a consuming primary input. Direct CallExpression and the first Flow target therefore left a named additional affine owner live through semantics even though code generation removed it; reuse failed late as unknown runtime binding. Projected FieldAccess additional arguments must retain their root owner with only the exact owned-place path transferred rather than whole-removing that owner.",
+      "focusedFixture": "1207-enum-owned-payload-projected-queue and 1206-quic-bidirectional-multi-stream-routing retain the original enum/drop transfer coverage. diagnostics/additional-move-owner-reuse requires ordinary named additional move reuse to fail during semantics. scripts/probes/socket-completion/x01-register-stream-reuse.slg and x01-register-reactor-reuse.slg require both consumed socket owners to fail before LLVM, while the W01 production consumer recovers exact owners from failure payloads.",
+      "closureGate": "Transfer analysis descends through TryExpression and maps every additional move parameter by declared signature in both semantic invalidation and LLVM ownership. Direct CallExpression and first Flow target named additional move owners fail on later reuse during semantics; projected FieldAccess is never whole-removed. Retain 1207 and 1206 plus ordinary and socket negative reducers, W01 exact owner recovery, managed native exact execution, direct-call closure, LLVM assembly, warning/note zero, repaired self-host parity, and final Stage2/Stage3 normalized fixed point before re-closing.",
       "closedEvidence": [
         "The preceding managed compiler emitted a second sollang_drop for the enum subject after enqueue returned Ok; fixture 1207 and the originating QUIC fixture 1206 both terminated with Windows heap corruption 0xC0000374.",
         "The managed emitter now unwraps TryExpression for ownership-transfer analysis and maps the primary input plus every additional move parameter by declared function signature. Fixture 1207 exits zero with exact output 42, fixture 1206 exits zero with quic-multi-stream=true, and existing two-connection QUIC fixture 1167 remains exact under the managed compiler.",
-        "Formal ManagedRecovery Stage2 and its immediate Stage3 passed native exact fixtures 1207 and 1206 after direct-call closure, LLVM assembly, link, and exact execution. Both generations reached normalized fixed point 9666A10B7077791F9AA61E73CC7A04AD457510F8DEE0030F71A8EDC3792D0A47, and Stage3 published feedback seed 3C1B89E0E7134A1F2BC3FF6C789C011F0E8D8A7BE0CBBAF29A465A7952B28C49 with zero unexpected warnings or notes."
+        "Formal ManagedRecovery Stage2 and its immediate Stage3 passed native exact fixtures 1207 and 1206 after direct-call closure, LLVM assembly, link, and exact execution. Both generations reached normalized fixed point 9666A10B7077791F9AA61E73CC7A04AD457510F8DEE0030F71A8EDC3792D0A47, and Stage3 published feedback seed 3C1B89E0E7134A1F2BC3FF6C789C011F0E8D8A7BE0CBBAF29A465A7952B28C49 with zero unexpected warnings or notes.",
+        "Reopened 2026-09-13: the current managed compiler accepts reuse of a direct named additional move owner through semantics and fails only during LLVM emission with unknown runtime binding; the previous fixtures covered enum/drop transfer but not semantic invalidation.",
+        "Candidate compiler SHA-256 D111552AC0594B689E8D756CDF6C38B05CC62659B8ED184C6E7615B49881DF8E passes artifacts/scratch/c92-additional-move-p11-output/result.json at 6/6 with stable inputs and no failure IDs. P1207 and P1206 preserve the original direct transfer behavior; P1206 records three deterministic audits at 169877 allocations, 169877 releases, and zero invalid releases. P2 proves a projected owned field transfers only its exact path while retaining the sibling, with three exact audits at four allocations, four releases, and zero invalid releases. N1, N2, and N3 each stop before LLVM with exactly one full source-position semantic diagnostic for direct, first-flow-target, and projected-path owner reuse. All positive cases have exact native output, empty stderr, zero warnings or notes, llvm-as success, and V004 closure. Socket-specific negatives, repaired self-host parity, and final accumulated Stage2/Stage3 remain final closure gates."
       ]
     },
     {
@@ -5092,13 +5094,15 @@
     {
       "id": "C2026-09-06-323",
       "classification": "latent-defect",
-      "state": "closed",
-      "owner": "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs",
-      "rootCause": "Readonly call argument emission retains only borrowed ABI values and fails to discharge fresh heap-owner drop obligations; literal/repeat and fixed-array-return factories leak. Formal readonly slice return escapes must be rejected before shortening the call temporary lifetime.",
-      "focusedFixture": "1500-readonly-call-temporary-lifetime",
-      "closureGate": "Retain focused exact allocation and borrowed/owned lifetime negative controls, managed/native target boundaries, zero warnings/notes and changed-source Windows Stage2/Stage3 fixed points before closure.",
+      "state": "candidate-fixed",
+      "owner": "src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs",
+      "rootCause": "Readonly call argument emission retains only borrowed ABI values and fails to discharge fresh heap-owner drop obligations; literal/repeat and fixed-array-return factories leak. The original repair classified every field access as a stable named place, so a projected field such as zeroBlock().bytes lost the anonymous factory parent owner after extracting the field and leaked the complete parent allocation. A first widening then classified every index as anonymous, so two scalar projections of self.values[index] scheduled the same caller-owned element for independent cleanup. Projection lifetime must follow the complete root expression: a named field/index root is a stable borrowed place, while a fresh anonymous factory root remains one temporary owner through the readonly call. Formal readonly slice return escapes must be rejected before shortening the call temporary lifetime.",
+      "focusedFixture": "1500-readonly-call-temporary-lifetime; 1741-readonly-projected-factory-parent-cleanup; 1742-readonly-named-nested-index-retention; 1743-readonly-anonymous-factory-index-cleanup; 1745-readonly-same-indexed-item-scalar-projections; 1206-quic-bidirectional-multi-stream-routing",
+      "closureGate": "Retain focused exact allocation and borrowed/owned lifetime negative controls. Projection classification recursively follows field/index roots, releases one complete anonymous factory parent after the readonly call, and never independently drops a named indexed item. Require 1500 and 1741/1742/1743/1745 exact allocation balance, zero dynamic-inline-item early drops, GCM production coverage, P1206 native exact plus llvm-as/V004 and invalid-release-zero balance, managed/native target boundaries, zero warnings/notes and changed-source Windows Stage2/Stage3 fixed points before re-closing.",
       "closedEvidence": [
-        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the current v0.5 compiler source."
+        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the current v0.5 compiler source.",
+        "Reopened 2026-09-13: the frozen baseline and current managed compiler both execute the projected factory-parent reducer but allocation audit reports 1 allocation and 0 releases; retained fixture 1500 remains balanced, proving a coverage gap rather than broad regression.",
+        "Candidate 2026-09-13: compiler SHA-256 B64972E6D63F47E5E600B3978B3F9AA57521CF124CCFCEDAC34B2A9AC8098F40 passes canonical fixtures 1741/1742/1743/1745 with exact native output, llvm-as, V004, balanced allocation/release, and no indexed-item early drop. artifacts/scratch/c323-c342-final-v4/p1206/result.json records exact QUIC output, 171840/171840 releases, invalidReleases 0, empty stderr, and stable inputs."
       ],
       "shapingEvidence": {
         "inputFingerprint": "E5EC527D9CABEA48B855C812FB98C0F36480BBE1058F4F4DD772862C9D5370B0",
@@ -5432,13 +5436,15 @@
     {
       "id": "C2026-09-06-341",
       "classification": "latent-defect",
-      "state": "closed",
-      "owner": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs",
-      "rootCause": "Managed collection mutation reduces projected ownership transfers to whole owner names, removing the binding. Code generation also destroys remaining local fields immediately, reserving partial live-field tracking for moving parameters. A direct moved field must leave sibling fields live until scope exit and reject only overlapping moved paths.",
-      "focusedFixture": "1527-projected-table-push-loop; diagnostics/1527-projected-push-use-after-move",
-      "closureGate": "Preserve exact output, sibling field lifetime and existing owned-place negative diagnostics, managed/native parity and changed-source Windows Stage2/Stage3.",
+      "state": "candidate-fixed",
+      "owner": "src/Sollang.Compiler/Semantics/SemanticCompiler.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Statements.cs; selfhost/semantic/ownership_check.slg",
+      "rootCause": "Managed collection mutation reduces projected ownership transfers to whole owner names, removing the binding. Code generation also destroys remaining local fields immediately, reserving partial live-field tracking for moving parameters. A direct moved field must leave sibling fields live until scope exit and reject only overlapping moved paths. The original repair covered projected transfers into collection/literal destinations but left direct binding detection restricted to move inputs or mutable holders; a local named affine aggregate therefore still removed or rejected the whole owner when binding one owned field.",
+      "focusedFixture": "1527-projected-table-push-loop; diagnostics/1527-projected-push-use-after-move; artifacts/scratch/socket-completion/w01-owner-recovery-reducer.slg; artifacts/scratch/socket-completion/c341-direct-binding-duplicate-field.slg; artifacts/scratch/socket-completion/c341-direct-binding-parent-overlap.slg",
+      "closureGate": "Preserve exact output, sibling field lifetime and existing owned-place negative diagnostics. The direct-binding positive must extract two disjoint affine fields and pass native exact output, llvm-as, and V004; duplicate field reuse and parent-after-child overlap must fail during semantics. The same 18 focused case IDs must pass through selfhost/semantic/ownership_check.slg with managed/selfhost diagnostic parity. The SocketRegistrationFailure production consumer must then return and reuse exact CompletionReactor and TcpStream owners. Managed/native parity and final changed-source Stage2/Stage3 remain required before re-closing.",
       "closedEvidence": [
-        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the current v0.5 compiler source."
+        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the then-current v0.5 compiler source.",
+        "Reopened 2026-09-13: Release F3EA4A5EFAB7F55299108C29FAB00714489BD4D81C1D63C955AD4F92C7CF8B2B rejects the 20-line direct-binding positive at 17:22 with owned container values must be created directly at their binding site in the current slice; the prior collection-only fixture did not cover this branch.",
+        "Candidate-focused evidence scripts/contracts/evidence/C2026-09-06-341/direct-binding-candidate.json fixes compiler SHA-256 D111552AC0594B689E8D756CDF6C38B05CC62659B8ED184C6E7615B49881DF8E and result SHA-256 E9643DEA378DA3CFDB05A3A77D4751596BDA9E24CE5269E3916DDB959E852071: managed direct-owned-field binding passes 20/20 with P1 exact native/LLVM/V004/allocation 4/4 and N1/N2 exact pre-LLVM overlap rejection. Selfhost parity, the production SocketRegistrationFailure consumer, and Stage2/Stage3 remain closure gates."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-06-341/as-us-001.json",
@@ -5450,13 +5456,15 @@
     {
       "id": "C2026-09-06-342",
       "classification": "latent-defect",
-      "state": "closed",
+      "state": "candidate-fixed",
       "owner": "src/Sollang.Compiler/Semantics/BoundProgram.cs; src/Sollang.Compiler/Semantics/SemanticCompiler.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs; src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs",
-      "rootCause": "Managed fixed-array ownership checks conflate copyable element semantics with heap-backed descriptor cleanup. Named fixed arrays are consumed by aggregate initialization or branch-result analysis, while permitted copies need independent backing. Preserve semantic copyability for non-owning elements, retain affine-element checks, and allocate and release each copied backing across struct, product, contextual initializer and branch-result paths.",
-      "focusedFixture": "1529-fixed-field-named; 1538-branch-fixed-outer-reuse; 1545-fixed-field-copy-independence",
-      "closureGate": "Retain fixed-field source reuse and mutation independence, scalar fixed branch copies, owned-element negative controls, exact allocation/release counts, managed/native parity, full native suite and changed-source Windows Stage2/Stage3.",
+      "rootCause": "Managed fixed-array ownership checks conflate copyable element semantics with heap-backed descriptor cleanup. Named fixed arrays are consumed by aggregate initialization or branch-result analysis, while permitted copies need independent backing. The return-owner scan also treated a named copyable fixed-array initializer inside an inline callee's returned aggregate as a transfer, exempting the source backing from callee scope cleanup even though the destination already owned an independent copy. Preserve semantic copyability for non-owning elements, retain affine-element checks, and allocate and release each copied backing across struct, product, contextual initializer, inline callee return and branch-result paths.",
+      "focusedFixture": "1529-fixed-field-named; 1538-branch-fixed-outer-reuse; 1545-fixed-field-copy-independence; 1744-inline-named-fixed-copy-return-cleanup",
+      "closureGate": "Retain fixed-field source reuse and mutation independence, scalar fixed branch copies, owned-element negative controls, and distinguish a fixed-storage copy from an affine owner transfer during return cleanup. Require 1744 plus 1529/1545 exact allocation balance, GCM production coverage, managed/native parity, full native suite and changed-source Windows Stage2/Stage3 before re-closing.",
       "closedEvidence": [
-        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the current v0.5 compiler source."
+        "Promoted by scripts/contracts/evidence/compiler-stabilization-v0.5-2026-09-11.json: focused candidate evidence plus Windows/Linux Stage2/Stage3 fixed points and the verified C374/C375 delta cover the current v0.5 compiler source.",
+        "Reopened 2026-09-13: the frozen baseline and current managed compiler both execute the inline-callee fixed-copy reducer but allocation audit reports 2 allocations and 1 release; retained fixtures 1529 and 1545 remain balanced, proving an uncovered inline cleanup boundary.",
+        "Candidate 2026-09-13: compiler SHA-256 B64972E6D63F47E5E600B3978B3F9AA57521CF124CCFCEDAC34B2A9AC8098F40 passes canonical fixture 1744 with exact output 9, llvm-as, V004, and allocation/release 2/2; retained fixtures 1529 and 1545 remain exact and balanced under the same compiler."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-06-342/as-us-001.json",
@@ -6358,7 +6366,7 @@
     {
       "id": "C2026-09-12-386",
       "classification": "introduced-regression",
-      "state": "open",
+      "state": "candidate-fixed",
       "owner": "pre-LLVM binary producer invariant canonical AST selection",
       "rootCause": "S059 indexed only a binary AST node whose immediate parent was a binding. Comparison grammar can preserve a transparent outer comparison wrapper and a nested canonical comparison with identical source span. Typed IR correctly materializes the inner node, but the invariant selected the outer wrapper and falsely reported the producer missing. Sequential and production builds appeared different only because the diagnostic node command does not execute emitter invariants; the retained Typed IR itself was not lost.",
       "focusedFixture": "stdlib/std/net.slg parseIpv4 contains index <= text.len as binding AST 435, transparent comparison AST 436, and canonical comparison AST 437. Sequential Typed IR contains kind-8 AST 437, while the pre-fix Windows checked build reports S059 for binding AST 435. Fixture 1702 protects the non-nested single-comparison control.",
@@ -6367,7 +6375,8 @@
         "The two-source checked Windows reproduction reports S059 at std.net source 0 binding AST 435, while typed-ir-nodes for the same ordered sources shows binding IR 208 and kind-8 comparison IR 236 at canonical AST 437.",
         "AST inspection proves nodes 436 and 437 are both kind 18 with the same byte span; node 436 is the binding child and node 437 is the actual comparison child. The original invariant selected 436 solely by immediate parent identity.",
         "The dedicated mode-parity verifier compared the same two sources through sequential and production function-parallel lowering and found 942/942 exact Typed IR node lines equal, disproving the parallel-result-loss hypothesis.",
-        "Five frozen canonical-owner controls pass: direct binary, transparent same-span wrapper, missing canonical producer, binary nested under a non-binary owner, and a smaller genuine nested binary whose missing outer producer must still fail."
+        "Five frozen canonical-owner controls pass: direct binary, transparent same-span wrapper, missing canonical producer, binary nested under a non-binary owner, and a smaller genuine nested binary whose missing outer producer must still fail.",
+        "The immutable selfhost candidate 3D63EB1FDBC96ED115C60307A05C5420223FA9D6E03E20936AF81B8416B8D245 passes the structured C386 focused gate: canonical owner controls 5/5, sequential/production-parallel identity 942/942 nodes, checked std.net plus parse_error with S059/warning/note 0 and llvm-as/V004 exit 0, and fixture 1702 native exact with llvm-as/V004 exit 0. Result artifacts/scratch/c386-focused-p08/result.json has SHA-256 8CA8CC4D06745572B5F4C7FB18FE7BADA398AAE72483A367BEEFBC2CE15F79CF and input drift 0."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-12-386/as-us-001.json",
@@ -6379,11 +6388,15 @@
     {
       "id": "C2026-09-12-387",
       "classification": "latent-defect",
-      "state": "open",
+      "state": "candidate-fixed",
       "owner": "selfhost AST operator-token ownership for type applications",
       "rootCause": "The self-host CST retains comparison grammar envelopes around a generic enum constructor. AST lowering scanned the complete envelope token span and let the closing greater-than delimiter from Result<Path, Text> satisfy the outer comparison rule. That construct is an EnumConstructorExpression whose generic prefix is owned by TypeAnnotation, not a TypeApplicationExpression. The managed AST preserves this syntax ownership and never creates that comparison. The spurious kind-19 nodes then reached the S059 binary-coverage policy even though Typed IR correctly materialized only the enum constructor.",
       "focusedFixture": "1703-selfhost-type-application-angle-ownership combines Result<Int, Text>.Err(message), a real comparison inside Result<Bool, Text>.Ok(3 > 2), and a standalone 3 > 2 comparison. The nested case prevents a whole-TypeApplicationExpression-span workaround from deleting legitimate argument operators. Managed execution prints generic, argument=true, and comparison=true; the pre-fix checked self-host build reports S059 from the generic constructor in stdlib/sys/path.slg.",
       "closureGate": "Mark angles in every exact TypeAnnotation span plus only the balanced outer type-argument clause of a TypeApplicationExpression before AST operator selection, stop before call arguments, forbid comparison envelopes from claiming those delimiters, and omit any precedence envelope that owns no operator. Retain both nested-argument and standalone greater-than producers, pass fixture 1703 and the original std.path reproduction under checked Windows lowering, then rerun the focused expression-family batch before final Stage2/Stage3.",
+      "closedEvidence": [
+        "The pre-fix checked std.path reproduction reports S059 because a comparison envelope claims the closing greater-than delimiter in Result<Path, Text>.Err(message); the retained baseline evidence fixes that failure before the type-syntax ownership repair.",
+        "The immutable selfhost candidate 3D63EB1FDBC96ED115C60307A05C5420223FA9D6E03E20936AF81B8416B8D245 passes the structured C387 focused gate: static ownership authority 4/4, AST positive/negative controls 3/3 with generic false owners 0 and both real comparisons retained as exact canonical pairs, sequential/production-parallel identity 2011/2011 nodes over four sources, checked std.path with S059/warning/note 0 and llvm-as/V004 exit 0, and fixture 1703 exact native output with llvm-as/V004 exit 0. Result artifacts/scratch/c387-focused-p04/result.json has SHA-256 CFA105A61625C3C3825EB922B54D9F7DDD014A74C6FE70E8223AE677974D24DC and input drift 0."
+      ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-12-387/as-us-001.json",
         "inputFingerprint": "ACF2A908077ED2EB799A3465235F6910D9B4C9AE61347E576CFA02F94104B1F6",
@@ -6612,14 +6625,15 @@
     {
       "id": "C2026-09-12-399",
       "classification": "latent-defect",
-      "state": "open",
+      "state": "candidate-fixed",
       "owner": "managed arm-scoped owned enum payload binding transfer",
-      "rootCause": "Enum matching already allowed an owned temporary or named owner's payload to be returned or passed to move inputs, but BindingStatement recognized only function move inputs as direct-name movement. A valid child => owner! binding was rejected before LLVM. Direct binding was also absent from named enum subject consumption analysis, although emitter direct-name movement already updates the retained-payload flag and removes the old owner.",
-      "focusedFixture": "1723-owned-match-payload-mutable-binding exercises fresh, named and nested payload transfer plus repeated readonly observation. Reachable negatives cover direct and nested borrowed payloads, payload and subject use after binding, and a borrowed same-name pattern shadow after the original payload moved. Public process1716/1717 retain the natural main/await owner path.",
-      "closureGate": "Keep transferable payload authority scoped to its enum arm and reset/restore it across function, generic specialization and main boundaries. Direct movement must invalidate the old name and named subject without cloning, weakening borrow rules or adding an async/runtime wrapper. Managed1723 native output agrees with five independent .NET List lines; LLVM assembly/closure and five ownership rejection behaviors are evidenced across the recorded builds. Public process Windows1716/1717 and Linux1716 exact, privacy2/2 and source contract27/27 pass. Preserve split hashes and complete affected managed/selfhost ownership differential plus final accumulated Stage2/Stage3 and required targets before closing.",
+      "rootCause": "Enum matching already allowed an owned temporary or named owner's payload to be returned or passed to move inputs, but BindingStatement recognized only function move inputs as direct-name movement. A valid child => owner! binding was rejected before LLVM. Direct binding was also absent from named enum subject consumption analysis, although emitter direct-name movement already updates the retained-payload flag and removes the old owner. The later projected-field coverage invariant also treated an affine native-handle struct with no recursively owned child fields as fully covered by an unrelated sibling path because Enumerable.All over that empty child set returned true. The first projected payload field therefore removed the complete arm binding and the second projection failed with unknown runtime binding 'value'.",
+      "focusedFixture": "1723-owned-match-payload-mutable-binding exercises fresh, named and nested payload transfer plus repeated readonly observation. Reachable negatives cover direct and nested borrowed payloads, payload and subject use after binding, and a borrowed same-name pattern shadow after the original payload moved. c399-owned-native-payload-direct-pending adds three atomic affine native owners inside one Result payload and projects all siblings after direct return and pending await, with exact six-allocation/six-release accounting. Public process1716/1717 retain the natural main/await owner path.",
+      "closureGate": "Keep transferable payload authority scoped to its enum arm and reset/restore it across function, generic specialization and main boundaries. Atomic owned structs must be covered only by an exact projected path; an empty recursive owned-child set is not whole-owner coverage. Direct movement must invalidate the old name and named subject without cloning, weakening borrow rules or adding an async/runtime wrapper. Candidate compiler4656B56C passes the immutable managed7/7 matrix: existing semantic and native6/6 plus direct/pending atomic-owner exact stdout, allocation/release6/6, LLVM assembly and V004. Complete affected selfhost ownership differential plus final accumulated Stage2/Stage3 and required targets before closing.",
       "closedEvidence": [
         "scripts/contracts/evidence/C2026-09-12-399/managed-execution-split.json retains the failed old-host public binding, successful public6/6 run, owned-payload5/6 assertion record with a correctly rejected nested-borrow diagnostic mismatch, and final4/4 delta. No mismatch was hidden as compiler success.",
-        "Final golden publication actually updated1723 through ExampleTests, passed1723 and newly cataloged Windows-only1717 as2/2, and verified published bytes.1717's previous target-suffixed golden moved to the normal catalog path without byte changes; an explicit Windows-only marker prevents Linux execution."
+        "Final golden publication actually updated1723 through ExampleTests, passed1723 and newly cataloged Windows-only1717 as2/2, and verified published bytes.1717's previous target-suffixed golden moved to the normal catalog path without byte changes; an explicit Windows-only marker prevents Linux execution.",
+        "scripts/contracts/evidence/C2026-09-12-399/candidate-atomic-owned-payload.json fixes immutable compiler SHA-256 4656B56CD5B7994C42597AEB73662C415CE2B87E7046F37A60D040529EE89845 and managed7/7 evidence. Existing P1723 plus five semantic-only negatives pass6/6 with stable inputs; the added native-handle payload direct/pending case passes exact stdout, six allocations, six releases, native exit0, llvm-as and V004. Baseline compiler D111552AC0594B689E8D756CDF6C38B05CC62659B8ED184C6E7615B49881DF8E reproduces unknown runtime binding 'value' on its second projected field."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-12-399/as-us-001.json",
@@ -7104,15 +7118,16 @@
     {
       "id": "C2026-09-13-424",
       "classification": "latent-defect",
-      "state": "candidate-fixed",
+      "state": "open",
       "owner": "managed nested aggregate affine sibling transfer accounting",
-      "rootCause": "Struct literal LLVM emission applied ownership changes while recursively constructing nested destination literals. Moving the first owned payload field into a nested literal removed the complete source binding before a disjoint sibling field could be emitted. A temporary outer-boundary-only approach compiled but omitted the block-result moved-field cleanup plan and caused heap corruption. The repair first emits the complete struct literal tree, then collects every whole-owner and projected transfer by source owner and applies one grouped drop or move plan. Semantic block-result validation independently rejects duplicate and parent-child overlapping transfers before LLVM.",
-      "focusedFixture": "c424-owned-sibling-rewrap moves two disjoint dynamic-array fields from one affine source into nested and direct destination positions and prints rewrap=1,2. c424-moved-field-reuse and c424-moved-payload-reuse must fail semantically. The portable verifier also preserves 1276, 1340, 1423, 1425 behavior through focused comparison and validates the real std.io.file async adapter that exposed the defect.",
-      "closureGate": "A literal tree must emit all values before exactly one owner-grouped transfer plan mutates local ownership. Disjoint sibling fields may move once; duplicate and parent-child overlapping paths must fail semantically. Windows and Linux focused file probes, llvm-as, V004 direct-call closure, and retained ownership regressions pass under one managed compiler hash. Keep candidate-fixed until final accumulated Stage2/Stage3 promotion.",
+      "rootCause": "Struct literal LLVM emission applied ownership changes while recursively constructing nested destination literals. Moving the first owned payload field into a nested literal removed the complete source binding before a disjoint sibling field could be emitted. A temporary outer-boundary-only approach compiled but omitted the block-result moved-field cleanup plan and caused heap corruption. The owner-grouped repair covered the original sibling rewrap shape but did not cover an inline nested whole-owner child inserted into its parent: emitted LLVM inserts aes128.Key into gcm.Key and then still drops the child, so the later parent cleanup frees the same dynamic array again. Semantic block-result validation independently rejects duplicate and parent-child overlapping projected transfers before LLVM.",
+      "focusedFixture": "c424-owned-sibling-rewrap moves two disjoint dynamic-array fields from one affine source into nested and direct destination positions and prints rewrap=1,2. Add a minimal GCM-like nested whole-owner child-to-parent transfer whose retained parent is dropped at scope exit and whose allocation audit must be exactly balanced. c424-moved-field-reuse and c424-moved-payload-reuse must fail semantically. Retain 1206, 1276, 1340, 1423, 1425 and the real std.io.file async adapter.",
+      "closureGate": "A literal tree must emit all values before exactly one owner-grouped transfer plan mutates local ownership. After a nested destination insert, the transferred whole-owner child must not be cleaned independently; borrowed/read-only uses and every failure edge must retain their existing cleanup. Disjoint sibling fields may move once; duplicate and parent-child overlapping paths must fail semantically. The minimal nested whole-owner allocation audit, P1206 native/llvm-as/V004, Windows and Linux focused file probes, and retained 1276/1340/1423/1425 regressions must pass under one managed compiler hash before candidate-fixed. Final accumulated Stage2/Stage3 remains required before re-closing.",
       "closedEvidence": [
         "The preserved baseline compiler SHA-256 0179D86B7B039ED20E5EEF297E531BED7314A2B3D48EB716A511B86CEB64BF04 fails c424-owned-sibling-rewrap with unknown runtime binding pair after the first nested field transfer.",
         "The discarded outer-boundary-only candidate compiled the positive reducer but terminated with Windows heap-corruption exit -1073740940, proving that block-result cleanup still required an explicit grouped transfer plan.",
-        "artifacts/scratch/portable-memory-io/contract-v8-file-async/result.json records 25/25 expected outcomes, including exact native execution, llvm-as, and V004 under compiler SHA-256 105EC78F5DDB5C81CDB4BF56270F750FA4B8CC4A3424AA38264D50508671D445."
+        "artifacts/scratch/portable-memory-io/contract-v8-file-async/result.json records 25/25 expected outcomes, including exact native execution, llvm-as, and V004 under compiler SHA-256 105EC78F5DDB5C81CDB4BF56270F750FA4B8CC4A3424AA38264D50508671D445.",
+        "Reopened 2026-09-13: P1206 under compiler SHA-256 072053692CF23754F9402928B7C0C45B80B509A3E2DEA62BB4655753611E83A5 compiles and passes llvm-as/V004 but terminates with Windows heap corruption. The allocation audit reports 26 invalid releases; its first chain is gcm.Key drop -> aes128.Key drop -> dynamic array drop, and emitted LLVM drops the aes128.Key child after inserting it into the retained gcm.Key parent."
       ],
       "shapingEvidence": {
         "tracePath": "scripts/contracts/evidence/C2026-09-13-424/as-us-001.json",
@@ -7139,6 +7154,232 @@
         "inputFingerprint": "9E9C7546AE9B5EE2C1D17B875146281AACAF347F26556778AE48D77E670B854F",
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-425/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-425/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-426",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed generic inherent block-method exact receiver resolution and callback-role specialization",
+      "rootCause": "Managed block-call binding resolved only top-level UserBlock names, so unqualified inherent block methods were invisible. Qualified wrong-owner names could also be stripped to their final segment and rebound to the source receiver. After selecting an inherent generic block method, the fallback specialization treated self as generic T even though self is dispatch-only and T belongs to the declared explicit values parameter and ref T callback role. Readonly yield and block-call code generation additionally lacked the contextual reference/slice materialization required by that declared role.",
+      "focusedFixture": "scripts/contracts/inherent-block-method-parity.json fixes P1 exact LeftAlgorithms selection with a colliding RightAlgorithms method, noncopyable ref OwnedEntry callback role, and exact native output. N1 rejects an explicitly wrong owner, N2 rejects self yielded where ref T is declared, and N3 rejects an Int callback result where Bool is declared; all negatives must stop before LLVM.",
+      "closureGate": "Block calls share exact nominal receiver-first lookup with ordinary methods. A qualified owner is never stripped into a wrong-owner fallback, while true top-level UserBlock calls remain available only after exact receiver lookup. Generic specialization infers T from declared explicit parameters and keeps self dispatch-only; readonly ref T yield and slice arguments preserve noncopyable owners. Require focused managed 4/4 exact native, llvm-as, V004, semantic-only negatives, repaired selfhost parity, and final changed-source Stage2/Stage3 before re-closing.",
+      "closedEvidence": [
+        "The frozen managed compiler SHA-256 4445E4A5A1EB5543B76A0679ECA46CB845492032D8CD4BB8D70A1940D1DF722B fails P1 before specialization with unknown block function 'partitionPoint'.",
+        "Candidate compiler SHA-256 F75440671502B79575476E2E841E6BCC1461C229EF5D6BA30751277EB185FFDE passes artifacts/scratch/c426-inherent-block-method-parity/candidate-v7/focused/result.json at 4/4: P1 exact native output plus llvm-as/V004, and N1/N2/N3 exact semantic diagnostics with no LLVM or executable artifact."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-426/as-us-001.json",
+        "inputFingerprint": "63818C793E2EDEFFF0DAB318833A965B3965650EA4A29DBCE262ACF2DE0FD1EA",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-426/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-426/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-427",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed stack-storage lifetime analysis for block-call additional arguments",
+      "rootCause": "StoragePlacementAnalyzer traversed a block call's flowed source and callback body but omitted its explicit additional arguments from unit indexing, nested storage-candidate discovery, and last-use analysis. A named fixed array passed as a readonly slice to an inherent block method was therefore considered dead at its binding statement. LLVM emitted lifetime.end before constructing and reading the slice, so later elements observed expired stack storage. Block calls and every call in a block pipeline now include all explicit arguments in those three analyses.",
+      "focusedFixture": "scripts/contracts/general-algorithms-partition-point.json includes boundary, noncopyable readonly, and minimal fixed-readonly-lifetime cases. The minimal case passes named [1,2,3,4] storage through Algorithms.partitionPoint, then reuses its first element; it must print boundary=4,first=1 and place lifetime.end only after the final slice use.",
+      "closureGate": "Every block-call and block-pipeline additional argument participates in stack unit indexing, nested candidate discovery, and exact last-use analysis. The managed focused matrix must pass exact output, llvm-as, V004, zero forbidden memory or input mutation, and zero premature lifetime ends under one compiler hash. Preserve selfhost behavior and require final changed-source Stage2/Stage3 before re-closing.",
+      "closedEvidence": [
+        "artifacts/scratch/general-algorithms-partition-point/c426-validation-v3/result.json records the baseline compiler at 1/3: fixed arrays all-true and mixed returned 0 instead of 4 and 3 while llvm-as and V004 passed; its LLVM places lifetime.end before slice construction.",
+        "Candidate compiler SHA-256 47C49A0726FA1C6C88DC53BDEAE15B6661676A4DC17E0249E5DD9948E67D778D passes artifacts/scratch/general-algorithms-partition-point/c427-validation-v4/result.json at 3/3 with exact outputs, llvm-as, V004, input stability, and zero premature lifetime ends."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-427/as-us-001.json",
+        "inputFingerprint": "A495C64253FF5E63644D880AD4994B5F4429758772B5ECD9D230C90854298F93",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-427/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-427/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-428",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed typed-block mutable-borrow semantic accounting and inline LLVM binding",
+      "rootCause": "Typed block-function validation registered the primary mutable-borrow input but omitted additional mutable-borrow inputs. Block-call semantic binding also failed to mark a mutable primary owner as mutated. Separately, inline block-call code generation passed mutable receiver and additional parameters as ordinary values into an empty callee mutable scope, diverging from ordinary inline function calls. The semantic paths now use the complete mutable-borrow binding set and the LLVM paths share one inline parameter binder with explicit mutable-borrow arguments.",
+      "focusedFixture": "The typed-block contract fixes generic primary mut self, generic additional mut fixed-array, and readonly-owner rejection. The natural stdlib Algorithms.partitionInPlace consumer fixes exact boundary output and a noncopyable owner audit.",
+      "closureGate": "Primary and additional mutable-borrow inputs must share semantic mutation accounting and LLVM reference binding. Require focused 3/3 exact native, semantic-only readonly rejection, input stability, and natural partition consumer 5/5 exact native, llvm-as, V004, structure, and noncopyable audit under one compiler hash. Keep candidate-fixed until final accumulated Stage2/Stage3 promotion.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 48160F6A345FB16D0862FE832D5DFA03C2218555E348C062A929B13D96B37A2E records 1/3 in artifacts/scratch/typed-block-mutable-borrow/root-current-v16/result.json: primary and additional mutable-borrow positives fail while the readonly negative passes.",
+        "Candidate compiler SHA-256 0D177F74BFBAF875D5F96648F05846E189B702B992D22D1F3C4B26F7D4F39851 records focused 3/3 in artifacts/scratch/typed-block-mutable-borrow/root-current-v18-primary-mark/result.json; both positives execute with exact stdout 1 and exit zero.",
+        "The same candidate records natural stdlib partition consumer 5/5 in artifacts/scratch/general-algorithms-partition/root-current-v7-marker-fixed/result.json with exact output, llvm-as, V004, ownership/order, noncopyable audit, and forbidden-call structure checks."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-428/as-us-001.json",
+        "inputFingerprint": "A8899CCBEB786AD09B42D73DCDED0F53261294198FA0B6199B8BE1BEED3866EA",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-428/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-428/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-429",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed recursive generic substitution inside composite types",
+      "rootCause": "Generic specialization substituted an outer Result but did not recurse into a product payload, leaving a GenericParameter in the declared return type after the runtime value had become concrete. The shared substitution authority now recursively covers Product, Option, Result, Task, Stream, EventStream, Reference, static/fixed/dynamic/bounded arrays, Dictionary, and bounded Dictionary; unsupported generic factories are not guessed.",
+      "focusedFixture": "1748-generic-nested-product-substitution returns Result<T, (T, Failure)> from a generic function and must specialize both occurrences of T, execute with exact stdout 7, and pass llvm-as and V004.",
+      "closureGate": "Every supported composite type constructor must recursively substitute nested generic parameters through the single type authority. Require the isolated differential and the async diagnostic track production consumer under one compiler hash, then final accumulated Stage2/Stage3.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 0D177F74BFBAF875D5F96648F05846E189B702B992D22D1F3C4B26F7D4F39851 rejects 1748 because the nested product still declares a generic parameter.",
+        "Candidate compiler SHA-256 CD7D0BC842CBD83AF6CCFC1A67EDED30C2654ECDB6B1AE9B3A18047404515515 compiles and executes exact stdout 7, with llvm-as and V004 exit zero in artifacts/scratch/async-observability-candidate-p29/c429-c430-result.json."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-429/as-us-001.json",
+        "inputFingerprint": "A741F47EF5DDAB9FD86AF8CBB1D9F4F5E12ADA21AF37F01949246A9B47A51B12",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-429/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-429/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-430",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed async CFG nested enum suspension collection",
+      "rootCause": "Async standalone boundary selection correctly entered EmitAsyncFunction, but the CFG suspension collector did not recurse into EnumMatchExpression arm or else bodies. A bare yield inside an enum arm therefore produced no active CFG plan and fell through to unsupported ordinary NameExpression lowering. The shared collector now visits every arm and optional else statement and tail value while retaining the original expression-statement site identity.",
+      "focusedFixture": "1747-async-nested-enum-yield places bare yield inside a Result enum arm and must execute with exact stdout 7 while passing llvm-as and V004.",
+      "closureGate": "Every legal nested await or bare yield must be represented in AsyncCfgPlan regardless of If, When, or EnumMatch nesting. Require isolated exact execution and the async observability production consumer under one compiler hash, then final accumulated Stage2/Stage3.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 0D177F74BFBAF875D5F96648F05846E189B702B992D22D1F3C4B26F7D4F39851 fails 1747 with unsupported runtime expression statement NameExpression.",
+        "Candidate compiler SHA-256 CD7D0BC842CBD83AF6CCFC1A67EDED30C2654ECDB6B1AE9B3A18047404515515 compiles and executes exact stdout 7, with llvm-as and V004 exit zero in artifacts/scratch/async-observability-candidate-p29/c429-c430-result.json."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-430/as-us-001.json",
+        "inputFingerprint": "D4E6B6219D9A54465783A5150B0B6197088AFE5C21CB75EDD84B256C5A526709",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-430/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-430/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-431",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed async diagnostic state-transition ordering",
+      "rootCause": "Async diagnostic suspension metadata was written while a child Task was still Ready, so the initial Ready record exposed a timer deadline and locator before the scheduler transitioned the task to Timer or AwaitBlocked.",
+      "focusedFixture": "scripts/probes/async-task-observability/parent-child-states.slg",
+      "closureGate": "Initial Ready must retain timerDeadlineMillis=0 and suspension=None; Timer and AwaitBlocked metadata may appear only at the corresponding runtime transition. Require exact native output, stderr0, llvm-as, V004 and input-stable immutable compiler evidence; keep Stage promotion separate.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 7EDC8D48AD6A2DD671064C69E058368843EE1B596DE6B067F8729068590045B5 fails scripts/contracts/evidence/C2026-09-13-431/baseline.json with ASYNC_DIAGNOSTIC_READY_METADATA_PREMATURE; baseline.output SHA-256 is 826A2345A6174FD8506C00CF30621414D57CE4E81BAE804BF477E0CB3741F987.",
+        "Candidate compiler SHA-256 3CBB1FA1BC714DD4BD16C1DFFAD755D6D08FDFBF4784EFA79BC37DE7055DAF7E passes scripts/contracts/evidence/C2026-09-13-431/candidate.json with initial Ready timerDeadlineMillis=0, suspension=None, native exact output, stderr zero, llvm-as exit zero, and V004 exit zero; candidate.output SHA-256 is A6C6635FD36461933A4734D49D53D01149141E2EDF177EEF8E63E40861861B87."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-431/as-us-001.json",
+        "inputFingerprint": "EDE66F84A68B8FA8B419EFB28A55F1D7387A90766F515F158D661A27F717C94A",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-431/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-431/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-432",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "async enum payload ownership merge",
+      "rootCause": "After an enum payload Task was consumed across resume and close paths, outer async scope reconstruction resurrected the pre-suspension owned Result<Task,...> value and its true ownership flag, causing a second join/release of the already released Task handle.",
+      "focusedFixture": "examples/regression/1749-async-two-ready-task-reverse-await.slg",
+      "closureGate": "Consumed enum payload ownership must merge false through every async resume and enum exit path; each affine Task handle joins/releases exactly once and execution continues after close. Require exact 22/11 bytes, stderr0, llvm-as, V004 and allocation/handle audit under one immutable compiler SHA; keep Stage promotion separate.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 F27F2478327B37050ADBE06A58C7F2927CAE1B69DC180185D0F5D41326150497 exits -1073740940 in scripts/contracts/evidence/C2026-09-13-432/baseline.json after the async enum merge releases a Task handle twice; baseline.output SHA-256 is C5D35A2460118EC8C80EE8AC0CA2090AFA0762EE8B562C5B77C1B29FBCE7A23C.",
+        "Candidate compiler SHA-256 6B8A3CE9BF24C13D3F630B7D6F79A972DAC205BA264A148E5A5E2802E3229AE0 passes scripts/contracts/evidence/C2026-09-13-432/candidate.json with exact stdout 22 and 11, stderr zero, llvm-as and V004 exit zero, and one join plus one release for task handles 10 and 7; candidate.output SHA-256 is 9122878F1C3AE5E979613EF6CEFEE02E884CDBDD5129AF147567A79AA2B987E0."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-432/as-us-001.json",
+        "inputFingerprint": "2E7B77AB06931F260CA474EF968E5C77784C7AA2B73C913E838ACDB7DD5A456E",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-432/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-432/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-433",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "async multi-suspension spill and enum payload liveness",
+      "rootCause": "Enum-arm payload bindings and re-spilled Task aggregates crossing multiple suspension states reused SSA values that did not dominate every resume predecessor; later scope restoration could also select the pre-resume aggregate instead of the path-specific reload.",
+      "focusedFixture": "examples/regression/1750-async-enum-payload-across-nested-yield.slg",
+      "closureGate": "Every multi-suspension enum payload and owned aggregate must spill and reload per resume state, with contiguous PHIs before side-effecting reconstruction and no stale pre-resume owner. Require exact stdout 7, stderr0, llvm-as, V004 and input-stable immutable compiler evidence; keep Stage promotion separate.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 C93C49820E14F7ED7BA53BB458D314E69C6A98954F87B0DABAD234D05BF10116 fails scripts/contracts/evidence/C2026-09-13-433/baseline.json with Instruction does not dominate all uses after a Task SSA is re-spilled on the second resume; baseline.output SHA-256 is 498CB33CCBDB61DD8CA3CC6545EEA3D947D835FD9D62B53609444B0DF729E2C0.",
+        "Candidate compiler SHA-256 6B8A3CE9BF24C13D3F630B7D6F79A972DAC205BA264A148E5A5E2802E3229AE0 passes scripts/contracts/evidence/C2026-09-13-433/candidate.json with exact stdout 7, stderr zero, llvm-as exit zero, and V004 exit zero; candidate.output SHA-256 is 9D20F5CE81F393432FD7CB293BAC40DFD402654989D4624AE6006E4EDECE859F."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-433/as-us-001.json",
+        "inputFingerprint": "2B69BD451E5379D34118EBA8F3471FF2707BE98323C2860E4DF5BEBDC99DC861",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-433/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-433/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-434",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "async diagnostic terminal record lifetime",
+      "rootCause": "A tracked Task could complete before owner await, then DiagnosticSession.close freed record storage while later await/release still rewrote the detached record; eager cancel marking and one-pass close also exposed dangling control/header pointers and mutated a Busy session.",
+      "focusedFixture": "scripts/probes/async-task-observability/completed-unawaited-close.slg",
+      "closureGate": "Worker completion and cancellation cleanup are the terminal-state authority; terminal records retain frozen state without dangling control, close is transactional two-pass, success detaches headers before freeing session storage, and later await cannot access freed records. Require exact completed-unawaited close then await, direct sleep complete/await/cancel, Busy order, capacity retry, session exhaustion, stderr0, llvm-as, V004 and balanced allocation audit under one immutable compiler SHA; keep selfhost/platform and Stage promotion separate.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 D70698D60F65B262A6DB518C155C08E964D2E624B359316B95A69330ADF5B35A exits -1073740940 in scripts/contracts/evidence/C2026-09-13-434/baseline.json with allocations=7, releases=7, and invalidReleaseCount=2; baseline.output SHA-256 is 3E109E95E26F259225D1795A3DC65D8586718871D3E9E566214E9029318ED233.",
+        "Candidate compiler SHA-256 FDCC2A113EC46E7AB73254E12A718CA36F2E36447BCE4E14FE5BC095DFFE3565 passes scripts/contracts/evidence/C2026-09-13-434/candidate.json with exact native output, stderr zero, llvm-as and V004 exit zero, allocations=7, releases=7, and invalidReleaseCount=0; candidate.output SHA-256 is CE394F4168A131C5830336DD29831F17F183D8ECB99D19D299515C792E68866C."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-434/as-us-001.json",
+        "inputFingerprint": "A6E537CECBBB48B73EE14CA634D530716486D7160B1180EAD23BA391059C9A5E",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-434/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-434/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-435",
+      "classification": "latent-defect",
+      "state": "open",
+      "owner": "self-host direct terminal control region classification",
+      "rootCause": "Self-host LLVM region termination recognized explicit returns found inside synthetic function and arm regions, but did not recognize a direct return or all-return control when that node itself was supplied as a region. A source-final numeric subject when whose every arm explicitly returned was therefore classified as continuing: subject-when emission retained an unreachable merge and the function epilogue returned the control SSA value even though no arm materialized it. The general repair routes a direct region index through the existing wrapper-aware, later-sibling-aware terminatingControlReturns authority before synthetic-region fallback discovery.",
+      "focusedFixture": "scripts/probes/gzip-stream-api/terminal-subject-when-all-return.slg fixes a source-final numeric subject when whose Ok and Err arms all return directly. The self-host compiler must emit no unreachable merge or undefined control SSA, pass llvm-as and V004, and execute exact stdout 7. Retain 1352 as the later-fallback negative control plus 1361, 1382, 1381, 1379, 1380, and production GZIP fixtures 1214 and 1215.",
+      "closureGate": "regionReturns, control emission, scheduling, function return selection, and ownership cleanup must share terminatingControlReturns for direct returns, direct enum or numeric controls, and canonical kind-9/opcode--1 wrappers. A source-final all-return control emits neither a merge nor an implicit undefined return; a control with a real later sibling retains its merge and fallback. Require the minimal fixture under managed and rebuilt self-host compilers with warning/note zero, llvm-as, V004, and exact execution; require 1352/1361/1382/1381/1379/1380 and 1214/1215 O0/O2 under one immutable self-host compiler SHA. Keep open until self-host candidate evidence exists, then require final accumulated Stage2/Stage3 before closing.",
+      "closedEvidence": [
+        "artifacts/scratch/c435-baseline/baseline.ll has SHA-256 31CA36CDA21CB70CDD28D97715DE64C851B79045140EB5D76F58D0EEB03DC41B and emits direct arm returns followed by unreachable when4_end and ret %v4; llvm-as rejects undefined %v4.",
+        "The managed oracle artifacts/scratch/c435-managed-p02/probe.ll has SHA-256 DA7AD39B0D9A28EC259A880FD2300264B4EAEEE8EAD07FD105FE5659BBFE8720, passes llvm-as and V004, and executes exact stdout 7. This is managed-only evidence; rebuilt self-host candidate evidence is still pending."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-435/as-us-001.json",
+        "inputFingerprint": "3CB7DC0A2B1625ABF45000A63EA0A8CB30B15BAE12553915B9964F5D93E0450E",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-435/baseline.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-436",
+      "classification": "latent-defect",
+      "state": "candidate-fixed",
+      "owner": "managed enum-arm binding-identity and scope-captured terminating ownership cleanup",
+      "rootCause": "Enum payload bindings were entered in the borrowed-owned set while the terminating cleanup exception was recorded in one emitter-global HashSet keyed only by source spelling. A projected enum field removed its outer struct without granting the selected payload a terminating obligation or preserving the outer sibling cleanup, and nested bindings that reused the same name could inherit, overwrite, or lose another binding's obligation across callback/yield LocalScope restoration. The emitter now captures immutable binding-identity cleanup obligations in every LocalScope, records projected payload and sibling obligations separately, restores exact outer/inner identities, and refreshes the exact payload value and ownership flag across async spills.",
+      "focusedFixture": "scripts/probes/enum-payload-early-return-owner-cleanup.slg and scripts/probes/enum-payload-borrowed-and-normal-cleanup.slg preserve direct, borrowed, and normal-arm behavior. scripts/probes/enum-projected-field-terminating-cleanup.slg proves projected payload plus outer sibling cleanup at 3 allocations/3 releases. scripts/probes/enum-payload-same-name-ownership.slg proves nested borrowed and owned bindings sharing one spelling at 8/8. scripts/probes/enum-payload-yield-scope-cleanup.slg proves LocalScope/async-spill ownership-flag reload and payload drop. The natural consumer is examples/regression/1753-zstd-fse-huffman-weights.slg.",
+      "closureGate": "Every owned enum arm cleanup is attached to a binding identity captured by LocalScope, never to a process-global source name. Projected-field arms must conditionally release the exact payload and unconditionally release all still-owned outer siblings on termination; nested same-name borrowed/owned bindings must preserve distinct exactly-once obligations; async spill reload must refresh the matching runtime value and retained flag. Require synchronous exact allocation balance for direct 2/2, borrowed/normal 4/4, projected 3/3, and same-name 8/8; yield exact output plus llvm-as/V004 and spill-flag reload/drop IR; Zstd 5/5, C399 6/6, C424 1/1 under one compiler SHA; then final accumulated Stage2/Stage3 promotion.",
+      "closedEvidence": [
+        "Baseline immutable compiler SHA-256 33F9C26EE81DDFA576F03B86A18C55090F5607442E3530F1EFF92D6476875A54 records the isolated early-return payload at allocations=2, releases=0, invalidReleaseCount=0 and the Zstd consumer at 4/5 with allocations=1339, releases=1333, invalidReleaseCount=0 in scripts/contracts/evidence/C2026-09-13-436/baseline.json.",
+        "Candidate compiler SHA-256 E7C4A962BE5DA574FF3C417629ACACA0E86E7D53FB053337E1371409E2F8F3B9 records direct 2/2, borrowed plus normal 4/4, projected-field 3/3, nested same-name borrowed/owned 8/8, yield exact output plus llvm-as/V004 and spill-flag reload/drop IR in scripts/contracts/evidence/C2026-09-13-436/focused-result.json; its schema accepts the exact 5-case topology and rejects forged count, ID, and yield allocation authority controls 3/3; Zstd 5/5 at 1339/1339/invalid0, C399 6/6, and C424 1/1 are hashed in scripts/contracts/evidence/C2026-09-13-436/candidate.json."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-436/as-us-001.json",
+        "inputFingerprint": "F4341318E43E996D60CC9DA7E7E0792B816CB4A4D0DF7225A24BE1713BD1470C",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-436/baseline.json",
+        "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-436/candidate.json"
+      }
+    },
+    {
+      "id": "C2026-09-13-437",
+      "classification": "latent-defect",
+      "state": "open",
+      "owner": "managed async CFG function identity and projected-owner move-mask restoration",
+      "rootCause": "An inlined synchronous helper used the caller's active async CFG because async merge mode was tested only for non-null state rather than exact current-function identity. A partially moved affine function input that crossed a CFG suspension was then restored from the resume base without its moved-field mask, and branch joins compared continuing states to that stale entry mask instead of comparing the actual continuing predecessors. The combination rejected identical legal owner states as divergent.",
+      "focusedFixture": "stdlib/std/io/socket.slg preparePending and AsyncStream.readIntoAsync are the first natural consumers. scripts/probes/portable-memory-io/async-socket-direct-owner-return.slg reproduces the synchronous-helper boundary and the partial function-input state that crosses the pending await. The pending and cancellation probes exercise the resumed state; conditional-partial-move-nested-field and the 1499 loop controls retain genuine divergence rejection.",
+      "closureGate": "Async merge mode must be scoped to the exact current function identity. Branch joins compare all continuing incoming masks and carry one identical mask forward; loop break, continue, back-edge, and fallthrough paths continue to compare against the loop entry mask. CFG suspension restores the exact moved-field mask for every retained affine primary and additional function input. Require W01-W03 exact Windows execution, llvm-as, V004, existing socket-completion consumers, divergent branch and loop E20 negatives, and C399/C424/Zstd controls under one immutable compiler SHA and current full source freeze. Keep selfhost, Linux, browser, and final Stage2/Stage3 promotion separate.",
+      "closedEvidence": [
+        "Baseline compiler SHA-256 888D637ACCDD218C4A59C3AA67CD396DBA6FAF014B30ECB93320C1D8E78A3C2A rejects scripts/probes/portable-memory-io/async-socket-direct-owner-return.slg with binding reactor inconsistent across async branch paths in scripts/contracts/evidence/C2026-09-13-437/baseline.json."
+      ],
+      "shapingEvidence": {
+        "tracePath": "scripts/contracts/evidence/C2026-09-13-437/as-us-001.json",
+        "inputFingerprint": "22DEBE01921831C10D4B9CE45C8DDACB0B9CC4765570D5BD19D94093A6C9516A",
+        "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-437/baseline.json"
       }
     }
   ]

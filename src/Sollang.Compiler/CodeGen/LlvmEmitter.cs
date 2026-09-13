@@ -18,9 +18,11 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesProcessCapture;
     private readonly bool _usesProcessExit;
     private readonly bool _usesAsync;
+    private readonly bool _usesAsyncDiagnostics;
     private readonly bool _usesAsyncFile;
     private bool _usesDirectoryTraversal;
     private readonly bool _usesNetwork;
+    private readonly bool _usesSocketCompletion;
     private readonly bool _usesDns;
     private readonly bool _usesSecureRandom;
     private readonly bool _usesParallel;
@@ -67,6 +69,8 @@ internal sealed partial class LlvmEmitter
     private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedOwnedLocals = new(StringComparer.Ordinal);
+    private readonly List<TerminatingOwnedCleanupObligation> _terminatingOwnedCleanupObligations = [];
+    private long _nextOwnedCleanupBindingId;
     private readonly Dictionary<string, HashSet<string>> _movedOwnedStructFields =
         new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _borrowedOwnedTransferFlags = new(StringComparer.Ordinal);
@@ -75,6 +79,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _readonlyCaptureBorrowPointers = new(StringComparer.Ordinal);
     private readonly Dictionary<RuntimeValue, string> _readonlyValueSlots =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Expression, RuntimeValue> _anonymousProjectionOwners =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundFunction>> _functionScopes =
         new(ReferenceEqualityComparer.Instance);
@@ -107,6 +113,7 @@ internal sealed partial class LlvmEmitter
     private readonly Stack<LoopContext> _loopContexts = new();
     private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
     private AsyncCfgLowering? _activeAsyncCfg;
+    private string _currentAsyncDiagnosticHeader = "null";
 
     public LlvmEmitter(
         BoundProgram program,
@@ -216,22 +223,43 @@ internal sealed partial class LlvmEmitter
                 or BoundFunctionKind.RuntimeSocketSetNonblocking
                 or BoundFunctionKind.RuntimeSocketPoll
                 or BoundFunctionKind.RuntimeSocketReactorWait
+                or BoundFunctionKind.RuntimeSocketCompletionCreate
+                or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                or BoundFunctionKind.RuntimeSocketCompletionClose
                 or BoundFunctionKind.RuntimeDnsLookup);
+        _usesSocketCompletion = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeSocketCompletionCreate
+                or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                or BoundFunctionKind.RuntimeSocketCompletionClose);
         _usesSecureRandom = _reachableFunctions.Any(static function =>
             function.Kind == BoundFunctionKind.RuntimeSecureRandomBytes);
+        _usesAsyncDiagnostics = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeDiagnosticSessionStart
+                or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+                or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+                or BoundFunctionKind.RuntimeDiagnosticSessionClose);
         _usesAsync = _reachableFunctions.Any(function => function.IsAsync)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesRuntimeSleep(function.Body))
                 || function.BlockBody.Any(UsesRuntimeSleep));
-        _platform.UsesAsyncFile = _usesAsyncFile;
+        _platform.UsesAsyncFile = _usesAsyncFile || _usesSocketCompletion;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
         _platform.UsesProcessCapture = _usesProcessCapture;
         _platform.UsesProcessExit = _usesProcessExit;
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
         _platform.UsesNetwork = _usesNetwork;
+        _platform.UsesSocketCompletion = _usesSocketCompletion;
         _platform.UsesSecureRandom = _usesSecureRandom;
         _platform.UsesMouseEvents = _usesMouseEvents;
         _platform.UsesConcurrentStreamJoins = _usesConcurrentStreamJoins;
@@ -719,6 +747,11 @@ internal sealed partial class LlvmEmitter
         {
             throw new SollangException("directory traversal is unavailable on the current target");
         }
+        if (_usesSocketCompletion && !_platform.SupportsNetwork)
+        {
+            throw new SollangException(
+                "asynchronous socket completion is unavailable on wasm32-browser; use a host-provided network adapter");
+        }
         if (_usesNetwork && !_platform.SupportsNetwork)
         {
             throw new SollangException(_usesDns
@@ -791,6 +824,14 @@ internal sealed partial class LlvmEmitter
             %sollang.dyn = type { ptr, ptr }
             %sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }
             """;
+        if (_usesAsyncDiagnostics)
+        {
+            header += """
+                %sollang.diagnostic_session = type { i64, i64, i64, i64, ptr }
+                %sollang.diagnostic_record = type { i64, i64, ptr, i32, i32, i64, i64, ptr, i64, ptr, i64, i64, i64, i64, ptr }
+
+                """;
+        }
         if (_usesDirectoryTraversal)
         {
             header += """
@@ -818,6 +859,10 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@_fltused = global i32 0");
         }
         EmitGlobalLine("@sollang_random_state = internal global i64 88172645463393265");
+        if (_usesAsyncDiagnostics)
+        {
+            EmitGlobalLine("@sollang_diagnostic_next_session_id = internal global i64 1");
+        }
         EmitGlobalLine("@sollang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8");
         EmitGlobalLine("@sollang_writer_buffer_count = internal global i64 0");
         EmitNativeGlobals();
@@ -828,10 +873,10 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@sollang_task_ready_tail = internal global ptr null");
             EmitGlobalLine("@sollang_task_timer_head = internal global ptr null");
             EmitGlobalLine("@sollang_file_request_head = internal global ptr null");
-            EmitGlobalLine("@sollang_file_completion_head = internal global ptr null");
+            EmitGlobalLine("@sollang_io_completion_head = internal global ptr null");
             EmitGlobalLine("@sollang_file_worker_started = internal global i1 false");
             EmitGlobalLine("@sollang_file_worker_stopping = internal global i32 0");
-            EmitGlobalLine("@sollang_file_outstanding = internal global i64 0");
+            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
         }
         if (_usesParallel)
         {

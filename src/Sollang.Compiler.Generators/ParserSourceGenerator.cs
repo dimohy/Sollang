@@ -1597,7 +1597,7 @@ internal static class ParserEmitter
         builder.AppendLine("            {");
         builder.AppendLine("                var blocklessSyntheticName = \"$block_pipeline_\" + _syntheticBlockResultIndex++.ToString(CultureInfo.InvariantCulture);");
         builder.AppendLine("                calls.Add(new BlockFunctionCallStatement(source, target, \"it\", Array.Empty<Statement>(), blocklessSyntheticName, false, targetToken.Line, targetToken.Column, true, ResultIsSynthetic: true, Arguments: arguments));");
-        builder.AppendLine("                source = new NameExpression(blocklessSyntheticName, targetToken.Line, targetToken.Column);");
+        builder.AppendLine("                source = new NameExpression(blocklessSyntheticName, targetToken.Line, targetToken.Column, targetToken.ByteOffset);");
         builder.AppendLine("                continue;");
         builder.AppendLine("            }");
         builder.AppendLine("            var itemName = \"it\";");
@@ -1673,7 +1673,7 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("            var syntheticName = \"$block_pipeline_\" + _syntheticBlockResultIndex++.ToString(CultureInfo.InvariantCulture);");
         builder.AppendLine("            calls[^1] = calls[^1] with { ResultName = syntheticName, ResultIsSynthetic = true };");
-        builder.AppendLine("            source = new NameExpression(syntheticName, nextTarget.Line, nextTarget.Column);");
+        builder.AppendLine("            source = new NameExpression(syntheticName, nextTarget.Line, nextTarget.Column, nextTarget.ByteOffset);");
         builder.AppendLine("            _index = nextTargetStart;");
         builder.AppendLine("        }");
         builder.AppendLine();
@@ -1970,11 +1970,11 @@ internal static class ParserEmitter
                 builder.AppendLine("                var arguments = ParseOptionalArgumentList();");
                 builder.AppendLine("                Expect(TokenKind.RightParen);");
                 builder.AppendLine("                targets ??= [];");
-                builder.AppendLine("                targets.Add(new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path)));");
+                builder.AppendLine("                targets.Add(new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path), target.ByteOffset));");
                 builder.AppendLine("                continue;");
                 builder.AppendLine("            }");
                 builder.AppendLine("            targets ??= [];");
-                builder.AppendLine("            targets.Add(new FlowTarget(path, [], usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path)));");
+                builder.AppendLine("            targets.Add(new FlowTarget(path, [], usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path), target.ByteOffset));");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        expression = BuildFlowExpression(expression, targets);");
@@ -2167,7 +2167,7 @@ internal static class ParserEmitter
         builder.AppendLine("            arguments = ParseOptionalArgumentList();");
         builder.AppendLine("            Expect(TokenKind.RightParen);");
         builder.AppendLine("        }");
-        builder.AppendLine("        return new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, first.Line, first.Column, GetOpenImportCandidates(path));");
+        builder.AppendLine("        return new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, first.Line, first.Column, GetOpenImportCandidates(path), first.ByteOffset);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseRangeOrLogicalExpression()");
@@ -2369,7 +2369,7 @@ internal static class ParserEmitter
         builder.AppendLine("                Expect(TokenKind.RightParen);");
         builder.AppendLine("            }");
         builder.AppendLine("            targets ??= [];");
-        builder.AppendLine("            targets.Add(new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path)));");
+        builder.AppendLine("            targets.Add(new FlowTarget(path, arguments, usesCallSyntax, typeArgument, compileTimeValueArgument, target.Line, target.Column, GetOpenImportCandidates(path), target.ByteOffset));");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        expression = BuildFlowExpression(expression, targets);");
@@ -2731,7 +2731,7 @@ internal static class ParserEmitter
         builder.AppendLine("            Expect(TokenKind.RightParen);");
         builder.AppendLine("            return new CallExpression(new[] { specialized, variant.Text }, arguments, typeName.Line, typeName.Column);");
         builder.AppendLine("        }");
-        builder.AppendLine("        return new FieldAccessExpression(new NameExpression(specialized, typeName.Line, typeName.Column), variant.Text, typeName.Line, typeName.Column);");
+        builder.AppendLine("        return new FieldAccessExpression(new NameExpression(specialized, typeName.Line, typeName.Column, typeName.ByteOffset), variant.Text, typeName.Line, typeName.Column);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseStructLiteralExpression(string typeName, int line, int column)");
@@ -3417,7 +3417,7 @@ internal static class ParserEmitter
         builder.AppendLine("            var resolved = ResolveImportedPath(path);");
         builder.AppendLine("            var ownerName = string.Join('.', resolved.Take(resolved.Count - 1));");
         builder.AppendLine("            return new FieldAccessExpression(");
-        builder.AppendLine("                new NameExpression(ownerName, identifier.Line, identifier.Column),");
+        builder.AppendLine("                new NameExpression(ownerName, identifier.Line, identifier.Column, identifier.ByteOffset),");
         builder.AppendLine("                resolved[^1],");
         builder.AppendLine("                identifier.Line,");
         builder.AppendLine("                identifier.Column);");
@@ -3429,7 +3429,7 @@ internal static class ParserEmitter
         builder.AppendLine("            name += \"!\";");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        Expression expression = new NameExpression(name, identifier.Line, identifier.Column);");
+        builder.AppendLine("        Expression expression = new NameExpression(name, identifier.Line, identifier.Column, identifier.ByteOffset);");
         builder.AppendLine("        for (var i = 1; i < path.Count; i++)");
         builder.AppendLine("        {");
         builder.AppendLine("            expression = new FieldAccessExpression(expression, path[i], identifier.Line, identifier.Column);");

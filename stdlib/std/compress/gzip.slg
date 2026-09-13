@@ -77,6 +77,12 @@ public struct Decoder {
     trailerChecksum: UInt32
     failed: Bool
     failure: Error
+    rawMode: Bool
+    rawComplete: Bool
+}
+
+public struct RawDeflateDecoder {
+    decoder: Decoder
 }
 
 public struct EncodePlan {
@@ -1344,7 +1350,11 @@ streamFinishBlock decoder: mut Decoder -> Unit {
     0 => decoder.compressedPhase
     decoder.finalBlock -> if {
         decoder -> streamAlignByte
-        decoder_phases.Phase.TrailerChecksum => decoder.phase
+        decoder.rawMode -> if {
+            true => decoder.rawComplete
+        } else {
+            decoder_phases.Phase.TrailerChecksum => decoder.phase
+        }
     } else {
         decoder_phases.Phase.BlockHeader => decoder.phase
     }
@@ -1734,7 +1744,7 @@ streamStep decoder: mut Decoder, input: [UInt8], cursor: mut StreamCursor -> Res
 
 streamProcess decoder: mut Decoder, input: [UInt8] -> Result<Int, Error> {
     StreamCursor { offset: 0 } => cursor!
-    true -> while {
+    not decoder.rawComplete -> while {
         streamStep(decoder, input, cursor!)? => progressed
         progressed -> unless { break }
     }
@@ -1750,6 +1760,39 @@ impl Limits {
 }
 
 impl Codec {
+    # Raw RFC 1951 bridges reuse the canonical GZIP DEFLATE engine without
+    # emitting or accepting an RFC 1952 wrapper. Compression writes into an
+    # explicit caller-owned work buffer; archive layers retain responsibility
+    # for publishing that work transactionally.
+    public compressDeflateFixedInto: self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        output -> len => before
+        before <= 2_147_483_647 - self.limits.maxOutputBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(input -> len)) -> return }
+        before + self.limits.maxOutputBytes => maximumOutputBytes
+        BitWriter { currentByte: 0, bitCount: 0 } => writer!
+        writeBits(writer!, output, 3, 3, maximumOutputBytes)? => blockHeader
+        writeLz77Payload(writer!, input, output, maximumOutputBytes, false)? => payloadWritten
+        flushBits(writer!, output, maximumOutputBytes)? => flushed
+        Result<Int, Error>.Ok((output -> len) - before)
+    }
+
+    public decompressDeflateInto: self, input: [UInt8], expectedOutputBytes: Int, output: mut [UInt8; ~] -> Result<Int, Error> {
+        expectedOutputBytes >= 0 -> unless { errorInt(errors.Kind.InvalidLimit, 0) -> return }
+        inflateRange(input, 0, input -> len, self.limits.maxOutputBytes, true)? => inflated
+        validateExpansion(input -> len, inflated.outputLength, self.limits.maxExpansionRatio, input -> len)? => outputLength
+        outputLength == expectedOutputBytes
+            -> unless { errorInt(errors.Kind.SizeMismatch, UIntSize(input -> len)) -> return }
+        (output -> len) <= 2_147_483_647 - outputLength
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(input -> len)) -> return }
+        output -> reserve((output -> len) + outputLength)
+        0 => index!
+        index! < (inflated.output -> len) -> while {
+            output -> push(inflated.output[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(outputLength)
+    }
+
     public encoder: self -> Result<Encoder, Error> {
         self.limits.maxOutputBytes >= 23 -> unless {
             errorEncoder(errors.Kind.OutputLimitExceeded, 0) -> return
@@ -1826,7 +1869,18 @@ impl Codec {
             trailerChecksum: 0
             failed: false
             failure: Error { kind: errors.Kind.TruncatedInput, offset: 0 }
+            rawMode: false
+            rawComplete: false
         })
+    }
+
+    public rawDeflateDecoder: self, maxInputBytes: Int -> Result<RawDeflateDecoder, Error> {
+        maxInputBytes >= 0
+            -> unless { Result<RawDeflateDecoder, Error>.Err(Error { kind: errors.Kind.InvalidLimit, offset: 0 }) -> return }
+        self -> decoder(DecoderLimits { maxInputBytes: maxInputBytes, maxMembers: 1 })? => decoder!
+        true => decoder!.rawMode
+        decoder_phases.Phase.BlockHeader => decoder!.phase
+        Result<RawDeflateDecoder, Error>.Ok(RawDeflateDecoder { decoder: decoder! })
     }
 
     public planCompress: self, inputLength: Int -> Result<EncodePlan, Error> {
@@ -2120,7 +2174,10 @@ impl Decoder {
             }
         not self.failed -> if {
             streamProcess(self, input) -> when {
-                Ok(_) { }
+                Ok(_) {
+                    self.totalInputBytes + (input -> len) => self.totalInputBytes
+                    Result<Int, Error>.Ok(input -> len) -> return
+                }
                 Err(failure) {
                     true => self.failed
                     failure => self.failure
@@ -2163,5 +2220,38 @@ impl Decoder {
             index! + 1 => index!
         }
         Result<Int, Error>.Ok(self.verifiedOutput -> len)
+    }
+}
+
+impl RawDeflateDecoder {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        self.decoder.rawComplete and (input -> len) > 0
+            -> if {
+                errorInt(errors.Kind.TrailingData, UIntSize(self.decoder.totalInputBytes)) -> return
+            }
+        self.decoder.processedInputBytes => before
+        self.decoder -> write(input)? => accepted
+        self.decoder.failed -> if { Result<Int, Error>.Err(self.decoder.failure) -> return }
+        self.decoder.processedInputBytes - before == (input -> len)
+            -> unless { errorInt(errors.Kind.TrailingData, UIntSize(self.decoder.processedInputBytes)) -> return }
+        Result<Int, Error>.Ok(accepted)
+    }
+
+    public finish: move self, expectedOutputBytes: Int, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.decoder.failed -> if { Result<Int, Error>.Err(self.decoder.failure) -> return }
+        self.decoder.rawComplete
+            -> unless { errorInt(errors.Kind.TruncatedInput, UIntSize(self.decoder.processedInputBytes)) -> return }
+        (self.decoder.memberOutput -> len) == expectedOutputBytes
+            -> unless { errorInt(errors.Kind.SizeMismatch, UIntSize(self.decoder.processedInputBytes)) -> return }
+        validateExpansion(self.decoder.totalInputBytes, self.decoder.memberOutput -> len, self.decoder.codec.limits.maxExpansionRatio, self.decoder.processedInputBytes)? => outputLength
+        (output -> len) <= 2_147_483_647 - outputLength
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.decoder.processedInputBytes)) -> return }
+        output -> reserve((output -> len) + outputLength)
+        0 => index!
+        index! < (self.decoder.memberOutput -> len) -> while {
+            output -> push(self.decoder.memberOutput[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(outputLength)
     }
 }

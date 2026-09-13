@@ -432,6 +432,12 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitExpression(Expression expression)
     {
+        if (TryEmitCfgAwaitExpression(expression, out var awaited))
+        {
+            EmitStackLifetimeEndsAfter(expression);
+            return awaited;
+        }
+
         var value = expression switch
         {
             StringExpression str => EmitTextLiteral(str),
@@ -1152,19 +1158,22 @@ internal sealed partial class LlvmEmitter
                 && _program.Types.IsStruct(inlineDictionary.KeyType)
                     ? EmitContextualStructLiteral(contextual, inlineDictionary.KeyType)
                     : EmitExpression(expression.Index);
-            return EmitInlineDictionaryLookup(inlineDictionary, key);
+            return RecordAnonymousIndexProjection(
+                expression,
+                source,
+                EmitInlineDictionaryLookup(inlineDictionary, key));
         }
         if (source is RuntimeMappedBytes mapped)
         {
-            return EmitMappedLoad(mapped, expression.Index);
+            return RecordAnonymousIndexProjection(expression, source, EmitMappedLoad(mapped, expression.Index));
         }
         if (source is RuntimeArguments arguments)
         {
-            return EmitArgumentLoad(arguments, expression.Index);
+            return RecordAnonymousIndexProjection(expression, source, EmitArgumentLoad(arguments, expression.Index));
         }
         var index = EmitIntExpression(expression.Index);
         var indexSize = EmitIntAsSize(index, "index_size");
-        return source switch
+        var projected = source switch
         {
             RuntimeIntSlice slice => EmitIntSliceLoad(slice, indexSize),
             RuntimeInlineSlice slice => EmitInlineSliceLoad(slice, indexSize),
@@ -1179,6 +1188,21 @@ internal sealed partial class LlvmEmitter
             RuntimeIntDictionary dictionary => EmitDictionaryLookup(dictionary, index.ValueName),
             _ => throw new SollangException("indexing expects an array or dictionary")
         };
+        return RecordAnonymousIndexProjection(expression, source, projected);
+    }
+
+    private RuntimeValue RecordAnonymousIndexProjection(
+        IndexExpression expression,
+        RuntimeValue source,
+        RuntimeValue projected)
+    {
+        if (IsAnonymousOwnedExpression(expression.Source)
+            && IsOwnedContainerRuntimeValue(source))
+        {
+            _anonymousProjectionOwners[expression] =
+                _anonymousProjectionOwners.GetValueOrDefault(expression.Source) ?? source;
+        }
+        return projected;
     }
 
 }

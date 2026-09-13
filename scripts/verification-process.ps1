@@ -1,3 +1,48 @@
+$script:VerificationCancellationRequestPath = ''
+$script:VerificationCancellationRunId = ''
+$script:VerificationCancellationAcknowledgementPath = ''
+
+function Initialize-VerificationCancellation {
+    param(
+        [Parameter(Mandatory)][string]$RequestPath,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$AcknowledgementPath
+    )
+    $script:VerificationCancellationRequestPath = [IO.Path]::GetFullPath($RequestPath)
+    $script:VerificationCancellationRunId = $RunId
+    $script:VerificationCancellationAcknowledgementPath = [IO.Path]::GetFullPath($AcknowledgementPath)
+}
+
+function Test-VerificationCancellationRequested {
+    if ([string]::IsNullOrWhiteSpace([string]$script:VerificationCancellationRequestPath) -or
+        -not (Test-Path -LiteralPath $script:VerificationCancellationRequestPath -PathType Leaf)) {
+        return $false
+    }
+    $request = Get-Content -LiteralPath $script:VerificationCancellationRequestPath -Raw | ConvertFrom-Json
+    if ($request.schemaVersion -ne 1 -or $request.runId -cne $script:VerificationCancellationRunId -or
+        [string]::IsNullOrWhiteSpace([string]$request.requestedAtUtc)) {
+        throw 'Cancellation request does not match the active verification target'
+    }
+    if (-not (Test-Path -LiteralPath $script:VerificationCancellationAcknowledgementPath -PathType Leaf)) {
+        $acknowledgement = [ordered]@{
+            schemaVersion = 1
+            runId = $script:VerificationCancellationRunId
+            targetProcessId = $PID
+            observedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        }
+        $temporaryPath = "$($script:VerificationCancellationAcknowledgementPath).tmp-$PID"
+        $acknowledgement | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
+        Move-Item -LiteralPath $temporaryPath -Destination $script:VerificationCancellationAcknowledgementPath -Force
+    }
+    return $true
+}
+
+function Assert-VerificationCancellationNotRequested {
+    if (Test-VerificationCancellationRequested) {
+        throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
+    }
+}
+
 function Get-VerificationProcessTreeSnapshot {
     param([Parameter(Mandatory)][int]$RootProcessId)
 
@@ -74,6 +119,7 @@ function Wait-VerificationProcess {
     $previousTelemetryAt = $startedAt
     $previousTree = $null
     while ([DateTimeOffset]::Now -lt $deadline) {
+        $cancellationObserved = Test-VerificationCancellationRequested
         $remaining = [int][Math]::Max(1, ($deadline - [DateTimeOffset]::Now).TotalMilliseconds)
         # A completed Windows Process can report zero for PeakWorkingSet64.
         # Callers requesting memory evidence therefore sample the live process
@@ -94,7 +140,17 @@ function Wait-VerificationProcess {
         }
         $waitSlice = [Math]::Min($maximumWaitSlice, $remaining)
         if ($Process.WaitForExit($waitSlice)) {
+            if ($cancellationObserved -or (Test-VerificationCancellationRequested)) {
+                throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
+            }
             return
+        }
+        if ($cancellationObserved) {
+            # A cancellation request stops new work. The active child is allowed
+            # to reach its own safe terminal boundary; cancellation never turns
+            # into raw process termination here.
+            while (-not $Process.WaitForExit([Math]::Min(1000, $waitSlice))) { }
+            throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
         }
         $observedAt = [DateTimeOffset]::Now
         $elapsed = $observedAt - $startedAt

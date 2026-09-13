@@ -725,6 +725,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                             false => knownEntryPushExpression!
                             false => knownEntryTakeExpression!
                             -1 => entryTakeElementTypeId!
+                            false => knownEntryExchangeExpression!
                             false => knownEntryPutExpression!
                             -223 => entryPutOpcode!
                             false => knownEntryCapacityExpression!
@@ -778,6 +779,24 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                         }
                                                     }
                                                 entryTakeReceiverSearch! + 1 => entryTakeReceiverSearch!
+                                            }
+                                    }
+                                    entryFlowOpcode == -310 -> if {
+                                        0 => entryExchangeReceiverSearch!
+                                        entryExchangeReceiverSearch! < sourceRange.astCount
+                                            -> while {
+                                                prepared.package.nodes[sourceRange.astStart + entryExchangeReceiverSearch!] => entryExchangeReceiverCandidate
+                                                frozenRecursiveTypeByAst[sourceRange.astStart + entryExchangeReceiverSearch!] => entryExchangeReceiverTypeId!
+                                                entryExchangeReceiverCandidate.parent == entryExpressionAst! and entryExchangeReceiverTypeId! >= 0
+                                                    -> if {
+                                                        frozenRecursiveSemanticTypes[entryExchangeReceiverTypeId!] => entryExchangeReceiverType!
+                                                        entryExchangeReceiverType!.kind == 8 -> if {
+                                                            entryExchangeReceiverType!.first => entryExchangeReceiverTypeId!
+                                                            frozenRecursiveSemanticTypes[entryExchangeReceiverTypeId!] => entryExchangeReceiverType!
+                                                        }
+                                                        entryExchangeReceiverType!.kind == 3 -> if { true => knownEntryExchangeExpression! }
+                                                    }
+                                                entryExchangeReceiverSearch! + 1 => entryExchangeReceiverSearch!
                                             }
                                     }
                                     entryFlowOpcode == -223 or entryFlowOpcode == -303
@@ -1097,6 +1116,12 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                 entryTakeElementType.module => entryExpressionTypeModule!
                                 entryTakeElementType.symbol => entryExpressionTypeSymbol!
                             }
+                            knownEntryExchangeExpression! -> if {
+                                -1 => recursiveEntryExpressionTypeId!
+                                1 => entryExpressionTypeOrigin!
+                                -1 => entryExpressionTypeModule!
+                                0 => entryExpressionTypeSymbol!
+                            }
                             knownEntryMapTextExpression! or knownEntryMapPathExpression!
                                 -> if {
                                     1 => entryExpressionTypeOrigin!
@@ -1369,8 +1394,10 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                         # lowering: an exact receiver method suppresses the
                                         # contextual intrinsic with the same spelling.
                                         knownEntryCallExpression! -> if { -1 => entryFlowEmissionOpcode! }
+                                        entryFlowEmissionOpcode! == -310 and not knownEntryExchangeExpression!
+                                            -> if { -1 => entryFlowEmissionOpcode! }
                                         prepared.controlProducerWrapperByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryControlProducerWrapperExpression
-                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryControlProducerWrapperExpression or entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307 or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
+                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression or entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307 or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
                                             -> if {
                                                 false => entryExpressionIsBoolLiteral!
                                                 entryExpression.kind == 15 and entryExpressionTypeOrigin! == 1 and entryExpressionTypeSymbol! == 23
@@ -1496,7 +1523,8 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                             knownEntryDynExpression! -> if { -224 => entryExpressionOpcode! }
                                                             entryExpression.kind == 10 or entryExpression.kind == 11
                                                                 -> if {
-                                                                    entryFlowEmissionOpcode! == -213 -> if { entryFlowEmissionOpcode! => entryExpressionOpcode! }
+                                                                    entryFlowEmissionOpcode! == -213 or entryFlowEmissionOpcode! == -310
+                                                                        -> if { entryFlowEmissionOpcode! => entryExpressionOpcode! }
                                                                 }
                                                             0 => entryIntrinsicChildSearch!
                                                             entryIntrinsicChildSearch! < sourceRange.astCount

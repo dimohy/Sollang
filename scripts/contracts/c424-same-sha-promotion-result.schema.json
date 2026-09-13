@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "mode", "defectId", "status", "completed", "total", "caseIds",
+    "compilerPath", "compilerSha256", "expectedCompilerSha256", "candidateShaMatched",
+    "sourceFreezeApproved", "currentSourceFreezeValidated",
+    "stdlibSourceCountStart", "stdlibSourceCountEnd", "stdlibManifestStart", "stdlibManifestEnd",
+    "stdlibManifestSha256Start", "stdlibManifestSha256End", "stdlibManifestCountMatched", "stdlibManifestExact",
+    "inputHashesStart", "inputHashesEnd", "inputHashesEqual", "inputDrift",
+    "processAuditIds", "rootProcessIds", "descendantProcessIds", "orphanProcessIds", "cases", "failureIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "enum": ["validate-inputs", "execute"] },
+    "defectId": { "const": "C2026-09-13-424" },
+    "status": { "enum": ["validated", "passed", "failed"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "total": { "const": 6 },
+    "caseIds": { "const": ["P1", "R424A", "N1", "N2", "R424N1", "R424N2"] },
+    "compilerPath": { "type": "string", "minLength": 1 },
+    "compilerSha256": { "$ref": "#/$defs/sha" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "candidateShaMatched": { "type": "boolean" },
+    "sourceFreezeApproved": { "type": "boolean" },
+    "currentSourceFreezeValidated": { "type": "boolean" },
+    "stdlibSourceCountStart": { "type": "integer", "minimum": 1 },
+    "stdlibSourceCountEnd": { "type": "integer", "minimum": 1 },
+    "stdlibManifestStart": { "$ref": "#/$defs/manifest" },
+    "stdlibManifestEnd": { "$ref": "#/$defs/manifest" },
+    "stdlibManifestSha256Start": { "$ref": "#/$defs/sha" },
+    "stdlibManifestSha256End": { "$ref": "#/$defs/sha" },
+    "stdlibManifestCountMatched": { "type": "boolean" },
+    "stdlibManifestExact": { "type": "boolean" },
+    "inputHashesStart": { "$ref": "#/$defs/hashes" },
+    "inputHashesEnd": { "$ref": "#/$defs/hashes" },
+    "inputHashesEqual": { "type": "boolean" },
+    "inputDrift": { "$ref": "#/$defs/names" },
+    "processAuditIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "rootProcessIds": { "$ref": "#/$defs/pids" },
+    "descendantProcessIds": { "$ref": "#/$defs/pids" },
+    "orphanProcessIds": { "$ref": "#/$defs/pids" },
+    "cases": {
+      "type": "array",
+      "prefixItems": [
+        { "$ref": "#/$defs/p1" }, { "$ref": "#/$defs/r424a" }, { "$ref": "#/$defs/n1" },
+        { "$ref": "#/$defs/n2" }, { "$ref": "#/$defs/r424n1" }, { "$ref": "#/$defs/r424n2" }
+      ],
+      "items": false,
+      "minItems": 6,
+      "maxItems": 6,
+      "uniqueItems": true
+    },
+    "failureIds": { "$ref": "#/$defs/names" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": { "properties": {
+        "mode": { "const": "execute" }, "completed": { "const": 6 },
+        "candidateShaMatched": { "const": true }, "sourceFreezeApproved": { "const": true },
+        "currentSourceFreezeValidated": { "const": true }, "stdlibManifestCountMatched": { "const": true },
+        "stdlibManifestExact": { "const": true }, "inputHashesEqual": { "const": true },
+        "inputDrift": { "maxItems": 0 }, "orphanProcessIds": { "maxItems": 0 },
+        "processAuditIds": { "const": ["P1-compile", "P1-native", "P1-llvm-as", "P1-v004", "P1-audit-link", "P1-audit-native", "R424A-compile", "R424A-native", "R424A-llvm-as", "R424A-v004", "R424A-audit-link", "R424A-audit-native", "N1-compile", "N2-compile", "R424N1-compile", "R424N2-compile"] }, "failureIds": { "maxItems": 0 }
+      } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "validated" } }, "required": ["status"] },
+      "then": { "properties": {
+        "mode": { "const": "validate-inputs" }, "completed": { "const": 0 },
+        "candidateShaMatched": { "const": true }, "sourceFreezeApproved": { "const": false },
+        "currentSourceFreezeValidated": { "const": false }, "stdlibManifestCountMatched": { "const": true },
+        "stdlibManifestExact": { "const": true }, "inputHashesEqual": { "const": true },
+        "inputDrift": { "maxItems": 0 }, "processAuditIds": { "maxItems": 0 },
+        "rootProcessIds": { "maxItems": 0 }, "descendantProcessIds": { "maxItems": 0 },
+        "orphanProcessIds": { "maxItems": 0 }, "failureIds": { "maxItems": 0 },
+        "cases": { "items": { "properties": { "status": { "const": "not-run" }, "compile": { "type": "null" }, "run": { "type": "null" }, "llvmAs": { "type": "null" }, "v004": { "type": "null" }, "audit": { "type": "null" }, "passed": { "const": false } } } }
+      } }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] },
+      "then": { "properties": { "currentSourceFreezeValidated": { "const": false }, "failureIds": { "minItems": 1 } } }
+    }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "names": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "pids": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "hashes": { "type": "object", "minProperties": 15, "additionalProperties": { "$ref": "#/$defs/sha" } },
+    "manifestEntry": { "type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": { "path": { "type": "string", "pattern": "^stdlib/.+\\.slg$" }, "sha256": { "$ref": "#/$defs/sha" } } },
+    "manifest": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/manifestEntry" } },
+    "stream": { "type": "object", "additionalProperties": false, "required": ["path", "sha256", "byteCount"], "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/sha" }, "byteCount": { "type": "integer", "minimum": 0 } } },
+    "process": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "expectedExitCode", "actualExitCode", "exitMatched", "rootProcessId", "rootTerminated", "descendantProcessIds", "orphanProcessIds", "warningNoteCount", "stdout", "stderr"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 }, "expectedExitCode": { "type": "integer" }, "actualExitCode": { "type": "integer" },
+        "exitMatched": { "type": "boolean" }, "rootProcessId": { "type": "integer", "minimum": 1 }, "rootTerminated": { "type": "boolean" },
+        "descendantProcessIds": { "$ref": "#/$defs/pids" }, "orphanProcessIds": { "$ref": "#/$defs/pids" },
+        "warningNoteCount": { "type": "integer", "minimum": 0 }, "stdout": { "$ref": "#/$defs/stream" }, "stderr": { "$ref": "#/$defs/stream" }
+      }
+    },
+    "audit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["link", "execute", "allocationCount", "releaseCount", "invalidReleaseCount", "balanced"],
+      "properties": {
+        "link": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stdout": { "properties": { "byteCount": { "const": 0 } } }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] },
+        "execute": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] },
+        "allocationCount": { "type": "integer", "minimum": 0 }, "releaseCount": { "type": "integer", "minimum": 0 },
+        "invalidReleaseCount": { "const": 0 }, "balanced": { "const": true }
+      }
+    },
+    "drop": {
+      "type": "object", "additionalProperties": false,
+      "required": ["childType", "parentType", "childDropFunction", "parentDropFunction", "childDropCallsInParent", "independentChildDropCalls", "parentDropCalls"],
+      "properties": {
+        "childType": { "type": "string", "minLength": 1 }, "parentType": { "type": "string", "minLength": 1 },
+        "childDropFunction": { "type": "string", "minLength": 1 }, "parentDropFunction": { "type": "string", "minLength": 1 },
+        "childDropCallsInParent": { "const": 1 }, "independentChildDropCalls": { "const": 0 }, "parentDropCalls": { "const": 1 }
+      }
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "status", "source", "sourceSha256", "compile", "run", "llvmPath", "llvmSha256", "llvmAs", "v004", "audit", "expectedStdoutSha256", "expectedStdoutByteCount", "outputExact", "diagnosticCount", "diagnosticExact", "llvmProduced", "warningNoteCount", "dropStructure", "passed", "failureId"],
+      "properties": {
+        "id": { "type": "string" }, "kind": { "enum": ["positive", "negative"] }, "status": { "enum": ["not-run", "passed", "failed"] },
+        "source": { "type": "string", "minLength": 1 }, "sourceSha256": { "$ref": "#/$defs/sha" },
+        "compile": { "anyOf": [{ "$ref": "#/$defs/process" }, { "type": "null" }] }, "run": { "anyOf": [{ "$ref": "#/$defs/process" }, { "type": "null" }] },
+        "llvmPath": { "type": ["string", "null"] }, "llvmSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+        "llvmAs": { "anyOf": [{ "$ref": "#/$defs/process" }, { "type": "null" }] }, "v004": { "anyOf": [{ "$ref": "#/$defs/process" }, { "type": "null" }] },
+        "audit": { "anyOf": [{ "$ref": "#/$defs/audit" }, { "type": "null" }] },
+        "expectedStdoutSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }, "expectedStdoutByteCount": { "type": ["integer", "null"], "minimum": 0 },
+        "outputExact": { "type": "boolean" }, "diagnosticCount": { "type": "integer", "minimum": 0 }, "diagnosticExact": { "type": "boolean" },
+        "llvmProduced": { "type": "boolean" }, "warningNoteCount": { "type": "integer", "minimum": 0 },
+        "dropStructure": { "anyOf": [{ "$ref": "#/$defs/drop" }, { "type": "null" }] },
+        "passed": { "type": "boolean" }, "failureId": { "type": ["string", "null"] }
+      }
+    },
+    "positive": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "kind": { "const": "positive" } } }] },
+    "negative": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "kind": { "const": "negative" } } }] },
+    "passedPositive": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": {
+      "status": { "const": "passed" }, "passed": { "const": true }, "failureId": { "type": "null" }, "outputExact": { "const": true },
+      "diagnosticCount": { "const": 0 }, "diagnosticExact": { "const": true }, "llvmProduced": { "const": true }, "warningNoteCount": { "const": 0 },
+      "compile": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] },
+      "run": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] },
+      "llvmPath": { "type": "string", "minLength": 1 }, "llvmSha256": { "$ref": "#/$defs/sha" },
+      "llvmAs": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stdout": { "properties": { "byteCount": { "const": 0 } } }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] },
+      "v004": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 0 }, "actualExitCode": { "const": 0 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stderr": { "properties": { "byteCount": { "const": 0 } } } } }] }
+    } }] },
+    "passedNegative": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": {
+      "status": { "const": "passed" }, "passed": { "const": true }, "failureId": { "type": "null" }, "outputExact": { "const": true },
+      "diagnosticCount": { "const": 1 }, "diagnosticExact": { "const": true }, "llvmProduced": { "const": false }, "warningNoteCount": { "const": 0 },
+      "compile": { "allOf": [{ "$ref": "#/$defs/process" }, { "properties": { "expectedExitCode": { "const": 1 }, "actualExitCode": { "const": 1 }, "exitMatched": { "const": true }, "rootTerminated": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "warningNoteCount": { "const": 0 }, "stdout": { "properties": { "byteCount": { "const": 0 } } }, "stderr": { "properties": { "byteCount": { "minimum": 1 } } } } }] },
+      "run": { "type": "null" }, "llvmPath": { "type": "null" }, "llvmSha256": { "type": "null" }, "llvmAs": { "type": "null" }, "v004": { "type": "null" }, "audit": { "type": "null" }, "dropStructure": { "type": "null" }
+    } }] },
+    "p1": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "P1" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "allOf": [{ "$ref": "#/$defs/passedPositive" }], "properties": { "expectedStdoutSha256": { "const": "43BFC8AFF8A11C543CA36CC722EFFE95F3EA1AA021D1A35A13A0F3BC33EAF990" }, "expectedStdoutByteCount": { "const": 17 }, "run": { "properties": { "stdout": { "properties": { "sha256": { "const": "43BFC8AFF8A11C543CA36CC722EFFE95F3EA1AA021D1A35A13A0F3BC33EAF990" }, "byteCount": { "const": 17 } } } } }, "audit": { "allOf": [{ "$ref": "#/$defs/audit" }, { "properties": { "allocationCount": { "const": 1 }, "releaseCount": { "const": 1 } } }] }, "dropStructure": { "$ref": "#/$defs/drop" } } } }] }] },
+    "r424a": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "R424A" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "allOf": [{ "$ref": "#/$defs/passedPositive" }], "properties": { "expectedStdoutSha256": { "const": "99087F276C5EF3D2217EA023A7416891E472C10F3A73875BF9F2C3D82B9DC8B6" }, "expectedStdoutByteCount": { "const": 11 }, "run": { "properties": { "stdout": { "properties": { "sha256": { "const": "99087F276C5EF3D2217EA023A7416891E472C10F3A73875BF9F2C3D82B9DC8B6" }, "byteCount": { "const": 11 } } } } }, "audit": { "allOf": [{ "$ref": "#/$defs/audit" }, { "properties": { "allocationCount": { "const": 2 }, "releaseCount": { "const": 2 } } }] }, "dropStructure": { "type": "null" } } } }] }] },
+    "n1": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "N1" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "$ref": "#/$defs/passedNegative" } }] }] },
+    "n2": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "N2" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "$ref": "#/$defs/passedNegative" } }] }] },
+    "r424n1": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "R424N1" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "$ref": "#/$defs/passedNegative" } }] }] },
+    "r424n2": { "allOf": [{ "$ref": "#/$defs/negative" }, { "properties": { "id": { "const": "R424N2" } }, "allOf": [{ "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "$ref": "#/$defs/passedNegative" } }] }] }
+  }
+}

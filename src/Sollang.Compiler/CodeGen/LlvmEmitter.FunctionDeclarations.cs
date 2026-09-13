@@ -670,6 +670,7 @@ internal sealed partial class LlvmEmitter
         const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
         var parameters = new[]
             {
+                _usesAsyncDiagnostics && function.IsAsync ? "ptr %diagnostic_context" : string.Empty,
                 CaptureParameterListForFunction(function),
                 ExplicitParameterListForFunction(function)
             }

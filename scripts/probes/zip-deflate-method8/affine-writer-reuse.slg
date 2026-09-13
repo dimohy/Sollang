@@ -1,0 +1,16 @@
+import std.archive.zip as zip_archive
+
+run: -> Result<Unit, zip_archive.Error> {
+    zip_archive.Limits { maxEncodedBytes: 128, maxDecodedBytes: 16, maxNameBytes: 16, maxExtraBytes: 4, maxCommentBytes: 4 } -> codec? => codec
+    codec -> writer(zip_archive.WriterLimits { maxEncodedBytes: 128, maxEntryBytes: 16, maxEntries: 1, maxNameBytes: 16, maxExtraBytes: 4, maxCommentBytes: 4, maxDirectoryBytes: 64, maxWorkUnits: 128 })? => writer!
+    [UInt8; ~] => scratch!
+    [UInt8; ~] => output!
+    writer! -> addDeflated(['d'], [UInt8; ~], ['x'], zip_archive.DeflateLimits { maxCompressedBytes: 16, maxExpansionRatio: 16, maxWorkUnits: 64 }, scratch!, output!)? => added
+    writer! -> finish([UInt8; ~], output!)? => first
+    writer! -> finish([UInt8; ~], output!)? => second
+    Result<Unit, zip_archive.Error>.Ok
+}
+
+main {
+    run() -> when { Ok(_) {} Err(_) {} }
+}

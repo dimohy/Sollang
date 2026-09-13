@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "scope", "completed", "total", "checks", "failureIds", "inputHashesStart", "inputHashesEnd", "inputDrift", "matrix"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["running", "passed", "failed"] },
+    "scope": { "const": "async-task-observability-contract-freeze" },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 14 },
+    "total": { "const": 14 },
+    "checks": { "type": "array", "maxItems": 14, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" } },
+    "inputHashesStart": { "$ref": "#/$defs/hashMap" },
+    "inputHashesEnd": { "$ref": "#/$defs/hashMap" },
+    "inputDrift": { "type": "boolean" },
+    "matrix": {
+      "type": "object", "additionalProperties": false,
+      "required": ["contractStatic", "managed", "selfhost", "platform", "platformByTarget", "classes"],
+      "properties": {
+        "contractStatic": { "const": 14 }, "managed": { "const": 13 }, "selfhost": { "const": 13 }, "platform": { "const": 17 },
+        "platformByTarget": { "type": "object" }, "classes": { "type": "object" }
+      }
+    },
+    "failure": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "hashMap": {
+      "type": "object", "minProperties": 1,
+      "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 14 }, "failureIds": { "maxItems": 0 }, "inputDrift": { "const": false } } } },
+    { "if": { "properties": { "status": { "const": "failed" } } }, "then": { "required": ["failure"], "properties": { "failureIds": { "minItems": 1 } } } }
+  ]
+}

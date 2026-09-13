@@ -110,6 +110,12 @@ internal sealed partial class LlvmEmitter
             EmitStackLifetimeEndsAfter(statement);
             return;
         }
+        if (statement is ExpressionStatement cfgAwaitExpression
+            && TryEmitCfgAwaitExpressionStatement(cfgAwaitExpression))
+        {
+            EmitStackLifetimeEndsAfter(statement);
+            return;
+        }
         if (statement is BindingStatement cfgAwait && TryEmitCfgAwaitBinding(cfgAwait))
         {
             EmitStackLifetimeEndsAfter(statement);
@@ -119,7 +125,7 @@ internal sealed partial class LlvmEmitter
         switch (statement)
         {
             case BindingStatement binding:
-                var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value)
+                string? movedSourceName = GetMoveConsumingContainerSourceName(binding.Value)
                     ?? (binding.Value is NameExpression directOwnedSource
                         && _locals.TryGetValue(directOwnedSource.Name, out var directOwnedValue)
                         && IsOwnedContainerRuntimeValue(directOwnedValue)
@@ -129,7 +135,15 @@ internal sealed partial class LlvmEmitter
                     && _locals.TryGetValue(binding.Name, out var reboundLocal)
                         ? EmitFunctionArgumentExpression(binding.Value, reboundLocal.Type)
                         : EmitExpression(binding.Value);
-                var movedOwnedField = GetMoveConsumingOwnedField(binding.Value, value);
+                var copiesFixedStorage = CopiesFixedStorageField(binding.Value, value.Type);
+                if (copiesFixedStorage)
+                {
+                    value = CopyFixedStorageValue(value);
+                    movedSourceName = null;
+                }
+                var movedOwnedField = copiesFixedStorage
+                    ? null
+                    : GetMoveConsumingOwnedField(binding.Value, value);
                 if (binding.IsMutable
                     && _mutableScalarSlots.TryGetValue(binding.Name, out var reboundPointer))
                 {
@@ -163,13 +177,13 @@ internal sealed partial class LlvmEmitter
                 {
                     MarkMovedOwnedStructField(
                         movedOwnedField.Value.OwnerName,
-                        movedOwnedField.Value.FieldName);
+                        movedOwnedField.Value.FieldPath);
                 }
                 // A direct field extracted from `move self` leaves a partially
                 // live aggregate.  Its exact moved-field mask replaces the
                 // generic aggregate-literal transfer path, which consumes the
                 // complete projected owner.
-                if (movedOwnedField is null)
+                if (movedOwnedField is null && !copiesFixedStorage)
                 {
                     RemoveOwnedLiteralSources(binding.Value, value.Type);
                 }
@@ -234,7 +248,7 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"'{statement.Kind.ToString().ToLowerInvariant()}' is only valid inside a loop");
         }
 
-        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)]);
+        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
         DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
@@ -300,7 +314,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(exitLabel);
         _currentBlockLabel = exitLabel;
-        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)]);
+        MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
         DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
@@ -331,7 +345,7 @@ internal sealed partial class LlvmEmitter
             EmitStatements(statements);
             if (!_currentBlockTerminated)
             {
-                MergeOwnedStructFieldMoves(outerScope, [(CaptureLocals(), _currentBlockLabel)]);
+                MergeOwnedStructFieldMoves(outerScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
                 DropOwnedLocalsCreatedSince(outerScope, transferredOwnerName: null);
             }
             if (!_currentBlockTerminated && _currentStreamCancellationSlot is { } cancellationSlot)
@@ -534,26 +548,20 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private (string OwnerName, string FieldName)? GetMoveConsumingOwnedField(
+    private (string OwnerName, string FieldPath)? GetMoveConsumingOwnedField(
         Expression expression,
         RuntimeValue value)
     {
-        if (expression is not FieldAccessExpression
-            {
-                Source: NameExpression owner,
-                FieldName: var fieldName
-            }
-            || _currentFunction is null
-            || _currentFunction.InputOwnership is not (
-                BoundFunctionInputOwnership.Move
-                or BoundFunctionInputOwnership.MutableBorrow)
-            || !string.Equals(owner.Name, _currentFunction.InputName ?? "it", StringComparison.Ordinal)
+        if (!TryGetOwnedFieldProjection(expression, out var ownerName, out var fieldPath)
+            || !_locals.TryGetValue(ownerName, out var ownerValue)
+            || ownerValue is not RuntimeStruct
+            || _borrowedOwnedLocals.Contains(ownerName)
             || !_program.Types.ContainsOwnedStorage(value.Type))
         {
             return null;
         }
 
-        return (owner.Name, fieldName);
+        return (ownerName, string.Join('.', fieldPath));
     }
 
     private void EmitBlockFunctionCall(BlockFunctionCallStatement statement)
@@ -1398,7 +1406,9 @@ internal sealed partial class LlvmEmitter
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
                 new Dictionary<string, string>(StringComparer.Ordinal),
-                new Dictionary<RuntimeValue, string>());
+                new Dictionary<RuntimeValue, string>(),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                []);
             var parameters = function.AdditionalParameters ?? [];
             if (parameters.Count != arguments.Count)
             {
@@ -1591,7 +1601,13 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"block function '{function.Name}' is not callable");
         }
 
-        var argument = streamedArgument ?? EmitExpression(statement.Source);
+        var argument = streamedArgument ?? (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
+            ? CreateMutableBorrowArgument(
+                statement.Source,
+                function.InputType.Value,
+                function.Name,
+                function.InputName ?? "it")
+            : EmitExpression(statement.Source));
         EnsureRuntimeType(argument, function.InputType.Value, function.Name);
         var additionalParameters = function.AdditionalParameters ?? [];
         var argumentExpressions = statement.Arguments ?? [];
@@ -1601,7 +1617,13 @@ internal sealed partial class LlvmEmitter
                 $"block function '{function.Name}' expects {additionalParameters.Count} additional argument(s)");
         }
         var additionalArguments = streamedAdditionalArguments
-            ?? argumentExpressions.Select(EmitExpression).ToArray();
+            ?? argumentExpressions.Select((expression, index) =>
+            {
+                var parameter = additionalParameters[index];
+                return parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow
+                    ? CreateMutableBorrowArgument(expression, parameter.Type, function.Name, parameter.Name)
+                    : EmitFlowAdditionalValue(parameter.Type, expression);
+            }).ToArray();
 
         var returnLocals = CaptureLocals();
         var callerLocals = callSite?.Locals ?? returnLocals;
@@ -1612,10 +1634,7 @@ internal sealed partial class LlvmEmitter
         var previousFunctions = _currentFunctions;
         var previousFunction = _currentFunction;
         var blockLocals = new LocalScope(
-            new Dictionary<string, RuntimeValue>(StringComparer.Ordinal)
-            {
-                [function.InputName ?? "it"] = argument
-            },
+            new Dictionary<string, RuntimeValue>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
@@ -1624,14 +1643,9 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
-            new Dictionary<RuntimeValue, string>());
-        for (var index = 0; index < additionalParameters.Count; index++)
-        {
-            var parameter = additionalParameters[index];
-            EnsureRuntimeType(additionalArguments[index], parameter.Type, parameter.Name);
-            blockLocals.Locals[parameter.Name] = additionalArguments[index];
-        }
-
+            new Dictionary<RuntimeValue, string>(),
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            []);
         var additionalBlockParameters = function.AdditionalBlockParameters ?? [];
         var additionalItemNames = statement.AdditionalItemNames ?? [];
         if (additionalItemNames.Count != additionalBlockParameters.Count)
@@ -1656,6 +1670,7 @@ internal sealed partial class LlvmEmitter
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
         _currentFunction = function;
         RestoreLocals(blockLocals);
+        BindInlineFunctionParameters(function, argument, additionalArguments);
         RuntimeValue result = RuntimeUnit.Instance;
         try
         {

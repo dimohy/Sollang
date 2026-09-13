@@ -1,0 +1,30 @@
+native copyTailOwner from "c399_owner" {
+    handle Owner drop "c399_owner_drop"
+    create value: Int32 -> copyTailOwner.Owner as "c399_owner_create"
+    value self: ref copyTailOwner.Owner -> Int32 as "c399_owner_value"
+    allocations: -> Int32 as "c399_owner_allocations"
+    releases: -> Int32 as "c399_owner_releases"
+    invalidReleases: -> Int32 as "c399_owner_invalid_releases"
+}
+
+struct Aggregate {
+    first: copyTailOwner.Owner
+    second: copyTailOwner.Owner
+    code: Int32
+}
+
+consume value: move Aggregate -> Unit uses Console {
+    value.first => first
+    value.second => second
+    value.code => code
+    "first=$(copyTailOwner.value(first)),second=$(copyTailOwner.value(second)),code=$code" -> println
+}
+
+main {
+    Aggregate {
+        first: copyTailOwner.create(1)
+        second: copyTailOwner.create(2)
+        code: 7
+    } -> consume
+    "allocations=$(copyTailOwner.allocations()),releases=$(copyTailOwner.releases()),invalid=$(copyTailOwner.invalidReleases())" -> println
+}

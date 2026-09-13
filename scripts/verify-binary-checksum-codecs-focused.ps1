@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$CompilerPath,
     [string]$OutputDirectory = "",
     [string]$WslDistribution = "Ubuntu"
 )
@@ -9,6 +10,20 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+if ([string]::IsNullOrWhiteSpace($CompilerPath)) {
+    throw "Binary/checksum verification requires an explicit CompilerPath"
+}
+$compilerInput = if ([IO.Path]::IsPathRooted($CompilerPath)) { $CompilerPath } else { Join-Path $root $CompilerPath }
+$compilerPath = [IO.Path]::GetFullPath($compilerInput)
+if (-not (Test-Path -LiteralPath $compilerPath -PathType Leaf)) {
+    throw "Binary/checksum compiler does not exist: $compilerPath"
+}
+$compilerExtension = [IO.Path]::GetExtension($compilerPath).ToLowerInvariant()
+if ($compilerExtension -notin @(".dll", ".exe")) {
+    throw "Binary/checksum compiler must be a .dll or .exe: $compilerPath"
+}
+$compilerDispatch = if ($compilerExtension -ceq ".dll") { "dotnet" } else { "direct" }
+
 $scratchRoot = [IO.Path]::GetFullPath((Join-Path $root "artifacts\scratch"))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
     $OutputDirectory = Join-Path $scratchRoot ("binary-checksum-codecs-" + [guid]::NewGuid().ToString("N"))
@@ -33,11 +48,14 @@ if (-not $resolvedOutput.StartsWith($scratchPrefix, [StringComparison]::OrdinalI
 $contractPath = Join-Path $root "scripts\contracts\binary-checksum-codecs.json"
 $verifierPath = Join-Path $root "scripts\verify-binary-checksum-codecs-focused.ps1"
 $formatVerifier = Join-Path $root "scripts\format-authoritative-slg.ps1"
-$compilerPath = Join-Path $root "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
 $llvmRoot = Join-Path $root ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmRoot "bin\clang.exe"
 $wasmLdPath = Join-Path $llvmRoot "bin\wasm-ld.exe"
-$dotnetPath = @((Get-Command dotnet -CommandType Application -ErrorAction Stop))[0].Source
+$dotnetPath = if ($compilerDispatch -ceq "dotnet") {
+    @((Get-Command dotnet -CommandType Application -ErrorAction Stop))[0].Source
+} else {
+    $null
+}
 $pwshPath = @((Get-Command pwsh -CommandType Application -ErrorAction Stop))[0].Source
 $wslPath = @((Get-Command wsl.exe -CommandType Application -ErrorAction Stop))[0].Source
 $nodePath = @((Get-Command node.exe -CommandType Application -ErrorAction Stop))[0].Source
@@ -62,7 +80,9 @@ $moduleSources = @(
 )
 
 $inputPaths = [Collections.Generic.List[string]]::new()
-foreach ($relative in @($moduleSources) + @($contractPath, $verifierPath, $formatVerifier, $compilerPath, $clangPath, $wasmLdPath, $dotnetPath, $pwshPath, $wslPath, $nodePath, $browserRunner)) {
+$toolInputPaths = @($compilerPath, $clangPath, $wasmLdPath, $pwshPath, $wslPath, $nodePath)
+if ($null -ne $dotnetPath) { $toolInputPaths += $dotnetPath }
+foreach ($relative in @($moduleSources) + @($contractPath, $verifierPath, $formatVerifier, $browserRunner) + $toolInputPaths) {
     $path = if ([IO.Path]::IsPathRooted($relative)) { $relative } else { Join-Path $root $relative }
     $inputPaths.Add([IO.Path]::GetFullPath($path))
 }
@@ -133,6 +153,17 @@ function Invoke-CheckedProcess {
     } finally {
         $process.Dispose()
     }
+}
+
+function Invoke-Compiler {
+    param(
+        [AllowEmptyCollection()][string[]]$ArgumentList,
+        [Parameter(Mandatory)][string]$Description
+    )
+    if ($compilerDispatch -ceq "dotnet") {
+        return Invoke-CheckedProcess -FilePath $dotnetPath -ArgumentList (@($compilerPath) + @($ArgumentList)) -Description $Description
+    }
+    Invoke-CheckedProcess -FilePath $compilerPath -ArgumentList $ArgumentList -Description $Description
 }
 
 function Normalize-ExactOutput {
@@ -252,8 +283,8 @@ foreach ($case in $positiveAuthority) {
         foreach ($optimization in @("O0", "O2")) {
             $extension = if ($target -ceq "windows-x64") { ".exe" } elseif ($target -ceq "linux-x64") { ".linux" } else { ".wasm" }
             $artifact = Join-Path $outputRoot "$($case.id).$target.$optimization$extension"
-            $compile = Invoke-CheckedProcess -FilePath $dotnetPath -ArgumentList @(
-                $compilerPath, "build", $sourcePath, "-o", $artifact,
+            $compile = Invoke-Compiler -ArgumentList @(
+                "build", $sourcePath, "-o", $artifact,
                 "--target", $target, "-$optimization", "--llvm", $llvmRoot
             ) -Description "$($case.id) $target $optimization compilation"
             Assert-CompileTranscript $compile $artifact "$($case.id) $target $optimization compilation"
@@ -296,8 +327,8 @@ foreach ($case in $negativeAuthority) {
     $sourcePath = Join-Path $root $case.source
     $artifact = Join-Path $outputRoot "$($case.id).exe"
     $beforeFiles = @(Get-ChildItem -LiteralPath $outputRoot -Recurse -File | Select-Object -ExpandProperty FullName)
-    $compile = Invoke-CheckedProcess -FilePath $dotnetPath -ArgumentList @(
-        $compilerPath, "build", $sourcePath, "-o", $artifact,
+    $compile = Invoke-Compiler -ArgumentList @(
+        "build", $sourcePath, "-o", $artifact,
         "--target", "windows-x64", "-O0", "--llvm", $llvmRoot
     ) -Description "$($case.id) negative compilation"
     if (-not $compile.HasExited -or $compile.ExitCode -eq 0) { throw "$($case.id) unexpectedly compiled" }
@@ -326,14 +357,17 @@ foreach ($key in $startingHashes.Keys) {
     if ($startingHashes[$key] -cne $endingHashes[$key]) { throw "Binary/checksum input changed during verification: $key" }
 }
 $toolHashes = [ordered]@{
-    compiler = [ordered]@{ path = $compilerPath; sha256 = $endingHashes[(Get-HashKey $compilerPath)] }
-    dotnet = [ordered]@{ path = $dotnetPath; sha256 = $endingHashes[(Get-HashKey $dotnetPath)] }
+    compiler = [ordered]@{ path = $compilerPath; sha256 = $endingHashes[(Get-HashKey $compilerPath)]; dispatch = $compilerDispatch }
     pwsh = [ordered]@{ path = $pwshPath; sha256 = $endingHashes[(Get-HashKey $pwshPath)] }
     wsl = [ordered]@{ path = $wslPath; sha256 = $endingHashes[(Get-HashKey $wslPath)] }
     clang = [ordered]@{ path = $clangPath; sha256 = $endingHashes[(Get-HashKey $clangPath)] }
     node = [ordered]@{ path = $nodePath; sha256 = $endingHashes[(Get-HashKey $nodePath)] }
     wasmLd = [ordered]@{ path = $wasmLdPath; sha256 = $endingHashes[(Get-HashKey $wasmLdPath)] }
 }
+if ($null -ne $dotnetPath) {
+    $toolHashes["dotnet"] = [ordered]@{ path = $dotnetPath; sha256 = $endingHashes[(Get-HashKey $dotnetPath)] }
+}
+$compilerSha256 = $endingHashes[(Get-HashKey $compilerPath)]
 $productionSourceHashes = [ordered]@{}
 foreach ($source in $moduleSources) {
     $productionSourceHashes[$source] = $endingHashes[$source]
@@ -347,9 +381,14 @@ $result = [ordered]@{
     total = 27
     positive = [ordered]@{ completed = $positiveResults.Count; total = 24; checks = $positiveResults }
     negative = [ordered]@{ completed = $negativeResults.Count; total = 3; checks = $negativeResults }
+    compilerProvenance = [ordered]@{
+        path = $compilerPath
+        sha256 = $compilerSha256
+        dispatch = $compilerDispatch
+    }
     managedExecution = [ordered]@{
         status = "passed"
-        compiler = "current-managed"
+        compiler = "explicit-$compilerDispatch"
         completed = $positiveResults.Count
         total = 24
         optimizations = @("O0", "O2")
@@ -386,7 +425,7 @@ $result = [ordered]@{
     hashVerification = [ordered]@{
         status = "passed"
         inputs = [ordered]@{ completed = $endingHashes.Count; total = $endingHashes.Count }
-        tools = [ordered]@{ completed = $toolHashes.Count; total = 7 }
+        tools = [ordered]@{ completed = $toolHashes.Count; total = $toolHashes.Count }
         productionSources = [ordered]@{
             completed = $productionSourceHashes.Count
             total = 4
@@ -408,10 +447,16 @@ if ($publishedText -cnotmatch '"failureIds"\s*:\s*\[\s*\]' -or
     $published.finalStageIntegration.status -cne "pending" -or
     $published.finalStageIntegration.completed -ne 0 -or
     $published.finalStageIntegration.total -ne 2 -or
+    $published.compilerProvenance.path -cne $compilerPath -or
+    $published.compilerProvenance.sha256 -cne $compilerSha256 -or
+    $published.compilerProvenance.dispatch -cne $compilerDispatch -or
+    $published.toolHashes.compiler.path -cne $compilerPath -or
+    $published.toolHashes.compiler.sha256 -cne $compilerSha256 -or
+    $published.toolHashes.compiler.dispatch -cne $compilerDispatch -or
     $published.hashVerification.inputs.completed -ne $endingHashes.Count -or
     $published.hashVerification.inputs.total -ne $endingHashes.Count -or
-    $published.hashVerification.tools.completed -ne 7 -or
-    $published.hashVerification.tools.total -ne 7 -or
+    $published.hashVerification.tools.completed -ne $toolHashes.Count -or
+    $published.hashVerification.tools.total -ne $toolHashes.Count -or
     $published.hashVerification.productionSources.completed -ne 4 -or
     $published.hashVerification.productionSources.total -ne 4) {
     throw "Binary/checksum structured result contract failed after publication"

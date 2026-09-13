@@ -1,0 +1,54 @@
+namespace probes.async_task_observability.two_task_track_minimal
+
+import std.async.diagnostics as diagnostics
+
+firstValue: -> async Int { 11 }
+
+secondValue: -> async Int {
+    yield
+    22
+}
+
+public observe: -> async Unit uses Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 2 }) => opened
+    opened -> when {
+        Ok(session) {
+            session => activeSession!
+            firstValue() => firstPending
+            activeSession! -> track(firstPending) => firstResult
+            firstResult -> when {
+                Ok(first) {
+                    secondValue() => secondPending
+                    activeSession! -> track(secondPending) => secondResult
+                    secondResult -> when {
+                        Ok(second) {
+                            second -> await -> println
+                            sys.runtime.flushStandardOutput()
+                            first -> await -> println
+                            sys.runtime.flushStandardOutput()
+                            activeSession! -> close => closed
+                            "done" -> println
+                            sys.runtime.flushStandardOutput()
+                        }
+                        Err(failure) {
+                            failure._0 -> await => failedSecond
+                            activeSession! -> close => failedClose
+                            "second-track-error" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => failedFirst
+                    activeSession! -> close => failedClose
+                    "first-track-error" -> println
+                }
+            }
+        }
+        Err(error) { "open-error" -> println }
+    }
+}
+
+main {
+    probes.async_task_observability.two_task_track_minimal.observe() => observation
+    observation -> await
+}

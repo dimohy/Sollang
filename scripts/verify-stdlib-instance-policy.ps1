@@ -44,31 +44,135 @@ $discovered = [System.Collections.Generic.Dictionary[string, string]]::new(
 $declarationByApi = [System.Collections.Generic.Dictionary[string, string]]::new(
     [System.StringComparer]::Ordinal)
 $declarationPattern = '^public\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)(?:<[^>]+>)?(?:\s+[^:]*)?:'
-foreach ($file in Get-ChildItem -LiteralPath $stdlibRoot -Recurse -File -Filter "*.slg") {
-    $lines = Get-Content -LiteralPath $file.FullName
-    $namespace = $null
-    for ($index = 0; $index -lt $lines.Count; $index++) {
-        $line = $lines[$index]
-        if ($line -match '^namespace\s+(?<namespace>[A-Za-z_][A-Za-z0-9_.]*)\s*$') {
-            $namespace = $Matches.namespace
-            continue
-        }
-        if ($line -notmatch $declarationPattern) {
-            if (($line -match '^public\s+') -and
-                ($line -notmatch '^public\s+(?:struct|enum|trait)\s+')) {
-                throw "unrecognized top-level public declaration at $($file.FullName):$($index + 1)"
+
+function Get-SlgStructuralLine {
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Line,
+        [Parameter(Mandatory)][ref]$InTripleQuotedString
+    )
+
+    $result = [System.Text.StringBuilder]::new($Line.Length)
+    $quote = [char]34
+    $apostrophe = [char]39
+    $escape = [char]92
+    $index = 0
+    while ($index -lt $Line.Length) {
+        if ($InTripleQuotedString.Value) {
+            if ($index + 2 -lt $Line.Length -and
+                $Line[$index] -eq $quote -and $Line[$index + 1] -eq $quote -and
+                $Line[$index + 2] -eq $quote) {
+                $InTripleQuotedString.Value = $false
+                [void]$result.Append('   ')
+                $index += 3
+            } else {
+                [void]$result.Append(' ')
+                $index++
             }
             continue
         }
-        if ([string]::IsNullOrWhiteSpace($namespace)) {
-            throw "public global function has no namespace at $($file.FullName):$($index + 1)"
+
+        $character = $Line[$index]
+        if ($character -eq '#' -or
+            ($character -eq '/' -and $index + 1 -lt $Line.Length -and $Line[$index + 1] -eq '/')) {
+            break
         }
-        $api = "$namespace.$($Matches.name)"
-        $location = "$($file.FullName):$($index + 1)"
-        if (-not $discovered.TryAdd($api, $location)) {
-            throw "duplicate public global function '$api' at $location and $($discovered[$api])"
+        if ($character -eq $quote -and $index + 2 -lt $Line.Length -and
+            $Line[$index + 1] -eq $quote -and $Line[$index + 2] -eq $quote) {
+            $InTripleQuotedString.Value = $true
+            [void]$result.Append('   ')
+            $index += 3
+            continue
         }
-        $declarationByApi.Add($api, $line.Trim())
+        if ($character -eq $quote -or $character -eq $apostrophe) {
+            $delimiter = $character
+            [void]$result.Append(' ')
+            $index++
+            $escaped = $false
+            while ($index -lt $Line.Length) {
+                $literalCharacter = $Line[$index]
+                [void]$result.Append(' ')
+                $index++
+                if ($escaped) {
+                    $escaped = $false
+                } elseif ($literalCharacter -eq $escape) {
+                    $escaped = $true
+                } elseif ($literalCharacter -eq $delimiter) {
+                    break
+                }
+            }
+            continue
+        }
+        [void]$result.Append($character)
+        $index++
+    }
+    $result.ToString()
+}
+
+function Get-SlgBraceDelta {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$StructuralLine)
+    [regex]::Matches($StructuralLine, '\{').Count - [regex]::Matches($StructuralLine, '\}').Count
+}
+
+function Assert-SlgStructuralScanner {
+    $triple = $false
+    if ((Get-SlgBraceDelta (Get-SlgStructuralLine 'impl Demo { # }' ([ref]$triple))) -ne 1 -or $triple) {
+        throw 'SLG structural scanner did not ignore a hash-comment brace'
+    }
+    if ((Get-SlgBraceDelta (Get-SlgStructuralLine 'value => "{ }" // {' ([ref]$triple))) -ne 0 -or $triple) {
+        throw 'SLG structural scanner did not ignore quoted and slash-comment braces'
+    }
+    if ((Get-SlgBraceDelta (Get-SlgStructuralLine 'value => """{' ([ref]$triple))) -ne 0 -or -not $triple) {
+        throw 'SLG structural scanner did not enter a triple-quoted string'
+    }
+    if ((Get-SlgBraceDelta (Get-SlgStructuralLine '}"""' ([ref]$triple))) -ne 0 -or $triple) {
+        throw 'SLG structural scanner did not leave a triple-quoted string'
+    }
+    if ((Get-SlgBraceDelta (Get-SlgStructuralLine "value => '{'; }" ([ref]$triple))) -ne -1 -or $triple) {
+        throw 'SLG structural scanner did not ignore a character-literal brace'
+    }
+}
+
+Assert-SlgStructuralScanner
+foreach ($file in Get-ChildItem -LiteralPath $stdlibRoot -Recurse -File -Filter "*.slg") {
+    $lines = Get-Content -LiteralPath $file.FullName
+    $namespace = $null
+    $braceDepth = 0
+    $implBodyDepth = 0
+    $inTripleQuotedString = $false
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $line = $lines[$index]
+        $structuralLine = Get-SlgStructuralLine $line ([ref]$inTripleQuotedString)
+        if ($braceDepth -eq 0 -and $structuralLine -match '^namespace\s+(?<namespace>[A-Za-z_][A-Za-z0-9_.]*)\s*$') {
+            $namespace = $Matches.namespace
+        }
+        if ($braceDepth -eq 0 -and $structuralLine -match '^impl\s+[A-Za-z_][A-Za-z0-9_.]*(?:<[^>]+>)?\s*\{') {
+            $implBodyDepth = $braceDepth + 1
+        } elseif ($braceDepth -eq 0 -and $structuralLine -notmatch '^public\s+(?:struct|enum|trait)\s+') {
+            if ($structuralLine -match $declarationPattern) {
+                if ([string]::IsNullOrWhiteSpace($namespace)) {
+                    throw "public global function has no namespace at $($file.FullName):$($index + 1)"
+                }
+                $api = "$namespace.$($Matches.name)"
+                $location = "$($file.FullName):$($index + 1)"
+                if (-not $discovered.TryAdd($api, $location)) {
+                    throw "duplicate public global function '$api' at $location and $($discovered[$api])"
+                }
+                $declarationByApi.Add($api, $line.Trim())
+            } elseif ($structuralLine -match '^public\s+') {
+                throw "unrecognized top-level public declaration at $($file.FullName):$($index + 1)"
+            }
+        }
+
+        $braceDepth += Get-SlgBraceDelta $structuralLine
+        if ($braceDepth -lt 0) {
+            throw "SLG structural brace depth became negative at $($file.FullName):$($index + 1)"
+        }
+        if ($implBodyDepth -gt 0 -and $braceDepth -lt $implBodyDepth) {
+            $implBodyDepth = 0
+        }
+    }
+    if ($inTripleQuotedString -or $braceDepth -ne 0 -or $implBodyDepth -ne 0) {
+        throw "SLG structural scope did not close in $($file.FullName)"
     }
 }
 

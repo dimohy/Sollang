@@ -1,0 +1,127 @@
+namespace probes.async_task_observability.stable_id_transitions
+
+import std.async.diagnostics as diagnostics
+
+printParent value: Option<UInt64> -> Unit uses Console {
+    value -> when {
+        Some(id) { "Some($id)" -> print }
+        None { "None" -> print }
+    }
+}
+
+printLifecycle value: diagnostics.Lifecycle -> Unit uses Console {
+    value -> when {
+        diagnostics.Lifecycle.Pending { "Pending" -> print }
+        diagnostics.Lifecycle.Running { "Running" -> print }
+        diagnostics.Lifecycle.Completed { "Completed" -> print }
+        diagnostics.Lifecycle.Cancelled { "Cancelled" -> print }
+    }
+}
+
+printWait value: diagnostics.WaitState -> Unit uses Console {
+    value -> when {
+        diagnostics.WaitState.None { "None" -> print }
+        diagnostics.WaitState.Ready { "Ready" -> print }
+        diagnostics.WaitState.Timer { "Timer" -> print }
+        diagnostics.WaitState.AwaitBlocked { "AwaitBlocked" -> print }
+    }
+}
+
+printSuspension value: Option<diagnostics.SuspensionLocator> -> Unit uses Console {
+    value -> when {
+        Some(locator) { "Some(sourceModule=$(locator.sourceModule);functionSymbol=$(locator.functionSymbol);resumeState=$(locator.resumeState);byteOffset=$(locator.byteOffset);line=$(locator.line);column=$(locator.column))" -> print }
+        None { "None" -> print }
+    }
+}
+
+printDeadline value: UInt64 -> Unit uses Console {
+    value == 0 -> if { "0" -> print } else { "nonzero" -> print }
+}
+
+printTask value: diagnostics.TaskSnapshot -> Unit uses Console {
+    "task taskId=$(value.taskId) parentTaskId=" -> print
+    value.parentTaskId -> printParent
+    " lifecycle=" -> print
+    value.lifecycle -> printLifecycle
+    " waitState=" -> print
+    value.waitState -> printWait
+    " awaitedTaskId=" -> print
+    value.awaitedTaskId -> printParent
+    " timerDeadlineMillis=" -> print
+    value.timerDeadlineMillis -> printDeadline
+    " suspension=" -> print
+    value.suspension -> printSuspension
+    "" -> println
+}
+
+printSnapshot result: diagnostics.SnapshotResult, snapshots: move [diagnostics.TaskSnapshot; 2] -> [diagnostics.TaskSnapshot; 2] uses Console {
+    "snapshot sessionId=$(result.sessionId) written=$(result.written) available=$(result.available) truncated=$(result.truncated)" -> println
+    snapshots[0] -> printTask
+    result.written > 1 -> if { snapshots[1] -> printTask }
+    snapshots
+}
+
+emptySnapshot: -> diagnostics.TaskSnapshot => diagnostics.TaskSnapshot {
+    taskId: 0,
+    parentTaskId: Option<UInt64>.None,
+    lifecycle: diagnostics.Lifecycle.Pending,
+    waitState: diagnostics.WaitState.None,
+    awaitedTaskId: Option<UInt64>.None,
+    timerDeadlineMillis: 0,
+    suspension: Option<diagnostics.SuspensionLocator>.None
+}
+
+firstValue: -> async Int { 11 }
+
+secondValue: -> async Int {
+    yield
+    22
+}
+
+public observe: -> async Unit uses Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 2 }) => opened
+    opened -> when {
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
+            session => activeSession!
+            firstValue() => firstPending
+            activeSession! -> track(firstPending) => firstResult
+            firstResult -> when {
+                Ok(first) {
+                    secondValue() => secondPending
+                    activeSession! -> track(secondPending) => secondResult
+                    secondResult -> when {
+                        Ok(second) {
+                            [emptySnapshot(), emptySnapshot()] => output!
+                            activeSession! -> snapshot<2>(output!) => bothReady
+                            bothReady -> printSnapshot(output!) => output1!
+                            yield
+                            activeSession! -> snapshot<2>(output1!) => firstCompleted
+                            firstCompleted -> printSnapshot(output1!) => output2!
+                            second -> await -> println
+                            first -> await -> println
+                            activeSession! -> snapshot<2>(output2!) => bothCompleted
+                            bothCompleted -> printSnapshot(output2!) => output3
+                            activeSession! -> close => closed
+                        }
+                        Err(failure) {
+                            failure._0 -> await => failedSecond
+                            activeSession! -> close => failedClose
+                            "second-track-error" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => failedFirst
+                    activeSession! -> close => failedClose
+                    "first-track-error" -> println
+                }
+            }
+        }
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+    }
+}
+
+main {
+    probes.async_task_observability.stable_id_transitions.observe() => observation
+    observation -> await
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defectId", "status", "managedCompiler", "selfhostCompiler", "inputStable", "inputDrift", "inputHashesStart", "inputHashesEnd", "authority", "typedIr", "fixtures", "failureIds", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-12-385" },
+    "status": { "enum": ["passed", "failed"] },
+    "managedCompiler": { "$ref": "#/definitions/compiler" },
+    "selfhostCompiler": { "$ref": "#/definitions/compiler" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashesStart": { "$ref": "#/definitions/hashes" },
+    "inputHashesEnd": { "$ref": "#/definitions/hashes" },
+    "authority": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "fixtureCount", "familyCount"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 3 }, "total": { "const": 3 }, "fixtureCount": { "const": 4 }, "familyCount": { "const": 13 } }
+    },
+    "typedIr": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "sequentialParallelExact", "sourceSpanChecks", "sourceSpanTotal"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 2 }, "total": { "const": 2 }, "sequentialParallelExact": { "type": "boolean" }, "sourceSpanChecks": { "type": "integer", "minimum": 0, "maximum": 13 }, "sourceSpanTotal": { "const": 13 } }
+    },
+    "fixtures": { "type": "array", "maxItems": 4, "items": { "$ref": "#/definitions/fixture" } },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^C385_[A-Z0-9_]+$" } },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } } },
+      "then": {
+        "properties": {
+          "inputStable": { "const": true }, "inputDrift": { "maxItems": 0 }, "failureIds": { "maxItems": 0 }, "failure": { "type": "null" },
+          "managedCompiler": { "properties": { "matched": { "const": true } } }, "selfhostCompiler": { "properties": { "matched": { "const": true } } },
+          "authority": { "properties": { "completed": { "const": 3 } } },
+          "typedIr": { "properties": { "completed": { "const": 2 }, "sequentialParallelExact": { "const": true }, "sourceSpanChecks": { "const": 13 } } },
+          "fixtures": {
+            "minItems": 4,
+            "maxItems": 4,
+            "items": { "properties": { "managed": { "$ref": "#/definitions/passedRun" }, "selfhost": { "$ref": "#/definitions/passedRun" } } },
+            "allOf": [
+              { "contains": { "properties": { "id": { "const": "1700-selfhost-binary-binding-after-propagation" } } } },
+              { "contains": { "properties": { "id": { "const": "1701-expression-context-shape-parity" } } } },
+              { "contains": { "properties": { "id": { "const": "25-arrays-dictionaries" } } } },
+              { "contains": { "properties": { "id": { "const": "16-condition-when-subject" } } } }
+            ]
+          }
+        }
+      },
+      "else": { "properties": { "failureIds": { "minItems": 1 }, "failure": { "type": "string", "minLength": 1 } } }
+    }
+  ],
+  "definitions": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "compiler": { "type": "object", "additionalProperties": false, "required": ["path", "sha256", "expectedSha256", "matched"], "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/definitions/sha" }, "expectedSha256": { "$ref": "#/definitions/sha" }, "matched": { "type": "boolean" } } },
+    "hashes": { "type": "object", "minProperties": 12, "additionalProperties": { "$ref": "#/definitions/sha" } },
+    "compilerRun": { "type": "object", "additionalProperties": false, "required": ["compileExit", "warningNoteCount", "llvmAsExit", "v004Exit", "nativeExit", "stdoutSha256", "stderrSha256", "stdoutExact"], "properties": { "compileExit": { "type": ["integer", "null"] }, "warningNoteCount": { "type": "integer", "minimum": 0 }, "llvmAsExit": { "type": ["integer", "null"] }, "v004Exit": { "type": ["integer", "null"] }, "nativeExit": { "type": ["integer", "null"] }, "stdoutSha256": { "$ref": "#/definitions/sha" }, "stderrSha256": { "$ref": "#/definitions/sha" }, "stdoutExact": { "type": "boolean" } } },
+    "passedRun": { "allOf": [ { "$ref": "#/definitions/compilerRun" }, { "properties": { "compileExit": { "const": 0 }, "warningNoteCount": { "const": 0 }, "llvmAsExit": { "const": 0 }, "v004Exit": { "const": 0 }, "nativeExit": { "const": 0 }, "stderrSha256": { "const": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855" }, "stdoutExact": { "const": true } } } ] },
+    "fixture": { "type": "object", "additionalProperties": false, "required": ["id", "expectedSha256", "managed", "selfhost"], "properties": { "id": { "enum": ["1700-selfhost-binary-binding-after-propagation", "1701-expression-context-shape-parity", "25-arrays-dictionaries", "16-condition-when-subject"] }, "expectedSha256": { "$ref": "#/definitions/sha" }, "managed": { "$ref": "#/definitions/compilerRun" }, "selfhost": { "$ref": "#/definitions/compilerRun" } } }
+  }
+}

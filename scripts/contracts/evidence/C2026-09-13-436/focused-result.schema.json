@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defectId", "status", "completed", "total", "failureIds", "compilerSha256", "inputStable", "toolHashes", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-13-436" },
+    "status": { "const": "passed" },
+    "completed": { "const": 5 },
+    "total": { "const": 5 },
+    "failureIds": { "type": "array", "maxItems": 0 },
+    "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "inputStable": { "const": true },
+    "toolHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["llvmAs", "v004", "allocationShim"],
+      "properties": {
+        "llvmAs": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "v004": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "allocationShim": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "prefixItems": [
+        { "$ref": "#/$defs/direct" },
+        { "$ref": "#/$defs/borrowedNormal" },
+        { "$ref": "#/$defs/projected" },
+        { "$ref": "#/$defs/sameName" },
+        { "$ref": "#/$defs/yieldScope" }
+      ]
+    }
+  },
+  "$defs": {
+    "base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sourcePath", "sourceSha256", "llvmPath", "llvmSha256", "bitcodeSha256", "executableSha256", "compileExit", "stderr", "stdout", "nativeExit", "llvmAsExit", "v004Exit", "allocationScope", "allocations", "releases", "invalidReleases", "passed"],
+      "properties": {
+        "id": { "type": "string" },
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "llvmPath": { "type": "string", "minLength": 1 },
+        "llvmSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "bitcodeSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "executableSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "compileExit": { "const": 0 },
+        "stderr": { "const": "" },
+        "stdout": { "type": "string" },
+        "nativeExit": { "const": 0 },
+        "llvmAsExit": { "const": 0 },
+        "v004Exit": { "const": 0 },
+        "allocationScope": { "enum": ["direct-synchronous", "not-authoritative-indirect-task-context-destroy"] },
+        "allocations": { "type": ["integer", "null"], "minimum": 0 },
+        "releases": { "type": ["integer", "null"], "minimum": 0 },
+        "invalidReleases": { "type": ["integer", "null"], "minimum": 0 },
+        "passed": { "const": true }
+      }
+    },
+    "direct": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "id": { "const": "direct-terminating" }, "stdout": { "const": "7\n" }, "allocationScope": { "const": "direct-synchronous" }, "allocations": { "const": 2 }, "releases": { "const": 2 }, "invalidReleases": { "const": 0 } } }] },
+    "borrowedNormal": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "id": { "const": "borrowed-and-normal" }, "stdout": { "const": "2,7\n" }, "allocationScope": { "const": "direct-synchronous" }, "allocations": { "const": 4 }, "releases": { "const": 4 }, "invalidReleases": { "const": 0 } } }] },
+    "projected": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "id": { "const": "projected-field-terminating" }, "stdout": { "const": "7\n" }, "allocationScope": { "const": "direct-synchronous" }, "allocations": { "const": 3 }, "releases": { "const": 3 }, "invalidReleases": { "const": 0 } } }] },
+    "sameName": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "id": { "const": "same-name-borrowed-owned" }, "stdout": { "const": "15,28\n" }, "allocationScope": { "const": "direct-synchronous" }, "allocations": { "const": 8 }, "releases": { "const": 8 }, "invalidReleases": { "const": 0 } } }] },
+    "yieldScope": { "allOf": [{ "$ref": "#/$defs/base" }, { "properties": { "id": { "const": "yield-scope-spill" }, "stdout": { "const": "8\n" }, "allocationScope": { "const": "not-authoritative-indirect-task-context-destroy" }, "allocations": { "const": null }, "releases": { "const": null }, "invalidReleases": { "const": null } } }] }
+  }
+}

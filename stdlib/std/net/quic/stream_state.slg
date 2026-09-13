@@ -91,28 +91,30 @@ public identity id: UInt64 -> StreamIdentity => StreamIdentity {
     direction: id % 4 < 2 -> if { model.Direction.Bidirectional } else { model.Direction.Unidirectional }
 }
 
-public validatePeerOpened id: UInt64, localIsServer: Bool, maximumBidirectional: UInt64, maximumUnidirectional: UInt64 -> Result<StreamIdentity, errors.Error> {
-    id <= maximumStreamId() -> unless {
-        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError())) -> return
-    }
-    maximumBidirectional -> transport.streamCount? => validMaximumBidirectional
-    maximumUnidirectional -> transport.streamCount? => validMaximumUnidirectional
-    identity(id) => identified
-    identified.initiator -> when {
-        Client { localIsServer }
-        Server { not localIsServer }
-    } => peerInitiated
-    peerInitiated -> unless {
-        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamStateError())) -> return
-    }
-    identified.direction -> when {
-        Bidirectional { validMaximumBidirectional -> value }
-        Unidirectional { validMaximumUnidirectional -> value }
-    } => limit
-    identified.sequence < limit -> if {
-        Result<StreamIdentity, errors.Error>.Ok(identified)
-    } else {
-        Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError()))
+impl UInt64 {
+    public validatePeerOpened: self, localIsServer: Bool, maximumBidirectional: UInt64, maximumUnidirectional: UInt64 -> Result<StreamIdentity, errors.Error> {
+        self <= maximumStreamId() -> unless {
+            Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError())) -> return
+        }
+        maximumBidirectional -> transport.streamCount? => validMaximumBidirectional
+        maximumUnidirectional -> transport.streamCount? => validMaximumUnidirectional
+        identity(self) => identified
+        identified.initiator -> when {
+            Client { localIsServer }
+            Server { not localIsServer }
+        } => peerInitiated
+        peerInitiated -> unless {
+            Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamStateError())) -> return
+        }
+        identified.direction -> when {
+            Bidirectional { validMaximumBidirectional -> value }
+            Unidirectional { validMaximumUnidirectional -> value }
+        } => limit
+        identified.sequence < limit -> if {
+            Result<StreamIdentity, errors.Error>.Ok(identified)
+        } else {
+            Result<StreamIdentity, errors.Error>.Err(transportError(errors.streamLimitError()))
+        }
     }
 }
 
@@ -339,7 +341,7 @@ impl StreamRegistry {
     }
 
     public discoverPeerBidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
-        validatePeerOpened(streamId, self.localIsServer, self.localBidirectionalLimit, 0)? => identified
+        streamId -> validatePeerOpened(self.localIsServer, self.localBidirectionalLimit, 0)? => identified
         identified.direction -> when {
             Unidirectional {
                 Result<Unit, errors.Error>.Err(
@@ -379,7 +381,7 @@ impl StreamRegistry {
     }
 
     public discoverPeerUnidirectional: mut self, streamId: UInt64 -> Result<Unit, errors.Error> {
-        validatePeerOpened(streamId, self.localIsServer, 0, self.localUnidirectionalLimit)? => identified
+        streamId -> validatePeerOpened(self.localIsServer, 0, self.localUnidirectionalLimit)? => identified
         identified.direction -> when {
             Bidirectional {
                 Result<Unit, errors.Error>.Err(

@@ -363,7 +363,33 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                 and dottedDirectReceiver!
                 and qualifiedResults[importedIndex!].status != 0
                 => unresolvedDottedReceiver
-            importedIndex! >= 0 and not unresolvedDottedReceiver => useQualifiedCall
+            false => qualifiedInherentBlockMethod!
+            importedIndex! >= 0
+                and localCallNode.kind == 48
+                and qualifiedResults[importedIndex!].status == 0
+                -> if {
+                    qualifiedResults[importedIndex!] => qualifiedBlockTarget
+                    qualifiedBlockTarget.targetModule >= 0
+                        and qualifiedBlockTarget.targetModule < (identities -> len)
+                        -> if {
+                            identities[qualifiedBlockTarget.targetModule].sourceIndex
+                                => qualifiedBlockTargetSource
+                            qualifiedBlockTargetSource >= 0
+                                and qualifiedBlockTargetSource < (package.ranges -> len)
+                                -> if {
+                                    package.ranges[qualifiedBlockTargetSource]
+                                        => qualifiedBlockTargetRange
+                                    qualifiedBlockTarget.targetSymbol >= 0
+                                        and qualifiedBlockTarget.targetSymbol < qualifiedBlockTargetRange.symbolCount
+                                        and package.symbols[qualifiedBlockTargetRange.symbolStart + qualifiedBlockTarget.targetSymbol].kind == 31
+                                        -> if { true => qualifiedInherentBlockMethod! }
+                                }
+                        }
+                }
+            importedIndex! >= 0
+                and not unresolvedDottedReceiver
+                and not qualifiedInherentBlockMethod!
+                => useQualifiedCall
             useQualifiedCall -> if {
                 qualifiedResults[importedIndex!] => imported
                 -1 => targetSourceModule!
@@ -536,7 +562,8 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                             2 => resolvedStatus!
                         }
                     }
-                # A flow or dotted direct-call receiver may be a local binding whose nominal type was
+                # A flow, block-method, or dotted direct-call receiver may be a
+                # local binding whose nominal type was
                 # declared in one fragment while its impl lives in another.
                 # Recover that binding's qualified initializer type, then search
                 # only impls for the same owner inside the logical module.
@@ -547,6 +574,7 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                 -1 => openReceiverTypeModule!
                 -1 => openReceiverTypeSymbol!
                 localCallNode.kind == 10
+                    or localCallNode.kind == 48
                     or dottedDirectReceiver!
                     -> if {
                         local.nameToken => receiverCallNameToken!
@@ -2256,6 +2284,8 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                                                     package.symbols[receiverMethodRange.symbolStart + receiverMethodSymbol!] => receiverMethod
                                                     receiverMethod.kind == 31
                                                         and receiverMethod.parent >= 0
+                                                        and (localCallNode.kind != 48
+                                                        or receiverMethod.blockNameToken >= 0)
                                                         and (receiverMethod.flags / 4 % 2 == 1
                                                         or receiverMethodIdentity.pathHash == identities[sourceIndex].pathHash)
                                                         -> if {
@@ -2343,6 +2373,26 @@ resolveSourceTyped sourceIndex: Int, package: ref analysis.PackageAnalysis, sema
                                 receiverTypeSymbol! => openReceiverTypeSymbol!
                             }
                     }
+                # A qualified inherent block method still uses the exact
+                # runtime receiver as dispatch authority. The qualifier may
+                # constrain that owner, but it cannot replace it or redirect
+                # the call to a same-name method on another type.
+                qualifiedInherentBlockMethod! -> if {
+                    qualifiedResults[importedIndex!] => qualifiedBlockTarget
+                    identities[qualifiedBlockTarget.targetModule].sourceIndex
+                        => qualifiedBlockTargetSource
+                    resolvedStatus! != 0
+                        or resolvedTargetSource! != qualifiedBlockTargetSource
+                        or resolvedFunctionSymbol! != qualifiedBlockTarget.targetSymbol
+                        -> if {
+                            true => siblingFound!
+                            false => siblingAmbiguous!
+                            sourceIndex => resolvedTargetModule!
+                            sourceIndex => resolvedTargetSource!
+                            -1 => resolvedFunctionSymbol!
+                            7 => resolvedStatus!
+                        }
+                }
                 # An unqualified name is also looked up in every directly
                 # imported module. This is the Stage1 open-import behavior used
                 # by `import std.sequence` followed by ordinary flow, direct,

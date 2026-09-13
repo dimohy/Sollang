@@ -11,6 +11,8 @@ internal sealed partial class SemanticCompiler
     private readonly TypeDefinitionTable _types;
     private readonly IReadOnlyDictionary<string, BoundTraitDefinition> _traits;
     private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<object, ContainerIntrinsicKind> _containerIntrinsics =
+        new(ReferenceEqualityComparer.Instance);
     private string? _currentFunctionName;
     private readonly Dictionary<object, BoundDynTraitConversion> _dynTraitConversions = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, BoundDynTraitDispatch> _dynTraitDispatches = new(ReferenceEqualityComparer.Instance);
@@ -243,11 +245,16 @@ internal sealed partial class SemanticCompiler
         {
             RegisterReusedStaticArrays(activeReuse);
         }
+        var asyncSuspensionLocations = AsyncSuspensionLocator.Index(
+            functions.Values
+                .Concat(stableFunctionIdentities.Keys)
+                .Concat(_resolvedGenericCalls.Values));
         return new BoundProgram(
             _types,
             _traits,
             functions,
             _resolvedGenericCalls,
+            _containerIntrinsics,
             _dynTraitConversions,
             _dynTraitDispatches,
             _program.Statements,
@@ -269,6 +276,7 @@ internal sealed partial class SemanticCompiler
             _streamJoinConsumers,
             _streamJoins,
             _parallelBranches,
+            asyncSuspensionLocations,
             _warnings);
     }
 
@@ -1080,14 +1088,10 @@ internal sealed partial class SemanticCompiler
                 parameter.Column))
             .ToArray();
         var effects = BindFunctionEffects(function);
+        var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
             && function.IsIntrinsic
-            && function.Name is "std.time.Duration.sleep"
-                or "sys.file.readAsync"
-                or "sys.file.openReadAsync"
-                or "sys.file.openWriteAsync"
-                or "sys.file.File.readIntoAtAsync"
-                or "sys.file.FileWriter.writeRangeAtAsync";
+            && IsAsyncRuntimeIntrinsicKind(kind);
         if (function.IsAsync
             && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
                 || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
@@ -1101,7 +1105,6 @@ internal sealed partial class SemanticCompiler
                 function.Column,
                 "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
         }
-        var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         if (kind == BoundFunctionKind.Native && function.Com is null)
         {
             if (inputType is { } nativeInputType)
@@ -1241,6 +1244,13 @@ internal sealed partial class SemanticCompiler
     {
         if (ownership == FunctionInputOwnership.Move)
         {
+            // A generic template has no concrete ownership shape yet. Its
+            // specialization is validated again after substitution, exactly
+            // like a generic mutable-borrow input below.
+            if (inputType is BoundType.GenericParameter or BoundType.SecondaryGenericParameter or BoundType.TertiaryGenericParameter)
+            {
+                return BoundFunctionInputOwnership.Move;
+            }
             if (inputType is null)
             {
                 throw Error(line, column, "move input requires an input type");
@@ -2306,18 +2316,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionEffects = function.Effects;
         _currentStreamElementType = function.StreamElementType;
 
-        var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
-        if (FunctionMutablyBorrowsInput(function))
-        {
-            mutableBindings.Add(function.InputName ?? "it");
-        }
-        foreach (var parameter in function.AdditionalParameters ?? [])
-        {
-            if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
-            {
-                mutableBindings.Add(parameter.Name);
-            }
-        }
+        var mutableBindings = MutableBorrowBindingNames(function);
 
         var returnedMoveInputName = ReturnedMoveInputName(function);
 
@@ -2681,11 +2680,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionAllowsEarlyReturn = false;
         _currentFunctionEffects = function.Effects;
 
-        var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
-        if (FunctionMutablyBorrowsInput(function))
-        {
-            mutableBindings.Add(function.InputName ?? "it");
-        }
+        var mutableBindings = MutableBorrowBindingNames(function);
 
         var parentDeferredStreams = BeginDeferredStreamScope();
         BindStatements(
@@ -3098,6 +3093,19 @@ internal sealed partial class SemanticCompiler
             "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: false),
             "sys.file.FileWriter.writeRangeAtAsync" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: true),
             "std.net.socket.Reactor.waitInto" => RequireSocketReactorWaitSignature(function, inputType, returnType),
+            "std.net.socket.completionReactor" => RequireSocketCompletionCreateSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.registerStream" => RequireSocketCompletionRegisterSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.removeStream" => RequireSocketCompletionRemoveSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.submit" => RequireSocketCompletionSubmitSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.cancelOperation" => RequireSocketCompletionCancelSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.dequeue" => RequireSocketCompletionDequeueSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.dequeueTerminal" => RequireSocketCompletionTerminalDequeueSignature(function, inputType, returnType),
+            "std.net.socket.CompletionReactor.close" => RequireSocketCloseSignature(
+                function, inputType, returnType, "std.net.socket.CompletionReactor", BoundFunctionKind.RuntimeSocketCompletionClose),
+            "std.async.diagnostics.startDiagnosticSession" => RequireDiagnosticSessionStartSignature(function, inputType, returnType),
+            "std.async.diagnostics.DiagnosticSession.track" => RequireDiagnosticSessionTrackSignature(function, inputType, returnType),
+            "std.async.diagnostics.DiagnosticSession.snapshot" => RequireDiagnosticSessionSnapshotSignature(function, inputType, returnType),
+            "std.async.diagnostics.DiagnosticSession.close" => RequireDiagnosticSessionCloseSignature(function, inputType, returnType),
             "std.net.socket.ListenOptions.listen" => RequireSocketListenSignature(function, inputType, returnType),
             "std.net.socket.TcpListener.accept" => RequireSocketOwnerResultSignature(
                 function, inputType, returnType, "std.net.socket.TcpListener", "std.net.socket.TcpStream",
@@ -3406,6 +3414,264 @@ internal sealed partial class SemanticCompiler
         return BoundFunctionKind.RuntimeSocketListen;
     }
 
+    private BoundFunctionKind RequireSocketCompletionCreateSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } optionsType
+            || !IsNamedStructType(optionsType, "std.net.socket.CompletionReactorOptions")
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.CompletionReactor")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketError")
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature CompletionReactorOptions -> Result<CompletionReactor, SocketError>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionCreate;
+    }
+
+    private BoundFunctionKind RequireDiagnosticSessionStartSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (!_types.TryResolve("std.async.diagnostics.DiagnosticLimits", out var limitsType)
+            || !_types.TryResolve("std.async.diagnostics.DiagnosticSession", out var sessionType)
+            || !_types.TryResolve("std.async.diagnostics.DiagnosticError", out var errorType)
+            || inputType != limitsType
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != sessionType || resultTypes.Error != errorType
+            || function.InputOwnership != FunctionInputOwnership.Default
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                "intrinsic startDiagnosticSession must be DiagnosticLimits -> Result<DiagnosticSession, DiagnosticError>");
+        }
+        return BoundFunctionKind.RuntimeDiagnosticSessionStart;
+    }
+
+    private BoundFunctionKind RequireDiagnosticSessionTrackSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var genericName = function.GenericParameterName;
+        var sessionResolved = _types.TryResolve("std.async.diagnostics.DiagnosticSession", out var sessionType);
+        var mismatches = new List<string>();
+        if (!sessionResolved || inputType != sessionType) mismatches.Add("receiver");
+        if (function.InputOwnership != FunctionInputOwnership.MutableBorrow) mismatches.Add("receiver-ownership");
+        if (genericName is null) mismatches.Add("generic-parameter");
+        if (parameters.Count != 1) mismatches.Add("parameter-count");
+        if (parameters.Count == 1 && parameters[0].Ownership != FunctionInputOwnership.Move) mismatches.Add("task-ownership");
+        if (parameters.Count == 1 && genericName is not null
+            && CompactTypeSyntax(parameters[0].TypeName) != genericName) mismatches.Add("task-type");
+        if (genericName is not null
+            && CompactTypeSyntax(function.ReturnType) != $"Result<{genericName},({genericName},std.async.diagnostics.TrackFailureKind)>") mismatches.Add("return-type");
+        if (function.IsAsync) mismatches.Add("async");
+        if (mismatches.Count != 0)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic DiagnosticSession.track<T> must return Result<T, (T, TrackFailureKind)>; invalid {string.Join(", ", mismatches)}; actual return '{function.ReturnType}'");
+        }
+        return BoundFunctionKind.RuntimeDiagnosticSessionTrack;
+    }
+
+    private static string CompactTypeSyntax(string syntax) =>
+        string.Concat(syntax.Where(static character => !char.IsWhiteSpace(character)));
+
+    private BoundFunctionKind RequireDiagnosticSessionSnapshotSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var sessionResolved = _types.TryResolve("std.async.diagnostics.DiagnosticSession", out var sessionType);
+        var resultResolved = _types.TryResolve("std.async.diagnostics.SnapshotResult", out var resultType);
+        var mismatches = new List<string>();
+        if (!sessionResolved || inputType != sessionType) mismatches.Add("receiver");
+        if (!resultResolved || returnType != resultType) mismatches.Add("return-type");
+        if (function.InputOwnership != FunctionInputOwnership.Default) mismatches.Add("receiver-ownership");
+        if (!function.IsValueGeneric) mismatches.Add("value-generic");
+        if (parameters.Count != 1) mismatches.Add("parameter-count");
+        if (parameters.Count == 1 && parameters[0].Ownership != FunctionInputOwnership.MutableBorrow) mismatches.Add("output-ownership");
+        if (parameters.Count == 1
+            && CompactTypeSyntax(parameters[0].TypeName) != "[std.async.diagnostics.TaskSnapshot;N]") mismatches.Add("output-type");
+        if (function.IsAsync) mismatches.Add("async");
+        if (mismatches.Count != 0)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic DiagnosticSession.snapshot<N> must borrow mut [TaskSnapshot; N] and return SnapshotResult; invalid {string.Join(", ", mismatches)}");
+        }
+        return BoundFunctionKind.RuntimeDiagnosticSessionSnapshot;
+    }
+
+    private BoundFunctionKind RequireDiagnosticSessionCloseSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (!_types.TryResolve("std.async.diagnostics.DiagnosticSession", out var sessionType)
+            || !_types.TryResolve("std.async.diagnostics.DiagnosticSummary", out var summaryType)
+            || !_types.TryResolve("std.async.diagnostics.DiagnosticCloseFailure", out var failureType)
+            || inputType != sessionType
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != summaryType || resultTypes.Error != failureType
+            || (function.AdditionalParameters?.Count ?? 0) != 0
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                "intrinsic DiagnosticSession.close must consume its owner and return Result<DiagnosticSummary, DiagnosticCloseFailure>");
+        }
+        return BoundFunctionKind.RuntimeDiagnosticSessionClose;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionRegisterSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 2
+            || parameters[0].TypeName != "std.net.socket.TcpStream"
+            || parameters[0].Ownership != FunctionInputOwnership.Move
+            || parameters[1].TypeName != "UInt64"
+            || parameters[1].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.CompletionReactor")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.SocketRegistrationFailure")
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, move TcpStream, UInt64 -> Result<CompletionReactor, SocketRegistrationFailure>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionRegisterStream;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionRemoveSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName != "UInt64"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.RemovedStream")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.CompletionWaitFailure")
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, UInt64 -> Result<RemovedStream, CompletionWaitFailure>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionRemoveStream;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionSubmitSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 2
+            || parameters[0].TypeName != "UInt64"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || parameters[1].TypeName != "std.net.socket.OperationSlot"
+            || parameters[1].Ownership != FunctionInputOwnership.Move
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedEnumType(resultTypes.Ok, "std.net.socket.CompletionSubmission")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.CompletionSubmissionFailure")
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, UInt64, move OperationSlot -> Result<CompletionSubmission, CompletionSubmissionFailure>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionSubmit;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionCancelSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName != "UInt64"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.CompletionReactor")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.CompletionWaitFailure")
+            || function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, UInt64 -> Result<CompletionReactor, CompletionWaitFailure>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionCancel;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionDequeueSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName != "std.io.async.Cancellation"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsNamedStructType(resultTypes.Ok, "std.net.socket.SocketCompletion")
+            || !IsNamedStructType(resultTypes.Error, "std.net.socket.CompletionWaitFailure")
+            || !function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, Cancellation -> async Result<SocketCompletion, CompletionWaitFailure>");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionDequeue;
+    }
+
+    private BoundFunctionKind RequireSocketCompletionTerminalDequeueSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        if (inputType is not { } reactorType
+            || !IsNamedStructType(reactorType, "std.net.socket.CompletionReactor")
+            || function.InputOwnership != FunctionInputOwnership.Move
+            || parameters.Count != 1
+            || parameters[0].TypeName != "std.io.async.Cancellation"
+            || parameters[0].Ownership != FunctionInputOwnership.Default
+            || !IsNamedEnumType(returnType, "std.net.socket.SocketTerminalOutcome")
+            || !function.IsAsync)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature move CompletionReactor, Cancellation -> async SocketTerminalOutcome");
+        }
+        return BoundFunctionKind.RuntimeSocketCompletionDequeue;
+    }
+
     private BoundFunctionKind RequireSocketConnectSignature(
         FunctionDeclaration function,
         BoundType? inputType,
@@ -3447,7 +3713,8 @@ internal sealed partial class SemanticCompiler
         FunctionDeclaration function,
         BoundType? inputType,
         BoundType returnType,
-        string ownerName)
+        string ownerName,
+        BoundFunctionKind kind = BoundFunctionKind.RuntimeSocketClose)
     {
         if (inputType is not { } ownerType
             || !IsNamedStructType(ownerType, ownerName)
@@ -3458,7 +3725,7 @@ internal sealed partial class SemanticCompiler
             throw Error(function.Line, function.Column,
                 $"intrinsic '{function.Name}' must have signature move {ownerName.Split('.').Last()} -> Unit");
         }
-        return BoundFunctionKind.RuntimeSocketClose;
+        return kind;
     }
 
     private BoundFunctionKind RequireSocketTryCloneSignature(
@@ -4411,6 +4678,7 @@ internal sealed partial class SemanticCompiler
         bool retainMutableDeclarationScope = false)
     {
         mutableBindings ??= new HashSet<string>(StringComparer.Ordinal);
+        var movedImmutableOwnedPlaces = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var parentMutableDeclarationsByName = _currentMutableDeclarationsByName is null
             ? null
             : new Dictionary<string, MutableBindingDeclaration>(
@@ -4485,6 +4753,22 @@ internal sealed partial class SemanticCompiler
                         mutableBindings);
                     var mutablyBorrowedFieldMove = movedFieldOwnerName is not null
                         && mutableBindings.Contains(movedFieldOwnerName);
+                    if (binding.Value is NameExpression partiallyMovedOwner
+                        && movedImmutableOwnedPlaces.TryGetValue(partiallyMovedOwner.Name, out var priorMovedPlaces)
+                        && priorMovedPlaces.Count > 0)
+                    {
+                        throw Error(binding.Line, binding.Column,
+                            $"owned binding '{partiallyMovedOwner.Name}' is partially moved; use only live sibling fields");
+                    }
+                    if (movedFieldOwnerName is not null
+                        && !mutablyBorrowedFieldMove
+                        && movedFieldOwnerPlace is not null
+                        && movedImmutableOwnedPlaces.TryGetValue(movedFieldOwnerName, out var movedPlaces)
+                        && movedPlaces.Any(place => BorrowPlacesConflict(place, movedFieldOwnerPlace)))
+                    {
+                        throw Error(binding.Line, binding.Column,
+                            $"owned field '{movedFieldOwnerPlace}' overlaps an already moved field");
+                    }
                     if (mutablyBorrowedFieldMove
                         && (binding.Value is not FieldAccessExpression movedField
                             || statementIndex + 1 >= statements.Count
@@ -4520,6 +4804,8 @@ internal sealed partial class SemanticCompiler
                             allowFlowBindingTarget: false,
                             yieldInputType: yieldInputType,
                             mutableBindings: mutableBindings);
+                    var copiesFixedStorageBinding = _types.RequiresFixedStorageCopy(valueType)
+                        && binding.Value is NameExpression or FieldAccessExpression;
                     _currentUsedTypes?.Add(valueType);
                     if (valueType == BoundType.Unit)
                     {
@@ -4575,7 +4861,8 @@ internal sealed partial class SemanticCompiler
 
                         if (!IsContainerCreationExpression(binding.Value)
                             && movedSourceName is null
-                            && movedFieldOwnerName is null)
+                            && movedFieldOwnerName is null
+                            && !copiesFixedStorageBinding)
                         {
                             throw Error(
                                 binding.Line,
@@ -4589,10 +4876,14 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(movedSourceName);
                         mutableBindings.Remove(movedSourceName);
                     }
-                    if (movedFieldOwnerName is not null && !mutablyBorrowedFieldMove)
+                    if (movedFieldOwnerName is not null && !mutablyBorrowedFieldMove && movedFieldOwnerPlace is not null)
                     {
-                        bindings.Remove(movedFieldOwnerName);
-                        mutableBindings.Remove(movedFieldOwnerName);
+                        if (!movedImmutableOwnedPlaces.TryGetValue(movedFieldOwnerName, out var recordedPlaces))
+                        {
+                            recordedPlaces = new HashSet<string>(StringComparer.Ordinal);
+                            movedImmutableOwnedPlaces.Add(movedFieldOwnerName, recordedPlaces);
+                        }
+                        recordedPlaces.Add(movedFieldOwnerPlace);
                     }
 
                     ValidateOwnedParameterConsumptionExpression(binding.Value, functions, bindings);
@@ -5453,12 +5744,30 @@ internal sealed partial class SemanticCompiler
                 BindWhileBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
             default:
-                if (functions.TryGetValue(target, out var function)
-                    && function.Kind is BoundFunctionKind.UserBlock
-                        or BoundFunctionKind.RuntimeParallel
-                        or BoundFunctionKind.RuntimeTryParallel)
+                var inputType = InferExpression(
+                    call.Source,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: true,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
+                if (TryResolveUserBlockFunction(
+                        inputType,
+                        target,
+                        functions,
+                        call,
+                        out var function,
+                        out var resolvedTarget))
                 {
-                    BindUserBlockFunctionCall(call, function, functions, bindings, mutableBindings, target);
+                    BindUserBlockFunctionCall(
+                        call,
+                        function,
+                        functions,
+                        bindings,
+                        mutableBindings,
+                        resolvedTarget,
+                        resolvedInputType: inputType);
                     return;
                 }
 
@@ -6325,6 +6634,58 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private bool TryResolveUserBlockFunction(
+        BoundType receiverType,
+        string target,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        BlockFunctionCallStatement call,
+        out BoundFunction function,
+        out string resolvedTarget)
+    {
+        function = null!;
+        resolvedTarget = target;
+        static bool IsBlockFunction(BoundFunction candidate) =>
+            candidate.Kind is BoundFunctionKind.UserBlock
+                or BoundFunctionKind.RuntimeParallel
+                or BoundFunctionKind.RuntimeTryParallel;
+
+        // A qualified inherent block-method name is an exact owner assertion.
+        // Never strip its owner and fall back to a same-named method on the
+        // source receiver.
+        if (target.Contains('.', StringComparison.Ordinal)
+            && functions.TryGetValue(target, out var qualified)
+            && IsBlockFunction(qualified))
+        {
+            if (qualified.InputType != receiverType)
+            {
+                throw Error(
+                    call.Line,
+                    call.Column,
+                    $"block method '{target}' cannot be called on {FormatType(receiverType)}");
+            }
+            function = qualified;
+            return true;
+        }
+
+        // Unqualified block-method syntax has the same exact nominal receiver
+        // priority as ordinary method calls. The receiver remains dispatch-only;
+        // callback-role specialization is performed from the declaration's
+        // explicit generic inputs by BindUserBlockFunctionCall.
+        if (TryResolveInstanceMethod(receiverType, target, functions, out var method)
+            && IsBlockFunction(method))
+        {
+            function = method;
+            return true;
+        }
+
+        if (functions.TryGetValue(target, out var global) && IsBlockFunction(global))
+        {
+            function = global;
+            return true;
+        }
+        return false;
+    }
+
     private void BindUserBlockFunctionCall(
         BlockFunctionCallStatement call,
         BoundFunction function,
@@ -6333,7 +6694,8 @@ internal sealed partial class SemanticCompiler
         HashSet<string> mutableBindings,
         string target,
         bool suppressResultBinding = false,
-        BoundType? streamedInputType = null)
+        BoundType? streamedInputType = null,
+        BoundType? resolvedInputType = null)
     {
         if (!call.UsesDefaultItemName)
         {
@@ -6345,7 +6707,7 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
-        var inputType = streamedInputType ?? InferExpression(
+        var inputType = streamedInputType ?? resolvedInputType ?? InferExpression(
             call.Source,
             functions,
             bindings,
@@ -6422,9 +6784,7 @@ internal sealed partial class SemanticCompiler
         if (function.Kind == BoundFunctionKind.UserBlock
             && function.GenericParameterName is not null
             && function.SpecializedType is null
-            && function.SpecializedValue is null
-            && (function.InputTypeTemplate is not null
-                || function.StreamElementTypeTemplate is not null))
+            && function.SpecializedValue is null)
         {
             BoundType? primaryType = null;
             BoundType? secondaryType = null;
@@ -6644,6 +7004,11 @@ internal sealed partial class SemanticCompiler
                 call.Source.Line,
                 call.Source.Column,
                 $"block function '{target}' expects {FormatType(function.InputType.Value)} but received {FormatType(inputType)}");
+        }
+
+        if (FunctionMutablyBorrowsInput(function))
+        {
+            EnsureMutableBorrowCallArgument(call.Source, target, mutableBindings);
         }
 
         ValidateAdditionalFunctionArguments(
@@ -10023,6 +10388,14 @@ internal sealed partial class SemanticCompiler
         var firstTargetReadonlyBorrows = expression.Targets.Count > 0
             && expression.Targets[0].Path.Count == 1
             && expression.Targets[0].Path[0] is "len" or "byte" or "slice";
+        if (expression.Targets.Count > 0
+            && expression.Targets[0].Path.Count == 1
+            && expression.Targets[0].Path[0] == "yield"
+            && yieldInputType is { } declaredYieldType
+            && _types.IsReference(declaredYieldType))
+        {
+            firstTargetReadonlyBorrows = true;
+        }
         var firstTargetConsumesOwned = false;
         if (expression.Targets.Count > 0)
         {
@@ -10121,7 +10494,10 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "yield may only flow onward to emit");
                 }
 
-                if (currentType != yieldInputType.Value)
+                var yieldTypeMatches = currentType == yieldInputType.Value
+                    || (_types.IsReference(yieldInputType.Value)
+                        && currentType == _types.GetReference(yieldInputType.Value).ElementType);
+                if (!yieldTypeMatches)
                 {
                     throw Error(
                         expression.Line,
@@ -10212,6 +10588,13 @@ internal sealed partial class SemanticCompiler
                         or BoundFunctionKind.RuntimeSocketSetNonblocking
                         or BoundFunctionKind.RuntimeSocketPoll
                         or BoundFunctionKind.RuntimeSocketReactorWait
+                        or BoundFunctionKind.RuntimeSocketCompletionCreate
+                        or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                        or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                        or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                        or BoundFunctionKind.RuntimeSocketCompletionCancel
+                        or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                        or BoundFunctionKind.RuntimeSocketCompletionClose
                         or BoundFunctionKind.RuntimeDnsLookup)
                     && target.Arguments.Count != 0
                     && (function.AdditionalParameters?.Count ?? 0) == 0)
@@ -10408,6 +10791,7 @@ internal sealed partial class SemanticCompiler
                         continue;
                     case BoundFunctionKind.RuntimeReadBytesAtAsync:
                     case BoundFunctionKind.RuntimeWriteBytesAtAsync:
+                    case BoundFunctionKind.RuntimeSocketCompletionDequeue:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         ValidateAdditionalFunctionArguments(
                             function,
@@ -10456,8 +10840,54 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeSocketSetNonblocking:
                     case BoundFunctionKind.RuntimeSocketPoll:
                     case BoundFunctionKind.RuntimeSocketReactorWait:
+                    case BoundFunctionKind.RuntimeSocketCompletionCreate:
+                    case BoundFunctionKind.RuntimeSocketCompletionRegisterStream:
+                    case BoundFunctionKind.RuntimeSocketCompletionRemoveStream:
+                    case BoundFunctionKind.RuntimeSocketCompletionSubmit:
+                    case BoundFunctionKind.RuntimeSocketCompletionCancel:
+                    case BoundFunctionKind.RuntimeSocketCompletionClose:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionStart:
+                    case BoundFunctionKind.RuntimeDiagnosticSessionClose:
                     case BoundFunctionKind.RuntimeDnsLookup:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        ValidateAdditionalFunctionArguments(
+                            function,
+                            target.Arguments,
+                            functions,
+                            bindings,
+                            allowReadIntCall,
+                            mutableBindings,
+                            path);
+                        _resolvedGenericCalls[target] = function;
+                        currentType = function.ReturnType;
+                        continue;
+                    case BoundFunctionKind.RuntimeDiagnosticSessionSnapshot:
+                        if (function.IsValueGeneric && function.SpecializedValue is null)
+                        {
+                            function = ResolveValueGenericSpecialization(
+                                function, currentType, target.CompileTimeValueArgument, target);
+                        }
+                        EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        ValidateAdditionalFunctionArguments(
+                            function,
+                            target.Arguments,
+                            functions,
+                            bindings,
+                            allowReadIntCall,
+                            mutableBindings,
+                            path);
+                        _resolvedGenericCalls[target] = function;
+                        currentType = function.ReturnType;
+                        continue;
+                    case BoundFunctionKind.RuntimeDiagnosticSessionTrack:
+                        if (function.GenericParameterName is not null
+                            && function.SpecializedType is null)
+                        {
+                            function = ResolveGenericFlowSpecialization(
+                                function, currentType, target, functions, bindings, allowReadIntCall);
+                        }
+                        EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        EnsureMutableBorrowFlowSource(expression.Source, path, mutableBindings);
                         ValidateAdditionalFunctionArguments(
                             function,
                             target.Arguments,
@@ -11466,6 +11896,40 @@ internal sealed partial class SemanticCompiler
                             : _types.GetDictionary(currentType).ValueType;
                 result = new FlowResult(takenType, FlowEffect.None);
                 return true;
+            case "exchange":
+                if (currentType != BoundType.DynamicIntArray
+                    && (!_types.IsDynamicArray(currentType)
+                        || _types.IsBinaryHeap(currentType)
+                        || _types.IsDeque(currentType)))
+                {
+                    return false;
+                }
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "exchange must be the final value-flow target");
+                }
+                EnsureMutableContainerSource(expression.Source, "exchange", mutableBindings, allowProjection: true);
+                if (target.Arguments.Count != 2)
+                {
+                    throw Error(target.Line, target.Column, "exchange expects exactly two Int indices");
+                }
+                foreach (var argument in target.Arguments)
+                {
+                    var argumentType = InferExpression(
+                        argument,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false);
+                    if (argumentType != BoundType.Int)
+                    {
+                        throw Error(argument.Line, argument.Column, "exchange indices must be Int");
+                    }
+                }
+                _containerIntrinsics[target] = ContainerIntrinsicKind.ArrayExchange;
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
             case "append":
                 if (currentType != BoundType.DynamicIntArray)
                 {
@@ -12045,6 +12509,7 @@ internal sealed partial class SemanticCompiler
                     expression, function, functions, bindings, allowReadIntCall);
             case BoundFunctionKind.RuntimeReadBytesAtAsync:
             case BoundFunctionKind.RuntimeWriteBytesAtAsync:
+            case BoundFunctionKind.RuntimeSocketCompletionDequeue:
                 var fileArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
                 if (expression.Arguments.Count != fileArgumentCount)
                 {
@@ -12113,6 +12578,16 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeSocketSetNonblocking:
             case BoundFunctionKind.RuntimeSocketPoll:
             case BoundFunctionKind.RuntimeSocketReactorWait:
+            case BoundFunctionKind.RuntimeSocketCompletionCreate:
+            case BoundFunctionKind.RuntimeSocketCompletionRegisterStream:
+            case BoundFunctionKind.RuntimeSocketCompletionRemoveStream:
+            case BoundFunctionKind.RuntimeSocketCompletionSubmit:
+            case BoundFunctionKind.RuntimeSocketCompletionCancel:
+            case BoundFunctionKind.RuntimeSocketCompletionClose:
+            case BoundFunctionKind.RuntimeDiagnosticSessionStart:
+            case BoundFunctionKind.RuntimeDiagnosticSessionTrack:
+            case BoundFunctionKind.RuntimeDiagnosticSessionSnapshot:
+            case BoundFunctionKind.RuntimeDiagnosticSessionClose:
             case BoundFunctionKind.RuntimeDnsLookup:
                 var socketArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
                 if (expression.Arguments.Count != socketArgumentCount)
@@ -12262,8 +12737,23 @@ internal sealed partial class SemanticCompiler
         if (missing is not null)
             throw Error(target.Line, target.Column,
                 $"generic function '{template.Name}' cannot infer type parameter '{missing}'");
-        return ResolveGenericSpecialization(template, inferred[names[0]], functions,
+        var specialization = ResolveGenericSpecialization(template, inferred[names[0]], functions,
             target, specializedInputType: inputType, explicitGenericTypes: inferred);
+        RequireDiagnosticTrackTaskSpecialization(specialization, target.Line, target.Column);
+        return specialization;
+    }
+
+    private void RequireDiagnosticTrackTaskSpecialization(
+        BoundFunction function,
+        int line,
+        int column)
+    {
+        if (function.Kind == BoundFunctionKind.RuntimeDiagnosticSessionTrack
+            && (function.SpecializedType is not { } specializedType || !_types.IsTask(specializedType)))
+        {
+            throw Error(line, column,
+                "DiagnosticSession.track<T> requires T to be Task<U>; the moved owner is not consumed on rejection");
+        }
     }
 
     private BoundType InferGenericCallExpression(
@@ -12382,6 +12872,13 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType>? explicitGenericTypes = null,
         bool validateSpecialization = true)
     {
+        if (template.Kind == BoundFunctionKind.RuntimeDiagnosticSessionTrack
+            && !_types.IsTask(actualType))
+        {
+            throw Error(template.Line, template.Column,
+                "DiagnosticSession.track<T> requires T to be Task<U>; the moved owner is not consumed on rejection");
+        }
+
         var genericParameterNames = GenericParameterNames(template);
         var specializedGenericTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         if (genericParameterNames.Count > 0)
@@ -12647,6 +13144,41 @@ internal sealed partial class SemanticCompiler
             var error = SubstituteGenericType(resultTypes.Error, primaryType, secondaryType, tertiaryType);
             return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
         }
+        if (_types.IsProduct(type))
+        {
+            var definition = _types.GetStruct(type);
+            var fields = definition.Fields.Select(field => (
+                Label: field.Name == $"_{field.Index}" ? null : field.Name,
+                Type: (TypeId)SubstituteGenericType(
+                    field.Type, primaryType, secondaryType, tertiaryType))).ToArray();
+            return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
+        }
+        if (_types.IsStaticArray(type))
+        {
+            var definition = _types.GetStaticArray(type);
+            var element = SubstituteGenericType(definition.ElementType, primaryType, secondaryType, tertiaryType);
+            return definition.FixedLength is { } length
+                ? _types.GetOrAddFixedStaticArray(element, length)
+                : _types.GetOrAddStaticArray(element);
+        }
+        if (_types.IsDynamicArray(type))
+            return _types.GetOrAddDynamicArray(SubstituteGenericType(
+                _types.GetDynamicArray(type).ElementType, primaryType, secondaryType, tertiaryType));
+        if (_types.IsBoundedArray(type))
+        {
+            var definition = _types.GetBoundedArray(type);
+            return _types.GetOrAddBoundedArray(SubstituteGenericType(
+                definition.ElementType, primaryType, secondaryType, tertiaryType), definition.Capacity);
+        }
+        if (_types.IsDictionary(type))
+        {
+            var definition = _types.GetDictionary(type);
+            var key = SubstituteGenericType(definition.KeyType, primaryType, secondaryType, tertiaryType);
+            var value = SubstituteGenericType(definition.ValueType, primaryType, secondaryType, tertiaryType);
+            return _types.IsBoundedDictionary(type)
+                ? _types.GetOrAddBoundedDictionary(key, value, _types.GetBoundedDictionary(type).MaxEntries)
+                : _types.GetOrAddDictionary(key, value);
+        }
         if (_types.TryGetTaskValue(type, out var taskValue))
         {
             var value = SubstituteGenericType(taskValue, primaryType, secondaryType, tertiaryType);
@@ -12710,6 +13242,40 @@ internal sealed partial class SemanticCompiler
             var ok = SubstituteGenericType(resultTypes.Ok, template, specializedTypes);
             var error = SubstituteGenericType(resultTypes.Error, template, specializedTypes);
             return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
+        }
+        if (_types.IsProduct(type))
+        {
+            var definition = _types.GetStruct(type);
+            var fields = definition.Fields.Select(field => (
+                Label: field.Name == $"_{field.Index}" ? null : field.Name,
+                Type: (TypeId)SubstituteGenericType(field.Type, template, specializedTypes))).ToArray();
+            return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
+        }
+        if (_types.IsStaticArray(type))
+        {
+            var definition = _types.GetStaticArray(type);
+            var element = SubstituteGenericType(definition.ElementType, template, specializedTypes);
+            return definition.FixedLength is { } length
+                ? _types.GetOrAddFixedStaticArray(element, length)
+                : _types.GetOrAddStaticArray(element);
+        }
+        if (_types.IsDynamicArray(type))
+            return _types.GetOrAddDynamicArray(SubstituteGenericType(
+                _types.GetDynamicArray(type).ElementType, template, specializedTypes));
+        if (_types.IsBoundedArray(type))
+        {
+            var definition = _types.GetBoundedArray(type);
+            return _types.GetOrAddBoundedArray(SubstituteGenericType(
+                definition.ElementType, template, specializedTypes), definition.Capacity);
+        }
+        if (_types.IsDictionary(type))
+        {
+            var definition = _types.GetDictionary(type);
+            var key = SubstituteGenericType(definition.KeyType, template, specializedTypes);
+            var value = SubstituteGenericType(definition.ValueType, template, specializedTypes);
+            return _types.IsBoundedDictionary(type)
+                ? _types.GetOrAddBoundedDictionary(key, value, _types.GetBoundedDictionary(type).MaxEntries)
+                : _types.GetOrAddDictionary(key, value);
         }
         if (_types.TryGetTaskValue(type, out var taskValue))
         {
@@ -12954,10 +13520,14 @@ internal sealed partial class SemanticCompiler
                 SpecializedType = fixedArrayElementType,
                 SpecializedSecondaryType = secondaryType,
                 SpecializedTertiaryType = tertiaryType,
-                SpecializedValue = valueArgument.Value
+                SpecializedValue = valueArgument.Value,
+                AdditionalParameters = SpecializeValueGenericAdditionalParameters(
+                    template, valueArgument.Value)
             };
             _boundFunctions.Add(specializedName, specialization);
-            if (validateSpecialization && _validatingGenericSpecializations.Add(specialization))
+            if (validateSpecialization
+                && specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
+                && _validatingGenericSpecializations.Add(specialization))
             {
                 ValidateGenericSpecialization(specialization, _boundFunctions);
             }
@@ -12965,6 +13535,25 @@ internal sealed partial class SemanticCompiler
 
         _resolvedGenericCalls[callSite] = specialization;
         return specialization;
+    }
+
+    private IReadOnlyList<BoundFunctionParameter> SpecializeValueGenericAdditionalParameters(
+        BoundFunction template,
+        int value)
+    {
+        var valueText = value.ToString(CultureInfo.InvariantCulture);
+        return (template.AdditionalParameters ?? []).Select(parameter =>
+        {
+            if (parameter.TypeTemplate is not { } typeTemplate
+                || template.GenericParameterName is not { } valueName)
+            {
+                return parameter;
+            }
+            var specializedSyntax = typeTemplate.Replace(
+                $"; {valueName}]", $"; {valueText}]", StringComparison.Ordinal);
+            var specializedType = ParseType(specializedSyntax, parameter.Line, parameter.Column);
+            return parameter with { Type = specializedType, TypeTemplate = null };
+        }).ToArray();
     }
 
     private BoundType? FixedArrayElementType(BoundType type)
@@ -13694,7 +14283,14 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeOpenFile
                 or BoundFunctionKind.RuntimeOpenWriteFile
                 or BoundFunctionKind.RuntimeOpenFileAsync
-                or BoundFunctionKind.RuntimeOpenWriteFileAsync)
+                or BoundFunctionKind.RuntimeOpenWriteFileAsync
+                or BoundFunctionKind.RuntimeDiagnosticSessionStart
+                or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+                or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+                or BoundFunctionKind.RuntimeDiagnosticSessionClose
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue)
         {
             return;
         }
@@ -13815,6 +14411,13 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeSocketSetNonblocking
                 or BoundFunctionKind.RuntimeSocketPoll
                 or BoundFunctionKind.RuntimeSocketReactorWait
+                or BoundFunctionKind.RuntimeSocketCompletionCreate
+                or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                or BoundFunctionKind.RuntimeSocketCompletionClose
                 or BoundFunctionKind.RuntimeDnsLookup => ["Network"],
             _ => []
         };
@@ -16225,20 +16828,51 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         IReadOnlySet<string>? mutableBindings = null)
     {
-        if (expression is not FieldAccessExpression { Source: NameExpression owner } field
-            || (!_currentMoveInputNames.Contains(owner.Name)
-                && !(mutableBindings?.Contains(owner.Name) ?? false))
-            || !bindings.TryGetValue(owner.Name, out var ownerType)
-            || !_types.IsStruct(ownerType))
+        if (expression is FieldAccessExpression { Source: NameExpression directOwner } directField
+            && (_currentMoveInputNames.Contains(directOwner.Name)
+                || (mutableBindings?.Contains(directOwner.Name) ?? false))
+            && bindings.TryGetValue(directOwner.Name, out var directOwnerType)
+            && _types.IsStruct(directOwnerType)
+            && _types.GetStruct(directOwnerType).Fields.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, directField.FieldName, StringComparison.Ordinal)) is { } directDefinition
+            && _types.ContainsOwnedStorage(directDefinition.Type)
+            && !_types.RequiresFixedStorageCopy(directDefinition.Type))
+        {
+            return directOwner.Name;
+        }
+        if (expression is not FieldAccessExpression
+            || !TryGetBorrowPlace(expression, out var place))
         {
             return null;
         }
-
-        var fieldDefinition = _types.GetStruct(ownerType).Fields
-            .FirstOrDefault(candidate => candidate.Name == field.FieldName);
-        return fieldDefinition is not null && _types.ContainsOwnedStorage(fieldDefinition.Type)
-            ? owner.Name
-            : null;
+        var parts = SplitBorrowPlace(place);
+        if (parts.Count < 2)
+        {
+            return null;
+        }
+        var ownerName = parts[0].TrimEnd('!');
+        if (!bindings.TryGetValue(ownerName, out var currentType)
+            || ((_currentFunctionOuterBindings?.ContainsKey(ownerName) ?? false)
+                && !_currentMoveInputNames.Contains(ownerName)
+                && !(mutableBindings?.Contains(ownerName) ?? false)))
+        {
+            return null;
+        }
+        foreach (var fieldName in parts.Skip(1))
+        {
+            var semanticFieldName = fieldName.TrimStart('.');
+            if (!_types.IsStruct(currentType)
+                || _types.GetStruct(currentType).Fields.FirstOrDefault(field =>
+                    string.Equals(field.Name, semanticFieldName, StringComparison.Ordinal)) is not { } field)
+            {
+                return null;
+            }
+            currentType = field.Type;
+        }
+        return _types.ContainsOwnedStorage(currentType)
+            && !_types.RequiresFixedStorageCopy(currentType)
+                ? ownerName
+                : null;
     }
 
     private string? GetMoveConsumingOwnedFieldPlace(
@@ -16250,8 +16884,8 @@ internal sealed partial class SemanticCompiler
             expression,
             bindings,
             mutableBindings);
-        return ownerName is not null && expression is FieldAccessExpression field
-            ? $"{CanonicalBorrowOriginName(ownerName)}.{field.FieldName}"
+        return ownerName is not null && TryGetBorrowPlace(expression, out var place)
+            ? place
             : null;
     }
 
@@ -16786,12 +17420,18 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var callFunction)
-            && FunctionMovesOwnedHeapInput(callFunction)
-            && call.Arguments.Count == 1
-            && call.Arguments[0] is NameExpression argumentName)
+            && (_resolvedGenericCalls.TryGetValue(call, out var callFunction)
+                || TryGetFunction(call.Path, functions, out callFunction)))
         {
-            return [argumentName.Name];
+            var consumed = GetDirectNamedMoveArgumentNames(
+                callFunction,
+                call.Arguments,
+                argumentsIncludePrimary: true,
+                bindings);
+            if (consumed.Count > 0)
+            {
+                return consumed;
+            }
         }
 
         if (expression is FlowExpression flow)
@@ -16816,31 +17456,49 @@ internal sealed partial class SemanticCompiler
                 if ((_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
                         || (sourceType is { } receiverType
                             && TryResolveInstanceMethod(receiverType, path, functions, out targetFunction))
-                        || TryGetFunction(target.Path, functions, out targetFunction))
-                    && FunctionMovesOwnedHeapInput(targetFunction)
-                    && flow.Source is NameExpression sourceName)
+                        || TryGetFunction(target.Path, functions, out targetFunction)))
                 {
-                    consumed.Add(sourceName.Name);
+                    if (FunctionMovesOwnedHeapInput(targetFunction)
+                        && flow.Source is NameExpression sourceName)
+                    {
+                        consumed.Add(sourceName.Name);
+                    }
+                    consumed.AddRange(GetDirectNamedMoveArgumentNames(
+                        targetFunction,
+                        target.Arguments,
+                        argumentsIncludePrimary: false,
+                        bindings));
                 }
             }
 
-            return consumed;
+            return consumed.Distinct(StringComparer.Ordinal).ToArray();
         }
 
         if (expression is BranchExpression branch
             && branch.Source is NameExpression branchSource
             && bindings.TryGetValue(branchSource.Name, out var branchSourceType))
         {
+            var consumed = new List<string>();
             foreach (var target in branch.Arms.SelectMany(static arm => arm.Targets.Take(1)))
             {
                 var path = string.Join('.', target.Path);
-                if ((TryGetFunction(target.Path, functions, out var targetFunction)
+                if ((_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
+                        || TryGetFunction(target.Path, functions, out targetFunction)
                         || TryResolveInstanceMethod(branchSourceType, path, functions, out targetFunction))
-                    && FunctionMovesOwnedHeapInput(targetFunction))
+                    && targetFunction is not null)
                 {
-                    return [branchSource.Name];
+                    if (FunctionMovesOwnedHeapInput(targetFunction))
+                    {
+                        consumed.Add(branchSource.Name);
+                    }
+                    consumed.AddRange(GetDirectNamedMoveArgumentNames(
+                        targetFunction,
+                        target.Arguments,
+                        argumentsIncludePrimary: false,
+                        bindings));
                 }
             }
+            return consumed.Distinct(StringComparer.Ordinal).ToArray();
         }
 
         if (expression is PartitionExpression { Source: NameExpression partitionSource }
@@ -16893,6 +17551,53 @@ internal sealed partial class SemanticCompiler
         }
 
         return [];
+    }
+
+    private static bool IsAsyncRuntimeIntrinsicKind(BoundFunctionKind kind) => kind is
+        BoundFunctionKind.RuntimeSleep
+        or BoundFunctionKind.RuntimeReadScalarAsync
+        or BoundFunctionKind.RuntimeReadBytesAtAsync
+        or BoundFunctionKind.RuntimeWriteBytesAtAsync
+        or BoundFunctionKind.RuntimeOpenFileAsync
+        or BoundFunctionKind.RuntimeOpenWriteFileAsync
+        or BoundFunctionKind.RuntimeSocketCompletionDequeue;
+
+    private IReadOnlyList<string> GetDirectNamedMoveArgumentNames(
+        BoundFunction function,
+        IReadOnlyList<Expression> arguments,
+        bool argumentsIncludePrimary,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        var consumed = new List<string>();
+        var argumentIndex = 0;
+        if (argumentsIncludePrimary && function.InputType is not null)
+        {
+            if (function.InputOwnership == BoundFunctionInputOwnership.Move
+                && arguments.Count > 0
+                && arguments[0] is NameExpression primary
+                && bindings.TryGetValue(primary.Name, out var primaryType)
+                && _types.ContainsOwnedStorage(primaryType))
+            {
+                consumed.Add(primary.Name);
+            }
+            argumentIndex = 1;
+        }
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            if (argumentIndex >= arguments.Count)
+            {
+                break;
+            }
+            if (parameter.Ownership == BoundFunctionInputOwnership.Move
+                && arguments[argumentIndex] is NameExpression additional
+                && bindings.TryGetValue(additional.Name, out var additionalType)
+                && _types.ContainsOwnedStorage(additionalType))
+            {
+                consumed.Add(additional.Name);
+            }
+            argumentIndex++;
+        }
+        return consumed;
     }
 
     private bool TryGetOwnedEnumConstructorSourceName(CallExpression expression, out string sourceName)
@@ -17572,6 +18277,23 @@ internal sealed partial class SemanticCompiler
                 || _types.IsBoundedArray(inputType)
                 || _types.IsDictionary(inputType)
                 || _types.IsStruct(inputType));
+    }
+
+    private HashSet<string> MutableBorrowBindingNames(BoundFunction function)
+    {
+        var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
+        if (FunctionMutablyBorrowsInput(function))
+        {
+            mutableBindings.Add(function.InputName ?? "it");
+        }
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
+            {
+                mutableBindings.Add(parameter.Name);
+            }
+        }
+        return mutableBindings;
     }
 
     private bool FunctionReadonlyBorrowsHeapInput(BoundFunction function, BoundType actualType)

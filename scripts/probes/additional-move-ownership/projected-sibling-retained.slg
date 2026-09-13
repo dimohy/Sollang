@@ -1,0 +1,18 @@
+struct Owner { bytes: [UInt8; ~] }
+struct Parcel { moved: Owner, retained: Owner }
+
+consume first: move Owner, second: move Owner -> Int {
+    (first.bytes -> len) + (second.bytes -> len)
+}
+
+main {
+    Owner { bytes: [1; ~] } => first
+    Parcel {
+        moved: Owner { bytes: [2, 3; ~] }
+        retained: Owner { bytes: [4, 5, 6; ~] }
+    } => parcel!
+    parcel!.moved => moved
+    Owner { bytes: [7; ~] } => parcel!.moved
+    consume(first, moved) => count
+    "count=$count,retained=$(parcel!.retained.bytes -> len)" -> println
+}

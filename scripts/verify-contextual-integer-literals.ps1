@@ -2,16 +2,40 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$CandidateCompiler,
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$ExpectedCandidateSha256 = '',
+    [string]$OutputDirectory = '',
     [switch]$RequireCandidateSealed
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath($RepositoryRoot)
-$output = Join-Path $repo ('artifacts/scratch/contextual-integer-literals/' + [guid]::NewGuid().ToString('N'))
-$compiler = Join-Path $repo 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+$output = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $repo ('artifacts/scratch/contextual-integer-literals/' + [guid]::NewGuid().ToString('N'))
+} else { [IO.Path]::GetFullPath($OutputDirectory) }
+$compiler = if ([string]::IsNullOrWhiteSpace($CandidateCompiler)) {
+    Join-Path $repo 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+} else { (Resolve-Path -LiteralPath $CandidateCompiler).Path }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 if ($RequireCandidateSealed -and [string]::IsNullOrWhiteSpace($CandidateCompiler)) {
     throw '-RequireCandidateSealed requires -CandidateCompiler.'
+}
+if (-not [string]::IsNullOrWhiteSpace($CandidateCompiler) -and [string]::IsNullOrWhiteSpace($ExpectedCandidateSha256)) {
+    throw '-CandidateCompiler requires -ExpectedCandidateSha256.'
+}
+$ExpectedCandidateSha256 = $ExpectedCandidateSha256.ToUpperInvariant()
+$compilerSha256Start = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash
+if (-not [string]::IsNullOrWhiteSpace($ExpectedCandidateSha256) -and $compilerSha256Start -cne $ExpectedCandidateSha256) {
+    throw "candidate compiler hash mismatch: expected=$ExpectedCandidateSha256 actual=$compilerSha256Start"
+}
+
+function Invoke-SollangCompiler([string[]]$Arguments) {
+    $lines = if ([IO.Path]::GetExtension($compiler) -ceq '.dll') {
+        @(& dotnet $compiler @Arguments 2>&1)
+    } else {
+        @(& $compiler @Arguments 2>&1)
+    }
+    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($lines -join "`n") }
 }
 
 function Read-Declaration([string]$Path, [string]$Name) {
@@ -65,10 +89,11 @@ $sources = @(
 $nativeTopology = $null
 $nativeExpected = $null
 if ($CandidateCompiler) {
-    $candidate = [IO.Path]::GetFullPath($CandidateCompiler)
+    $candidate = $compiler
     $fixture = Join-Path $repo 'scripts/contracts/fixtures/1715-native-negative-float-context.slg'
-    $candidateIr = (& $candidate typed-ir-nodes $fixture 2>&1) -join "`n"
-    if ($LASTEXITCODE -ne 0) { throw "native Float candidate IR failed: $candidateIr" }
+    $candidateInvocation = Invoke-SollangCompiler -Arguments @('typed-ir-nodes', $fixture)
+    $candidateIr = $candidateInvocation.Output
+    if ($candidateInvocation.ExitCode -ne 0) { throw "native Float candidate IR failed: $candidateIr" }
     [IO.File]::WriteAllText((Join-Path $output '1715-candidate-typed-ir.txt'), $candidateIr)
     $fieldNames = @('index', 'kind', 'parent', 'sourceModule', 'astNode', 'symbol', 'targetModule', 'typeId', 'typeKind', 'typeOrigin', 'typeModule', 'typeSymbol', 'typeFlags', 'payloadToken', 'opcode', 'operand0', 'operand1', 'nextOperand', 'flags')
     $nativeRows = @($candidateIr -split '\r?\n' | ForEach-Object {
@@ -138,8 +163,9 @@ foreach ($source in $sources) {
     $paths += $path
 }
 $paths += Join-Path $repo 'scripts/probes/contextual-integer-literals.slg'
-$actual = (& dotnet $compiler run @paths --llvm (Join-Path $repo '.tools/llvm-22.1.8') -o (Join-Path $output 'probe.exe') 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) { throw "contextual integer helper execution failed: $actual" }
+$helperInvocation = Invoke-SollangCompiler -Arguments (@('run') + $paths + @('--llvm', (Join-Path $repo '.tools/llvm-22.1.8'), '-o', (Join-Path $output 'probe.exe')))
+$actual = $helperInvocation.Output
+if ($helperInvocation.ExitCode -ne 0) { throw "contextual integer helper execution failed: $actual" }
 $expected = @(
     'negative=6,6,7'
     'nonliteral=2,2,2'
@@ -343,8 +369,9 @@ foreach ($source in $rangeSources) {
     $rangePaths += $path
 }
 $rangePaths += Join-Path $repo 'scripts/probes/contextual-integer-literals/range-diagnostics.slg'
-$rangeActual = (& dotnet $compiler run @rangePaths --llvm (Join-Path $repo '.tools/llvm-22.1.8') -o (Join-Path $output 'range-probe.exe') 2>&1) -join "`n"
-if ($LASTEXITCODE -ne 0) { throw "contextual integer lexical range execution failed: $rangeActual" }
+$rangeInvocation = Invoke-SollangCompiler -Arguments (@('run') + $rangePaths + @('--llvm', (Join-Path $repo '.tools/llvm-22.1.8'), '-o', (Join-Path $output 'range-probe.exe')))
+$rangeActual = $rangeInvocation.Output
+if ($rangeInvocation.ExitCode -ne 0) { throw "contextual integer lexical range execution failed: $rangeActual" }
 $rangeExpected = @($rangeContract.cases | ForEach-Object { $_.name + '=' + ([bool]$_.fits).ToString().ToLowerInvariant() }) -join "`n"
 if ($rangeActual.Replace("`r`n", "`n").TrimEnd() -cne $rangeExpected) {
     throw "contextual integer lexical range output mismatch: $rangeActual"
@@ -359,6 +386,10 @@ $nativeCallsite = Get-Content -LiteralPath (Join-Path $repo 'selfhost/ir/typed/r
 if ($nativeCallsite -notmatch 'nodes -> sealNativeNumericLiteralContext\(contextualNativeArgumentIndex!, contextualNativeParameter\)') {
     throw 'missing shared native numeric context call'
 }
+$compilerSha256End = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash
+if ($compilerSha256End -cne $compilerSha256Start) {
+    throw "candidate compiler drift: start=$compilerSha256Start end=$compilerSha256End"
+}
 $evidence = [ordered]@{
     schemaVersion = 1
     scope = 'production-integer-native-helpers-and-final-binary-pass-execution-and-callsite-presence'
@@ -366,7 +397,9 @@ $evidence = [ordered]@{
     completed = 16 + [int][bool]$nativeExpected
     total = 16 + [int][bool]$nativeExpected
     countUnit = 'exact-output-assertion-groups'
-    compilerSha256 = (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash
+    compilerSha256 = $compilerSha256Start
+    expectedCompilerSha256 = if ([string]::IsNullOrWhiteSpace($ExpectedCandidateSha256)) { $null } else { $ExpectedCandidateSha256 }
+    compilerInputStable = $true
     helperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($helper)))
     numericHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($numericHelper)))
     numericPeerHelperSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($numericPeerHelper)))

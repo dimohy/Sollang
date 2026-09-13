@@ -56,6 +56,34 @@ if ($unresolved.Count -gt 0) {
     throw "sollang compiler verification failure V004: emitted LLVM contains internal Sollang calls without definitions or runtime calls without declarations: $($unresolved -join ', '). A bodyless runtime intrinsic must lower to its canonical runtime opcode instead of surviving as declare @sollang_m*_s*; keep derived callbacks and user-function emission on the same executable reachability closure, and emit each used sollang_runtime_* helper from its target capability owner."
 }
 
+# Generated scalar/value SSA names are stable `%vN` identities. Validate them
+# per function so a definition in a different function cannot mask a missing
+# local producer, while still allowing ordinary LLVM forward references.
+$undefinedSsa = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
+$functionBodies = [regex]::Matches($llvm, '(?ms)^define\s+[^\r\n]*?@(?<function>[-a-zA-Z$._0-9]+)\((?<parameters>[^\r\n]*)\)\s*[^\r\n]*\{(?<body>.*?)^\}')
+foreach ($functionBody in $functionBodies) {
+    $bodyLines = $functionBody.Groups['body'].Value -split "`r?`n" | ForEach-Object {
+        # Quoted LLVM strings and trailing comments are data, not SSA uses.
+        ([regex]::Replace($_, '"(?:\\.|[^"\\])*"', '""') -replace ';.*$', '')
+    }
+    $body = $bodyLines -join "`n"
+    $ssaDefinitions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    [regex]::Matches($functionBody.Groups['parameters'].Value, '(?<![-a-zA-Z$._0-9])%(?<name>v\d+)(?![-a-zA-Z$._0-9])') |
+        ForEach-Object { [void]$ssaDefinitions.Add($_.Groups['name'].Value) }
+    [regex]::Matches($body, '(?m)^\s*%(?<name>v\d+)\s*=') |
+        ForEach-Object { [void]$ssaDefinitions.Add($_.Groups['name'].Value) }
+    [regex]::Matches($body, '(?<![-a-zA-Z$._0-9])%(?<name>v\d+)(?![-a-zA-Z$._0-9])') |
+        ForEach-Object {
+            $name = $_.Groups['name'].Value
+            if (-not $ssaDefinitions.Contains($name)) {
+                [void]$undefinedSsa.Add("$($functionBody.Groups['function'].Value):%$name")
+            }
+        }
+}
+if ($undefinedSsa.Count -gt 0) {
+    throw "sollang compiler verification failure V004: emitted LLVM uses generated SSA values without definitions in the same function: $($undefinedSsa -join ', '). Materialize each scheduled value in its owning control or callback path before consuming it; do not let another function's same-numbered SSA mask the missing producer."
+}
+
 $nativeGlobalPattern = 'sollang_native_(?:function_m\d+_s\d+|library_m\d+_a\d+)'
 $definedNativeGlobals = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 [regex]::Matches($llvm, "(?m)^@(?<symbol>$nativeGlobalPattern)\s*=") |

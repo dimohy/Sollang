@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "contractSchema": "scripts/contracts/json-capability-candidate.schema.json",
+  "capabilityId": "fixed-decimal-conversion",
+  "authority": "detail-authority",
+  "implementationStatus": "blocked",
+  "productionImplemented": false,
+  "module": "stdlib/std/text/json.slg",
+  "scope": "json-fixed-decimal-policy-type-and-api-candidate",
+  "probes": {
+    "control": "scripts/probes/json-fixed-decimal/int64-decimal-control.slg",
+    "wideIntermediateBlocker": "scripts/probes/json-fixed-decimal/int128-intermediate.slg",
+    "readerBlocker": "scripts/probes/json-fixed-decimal/json-decimal-reader.slg",
+    "writerBlocker": "scripts/probes/json-fixed-decimal/json-decimal-writer.slg"
+  },
+  "type": {
+    "name": "FixedDecimal",
+    "storage": "private Int64 coefficient plus UInt8 precision and UInt8 scale; no heap allocation",
+    "precision": "1 through 18 decimal digits",
+    "scale": "0 through precision",
+    "coefficientRange": "-(10^precision-1) through +(10^precision-1)",
+    "value": "coefficient multiplied by 10^-scale",
+    "signedZero": "not represented; every zero has coefficient 0 and formats without a minus sign",
+    "forgeability": "construction only through validating factories"
+  },
+  "roundingModes": [
+    "Exact",
+    "NearestTiesToEven",
+    "TowardZero",
+    "TowardPositive",
+    "TowardNegative"
+  ],
+  "parse": {
+    "input": "one authenticated complete RFC 8259 number lexeme",
+    "conversion": "coefficient = round(mathematicalValue * 10^scale)",
+    "exactMode": "any discarded nonzero decimal digit returns RoundingRequired",
+    "overflow": "range is tested after rounding; no saturation or wrap",
+    "canonicalInput": "noncanonical but valid RFC 8259 exponent and redundant fractional-zero spellings are accepted"
+  },
+  "format": {
+    "form": "base-10 fixed notation without exponent",
+    "scale": "exactly scale digits follow the decimal point; trailing zeros are retained",
+    "integer": "scale zero has no decimal point",
+    "zero": "zero never carries a minus sign",
+    "canonical": "no leading integer zeros except the single zero before a fractional point"
+  },
+  "arithmetic": {
+    "addSubtract": "operands require identical precision and scale and use exact checked coefficient arithmetic",
+    "multiply": "caller supplies result precision, scale, and rounding; exact wide intermediate precedes one rounding step",
+    "rescale": "caller supplies target precision, scale, and rounding; discarded digits are never silently rounded",
+    "overflow": "checked against the target precision after the single declared rounding step"
+  },
+  "jsonApi": [
+    "fixedDecimal(coefficient: Int64, precision: UInt8, scale: UInt8) -> Result<FixedDecimal, DecimalError>",
+    "Reader.fixedDecimal(Token, DecimalPolicy) -> Result<FixedDecimal, Error>",
+    "valueFixedDecimal(ref Value, DecimalPolicy) -> Result<FixedDecimal, Error>",
+    "Writer.fixedDecimal(ref FixedDecimal) -> Result<Unit, Error>"
+  ],
+  "transactionality": {
+    "reader": "token/value authenticity, precision, scale, rounding and overflow are resolved before returning the copyable scalar",
+    "writer": "canonical encoded length and output capacity are checked before first Writer mutation",
+    "arithmetic": "failure returns no partially initialized value"
+  },
+  "schemaMapping": {
+    "fieldContract": "each decimal field declares precision, scale, and rounding mode in its nominal user schema",
+    "read": "schema validation invokes valueFixedDecimal after member multiplicity and kind checks",
+    "write": "schema writer borrows FixedDecimal and emits its canonical fixed lexeme in schema field order",
+    "ownership": "FixedDecimal is a copyable bounded scalar; it neither borrows the JSON arena nor owns hidden storage"
+  },
+  "rejectedImplementations": [
+    "Float32 or Float64 intermediate conversion",
+    "unchecked Int64 multiply before rescaling",
+    "locale-sensitive decimal parsing or formatting",
+    "implicit banker rounding",
+    "signed-zero preservation",
+    "lexeme-preserving output instead of value-and-scale canonical output",
+    "fixture-specific lookup tables"
+  ],
+  "requiredPrimitive": "signed exact intermediate of at least 128 bits for general precision-18 multiply and rescale",
+  "reference": {
+    "provider": ".NET BigInteger decimal arithmetic in the isolated verifier",
+    "conversionTupleCount": 22,
+    "arithmeticTupleCount": 6,
+    "path": "scripts/contracts/json-fixed-decimal-reference.json"
+  },
+  "verifier": {
+    "path": "scripts/verify-json-fixed-decimal.ps1",
+    "total": 40,
+    "staticChecks": 7,
+    "referenceChecks": 28,
+    "capabilityChecks": 4,
+    "inputStabilityChecks": 1,
+    "expectedCapabilityStatus": "blocked"
+  },
+  "blockerIds": [
+    "JSON_DECIMAL_WIDE_EXACT_INTERMEDIATE_MISSING",
+    "JSON_DECIMAL_READER_API_MISSING",
+    "JSON_DECIMAL_WRITER_API_MISSING"
+  ]
+}

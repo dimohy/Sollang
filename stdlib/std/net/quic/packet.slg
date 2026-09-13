@@ -74,7 +74,7 @@ appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
 }
 
 appendVarint output: mut [UInt8; ~], value: UInt64 -> Result<Bool, errors.Error> {
-    varint.encode(value)? => encoded
+    value -> varint.encode? => encoded
     output -> appendBytes(encoded)
     Result<Bool, errors.Error>.Ok(true)
 }
@@ -154,53 +154,55 @@ handshakeFirstByte version: UInt32, packetNumberLength: UIntSize -> Result<UInt8
 
 # `plaintextLength` excludes the 16-byte AEAD tag. The encoded QUIC Length
 # field includes the packet number, protected payload, and authentication tag.
-public encodeInitialHeader version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], token: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintextLength: UIntSize -> Result<[UInt8; ~], errors.Error> {
-    (destinationConnectionId -> len) <= 20 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
+impl UInt32 {
+    public encodeInitialHeader: self, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], token: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintextLength: UIntSize -> Result<[UInt8; ~], errors.Error> {
+        (destinationConnectionId -> len) <= 20 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
+        }
+        (sourceConnectionId -> len) <= 20 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(sourceConnectionId -> len))) -> return
+        }
+        initialFirstByte(self, packetNumberLength)? => firstByte
+        packetNumberValue -> packetNumber.truncate(packetNumberLength)? => truncated
+        [UInt8; ~] => header!
+        header! -> push(firstByte)
+        header! -> appendUInt32(self)
+        header! -> push(UInt8(destinationConnectionId -> len))
+        header! -> appendBytes(destinationConnectionId)
+        header! -> push(UInt8(sourceConnectionId -> len))
+        header! -> appendBytes(sourceConnectionId)
+        header! -> appendVarint(UInt64(token -> len)) => tokenLengthResult
+        tokenLengthResult? => tokenLengthWritten
+        header! -> appendBytes(token)
+        UInt64(packetNumberLength + plaintextLength + 16) => protectedLength
+        header! -> appendVarint(protectedLength) => protectedLengthResult
+        protectedLengthResult? => protectedLengthWritten
+        header! -> appendPacketNumber(truncated)
+        Result<[UInt8; ~], errors.Error>.Ok(header!)
     }
-    (sourceConnectionId -> len) <= 20 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(sourceConnectionId -> len))) -> return
-    }
-    initialFirstByte(version, packetNumberLength)? => firstByte
-    packetNumber.truncate(packetNumberValue, packetNumberLength)? => truncated
-    [UInt8; ~] => header!
-    header! -> push(firstByte)
-    header! -> appendUInt32(version)
-    header! -> push(UInt8(destinationConnectionId -> len))
-    header! -> appendBytes(destinationConnectionId)
-    header! -> push(UInt8(sourceConnectionId -> len))
-    header! -> appendBytes(sourceConnectionId)
-    header! -> appendVarint(UInt64(token -> len)) => tokenLengthResult
-    tokenLengthResult? => tokenLengthWritten
-    header! -> appendBytes(token)
-    UInt64(packetNumberLength + plaintextLength + 16) => protectedLength
-    header! -> appendVarint(protectedLength) => protectedLengthResult
-    protectedLengthResult? => protectedLengthWritten
-    header! -> appendPacketNumber(truncated)
-    Result<[UInt8; ~], errors.Error>.Ok(header!)
-}
 
-public encodeHandshakeHeader version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintextLength: UIntSize -> Result<[UInt8; ~], errors.Error> {
-    (destinationConnectionId -> len) <= 20 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
+    public encodeHandshakeHeader: self, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintextLength: UIntSize -> Result<[UInt8; ~], errors.Error> {
+        (destinationConnectionId -> len) <= 20 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
+        }
+        (sourceConnectionId -> len) <= 20 -> unless {
+            Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(sourceConnectionId -> len))) -> return
+        }
+        handshakeFirstByte(self, packetNumberLength)? => firstByte
+        packetNumberValue -> packetNumber.truncate(packetNumberLength)? => truncated
+        [UInt8; ~] => header!
+        header! -> push(firstByte)
+        header! -> appendUInt32(self)
+        header! -> push(UInt8(destinationConnectionId -> len))
+        header! -> appendBytes(destinationConnectionId)
+        header! -> push(UInt8(sourceConnectionId -> len))
+        header! -> appendBytes(sourceConnectionId)
+        UInt64(packetNumberLength + plaintextLength + 16) => protectedLength
+        header! -> appendVarint(protectedLength) => protectedLengthResult
+        protectedLengthResult? => protectedLengthWritten
+        header! -> appendPacketNumber(truncated)
+        Result<[UInt8; ~], errors.Error>.Ok(header!)
     }
-    (sourceConnectionId -> len) <= 20 -> unless {
-        Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(sourceConnectionId -> len))) -> return
-    }
-    handshakeFirstByte(version, packetNumberLength)? => firstByte
-    packetNumber.truncate(packetNumberValue, packetNumberLength)? => truncated
-    [UInt8; ~] => header!
-    header! -> push(firstByte)
-    header! -> appendUInt32(version)
-    header! -> push(UInt8(destinationConnectionId -> len))
-    header! -> appendBytes(destinationConnectionId)
-    header! -> push(UInt8(sourceConnectionId -> len))
-    header! -> appendBytes(sourceConnectionId)
-    UInt64(packetNumberLength + plaintextLength + 16) => protectedLength
-    header! -> appendVarint(protectedLength) => protectedLengthResult
-    protectedLengthResult? => protectedLengthWritten
-    header! -> appendPacketNumber(truncated)
-    Result<[UInt8; ~], errors.Error>.Ok(header!)
 }
 
 sealProtectedLong protector: ref Protector, header: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintext: [UInt8] -> Result<[UInt8; ~], errors.Error> {
@@ -222,13 +224,12 @@ sealProtectedLong protector: ref Protector, header: [UInt8], packetNumberValue: 
         sampleIndex! + 1 => sampleIndex!
     }
     protector.header -> mask(sample!) => mask
-    UInt8(bits.xor(UInt32(packet![0]), bits.and(UInt32(mask[0]), 15))) => packet![0]
+    UInt8(UInt32(packet![0]) -> bits.xor(UInt32(mask[0]) -> bits.and(15))) => packet![0]
     UIntSize(0) => protectedIndex!
     protectedIndex! < packetNumberLength -> while {
         packetNumberOffset + protectedIndex! => byteOffset
-        UInt8(bits.xor(
-        UInt32(packet![Int(byteOffset)]),
-        UInt32(mask[Int(protectedIndex! + 1)]))) => packet![Int(byteOffset)]
+        UInt8(UInt32(packet![Int(byteOffset)])
+            -> bits.xor(UInt32(mask[Int(protectedIndex! + 1)]))) => packet![Int(byteOffset)]
         protectedIndex! + 1 => protectedIndex!
     }
     Result<[UInt8; ~], errors.Error>.Ok(packet!)
@@ -377,7 +378,7 @@ openProtectedLong protector: ref Protector, packet: [UInt8], packetNumberOffset:
         sampleIndex! + 1 => sampleIndex!
     }
     protector.header -> mask(sample!) => mask
-    UInt8(bits.xor(UInt32(packet[0]), bits.and(UInt32(mask[0]), 15))) => firstByte
+    UInt8(UInt32(packet[0]) -> bits.xor(UInt32(mask[0]) -> bits.and(15))) => firstByte
     UIntSize(firstByte % 4 + 1) => packetNumberLength
     UInt64(packetEnd - packetNumberOffset) >= UInt64(packetNumberLength + 16)
         -> unless {
@@ -386,13 +387,12 @@ openProtectedLong protector: ref Protector, packet: [UInt8], packetNumberOffset:
     UInt32(0) => truncatedPacketNumber!
     UIntSize(0) => packetNumberIndex!
     packetNumberIndex! < packetNumberLength -> while {
-        UInt8(bits.xor(
-        UInt32(packet[Int(packetNumberOffset + packetNumberIndex!)]),
-        UInt32(mask[Int(packetNumberIndex! + 1)]))) => packetNumberByte
+        UInt8(UInt32(packet[Int(packetNumberOffset + packetNumberIndex!)])
+            -> bits.xor(UInt32(mask[Int(packetNumberIndex! + 1)]))) => packetNumberByte
         truncatedPacketNumber! * 256 + UInt32(packetNumberByte) => truncatedPacketNumber!
         packetNumberIndex! + 1 => packetNumberIndex!
     }
-    packetNumber.restore(expectedPacketNumber, truncatedPacketNumber!, packetNumberLength)? => restoredPacketNumber
+    expectedPacketNumber -> packetNumber.restore(truncatedPacketNumber!, packetNumberLength)? => restoredPacketNumber
     copyRange(packet, 0, packetNumberOffset + packetNumberLength)? => header!
     firstByte => header![0]
     UIntSize(0) => headerPacketNumberIndex!
@@ -446,7 +446,7 @@ sealOneRttPrepared protector: ref Protector, destinationConnectionId: [UInt8], k
         Result<[UInt8; ~], errors.Error>.Err(error(errors.Kind.Encoding, UInt64(destinationConnectionId -> len))) -> return
     }
     oneRttFirstByte(keyPhase, packetNumberLength)? => firstByte
-    packetNumber.truncate(packetNumberValue, packetNumberLength)? => truncated
+    packetNumberValue -> packetNumber.truncate(packetNumberLength)? => truncated
     [UInt8; ~] => header!
     header! -> push(firstByte)
     header! -> appendBytes(destinationConnectionId)
@@ -469,13 +469,12 @@ sealOneRttPrepared protector: ref Protector, destinationConnectionId: [UInt8], k
         sampleIndex! + 1 => sampleIndex!
     }
     protector.header -> mask(sample!) => mask
-    UInt8(bits.xor(UInt32(packet![0]), bits.and(UInt32(mask[0]), 31))) => packet![0]
+    UInt8(UInt32(packet![0]) -> bits.xor(UInt32(mask[0]) -> bits.and(31))) => packet![0]
     UIntSize(0) => protectedIndex!
     protectedIndex! < packetNumberLength -> while {
         packetNumberOffset + protectedIndex! => byteOffset
-        UInt8(bits.xor(
-        UInt32(packet![Int(byteOffset)]),
-        UInt32(mask[Int(protectedIndex! + 1)]))) => packet![Int(byteOffset)]
+        UInt8(UInt32(packet![Int(byteOffset)])
+            -> bits.xor(UInt32(mask[Int(protectedIndex! + 1)]))) => packet![Int(byteOffset)]
         protectedIndex! + 1 => protectedIndex!
     }
     Result<[UInt8; ~], errors.Error>.Ok(packet!)
@@ -494,9 +493,8 @@ openOneRttPrepared protector: ref Protector, packet: [UInt8], destinationConnect
     0 => connectionIdIndex!
     connectionIdIndex! < (destinationConnectionId -> len)
         -> while {
-            bits.xor(
-            UInt32(packet[connectionIdIndex! + 1]),
-            UInt32(destinationConnectionId[connectionIdIndex!])) => different
+            UInt32(packet[connectionIdIndex! + 1])
+                -> bits.xor(UInt32(destinationConnectionId[connectionIdIndex!])) => different
             connectionIdDifference! + different => connectionIdDifference!
             connectionIdIndex! + 1 => connectionIdIndex!
         }
@@ -515,9 +513,9 @@ openOneRttPrepared protector: ref Protector, packet: [UInt8], destinationConnect
         sampleIndex! + 1 => sampleIndex!
     }
     protector.header -> mask(sample!) => mask
-    UInt8(bits.xor(UInt32(packet[0]), bits.and(UInt32(mask[0]), 31))) => firstByte
-    bits.and(UInt32(firstByte), 192) == 64
-        and bits.and(UInt32(firstByte), 24) == 0 -> unless {
+    UInt8(UInt32(packet[0]) -> bits.xor(UInt32(mask[0]) -> bits.and(31))) => firstByte
+    (UInt32(firstByte) -> bits.and(192)) == 64
+        and (UInt32(firstByte) -> bits.and(24)) == 0 -> unless {
             Result<OpenedOneRtt, errors.Error>.Err(error(errors.Kind.ProtocolViolation, UInt64(firstByte))) -> return
         }
     UIntSize(firstByte % 4 + 1) => packetNumberLength
@@ -528,13 +526,12 @@ openOneRttPrepared protector: ref Protector, packet: [UInt8], destinationConnect
     UInt32(0) => truncatedPacketNumber!
     UIntSize(0) => packetNumberIndex!
     packetNumberIndex! < packetNumberLength -> while {
-        UInt8(bits.xor(
-        UInt32(packet[Int(packetNumberOffset + packetNumberIndex!)]),
-        UInt32(mask[Int(packetNumberIndex! + 1)]))) => packetNumberByte
+        UInt8(UInt32(packet[Int(packetNumberOffset + packetNumberIndex!)])
+            -> bits.xor(UInt32(mask[Int(packetNumberIndex! + 1)]))) => packetNumberByte
         truncatedPacketNumber! * 256 + UInt32(packetNumberByte) => truncatedPacketNumber!
         packetNumberIndex! + 1 => packetNumberIndex!
     }
-    packetNumber.restore(expectedPacketNumber, truncatedPacketNumber!, packetNumberLength)? => restoredPacketNumber
+    expectedPacketNumber -> packetNumber.restore(truncatedPacketNumber!, packetNumberLength)? => restoredPacketNumber
     copyRange(packet, 0, packetNumberOffset + packetNumberLength)? => header!
     firstByte => header![0]
     UIntSize(0) => headerPacketNumberIndex!
@@ -562,7 +559,7 @@ openOneRttPrepared protector: ref Protector, packet: [UInt8], destinationConnect
     protector.packet -> open(restoredPacketNumber, header!, ciphertext, tag!) -> when {
         Plaintext(plaintext) {
             Result<OpenedOneRtt, errors.Error>.Ok(OpenedOneRtt {
-                keyPhase: bits.and(UInt32(firstByte), 4) == 4
+                keyPhase: (UInt32(firstByte) -> bits.and(4)) == 4
                 packetNumber: restoredPacketNumber
                 plaintext: plaintext
             })
@@ -575,8 +572,7 @@ openOneRttPrepared protector: ref Protector, packet: [UInt8], destinationConnect
 
 impl Protector {
     public sealInitial: self, version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], token: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintext: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-        encodeInitialHeader(
-        version,
+        version -> encodeInitialHeader(
         destinationConnectionId,
         sourceConnectionId,
         token,
@@ -604,8 +600,7 @@ impl Protector {
     }
 
     public sealHandshake: self, version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumberValue: UInt64, packetNumberLength: UIntSize, plaintext: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-        encodeHandshakeHeader(
-        version,
+        version -> encodeHandshakeHeader(
         destinationConnectionId,
         sourceConnectionId,
         packetNumberValue,

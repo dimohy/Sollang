@@ -1,0 +1,293 @@
+namespace std.io.socket
+
+import std.io.async as asyncio
+import std.net.socket as socket
+
+# One AsyncStream owns one bounded completion reactor and the TcpStream retained
+# in its registration table. Operations move this owner and the caller buffer
+# into their Task and return both on every observable terminal result.
+public struct AsyncStream {
+    reactor: socket.CompletionReactor
+    nextOperationKey: UInt64
+}
+
+public struct CreateFailure {
+    public connection: socket.TcpStream
+    public error: socket.SocketError
+}
+
+public struct ReadSuccess {
+    public channel: AsyncStream
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+    public end: Bool
+}
+
+public struct ReadFailure {
+    public channel: AsyncStream
+    public buffer: [UInt8; ~]
+    public error: socket.SocketError
+}
+
+public struct WriteSuccess {
+    public channel: AsyncStream
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+}
+
+public struct WriteFailure {
+    public channel: AsyncStream
+    public buffer: [UInt8; ~]
+    public error: socket.SocketError
+}
+
+invalidArgument: -> socket.SocketError => socket.SocketError {
+    kind: socket.SocketErrorKind.InvalidArgument
+    code: 0
+}
+
+readTerminal channel: move AsyncStream, slot: move socket.OperationSlot -> Result<ReadSuccess, ReadFailure> {
+    slot -> transferredCount -> when {
+        None {
+            slot -> intoBytes => buffer
+            Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+                channel: channel
+                buffer: buffer
+                error: invalidArgument()
+            })
+        }
+        Some(count) {
+            slot -> completionError -> when {
+                Some(error) {
+                    slot -> intoBytes => buffer
+                    Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+                        channel: channel
+                        buffer: buffer
+                        error: error
+                    })
+                }
+                None {
+                    slot -> intoBytes => buffer
+                    Result<ReadSuccess, ReadFailure>.Ok(ReadSuccess {
+                        channel: channel
+                        buffer: buffer
+                        count: count
+                        end: count == 0
+                    })
+                }
+            }
+        }
+    }
+}
+
+writeTerminal channel: move AsyncStream, slot: move socket.OperationSlot -> Result<WriteSuccess, WriteFailure> {
+    slot -> transferredCount -> when {
+        None {
+            slot -> intoBytes => buffer
+            Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                channel: channel
+                buffer: buffer
+                error: invalidArgument()
+            })
+        }
+        Some(count) {
+            slot -> completionError -> when {
+                Some(error) {
+                    slot -> intoBytes => buffer
+                    Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                        channel: channel
+                        buffer: buffer
+                        error: error
+                    })
+                }
+                None {
+                    slot -> intoBytes => buffer
+                    Result<WriteSuccess, WriteFailure>.Ok(WriteSuccess {
+                        channel: channel
+                        buffer: buffer
+                        count: count
+                    })
+                }
+            }
+        }
+    }
+}
+
+readOutcome nextOperationKey: UInt64, outcome: move socket.SocketTerminalOutcome -> Result<ReadSuccess, ReadFailure> => outcome -> when {
+    socket.SocketTerminalOutcome.Succeeded(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> readTerminal(slot)
+    }
+    socket.SocketTerminalOutcome.Failed(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> readTerminal(slot)
+    }
+    socket.SocketTerminalOutcome.Cancelled(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> readTerminal(slot)
+    }
+}
+
+writeOutcome nextOperationKey: UInt64, outcome: move socket.SocketTerminalOutcome -> Result<WriteSuccess, WriteFailure> => outcome -> when {
+    socket.SocketTerminalOutcome.Succeeded(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> writeTerminal(slot)
+    }
+    socket.SocketTerminalOutcome.Failed(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> writeTerminal(slot)
+    }
+    socket.SocketTerminalOutcome.Cancelled(completion) {
+        completion.reactor => reactor
+        completion.slot => slot
+        AsyncStream { reactor: reactor, nextOperationKey: nextOperationKey } -> writeTerminal(slot)
+    }
+}
+
+cancelPending reactor: move socket.CompletionReactor, key: UInt64 -> socket.CompletionReactor uses Network {
+    reactor -> cancelOperation(key) -> when {
+        Ok(cancelled) { cancelled }
+        Err(failure) {
+            failure.reactor => returned
+            returned
+        }
+    }
+}
+
+preparePending reactor: move socket.CompletionReactor, requested: Bool, key: UInt64 -> socket.CompletionReactor uses Network {
+    requested -> if {
+        reactor -> cancelPending(key)
+    } else {
+        reactor
+    }
+}
+
+public asyncStream connection: move socket.TcpStream -> Result<AsyncStream, CreateFailure> uses Network {
+    socket.CompletionReactorOptions {
+        registrations: 1
+        pendingOperations: 1
+        completionBatch: 1
+    } -> socket.completionReactor -> when {
+        Err(error) {
+            Result<AsyncStream, CreateFailure>.Err(CreateFailure {
+                connection: connection
+                error: error
+            })
+        }
+        Ok(reactor) {
+            reactor -> registerStream(connection, 1) -> when {
+                Err(failure) {
+                    failure.error => error
+                    failure.reactor => failedReactor
+                    failure.connection => returnedStream
+                    failedReactor -> close
+                    Result<AsyncStream, CreateFailure>.Err(CreateFailure {
+                        connection: returnedStream
+                        error: error
+                    })
+                }
+                Ok(registered) {
+                    Result<AsyncStream, CreateFailure>.Ok(AsyncStream {
+                        reactor: registered
+                        nextOperationKey: 1
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl AsyncStream {
+    public readIntoAsync: move self, buffer: move [UInt8; ~], cancellation: asyncio.Cancellation -> async Result<ReadSuccess, ReadFailure> uses Network {
+        self.nextOperationKey => operationKey
+        self.reactor => reactor
+        socket.operationSlot(buffer, operationKey, socket.OperationDirection.Receive) => slot
+        reactor -> submit(1, slot) => submissionResult
+        submissionResult -> when {
+            Err(failure) {
+                failure.error => error
+                failure.reactor => failedReactor
+                failure.slot => failedSlot
+                failedSlot -> intoBytes => returnedBuffer
+                Result<ReadSuccess, ReadFailure>.Err(ReadFailure {
+                    channel: AsyncStream { reactor: failedReactor, nextOperationKey: operationKey }
+                    buffer: returnedBuffer
+                    error: error
+                })
+            }
+            Ok(submission) {
+                submission -> when {
+                    socket.CompletionSubmission.Completed(completion) {
+                        completion.reactor => completedReactor
+                        completion.slot => completedSlot
+                        AsyncStream { reactor: completedReactor, nextOperationKey: operationKey + 1 }
+                            -> readTerminal(completedSlot)
+                    }
+                    socket.CompletionSubmission.Pending(pendingReactor) {
+                        pendingReactor -> preparePending(cancellation.requested, operationKey) => waitingReactor
+                        waitingReactor -> dequeueTerminal(asyncio.Cancellation { requested: false }) => pendingTask
+                        pendingTask -> await => outcome
+                        operationKey + 1 -> readOutcome(outcome)
+                    }
+                }
+            }
+        }
+    }
+
+    public writeRangeAsync: move self, buffer: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: asyncio.Cancellation -> async Result<WriteSuccess, WriteFailure> uses Network {
+        self.nextOperationKey => operationKey
+        self.reactor => reactor
+        socket.operationSlot(buffer, operationKey, socket.OperationDirection.Send) -> range(offset, length) -> when {
+            Err(failure) {
+                failure -> intoSlot -> intoBytes => returnedBuffer
+                Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                    channel: AsyncStream { reactor: reactor, nextOperationKey: operationKey }
+                    buffer: returnedBuffer
+                    error: invalidArgument()
+                })
+            }
+            Ok(slot) {
+                reactor -> submit(1, slot) => submissionResult
+                submissionResult -> when {
+                    Err(failure) {
+                        failure.error => error
+                        failure.reactor => failedReactor
+                        failure.slot => failedSlot
+                        failedSlot -> intoBytes => returnedBuffer
+                        Result<WriteSuccess, WriteFailure>.Err(WriteFailure {
+                            channel: AsyncStream { reactor: failedReactor, nextOperationKey: operationKey }
+                            buffer: returnedBuffer
+                            error: error
+                        })
+                    }
+                    Ok(submission) {
+                        submission -> when {
+                            socket.CompletionSubmission.Completed(completion) {
+                                completion.reactor => completedReactor
+                                completion.slot => completedSlot
+                                AsyncStream { reactor: completedReactor, nextOperationKey: operationKey + 1 }
+                                    -> writeTerminal(completedSlot)
+                            }
+                            socket.CompletionSubmission.Pending(pendingReactor) {
+                                pendingReactor -> preparePending(cancellation.requested, operationKey) => waitingReactor
+                                waitingReactor -> dequeueTerminal(asyncio.Cancellation { requested: false }) => pendingTask
+                                pendingTask -> await => outcome
+                                operationKey + 1 -> writeOutcome(outcome)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public close: move self -> Unit uses Network {
+        self.reactor => reactor
+        reactor -> close
+    }
+}

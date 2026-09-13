@@ -261,6 +261,13 @@ internal sealed partial class LlvmEmitter
             6,
             "sleep_result_address");
         EmitStore("i8", "0", resultAddress, 1);
+        string? diagnosticHeader = null;
+        if (_usesAsyncDiagnostics)
+        {
+            diagnosticHeader = AsyncContextField(
+                context, null, BoundType.Unit, 10, "sleep_diagnostic_header");
+            EmitInitializeAsyncDiagnosticHeader(diagnosticHeader, _currentAsyncDiagnosticHeader);
+        }
         var handle = NextTemp("sleep_handle");
         EmitCall(
             handle,
@@ -276,6 +283,10 @@ internal sealed partial class LlvmEmitter
         EmitCall(target: null, "void", "sollang_free", $"ptr {context}");
         EmitTrap();
         EmitLabel(readyLabel);
+        if (diagnosticHeader is not null)
+        {
+            EmitAttachInheritedDiagnosticRecord(diagnosticHeader, handle);
+        }
         var deadlineAddress = NextTemp("sleep_deadline_address");
         EmitAssign(
             deadlineAddress,
@@ -287,7 +298,8 @@ internal sealed partial class LlvmEmitter
             null,
             BoundType.Unit,
             handle,
-            context);
+            context,
+            DiagnosticHeaderName: diagnosticHeader);
     }
 
     private RuntimeTask EmitRuntimeReadScalarAsync(BoundFunction function)

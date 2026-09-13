@@ -310,16 +310,21 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_mutableScalarSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_readonlyCaptureBorrowPointers, StringComparer.Ordinal),
-            new Dictionary<RuntimeValue, string>(_readonlyValueSlots));
+            new Dictionary<RuntimeValue, string>(_readonlyValueSlots),
+            new Dictionary<string, string>(_borrowedOwnedTransferFlags, StringComparer.Ordinal),
+            [.. _terminatingOwnedCleanupObligations]);
     }
 
     private void ClearLocalState()
     {
         _currentHoistedAllocas = null;
+        _currentAsyncDiagnosticHeader = "null";
         _locals.Clear();
         _mutableLocals.Clear();
         _borrowedMutableLocals.Clear();
         _borrowedOwnedLocals.Clear();
+        _terminatingOwnedCleanupObligations.Clear();
+        _nextOwnedCleanupBindingId = 0;
         _movedOwnedStructFields.Clear();
         _mutableContainerSlots.Clear();
         _mutableStructSlots.Clear();
@@ -413,6 +418,12 @@ internal sealed partial class LlvmEmitter
             _borrowedOwnedLocals.Add(name);
         }
 
+        _borrowedOwnedTransferFlags.Clear();
+        foreach (var (name, pointer) in scope.BorrowedOwnedTransferFlags)
+        {
+            _borrowedOwnedTransferFlags.Add(name, pointer);
+        }
+
         _movedOwnedStructFields.Clear();
         foreach (var (name, fields) in scope.MovedOwnedStructFields)
         {
@@ -450,6 +461,9 @@ internal sealed partial class LlvmEmitter
         {
             _readonlyValueSlots.Add(value, pointer);
         }
+
+        _terminatingOwnedCleanupObligations.Clear();
+        _terminatingOwnedCleanupObligations.AddRange(scope.TerminatingOwnedCleanupObligations);
     }
 
     private static LocalScope KeepLocalsInScope(LocalScope scope, IEnumerable<string> names)
@@ -484,7 +498,14 @@ internal sealed partial class LlvmEmitter
                 .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
             scope.ReadonlyValueSlots
                 .Where(slot => retainedValues.Contains(slot.Key))
-                .ToDictionary(static slot => slot.Key, static slot => slot.Value));
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value),
+            scope.BorrowedOwnedTransferFlags
+                .Where(flag => retainedNames.Contains(flag.Key))
+                .ToDictionary(static flag => flag.Key, static flag => flag.Value, StringComparer.Ordinal),
+            scope.TerminatingOwnedCleanupObligations
+                .Where(obligation => obligation.BindingName is null
+                    || retainedNames.Contains(obligation.BindingName))
+                .ToList());
     }
 
     private void DropOwnedLocals(
@@ -503,6 +524,10 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
             DropOwnedLocal(name, storedValue);
+        }
+        foreach (var obligation in _terminatingOwnedCleanupObligations.AsEnumerable().Reverse())
+        {
+            DropTerminatingOwnedCleanupObligation(obligation);
         }
     }
 
@@ -569,17 +594,31 @@ internal sealed partial class LlvmEmitter
             ? LoadMutableStruct(storedValue, structPointer)
             : LoadMutableContainer(name, storedValue);
         if (value is RuntimeStruct structure
-            && _movedOwnedStructFields.TryGetValue(name, out var movedFields))
+            && _movedOwnedStructFields.ContainsKey(name))
         {
-            DropOwnedStructFieldsExcept(
-                structure,
-                movedFields.ToArray());
+            DropOwnedStructFieldsExceptMoved(name, structure);
         }
         else
         {
             DropOwnedRuntimeValue(value);
         }
         EndMutableContainerSlotLifetime(name);
+    }
+
+    private void DropTerminatingOwnedCleanupObligation(TerminatingOwnedCleanupObligation obligation)
+    {
+        if (obligation.ExcludedProjectedField is { } excludedField
+            && obligation.Value is RuntimeStruct projectedOwner)
+        {
+            DropOwnedStructFieldsExcept(projectedOwner, excludedField);
+            return;
+        }
+        if (obligation.RetainedFlag is { } retainedFlag)
+        {
+            DropOwnedRuntimeValueIfRetained(retainedFlag, obligation.Value);
+            return;
+        }
+        DropOwnedRuntimeValue(obligation.Value);
     }
 
     private RuntimeValue LoadMutableStruct(RuntimeValue storedValue, string pointer)
@@ -771,6 +810,23 @@ internal sealed partial class LlvmEmitter
 
     private void MarkMovedOwnedStructField(string ownerName, string fieldName)
     {
+        if (_locals.TryGetValue(ownerName, out var ownerValue)
+            && ownerValue is RuntimeStruct owner)
+        {
+            var movedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var existingFields)
+                ? existingFields
+                    .Append(fieldName)
+                    .Select(static path => (IReadOnlyList<string>)path.Split('.'))
+                    .ToArray()
+                : [(IReadOnlyList<string>)fieldName.Split('.')];
+            if (OwnedProjectionPathsCoverStorage(owner.Type, movedPaths))
+            {
+                if (_borrowedOwnedTransferFlags.TryGetValue(ownerName, out var transferFlag))
+                {
+                    EmitStore("i1", "false", transferFlag, 1);
+                }
+            }
+        }
         if (!_movedOwnedStructFields.TryGetValue(ownerName, out var fields))
         {
             fields = new HashSet<string>(StringComparer.Ordinal);
@@ -782,6 +838,24 @@ internal sealed partial class LlvmEmitter
     private bool IsMovedOwnedStructField(string ownerName, string fieldName) =>
         _movedOwnedStructFields.TryGetValue(ownerName, out var fields)
         && fields.Contains(fieldName);
+
+    private bool IsMovedOwnedStructPath(string ownerName, IReadOnlyList<string> fieldPath, bool allowMovedDescendant)
+    {
+        if (!_movedOwnedStructFields.TryGetValue(ownerName, out var movedPaths))
+        {
+            return false;
+        }
+        return movedPaths.Any(path =>
+        {
+            var moved = path.Split('.');
+            var common = Math.Min(moved.Length, fieldPath.Count);
+            if (!moved.Take(common).SequenceEqual(fieldPath.Take(common), StringComparer.Ordinal))
+            {
+                return false;
+            }
+            return moved.Length <= fieldPath.Count || !allowMovedDescendant;
+        });
+    }
 
     private void RepairMovedOwnedStructField(string ownerName, string fieldName)
     {
@@ -801,11 +875,12 @@ internal sealed partial class LlvmEmitter
         RuntimeStruct owner,
         params string[] additionallyExcludedFieldNames)
     {
-        var excluded = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
-            ? new HashSet<string>(movedFields, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
-        excluded.UnionWith(additionallyExcludedFieldNames);
-        DropOwnedStructFieldsExcept(owner, excluded.ToArray());
+        var transferredPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
+            ? movedFields.Select(static path => (IReadOnlyList<string>)path.Split('.')).ToList()
+            : [];
+        transferredPaths.AddRange(additionallyExcludedFieldNames.Select(static field =>
+            (IReadOnlyList<string>)new[] { field }));
+        DropOwnedStructFieldsExceptTransferred(owner, transferredPaths);
     }
 
     private void DropOwnedStructFieldsExceptMovedAndTransferred(
@@ -813,10 +888,11 @@ internal sealed partial class LlvmEmitter
         RuntimeStruct owner,
         IReadOnlyList<IReadOnlyList<string>> transferredPaths)
     {
-        var excluded = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
-            ? new HashSet<string>(movedFields, StringComparer.Ordinal)
-            : new HashSet<string>(StringComparer.Ordinal);
-        DropOwnedStructFieldsExceptTransferred(owner, transferredPaths, excluded);
+        var combinedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
+            ? movedFields.Select(static path => (IReadOnlyList<string>)path.Split('.')).ToList()
+            : [];
+        combinedPaths.AddRange(transferredPaths);
+        DropOwnedStructFieldsExceptTransferred(owner, combinedPaths);
     }
 
     private void DropOwnedStructFieldsExceptTransferred(
@@ -945,6 +1021,9 @@ internal sealed partial class LlvmEmitter
 
         return value switch
         {
+            RuntimeStaticIntArray array => array with { PointerName = pointer, LengthName = length },
+            RuntimeStaticTextArray array => array with { PointerName = pointer, LengthName = length },
+            RuntimeStaticInlineArray array => array with { PointerName = pointer, LengthName = length },
             RuntimeDynamicIntArray => new RuntimeDynamicIntArray(pointer, length, capacity),
             RuntimeDynamicInlineArray array => array with
             {
@@ -973,6 +1052,21 @@ internal sealed partial class LlvmEmitter
 
         switch (value)
         {
+            case RuntimeStaticIntArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
+            case RuntimeStaticTextArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
+            case RuntimeStaticInlineArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
             case RuntimeDynamicIntArray array:
                 EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
                 EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
@@ -1013,9 +1107,17 @@ internal sealed partial class LlvmEmitter
             return null;
         }
 
+        if (flow.Targets.Any(target =>
+                target.Path.Count == 1
+                && target.Path[0] is "await" or "cancel")
+            && TryGetOwnedFieldProjection(flow.Source, out var projectedOwnerName, out _))
+        {
+            return projectedOwnerName;
+        }
+
         if (flow.Source is not NameExpression name)
         {
-            return null;
+            return GetMoveConsumingContainerSourceName(flow.Source);
         }
 
         if (flow.Targets.Any(target =>
@@ -1045,10 +1147,8 @@ internal sealed partial class LlvmEmitter
         return expression switch
         {
             NameExpression => false,
-            FieldAccessExpression { Source: NameExpression owner }
-                => !_locals.ContainsKey(owner.Name)
-                    && !_mutableLocals.Contains(owner.Name),
             FieldAccessExpression field => IsAnonymousOwnedExpression(field.Source),
+            IndexExpression index => IsAnonymousOwnedExpression(index.Source),
             _ => true
         };
     }
@@ -1314,6 +1414,7 @@ internal sealed partial class LlvmEmitter
             if (structure.Fields.Any(initializer =>
                 definition.Fields.First(field => field.Name == initializer.Name) is { Type: var fieldType }
                 && _program.Types.ContainsOwnedStorage(fieldType)
+                && !CopiesFixedStorageField(initializer.Value, fieldType)
                 && TransfersOwnerName(initializer.Value, ownerName, isResult: true, ownerType: ownerType)))
             {
                 return true;
@@ -1355,6 +1456,26 @@ internal sealed partial class LlvmEmitter
 
         if (expression is FlowExpression flow
             && FlowTransfersOwnerName(flow, ownerName, ownerType))
+        {
+            return true;
+        }
+
+        if (expression is EnumMatchExpression
+            {
+                Subject: NameExpression enumSubject
+            } ownedEnumMatch
+            && string.Equals(enumSubject.Name, ownerName, StringComparison.Ordinal)
+            && ownerType is { } knownEnumType
+            && _program.Types.IsEnum(knownEnumType)
+            && ownedEnumMatch.Arms.Any(arm =>
+                arm.Condition is EnumPatternExpression { BindingName: { } bindingName } pattern
+                && _program.Types.GetEnum(knownEnumType).Variants.First(
+                    variant => variant.Name == pattern.VariantName).PayloadType is { } payloadType
+                && _program.Types.ContainsOwnedStorage(payloadType)
+                && TransfersOwnerName(
+                    arm.Body,
+                    bindingName,
+                    payloadType)))
         {
             return true;
         }
@@ -1658,7 +1779,8 @@ internal sealed partial class LlvmEmitter
         BoundType ResultType,
         string HandleName,
         string ContextName,
-        BoundFunction? RuntimeFunction = null)
+        BoundFunction? RuntimeFunction = null,
+        string? DiagnosticHeaderName = null)
         : RuntimeValue(TaskType);
 
     private sealed record RuntimeProducerStream(
@@ -1826,7 +1948,16 @@ internal sealed partial class LlvmEmitter
         Dictionary<string, string> MutableStructSlots,
         Dictionary<string, string> MutableScalarSlots,
         Dictionary<string, string> ReadonlyCaptureBorrowPointers,
-        Dictionary<RuntimeValue, string> ReadonlyValueSlots);
+        Dictionary<RuntimeValue, string> ReadonlyValueSlots,
+        Dictionary<string, string> BorrowedOwnedTransferFlags,
+        List<TerminatingOwnedCleanupObligation> TerminatingOwnedCleanupObligations);
+
+    private sealed record TerminatingOwnedCleanupObligation(
+        long BindingId,
+        string? BindingName,
+        RuntimeValue Value,
+        string? RetainedFlag,
+        string? ExcludedProjectedField);
 
     private sealed record LoopContext(
         string ContinueLabel,

@@ -94,15 +94,39 @@ $expectedPrivateFields = [ordered]@{
     'stdlib/std/net/quic/transport_parameters.slg' = 1
     # HMAC owns both hash states; callers use update/finish without replacing them.
     'stdlib/std/crypto/hmac_sha256.slg' = 2
+    # GZIP codec, encoder, framed decoder, and raw DEFLATE decoder fields are
+    # validated streaming state; callers use checked factories and write/finish.
+    'stdlib/std/compress/gzip.slg' = 51
+    # ZIP codec limits plus affine stored/DEFLATE decoder and writer header,
+    # payload, checksum, directory, phase, and failure state are mutated only by
+    # checked instance construction, write, entry-finalization, and consuming finish.
+    'stdlib/std/archive/zip.slg' = 41
+    # Binary reader/writer order, cursor, ceiling, and produced count advance
+    # only through checked factories and instance operations.
+    'stdlib/std/encoding/binary.slg' = 5
+    # Hash configuration, accumulators, byte counts, and buffered tails stay
+    # hasher-owned behind write/checksum/reset operations.
+    'stdlib/std/hash/crc32.slg' = 2
+    'stdlib/std/hash/xxhash64.slg' = 9
     # Replay storage, scratch, cursor, and ceilings remain adapter-owned.
     'stdlib/std/io.slg' = 5
+    # BufferQueue owns storage, cursor, watermarks, and pause state so its
+    # bounded backpressure invariant cannot be fabricated by callers.
+    'stdlib/std/io/async.slg' = 5
+    # DiagnosticSession is an affine compiler-owned capability. Callers use
+    # track, snapshot, and close rather than fabricating its opaque token.
+    'stdlib/std/async/diagnostics.slg' = 1
     # File adapters encapsulate their affine handles and explicit positions.
     'stdlib/std/io/file.slg' = 4
-    # Completion slots expose observations and consuming buffer recovery only;
-    # the socket runtime exclusively owns native identity and state transitions.
-    'stdlib/std/net/socket.slg' = 9
-    # Clock identity, affine timer state, and tick ownership cannot be fabricated.
-    'stdlib/std/time.slg' = 15
+    # AsyncStream is the sole affine owner of its completion reactor and next
+    # operation identity; callers advance both only through consuming methods.
+    'stdlib/std/io/socket.slg' = 2
+    # The completion reactor token and completion-slot state stay private;
+    # the socket runtime exclusively owns native identity and transitions.
+    'stdlib/std/net/socket.slg' = 10
+    # Clock identity, affine timer state, tick ownership, and fixed offsets
+    # cannot be fabricated outside the validated clock constructors.
+    'stdlib/std/time.slg' = 16
     # Logger filtering remains controlled by its constructor and instance API.
     'stdlib/std/log.slg' = 1
     # Original authority spelling is retained only by the validated URI parser.
@@ -110,6 +134,9 @@ $expectedPrivateFields = [ordered]@{
     # Path iteration retains its borrowed source, cursor, bounds, style, limits,
     # and parsed header; callers observe components only through instance APIs.
     'stdlib/std/path.slg' = 7
+    # sys.path.Path retains validated UTF-8 bytes and style behind factories
+    # and inherent observation/normalization methods.
+    'stdlib/sys/path.slg' = 2
     # CSV reader/writer cursors, budgets, and format state are advanced only by
     # their checked instance APIs; callers receive public Field/Error values.
     'stdlib/std/text/csv.slg' = 13
@@ -127,6 +154,9 @@ $expectedPrivateFields = [ordered]@{
     'examples/regression/1392-selfhost-opaque-struct-ast.slg' = 1
     'examples/regression/1393-selfhost-opaque-struct-diagnostics.slg' = 1
     'examples/regression/diagnostics/opaque-struct-modifier-rejected.slg' = 1
+    # The qualified-call fixture deliberately exposes its embedded Path only
+    # through fromText, normalizeConfined, and byteCount.
+    'examples/regression/656-selfhost-qualified-move-when-ir.slg' = 2
 }
 $actualPrivateFields = [ordered]@{}
 foreach ($file in Get-ChildItem -LiteralPath $sourceRoots -Recurse -File -Filter "*.slg") {

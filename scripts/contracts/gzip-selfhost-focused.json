@@ -1,0 +1,57 @@
+{
+  "$schema": "gzip-selfhost-focused.schema.json",
+  "version": 1,
+  "mode": "selfhost-native-gzip-focused",
+  "authorityContract": "scripts/contracts/gzip-stream-api.json",
+  "platform": "windows-x64",
+  "optimizations": ["O0", "O2"],
+  "positiveCaseIds": [
+    "stored-roundtrip",
+    "fixed-dynamic-decode",
+    "rejection-limits",
+    "fixed-writer",
+    "stored-streaming-encoder",
+    "crc-parity",
+    "transactional-concatenated",
+    "one-byte-boundaries",
+    "error-offsets",
+    "dynamic-writer"
+  ],
+  "negativeCaseIds": ["private-codec-state", "private-encoder-state", "private-decoder-state"],
+  "selfhostDiagnosticsByCase": {
+    "private-codec-state": "; sollang semantic error: cannot read private field 'limits' of struct 'std.compress.gzip.Codec' outside module 'std.compress.gzip'; use its public factory or public instance methods",
+    "private-encoder-state": "; sollang semantic error: cannot read private field 'produced' of struct 'std.compress.gzip.Encoder' outside module 'std.compress.gzip'; use its public factory or public instance methods",
+    "private-decoder-state": "; sollang semantic error: cannot read private field 'phase' of struct 'std.compress.gzip.Decoder' outside module 'std.compress.gzip'; use its public factory or public instance methods"
+  },
+  "additionalSourcesByCase": {
+    "crc-parity": ["stdlib/std/hash/crc32.slg"]
+  },
+  "requiredFocusedCaseIds": ["transactional-concatenated", "one-byte-boundaries", "dynamic-writer"],
+  "positiveTotal": 20,
+  "negativeTotal": 3,
+  "total": 23,
+  "acceptance": [
+    "the explicitly supplied native selfhost compiler exists and matches ExpectedCompilerSha256 at start and end",
+    "every positive emits diagnostic-free Windows LLVM under the frozen compiler and passes llvm-as and V004",
+    "every positive links and executes with exact stdout at clang O0 and O2",
+    "dynamic-writer emits BTYPE 2 bytes accepted by System.IO.Compression.GZipStream and identical across O0 and O2",
+    "every negative fails before LLVM with the exact selfhost worker prelude and one target-specific semantic diagnostic",
+    "all compiler contract source expected tool and verifier inputs remain hash-stable"
+  ],
+  "validationControls": {
+    "positive": "a canonical passed 23-of-23 receipt with stable inputs and no failures satisfies the result schema",
+    "negative": [
+      "a passed receipt with completed below 23 is rejected",
+      "a passed receipt with failureIds is rejected",
+      "a passed receipt with inputDrift is rejected",
+      "a receipt with fewer or more than 23 case records is rejected"
+    ]
+  },
+  "executionPolicy": {
+    "estimatedDuration": ">=60s",
+    "detachedSupervisorMandatory": true,
+    "launcher": "scripts/invoke-detached-selfhost-verification.ps1",
+    "worker": "scripts/verify-gzip-selfhost-focused.ps1",
+    "routeStatus": "integrated-and-validated"
+  }
+}

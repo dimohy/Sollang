@@ -47,7 +47,8 @@ internal sealed partial class LlvmEmitter
                 .AppendLine(" x i64] }");
         }
         foreach (var definition in _program.Types.Structs
-                     .Where(definition => ShouldEmitTypeDefinition(definition.Id))
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsConcreteTypeDefinition(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
             var fields = string.Join(", ", definition.Fields.Select(field => LlvmType(field.Type)));
@@ -58,7 +59,8 @@ internal sealed partial class LlvmEmitter
         }
 
         foreach (var definition in _program.Types.Enums
-                     .Where(definition => ShouldEmitTypeDefinition(definition.Id))
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsConcreteTypeDefinition(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
             builder.Append(LlvmEnumType(definition.Id))
@@ -79,6 +81,42 @@ internal sealed partial class LlvmEmitter
             or TypeId.DirectoryRawResult
             or TypeId.DirectoryReadResult)
         || IsDropTypeReachable(type);
+
+    private bool IsConcreteTypeDefinition(TypeId type) =>
+        IsConcreteTypeDefinition(type, new HashSet<TypeId>());
+
+    private bool IsConcreteTypeDefinition(TypeId type, ISet<TypeId> visiting)
+    {
+        if (type is TypeId.GenericParameter
+            or TypeId.SecondaryGenericParameter
+            or TypeId.TertiaryGenericParameter)
+        {
+            return false;
+        }
+        if (!visiting.Add(type))
+        {
+            return true;
+        }
+        try
+        {
+            if (_program.Types.IsStruct(type))
+            {
+                return _program.Types.GetStruct(type).Fields.All(field =>
+                    IsConcreteTypeDefinition(field.Type, visiting));
+            }
+            if (_program.Types.IsEnum(type))
+            {
+                return _program.Types.GetEnum(type).Variants.All(variant =>
+                    variant.PayloadType is not { } payload
+                    || IsConcreteTypeDefinition(payload, visiting));
+            }
+            return true;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
+    }
 
     private static string LlvmBoundedArrayType(TypeId type) => $"%sollang.bounded_array.t{(int)type}";
 
@@ -246,9 +284,9 @@ internal sealed partial class LlvmEmitter
             return false;
         }
 
-        if (IsMovedOwnedStructField(ownerName, fieldPath[0]))
+        if (IsMovedOwnedStructPath(ownerName, fieldPath, allowMovedDescendant: false))
         {
-            throw new SollangException($"owned field '{ownerName}.{fieldPath[0]}' has already moved");
+            throw new SollangException($"owned field '{ownerName}.{string.Join('.', fieldPath)}' overlaps an already moved field");
         }
 
         if (!projectedTransfers.TryGetValue(ownerName, out var paths))
@@ -513,10 +551,28 @@ internal sealed partial class LlvmEmitter
         foreach (var (ownerName, transferredPaths) in projectedTransfers)
         {
             var owner = (RuntimeStruct)_locals[ownerName];
+            var combinedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
+                ? movedFields
+                    .Select(static path => (IReadOnlyList<string>)path.Split('.'))
+                    .Concat(transferredPaths)
+                    .ToArray()
+                : transferredPaths.ToArray();
+            if (OwnedProjectionPathsCoverStorage(owner.Type, combinedPaths))
+            {
+                if (_borrowedOwnedTransferFlags.TryGetValue(ownerName, out var transferFlag))
+                {
+                    EmitStore("i1", "false", transferFlag, 1);
+                }
+                foreach (var path in transferredPaths)
+                {
+                    MarkMovedOwnedStructField(ownerName, string.Join('.', path));
+                }
+                continue;
+            }
             if (transferredPaths.All(static path => path.Count == 1))
             {
                 foreach (var path in transferredPaths)
-                    MarkMovedOwnedStructField(ownerName, path[0]);
+                    MarkMovedOwnedStructField(ownerName, string.Join('.', path));
                 continue;
             }
             DropOwnedStructFieldsExceptMovedAndTransferred(
@@ -528,7 +584,44 @@ internal sealed partial class LlvmEmitter
         return true;
     }
 
-    private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression)
+    private bool OwnedProjectionPathsCoverStorage(
+        BoundType ownerType,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths) =>
+        OwnedProjectionPathsCoverStorage(ownerType, [], transferredPaths, new HashSet<BoundType>());
+
+    private bool OwnedProjectionPathsCoverStorage(
+        BoundType type,
+        IReadOnlyList<string> prefix,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths,
+        ISet<BoundType> visiting)
+    {
+        if (transferredPaths.Any(path => path.SequenceEqual(prefix, StringComparer.Ordinal)))
+        {
+            return true;
+        }
+        if (!_program.Types.IsStruct(type) || !visiting.Add(type))
+        {
+            return false;
+        }
+        try
+        {
+            var ownedFields = _program.Types.GetStruct(type).Fields
+                .Where(field => _program.Types.ContainsOwnedStorage(field.Type))
+                .ToArray();
+            return ownedFields.Length > 0
+                && ownedFields.All(field => OwnedProjectionPathsCoverStorage(
+                    field.Type,
+                    prefix.Append(field.Name).ToArray(),
+                    transferredPaths,
+                    visiting));
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
+    }
+
+    private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression, bool asProjectionSource = false)
     {
         if (TryEmitPayloadlessEnumVariant(expression, out var enumValue))
         {
@@ -551,11 +644,17 @@ internal sealed partial class LlvmEmitter
             return EmitFunctionCall(associated, argument: null);
         }
 
-        if (expression.Source is NameExpression movedOwner && IsMovedOwnedStructField(movedOwner.Name, expression.FieldName))
-            throw new SollangException($"owned field '{movedOwner.Name}.{expression.FieldName}' has already moved");
-        var source = expression.Source is NameExpression ownerPlace
-            ? EmitNameExpression(ownerPlace, allowPartialOwner: true)
-            : EmitExpression(expression.Source);
+        if (TryGetOwnedFieldProjection(expression, out var movedOwnerName, out var movedFieldPath)
+            && IsMovedOwnedStructPath(movedOwnerName, movedFieldPath, allowMovedDescendant: asProjectionSource))
+        {
+            throw new SollangException($"owned field '{movedOwnerName}.{string.Join('.', movedFieldPath)}' overlaps an already moved field");
+        }
+        var source = expression.Source switch
+        {
+            NameExpression ownerPlace => EmitNameExpression(ownerPlace, allowPartialOwner: true),
+            FieldAccessExpression parentField => EmitFieldAccessExpression(parentField, asProjectionSource: true),
+            _ => EmitExpression(expression.Source)
+        };
         if (source is RuntimeReference reference)
         {
             source = LoadReference(reference);
@@ -588,7 +687,14 @@ internal sealed partial class LlvmEmitter
         EmitAssign(
             extracted,
             $"extractvalue {LlvmStructType(value.Type)} {value.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
-        return DematerializeAggregateValue(field.Type, extracted);
+        var projected = DematerializeAggregateValue(field.Type, extracted);
+        if (IsAnonymousOwnedExpression(expression.Source)
+            && IsOwnedContainerRuntimeValue(source))
+        {
+            _anonymousProjectionOwners[expression] =
+                _anonymousProjectionOwners.GetValueOrDefault(expression.Source) ?? source;
+        }
+        return projected;
     }
 
     private RuntimeValue LoadReference(RuntimeReference reference)
@@ -1049,6 +1155,14 @@ internal sealed partial class LlvmEmitter
             var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
             return new RuntimeInlineDictionary(
                 type, definition.KeyType, definition.ValueType, pointer, length, capacity);
+        }
+        if (_program.Types.TryGetTaskValue(type, out var taskResultType))
+        {
+            var handle = NextTemp("task_field_handle");
+            EmitAssign(handle, $"extractvalue %sollang.task {valueName}, 0");
+            var context = NextTemp("task_field_context");
+            EmitAssign(context, $"extractvalue %sollang.task {valueName}, 1");
+            return new RuntimeTask(type, null, taskResultType, handle, context);
         }
         if (IsIntegerType(type))
         {

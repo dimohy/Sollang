@@ -1,0 +1,23 @@
+# An owned enum payload must release sibling owners when its arm returns early.
+struct Holder {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+make: -> Result<Holder, Int> {
+    Result<Holder, Int>.Ok(Holder { first: [1; ~], second: [2; ~] })
+}
+
+fail: -> Result<Int, Int> {
+    make() -> when {
+        Ok(holder) { Result<Int, Int>.Err((holder.first -> len) + 6) -> return }
+        Err(error) { Result<Int, Int>.Err(error) -> return }
+    }
+}
+
+main {
+    fail() -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { error -> println }
+    }
+}

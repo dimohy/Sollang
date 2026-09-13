@@ -1,12 +1,11 @@
 namespace std.compress.zstd.huffman
 
 import std.compress.zstd.huffman as model
+import std.compress.zstd.fse as fse
 
-# RFC 8878 section 4.2 direct-weight Huffman tables and reverse bitstreams.
-# FSE-compressed weight descriptions intentionally share the later FSE engine.
+# RFC 8878 section 4.2 bounded Huffman tables and reverse bitstreams.
 public enum Failure {
     Invalid
-    UnsupportedFseWeights
 }
 
 public struct Table {
@@ -67,26 +66,16 @@ impl Description {
     }
 }
 
-public parseDirectDescription input: [UInt8], offset: Int, available: Int -> Result<Description, Failure> {
-    available > 0 and offset >= 0 and offset < (input -> len)
+descriptionFromWeights decodedWeights: move [Int; ~], bytesRead: Int -> Result<Description, Failure> {
+    decodedWeights => weights!
+    (weights! -> len) > 0 and (weights! -> len) <= 255 and bytesRead > 0
         -> unless { errorDescription(model.Failure.Invalid) -> return }
-    Int(input[offset]) => header
-    header >= 128
-        -> unless { errorDescription(model.Failure.UnsupportedFseWeights) -> return }
-    header - 127 => listedSymbols
-    (listedSymbols + 1) / 2 => weightBytes
-    1 + weightBytes <= available and offset + 1 + weightBytes <= (input -> len)
-        -> unless { errorDescription(model.Failure.Invalid) -> return }
-
-    [Int; ~] => weights!
-    weights! -> reserve(listedSymbols + 1)
+    weights! -> reserve((weights! -> len) + 1)
     0 => weightSum!
     0 => symbol!
-    symbol! < listedSymbols -> while {
-        Int(input[offset + 1 + symbol! / 2]) => packed
-        symbol! % 2 == 0 -> if { packed / 16 } else { packed % 16 } => weight
+    symbol! < (weights! -> len) -> while {
+        weights![symbol!] => weight
         weight <= 11 -> unless { errorDescription(model.Failure.Invalid) -> return }
-        weights! -> push(weight)
         weight > 0 -> if { weightSum! + ((weight - 1) -> powerOfTwo) => weightSum! }
         symbol! + 1 => symbol!
     }
@@ -143,8 +132,117 @@ public parseDirectDescription input: [UInt8], offset: Int, available: Int -> Res
 
     Result<Description, Failure>.Ok(Description {
         table: Table { symbolsByCode: symbolsByCode!, maxBits: maxBits! }
-        bytesRead: 1 + weightBytes
+        bytesRead: bytesRead
     })
+}
+
+decodeFseWeights input: [UInt8], offset: Int, encodedBytes: Int -> Result<[Int; ~], Failure> {
+    encodedBytes > 0 and offset >= 0 and offset + encodedBytes <= (input -> len)
+        -> unless { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+    fse.parseDescription(input, offset, encodedBytes, 12, 6) -> when {
+        Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+        Ok(description) {
+            description.bytesRead < encodedBytes
+                -> unless { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+            description.table -> accuracy => accuracy
+            encodedBytes - description.bytesRead => streamBytes
+            fse.decodeReverse(input, offset + description.bytesRead, streamBytes) -> when {
+                Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                Ok(reverse) { reverse }
+            } => reader!
+            reader! -> read(input, accuracy) -> when {
+                Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                Ok(state) { state }
+            } => evenState!
+            reader! -> read(input, accuracy) -> when {
+                Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                Ok(state) { state }
+            } => oddState!
+
+            [Int; ~] => weights!
+            weights! -> reserve(255)
+            false => complete!
+            not complete! and (weights! -> len) < 255 -> while {
+                description.table -> symbol(evenState!) -> when {
+                    Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                    Ok(weight) { weight }
+                } => evenWeight
+                weights! -> push(evenWeight)
+                description.table -> bits(evenState!) -> when {
+                    Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                    Ok(bits) { bits }
+                } => evenBits
+                evenBits > reader!.bitOffset -> if {
+                    (weights! -> len) < 255
+                        -> unless { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                    description.table -> symbol(oddState!) -> when {
+                        Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                        Ok(weight) { weight }
+                    } => finalOddWeight
+                    weights! -> push(finalOddWeight)
+                    true => complete!
+                } else {
+                    description.table -> update(evenState!, reader!, input) -> when {
+                        Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                        Ok(state) { state }
+                    } => evenState!
+                    description.table -> symbol(oddState!) -> when {
+                        Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                        Ok(weight) { weight }
+                    } => oddWeight
+                    weights! -> push(oddWeight)
+                    description.table -> bits(oddState!) -> when {
+                        Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                        Ok(bits) { bits }
+                    } => oddBits
+                    oddBits > reader!.bitOffset -> if {
+                        (weights! -> len) < 255
+                            -> unless { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                        description.table -> symbol(evenState!) -> when {
+                            Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                            Ok(weight) { weight }
+                        } => finalEvenWeight
+                        weights! -> push(finalEvenWeight)
+                        true => complete!
+                    } else {
+                        description.table -> update(oddState!, reader!, input) -> when {
+                            Err(_) { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+                            Ok(state) { state }
+                        } => oddState!
+                    }
+                }
+            }
+            complete! -> unless { Result<[Int; ~], Failure>.Err(model.Failure.Invalid) -> return }
+            Result<[Int; ~], Failure>.Ok(weights!)
+        }
+    }
+}
+
+public parseDescription input: [UInt8], offset: Int, available: Int -> Result<Description, Failure> {
+    available > 0 and offset >= 0 and offset < (input -> len)
+        -> unless { errorDescription(model.Failure.Invalid) -> return }
+    Int(input[offset]) => header
+    header >= 128 -> if {
+        header - 127 => listedSymbols
+        (listedSymbols + 1) / 2 => weightBytes
+        1 + weightBytes <= available and offset + 1 + weightBytes <= (input -> len)
+            -> unless { errorDescription(model.Failure.Invalid) -> return }
+        [Int; ~] => weights!
+        weights! -> reserve(listedSymbols)
+        0 => symbol!
+        symbol! < listedSymbols -> while {
+            Int(input[offset + 1 + symbol! / 2]) => packed
+            symbol! % 2 == 0 -> if { packed / 16 } else { packed % 16 } => weight
+            weights! -> push(weight)
+            symbol! + 1 => symbol!
+        }
+        descriptionFromWeights(weights!, 1 + weightBytes)
+    } else {
+        header > 0 and 1 + header <= available and offset + 1 + header <= (input -> len)
+            -> unless { errorDescription(model.Failure.Invalid) -> return }
+        decodeFseWeights(input, offset + 1, header)? => weights
+        descriptionFromWeights(weights, 1 + header)
+    }
 }
 
 highestSetBit value: Int -> Int {

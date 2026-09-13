@@ -186,7 +186,7 @@ internal sealed partial class SemanticCompiler
         Check("reject-unit-view", () => Reject(() => Resolve("[T]", "T", "Unit"), "readonly array views require"));
         Check("reference-parser-scope-restored", () => Reject(() => resolver.ParsePlain("T"), "unknown type 'T'"));
         Check("named-owner-remains-addressable", () => {
-            var name = Activator.CreateInstance(assembly.GetType("Sollang.Compiler.Syntax.NameExpression", throwOnError: true)!, ["number", 1, 1])!;
+            var name = Activator.CreateInstance(assembly.GetType("Sollang.Compiler.Syntax.NameExpression", throwOnError: true)!, ["number", 1, 1, -1])!;
             resolver.ReferenceCall("EnsureReferenceArgumentPlace", name,
                 resolver.ReferenceBindings(new Dictionary<string, BoundType> { ["number"] = resolver.ParsePlain("Int") }), null, "Ordering.copy");
         });

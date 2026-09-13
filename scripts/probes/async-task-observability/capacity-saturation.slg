@@ -1,0 +1,40 @@
+namespace probes.async_task_observability.capacity_saturation
+
+import std.async.diagnostics as diagnostics
+
+unit: -> async Unit { yield }
+
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) => opened
+    opened -> when {
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
+            unit() => firstTask
+            unit() => secondTask
+            session! -> track(firstTask) => firstResult
+            firstResult -> when {
+                Ok(first) {
+                    session! -> track(secondTask) => secondResult
+                    secondResult -> when {
+                        Ok(second) {
+                            second -> await
+                            "unexpected-second-track" -> println
+                        }
+                        Err(failure) {
+                            # The product error preserves both the unchanged Task
+                            # owner and the Capacity reason without a generic user ADT.
+                            failure._1 -> println
+                            first -> await
+                            failure._0 -> await
+                            session! -> close -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await
+                    "first-track-error" -> println
+                }
+            }
+        }
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+    }
+}

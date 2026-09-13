@@ -1,17 +1,71 @@
 param(
-    [ValidateSet("Pass", "Fail", "PlainFail", "Wait", "ChildPass", "ChildOrphan", "ChildWorker")]
+    [ValidateSet("Pass", "Fail", "PlainFail", "Wait", "ChildPass", "ChildOrphan", "ChildWorker", "CooperativeWait", "CooperativeChild", "NonCooperativeWait")]
     [string]$Outcome = "Fail",
     [string]$EvidencePath = '',
     [string]$ReleasePath = '',
-    [int]$ChildMilliseconds = 0
+    [int]$ChildMilliseconds = 0,
+    [string]$CancellationRequestPath = '',
+    [string]$CancellationRunId = '',
+    [string]$CancellationAcknowledgementPath = ''
 )
+
+function Test-CooperativeCancellation {
+    param([switch]$Acknowledge)
+    if ($CancellationRequestPath -eq '' -or -not (Test-Path -LiteralPath $CancellationRequestPath -PathType Leaf)) {
+        return $false
+    }
+    $request = Get-Content -LiteralPath $CancellationRequestPath -Raw | ConvertFrom-Json
+    if ($request.schemaVersion -ne 1 -or $request.runId -cne $CancellationRunId) {
+        throw 'probe cancellation request does not match the active run'
+    }
+    if ($Acknowledge) {
+        $acknowledgement = [ordered]@{
+            schemaVersion = 1
+            runId = $CancellationRunId
+            targetProcessId = $PID
+            observedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        }
+        $temporaryPath = "$CancellationAcknowledgementPath.tmp-$PID"
+        $acknowledgement | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
+        Move-Item -LiteralPath $temporaryPath -Destination $CancellationAcknowledgementPath -Force
+    }
+    return $true
+}
 
 if ($Outcome -eq 'ChildWorker') {
     $deadline = [DateTimeOffset]::UtcNow.AddMilliseconds($ChildMilliseconds)
     while ([DateTimeOffset]::UtcNow -lt $deadline -and -not (Test-Path -LiteralPath $ReleasePath)) {
+        if (Test-CooperativeCancellation) { exit 130 }
         Start-Sleep -Milliseconds 100
     }
     exit 0
+}
+
+if ($Outcome -eq 'NonCooperativeWait') {
+    Start-Sleep -Seconds 20
+    exit 0
+}
+
+if ($Outcome -eq 'CooperativeChild') {
+    if ($EvidencePath -eq '') { throw 'CooperativeChild requires its evidence path' }
+    $child = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList @(
+        '-NoProfile', '-File', ('"' + $PSCommandPath + '"'),
+        '-Outcome', 'ChildWorker',
+        '-ChildMilliseconds', '30000',
+        '-CancellationRequestPath', ('"' + $CancellationRequestPath + '"'),
+        '-CancellationRunId', ('"' + $CancellationRunId + '"'),
+        '-CancellationAcknowledgementPath', ('"' + $CancellationAcknowledgementPath + '"')
+    ) -WindowStyle Hidden -PassThru
+    [ordered]@{ processId = $child.Id } | ConvertTo-Json |
+        Set-Content -LiteralPath $EvidencePath -Encoding utf8
+    while (-not (Test-CooperativeCancellation -Acknowledge)) { Start-Sleep -Milliseconds 50 }
+    if (-not $child.WaitForExit(5000)) { throw 'cooperative child did not stop after cancellation' }
+    exit 130
+}
+
+if ($Outcome -eq 'CooperativeWait') {
+    while (-not (Test-CooperativeCancellation -Acknowledge)) { Start-Sleep -Milliseconds 50 }
+    exit 130
 }
 if ($Outcome -in @('ChildPass', 'ChildOrphan')) {
     if ($EvidencePath -eq '') { throw 'Child probe requires its evidence path' }

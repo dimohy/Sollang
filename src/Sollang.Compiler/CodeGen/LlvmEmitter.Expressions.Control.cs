@@ -374,7 +374,7 @@ internal sealed partial class LlvmEmitter
         {
             incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
         }
-        if (_activeAsyncCfg is not null)
+        if (HasCurrentFunctionAsyncCfg())
         {
             MergeAsyncOuterScope(entryScope, incomingScopes);
         }
@@ -476,7 +476,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
 
-        if (_activeAsyncCfg is not null)
+        if (HasCurrentFunctionAsyncCfg())
         {
             MergeAsyncOuterScope(entryScope, scopeResults);
         }
@@ -657,7 +657,7 @@ internal sealed partial class LlvmEmitter
     private BlockResult EmitScopedBlockBody(BlockBody body, BoundType? expectedResultType = null)
     {
         var outerLocals = CaptureLocals();
-        if (_activeAsyncCfg is not null)
+        if (HasCurrentFunctionAsyncCfg())
         {
             _asyncScopeSnapshots.Push(outerLocals);
         }
@@ -698,11 +698,16 @@ internal sealed partial class LlvmEmitter
                 value = CopyFixedStorageValue(value);
             }
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName, body.Value);
+            if (transferredOwnerName is not null
+                && outerLocals.Locals.ContainsKey(transferredOwnerName))
+            {
+                RemoveLocal(transferredOwnerName);
+            }
             return new BlockResult(value, _currentBlockLabel, CaptureLocals());
         }
         finally
         {
-            if (_activeAsyncCfg is not null)
+            if (HasCurrentFunctionAsyncCfg())
             {
                 _asyncScopeSnapshots.Pop();
             }
@@ -721,22 +726,30 @@ internal sealed partial class LlvmEmitter
         }
 
         RestoreLocals(entryScope);
+        var removedLocals = new List<string>();
         foreach (var (name, entryValue) in entryScope.Locals)
         {
-            if (entryScope.BorrowedOwnedLocals.Contains(name))
-            {
-                continue;
-            }
             var presentCount = incoming.Count(item => item.Scope.Locals.ContainsKey(name));
             if (presentCount == 0)
             {
-                RemoveLocal(name);
+                removedLocals.Add(name);
+                continue;
+            }
+            if (presentCount != incoming.Count
+                && entryScope.BorrowedOwnedLocals.Contains(name))
+            {
+                var borrowedValues = incoming
+                    .Select(item => (
+                        Value: item.Scope.Locals.GetValueOrDefault(name, PoisonRuntimeValue(entryValue)),
+                        item.Label))
+                    .ToArray();
+                _locals[name] = EmitAsyncScopePhi($"async_{name}", entryValue.Type, borrowedValues);
                 continue;
             }
             if (presentCount != incoming.Count)
             {
                 throw new SollangException(
-                    $"binding '{name}' has inconsistent ownership across async branch paths");
+                    $"binding '{name}' has inconsistent ownership across async branch paths in '{_currentFunction?.Name ?? "<entry>"}'");
             }
             if (entryScope.MutableLocals.Contains(name))
             {
@@ -749,7 +762,26 @@ internal sealed partial class LlvmEmitter
             _locals[name] = EmitAsyncScopePhi($"async_{name}", entryValue.Type, values);
         }
 
-        MergeOwnedStructFieldMoves(entryScope, incoming);
+        foreach (var (name, entryPointer) in entryScope.BorrowedOwnedTransferFlags)
+        {
+            var pointers = incoming
+                .Select(item => item.Scope.BorrowedOwnedTransferFlags.GetValueOrDefault(name, entryPointer))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            _borrowedOwnedTransferFlags[name] = pointers.Length == 1
+                ? pointers[0]
+                : EmitAsyncPointerPhi(
+                    $"async_{name}_owned_flag",
+                    incoming.Select(item => (
+                        item.Scope.BorrowedOwnedTransferFlags.GetValueOrDefault(name, entryPointer),
+                        item.Label)).ToArray());
+        }
+
+        MergeOwnedStructFieldMoves(entryScope, incoming, requireEntryMask: false);
+        foreach (var name in removedLocals)
+        {
+            RemoveLocal(name);
+        }
     }
 
     private void MergeSynchronousOuterScope(
@@ -789,12 +821,13 @@ internal sealed partial class LlvmEmitter
             }
         }
 
-        MergeOwnedStructFieldMoves(entryScope, incoming);
+        MergeOwnedStructFieldMoves(entryScope, incoming, requireEntryMask: false);
     }
 
     private void MergeOwnedStructFieldMoves(
         LocalScope entryScope,
-        IReadOnlyList<(LocalScope Scope, string Label)> incoming)
+        IReadOnlyList<(LocalScope Scope, string Label)> incoming,
+        bool requireEntryMask)
     {
         foreach (var name in entryScope.Locals.Keys)
         {
@@ -811,19 +844,31 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
 
+            var mergedMask = masks[0];
             var entryMask = entryScope.MovedOwnedStructFields.TryGetValue(name, out var entryFields)
                 ? entryFields
                 : EmptyMovedFieldMask;
-            if (masks.Any(mask => !entryMask.SetEquals(mask)))
+            if (requireEntryMask
+                    ? masks.Any(mask => !entryMask.SetEquals(mask))
+                    : masks.Skip(1).Any(mask => !mergedMask.SetEquals(mask)))
             {
                 var changedFields = masks
                     .SelectMany(static mask => mask)
+                    .Concat(requireEntryMask ? entryMask : EmptyMovedFieldMask)
                     .Distinct(StringComparer.Ordinal)
                     .Order(StringComparer.Ordinal);
                 throw new SollangException(
                     $"sollang error[E20]: partial move of owned field(s) "
                     + $"'{string.Join(", ", changedFields)}' from binding '{name}' exits a branch; "
                     + "reinitialize each moved field before the branch exits or return from the moving branch");
+            }
+            if (mergedMask.Count == 0)
+            {
+                _movedOwnedStructFields.Remove(name);
+            }
+            else
+            {
+                _movedOwnedStructFields[name] = new HashSet<string>(mergedMask, StringComparer.Ordinal);
             }
         }
     }
@@ -941,6 +986,42 @@ internal sealed partial class LlvmEmitter
         };
     }
 
+    private static RuntimeValue PoisonRuntimeValue(RuntimeValue template) => template switch
+    {
+        RuntimeArguments value => value with { LengthName = "poison" },
+        RuntimeInt value => value with { ValueName = "poison" },
+        RuntimeFloat value => value with { ValueName = "poison" },
+        RuntimeBool value => value with { ValueName = "poison" },
+        RuntimeText value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeTask value => value with { HandleName = "poison", ContextName = "poison" },
+        RuntimeBox value => value with { PointerName = "poison" },
+        RuntimeReference value => value with { PointerName = "poison" },
+        RuntimeInlineSlice value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeStaticIntArray value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeStaticTextArray value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeStaticInlineArray value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeDynamicIntArray value => value with
+        {
+            PointerName = "poison", LengthName = "poison", CapacityName = "poison"
+        },
+        RuntimeDynamicInlineArray value => value with
+        {
+            PointerName = "poison", LengthName = "poison", CapacityName = "poison"
+        },
+        RuntimeIntDictionary value => value with
+        {
+            PointerName = "poison", LengthName = "poison", CapacityName = "poison"
+        },
+        RuntimeInlineDictionary value => value with
+        {
+            PointerName = "poison", LengthName = "poison", CapacityName = "poison"
+        },
+        RuntimeStruct value => value with { ValueName = "poison" },
+        RuntimeEnum value => value with { ValueName = "poison" },
+        _ => throw new SollangException(
+            $"unsupported borrowed async phi value {template.GetType().Name}")
+    };
+
     private static (string Pointer, string Length, BoundType ElementType, RuntimeContainerStorage Storage)
         StaticArrayPhiStorage(RuntimeValue value) => value switch
         {
@@ -1037,7 +1118,15 @@ internal sealed partial class LlvmEmitter
         EmitPhi(handle, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeTask)value).HandleName));
         var context = NextTemp(prefix + "_context");
         EmitPhi(context, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeTask)value).ContextName));
-        return first with { HandleName = handle, ContextName = context };
+        return first with
+        {
+            HandleName = handle,
+            ContextName = context,
+            DiagnosticHeaderName = first.DiagnosticHeaderName is null
+                ? null
+                : AsyncContextField(
+                    context, first.InputType, first.ResultType, 10, "async_phi_task_diagnostic_header")
+        };
     }
 
     private RuntimeBox EmitBoxPhi(

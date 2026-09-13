@@ -78,6 +78,11 @@ httpError kind: errors.Kind, offset: UIntSize -> Error {
     model.Error.Http(http.Error { kind: kind, offset: offset })
 }
 
+socketSuccess outcome: Result<Unit, socket.SocketError> -> Result<Unit, Error> => outcome -> when {
+    Err(error) { Result<Unit, Error>.Err(model.Error.Socket(error)) }
+    Ok(_) { Result<Unit, Error>.Ok }
+}
+
 # Reads a head whose unparsed bytes begin at index zero. Split receives append
 # directly into one bounded owner; no intermediate encoded-input copy exists.
 readFresh connection: move Connection -> Result<Request, Error> uses Network {
@@ -393,15 +398,9 @@ impl Request {
         head.connection => connectionMode
         head.bodyDisposition => disposition
         head -> intoBytes => headBytes
-        request.transport -> sendAll(headBytes) -> when {
-            Err(error) { Result<ResponseOutcome, Error>.Err(model.Error.Socket(error)) -> return }
-            Ok(_) { }
-        }
+        request.transport -> sendAll(headBytes) -> socketSuccess?
         disposition -> when {
-            Send => request.transport -> sendAll(body) -> when {
-                Err(error) { Result<ResponseOutcome, Error>.Err(model.Error.Socket(error)) -> return }
-                Ok(_) { }
-            }
+            Send { request.transport -> sendAll(body) -> socketSuccess? }
             Suppress { }
             Tunnel { }
         }

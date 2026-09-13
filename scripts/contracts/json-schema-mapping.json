@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "contractSchema": "scripts/contracts/json-capability-candidate.schema.json",
+  "capabilityId": "schema-driven-user-mapping",
+  "authority": "detail-authority",
+  "implementationStatus": "candidate-only",
+  "productionImplemented": false,
+  "module": "stdlib/std/text/json.slg",
+  "scope": "explicit-slg-schema-user-struct-and-enum-mapping",
+  "fixture": "scripts/probes/json-schema-mapping/schema-mapping.slg",
+  "expected": "scripts/probes/json-schema-mapping/schema-mapping.stdout.txt",
+  "reflection": "forbidden",
+  "model": {
+    "source": "owned std.text.json.Document",
+    "mapping": "caller-type-specific validate and decode functions",
+    "schemaAuthority": "immutable nominal SLG schema value",
+    "fieldOrder": "schema declaration order on write; input order ignored on read",
+    "fieldNames": "exact decoded UTF-8 bytes; case-sensitive; no normalization",
+    "required": "each required field occurs exactly once",
+    "optional": "zero or one occurrence; schema declares its default",
+    "duplicateKnownField": "reject regardless of unknown-member policy",
+    "unknownMembers": ["Reject", "Skip"],
+    "enumRepresentation": "exact JSON string tag",
+    "unknownEnumTag": "reject; no catch-all or numeric ordinal fallback"
+  },
+  "ownership": {
+    "readerInput": "readonly borrow of Document",
+    "ownedOutput": "deliberate bounded copy of owned UTF-8 payloads after whole-schema validation",
+    "failure": "Document remains byte-for-byte and structurally unchanged",
+    "success": "caller owns the returned user value independently of Document",
+    "zeroCopyFollowup": "requires an unforgeable validated plan plus an arena extraction API; not claimed by this slice"
+  },
+  "bounds": {
+    "reader": ["maxOwnedBytes", "document arena bounds", "exact field multiplicity"],
+    "writer": ["maxStagingBytes", "Writer.maxOutputBytes", "Writer.maxDepth"],
+    "validationOrder": "schema shape, root, members, required/duplicate/unknown, value kinds, enum tags, aggregate owned-byte bound, then allocation or writer mutation"
+  },
+  "transactionality": {
+    "reader": "all fallible validation and aggregate-size checks precede owned output allocation",
+    "writer": "stage one canonical Document, then call Writer.document which validates complete output before commit",
+    "noConvenienceParser": "schema mapping consumes the existing Document model; it does not duplicate token parsing"
+  },
+  "fixtureCases": [
+    {"id": "positive-reordered", "expected": "positive=3,true,admin"},
+    {"id": "canonical-write-order", "expected": "write={\"name\":\"Sol\",\"active\":true,\"role\":\"admin\"}"},
+    {"id": "missing-required", "expected": "missing=MissingRequired"},
+    {"id": "duplicate-known", "expected": "duplicate=DuplicateField"},
+    {"id": "unknown-reject", "expected": "unknown-reject=UnknownField"},
+    {"id": "unknown-skip", "expected": "unknown-skip=ok"},
+    {"id": "unknown-enum-tag", "expected": "enum=UnknownEnumTag"},
+    {"id": "wrong-kind", "expected": "kind=WrongKind"},
+    {"id": "reader-owned-byte-boundary", "expected": "reader-bound=OwnedByteLimitExceeded"},
+    {"id": "reader-input-transactionality", "expected": "reader-unchanged=true"},
+    {"id": "writer-output-boundary", "expected": "writer-bound=OutputLimitExceeded"},
+    {"id": "writer-transactionality", "expected": "writer-unchanged=true"}
+  ],
+  "verifier": {
+    "path": "scripts/verify-json-schema-mapping.ps1",
+    "total": 18,
+    "staticChecks": 5,
+    "isolatedCaseChecks": 12,
+    "inputStabilityChecks": 1,
+    "failureIds": [
+      "SCHEMA_CONTRACT_MISMATCH",
+      "SCHEMA_SURFACE_MISMATCH",
+      "REFLECTION_OR_IMPLICIT_MAPPING_FOUND",
+      "ISOLATED_COMPILE_FAILED",
+      "ISOLATED_CASE_FAILED",
+      "INPUT_DRIFT"
+    ]
+  },
+  "residual": [
+    "generic reusable schema combinators without reflection",
+    "zero-copy validated arena extraction",
+    "payload enum representation beyond string-tag enums",
+    "production API placement and cross-target promotion"
+  ]
+}

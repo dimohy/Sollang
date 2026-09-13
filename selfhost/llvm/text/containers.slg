@@ -2122,6 +2122,120 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
         }
     }
 }
+emitExchange request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.whileIndex => exchangeIndex
+    context.ir[exchangeIndex] => exchangeNode
+    context.ir[exchangeNode.operand0] => exchangeSource
+    exchangeNode.operand1 -> aggregateValueIndex(context, state) => exchangeLeftIndex
+    context.ir[exchangeLeftIndex] => exchangeLeft
+    context.ir[exchangeNode.operand1].nextOperand -> aggregateValueIndex(context, state) => exchangeRightIndex
+    context.ir[exchangeRightIndex] => exchangeRight
+    exchangeNode.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => exchangeBorrowOrdinal
+    exchangeNode.operand0 -> referencePlaceRootBindingForOwner(request.ownerIndex, context) => exchangePlaceRoot
+    exchangePlaceRoot -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => exchangePlaceRootBorrowOrdinal
+    (exchangeSource.kind == 13
+        and exchangeSource.operand0 >= 0
+        and exchangePlaceRoot >= 0
+        and (exchangePlaceRootBorrowOrdinal >= 0
+        or (context.ir[exchangePlaceRoot].kind == 10 and context.ir[exchangePlaceRoot].flags / 2 % 2 == 1)
+        or (context.ir[exchangePlaceRoot].kind == 17 and context.ir[exchangePlaceRoot].flags == 1))) => exchangeStructMember
+    exchangeBorrowOrdinal >= 0 and not exchangeStructMember
+        -> if {
+            "  %exchange$(exchangeIndex)_data = load ptr, ptr " -> print
+            exchangeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(exchangeBorrowOrdinal)_mut_ptr_addr" -> print }
+            ", align 8" -> println
+            "  %exchange$(exchangeIndex)_length = load i64, ptr " -> print
+            exchangeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(exchangeBorrowOrdinal)_mut_len_addr" -> print }
+            ", align 8" -> println
+        } else {
+            "  %exchange$(exchangeIndex)_data = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0), 0" -> println
+            "  %exchange$(exchangeIndex)_length = extractvalue %sollang.array.i32 %v$(exchangeNode.operand0), 1" -> println
+        }
+    exchangeLeft -> integerNodeWidth(context, state) => exchangeLeftWidth
+    exchangeLeft.kind != 3 and exchangeLeftWidth > 0 and exchangeLeftWidth < 64
+        -> if {
+            "  %exchange$(exchangeIndex)_left = " -> print
+            exchangeLeft -> integerNodeSigned(context, state)
+                -> if { "sext " -> print } else { "zext " -> print }
+            exchangeLeft -> writeIrType(context, state)
+            " %v$(exchangeLeftIndex) to i64" -> println
+        }
+    exchangeRight -> integerNodeWidth(context, state) => exchangeRightWidth
+    exchangeRight.kind != 3 and exchangeRightWidth > 0 and exchangeRightWidth < 64
+        -> if {
+            "  %exchange$(exchangeIndex)_right = " -> print
+            exchangeRight -> integerNodeSigned(context, state)
+                -> if { "sext " -> print } else { "zext " -> print }
+            exchangeRight -> writeIrType(context, state)
+            " %v$(exchangeRightIndex) to i64" -> println
+        }
+    "  %exchange$(exchangeIndex)_left_in_bounds = icmp ult i64 " -> print
+    exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
+        exchangeLeftWidth > 0 and exchangeLeftWidth < 64
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+    }
+    ", %exchange$(exchangeIndex)_length" -> println
+    "  %exchange$(exchangeIndex)_right_in_bounds = icmp ult i64 " -> print
+    exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
+        exchangeRightWidth > 0 and exchangeRightWidth < 64
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+    }
+    ", %exchange$(exchangeIndex)_length" -> println
+    "  %exchange$(exchangeIndex)_in_bounds = and i1 %exchange$(exchangeIndex)_left_in_bounds, %exchange$(exchangeIndex)_right_in_bounds" -> println
+    "  br i1 %exchange$(exchangeIndex)_in_bounds, label %exchange$(exchangeIndex)_validated, label %exchange$(exchangeIndex)_missing" -> println
+    "exchange$(exchangeIndex)_missing:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "exchange$(exchangeIndex)_validated:" -> println
+    "  %exchange$(exchangeIndex)_same = icmp eq i64 " -> print
+    exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
+        exchangeLeftWidth > 0 and exchangeLeftWidth < 64
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+    }
+    ", " -> print
+    exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
+        exchangeRightWidth > 0 and exchangeRightWidth < 64
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+    }
+    "" -> println
+    "  br i1 %exchange$(exchangeIndex)_same, label %exchange$(exchangeIndex)_done, label %exchange$(exchangeIndex)_swap" -> println
+    "exchange$(exchangeIndex)_swap:" -> println
+    "  %exchange$(exchangeIndex)_left_ptr = getelementptr " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    ", ptr %exchange$(exchangeIndex)_data, i64 " -> print
+    exchangeLeft.kind == 3 -> if { exchangeLeft -> writeIntegerLiteral(context, state) } else {
+        exchangeLeftWidth > 0 and exchangeLeftWidth < 64
+            -> if { "%exchange$(exchangeIndex)_left" -> print } else { "%v$(exchangeLeftIndex)" -> print }
+    }
+    "" -> println
+    "  %exchange$(exchangeIndex)_right_ptr = getelementptr " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    ", ptr %exchange$(exchangeIndex)_data, i64 " -> print
+    exchangeRight.kind == 3 -> if { exchangeRight -> writeIntegerLiteral(context, state) } else {
+        exchangeRightWidth > 0 and exchangeRightWidth < 64
+            -> if { "%exchange$(exchangeIndex)_right" -> print } else { "%v$(exchangeRightIndex)" -> print }
+    }
+    "" -> println
+    "  %exchange$(exchangeIndex)_left_value = load " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    ", ptr %exchange$(exchangeIndex)_left_ptr, align " -> print
+    exchangeSource -> arrayElementAlign(context, state) -> writeDecimalLine
+    "  %exchange$(exchangeIndex)_right_value = load " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    ", ptr %exchange$(exchangeIndex)_right_ptr, align " -> print
+    exchangeSource -> arrayElementAlign(context, state) -> writeDecimalLine
+    "  store " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    " %exchange$(exchangeIndex)_right_value, ptr %exchange$(exchangeIndex)_left_ptr, align " -> print
+    exchangeSource -> arrayElementAlign(context, state) -> writeDecimalLine
+    "  store " -> print
+    exchangeSource -> writeArrayElementType(context, state)
+    " %exchange$(exchangeIndex)_left_value, ptr %exchange$(exchangeIndex)_right_ptr, align " -> print
+    exchangeSource -> arrayElementAlign(context, state) -> writeDecimalLine
+    "  br label %exchange$(exchangeIndex)_done" -> println
+    "exchange$(exchangeIndex)_done:" -> println
+}
+
 emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     request.whileIndex => takeIndex
     context.ir[takeIndex] => takeNode

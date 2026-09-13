@@ -1,0 +1,28 @@
+# A yield scope snapshot must retain the exact owned payload cleanup obligation.
+struct Holder {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+make: -> Result<Holder, Int> {
+    Result<Holder, Int>.Ok(Holder { first: [8; ~], second: [9; ~] })
+}
+
+failAsync: -> async Result<Int, Int> {
+    make() -> when {
+        Ok(payload) {
+            yield
+            Result<Int, Int>.Err(payload.first[0])
+        }
+        Err(error) { Result<Int, Int>.Err(error) }
+    }
+}
+
+main {
+    failAsync() => pending
+    pending -> await => result
+    result -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(error) { error -> println }
+    }
+}

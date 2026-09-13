@@ -8,6 +8,7 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<string, BoundTraitDefinition> Traits,
     IReadOnlyDictionary<string, BoundFunction> Functions,
     IReadOnlyDictionary<object, BoundFunction> ResolvedGenericCalls,
+    IReadOnlyDictionary<object, ContainerIntrinsicKind> ContainerIntrinsics,
     IReadOnlyDictionary<object, BoundDynTraitConversion> DynTraitConversions,
     IReadOnlyDictionary<object, BoundDynTraitDispatch> DynTraitDispatches,
     IReadOnlyList<Statement> MainStatements,
@@ -29,7 +30,14 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<Statement, BoundStreamJoinPipeline> StreamJoinConsumers,
     IReadOnlyDictionary<StreamJoinExpression, BoundStreamJoin> StreamJoins,
     IReadOnlyDictionary<BranchExpression, BoundParallelBranch> ParallelBranches,
+    IReadOnlyDictionary<object, BoundAsyncSuspensionLocation> AsyncSuspensionLocations,
     IReadOnlyList<SemanticWarning> Warnings);
+
+internal sealed record BoundAsyncSuspensionLocation(
+    BoundFunction Function,
+    int ByteOffset,
+    int Line,
+    int Column);
 
 internal sealed record BoundParallelBranch(
     TypeId SourceType,
@@ -183,6 +191,11 @@ internal enum BoundFunctionInputOwnership
     MutableBorrow
 }
 
+internal enum ContainerIntrinsicKind
+{
+    ArrayExchange
+}
+
 internal enum BoundFunctionKind
 {
     User,
@@ -283,6 +296,17 @@ internal enum BoundFunctionKind
     RuntimeSocketSetNonblocking,
     RuntimeSocketPoll,
     RuntimeSocketReactorWait,
+    RuntimeSocketCompletionCreate,
+    RuntimeSocketCompletionRegisterStream,
+    RuntimeSocketCompletionRemoveStream,
+    RuntimeSocketCompletionSubmit,
+    RuntimeSocketCompletionCancel,
+    RuntimeSocketCompletionDequeue,
+    RuntimeSocketCompletionClose,
+    RuntimeDiagnosticSessionStart,
+    RuntimeDiagnosticSessionTrack,
+    RuntimeDiagnosticSessionSnapshot,
+    RuntimeDiagnosticSessionClose,
     RuntimeDnsLookup,
     RuntimeRangeStream,
     RuntimeMouseEvents,
@@ -1332,7 +1356,7 @@ internal sealed class TypeDefinitionTable
             return true;
         }
         if (_structs.TryGetValue(type, out var nativeOwner)
-            && nativeOwner.Name is "std.net.socket.TcpListener" or "std.net.socket.TcpStream" or "std.net.socket.UdpSocket" or "sys.process.Child")
+            && nativeOwner.Name is "std.net.socket.TcpListener" or "std.net.socket.TcpStream" or "std.net.socket.UdpSocket" or "std.net.socket.CompletionReactor" or "std.async.diagnostics.DiagnosticSession" or "sys.process.Child")
         {
             return true;
         }

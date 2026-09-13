@@ -62,23 +62,25 @@ copyRange bytes: [UInt8], offset: UIntSize, length: UIntSize -> Result<[UInt8; ~
     Result<[UInt8; ~], errors.Error>.Ok(output!)
 }
 
-public encode id: UInt64, value: [UInt8] -> Result<[UInt8; ~], errors.Error> {
-    varint.encode(id)? => encodedId
-    varint.encode(UInt64(value -> len))? => encodedLength
-    [UInt8; ~] => output!
-    output! -> appendBytes(encodedId)
-    output! -> appendBytes(encodedLength)
-    output! -> appendBytes(value)
-    Result<[UInt8; ~], errors.Error>.Ok(output!)
-}
+impl UInt64 {
+    public encode: self, value: [UInt8] -> Result<[UInt8; ~], errors.Error> {
+        self -> varint.encode? => encodedId
+        UInt64(value -> len) -> varint.encode? => encodedLength
+        [UInt8; ~] => output!
+        output! -> appendBytes(encodedId)
+        output! -> appendBytes(encodedLength)
+        output! -> appendBytes(value)
+        Result<[UInt8; ~], errors.Error>.Ok(output!)
+    }
 
-public encodeInteger id: UInt64, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
-    varint.encode(value)? => encodedValue
-    encode(id, encodedValue)
-}
+    public encodeInteger: self, value: UInt64 -> Result<[UInt8; ~], errors.Error> {
+        value -> varint.encode? => encodedValue
+        self -> encode(encodedValue)
+    }
 
-public encodeEmpty id: UInt64 -> Result<[UInt8; ~], errors.Error> {
-    encode(id, [])
+    public encodeEmpty: self -> Result<[UInt8; ~], errors.Error> {
+        self -> encode([])
+    }
 }
 
 public decode bytes: [UInt8], offset: UIntSize -> Result<Decoded, errors.Error> {

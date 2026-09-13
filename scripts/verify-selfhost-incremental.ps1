@@ -14,6 +14,11 @@ param(
     [ValidateSet("Slg", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
     [string]$SlgSeedCompiler = "",
+    [string]$ManagedCompiler = "",
+    [string]$ExpectedManagedCompilerSha256 = "",
+    [string]$CancellationRequestPath = "",
+    [string]$CancellationRunId = "",
+    [string]$CancellationAcknowledgementPath = "",
     [bool]$ManagedDifferential = $true,
     [switch]$ManagedOracleOnly,
     [bool]$CompareStage2 = $true,
@@ -33,9 +38,31 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
-$managedFormatterCompiler = Join-Path $repoRoot "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
+$defaultManagedCompiler = Join-Path $repoRoot "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
+$managedFormatterCompiler = if ([string]::IsNullOrWhiteSpace($ManagedCompiler)) {
+    $defaultManagedCompiler
+} else {
+    [IO.Path]::GetFullPath((Join-Path $repoRoot $ManagedCompiler))
+}
+if ([string]::IsNullOrWhiteSpace($ManagedCompiler) -ne [string]::IsNullOrWhiteSpace($ExpectedManagedCompilerSha256)) {
+    throw '-ManagedCompiler and -ExpectedManagedCompilerSha256 must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($ExpectedManagedCompilerSha256) -and
+    $ExpectedManagedCompilerSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+    throw '-ExpectedManagedCompilerSha256 must contain exactly 64 hexadecimal characters'
+}
 . (Join-Path $PSScriptRoot "verification-process.ps1")
 . (Join-Path $PSScriptRoot "compiler-emission-fingerprint.ps1")
+$cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
+if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
+    throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
+    Initialize-VerificationCancellation -RequestPath $CancellationRequestPath `
+        -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
+}
+trap [OperationCanceledException] { exit 130 }
+Assert-VerificationCancellationNotRequested
 $fixtureRoots = @($Fixture | ForEach-Object {
     (Resolve-Path (Join-Path $repoRoot $_)).Path
 })
@@ -62,22 +89,35 @@ if (-not [string]::IsNullOrWhiteSpace($ProfileOutput) -and
     throw "-ProfileOutput requires -ProfilePhases or -ProfileExpressionTypesOnly."
 }
 if (-not (Test-Path -LiteralPath $managedFormatterCompiler -PathType Leaf)) {
+    if (-not [string]::IsNullOrWhiteSpace($ManagedCompiler)) {
+        throw "explicit managed compiler is missing: $managedFormatterCompiler"
+    }
     Write-Host "[preflight] Managed formatter compiler is missing; building Release output."
-    & dotnet build $compilerProject -c Release --nologo
+    & dotnet build $compilerProject -c Release --nologo --disable-build-servers -nodeReuse:false -p:UseSharedCompilation=false
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $managedFormatterCompiler -PathType Leaf)) {
         throw "managed formatter compiler build did not produce $managedFormatterCompiler"
     }
 }
+Assert-VerificationCancellationNotRequested
+$managedCompilerBinaryHash = (Get-FileHash -LiteralPath $managedFormatterCompiler -Algorithm SHA256).Hash
+if (-not [string]::IsNullOrWhiteSpace($ExpectedManagedCompilerSha256) -and
+    $managedCompilerBinaryHash -cne $ExpectedManagedCompilerSha256.ToUpperInvariant()) {
+    throw "managed compiler hash mismatch: expected=$($ExpectedManagedCompilerSha256.ToUpperInvariant()) actual=$managedCompilerBinaryHash"
+}
 & (Join-Path $PSScriptRoot "verify-selfhost-compiler-contracts.ps1") `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "format-authoritative-slg.ps1") -Check
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-each-call-result-source-selection.ps1") `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 & (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
     -Manifest @($manifestPath, $runtimeManifestPath) `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 $llvmRoot = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAs = Join-Path $llvmRoot "bin\llvm-as.exe"
 $clang = Join-Path $llvmRoot "bin\clang.exe"
@@ -236,6 +276,10 @@ function Invoke-ProfilePhase {
         $deadline = [DateTimeOffset]::Now.AddMilliseconds($CompilerTimeoutMilliseconds)
         $nextTelemetry = [DateTimeOffset]::Now.AddSeconds(60)
         do {
+            if (Test-VerificationCancellationRequested) {
+                while (-not $process.WaitForExit(1000)) { }
+                throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
+            }
             $process.Refresh()
             $peakWorkingSetBytes = [Math]::Max($peakWorkingSetBytes, [long]$process.PeakWorkingSet64)
             $processorMilliseconds = [Math]::Max(
@@ -601,6 +645,7 @@ $platformLibraries = if ($Target -eq "windows") {
 }
 
 if (-not $ManagedOracleOnly -and $SeedMode -eq "Slg") {
+    Assert-VerificationCancellationNotRequested
     Assert-SlgSeedBootstrapCapabilities $SlgSeedCompiler
 }
 
@@ -632,6 +677,7 @@ if (-not $ManagedOracleOnly -and
             $stage1HostLlvmMs = [int]((Get-Date) - $stage1HostLlvmStarted).TotalMilliseconds
             Write-Host "[timing] SLG seed compiler LLVM emission ${stage1HostLlvmMs}ms."
             & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $stage1HostLlvm
+            Assert-VerificationCancellationNotRequested
             & $llvmAs $stage1HostLlvm -o $stage1HostBitcode
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             [System.IO.File]::WriteAllText($stage1HostLlvmFingerprint, $bootstrapInputHash)
@@ -646,6 +692,7 @@ if (-not $ManagedOracleOnly -and
         }
         & $clang -Wno-override-module $stage1HostLlvm $hostOptimization @hostSanitizer -o $stage1Compiler @platformLibraries
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Assert-VerificationCancellationNotRequested
     } else {
         Write-Warning "ManagedRecovery is an explicit bootstrap bridge; complete the SLG implementation and return to -SeedMode Slg."
         $arguments = @(
@@ -656,6 +703,7 @@ if (-not $ManagedOracleOnly -and
         )
         & dotnet @arguments
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Assert-VerificationCancellationNotRequested
     }
     [System.IO.File]::WriteAllText($stage1Fingerprint, $stage1BuildHash)
     $stage1BuildMs = [int]((Get-Date) - $stage1BuildStarted).TotalMilliseconds
@@ -668,6 +716,7 @@ if (-not $ManagedOracleOnly) {
     & (Join-Path $PSScriptRoot "verify-each-call-result-source-selection.ps1") `
         -RepositoryRoot $repoRoot `
         -CandidateCompiler $stage1Compiler
+    Assert-VerificationCancellationNotRequested
 }
 
 if ($BootstrapStage2 -and $SeedMode -eq "ManagedRecovery") {
@@ -679,6 +728,7 @@ if ($BootstrapStage2 -and $SeedMode -eq "ManagedRecovery") {
     )
     & dotnet @managedMaterializeArguments
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     if (-not (Test-Path -LiteralPath $managedStage1HostLlvm) -or
         (Get-Item -LiteralPath $managedStage1HostLlvm).Length -eq 0) {
         throw "ManagedRecovery did not materialize the Stage1 host LLVM provenance artifact: $managedStage1HostLlvm"
@@ -899,6 +949,7 @@ $stage1LlvmCacheHit = (Test-Path -LiteralPath $stage1Llvm) -and
     (Get-Item -LiteralPath $stage1Llvm).Length -gt 0
 
 if (-not $stage1LlvmCacheHit) {
+    Assert-VerificationCancellationNotRequested
     Write-Host "[fast 2/5] Focused Stage1 LLVM cache MISS."
     $stage1EmitStarted = Get-Date
     Invoke-ToFile $stage1Compiler $fixtureCompilerArguments $stage1Llvm $stage1Error
@@ -908,7 +959,9 @@ if (-not $stage1LlvmCacheHit) {
     Write-Host "[fast 2/5] Focused Stage1 LLVM cache HIT."
 }
 Assert-FocusedLlvmContract $stage1Llvm $expectedDir $fixtureName
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $stage1Llvm
+Assert-VerificationCancellationNotRequested
 $stage1VerifyStarted = Get-Date
 if ($stage1LlvmCacheHit -and
     (Test-Path -LiteralPath $stage1Bitcode) -and
@@ -917,6 +970,7 @@ if ($stage1LlvmCacheHit -and
 } else {
     & $llvmAs $stage1Llvm -o $stage1Bitcode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
 }
 $stage1VerifyMs = [int]((Get-Date) - $stage1VerifyStarted).TotalMilliseconds
 Write-Host "[fast 3/5] Focused LLVM verifier PASS ${stage1VerifyMs}ms."
@@ -932,6 +986,7 @@ if (-not $NoExecute) {
             Link-FocusedExecutable $stage1Llvm $stage1Executable
         }
         $actual = (Invoke-FocusedExecutable $stage1Executable).Replace("`r`n", "`n").TrimEnd("`n")
+        Assert-VerificationCancellationNotRequested
         if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
             throw "focused execution differs from $expectedPath`nexpected: $expected`nactual: $actual"
         }
@@ -945,7 +1000,9 @@ if (-not $NoExecute) {
 }
 
 if ($ManagedDifferential) {
+    Assert-VerificationCancellationNotRequested
     Invoke-ManagedOracle $fixturePaths $fixtureHash $expectedPath $expected
+    Assert-VerificationCancellationNotRequested
 } else {
     Write-Host "[managed differential] disabled explicitly."
 }
@@ -1089,6 +1146,9 @@ if ($Target -eq "linux" -and $CompareStage2) {
 if (-not $ManagedOracleOnly -and
     -not $NoExecute -and
     (Test-Path -LiteralPath $expectedPath)) {
+    if ((Get-FileHash -LiteralPath $managedFormatterCompiler -Algorithm SHA256).Hash -cne $managedCompilerBinaryHash) {
+        throw 'managed compiler changed during verification; discard the candidate and rerun'
+    }
     $verifiedSourceFingerprint = Get-CompilerEmissionInputFingerprint `
         -RepositoryRoot $repoRoot `
         -Path $compilerInputSources
@@ -1117,6 +1177,17 @@ if (-not $ManagedOracleOnly -and
         llvmFingerprint = (Get-FileHash -LiteralPath $stage1HostLlvm -Algorithm SHA256).Hash
         focusedExecutionVerified = $true
         managedDifferential = $ManagedDifferential
+        managedCompilerPath = [System.IO.Path]::GetRelativePath($repoRoot, $managedFormatterCompiler).Replace('\', '/')
+        managedCompilerSha256 = $managedCompilerBinaryHash
+        focusedFixtureRoots = @($fixtureRoots | ForEach-Object {
+            [System.IO.Path]::GetRelativePath($repoRoot, $_).Replace('\', '/')
+        })
+        focusedFixtureRootSha256 = @($fixtureRoots | ForEach-Object {
+            (Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash
+        })
+        focusedFixtureFingerprint = $fixtureHash
+        focusedExpectedPath = [System.IO.Path]::GetRelativePath($repoRoot, $expectedPath).Replace('\', '/')
+        focusedExpectedSha256 = (Get-FileHash -LiteralPath $expectedPath -Algorithm SHA256).Hash
     }
     $generationJson = ($generation | ConvertTo-Json -Depth 4) + "`n"
     $generationSchema = Join-Path $repoRoot "scripts/contracts/selfhost-stage1-generation.schema.json"

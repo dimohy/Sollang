@@ -239,6 +239,7 @@ internal static class LexerEmitter
         builder.Append("internal sealed class ").Append(typeName).AppendLine("(string source)");
         builder.AppendLine("{");
         builder.AppendLine("    private readonly List<Token> _tokens = [];");
+        builder.AppendLine("    private readonly int[] _utf8ByteOffsets = BuildUtf8ByteOffsets(source);");
         builder.AppendLine("    private int _index;");
         builder.AppendLine("    private int _line = 1;");
         builder.AppendLine("    private int _column = 1;");
@@ -330,7 +331,7 @@ internal static class LexerEmitter
         builder.AppendLine("            }");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        _tokens.Add(new Token(TokenKind.End, \"\", _line, _column));");
+        builder.AppendLine("        _tokens.Add(new Token(TokenKind.End, \"\", _line, _column, ByteOffset: CurrentByteOffset));");
         builder.AppendLine("        return _tokens;");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -338,9 +339,11 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("    private char Current => source[_index];");
         builder.AppendLine();
+        builder.AppendLine("    private int CurrentByteOffset => _utf8ByteOffsets[_index];");
+        builder.AppendLine();
         builder.AppendLine("    private void AddSingle(TokenKind kind)");
         builder.AppendLine("    {");
-        builder.AppendLine("        _tokens.Add(new Token(kind, Current.ToString(), _line, _column));");
+        builder.AppendLine("        _tokens.Add(new Token(kind, Current.ToString(), _line, _column, ByteOffset: CurrentByteOffset));");
         builder.AppendLine("        Advance();");
         builder.AppendLine("    }");
         builder.AppendLine();
@@ -348,6 +351,7 @@ internal static class LexerEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        var line = _line;");
         builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        var byteOffset = CurrentByteOffset;");
         builder.AppendLine("        for (var i = 0; i < literal.Length; i++)");
         builder.AppendLine("        {");
         builder.AppendLine("            if (IsAtEnd || Current != literal[i])");
@@ -358,7 +362,7 @@ internal static class LexerEmitter
         builder.AppendLine("            Advance();");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        _tokens.Add(new Token(kind, literal, line, column));");
+        builder.AppendLine("        _tokens.Add(new Token(kind, literal, line, column, ByteOffset: byteOffset));");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private bool MatchesLiteral(string literal)");
@@ -383,6 +387,7 @@ internal static class LexerEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        var line = _line;");
         builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        var byteOffset = CurrentByteOffset;");
         builder.AppendLine("        if (Current == '\\r')");
         builder.AppendLine("        {");
         builder.AppendLine("            AdvanceRaw();");
@@ -398,7 +403,7 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("        _line++;");
         builder.AppendLine("        _column = 1;");
-        builder.AppendLine("        _tokens.Add(new Token(TokenKind.NewLine, \"\\n\", line, column));");
+        builder.AppendLine("        _tokens.Add(new Token(TokenKind.NewLine, \"\\n\", line, column, ByteOffset: byteOffset));");
         builder.AppendLine("    }");
         builder.AppendLine();
         if (hasLineCommentSkip)
@@ -417,6 +422,7 @@ internal static class LexerEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        var line = _line;");
         builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        var byteOffset = CurrentByteOffset;");
         builder.AppendLine("        var start = _index;");
         builder.AppendLine();
         builder.AppendLine("        while (!IsAtEnd && IsIdentifierPart(Current))");
@@ -424,7 +430,7 @@ internal static class LexerEmitter
         builder.AppendLine("            Advance();");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        _tokens.Add(new Token(TokenKind.Identifier, source[start.._index], line, column));");
+        builder.AppendLine("        _tokens.Add(new Token(TokenKind.Identifier, source[start.._index], line, column, ByteOffset: byteOffset));");
         builder.AppendLine("    }");
         builder.AppendLine();
         if (hasNumber)
@@ -433,6 +439,7 @@ internal static class LexerEmitter
             builder.AppendLine("    {");
             builder.AppendLine("        var line = _line;");
             builder.AppendLine("        var column = _column;");
+            builder.AppendLine("        var byteOffset = CurrentByteOffset;");
             builder.AppendLine("        var start = _index;");
             builder.AppendLine();
             builder.AppendLine("        while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1]))))");
@@ -453,7 +460,7 @@ internal static class LexerEmitter
             builder.AppendLine("            while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1])))) Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
-            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Number, source[start.._index].Replace(\"_\", \"\"), line, column));");
+            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Number, source[start.._index].Replace(\"_\", \"\"), line, column, ByteOffset: byteOffset));");
             builder.AppendLine("    }");
             builder.AppendLine();
         }
@@ -464,6 +471,7 @@ internal static class LexerEmitter
             builder.AppendLine("    {");
             builder.AppendLine("        var line = _line;");
             builder.AppendLine("        var column = _column;");
+            builder.AppendLine("        var byteOffset = CurrentByteOffset;");
             builder.AppendLine("        Advance();");
             builder.AppendLine("        if (IsAtEnd || Current is '\\r' or '\\n')");
             builder.AppendLine("        {");
@@ -523,7 +531,7 @@ internal static class LexerEmitter
             builder.AppendLine("            throw ErrorAt(line, column, \"character literal must contain one Unicode scalar\");");
             builder.AppendLine("        }");
             builder.AppendLine("        Advance();");
-            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Character, scalar.ToString(CultureInfo.InvariantCulture), line, column));");
+            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Character, scalar.ToString(CultureInfo.InvariantCulture), line, column, ByteOffset: byteOffset));");
             builder.AppendLine("    }");
             builder.AppendLine();
         }
@@ -538,6 +546,7 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("        var line = _line;");
         builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        var byteOffset = CurrentByteOffset;");
         builder.AppendLine("        Advance();");
         builder.AppendLine("        var start = _index;");
         builder.AppendLine();
@@ -558,13 +567,14 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("        var text = source[start.._index];");
         builder.AppendLine("        Advance();");
-        builder.AppendLine("        _tokens.Add(new Token(TokenKind.String, text, line, column));");
+        builder.AppendLine("        _tokens.Add(new Token(TokenKind.String, text, line, column, ByteOffset: byteOffset));");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private void LexRawString()");
         builder.AppendLine("    {");
         builder.AppendLine("        var line = _line;");
         builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        var byteOffset = CurrentByteOffset;");
         builder.AppendLine("        var delimiterWidth = 0;");
         builder.AppendLine("        while (_index + delimiterWidth < source.Length && source[_index + delimiterWidth] == '\"') delimiterWidth++;");
         builder.AppendLine("        for (var i = 0; i < delimiterWidth; i++) Advance();");
@@ -598,7 +608,7 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("        var text = source[start.._index];");
         builder.AppendLine("        for (var i = 0; i < delimiterWidth; i++) Advance();");
-        builder.AppendLine("        _tokens.Add(new Token(TokenKind.String, text, line, column, true));");
+        builder.AppendLine("        _tokens.Add(new Token(TokenKind.String, text, line, column, true, byteOffset));");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private bool HasQuoteRun(int width)");
@@ -620,6 +630,39 @@ internal static class LexerEmitter
         builder.AppendLine("    private void AdvanceRaw()");
         builder.AppendLine("    {");
         builder.AppendLine("        _index++;");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private static int[] BuildUtf8ByteOffsets(string text)");
+        builder.AppendLine("    {");
+        builder.AppendLine("        var offsets = new int[text.Length + 1];");
+        builder.AppendLine("        var byteOffset = 0;");
+        builder.AppendLine("        var index = 0;");
+        builder.AppendLine("        while (index < text.Length)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            offsets[index] = byteOffset;");
+        builder.AppendLine("            var current = text[index];");
+        builder.AppendLine("            if (char.IsHighSurrogate(current)");
+        builder.AppendLine("                && index + 1 < text.Length");
+        builder.AppendLine("                && char.IsLowSurrogate(text[index + 1]))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                offsets[index + 1] = byteOffset + 3;");
+        builder.AppendLine("                byteOffset += 4;");
+        builder.AppendLine("                index += 2;");
+        builder.AppendLine("                offsets[index] = byteOffset;");
+        builder.AppendLine("                continue;");
+        builder.AppendLine("            }");
+        builder.AppendLine();
+        builder.AppendLine("            byteOffset += current switch");
+        builder.AppendLine("            {");
+        builder.AppendLine("                <= '\\u007f' => 1,");
+        builder.AppendLine("                <= '\\u07ff' => 2,");
+        builder.AppendLine("                _ => 3");
+        builder.AppendLine("            };");
+        builder.AppendLine("            index++;");
+        builder.AppendLine("            offsets[index] = byteOffset;");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return offsets;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private static bool IsIdentifierStart(char c)");

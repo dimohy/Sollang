@@ -1,0 +1,18 @@
+import std.net.socket as socket
+
+main {
+    [7, 9; ~] -> socket.operationSlot(41, socket.OperationDirection.Receive) => slot
+    slot -> recycle -> when {
+        Ok(_) { "unexpected" -> println }
+        Err(failure) {
+            failure.error.code => code
+            failure.error.kind -> when {
+                socket.SocketErrorKind.InvalidArgument { true }
+                else { false }
+            } => invalid
+            failure -> intoSlot => failedSlot
+            failedSlot -> intoBytes => bytes
+            "invalid=$invalid,code=$code,len=$(bytes -> len),first=$(bytes[0])" -> println
+        }
+    }
+}

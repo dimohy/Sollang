@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "completed", "total", "compilerSha256", "inputStable", "inputHashes", "cases", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "total": { "const": 3 },
+    "compilerSha256": { "$ref": "#/$defs/sha256" },
+    "inputStable": { "type": "boolean" },
+    "inputHashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compiler", "contract", "contractSchema", "staticResultSchema", "managedResultSchema", "compilerSource", "verifier", "verificationProcess", "formatter", "expected", "source:P-PRIMARY-MUT", "source:P-ADDITIONAL-MUT", "source:N-ADDITIONAL-READONLY", "stdlibSourceSet"],
+      "properties": {
+        "compiler": { "$ref": "#/$defs/sha256" }, "contract": { "$ref": "#/$defs/sha256" },
+        "contractSchema": { "$ref": "#/$defs/sha256" }, "staticResultSchema": { "$ref": "#/$defs/sha256" },
+        "managedResultSchema": { "$ref": "#/$defs/sha256" }, "compilerSource": { "$ref": "#/$defs/sha256" },
+        "verifier": { "$ref": "#/$defs/sha256" }, "verificationProcess": { "$ref": "#/$defs/sha256" },
+        "formatter": { "$ref": "#/$defs/sha256" }, "expected": { "$ref": "#/$defs/sha256" },
+        "source:P-PRIMARY-MUT": { "$ref": "#/$defs/sha256" }, "source:P-ADDITIONAL-MUT": { "$ref": "#/$defs/sha256" },
+        "source:N-ADDITIONAL-READONLY": { "$ref": "#/$defs/sha256" },
+        "stdlibSourceSet": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "cases": {
+      "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/case" },
+      "allOf": [
+        { "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" } }, "required": ["id"] } },
+        { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" } }, "required": ["id"] } }
+      ]
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "enum": ["P-PRIMARY-MUT", "P-ADDITIONAL-MUT", "N-ADDITIONAL-READONLY", "INPUT_DRIFT"] } }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "passed", "compileExit", "warningNoteFree", "llvmProduced", "executableProduced", "diagnosticCount", "diagnosticMatched", "diagnosticsSha256", "llvmSha256", "executableSha256", "failure"],
+      "properties": {
+        "id": { "enum": ["P-PRIMARY-MUT", "P-ADDITIONAL-MUT", "N-ADDITIONAL-READONLY"] },
+        "kind": { "enum": ["compile-success", "compile-failure"] }, "passed": { "type": "boolean" },
+        "compileExit": { "type": "integer" }, "warningNoteFree": { "type": "boolean" }, "llvmProduced": { "type": "boolean" }, "executableProduced": { "type": "boolean" },
+        "diagnosticCount": { "type": "integer", "minimum": 0 }, "diagnosticMatched": { "type": ["boolean", "null"] },
+        "diagnosticsSha256": { "$ref": "#/$defs/sha256" }, "llvmSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] }, "executableSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+        "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" } } }, "then": { "properties": { "kind": { "const": "compile-failure" } } }, "else": { "properties": { "kind": { "const": "compile-success" } } } },
+        { "if": { "properties": { "passed": { "const": false } } }, "then": { "properties": { "failure": { "type": "string", "minLength": 1 } } }, "else": { "properties": { "failure": { "type": "null" } } } },
+        { "if": { "properties": { "passed": { "const": true }, "kind": { "const": "compile-success" } } }, "then": { "properties": { "compileExit": { "const": 0 }, "warningNoteFree": { "const": true }, "llvmProduced": { "const": true }, "executableProduced": { "const": true }, "diagnosticCount": { "const": 0 }, "diagnosticMatched": { "type": "null" }, "llvmSha256": { "$ref": "#/$defs/sha256" }, "executableSha256": { "$ref": "#/$defs/sha256" } } } },
+        { "if": { "properties": { "passed": { "const": true }, "kind": { "const": "compile-failure" } } }, "then": { "properties": { "compileExit": { "not": { "const": 0 } }, "warningNoteFree": { "const": true }, "llvmProduced": { "const": false }, "executableProduced": { "const": false }, "diagnosticCount": { "const": 1 }, "diagnosticMatched": { "const": true }, "llvmSha256": { "type": "null" }, "executableSha256": { "type": "null" } } } }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        { "properties": { "completed": { "const": 0 }, "cases": { "items": { "properties": { "passed": { "const": false } } } } } },
+        { "properties": { "completed": { "const": 1 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": false } } } }] } } },
+        { "properties": { "completed": { "const": 1 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": false } } } }] } } },
+        { "properties": { "completed": { "const": 1 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": true } } } }] } } },
+        { "properties": { "completed": { "const": 2 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": true } } } }] } } },
+        { "properties": { "completed": { "const": 2 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": false } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": true } } } }] } } },
+        { "properties": { "completed": { "const": 2 }, "cases": { "allOf": [{ "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": true } } } }, { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": false } } } }] } } },
+        { "properties": { "completed": { "const": 3 }, "cases": { "items": { "properties": { "passed": { "const": true } } } } } }
+      ]
+    },
+    { "if": { "properties": { "status": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 3 }, "inputStable": { "const": true }, "failureIds": { "maxItems": 0 } } }, "else": { "anyOf": [{ "properties": { "completed": { "maximum": 2 } } }, { "properties": { "inputStable": { "const": false } } }], "properties": { "failureIds": { "minItems": 1 } } } },
+    { "if": { "properties": { "inputStable": { "const": false } } }, "then": { "properties": { "failureIds": { "contains": { "const": "INPUT_DRIFT" } } } }, "else": { "properties": { "failureIds": { "not": { "contains": { "const": "INPUT_DRIFT" } } } } } },
+    { "if": { "properties": { "cases": { "contains": { "properties": { "id": { "const": "P-PRIMARY-MUT" }, "passed": { "const": false } } } } } }, "then": { "properties": { "failureIds": { "contains": { "const": "P-PRIMARY-MUT" } } } }, "else": { "properties": { "failureIds": { "not": { "contains": { "const": "P-PRIMARY-MUT" } } } } } },
+    { "if": { "properties": { "cases": { "contains": { "properties": { "id": { "const": "P-ADDITIONAL-MUT" }, "passed": { "const": false } } } } } }, "then": { "properties": { "failureIds": { "contains": { "const": "P-ADDITIONAL-MUT" } } } }, "else": { "properties": { "failureIds": { "not": { "contains": { "const": "P-ADDITIONAL-MUT" } } } } } },
+    { "if": { "properties": { "cases": { "contains": { "properties": { "id": { "const": "N-ADDITIONAL-READONLY" }, "passed": { "const": false } } } } } }, "then": { "properties": { "failureIds": { "contains": { "const": "N-ADDITIONAL-READONLY" } } } }, "else": { "properties": { "failureIds": { "not": { "contains": { "const": "N-ADDITIONAL-READONLY" } } } } } }
+  ]
+}

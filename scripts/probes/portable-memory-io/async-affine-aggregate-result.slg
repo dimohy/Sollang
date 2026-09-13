@@ -1,0 +1,38 @@
+import std.net.socket as socket
+
+struct Payload {
+    bytes: [UInt8; ~]
+}
+
+struct NativePayload {
+    connection: socket.TcpStream
+    bytes: [UInt8; ~]
+}
+
+enum NativeOutcome {
+    Succeeded(NativePayload)
+    Failed(NativePayload)
+}
+
+carryNative payload: move NativePayload -> async NativeOutcome {
+    yield
+    NativeOutcome.Succeeded(payload)
+}
+
+enum Outcome {
+    Succeeded(Payload)
+    Failed(Payload)
+}
+
+produce: -> async Outcome {
+    yield
+    Outcome.Succeeded(Payload { bytes: [7; ~] })
+}
+
+main {
+    produce() => task
+    task -> await -> when {
+        Outcome.Succeeded(payload) { "value=$(payload.bytes[0])" -> println }
+        Outcome.Failed(_) { "failed" -> println }
+    }
+}

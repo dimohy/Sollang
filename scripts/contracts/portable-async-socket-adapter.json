@@ -1,0 +1,131 @@
+{
+  "$schema": "portable-async-socket-adapter.schema.json",
+  "schemaVersion": 1,
+  "item": "Portable memory I/O",
+  "status": "implementation-in-progress",
+  "module": "std.io.socket",
+  "probeLayer": "existing-std.net.socket-completion-api",
+  "implementationClaim": false,
+  "probes": [
+    {
+      "id": "direct-owner-return",
+      "source": "scripts/probes/portable-memory-io/async-socket-direct-owner-return.slg",
+      "path": "direct",
+      "expected": ["direct=true,count=3,first=97,last=99,len=3"]
+    },
+    {
+      "id": "pending-await-owner-return",
+      "source": "scripts/probes/portable-memory-io/async-socket-pending-owner-return.slg",
+      "path": "pending",
+      "expected": ["pending=true,count=2,first=100,last=101,len=3"]
+    },
+    {
+      "id": "cooperative-cancellation-owner-return",
+      "source": "scripts/probes/portable-memory-io/async-socket-cancel-owner-return.slg",
+      "path": "cancelled",
+      "expected": ["cancelled=true,len=3"]
+    }
+  ],
+  "api": [
+    "asyncStream(connection: move TcpStream) -> Result<AsyncStream, CreateFailure>",
+    "AsyncStream.readIntoAsync(move self, buffer: move [UInt8; ~], cancellation: Cancellation) -> async Result<ReadSuccess, ReadFailure>",
+    "AsyncStream.writeRangeAsync(move self, buffer: move [UInt8; ~], offset: UIntSize, length: UIntSize, cancellation: Cancellation) -> async Result<WriteSuccess, WriteFailure>",
+    "AsyncStream.close(move self) -> Unit"
+  ],
+  "ownership": [
+    "AsyncStream is the sole affine owner of its CompletionReactor and registered TcpStream",
+    "CreateFailure returns the unchanged TcpStream owner when adapter creation cannot publish an AsyncStream",
+    "each operation moves AsyncStream and the exact caller buffer into one Task context",
+    "ordinary success returns the exact AsyncStream and caller buffer owners",
+    "native failure returns the exact AsyncStream and caller buffer owners",
+    "cooperative cancellation returns the exact AsyncStream and caller buffer owners",
+    "Task cancellation drains the retained operation then drops stream reactor slot and buffer exactly once",
+    "operation keys are monotonic and exhaustion is a typed pre-submission failure",
+    "one adapter permits one pending operation and uses fixed registration pending and batch capacities of one"
+  ],
+  "scheduling": [
+    "Completed is returned directly without creating or awaiting a dequeue Task",
+    "Pending alone creates the dequeue Task and crosses await",
+    "native completion only schedules readiness and never runs the caller continuation in the callback",
+    "cancellation and completion publish exactly one terminal winner"
+  ],
+  "forbidden": [
+    "await or dequeue on the direct Completed path",
+    "synchronous socket fallback presented as async",
+    "per-operation blocking helper thread",
+    "busy polling",
+    "payload copy or replacement buffer allocation",
+    "owner loss on any ordinary Result arm",
+    "unbounded registration operation or completion storage"
+  ],
+  "parentDependencies": {
+    "stdlibBacklog": {
+      "path": "scripts/contracts/stdlib-evolution-progress.json",
+      "denominator": 22,
+      "selectedOrdinal": 8
+    },
+    "socketCompletion": {
+      "path": "scripts/contracts/socket-completion-reactor.json",
+      "denominator": 22,
+      "requiredCompleted": 22
+    }
+  },
+  "acceptanceComposition": {
+    "rule": "adapter 21/21 AND socket completion 22/22 AND Portable memory I/O item acceptance",
+    "independentDenominators": [21, 22, 22],
+    "sumForbidden": true
+  },
+  "matrix": {
+    "scope": "nested-adapter-slice",
+    "replacesParentMatrix": false,
+    "total": 21,
+    "managedWindows": 3,
+    "managedLinux": 3,
+    "selfhostWindows": 3,
+    "selfhostLinux": 3,
+    "browser": 1,
+    "semanticNegative": 5,
+    "crossCutting": 3,
+    "browserPolicy": {
+      "focusedBuildRequired": true,
+      "unsupportedClaimRequiresBuildRejection": true,
+      "compileSuccessRequiresSupportedBehaviorTest": true
+    },
+    "cases": [
+      { "id": "W01", "platform": "managed-windows-x64", "kind": "direct-owner-return", "status": "probe-ready" },
+      { "id": "W02", "platform": "managed-windows-x64", "kind": "pending-await-owner-return", "status": "probe-ready" },
+      { "id": "W03", "platform": "managed-windows-x64", "kind": "cooperative-cancellation-owner-return", "status": "probe-ready" },
+      { "id": "L01", "platform": "managed-linux-x64", "kind": "direct-owner-return", "status": "planned" },
+      { "id": "L02", "platform": "managed-linux-x64", "kind": "pending-await-owner-return", "status": "planned" },
+      { "id": "L03", "platform": "managed-linux-x64", "kind": "cooperative-cancellation-owner-return", "status": "planned" },
+      { "id": "SW01", "platform": "selfhost-windows-x64", "kind": "direct-owner-return", "status": "planned" },
+      { "id": "SW02", "platform": "selfhost-windows-x64", "kind": "pending-await-owner-return", "status": "planned" },
+      { "id": "SW03", "platform": "selfhost-windows-x64", "kind": "cooperative-cancellation-owner-return", "status": "planned" },
+      { "id": "SL01", "platform": "selfhost-linux-x64", "kind": "direct-owner-return", "status": "planned" },
+      { "id": "SL02", "platform": "selfhost-linux-x64", "kind": "pending-await-owner-return", "status": "planned" },
+      { "id": "SL03", "platform": "selfhost-linux-x64", "kind": "cooperative-cancellation-owner-return", "status": "planned" },
+      { "id": "B01", "platform": "wasm32-browser", "kind": "focused-capability-then-rejection-or-supported-behavior", "status": "planned" },
+      { "id": "N01", "platform": "semantic", "kind": "moved-buffer-reuse-after-submit", "status": "planned" },
+      { "id": "N02", "platform": "semantic", "kind": "moved-reactor-reuse-after-submit", "status": "planned" },
+      { "id": "N03", "platform": "semantic", "kind": "pending-task-owner-alias", "status": "planned" },
+      { "id": "N04", "platform": "semantic", "kind": "terminal-slot-double-recycle", "status": "planned" },
+      { "id": "N05", "platform": "semantic", "kind": "partial-owner-parent-overlap", "status": "planned" },
+      { "id": "X01", "platform": "cross-cutting", "kind": "llvm-as-v004-warning-note-zero", "status": "planned" },
+      { "id": "X02", "platform": "cross-cutting", "kind": "allocation-copy-and-exactly-once-drop", "status": "planned" },
+      { "id": "X03", "platform": "cross-cutting", "kind": "schema-input-hash-and-platform-differential", "status": "planned" }
+    ]
+  },
+  "negativeControls": [
+    { "id": "N01", "behavior": "the caller buffer moved into OperationSlot cannot be reused before terminal owner return" },
+    { "id": "N02", "behavior": "the CompletionReactor moved into submit cannot be reused outside the returned submission arm" },
+    { "id": "N03", "behavior": "a pending dequeue Task cannot coexist with an alias of its reactor owner" },
+    { "id": "N04", "behavior": "a terminal OperationSlot can be recycled exactly once and the consumed slot cannot be reused" },
+    { "id": "N05", "behavior": "moving a projected owner and then its parent is rejected before LLVM"
+    }
+  ],
+  "earlyGate": {
+    "completed": 3,
+    "total": 3,
+    "requiredBeforeImplementation": true
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "contractSchema": "scripts/contracts/json-capability-candidate.schema.json",
+  "capabilityId": "float32-float64-conversion",
+  "authority": "detail-authority",
+  "implementationStatus": "blocked",
+  "productionImplemented": false,
+  "module": "stdlib/std/text/json.slg",
+  "scope": "json-float32-float64-conversion-policy-and-api-candidate",
+  "probes": {
+    "control": "scripts/probes/json-float-conversion/float-control.slg",
+    "dynamicParseBlocker": "scripts/probes/json-float-conversion/dynamic-text-to-float.slg",
+    "classificationBlocker": "scripts/probes/json-float-conversion/float-classification.slg",
+    "formatBlocker": "scripts/probes/json-float-conversion/float-shortest-format.slg"
+  },
+  "readerApi": [
+    "Reader.float32(Token, FloatPolicy) -> Result<Float32, Error>",
+    "Reader.float64(Token, FloatPolicy) -> Result<Float64, Error>"
+  ],
+  "writerApi": [
+    "Writer.float32(Float32, FloatPolicy) -> Result<Unit, Error>",
+    "Writer.float64(Float64, FloatPolicy) -> Result<Unit, Error>"
+  ],
+  "policy": {
+    "grammar": "the authenticated token must be one complete RFC 8259 number lexeme",
+    "rounding": "IEEE-754 roundTiesToEven only",
+    "overflow": "reject when the rounded result is positive or negative infinity",
+    "underflow": "accept subnormal results; reject a nonzero mathematical lexeme that rounds to signed zero",
+    "negativeZero": "preserve an exact negative-zero lexeme and emit -0; positive zero emits 0",
+    "finiteOnly": "reader and writer never return or emit NaN or Infinity",
+    "format": "shortest decimal that round-trips to the identical IEEE-754 value under roundTiesToEven",
+    "exponent": "lowercase e, no plus sign, and no redundant exponent leading zero",
+    "integerBoundary": {
+      "Float32": "16777215 and 16777216 exact; 16777217 rounds to 16777216",
+      "Float64": "9007199254740991 and 9007199254740992 exact; 9007199254740993 rounds to 9007199254740992"
+    },
+    "invalidSpellings": ["NaN", "Infinity", "-Infinity"]
+  },
+  "transactionality": {
+    "reader": "authenticate token and determine finite rounded result before returning a value; Reader state is readonly for token conversion",
+    "writer": "finite check and exact encoded-length check precede the first Writer output or structural mutation"
+  },
+  "requiredPortablePrimitives": [
+    "correctly-rounded RFC8259 decimal lexeme to Float32 and Float64",
+    "Float32 and Float64 finite/sign/IEEE-bit classification",
+    "shortest round-trip finite Float32 and Float64 formatting"
+  ],
+  "rejectedImplementations": [
+    "digit-by-digit floating accumulation without a proof of correct rounding",
+    "fixture-specific lexeme tables",
+    "locale-sensitive host parsing or formatting",
+    "formatting through integer narrowing",
+    "overflow saturation or underflow-to-zero success",
+    "NaN or Infinity JSON extensions"
+  ],
+  "reference": {
+    "provider": ".NET invariant IEEE-754 parser and R formatter",
+    "normalization": "R output only supplies the shortest digit sequence; JSON exponent spelling is normalized separately",
+    "tupleCount": 21,
+    "path": "scripts/contracts/json-float-reference.json"
+  },
+  "verifier": {
+    "path": "scripts/verify-json-float-conversion.ps1",
+    "total": 32,
+    "staticChecks": 6,
+    "referenceTupleChecks": 21,
+    "capabilityChecks": 4,
+    "inputStabilityChecks": 1,
+    "expectedStatus": "blocked",
+    "failureIds": [
+      "FLOAT_POLICY_CONTRACT_MISMATCH",
+      "FLOAT_REFERENCE_MISMATCH",
+      "FLOAT_CAPABILITY_DIAGNOSTIC_DRIFT",
+      "FLOAT_INPUT_DRIFT"
+    ]
+  },
+  "promotionGate": "do not add production APIs until all three portable primitives exist on managed and self-host Windows/Linux/browser paths"
+}

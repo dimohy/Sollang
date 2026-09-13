@@ -27,7 +27,17 @@ verify: -> Result<Verified, errors.Error> {
     } => information
     information -> encode? => encoded
     versionNegotiation.decode(encoded)? => decoded
-    decoded -> validateClient? => valid
+    decoded -> validateClient?
+    versionNegotiation.Information {
+        chosen: keys.version2()
+        available: [keys.version1(); ~]
+    } -> validateClient -> when {
+        Ok(_) { false }
+        Err(error) => error.kind -> when {
+            Transport { error.code == errors.versionNegotiationError() }
+            else { false }
+        }
+    } => rejectsUnavailable
     versionNegotiation.choose(
     [keys.version2(), keys.version1()],
     [keys.version1(), keys.version2()])? => chosen
@@ -35,7 +45,7 @@ verify: -> Result<Verified, errors.Error> {
         chosen: chosen
         length: UIntSize(encoded -> len)
         checksum: encoded -> checksum
-        valid: valid
+        valid: rejectsUnavailable
     })
 }
 

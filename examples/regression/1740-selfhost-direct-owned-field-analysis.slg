@@ -1,0 +1,162 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+struct Counts {
+    total: Int
+    e17: Int
+    e34: Int
+    e36: Int
+}
+
+summarize source: Text -> Counts {
+    [source,; ~] => unit
+    unit -> ownershipCheck.analyze => errors
+    0 => e17!
+    0 => e34!
+    0 => e36!
+    errors -> each error {
+        error.code == 17 -> if { e17! + 1 => e17! }
+        error.code == 34 -> if { e34! + 1 => e34! }
+        error.code == 36 -> if { e36! + 1 => e36! }
+    }
+    Counts { total: errors -> len, e17: e17!, e34: e34!, e36: e36! }
+}
+
+main {
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    valid: -> UIntSize {
+        Pair { left: [1; ~], right: [2; ~] } => pair
+        pair.left => left
+        pair.right -> len
+    }
+    main { }
+    """ -> summarize => local
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    valid pair: move Pair -> UIntSize {
+        pair.left => left
+        left -> len
+    }
+    main { }
+    """ -> summarize => moveInput
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        valid: mut self -> UIntSize {
+            self.left => left
+            [3; ~] => self.left
+            left -> len
+        }
+    }
+    main { }
+    """ -> summarize => mutSelfRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    valid pair: mut Pair -> UIntSize {
+        pair.left => left
+        [3; ~] => pair.left
+        left -> len
+    }
+    main { }
+    """ -> summarize => mutParamRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        valid: mut self -> UIntSize {
+            self.left => left
+            # Trivia does not constitute an intervening statement.
+
+            [3; ~] => self.left
+            left -> len
+        }
+    }
+    main { }
+    """ -> summarize => commentRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        invalid: self -> UIntSize {
+            self.left => left
+            left -> len
+        }
+    }
+    main { }
+    """ -> summarize => readonlySelf
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    invalid pair: ref Pair -> UIntSize {
+        pair.left => left
+        left -> len
+    }
+    main { }
+    """ -> summarize => readonlyParam
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    outer pair: Pair -> UIntSize {
+        inner unit: Unit -> UIntSize {
+            pair.left => left
+            left -> len
+        }
+        Unit -> inner
+    }
+    main { }
+    """ -> summarize => captured
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        invalid: mut self -> UIntSize {
+            self.left => left
+            left -> len
+        }
+    }
+    main { }
+    """ -> summarize => noRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        invalid: mut self -> UIntSize {
+            self.left => left
+            self.right -> len => observed
+            [3; ~] => self.left
+            observed
+        }
+    }
+    main { }
+    """ -> summarize => delayedRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    impl Pair {
+        invalid: mut self -> UIntSize {
+            self.left => left
+            [3; ~] => self.right
+            left -> len
+        }
+    }
+    main { }
+    """ -> summarize => wrongRepair
+
+    """
+    struct Pair { left: [Int; ~], right: [Int; ~] }
+    replacement: -> Result<[Int; ~], Int> => Result<[Int; ~], Int>.Err(7)
+    impl Pair {
+        invalid: mut self -> Result<UIntSize, Int> {
+            self.left => left
+            replacement()? => self.left
+            Result<UIntSize, Int>.Ok(left -> len)
+        }
+    }
+    main { }
+    """ -> summarize => fallibleRepair
+
+    "local=$(local.total)/$(local.e17)/$(local.e34)/$(local.e36), move-input=$(moveInput.total)/$(moveInput.e17)/$(moveInput.e34)/$(moveInput.e36), mut-self-repair=$(mutSelfRepair.total)/$(mutSelfRepair.e17)/$(mutSelfRepair.e34)/$(mutSelfRepair.e36), mut-param-repair=$(mutParamRepair.total)/$(mutParamRepair.e17)/$(mutParamRepair.e34)/$(mutParamRepair.e36), comment-repair=$(commentRepair.total)/$(commentRepair.e17)/$(commentRepair.e34)/$(commentRepair.e36), readonly-self=$(readonlySelf.total)/$(readonlySelf.e17)/$(readonlySelf.e34)/$(readonlySelf.e36), readonly-param=$(readonlyParam.total)/$(readonlyParam.e17)/$(readonlyParam.e34)/$(readonlyParam.e36), captured=$(captured.total)/$(captured.e17)/$(captured.e34)/$(captured.e36), no-repair=$(noRepair.total)/$(noRepair.e17)/$(noRepair.e34)/$(noRepair.e36), delayed-repair=$(delayedRepair.total)/$(delayedRepair.e17)/$(delayedRepair.e34)/$(delayedRepair.e36), wrong-repair=$(wrongRepair.total)/$(wrongRepair.e17)/$(wrongRepair.e34)/$(wrongRepair.e36), fallible-repair=$(fallibleRepair.total)/$(fallibleRepair.e17)/$(fallibleRepair.e34)/$(fallibleRepair.e36)" -> println
+}

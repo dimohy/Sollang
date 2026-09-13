@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 6,
   "module": "stdlib/std/algorithm.slg",
   "scope": "caller-owned-growable-arrays-copyable-selection-and-readonly-generic-sequences",
   "receiver": "Ordering",
@@ -21,6 +21,19 @@
     "wholeStorageCopies": 0,
     "preserves": ["owner", "length", "capacity", "element multiset"]
   },
+  "stableSort": {
+    "algorithm": "bottom-up merge sort",
+    "stable": true,
+    "comparisons": "O(n log n)",
+    "ownership": "mutable borrow of caller-owned values and initialized scratch; inline-copyable elements only",
+    "failureType": "StableSortError.InsufficientScratch",
+    "scratch": "scratch length must be at least values length; insufficient scratch fails before mutation",
+    "success": "values sorted stably; scratch prefix unspecified; both owners, lengths, and capacities preserved",
+    "coverage": ["empty", "single", "duplicates", "stability", "ascending", "descending", "insufficient scratch pre-effect"],
+    "heapAllocations": 0,
+    "bulkStorageCopies": 0,
+    "elementCopies": "O(n log n) into caller-owned initialized scratch"
+  },
   "binarySearch": {
     "precondition": "sorted by the same Ordering direction and Comparison",
     "comparisons": "O(log n)",
@@ -39,9 +52,24 @@
     "heapAllocations": 0,
     "wholeStorageCopies": 0
   },
+  "merge": {
+    "method": "Ordering.mergeSorted",
+    "algorithm": "stable two-way merge",
+    "precondition": "both readonly slices are sorted by the same Ordering direction and Comparison and do not overlap output",
+    "result": "Result<Int, MergeError>; success count equals left length plus right length",
+    "failurePrecedence": ["LengthOverflow", "InsufficientOutputCapacity", "InsufficientOutputLength"],
+    "failureTransactionality": "all validation completes before the first output mutation",
+    "ownership": "readonly caller-owned inputs plus mutable borrow of caller-owned preinitialized output; inline-copyable elements only",
+    "stability": "equivalent elements retain source order and left equivalents precede right equivalents",
+    "success": "writes only output prefix count and preserves every owner, length, and capacity",
+    "coverage": ["empty", "duplicates", "stability", "ascending", "descending", "short capacity pre-effect", "short length pre-effect"],
+    "comparisons": "O(left length + right length)",
+    "heapAllocations": 0,
+    "bulkStorageCopies": 0
+  },
   "noncopyablePermutation": {
-    "status": "blocked-on-general-collection-primitive",
-    "requiredPrimitive": "move-safe indexed exchange of two initialized elements while preserving the same array owner, length, capacity, and exactly-once drop state",
+    "status": "exchange-primitive-integrated",
+    "requiredPrimitive": "satisfied by values! -> exchange(left, right), preserving the same array owner, length, capacity, and exactly-once drop state",
     "forbiddenWorkarounds": [
       "copying an owned element into a temporary",
       "take plus reallocation or order-changing push",
@@ -50,11 +78,35 @@
     ],
     "existingNegativeEvidence": "algorithm-ordering-owned-negative"
   },
-  "remainingSequence": {
-    "stableSort": "unimplemented; first freeze caller-supplied scratch ownership and a deterministic insufficient-scratch error",
-    "partition": "blocked on the same move-safe indexed permutation primitive; predicate effects and returned partition boundary remain to be frozen",
-    "merge": "unimplemented; first freeze caller-owned destination capacity, source overlap, partial-progress, and comparison-failure behavior",
-    "iteratorTransforms": "unimplemented here; first separate lazy std.sequence adapters from explicitly bounded materializing collectors"
+  "partitionPoint": {
+    "status": "managed-windows-focused-complete",
+    "method": "Algorithms.partitionPoint",
+    "contract": "scripts/contracts/general-algorithms-partition-point.json",
+    "schema": "scripts/contracts/general-algorithms-partition-point.schema.json",
+    "verifier": "scripts/verify-general-algorithms-partition-point-focused.ps1",
+    "result": "artifacts/scratch/general-algorithms-partition-point/c427-validation-v4/result.json",
+    "resultSha256": "282A37CBDC2EF809C81DE03ADAAD314D0E961E719EBCCD697D57F09476A292C3",
+    "semantics": "readonly true*false* predicate partition; first false or length; O(log n); zero mutation and allocation"
+  },
+  "partitionInPlace": {
+    "status": "implemented-static-managed-pending",
+    "method": "Algorithms.partitionInPlace",
+    "contract": "scripts/contracts/general-algorithms-partition.json",
+    "schema": "scripts/contracts/general-algorithms-partition.schema.json",
+    "resultSchema": "scripts/contracts/general-algorithms-partition-result.schema.json",
+    "verifier": "scripts/verify-general-algorithms-partition-focused.ps1",
+    "semantics": "unstable true-prefix partition; one forward scan; exact typed block evaluation; atomic noncopyable exchange; O(n); O(1)"
+  },
+  "remainingSequence": {},
+  "iteratorTransforms": {
+    "status": "managed-windows-focused-complete",
+    "module": "stdlib/std/sequence.slg",
+    "contract": "scripts/contracts/sequence-iterator-transforms.json",
+    "schema": "scripts/contracts/sequence-iterator-transforms.schema.json",
+    "verifier": "scripts/verify-sequence-iterator-transforms-focused.ps1",
+    "result": "current-input result emitted by the focused verifier and embedded into the General result",
+    "completed": 12,
+    "total": 12
   },
   "selection": {
     "methods": ["min", "max", "clamp"],
@@ -91,18 +143,34 @@
       "id": "readonly-sequence",
       "source": "scripts/probes/general-algorithms/readonly-sequence.slg",
       "stdout": "true\nfalse\nsearch=1,true\nlower=1\nupper=3\nrange=1,3\nreuse=1,3"
+    },
+    {
+      "id": "stable-sort",
+      "source": "scripts/probes/general-algorithms/stable-sort.slg",
+      "stdout": "1:1\n1:3\n2:0\n2:2\n3:4\nstorage=5,5,5,5\ncapacity=5,5\n3:4\n2:0\n2:2\n1:1\n1:3\nempty=0,0\nsingle=7,1,1\nshort=3,1,2,0,0"
+    },
+    {
+      "id": "sorted-merge",
+      "source": "scripts/probes/general-algorithms/sorted-merge.slg",
+      "stdout": "ascending=7\n1:0:0\n2:0:1\n2:0:2\n2:1:0\n2:1:1\n3:1:2\n5:0:3\nstorage=7,7,7\ninputs=4,3\ndescending=7\n5:0:3\n3:1:2\n2:0:1\n2:0:2\n2:1:0\n2:1:1\n1:0:0\nempty=0,0,0\nshort-capacity\ncapacity-unchanged=99,1,1\nshort-length\nlength-unchanged=0,4"
     }
   ],
   "reference": "System.Array.Sort, System.Array.FindIndex, System.Math.Min/Max/Clamp",
-  "acceptance": "managed Windows focused slice plus managed generic readonly/ref/owned-sequence probes only; selfhost and platform closure pending",
+  "acceptance": "managed Windows algorithm slice plus current-input sequence iterator-transform and partitionPoint focused closure; partitionInPlace static/parser 5/5 complete; partitionInPlace managed, selfhost, and platform closure pending",
   "unresolved": [
-    "stable selfhost candidate validation of generic readonly slice and explicit reference specialization",
-    "move-safe noncopyable indexed permutation primitive",
-    "stable sorting, partitioning, merging, and iterator-style transform coverage",
-    "Windows/Linux/browser and final fixed-point closure"
+    "partitionPoint selfhost/platform validation",
+    "partitionInPlace managed/selfhost/platform validation",
+    "sorted-merge output-overlap diagnostics",
+    "selfhost candidate validation of generic readonly/reference, stable-sort, sorted-merge, and iterator-transform paths",
+    "Windows/Linux/browser final fixed-point closure"
   ],
   "selfhostPendingProbes": [
     "scripts/probes/general-algorithms/generic-readonly-slice.slg",
-    "scripts/probes/general-algorithms/generic-explicit-reference.slg"
+    "scripts/probes/general-algorithms/generic-explicit-reference.slg",
+    "scripts/probes/general-algorithms/stable-sort.slg",
+    "scripts/probes/general-algorithms/sorted-merge.slg",
+    "scripts/probes/general-algorithms/partition-point-boundaries.slg",
+    "scripts/probes/general-algorithms/partition-point-noncopyable.slg",
+    "scripts/probes/general-algorithms/partition-point-fixed-readonly-lifetime.slg"
   ]
 }

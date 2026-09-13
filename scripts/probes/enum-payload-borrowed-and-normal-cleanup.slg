@@ -1,0 +1,30 @@
+# Borrowed enum payloads stay borrowed; owned anonymous payloads clean up after a normal arm.
+struct Holder {
+    first: [Int; ~]
+    second: [Int; ~]
+}
+
+make value: Int -> Result<Holder, Int> {
+    [Int; ~] => first!
+    [Int; ~] => second!
+    first! -> push(value)
+    second! -> push(value + 1)
+    Result<Holder, Int>.Ok(Holder { first: first!, second: second! })
+}
+
+inspect result: Result<Holder, Int> -> Int => result -> when {
+    Ok(holder) { (holder.first -> len) + (holder.second -> len) }
+    Err(error) { error }
+}
+
+normal: -> Int => make(3) -> when {
+    Ok(holder) { holder.first[0] + holder.second[0] }
+    Err(error) { error }
+}
+
+main {
+    make(8) => borrowedOwner
+    borrowedOwner -> inspect => borrowed
+    normal() => owned
+    "$borrowed,$owned" -> println
+}

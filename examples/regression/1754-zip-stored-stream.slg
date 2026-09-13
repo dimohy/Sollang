@@ -1,0 +1,286 @@
+# A deterministic standard ZIP archive carries one stored binary entry.
+import std.archive.zip as zip_archive
+import std.archive.zip.error as zip_errors
+
+kindCode kind: zip_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    NameLimitExceeded { 3 }
+    ExtraLimitExceeded { 4 }
+    CommentLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidSignature { 7 }
+    InvalidHeader { 8 }
+    ChecksumMismatch { 9 }
+    SizeMismatch { 10 }
+    UnsupportedMethod { 11 }
+    UnsupportedEncryption { 12 }
+    UnsupportedZip64 { 13 }
+    UnsupportedDataDescriptor { 14 }
+    UnsupportedMultipleEntries { 15 }
+    TrailingData { 16 }
+    InvalidState { 17 }
+    EntryLimitExceeded { 18 }
+    DirectoryLimitExceeded { 19 }
+    WorkLimitExceeded { 20 }
+    InvalidDeflate { 21 }
+    ExpansionRatioExceeded { 22 }
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+changedAt input: [UInt8], offset: Int, value: UInt8 -> [UInt8; ~] {
+    [UInt8; ~] => changed!
+    changed! -> reserve(input -> len)
+    0 => index!
+    index! < (input -> len) -> while {
+        index! == offset -> if { changed! -> push(value) } else { changed! -> push(input[index!]) }
+        index! + 1 => index!
+    }
+    changed!
+}
+
+withoutLast input: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => shortened!
+    0 => index!
+    index! + 1 < (input -> len) -> while {
+        shortened! -> push(input[index!])
+        index! + 1 => index!
+    }
+    shortened!
+}
+
+withTrailing input: [UInt8] -> [UInt8; ~] {
+    [UInt8; ~] => extended!
+    extended! -> reserve((input -> len) + 1)
+    0 => index!
+    index! < (input -> len) -> while {
+        extended! -> push(input[index!])
+        index! + 1 => index!
+    }
+    extended! -> push(0)
+    extended!
+}
+
+decode codec: zip_archive.Codec, input: [UInt8], bytewise: Bool -> Result<[UInt8; ~], zip_archive.Error> {
+    codec -> decoder? => decoder!
+    bytewise -> if {
+        0 => index!
+        index! < (input -> len) -> while {
+            decoder! -> write([input[index!]])? => accepted
+            accepted == 1 -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error {
+                    kind: zip_errors.Kind.InvalidHeader
+                    offset: UIntSize(index!)
+                }) -> return }
+            index! + 1 => index!
+        }
+    } else {
+        decoder! -> write(input)? => accepted
+        accepted == (input -> len) -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error {
+                kind: zip_errors.Kind.InvalidHeader
+                offset: UIntSize(accepted)
+            }) -> return }
+    }
+    [UInt8; ~] => output!
+    decoder! -> finish(output!)? => written
+    written == (output! -> len) -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error {
+            kind: zip_errors.Kind.SizeMismatch
+            offset: UIntSize(written)
+        }) -> return }
+    Result<[UInt8; ~], zip_archive.Error>.Ok(output!)
+}
+
+rejects codec: zip_archive.Codec, input: [UInt8], expected: Int -> Bool {
+    codec -> decoder -> when {
+        Err(error) { (error.kind -> kindCode) == expected -> return }
+        Ok(decoderValue) {
+            decoderValue => decoder!
+            decoder! -> write(input) -> when {
+                Err(error) { (error.kind -> kindCode) == expected -> return }
+                Ok(_) {}
+            }
+            [UInt8(9); ~] => output!
+            decoder! -> finish(output!) -> when {
+                Ok(_) { false }
+                Err(error) { (error.kind -> kindCode) == expected and (output! -> len) == 1 and output![0] == 9 }
+            }
+        }
+    }
+}
+
+rejectsAt codec: zip_archive.Codec, input: [UInt8], bytewise: Bool, expected: Int, offset: UIntSize -> Bool {
+    codec -> decoder -> when {
+        Err(error) { (error.kind -> kindCode) == expected and error.offset == offset -> return }
+        Ok(decoderValue) {
+            decoderValue => decoder!
+            bytewise -> if {
+                0 => index!
+                index! < (input -> len) -> while {
+                    decoder! -> write([input[index!]]) -> when {
+                        Err(error) {
+                            (error.kind -> kindCode) == expected and error.offset == offset -> return
+                        }
+                        Ok(_) {}
+                    }
+                    index! + 1 => index!
+                }
+            } else {
+                decoder! -> write(input) -> when {
+                    Err(error) {
+                        (error.kind -> kindCode) == expected and error.offset == offset -> return
+                    }
+                    Ok(_) {}
+                }
+            }
+            [UInt8(9); ~] => output!
+            decoder! -> finish(output!) -> when {
+                Ok(_) { false }
+                Err(error) {
+                    (error.kind -> kindCode) == expected and error.offset == offset
+                        and (output! -> len) == 1 and output![0] == 9
+                }
+            }
+        }
+    }
+}
+
+rejectsAtBoth codec: zip_archive.Codec, input: [UInt8], expected: Int, offset: UIntSize -> Bool {
+    codec -> rejectsAt(input, false, expected, offset)
+        and codec -> rejectsAt(input, true, expected, offset)
+}
+
+run: -> Result<Unit, zip_archive.Error> uses Console {
+    zip_archive.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 64
+        maxNameBytes: 32
+        maxExtraBytes: 32
+        maxCommentBytes: 32
+    } -> codec? => codec
+
+    [UInt8(
+    80), 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 79, 248,
+    232, 96, 7, 0, 0, 0, 7, 0, 0, 0, 9, 0, 0, 0, 104, 101,
+    108, 108, 111, 46, 98, 105, 110, 0, 1, 2, 3, 255, 10, 20, 80, 75,
+    1, 2, 20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 79, 248,
+    232, 96, 7, 0, 0, 0, 7, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 104, 101, 108, 108, 111, 46, 98, 105,
+    110, 80, 75, 5, 6, 0, 0, 0, 0, 1, 0, 1, 0, 55, 0, 0, 0,
+    46, 0, 0, 0, 0, 0] => encoded
+    [UInt8(0), 1, 2, 3, 255, 10, 20] => expected
+    [UInt8(
+    80), 75, 3, 4, 20, 0, 0, 0, 0, 0, 111, 139, 45, 93, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 101, 109,
+    112, 116, 121, 46, 98, 105, 110, 80, 75, 1, 2, 20, 0, 20, 0, 0, 0,
+    0, 0, 111, 139, 45, 93, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0,
+    0, 0, 101, 109, 112, 116, 121, 46, 98, 105, 110, 80, 75, 5, 6, 0, 0,
+    0, 0, 1, 0, 1, 0, 55, 0, 0, 0, 39, 0, 0, 0, 0, 0] => emptyEncoded
+    [UInt8; ~] => emptyExpected
+
+    codec -> decode(encoded, false)? => bulk
+    codec -> decode(encoded, true)? => bytewise
+    bulk -> matches(expected) => bulkMatches
+    bytewise -> matches(expected) => bytewiseMatches
+    bulk -> matches(bytewise) => pathsMatch
+    codec -> decode(emptyEncoded, false)? => emptyBulk
+    codec -> decode(emptyEncoded, true)? => emptyBytewise
+    emptyBulk -> matches(emptyExpected) and emptyBytewise -> matches(emptyExpected)
+        and emptyBulk -> matches(emptyBytewise) => emptyPathsMatch
+
+    encoded -> changedAt(6, 1) => encrypted
+    encoded -> changedAt(6, 8) => described
+    encoded -> changedAt(8, 8) => deflated
+    encoded -> changedAt(4, 45) => zip64
+    encoded -> changedAt(48, 3) -> changedAt(49, 4) => multiple
+    encoded -> changedAt(14, 78) => badChecksum
+    emptyEncoded -> changedAt(14, 1) -> changedAt(55, 1) => emptyBadChecksum
+    encoded -> changedAt(46, 0) => badCentralSignature
+    encoded -> changedAt(62, 78) => badCentralChecksum
+    encoded -> changedAt(101, 0) => badEocdSignature
+    encoded -> changedAt(28, 1) => malformedExtra
+    encoded -> changedAt(28, 4) -> changedAt(39, 1) -> changedAt(40, 0)
+        -> changedAt(41, 0) -> changedAt(42, 0) => zip64Extra
+    encoded -> changedAt(78, 1) => centralComment
+    encoded -> withoutLast => truncated
+    encoded -> withTrailing => trailing
+
+    codec -> rejects(encrypted, 12) => encryptionRejected
+    codec -> rejects(described, 14) => descriptorRejected
+    codec -> rejects(deflated, 11) => methodRejected
+    codec -> rejects(zip64, 13) => zip64Rejected
+    codec -> rejects(multiple, 15) => multipleRejected
+    codec -> rejects(badChecksum, 9) => checksumRejected
+    codec -> rejects(truncated, 6) => truncationRejected
+    codec -> rejects(trailing, 16) => trailingRejected
+    codec -> rejectsAtBoth(emptyBadChecksum, 9, 14) => emptyChecksumRejected
+    codec -> rejectsAtBoth(badCentralSignature, 7, 46) => centralSignatureOffset
+    codec -> rejectsAtBoth(badCentralChecksum, 9, 62) => centralChecksumOffset
+    codec -> rejectsAtBoth(badEocdSignature, 7, 101) => eocdSignatureOffset
+    codec -> rejectsAtBoth(malformedExtra, 8, 39) => malformedTlvRejected
+    codec -> rejectsAtBoth(zip64Extra, 13, 39) => zip64TlvRejected
+
+    zip_archive.Limits {
+        maxEncodedBytes: 122
+        maxDecodedBytes: 64
+        maxNameBytes: 32
+        maxExtraBytes: 32
+        maxCommentBytes: 32
+    } -> codec? => inputLimitCodec
+    zip_archive.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 6
+        maxNameBytes: 32
+        maxExtraBytes: 32
+        maxCommentBytes: 32
+    } -> codec? => outputLimitCodec
+    zip_archive.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 64
+        maxNameBytes: 8
+        maxExtraBytes: 32
+        maxCommentBytes: 32
+    } -> codec? => nameLimitCodec
+    zip_archive.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 64
+        maxNameBytes: 32
+        maxExtraBytes: 0
+        maxCommentBytes: 32
+    } -> codec? => extraLimitCodec
+    zip_archive.Limits {
+        maxEncodedBytes: 256
+        maxDecodedBytes: 64
+        maxNameBytes: 32
+        maxExtraBytes: 32
+        maxCommentBytes: 0
+    } -> codec? => commentLimitCodec
+    inputLimitCodec -> rejectsAtBoth(encoded, 1, 123) => inputLimitRejected
+    outputLimitCodec -> rejectsAtBoth(encoded, 2, 22) => outputLimitRejected
+    nameLimitCodec -> rejectsAtBoth(encoded, 3, 26) => nameLimitRejected
+    extraLimitCodec -> rejectsAtBoth(malformedExtra, 4, 28) => extraLimitRejected
+    commentLimitCodec -> rejectsAtBoth(centralComment, 5, 78) => commentLimitRejected
+
+    "zip-stored=$(bulkMatches and bytewiseMatches and pathsMatch and emptyPathsMatch)" -> println
+    "zip-stored-unsupported=$encryptionRejected,$descriptorRejected,$methodRejected,$zip64Rejected,$multipleRejected" -> println
+    "zip-stored-malformed=$checksumRejected,$truncationRejected,$trailingRejected" -> println
+    "zip-stored-crc-offsets=$emptyChecksumRejected,$centralSignatureOffset,$centralChecksumOffset,$eocdSignatureOffset" -> println
+    "zip-stored-bounds=$inputLimitRejected,$outputLimitRejected,$nameLimitRejected,$extraLimitRejected,$commentLimitRejected,$malformedTlvRejected,$zip64TlvRejected" -> println
+    Result<Unit, zip_archive.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zip-stored-error=$(error.kind -> kindCode),$(error.offset)" -> println }
+    }
+}

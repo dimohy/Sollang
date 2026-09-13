@@ -98,12 +98,13 @@ callHasDeclaredEffects node: typedIr.TypedIrNode, context: ref emitterContext.Em
 # effect roots and predecessor ordering. In particular, reserve may replace
 # the backing allocation even when the logical array length does not change.
 isSchedulingMutationIntrinsic node: typedIr.TypedIrNode -> Bool {
-    node.kind == 9 and (node.opcode == -204 or node.opcode == -213
+    (node.kind == 9 and (node.opcode == -204 or node.opcode == -213
         or node.opcode == -223 or node.opcode == -303
         or node.opcode == -229 or node.opcode == -241 or node.opcode == -242
         or node.opcode == -246 or node.opcode == -247 or node.opcode == -250
         or node.opcode == -251 or node.opcode == -252 or node.opcode == -254
-        or node.opcode == -255 or node.opcode == -257 or node.opcode == -271)
+        or node.opcode == -255 or node.opcode == -257 or node.opcode == -271))
+        or (node -> typedIr.isArrayExchangeIntrinsicCall)
 }
 
 # Aggregate materialization captures inline values from backing storage.
@@ -408,10 +409,18 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                         }
                     scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart]
                         -> if { false => scheduleReady! }
-                    scheduleReady! and ((scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -213 or scheduleNode.opcode == -241 or scheduleNode.opcode == -242 or scheduleNode.opcode == -246 or scheduleNode.opcode == -247 or scheduleNode.opcode == -252 or scheduleNode.opcode == -255 or scheduleNode.opcode == -256 or scheduleNode.opcode == -257 or scheduleNode.opcode == -271)) or (scheduleNode -> typedIr.isSetIntrinsicCall)) and scheduleNode.operand1 >= 0
+                    scheduleReady! and ((scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -213 or scheduleNode.opcode == -241 or scheduleNode.opcode == -242 or scheduleNode.opcode == -246 or scheduleNode.opcode == -247 or scheduleNode.opcode == -252 or scheduleNode.opcode == -255 or scheduleNode.opcode == -256 or scheduleNode.opcode == -257 or scheduleNode.opcode == -271)) or (scheduleNode -> typedIr.isSetIntrinsicCall) or (scheduleNode -> typedIr.isArrayExchangeIntrinsicCall)) and scheduleNode.operand1 >= 0
                         -> if {
                             scheduleNode.operand1 -> aggregateValueIndex(context, state) => schedulePushValue
                             schedulePushValue >= expressionStart and schedulePushValue < functionEnd and not expressionScheduled![schedulePushValue - expressionStart]
+                                -> if { false => scheduleReady! }
+                        }
+                    scheduleReady! and (scheduleNode -> typedIr.isArrayExchangeIntrinsicCall)
+                        and context.ir[scheduleNode.operand1].nextOperand >= expressionStart
+                        and context.ir[scheduleNode.operand1].nextOperand < functionEnd
+                        -> if {
+                            context.ir[scheduleNode.operand1].nextOperand -> aggregateValueIndex(context, state) => scheduleExchangeRightValue
+                            scheduleExchangeRightValue >= expressionStart and scheduleExchangeRightValue < functionEnd and not expressionScheduled![scheduleExchangeRightValue - expressionStart]
                                 -> if { false => scheduleReady! }
                         }
                     scheduleReady! and scheduleNode.kind == 26 and scheduleNode.operand0 >= 0

@@ -22,9 +22,9 @@
     "orphanProcessIds"
   ],
   "properties": {
-    "schemaVersion": { "enum": [1, 2] },
+    "schemaVersion": { "enum": [1, 2, 3] },
     "runId": { "type": "string", "minLength": 1 },
-    "verification": { "enum": ["Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ExpressionBatch", "ManagedHost", "Probe"] },
+    "verification": { "enum": ["Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "ExpressionBatch", "PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe"] },
     "executionMode": { "const": "detached-supervisor" },
     "supervisorPid": { "type": "integer", "minimum": 1 },
     "startedAtUtc": { "type": "string", "format": "date-time" },
@@ -40,6 +40,23 @@
     "logPath": { "type": "string", "minLength": 1 },
     "standardErrorPath": { "type": "string", "minLength": 1 },
     "cancellationRequestPath": { "type": "string", "minLength": 1 },
+    "cancellationAcknowledgementPath": { "type": "string", "minLength": 1 },
+    "cancellationAcknowledgement": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["schemaVersion", "runId", "targetProcessId", "observedAtUtc"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "runId": { "type": "string", "minLength": 1 },
+        "targetProcessId": { "type": "integer", "minimum": 1 },
+        "observedAtUtc": { "type": "string", "format": "date-time" }
+      }
+    },
+    "additionalMoveOwnershipCompiler": { "type": ["string", "null"], "minLength": 1 },
+    "additionalMoveOwnershipExpectedCompilerSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+    "additionalMoveOwnershipOutputDirectory": { "type": ["string", "null"], "minLength": 1 },
+    "focusedResultPath": { "type": ["string", "null"], "minLength": 1 },
+    "focusedResultSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
     "targetProcessId": { "type": ["integer", "null"], "minimum": 1 },
     "targetExitCode": { "type": ["integer", "null"] },
     "processAudit": {
@@ -64,7 +81,40 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "schemaVersion": { "const": 2 } } },
+      "if": { "properties": { "verification": { "const": "AdditionalMoveOwnership" } } },
+      "then": {
+        "required": ["additionalMoveOwnershipCompiler", "additionalMoveOwnershipExpectedCompilerSha256", "additionalMoveOwnershipOutputDirectory"],
+        "properties": {
+          "additionalMoveOwnershipCompiler": { "type": "string", "minLength": 1 },
+          "additionalMoveOwnershipExpectedCompilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+          "additionalMoveOwnershipOutputDirectory": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "verification": { "enum": ["C341FinalSelfhost", "C394FinalCandidate"] },
+          "status": { "const": "passed" }
+        },
+        "required": ["verification", "status"]
+      },
+      "then": {
+        "required": ["focusedResultPath", "focusedResultSha256"],
+        "properties": {
+          "focusedResultPath": { "type": "string", "minLength": 1 },
+          "focusedResultSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "schemaVersion": { "const": 3 } } },
+      "then": {
+        "required": ["processAudit", "targetExitCode", "cancellationAcknowledgementPath", "cancellationAcknowledgement"]
+      }
+    },
+    {
+      "if": { "properties": { "schemaVersion": { "enum": [2, 3] } } },
       "then": {
         "required": ["processAudit", "targetExitCode"],
         "allOf": [{
@@ -100,7 +150,9 @@
         "properties": {
           "exitCode": { "not": { "const": 0 } },
           "failureIds": { "const": ["CANCELLATION_REQUESTED"] },
-          "orphanProcessIds": { "maxItems": 0 }
+          "orphanProcessIds": { "maxItems": 0 },
+          "targetExitCode": { "const": 130 },
+          "cancellationAcknowledgement": { "type": "object" }
         }
       }
     }

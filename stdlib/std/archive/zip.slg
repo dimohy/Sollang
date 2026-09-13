@@ -1,0 +1,1079 @@
+namespace std.archive.zip
+
+import std.archive.zip.error as errors
+import std.archive.zip.decoder_phase as phases
+import std.archive.zip.encoder_phase as encoder_phases
+import std.compress.gzip as gzip
+import std.compress.gzip.error as gzip_errors
+import std.hash.crc32 as crc32
+
+# Bounded streaming foundation for one stored ZIP entry. Decoder.write consumes
+# caller chunks without retaining the complete archive. Decoder.finish publishes
+# bytes only after the local header, central directory, EOCD, and CRC agree.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxEncodedBytes: Int
+    public maxDecodedBytes: Int
+    public maxNameBytes: Int
+    public maxExtraBytes: Int
+    public maxCommentBytes: Int
+}
+
+public struct Codec {
+    limits: Limits
+}
+
+public struct DeflateLimits {
+    public maxCompressedBytes: Int
+    public maxExpansionRatio: Int
+    public maxWorkUnits: Int
+}
+
+public struct Decoder {
+    limits: Limits
+    phase: phases.Phase
+    totalInputBytes: Int
+    localHeader: [UInt8; ~]
+    localName: [UInt8; ~]
+    localFlags: Int
+    localExtraLength: Int
+    localExtraBytes: Int
+    localExtra: [UInt8; ~]
+    method: Int
+    payloadBytes: Int
+    decodedBytes: Int
+    payloadReadBytes: Int
+    deflate: Option<gzip.RawDeflateDecoder>
+    allowDeflate: Bool
+    deflateLimits: DeflateLimits
+    expectedChecksum: UInt32
+    checksum: crc32.Hasher
+    verifiedOutput: [UInt8; ~]
+    centralHeader: [UInt8; ~]
+    centralNameIndex: Int
+    centralExtraLength: Int
+    centralExtraBytes: Int
+    centralExtra: [UInt8; ~]
+    centralCommentLength: Int
+    centralCommentBytes: Int
+    eocd: [UInt8; ~]
+    archiveCommentBytes: Int
+    failed: Bool
+    failure: Error
+}
+
+public struct WriterLimits {
+    public maxEncodedBytes: Int
+    public maxEntryBytes: Int
+    public maxEntries: Int
+    public maxNameBytes: Int
+    public maxExtraBytes: Int
+    public maxCommentBytes: Int
+    public maxDirectoryBytes: Int
+    public maxWorkUnits: Int
+}
+
+public struct Writer {
+    limits: WriterLimits
+    phase: encoder_phases.Phase
+    encodedBytes: Int
+    workUnits: Int
+    entryCount: Int
+    entryExpectedBytes: Int
+    entryWrittenBytes: Int
+    entryExpectedChecksum: UInt32
+    entryChecksum: crc32.Hasher
+    directory: [UInt8; ~]
+}
+
+errorCodec kind: errors.Kind, offset: UIntSize -> Result<Codec, Error> {
+    Result<Codec, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoder kind: errors.Kind, offset: UIntSize -> Result<Decoder, Error> {
+    Result<Decoder, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorWriter kind: errors.Kind, offset: UIntSize -> Result<Writer, Error> {
+    Result<Writer, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
+    Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+requireDecoderComplete phase: phases.Phase, offset: UIntSize -> Result<Unit, Error> {
+    phase -> when {
+        phases.Phase.Complete { Result<Unit, Error>.Ok }
+        else { errorUnit(errors.Kind.TruncatedInput, offset) }
+    }
+}
+
+requireWriterPhase phase: encoder_phases.Phase, expected: encoder_phases.Phase, offset: UIntSize -> Result<Unit, Error> {
+    phase -> when {
+        encoder_phases.Phase.Ready => expected -> when {
+            encoder_phases.Phase.Ready { Result<Unit, Error>.Ok }
+            encoder_phases.Phase.Entry { errorUnit(errors.Kind.InvalidState, offset) }
+        }
+        encoder_phases.Phase.Entry => expected -> when {
+            encoder_phases.Phase.Ready { errorUnit(errors.Kind.InvalidState, offset) }
+            encoder_phases.Phase.Entry { Result<Unit, Error>.Ok }
+        }
+    }
+}
+
+appendLe16 output: mut [UInt8; ~], value: Int -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8(value / 256 % 256))
+}
+
+appendLe32 output: mut [UInt8; ~], value: UInt32 -> Unit {
+    output -> push(UInt8(value % 256))
+    output -> push(UInt8(value / 256 % 256))
+    output -> push(UInt8(value / 65_536 % 256))
+    output -> push(UInt8(value / 16_777_216 % 256))
+}
+
+appendBytes output: mut [UInt8; ~], bytes: [UInt8] -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        output -> push(bytes[index!])
+        index! + 1 => index!
+    }
+}
+
+validateWriterExtra bytes: [UInt8] -> Result<Unit, Error> {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        index! + 4 <= (bytes -> len)
+            -> unless { errorUnit(errors.Kind.InvalidHeader, UIntSize(index!)) -> return }
+        bytes -> readLe(index!, 2) => identifier
+        Int(bytes -> readLe(index! + 2, 2)) => valueBytes
+        valueBytes <= (bytes -> len) - index! - 4
+            -> unless { errorUnit(errors.Kind.InvalidHeader, UIntSize(index!)) -> return }
+        identifier == 1
+            -> if { errorUnit(errors.Kind.UnsupportedZip64, UIntSize(index!)) -> return }
+        index! + 4 + valueBytes => index!
+    }
+    Result<Unit, Error>.Ok
+}
+
+appendLocalHeader output: mut [UInt8; ~], name: [UInt8], extra: [UInt8], method: Int, compressedSize: Int, decodedSize: Int, checksum: UInt32 -> Unit {
+    output -> appendLe32(67_324_752)
+    output -> appendLe16(20)
+    output -> appendLe16(0)
+    output -> appendLe16(method)
+    output -> appendLe16(0)
+    output -> appendLe16(33)
+    output -> appendLe32(checksum)
+    output -> appendLe32(UInt32(compressedSize))
+    output -> appendLe32(UInt32(decodedSize))
+    output -> appendLe16(name -> len)
+    output -> appendLe16(extra -> len)
+    output -> appendBytes(name)
+    output -> appendBytes(extra)
+}
+
+appendCentralHeader output: mut [UInt8; ~], name: [UInt8], extra: [UInt8], method: Int, compressedSize: Int, decodedSize: Int, checksum: UInt32, offset: Int -> Unit {
+    output -> appendLe32(33_639_248)
+    output -> appendLe16(20)
+    output -> appendLe16(20)
+    output -> appendLe16(0)
+    output -> appendLe16(method)
+    output -> appendLe16(0)
+    output -> appendLe16(33)
+    output -> appendLe32(checksum)
+    output -> appendLe32(UInt32(compressedSize))
+    output -> appendLe32(UInt32(decodedSize))
+    output -> appendLe16(name -> len)
+    output -> appendLe16(extra -> len)
+    output -> appendLe16(0)
+    output -> appendLe16(0)
+    output -> appendLe16(0)
+    output -> appendLe32(25_165_824)
+    output -> appendLe32(UInt32(offset))
+    output -> appendBytes(name)
+    output -> appendBytes(extra)
+}
+
+readLe bytes: [UInt8], offset: Int, count: Int -> UInt64 {
+    UInt64(0) => value!
+    UInt64(1) => factor!
+    0 => index!
+    index! < count -> while {
+        value! + UInt64(bytes[offset + index!]) * factor! => value!
+        factor! * 256 => factor!
+        index! + 1 => index!
+    }
+    value!
+}
+
+flagSet flags: Int, bit: Int -> Bool {
+    bit -> when {
+        == 0 { flags % 2 == 1 }
+        == 3 { (flags / 8) % 2 == 1 }
+        else { false }
+    }
+}
+
+fail decoder: mut Decoder, kind: errors.Kind, offset: Int -> Unit {
+    not decoder.failed -> if {
+        true => decoder.failed
+        Error { kind: kind, offset: UIntSize(offset) } => decoder.failure
+    }
+}
+
+validateExtra decoder: mut Decoder, bytes: [UInt8], baseOffset: Int -> Unit {
+    0 => index!
+    index! < (bytes -> len) -> while {
+        index! + 4 <= (bytes -> len) -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, baseOffset + index!)
+            return
+        }
+        bytes -> readLe(index!, 2) => identifier
+        Int(bytes -> readLe(index! + 2, 2)) => valueBytes
+        valueBytes <= (bytes -> len) - index! - 4 -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, baseOffset + index!)
+            return
+        }
+        identifier == 1 -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, baseOffset + index!)
+            return
+        }
+        index! + 4 + valueBytes => index!
+    }
+}
+
+completePayload decoder: mut Decoder, mismatchOffset: Int -> Unit {
+    decoder.checksum -> checksum == decoder.expectedChecksum
+        -> unless {
+            decoder -> fail(errors.Kind.ChecksumMismatch, mismatchOffset)
+            return
+        }
+    phases.Phase.CentralHeader => decoder.phase
+}
+
+failDeflate decoder: mut Decoder, failure: gzip.Error, baseOffset: Int -> Unit {
+    failure.kind -> when {
+        gzip_errors.Kind.OutputLimitExceeded { decoder -> fail(errors.Kind.OutputLimitExceeded, baseOffset + Int(failure.offset)) }
+        gzip_errors.Kind.ExpansionRatioExceeded { decoder -> fail(errors.Kind.ExpansionRatioExceeded, baseOffset + Int(failure.offset)) }
+        gzip_errors.Kind.SizeMismatch { decoder -> fail(errors.Kind.SizeMismatch, baseOffset + Int(failure.offset)) }
+        else { decoder -> fail(errors.Kind.InvalidDeflate, baseOffset + Int(failure.offset)) }
+    }
+}
+
+completeDeflatedPayload decoder: mut Decoder, payloadOffset: Int -> Unit {
+    decoder.deflate -> when {
+        None {
+            decoder -> fail(errors.Kind.InvalidDeflate, payloadOffset)
+            return
+        }
+        Some(raw) {
+            raw -> finish(decoder.decodedBytes, decoder.verifiedOutput) -> when {
+                Err(failure) {
+                    decoder -> failDeflate(failure, payloadOffset)
+                    return
+                }
+                Ok(decodedBytes) {
+                    decodedBytes == decoder.decodedBytes
+                        -> unless {
+                            decoder -> fail(errors.Kind.SizeMismatch, payloadOffset)
+                            return
+                        }
+                }
+            }
+        }
+    }
+    decoder.checksum -> write(decoder.verifiedOutput)
+    decoder -> completePayload(payloadOffset + decoder.payloadBytes)
+}
+
+completeSelectedPayload decoder: mut Decoder, payloadOffset: Int -> Unit {
+    decoder.method == 8 -> if {
+        decoder -> completeDeflatedPayload(payloadOffset)
+    } else {
+        decoder -> completePayload(payloadOffset)
+    }
+}
+
+validateLocalHeader decoder: mut Decoder -> Unit {
+    decoder.localHeader -> readLe(0, 4) == 67_324_752
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidSignature, 0)
+            return
+        }
+    decoder.localHeader -> readLe(4, 2) => version
+    version >= 45 -> if {
+        decoder -> fail(errors.Kind.UnsupportedZip64, 4)
+        return
+    }
+    Int(decoder.localHeader -> readLe(6, 2)) => flags
+    flags -> flagSet(0) -> if {
+        decoder -> fail(errors.Kind.UnsupportedEncryption, 6)
+        return
+    }
+    flags -> flagSet(3) -> if {
+        decoder -> fail(errors.Kind.UnsupportedDataDescriptor, 6)
+        return
+    }
+    flags == 0 or flags == 2_048 -> unless {
+        decoder -> fail(errors.Kind.InvalidHeader, 6)
+        return
+    }
+    flags => decoder.localFlags
+    decoder.localHeader -> readLe(8, 2) => method
+    method != 0 and method != 8 -> if {
+        decoder -> fail(errors.Kind.UnsupportedMethod, 8)
+        return
+    }
+    method == 8 and not decoder.allowDeflate -> if {
+        decoder -> fail(errors.Kind.UnsupportedMethod, 8)
+        return
+    }
+    decoder.localHeader -> readLe(18, 4) => compressedSize
+    decoder.localHeader -> readLe(22, 4) => decodedSize
+    (compressedSize == 4_294_967_295) or (decodedSize == 4_294_967_295)
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, 18)
+            return
+        }
+    method == 0 and compressedSize != decodedSize
+        -> if {
+            decoder -> fail(errors.Kind.SizeMismatch, 18)
+            return
+        }
+    method == 8 and compressedSize > UInt64(decoder.deflateLimits.maxCompressedBytes)
+        -> if {
+            decoder -> fail(errors.Kind.InputLimitExceeded, 18)
+            return
+        }
+    method == 8 and compressedSize > UInt64(decoder.deflateLimits.maxWorkUnits)
+        -> if {
+            decoder -> fail(errors.Kind.WorkLimitExceeded, 18)
+            return
+        }
+    method == 8 and decodedSize > UInt64(decoder.deflateLimits.maxWorkUnits) - compressedSize
+        -> if {
+            decoder -> fail(errors.Kind.WorkLimitExceeded, 22)
+            return
+        }
+    method == 8 and decodedSize > 0 -> if {
+        compressedSize > 0
+            -> unless {
+                decoder -> fail(errors.Kind.ExpansionRatioExceeded, 18)
+                return
+            }
+        (decodedSize - 1) / compressedSize + 1 <= UInt64(decoder.deflateLimits.maxExpansionRatio)
+            -> unless {
+                decoder -> fail(errors.Kind.ExpansionRatioExceeded, 22)
+                return
+            }
+    }
+    decodedSize <= UInt64(decoder.limits.maxDecodedBytes)
+        -> unless {
+            decoder -> fail(errors.Kind.OutputLimitExceeded, 22)
+            return
+        }
+    Int(decoder.localHeader -> readLe(26, 2)) => nameBytes
+    Int(decoder.localHeader -> readLe(28, 2)) => extraBytes
+    nameBytes <= decoder.limits.maxNameBytes
+        -> unless {
+            decoder -> fail(errors.Kind.NameLimitExceeded, 26)
+            return
+        }
+    extraBytes <= decoder.limits.maxExtraBytes
+        -> unless {
+            decoder -> fail(errors.Kind.ExtraLimitExceeded, 28)
+            return
+        }
+    UInt32(decoder.localHeader -> readLe(14, 4)) => decoder.expectedChecksum
+    extraBytes => decoder.localExtraLength
+    extraBytes => decoder.localExtraBytes
+    Int(method) => decoder.method
+    Int(compressedSize) => decoder.payloadBytes
+    Int(decodedSize) => decoder.decodedBytes
+    0 => decoder.payloadReadBytes
+    method == 8 -> if {
+        gzip.Limits { maxOutputBytes: Int(decodedSize), maxExpansionRatio: decoder.deflateLimits.maxExpansionRatio } -> codec -> when {
+            Err(failure) {
+                decoder -> failDeflate(failure, 22)
+                return
+            }
+            Ok(codec) {
+                codec -> rawDeflateDecoder(Int(compressedSize)) -> when {
+                    Err(failure) {
+                        decoder -> failDeflate(failure, 18)
+                        return
+                    }
+                    Ok(raw) { Option<gzip.RawDeflateDecoder>.Some(raw) => decoder.deflate }
+                }
+            }
+        }
+    }
+    nameBytes == 0 -> if {
+        extraBytes == 0 -> if {
+            compressedSize == 0 -> if {
+                decoder -> completeSelectedPayload(14)
+            } else {
+                phases.Phase.Payload => decoder.phase
+            }
+        } else {
+            phases.Phase.LocalExtra => decoder.phase
+        }
+    } else {
+        phases.Phase.LocalName => decoder.phase
+    }
+}
+
+validateCentralHeader decoder: mut Decoder -> Unit {
+    decoder.centralHeader -> readLe(0, 4) => signature
+    signature == 67_324_752 -> if {
+        decoder -> fail(errors.Kind.UnsupportedMultipleEntries, decoder.totalInputBytes - 45)
+        return
+    }
+    signature == 101_075_792 or signature == 117_853_008
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, decoder.totalInputBytes - 45)
+            return
+        }
+    signature == 33_639_248 -> unless {
+        decoder -> fail(errors.Kind.InvalidSignature, decoder.totalInputBytes - 45)
+        return
+    }
+    decoder.centralHeader -> readLe(6, 2) >= 45
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, decoder.totalInputBytes - 39)
+            return
+        }
+    Int(decoder.centralHeader -> readLe(8, 2)) => flags
+    flags -> flagSet(0) -> if {
+        decoder -> fail(errors.Kind.UnsupportedEncryption, decoder.totalInputBytes - 37)
+        return
+    }
+    flags -> flagSet(3) -> if {
+        decoder -> fail(errors.Kind.UnsupportedDataDescriptor, decoder.totalInputBytes - 37)
+        return
+    }
+    flags == decoder.localFlags -> unless {
+        decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 37)
+        return
+    }
+    decoder.centralHeader -> readLe(10, 2) != UInt64(decoder.method)
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedMethod, decoder.totalInputBytes - 35)
+            return
+        }
+    (decoder.centralHeader -> readLe(12, 2)) == (decoder.localHeader -> readLe(10, 2))
+        and (decoder.centralHeader -> readLe(14, 2)) == (decoder.localHeader -> readLe(12, 2))
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 33)
+            return
+        }
+    (decoder.centralHeader -> readLe(20, 4)) == 4_294_967_295
+        or (decoder.centralHeader -> readLe(24, 4)) == 4_294_967_295
+        or (decoder.centralHeader -> readLe(42, 4)) == 4_294_967_295
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, decoder.totalInputBytes - 25)
+            return
+        }
+    decoder.centralHeader -> readLe(16, 4) == UInt64(decoder.expectedChecksum)
+        -> unless {
+            decoder -> fail(errors.Kind.ChecksumMismatch, decoder.totalInputBytes - 29)
+            return
+        }
+    (decoder.centralHeader -> readLe(20, 4)) == UInt64(decoder.payloadBytes)
+        and (decoder.centralHeader -> readLe(24, 4)) == UInt64(decoder.decodedBytes)
+        -> unless {
+            decoder -> fail(errors.Kind.SizeMismatch, decoder.totalInputBytes - 25)
+            return
+        }
+    Int(decoder.centralHeader -> readLe(28, 2)) == (decoder.localName -> len)
+        -> unless {
+            decoder -> fail(errors.Kind.SizeMismatch, decoder.totalInputBytes - 17)
+            return
+        }
+    (decoder.centralHeader -> readLe(34, 2)) == 0
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 11)
+            return
+        }
+    (decoder.centralHeader -> readLe(42, 4)) == 0
+        -> unless {
+            decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 3)
+            return
+        }
+    Int(decoder.centralHeader -> readLe(30, 2)) => decoder.centralExtraLength
+    decoder.centralExtraLength => decoder.centralExtraBytes
+    Int(decoder.centralHeader -> readLe(32, 2)) => decoder.centralCommentLength
+    decoder.centralCommentLength => decoder.centralCommentBytes
+    decoder.centralExtraBytes <= decoder.limits.maxExtraBytes
+        -> unless {
+            decoder -> fail(errors.Kind.ExtraLimitExceeded, decoder.totalInputBytes - 15)
+            return
+        }
+    decoder.centralCommentBytes <= decoder.limits.maxCommentBytes
+        -> unless {
+            decoder -> fail(errors.Kind.CommentLimitExceeded, decoder.totalInputBytes - 13)
+            return
+        }
+    0 => decoder.centralNameIndex
+    (decoder.localName -> len) == 0 -> if {
+        decoder.centralExtraBytes == 0 -> if {
+            decoder.centralCommentBytes == 0 -> if {
+                phases.Phase.EndOfCentralDirectory => decoder.phase
+            } else {
+                phases.Phase.CentralComment => decoder.phase
+            }
+        } else {
+            phases.Phase.CentralExtra => decoder.phase
+        }
+    } else {
+        phases.Phase.CentralName => decoder.phase
+    }
+}
+
+validateEocd decoder: mut Decoder -> Unit {
+    decoder.eocd -> readLe(0, 4) => signature
+    signature == 33_639_248 -> if {
+        decoder -> fail(errors.Kind.UnsupportedMultipleEntries, decoder.totalInputBytes - 21)
+        return
+    }
+    signature == 101_075_792 or signature == 117_853_008
+        -> if {
+            decoder -> fail(errors.Kind.UnsupportedZip64, decoder.totalInputBytes - 21)
+            return
+        }
+    signature == 101_010_256 -> unless {
+        decoder -> fail(errors.Kind.InvalidSignature, decoder.totalInputBytes - 21)
+        return
+    }
+    (decoder.eocd -> readLe(4, 2)) == 0 -> unless {
+        decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 17)
+        return
+    }
+    (decoder.eocd -> readLe(6, 2)) == 0 -> unless {
+        decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes - 15)
+        return
+    }
+    (decoder.eocd -> readLe(8, 2)) == 1 -> unless {
+        decoder -> fail(errors.Kind.UnsupportedMultipleEntries, decoder.totalInputBytes - 13)
+        return
+    }
+    (decoder.eocd -> readLe(10, 2)) == 1 -> unless {
+        decoder -> fail(errors.Kind.UnsupportedMultipleEntries, decoder.totalInputBytes - 11)
+        return
+    }
+    46 + (decoder.localName -> len) + decoder.centralExtraLength + decoder.centralCommentLength => centralSize
+    30 + (decoder.localName -> len) + decoder.localExtraLength + decoder.payloadBytes => centralOffset
+    (decoder.eocd -> readLe(12, 4)) == UInt64(centralSize)
+        -> unless {
+            decoder -> fail(errors.Kind.SizeMismatch, decoder.totalInputBytes - 9)
+            return
+        }
+    (decoder.eocd -> readLe(16, 4)) == UInt64(centralOffset)
+        -> unless {
+            decoder -> fail(errors.Kind.SizeMismatch, decoder.totalInputBytes - 5)
+            return
+        }
+    Int(decoder.eocd -> readLe(20, 2)) => decoder.archiveCommentBytes
+    decoder.archiveCommentBytes <= decoder.limits.maxCommentBytes
+        -> unless {
+            decoder -> fail(errors.Kind.CommentLimitExceeded, decoder.totalInputBytes - 1)
+            return
+        }
+    decoder.archiveCommentBytes == 0 -> if {
+        phases.Phase.Complete => decoder.phase
+    } else {
+        phases.Phase.ArchiveComment => decoder.phase
+    }
+}
+
+processByte decoder: mut Decoder, byte: UInt8 -> Unit {
+    decoder.failed -> if { return }
+    decoder.phase -> when {
+        phases.Phase.LocalHeader {
+            decoder.localHeader -> push(byte)
+            (decoder.localHeader -> len) == 30 -> if { decoder -> validateLocalHeader }
+        }
+        phases.Phase.LocalName {
+            decoder.localName -> push(byte)
+            (decoder.localName -> len) == Int(decoder.localHeader -> readLe(26, 2))
+                -> if {
+                    decoder.localExtraBytes == 0 -> if {
+                        decoder.payloadBytes == 0 -> if {
+                            decoder -> completeSelectedPayload(14)
+                        } else {
+                            phases.Phase.Payload => decoder.phase
+                        }
+                    } else {
+                        phases.Phase.LocalExtra => decoder.phase
+                    }
+                }
+        }
+        phases.Phase.LocalExtra {
+            decoder.localExtra -> push(byte)
+            decoder.localExtraBytes - 1 => decoder.localExtraBytes
+            decoder.localExtraBytes == 0 -> if {
+                decoder -> validateExtra(decoder.localExtra, 30 + (decoder.localName -> len))
+                decoder.failed -> if { return }
+                decoder.payloadBytes == 0 -> if {
+                    decoder -> completeSelectedPayload(14)
+                } else {
+                    phases.Phase.Payload => decoder.phase
+                }
+            }
+        }
+        phases.Phase.Payload {
+            decoder.method == 8 -> if {
+                decoder.deflate -> when {
+                    None {
+                        decoder -> fail(errors.Kind.InvalidDeflate, decoder.totalInputBytes)
+                        return
+                    }
+                    Some(raw) {
+                        raw => active!
+                        active! -> write([byte]) -> when {
+                            Err(failure) {
+                                Option<gzip.RawDeflateDecoder>.Some(active!) => decoder.deflate
+                                decoder -> failDeflate(failure, decoder.totalInputBytes)
+                                return
+                            }
+                            Ok(_) { Option<gzip.RawDeflateDecoder>.Some(active!) => decoder.deflate }
+                        }
+                    }
+                }
+            } else {
+                decoder.verifiedOutput -> push(byte)
+                decoder.checksum -> write([byte])
+            }
+            decoder.payloadReadBytes + 1 => decoder.payloadReadBytes
+            decoder.payloadReadBytes == decoder.payloadBytes
+                -> if {
+                    decoder -> completeSelectedPayload(decoder.totalInputBytes - decoder.payloadBytes + 1)
+                }
+        }
+        phases.Phase.CentralHeader {
+            decoder.centralHeader -> push(byte)
+            (decoder.centralHeader -> len) == 46 -> if { decoder -> validateCentralHeader }
+        }
+        phases.Phase.CentralName {
+            byte == decoder.localName[decoder.centralNameIndex]
+                -> unless {
+                    decoder -> fail(errors.Kind.InvalidHeader, decoder.totalInputBytes)
+                    return
+                }
+            decoder.centralNameIndex + 1 => decoder.centralNameIndex
+            decoder.centralNameIndex == (decoder.localName -> len)
+                -> if {
+                    decoder.centralExtraBytes == 0 -> if {
+                        decoder.centralCommentBytes == 0 -> if {
+                            phases.Phase.EndOfCentralDirectory => decoder.phase
+                        } else {
+                            phases.Phase.CentralComment => decoder.phase
+                        }
+                    } else {
+                        phases.Phase.CentralExtra => decoder.phase
+                    }
+                }
+        }
+        phases.Phase.CentralExtra {
+            decoder.centralExtra -> push(byte)
+            decoder.centralExtraBytes - 1 => decoder.centralExtraBytes
+            decoder.centralExtraBytes == 0 -> if {
+                decoder -> validateExtra(
+                decoder.centralExtra,
+                decoder.totalInputBytes - (decoder.centralExtra -> len) + 1
+                )
+                decoder.failed -> if { return }
+                decoder.centralCommentBytes == 0 -> if {
+                    phases.Phase.EndOfCentralDirectory => decoder.phase
+                } else {
+                    phases.Phase.CentralComment => decoder.phase
+                }
+            }
+        }
+        phases.Phase.CentralComment {
+            decoder.centralCommentBytes - 1 => decoder.centralCommentBytes
+            decoder.centralCommentBytes == 0 -> if { phases.Phase.EndOfCentralDirectory => decoder.phase }
+        }
+        phases.Phase.EndOfCentralDirectory {
+            decoder.eocd -> push(byte)
+            (decoder.eocd -> len) == 22 -> if { decoder -> validateEocd }
+        }
+        phases.Phase.ArchiveComment {
+            decoder.archiveCommentBytes - 1 => decoder.archiveCommentBytes
+            decoder.archiveCommentBytes == 0 -> if { phases.Phase.Complete => decoder.phase }
+        }
+        else { decoder -> fail(errors.Kind.TrailingData, decoder.totalInputBytes) }
+    }
+}
+
+impl Limits {
+    public codec: self -> Result<Codec, Error> {
+        self.maxEncodedBytes >= 0 and self.maxDecodedBytes >= 0
+            and self.maxNameBytes >= 0 and self.maxExtraBytes >= 0
+            and self.maxCommentBytes >= 0
+            -> unless { errorCodec(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Codec, Error>.Ok(Codec { limits: self })
+    }
+}
+
+impl Codec {
+    public decoder: self -> Result<Decoder, Error> {
+        self.limits.maxEncodedBytes >= 52
+            -> unless { errorDecoder(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Decoder, Error>.Ok(Decoder {
+            limits: self.limits
+            phase: phases.Phase.LocalHeader
+            totalInputBytes: 0
+            localHeader: [UInt8; ~]
+            localName: [UInt8; ~]
+            localFlags: 0
+            localExtraLength: 0
+            localExtraBytes: 0
+            localExtra: [UInt8; ~]
+            method: 0
+            payloadBytes: 0
+            decodedBytes: 0
+            payloadReadBytes: 0
+            deflate: Option<gzip.RawDeflateDecoder>.None
+            allowDeflate: false
+            deflateLimits: DeflateLimits { maxCompressedBytes: 0, maxExpansionRatio: 1, maxWorkUnits: 0 }
+            expectedChecksum: 0
+            checksum: crc32.Polynomial.Ieee -> hasher
+            verifiedOutput: [UInt8; ~]
+            centralHeader: [UInt8; ~]
+            centralNameIndex: 0
+            centralExtraLength: 0
+            centralExtraBytes: 0
+            centralExtra: [UInt8; ~]
+            centralCommentLength: 0
+            centralCommentBytes: 0
+            eocd: [UInt8; ~]
+            archiveCommentBytes: 0
+            failed: false
+            failure: Error { kind: errors.Kind.InvalidHeader, offset: 0 }
+        })
+    }
+
+    public deflateDecoder: self, limits: DeflateLimits -> Result<Decoder, Error> {
+        limits.maxCompressedBytes >= 0 and limits.maxExpansionRatio > 0 and limits.maxWorkUnits >= 0
+            -> unless { errorDecoder(errors.Kind.InvalidLimit, 0) -> return }
+        self -> decoder? => decoder!
+        true => decoder!.allowDeflate
+        limits => decoder!.deflateLimits
+        Result<Decoder, Error>.Ok(decoder!)
+    }
+
+    public writer: self, limits: WriterLimits -> Result<Writer, Error> {
+        limits.maxEncodedBytes >= 0 and limits.maxEntryBytes >= 0
+            and limits.maxEntries >= 0 and limits.maxNameBytes >= 0
+            and limits.maxExtraBytes >= 0 and limits.maxCommentBytes >= 0
+            and limits.maxDirectoryBytes >= 0 and limits.maxWorkUnits >= 0
+            -> unless { errorWriter(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Writer, Error>.Ok(Writer {
+            limits: limits
+            phase: encoder_phases.Phase.Ready
+            encodedBytes: 0
+            workUnits: 0
+            entryCount: 0
+            entryExpectedBytes: 0
+            entryWrittenBytes: 0
+            entryExpectedChecksum: 0
+            entryChecksum: crc32.Polynomial.Ieee -> hasher
+            directory: [UInt8; ~]
+        })
+    }
+}
+
+impl Decoder {
+    public write: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= self.limits.maxEncodedBytes - self.totalInputBytes
+            -> unless { errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.totalInputBytes + (input -> len))) -> return }
+        0 => index!
+        index! < (input -> len) and not self.failed -> while {
+            self -> processByte(input[index!])
+            self.totalInputBytes + 1 => self.totalInputBytes
+            index! + 1 => index!
+        }
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public finish: move self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.failed -> if { Result<Int, Error>.Err(self.failure) -> return }
+        self.phase -> requireDecoderComplete(UIntSize(self.totalInputBytes))?
+        (output -> len) <= 2_147_483_647 - (self.verifiedOutput -> len)
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.totalInputBytes)) -> return }
+        output -> reserve((output -> len) + (self.verifiedOutput -> len))
+        0 => index!
+        index! < (self.verifiedOutput -> len) -> while {
+            output -> push(self.verifiedOutput[index!])
+            index! + 1 => index!
+        }
+        Result<Int, Error>.Ok(self.verifiedOutput -> len)
+    }
+}
+
+impl Writer {
+    public beginStored: mut self, name: [UInt8], extra: [UInt8], declaredBytes: Int, declaredChecksum: UInt32, output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.phase -> requireWriterPhase(encoder_phases.Phase.Ready, UIntSize(self.encodedBytes))?
+        declaredBytes >= 0 -> unless { errorInt(errors.Kind.InvalidLimit, UIntSize(self.encodedBytes)) -> return }
+        declaredBytes <= self.limits.maxEntryBytes
+            -> unless { errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.entryCount < self.limits.maxEntries and self.entryCount < 65_535
+            -> unless { errorInt(errors.Kind.EntryLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (name -> len) <= self.limits.maxNameBytes and (name -> len) <= 65_535
+            -> unless { errorInt(errors.Kind.NameLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (extra -> len) <= self.limits.maxExtraBytes and (extra -> len) <= 65_535
+            -> unless { errorInt(errors.Kind.ExtraLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        extra -> validateWriterExtra?
+        UInt64(declaredBytes) <= 4_294_967_295 and UInt64(self.encodedBytes) <= 4_294_967_295
+            -> unless { errorInt(errors.Kind.UnsupportedZip64, UIntSize(self.encodedBytes)) -> return }
+        30 + (name -> len) + (extra -> len) => localBytes
+        46 + (name -> len) + (extra -> len) => directoryBytes
+        (self.directory -> len) <= self.limits.maxDirectoryBytes
+            -> unless { errorInt(errors.Kind.DirectoryLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        directoryBytes <= self.limits.maxDirectoryBytes - (self.directory -> len)
+            -> unless { errorInt(errors.Kind.DirectoryLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.encodedBytes <= self.limits.maxEncodedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        localBytes <= self.limits.maxEncodedBytes - self.encodedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        declaredBytes <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (self.directory -> len) <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - declaredBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        directoryBytes <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - declaredBytes - (self.directory -> len)
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - declaredBytes - (self.directory -> len) - directoryBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.workUnits <= self.limits.maxWorkUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        localBytes <= self.limits.maxWorkUnits - self.workUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        declaredBytes <= self.limits.maxWorkUnits - self.workUnits - localBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        directoryBytes <= self.limits.maxWorkUnits - self.workUnits - localBytes - declaredBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= self.limits.maxWorkUnits - self.workUnits - localBytes - declaredBytes - directoryBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+
+        (output -> len) <= 2_147_483_647 - localBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        output -> reserve((output -> len) + localBytes)
+        output -> appendLocalHeader(name, extra, 0, declaredBytes, declaredBytes, declaredChecksum)
+        self.directory -> appendCentralHeader(name, extra, 0, declaredBytes, declaredBytes, declaredChecksum, self.encodedBytes)
+        self.encodedBytes + localBytes => self.encodedBytes
+        self.workUnits + localBytes + directoryBytes => self.workUnits
+        declaredBytes => self.entryExpectedBytes
+        0 => self.entryWrittenBytes
+        declaredChecksum => self.entryExpectedChecksum
+        crc32.Polynomial.Ieee -> hasher => self.entryChecksum
+        encoder_phases.Phase.Entry => self.phase
+        Result<Int, Error>.Ok(localBytes)
+    }
+
+    public addDeflated: mut self, name: [UInt8], extra: [UInt8], input: [UInt8], limits: DeflateLimits, scratch: mut [UInt8; ~], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.phase -> requireWriterPhase(encoder_phases.Phase.Ready, UIntSize(self.encodedBytes))?
+        limits.maxCompressedBytes >= 0 and limits.maxExpansionRatio > 0 and limits.maxWorkUnits >= 0
+            -> unless { errorInt(errors.Kind.InvalidLimit, UIntSize(self.encodedBytes)) -> return }
+        (input -> len) <= self.limits.maxEntryBytes
+            -> unless { errorInt(errors.Kind.InputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.entryCount < self.limits.maxEntries and self.entryCount < 65_535
+            -> unless { errorInt(errors.Kind.EntryLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (name -> len) <= self.limits.maxNameBytes and (name -> len) <= 65_535
+            -> unless { errorInt(errors.Kind.NameLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (extra -> len) <= self.limits.maxExtraBytes and (extra -> len) <= 65_535
+            -> unless { errorInt(errors.Kind.ExtraLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        extra -> validateWriterExtra?
+        (input -> len) <= limits.maxWorkUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (scratch -> len) == 0
+            -> unless { errorInt(errors.Kind.InvalidState, UIntSize(self.encodedBytes)) -> return }
+        30 + (name -> len) + (extra -> len) => localBytes
+        46 + (name -> len) + (extra -> len) => directoryBytes
+        localBytes <= limits.maxWorkUnits - (input -> len)
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        directoryBytes <= limits.maxWorkUnits - (input -> len) - localBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= limits.maxWorkUnits - (input -> len) - localBytes - directoryBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        limits.maxWorkUnits - (input -> len) - localBytes - directoryBytes - 22 => deflateWorkBudget
+
+        self.workUnits <= self.limits.maxWorkUnits
+            and (input -> len) <= self.limits.maxWorkUnits - self.workUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        localBytes <= self.limits.maxWorkUnits - self.workUnits - (input -> len)
+            and directoryBytes <= self.limits.maxWorkUnits - self.workUnits - (input -> len) - localBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= self.limits.maxWorkUnits - self.workUnits - (input -> len) - localBytes - directoryBytes
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.limits.maxWorkUnits - self.workUnits - (input -> len) - localBytes - directoryBytes - 22 => archiveWorkBudget
+
+        self.encodedBytes <= self.limits.maxEncodedBytes
+            and localBytes <= self.limits.maxEncodedBytes - self.encodedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (self.directory -> len) <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes
+            and directoryBytes <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (self.directory -> len)
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (self.directory -> len) - directoryBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (self.directory -> len) - directoryBytes - 22 => encodedBudget
+
+        limits.maxCompressedBytes => compressionBudget!
+        errors.Kind.OutputLimitExceeded => compressionLimitKind!
+        deflateWorkBudget < compressionBudget! -> if {
+            deflateWorkBudget => compressionBudget!
+            errors.Kind.WorkLimitExceeded => compressionLimitKind!
+        }
+        archiveWorkBudget < compressionBudget! -> if {
+            archiveWorkBudget => compressionBudget!
+            errors.Kind.WorkLimitExceeded => compressionLimitKind!
+        }
+        encodedBudget < compressionBudget! -> if {
+            encodedBudget => compressionBudget!
+            errors.Kind.OutputLimitExceeded => compressionLimitKind!
+        }
+
+        gzip.Limits { maxOutputBytes: compressionBudget!, maxExpansionRatio: limits.maxExpansionRatio } -> codec -> when {
+            Err(_) { errorInt(errors.Kind.InvalidLimit, UIntSize(self.encodedBytes)) -> return }
+            Ok(codec) {
+                codec -> compressDeflateFixedInto(input, scratch) -> when {
+                    Err(failure) {
+                        failure.kind -> when {
+                            gzip_errors.Kind.OutputLimitExceeded { errorInt(compressionLimitKind!, UIntSize(self.encodedBytes)) -> return }
+                            else { errorInt(errors.Kind.InvalidDeflate, UIntSize(self.encodedBytes)) -> return }
+                        }
+                    }
+                    Ok(_) {
+                        (input -> len) > 0 -> if {
+                            (scratch -> len) > 0
+                                -> unless { errorInt(errors.Kind.InvalidDeflate, UIntSize(self.encodedBytes)) -> return }
+                            ((input -> len) - 1) / (scratch -> len) + 1 <= limits.maxExpansionRatio
+                                -> unless { errorInt(errors.Kind.ExpansionRatioExceeded, UIntSize(self.encodedBytes)) -> return }
+                        }
+                        (self.directory -> len) <= self.limits.maxDirectoryBytes
+                            and directoryBytes <= self.limits.maxDirectoryBytes - (self.directory -> len)
+                            -> unless { errorInt(errors.Kind.DirectoryLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        self.encodedBytes <= self.limits.maxEncodedBytes
+                            and localBytes <= self.limits.maxEncodedBytes - self.encodedBytes
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        (scratch -> len) <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        (self.directory -> len) <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (scratch -> len)
+                            and directoryBytes <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (scratch -> len) - (self.directory -> len)
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        22 <= self.limits.maxEncodedBytes - self.encodedBytes - localBytes - (scratch -> len) - (self.directory -> len) - directoryBytes
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        (input -> len) <= limits.maxWorkUnits
+                            and (scratch -> len) <= limits.maxWorkUnits - (input -> len)
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        localBytes <= limits.maxWorkUnits - (input -> len) - (scratch -> len)
+                            and directoryBytes <= limits.maxWorkUnits - (input -> len) - (scratch -> len) - localBytes
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        22 <= limits.maxWorkUnits - (input -> len) - (scratch -> len) - localBytes - directoryBytes
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        self.workUnits <= self.limits.maxWorkUnits
+                            and (input -> len) <= self.limits.maxWorkUnits - self.workUnits
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        (scratch -> len) <= self.limits.maxWorkUnits - self.workUnits - (input -> len)
+                            and localBytes <= self.limits.maxWorkUnits - self.workUnits - (input -> len) - (scratch -> len)
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        directoryBytes <= self.limits.maxWorkUnits - self.workUnits - (input -> len) - (scratch -> len) - localBytes
+                            and 22 <= self.limits.maxWorkUnits - self.workUnits - (input -> len) - (scratch -> len) - localBytes - directoryBytes
+                            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+                        (output -> len) <= 2_147_483_647 - localBytes - (scratch -> len)
+                            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+
+                        crc32.Polynomial.Ieee -> hasher => checksum!
+                        checksum! -> write(input)
+                        checksum! -> checksum => value
+                        output -> reserve((output -> len) + localBytes + (scratch -> len))
+                        output -> appendLocalHeader(name, extra, 8, scratch -> len, input -> len, value)
+                        output -> appendBytes(scratch)
+                        self.directory -> appendCentralHeader(name, extra, 8, scratch -> len, input -> len, value, self.encodedBytes)
+                        self.encodedBytes + localBytes + (scratch -> len) => self.encodedBytes
+                        self.workUnits + localBytes + (scratch -> len) + (input -> len) + directoryBytes => self.workUnits
+                        self.entryCount + 1 => self.entryCount
+                        Result<Int, Error>.Ok(localBytes + (scratch -> len)) -> return
+                    }
+                }
+            }
+        }
+        errorInt(errors.Kind.InvalidDeflate, UIntSize(self.encodedBytes))
+    }
+
+    public write: mut self, input: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.phase -> requireWriterPhase(encoder_phases.Phase.Entry, UIntSize(self.encodedBytes))?
+        (input -> len) <= self.entryExpectedBytes - self.entryWrittenBytes
+            -> unless { errorInt(errors.Kind.SizeMismatch, UIntSize(self.encodedBytes)) -> return }
+        (output -> len) <= 2_147_483_647 - (input -> len)
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        output -> reserve((output -> len) + (input -> len))
+        output -> appendBytes(input)
+        self.entryChecksum -> write(input)
+        self.entryWrittenBytes + (input -> len) => self.entryWrittenBytes
+        self.encodedBytes + (input -> len) => self.encodedBytes
+        self.workUnits + (input -> len) => self.workUnits
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public finishEntry: mut self -> Result<Unit, Error> {
+        self.phase -> requireWriterPhase(encoder_phases.Phase.Entry, UIntSize(self.encodedBytes))?
+        self.entryWrittenBytes == self.entryExpectedBytes
+            -> unless { errorUnit(errors.Kind.SizeMismatch, UIntSize(self.encodedBytes)) -> return }
+        self.entryChecksum -> checksum == self.entryExpectedChecksum
+            -> unless { errorUnit(errors.Kind.ChecksumMismatch, UIntSize(self.encodedBytes)) -> return }
+        self.entryCount + 1 => self.entryCount
+        encoder_phases.Phase.Ready => self.phase
+        Result<Unit, Error>.Ok
+    }
+
+    public finish: move self, comment: [UInt8], output: mut [UInt8; ~] -> Result<Int, Error> {
+        self.phase -> requireWriterPhase(encoder_phases.Phase.Ready, UIntSize(self.encodedBytes))?
+        (comment -> len) <= self.limits.maxCommentBytes and (comment -> len) <= 65_535
+            -> unless { errorInt(errors.Kind.CommentLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.entryCount <= 65_535 and UInt64(self.encodedBytes) <= 4_294_967_295
+            and UInt64(self.directory -> len) <= 4_294_967_295
+            -> unless { errorInt(errors.Kind.UnsupportedZip64, UIntSize(self.encodedBytes)) -> return }
+        (self.directory -> len) <= 2_147_483_647 - 22
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (comment -> len) <= 2_147_483_647 - (self.directory -> len) - 22
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (self.directory -> len) + 22 + (comment -> len) => finalBytes
+        self.encodedBytes <= self.limits.maxEncodedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        finalBytes <= self.limits.maxEncodedBytes - self.encodedBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        self.workUnits <= self.limits.maxWorkUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        22 <= self.limits.maxWorkUnits - self.workUnits
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        (comment -> len) <= self.limits.maxWorkUnits - self.workUnits - 22
+            -> unless { errorInt(errors.Kind.WorkLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+
+        (output -> len) <= 2_147_483_647 - finalBytes
+            -> unless { errorInt(errors.Kind.OutputLimitExceeded, UIntSize(self.encodedBytes)) -> return }
+        output -> reserve((output -> len) + finalBytes)
+        output -> appendBytes(self.directory)
+        output -> appendLe32(101_010_256)
+        output -> appendLe16(0)
+        output -> appendLe16(0)
+        output -> appendLe16(self.entryCount)
+        output -> appendLe16(self.entryCount)
+        output -> appendLe32(UInt32(self.directory -> len))
+        output -> appendLe32(UInt32(self.encodedBytes))
+        output -> appendLe16(comment -> len)
+        output -> appendBytes(comment)
+        Result<Int, Error>.Ok(finalBytes)
+    }
+}

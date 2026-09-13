@@ -24,10 +24,20 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         functions.AppendLine("declare i32 @getsockopt(i32, i32, i32, ptr, ptr)");
         functions.AppendLine("declare i32 @fcntl(i32, i32, ...)");
         functions.AppendLine("declare i32 @poll(ptr, i64, i32)");
+        if (UsesSocketCompletion)
+        {
+            functions.AppendLine("declare i32 @epoll_create1(i32)");
+            functions.AppendLine("declare i32 @epoll_ctl(i32, i32, i32, ptr)");
+            functions.AppendLine("declare i32 @epoll_wait(i32, ptr, i32, i32)");
+        }
         functions.AppendLine("declare i32 @getaddrinfo(ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare void @freeaddrinfo(ptr)");
         functions.AppendLine();
         functions.AppendLine(SocketRuntime);
+        if (UsesSocketCompletion)
+        {
+            functions.AppendLine(CompletionRuntime);
+        }
         functions.AppendLine(DnsRuntime);
     }
 
@@ -1438,5 +1448,296 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret void
         }
 
+        """;
+
+    private const string CompletionRuntime = """
+        define internal %sollang.socket_result @sollang_platform_socket_completion_create(i64 %registrations, i64 %pending, i64 %batch) #0 {
+        entry:
+          %registrations_min = icmp uge i64 %registrations, 1
+          %registrations_max = icmp ule i64 %registrations, 1024
+          %pending_min = icmp uge i64 %pending, 1
+          %pending_relation = icmp ule i64 %pending, %registrations
+          %batch_min = icmp uge i64 %batch, 1
+          %batch_relation = icmp ule i64 %batch, %pending
+          %valid0 = and i1 %registrations_min, %registrations_max
+          %valid1 = and i1 %pending_min, %pending_relation
+          %valid2 = and i1 %batch_min, %batch_relation
+          %valid3 = and i1 %valid0, %valid1
+          %valid = and i1 %valid3, %valid2
+          br i1 %valid, label %create_epoll, label %invalid
+        create_epoll:
+          %epoll = call i32 @epoll_create1(i32 524288)
+          %epoll_ok = icmp sge i32 %epoll, 0
+          br i1 %epoll_ok, label %create_wakeup, label %epoll_failed
+        create_wakeup:
+          %wakeup = call i32 @eventfd(i32 0, i32 526336)
+          %wakeup_ok = icmp sge i32 %wakeup, 0
+          br i1 %wakeup_ok, label %register_wakeup, label %wakeup_failed
+        register_wakeup:
+          %wakeup_event = alloca [12 x i8], align 4
+          store i32 1, ptr %wakeup_event, align 4
+          %wakeup_data = getelementptr i8, ptr %wakeup_event, i64 4
+          store i64 0, ptr %wakeup_data, align 1
+          %wakeup_registered = call i32 @epoll_ctl(i32 %epoll, i32 1, i32 %wakeup, ptr %wakeup_event)
+          %wakeup_registration_ok = icmp eq i32 %wakeup_registered, 0
+          br i1 %wakeup_registration_ok, label %allocate_state, label %wakeup_registration_failed
+        allocate_state:
+          %state = call ptr @sollang_alloc(i64 96)
+          %state_ok = icmp ne ptr %state, null
+          br i1 %state_ok, label %allocate_registrations, label %state_allocation_failed
+        allocate_registrations:
+          %registration_bytes = mul nuw i64 %registrations, 32
+          %registration_table = call ptr @sollang_alloc(i64 %registration_bytes)
+          %registration_table_ok = icmp ne ptr %registration_table, null
+          br i1 %registration_table_ok, label %allocate_pending, label %registration_allocation_failed
+        allocate_pending:
+          %pending_bytes = mul nuw i64 %pending, 128
+          %pending_table = call ptr @sollang_alloc(i64 %pending_bytes)
+          %pending_table_ok = icmp ne ptr %pending_table, null
+          br i1 %pending_table_ok, label %allocate_completions, label %pending_allocation_failed
+        allocate_completions:
+          %completion_bytes = mul nuw i64 %batch, 32
+          %completion_table = call ptr @sollang_alloc(i64 %completion_bytes)
+          %completion_table_ok = icmp ne ptr %completion_table, null
+          br i1 %completion_table_ok, label %initialize, label %completion_allocation_failed
+        initialize:
+          call void @llvm.memset.p0.i64(ptr %registration_table, i8 0, i64 %registration_bytes, i1 false)
+          call void @llvm.memset.p0.i64(ptr %pending_table, i8 0, i64 %pending_bytes, i1 false)
+          call void @llvm.memset.p0.i64(ptr %completion_table, i8 0, i64 %completion_bytes, i1 false)
+          %epoll64 = sext i32 %epoll to i64
+          store i64 %epoll64, ptr %state, align 8
+          %wakeup_slot = getelementptr i8, ptr %state, i64 8
+          %wakeup64 = sext i32 %wakeup to i64
+          store i64 %wakeup64, ptr %wakeup_slot, align 8
+          %registration_table_slot = getelementptr i8, ptr %state, i64 16
+          store ptr %registration_table, ptr %registration_table_slot, align 8
+          %pending_table_slot = getelementptr i8, ptr %state, i64 24
+          store ptr %pending_table, ptr %pending_table_slot, align 8
+          %completion_table_slot = getelementptr i8, ptr %state, i64 32
+          store ptr %completion_table, ptr %completion_table_slot, align 8
+          %registrations_slot = getelementptr i8, ptr %state, i64 40
+          store i64 %registrations, ptr %registrations_slot, align 8
+          %pending_slot = getelementptr i8, ptr %state, i64 48
+          store i64 %pending, ptr %pending_slot, align 8
+          %batch_slot = getelementptr i8, ptr %state, i64 56
+          store i64 %batch, ptr %batch_slot, align 8
+          %registration_count = getelementptr i8, ptr %state, i64 64
+          store i64 0, ptr %registration_count, align 8
+          %pending_count = getelementptr i8, ptr %state, i64 72
+          store i64 0, ptr %pending_count, align 8
+          %identity = ptrtoint ptr %state to i64
+          %success = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 -1, i32 0)
+          ret %sollang.socket_result %success
+        completion_allocation_failed:
+          call void @sollang_free(ptr %pending_table)
+          br label %pending_allocation_failed
+        pending_allocation_failed:
+          call void @sollang_free(ptr %registration_table)
+          br label %registration_allocation_failed
+        registration_allocation_failed:
+          call void @sollang_free(ptr %state)
+          br label %state_allocation_failed
+        state_allocation_failed:
+          %state_close_wakeup = call i32 @close(i32 %wakeup)
+          %state_close_epoll = call i32 @close(i32 %epoll)
+          %allocation_error = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 8, i32 12)
+          ret %sollang.socket_result %allocation_error
+        wakeup_registration_failed:
+          %registration_error = call i32 @sollang_socket_errno()
+          %registration_kind = call i32 @sollang_socket_error_kind(i32 %registration_error)
+          %registration_close_wakeup = call i32 @close(i32 %wakeup)
+          %registration_close_epoll = call i32 @close(i32 %epoll)
+          %registration_result = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 %registration_kind, i32 %registration_error)
+          ret %sollang.socket_result %registration_result
+        wakeup_failed:
+          %wakeup_error = call i32 @sollang_socket_errno()
+          %wakeup_kind = call i32 @sollang_socket_error_kind(i32 %wakeup_error)
+          %wakeup_close_epoll = call i32 @close(i32 %epoll)
+          %wakeup_result = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 %wakeup_kind, i32 %wakeup_error)
+          ret %sollang.socket_result %wakeup_result
+        epoll_failed:
+          %epoll_error = call i32 @sollang_socket_errno()
+          %epoll_kind = call i32 @sollang_socket_error_kind(i32 %epoll_error)
+          %epoll_result = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 %epoll_kind, i32 %epoll_error)
+          ret %sollang.socket_result %epoll_result
+        invalid:
+          %invalid_result = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)
+          ret %sollang.socket_result %invalid_result
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_register_stream(i64 %identity, i64 %socket, i64 %key) #0 {
+        entry:
+          %identity_ok = icmp ugt i64 %identity, 0
+          %socket_ok = icmp sge i64 %socket, 0
+          %valid = and i1 %identity_ok, %socket_ok
+          br i1 %valid, label %load_state, label %invalid_argument
+        load_state:
+          %state = inttoptr i64 %identity to ptr
+          %table_slot = getelementptr i8, ptr %state, i64 16
+          %table = load ptr, ptr %table_slot, align 8
+          %capacity_slot = getelementptr i8, ptr %state, i64 40
+          %capacity = load i64, ptr %capacity_slot, align 8
+          %count_slot = getelementptr i8, ptr %state, i64 64
+          %count = load i64, ptr %count_slot, align 8
+          br label %duplicate_loop
+        duplicate_loop:
+          %duplicate_index = phi i64 [ 0, %load_state ], [ %duplicate_next, %duplicate_continue ]
+          %duplicate_done = icmp uge i64 %duplicate_index, %capacity
+          br i1 %duplicate_done, label %free_loop, label %duplicate_check
+        duplicate_check:
+          %duplicate_offset = mul nuw i64 %duplicate_index, 32
+          %duplicate_entry = getelementptr i8, ptr %table, i64 %duplicate_offset
+          %duplicate_active = load i64, ptr %duplicate_entry, align 8
+          %duplicate_active_ok = icmp ne i64 %duplicate_active, 0
+          %duplicate_key_slot = getelementptr i8, ptr %duplicate_entry, i64 8
+          %duplicate_key = load i64, ptr %duplicate_key_slot, align 8
+          %duplicate_key_ok = icmp eq i64 %duplicate_key, %key
+          %duplicate = and i1 %duplicate_active_ok, %duplicate_key_ok
+          br i1 %duplicate, label %duplicate_failure, label %duplicate_continue
+        duplicate_continue:
+          %duplicate_next = add nuw i64 %duplicate_index, 1
+          br label %duplicate_loop
+        free_loop:
+          %free_index = phi i64 [ 0, %duplicate_loop ], [ %free_next, %free_continue ]
+          %free_done = icmp uge i64 %free_index, %capacity
+          br i1 %free_done, label %capacity_failure, label %free_check
+        free_check:
+          %free_offset = mul nuw i64 %free_index, 32
+          %free_entry = getelementptr i8, ptr %table, i64 %free_offset
+          %free_active = load i64, ptr %free_entry, align 8
+          %is_free = icmp eq i64 %free_active, 0
+          br i1 %is_free, label %publish, label %free_continue
+        free_continue:
+          %free_next = add nuw i64 %free_index, 1
+          br label %free_loop
+        publish:
+          %key_slot = getelementptr i8, ptr %free_entry, i64 8
+          store i64 %key, ptr %key_slot, align 8
+          %socket_slot = getelementptr i8, ptr %free_entry, i64 16
+          store i64 %socket, ptr %socket_slot, align 8
+          %submission_state_slot = getelementptr i8, ptr %free_entry, i64 24
+          store i64 0, ptr %submission_state_slot, align 8
+          %next_count = add nuw i64 %count, 1
+          store i64 %next_count, ptr %count_slot, align 8
+          store i64 1, ptr %free_entry, align 8
+          %success = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 -1, i32 0)
+          ret %sollang.socket_result %success
+        duplicate_failure:
+          %duplicate_result = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 1, i32 0)
+          ret %sollang.socket_result %duplicate_result
+        capacity_failure:
+          %capacity_result = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 8, i32 0)
+          ret %sollang.socket_result %capacity_result
+        invalid_argument:
+          %invalid_result = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 1, i32 0)
+          ret %sollang.socket_result %invalid_result
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_remove_stream(i64 %identity, i64 %key) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %load_state, label %not_found
+        load_state:
+          %state = inttoptr i64 %identity to ptr
+          %table_slot = getelementptr i8, ptr %state, i64 16
+          %table = load ptr, ptr %table_slot, align 8
+          %capacity_slot = getelementptr i8, ptr %state, i64 40
+          %capacity = load i64, ptr %capacity_slot, align 8
+          br label %scan
+        scan:
+          %index = phi i64 [ 0, %load_state ], [ %next, %continue ]
+          %done = icmp uge i64 %index, %capacity
+          br i1 %done, label %not_found, label %check
+        check:
+          %offset = mul nuw i64 %index, 32
+          %registration_entry = getelementptr i8, ptr %table, i64 %offset
+          %active = load i64, ptr %registration_entry, align 8
+          %active_ok = icmp ne i64 %active, 0
+          %key_slot = getelementptr i8, ptr %registration_entry, i64 8
+          %entry_key = load i64, ptr %key_slot, align 8
+          %key_ok = icmp eq i64 %entry_key, %key
+          %match = and i1 %active_ok, %key_ok
+          br i1 %match, label %check_unassociated, label %continue
+        continue:
+          %next = add nuw i64 %index, 1
+          br label %scan
+        check_unassociated:
+          %association_state_slot = getelementptr i8, ptr %registration_entry, i64 24
+          %association_state = load i64, ptr %association_state_slot, align 8
+          %unassociated = icmp eq i64 %association_state, 0
+          br i1 %unassociated, label %publish, label %associated_failure
+        publish:
+          %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
+          %socket = load i64, ptr %socket_slot, align 8
+          store i64 0, ptr %registration_entry, align 8
+          store i64 0, ptr %key_slot, align 8
+          store i64 -1, ptr %socket_slot, align 8
+          %submission_state_slot = getelementptr i8, ptr %registration_entry, i64 24
+          store i64 0, ptr %submission_state_slot, align 8
+          %count_slot = getelementptr i8, ptr %state, i64 64
+          %count = load i64, ptr %count_slot, align 8
+          %next_count = sub nuw i64 %count, 1
+          store i64 %next_count, ptr %count_slot, align 8
+          %success = call %sollang.socket_result @sollang_socket_result(i64 %socket, i32 -1, i32 0)
+          ret %sollang.socket_result %success
+        not_found:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        associated_failure:
+          %associated_result = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)
+          ret %sollang.socket_result %associated_result
+        }
+
+        define internal void @sollang_platform_socket_completion_close(i64 %identity) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %close_reactor, label %done
+        close_reactor:
+          %state = inttoptr i64 %identity to ptr
+          %epoll64 = load i64, ptr %state, align 8
+          %epoll = trunc i64 %epoll64 to i32
+          %wakeup_slot = getelementptr i8, ptr %state, i64 8
+          %wakeup64 = load i64, ptr %wakeup_slot, align 8
+          %wakeup = trunc i64 %wakeup64 to i32
+          %registration_table_slot = getelementptr i8, ptr %state, i64 16
+          %registration_table = load ptr, ptr %registration_table_slot, align 8
+          %pending_table_slot = getelementptr i8, ptr %state, i64 24
+          %pending_table = load ptr, ptr %pending_table_slot, align 8
+          %completion_table_slot = getelementptr i8, ptr %state, i64 32
+          %completion_table = load ptr, ptr %completion_table_slot, align 8
+          %registration_capacity_slot = getelementptr i8, ptr %state, i64 40
+          %registration_capacity = load i64, ptr %registration_capacity_slot, align 8
+          br label %close_registration_loop
+        close_registration_loop:
+          %registration_index = phi i64 [ 0, %close_reactor ], [ %registration_next, %close_registration_continue ]
+          %registrations_done = icmp uge i64 %registration_index, %registration_capacity
+          br i1 %registrations_done, label %close_handles, label %close_registration
+        close_registration:
+          %registration_offset = mul nuw i64 %registration_index, 32
+          %registration_entry = getelementptr i8, ptr %registration_table, i64 %registration_offset
+          %registration_active = load i64, ptr %registration_entry, align 8
+          %registration_is_active = icmp ne i64 %registration_active, 0
+          br i1 %registration_is_active, label %close_registered_socket, label %close_registration_continue
+        close_registered_socket:
+          %registered_socket_slot = getelementptr i8, ptr %registration_entry, i64 16
+          %registered_socket64 = load i64, ptr %registered_socket_slot, align 8
+          %registered_socket = trunc i64 %registered_socket64 to i32
+          %registered_socket_closed = call i32 @close(i32 %registered_socket)
+          store i64 0, ptr %registration_entry, align 8
+          br label %close_registration_continue
+        close_registration_continue:
+          %registration_next = add nuw i64 %registration_index, 1
+          br label %close_registration_loop
+        close_handles:
+          %closed_wakeup = call i32 @close(i32 %wakeup)
+          %closed_epoll = call i32 @close(i32 %epoll)
+          call void @sollang_free(ptr %completion_table)
+          call void @sollang_free(ptr %pending_table)
+          call void @sollang_free(ptr %registration_table)
+          call void @sollang_free(ptr %state)
+          br label %done
+        done:
+          ret void
+        }
         """;
 }

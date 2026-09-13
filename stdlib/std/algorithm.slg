@@ -16,6 +16,8 @@ public struct Ordering {
     public direction: Direction
 }
 
+public struct Algorithms { }
+
 public struct SearchResult {
     public index: Int
     public found: Bool
@@ -28,6 +30,55 @@ public struct EqualRange {
 
 public enum Error {
     ReversedBounds
+}
+
+public enum StableSortError {
+    InsufficientScratch
+}
+
+public enum MergeError {
+    LengthOverflow
+    InsufficientOutputCapacity
+    InsufficientOutputLength
+}
+
+impl Algorithms {
+    # The predicate must be true for one prefix and false for the remaining
+    # suffix. Returns the first false position, or values.len when all are true.
+    # The readonly search borrows every inspected item and performs no allocation.
+    public partitionPoint<T>: self, values: [T] -> Int block item: ref T -> Bool {
+        0 => lower!
+        values -> len => upper!
+        lower! < upper! -> while {
+            lower! + (upper! - lower!) / 2 => middle
+            values[middle] -> yield => inPrefix
+            inPrefix -> if {
+                middle + 1 => lower!
+            } else {
+                middle => upper!
+            }
+        }
+        lower!
+    }
+
+    # Unstable in-place partition. The typed block observes every original
+    # element exactly once in index order. Selected elements are moved into the
+    # prefix by the atomic collection exchange primitive, so owned elements are
+    # never copied or exposed through an uninitialized place.
+    public partitionInPlace<T>: self, values: mut [T; ~] -> Int block item: ref T -> Bool {
+        values -> len => count
+        0 => boundary!
+        0 => index!
+        index! < count -> while {
+            values[index!] -> yield => selected
+            selected -> if {
+                values -> exchange(boundary!, index!)
+                boundary! + 1 => boundary!
+            }
+            index! + 1 => index!
+        }
+        boundary!
+    }
 }
 
 impl Ordering {
@@ -95,6 +146,110 @@ impl Ordering {
             self -> exchange(values, 0, remaining!)
             self -> siftDown(values, 0, remaining!, comparison)
         }
+    }
+
+    mergeStable<T, C>: self, values: mut [T; ~], scratch: mut [T; ~], start: Int, middle: Int, end: Int, comparison: C -> Unit where C: Comparison, C.Item == T {
+        start => index!
+        index! < end -> while {
+            values[index!] => scratch[index!]
+            index! + 1 => index!
+        }
+
+        start => left!
+        middle => right!
+        start => output!
+        output! < end -> while {
+            false => takeRight!
+            left! >= middle -> if {
+                true => takeRight!
+            } else {
+                right! < end -> if {
+                    self -> before(scratch[right!], scratch[left!], comparison) => takeRight!
+                }
+            }
+            takeRight! -> if {
+                scratch[right!] => values[output!]
+                right! + 1 => right!
+            } else {
+                scratch[left!] => values[output!]
+                left! + 1 => left!
+            }
+            output! + 1 => output!
+        }
+    }
+
+    # Stable bottom-up merge sort for inline-copyable elements. Scratch storage
+    # is caller-owned and must already contain at least values.len elements.
+    # Insufficient scratch is rejected before either array is changed.
+    public stableSort<T, C>: self, values: mut [T; ~], scratch: mut [T; ~], comparison: C -> Result<Unit, StableSortError> where C: Comparison, C.Item == T {
+        values -> len => count
+        (scratch -> len) < count -> if {
+            Result<Unit, StableSortError>.Err(StableSortError.InsufficientScratch) -> return
+        }
+
+        1 => width!
+        width! < count -> while {
+            0 => start!
+            start! < count -> while {
+                start! + width! => middle!
+                middle! > count -> if { count => middle! }
+                middle! => end!
+                (count - middle!) < width! -> if {
+                    count => end!
+                } else {
+                    middle! + width! => end!
+                }
+                self -> mergeStable(values, scratch, start!, middle!, end!, comparison)
+                end! => start!
+            }
+            width! > count / 2 -> if {
+                count => width!
+            } else {
+                width! * 2 => width!
+            }
+        }
+        Result<Unit, StableSortError>.Ok
+    }
+
+    # Stable merge into caller-owned initialized output. Both sorted inputs are
+    # borrowed and remain reusable. Output validation completes before writing.
+    public mergeSorted<T, C>: self, left: [T], right: [T], output: mut [T; ~], comparison: C -> Result<Int, MergeError> where C: Comparison, C.Item == T {
+        left -> len => leftLength
+        right -> len => rightLength
+        leftLength > 2_147_483_647 - rightLength
+            -> if {
+                Result<Int, MergeError>.Err(MergeError.LengthOverflow) -> return
+            }
+        leftLength + rightLength => required
+        (output -> capacity) < required -> if {
+            Result<Int, MergeError>.Err(MergeError.InsufficientOutputCapacity) -> return
+        }
+        (output -> len) < required -> if {
+            Result<Int, MergeError>.Err(MergeError.InsufficientOutputLength) -> return
+        }
+
+        0 => leftIndex!
+        0 => rightIndex!
+        0 => outputIndex!
+        outputIndex! < required -> while {
+            false => takeRight!
+            leftIndex! >= leftLength -> if {
+                true => takeRight!
+            } else {
+                rightIndex! < rightLength -> if {
+                    self -> before(right[rightIndex!], left[leftIndex!], comparison) => takeRight!
+                }
+            }
+            takeRight! -> if {
+                right[rightIndex!] => output[outputIndex!]
+                rightIndex! + 1 => rightIndex!
+            } else {
+                left[leftIndex!] => output[outputIndex!]
+                leftIndex! + 1 => leftIndex!
+            }
+            outputIndex! + 1 => outputIndex!
+        }
+        Result<Int, MergeError>.Ok(required)
     }
 
     # The array must already be sorted by this direction and comparator.

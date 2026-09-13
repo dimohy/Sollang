@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "mode", "defectId", "status", "completed", "total",
+    "compilerSha256", "expectedCompilerSha256", "runnerSupportsCompilerInjection",
+    "requiredRunnerOption", "runnerCapabilityChecks", "runnerExitCode", "runnerStdoutSha256", "runnerStderrSha256",
+    "inputStable", "inputDrift", "inputHashesStart", "inputHashesEnd",
+    "toolHashes", "sourceHashes", "cases", "failureIds"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "mode": { "const": "owned-match-payload-focused" },
+    "defectId": { "const": "C2026-09-12-399" },
+    "status": { "enum": ["passed", "failed", "blocked"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "total": { "const": 6 },
+    "compilerSha256": { "$ref": "#/$defs/sha256" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha256" },
+    "runnerSupportsCompilerInjection": { "type": "boolean" },
+    "requiredRunnerOption": { "const": "--compiler" },
+    "runnerCapabilityChecks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceOptionDeclared", "missingValue", "missingFile"],
+      "properties": {
+        "sourceOptionDeclared": { "type": "boolean" },
+        "missingValue": { "$ref": "#/$defs/capabilityCheck" },
+        "missingFile": { "$ref": "#/$defs/capabilityCheck" }
+      }
+    },
+    "runnerExitCode": { "type": ["integer", "null"] },
+    "runnerStdoutSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "runnerStderrSha256": { "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }] },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashesStart": { "$ref": "#/$defs/hashes" },
+    "inputHashesEnd": { "$ref": "#/$defs/endHashes" },
+    "toolHashes": { "$ref": "#/$defs/hashes" },
+    "sourceHashes": { "$ref": "#/$defs/hashes" },
+    "cases": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "prefixItems": [
+        { "$ref": "#/$defs/p1723Result" },
+        { "$ref": "#/$defs/n1Result" },
+        { "$ref": "#/$defs/n2Result" },
+        { "$ref": "#/$defs/n3Result" },
+        { "$ref": "#/$defs/n4Result" },
+        { "$ref": "#/$defs/n5Result" }
+      ],
+      "items": false
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } } },
+      "then": {
+        "properties": {
+          "completed": { "const": 6 },
+          "runnerSupportsCompilerInjection": { "const": true },
+          "runnerCapabilityChecks": {
+            "properties": {
+              "sourceOptionDeclared": { "const": true },
+              "missingValue": { "properties": { "diagnosticMatched": { "const": true } } },
+              "missingFile": { "properties": { "diagnosticMatched": { "const": true } } }
+            }
+          },
+          "inputStable": { "const": true },
+          "inputDrift": { "maxItems": 0 },
+          "cases": {
+            "items": {
+              "properties": {
+                "status": { "const": "passed" },
+                "passed": { "const": true },
+                "failureId": { "type": "null" }
+              }
+            }
+          },
+          "failureIds": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "blocked" } } },
+      "then": { "properties": { "completed": { "const": 0 }, "runnerSupportsCompilerInjection": { "const": false }, "runnerExitCode": { "type": "null" }, "failureIds": { "const": ["RUNNER_COMPILER_INJECTION_UNAVAILABLE"] } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "hashes": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/sha256" } },
+    "endHashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+      }
+    },
+    "caseResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "runnerId", "kind", "source", "sourceSha256", "expected", "expectedSha256", "status", "passed", "failureId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "runnerId": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["positive", "negative"] },
+        "source": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "$ref": "#/$defs/sha256" },
+        "expected": { "type": "string", "minLength": 1 },
+        "expectedSha256": { "$ref": "#/$defs/sha256" },
+        "status": { "enum": ["passed", "failed", "not-run"] },
+        "passed": { "type": "boolean" },
+        "failureId": { "type": ["string", "null"] }
+      }
+    },
+    "capabilityCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exitCode", "stdoutSha256", "stderrSha256", "diagnosticMatched"],
+      "properties": {
+        "exitCode": { "type": "integer" },
+        "stdoutSha256": { "$ref": "#/$defs/sha256" },
+        "stderrSha256": { "$ref": "#/$defs/sha256" },
+        "diagnosticMatched": { "type": "boolean" }
+      }
+    },
+    "p1723Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "P1723" }, "runnerId": { "const": "1723-owned-match-payload-mutable-binding" }, "kind": { "const": "positive" } } }] },
+    "n1Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "N1" }, "runnerId": { "const": "diagnostic/owned-match-payload-borrowed-binding" }, "kind": { "const": "negative" } } }] },
+    "n2Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "N2" }, "runnerId": { "const": "diagnostic/owned-match-payload-use-after-binding" }, "kind": { "const": "negative" } } }] },
+    "n3Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "N3" }, "runnerId": { "const": "diagnostic/owned-match-subject-use-after-binding" }, "kind": { "const": "negative" } } }] },
+    "n4Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "N4" }, "runnerId": { "const": "diagnostic/owned-match-nested-borrowed-binding" }, "kind": { "const": "negative" } } }] },
+    "n5Result": { "allOf": [{ "$ref": "#/$defs/caseResult" }, { "properties": { "id": { "const": "N5" }, "runnerId": { "const": "diagnostic/owned-match-shadowed-borrowed-binding" }, "kind": { "const": "negative" } } }] }
+  }
+}

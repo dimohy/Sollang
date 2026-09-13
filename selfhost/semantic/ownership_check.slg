@@ -1427,6 +1427,94 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
             }
         matches!
     }
+    astNodeBelongsTo sourceModule: Int, nodeIndex: Int, ancestorIndex: Int -> Bool {
+        false => belongs!
+        sourceModule >= 0 and sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[sourceModule] => sourceRange
+                nodeIndex >= 0 and nodeIndex < sourceRange.astCount
+                    and ancestorIndex >= 0 and ancestorIndex < sourceRange.astCount
+                    -> if {
+                        nodeIndex => current!
+                        0 => depth!
+                        current! >= 0 and current! < sourceRange.astCount
+                            and depth! < sourceRange.astCount and not belongs!
+                            -> while {
+                                current! == ancestorIndex -> if {
+                                    true => belongs!
+                                } else {
+                                    prepared.package.nodes[sourceRange.astStart + current!].parent => next
+                                    next == current! -> if { -1 => current! } else { next => current! }
+                                    depth! + 1 => depth!
+                                }
+                            }
+                    }
+            }
+        belongs!
+    }
+    assignmentMayExitEarly sourceModule: Int, assignmentAstIndex: Int -> Bool {
+        false => exits!
+        sourceModule >= 0 and sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[sourceModule] => sourceRange
+                0 => candidateIndex!
+                candidateIndex! < sourceRange.astCount and not exits!
+                    -> while {
+                        prepared.package.nodes[sourceRange.astStart + candidateIndex!] => candidate
+                        (candidate.kind == 47 or candidate.kind == 82)
+                            and (sourceModule -> astNodeBelongsTo(candidateIndex!, assignmentAstIndex))
+                            -> if { true => exits! }
+                        candidateIndex! + 1 => candidateIndex!
+                    }
+            }
+        exits!
+    }
+    immediateInfallibleMemberRepair moveIndex: Int -> Bool {
+        false => repaired!
+        moves[moveIndex] => candidateMove
+        candidateMove.siteIr >= 0 and candidateMove.siteIr < (typed -> len)
+            and candidateMove.sourceModule >= 0
+            and candidateMove.sourceModule < (prepared.package.ranges -> len)
+            and typed[candidateMove.siteIr].astNode >= 0
+            -> if {
+                prepared.package.ranges[candidateMove.sourceModule] => sourceRange
+                typed[candidateMove.siteIr].astNode => moveAstIndex
+                moveAstIndex < sourceRange.astCount -> if {
+                    prepared.package.nodes[sourceRange.astStart + moveAstIndex] => moveAst
+                    -1 => nextStatementAst!
+                    UIntSize(0) => nextStatementStart!
+                    0 => astSearch!
+                    astSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + astSearch!] => candidateAst
+                        candidateAst.parent == moveAst.parent and candidateAst.start > moveAst.start
+                            and (nextStatementAst! < 0 or candidateAst.start < nextStatementStart!)
+                            -> if {
+                                astSearch! => nextStatementAst!
+                                candidateAst.start => nextStatementStart!
+                            }
+                        astSearch! + 1 => astSearch!
+                    }
+                    nextStatementAst! >= 0
+                        and prepared.package.nodes[sourceRange.astStart + nextStatementAst!].kind == 54
+                        and not (candidateMove.sourceModule -> assignmentMayExitEarly(nextStatementAst!))
+                        -> if {
+                            0 => assignmentSearch!
+                            assignmentSearch! < (typed -> len) and not repaired!
+                                -> while {
+                                    typed[assignmentSearch!] => assignment
+                                    assignment.kind == 25
+                                        and assignment.sourceModule == candidateMove.sourceModule
+                                        and assignment.astNode == nextStatementAst!
+                                        and (assignmentSearch! -> moveRegionFor) == candidateMove.regionIr
+                                        and (moveIndex -> memberMoveMatchesAssignment(assignmentSearch!))
+                                        -> if { true => repaired! }
+                                    assignmentSearch! + 1 => assignmentSearch!
+                                }
+                        }
+                }
+            }
+        repaired!
+    }
     bindingDeclaredBeforeControl moveEvent: typedIr.MoveEvent, controlIndex: Int -> Bool {
         false => declared!
         controlIndex >= 0
@@ -3077,6 +3165,67 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
     0 => partialMoveIndex!
     partialMoveIndex! < (moves -> len) -> while {
         moves[partialMoveIndex!] => partialMove
+        partialMove.memberIr >= 0 and partialMove.memberIr < (typed -> len)
+            and partialMove.siteIr >= 0 and partialMove.siteIr < (typed -> len)
+            and typed[partialMove.siteIr].kind == 17
+            -> if {
+                partialMove.memberIr -> placeRootBinding => directFieldOwner!
+                directFieldOwner! < 0 -> if {
+                    0 => directFieldOwnerSearch!
+                    directFieldOwnerSearch! < (typed -> len) and directFieldOwner! < 0
+                        -> while {
+                            typed[directFieldOwnerSearch!] => directFieldOwnerCandidate
+                            (directFieldOwnerCandidate.kind == 10
+                                or directFieldOwnerCandidate.kind == 17
+                                or directFieldOwnerCandidate.kind == 29)
+                                and directFieldOwnerCandidate.sourceModule == partialMove.sourceModule
+                                and directFieldOwnerCandidate.symbol == partialMove.symbol
+                                -> if { directFieldOwnerSearch! => directFieldOwner! }
+                            directFieldOwnerSearch! + 1 => directFieldOwnerSearch!
+                        }
+                }
+                false => directFieldAllowed!
+                false => directFieldNeedsRepair!
+                directFieldOwner! >= 0 and directFieldOwner! < (typed -> len)
+                    -> if {
+                        typed[directFieldOwner!] => directFieldOwnerNode
+                        directFieldOwnerNode.sourceModule == partialMove.sourceModule
+                            and (directFieldOwner! -> lexicalExecutableAst) == (partialMove.siteIr -> lexicalExecutableAst)
+                            -> if {
+                                directFieldOwnerNode.kind == 17 -> if {
+                                    directFieldOwnerNode.flags % 2 == 1
+                                        -> if { true => directFieldNeedsRepair! } else { true => directFieldAllowed! }
+                                }
+                                directFieldOwnerNode.kind == 10 -> if {
+                                    directFieldOwnerNode.flags % 2 == 1 -> if { true => directFieldAllowed! }
+                                    directFieldOwnerNode.flags % 2 == 0
+                                        and directFieldOwnerNode.flags / 2 % 2 == 1
+                                        -> if { true => directFieldNeedsRepair! }
+                                }
+                                directFieldOwnerNode.kind == 29 -> if { true => directFieldAllowed! }
+                            }
+                    }
+                directFieldNeedsRepair! -> if {
+                    partialMoveIndex! -> immediateInfallibleMemberRepair => directFieldAllowed!
+                }
+                not directFieldAllowed! -> if {
+                    prepared.package.ranges[partialMove.sourceModule] => directFieldRange
+                    prepared.package.nodes[directFieldRange.astStart + typed[partialMove.memberIr].astNode] => directFieldAst
+                    diagnostics! -> push(OwnershipDiagnostic {
+                        code: directFieldNeedsRepair! -> if { 36 } else { 34 }
+                        sourceModule: partialMove.sourceModule
+                        functionSymbol: -1
+                        expectedOrigin: -1
+                        expectedModule: -1
+                        expectedSymbol: partialMove.siteIr
+                        actualOrigin: directFieldOwner!
+                        actualModule: -1
+                        actualSymbol: partialMove.memberIr
+                        actualBuiltin: -1
+                        span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: directFieldAst.start, length: directFieldAst.length }
+                    })
+                }
+            }
         partialMove.memberIr < 0
             and partialMove.siteIr >= 0
             and partialMove.siteIr < (typed -> len)
@@ -3188,11 +3337,19 @@ public analyzeResolvedLoweredContext prepared: ref semanticContext.SemanticSnaps
                         -> if {
                             movedUse.parent => movedUseAncestor!
                             -1 => movedUseMember!
-                            movedUseAncestor! >= 0 and movedUseMember! < 0
+                            0 => movedUseProjectionDepth!
+                            movedUseAncestor! >= 0
+                                and movedUseAncestor! < (typed -> len)
+                                and movedUseProjectionDepth! < (typed -> len)
+                                and (typed[movedUseAncestor!].kind == 13 or typed[movedUseAncestor!].kind == 15)
                                 -> while {
-                                    typed[movedUseAncestor!].kind == 13 or typed[movedUseAncestor!].kind == 15
-                                        -> if { movedUseAncestor! => movedUseMember! } else { typed[movedUseAncestor!].parent => movedUseAncestor! }
+                                    movedUseAncestor! => movedUseMember!
+                                    typed[movedUseAncestor!].parent => nextMovedUseAncestor
+                                    nextMovedUseAncestor == movedUseAncestor!
+                                        -> if { -1 => movedUseAncestor! } else { nextMovedUseAncestor => movedUseAncestor! }
+                                    movedUseProjectionDepth! + 1 => movedUseProjectionDepth!
                                 }
+                            movedUseProjectionDepth! >= (typed -> len) -> if { -1 => movedUseMember! }
                             movedUseMember! < 0 => invalidMovedUse!
                             movedUseMember! >= 0 -> if {
                                 partialMove.memberIr -> placesOverlap(movedUseMember!) => invalidMovedUse!

@@ -148,6 +148,13 @@ terminatingControlReturns controlIndex: Int, context: ref emitterContext.EmitCon
 
 regionReturns regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => returns!
+    # A function body may point directly at its source-final control rather
+    # than at a synthetic region wrapper.  Treat that control through the
+    # same all-paths-return and later-sibling predicate used by scheduling and
+    # control emission; otherwise emitFunctionReturn tries to return an SSA
+    # value that an all-return control intentionally never materializes.
+    regionIndex -> terminatingControlReturns(context, state)
+        -> if { true => returns! }
     context.ir[regionIndex] => returnRegion
     -1 => canonicalTerminal!
     returnRegion.kind == 1 -> if {

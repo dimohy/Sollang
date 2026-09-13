@@ -43,12 +43,20 @@ public initialRttState: -> RttState => RttState {
     variance: initialRtt() / 2
 }
 
-public lostByPacketThreshold largestAcknowledged: UInt64, packetNumber: UInt64 -> Bool {
-    largestAcknowledged > packetNumber -> if {
-        largestAcknowledged - packetNumber >= packetThreshold()
-    } else {
-        false
+impl UInt64 {
+    public lostByPacketThreshold: self, packetNumber: UInt64 -> Bool {
+        self > packetNumber -> if {
+            self - packetNumber >= packetThreshold()
+        } else {
+            false
+        }
     }
+
+    public initialCongestionWindow: self -> UInt64 {
+        minimum(self * 10, maximum(self * 2, 14_720))
+    }
+
+    public minimumCongestionWindow: self -> UInt64 => self * 2
 }
 
 impl RttState {
@@ -107,14 +115,8 @@ impl RttState {
     }
 }
 
-public initialCongestionWindow maxDatagramSize: UInt64 -> UInt64 {
-    minimum(maxDatagramSize * 10, maximum(maxDatagramSize * 2, 14_720))
-}
-
-public minimumCongestionWindow maxDatagramSize: UInt64 -> UInt64 => maxDatagramSize * 2
-
 public initialCongestionState maxDatagramSize: UInt64 -> CongestionState => CongestionState {
-    congestionWindow: initialCongestionWindow(maxDatagramSize)
+    congestionWindow: maxDatagramSize -> initialCongestionWindow
     slowStartThreshold: maximumDuration()
     bytesInFlight: 0
     recoveryStartTime: 0
@@ -173,7 +175,7 @@ impl CongestionState {
                     inRecovery: self.inRecovery
                 }
             } else {
-                maximum(self.congestionWindow / 2, minimumCongestionWindow(maxDatagramSize)) => nextWindow
+                maximum(self.congestionWindow / 2, maxDatagramSize -> minimumCongestionWindow) => nextWindow
                 CongestionState {
                     congestionWindow: nextWindow
                     slowStartThreshold: nextWindow
@@ -185,7 +187,7 @@ impl CongestionState {
     }
 
     public onPersistentCongestion: self, maxDatagramSize: UInt64 -> CongestionState => CongestionState {
-        congestionWindow: minimumCongestionWindow(maxDatagramSize)
+        congestionWindow: maxDatagramSize -> minimumCongestionWindow
         slowStartThreshold: self.slowStartThreshold
         bytesInFlight: self.bytesInFlight
         recoveryStartTime: self.recoveryStartTime

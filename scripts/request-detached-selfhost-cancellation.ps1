@@ -23,8 +23,13 @@ if (Test-Path -LiteralPath $completionRecordPath -PathType Leaf) {
 
 $launch = Get-Content -LiteralPath $launchRecordPath -Raw | ConvertFrom-Json
 $cancellationRequestPath = [IO.Path]::GetFullPath($launch.cancellationRequestPath)
+$cancellationAcknowledgementPath = [IO.Path]::GetFullPath($launch.cancellationAcknowledgementPath)
 if (-not $cancellationRequestPath.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'launch record cancellation path is outside artifacts'
+}
+if (-not $cancellationAcknowledgementPath.StartsWith($artifactRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+    $cancellationAcknowledgementPath -ceq $cancellationRequestPath) {
+    throw 'launch record cancellation acknowledgement path is invalid'
 }
 
 $supervisor = Get-CimInstance Win32_Process -Filter "ProcessId = $([int]$launch.supervisorPid)" -ErrorAction SilentlyContinue
@@ -64,6 +69,12 @@ if (@($result.failureIds).Count -ne 1 -or $result.failureIds[0] -cne 'CANCELLATI
 }
 if (@($result.orphanProcessIds).Count -ne 0) {
     throw 'Detached cancellation left an orphan process'
+}
+if ($result.targetExitCode -ne 130 -or $null -eq $result.cancellationAcknowledgement -or
+    $result.cancellationAcknowledgement.runId -cne $launch.runId -or
+    [int]$result.cancellationAcknowledgement.targetProcessId -ne [int]$result.targetProcessId -or
+    $result.cancellationAcknowledgementPath -cne $cancellationAcknowledgementPath) {
+    throw 'Detached cancellation did not preserve exact cooperative target acknowledgement'
 }
 
 $supervisorDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)

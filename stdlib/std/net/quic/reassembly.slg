@@ -17,10 +17,6 @@ public struct Queue {
     public byteLength: UInt64
 }
 
-public enum TakeError {
-    Missing
-}
-
 public initial: -> Queue => Queue {
     values: []
     byteLength: 0
@@ -72,7 +68,7 @@ impl Queue {
     # Return at most maxBytes from the segment that covers consumed. Fully
     # consumed retransmissions are discarded; future segments remain bounded
     # in this queue until their preceding bytes arrive.
-    public takeContiguous: mut self, streamId: UInt64, consumed: UInt64, maxBytes: UIntSize -> Result<frames.Stream, TakeError> {
+    public takeContiguous: mut self, streamId: UInt64, consumed: UInt64, maxBytes: UIntSize -> Option<frames.Stream> {
         0 => index!
         index! < (self.values -> len) -> while {
             self.values[index!].id == streamId -> if {
@@ -133,9 +129,9 @@ impl Queue {
                 consumed => value!.offset
                 output => value!.data
             }
-            Result<frames.Stream, TakeError>.Ok(value!)
+            Option<frames.Stream>.Some(value!)
         } else {
-            Result<frames.Stream, TakeError>.Err(model.TakeError.Missing)
+            Option<frames.Stream>.None
         }
     }
 }

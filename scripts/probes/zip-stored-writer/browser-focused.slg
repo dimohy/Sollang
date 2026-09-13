@@ -1,0 +1,276 @@
+import std.archive.zip as zip_archive
+import std.archive.zip.error as zip_errors
+
+kindCode kind: zip_errors.Kind -> Int => kind -> when {
+    InvalidLimit { 0 }
+    InputLimitExceeded { 1 }
+    OutputLimitExceeded { 2 }
+    NameLimitExceeded { 3 }
+    ExtraLimitExceeded { 4 }
+    CommentLimitExceeded { 5 }
+    TruncatedInput { 6 }
+    InvalidSignature { 7 }
+    InvalidHeader { 8 }
+    ChecksumMismatch { 9 }
+    SizeMismatch { 10 }
+    UnsupportedMethod { 11 }
+    UnsupportedEncryption { 12 }
+    UnsupportedZip64 { 13 }
+    UnsupportedDataDescriptor { 14 }
+    UnsupportedMultipleEntries { 15 }
+    TrailingData { 16 }
+    InvalidState { 17 }
+    EntryLimitExceeded { 18 }
+    DirectoryLimitExceeded { 19 }
+    WorkLimitExceeded { 20 }
+    InvalidDeflate { 21 }
+    ExpansionRatioExceeded { 22 }
+}
+
+limits: -> zip_archive.WriterLimits => zip_archive.WriterLimits {
+    maxEncodedBytes: 512
+    maxEntryBytes: 64
+    maxEntries: 4
+    maxNameBytes: 32
+    maxExtraBytes: 16
+    maxCommentBytes: 16
+    maxDirectoryBytes: 256
+    maxWorkUnits: 512
+}
+
+maximumLimits: -> zip_archive.WriterLimits => zip_archive.WriterLimits {
+    maxEncodedBytes: 2_147_483_647
+    maxEntryBytes: 2_147_483_647
+    maxEntries: 2_147_483_647
+    maxNameBytes: 2_147_483_647
+    maxExtraBytes: 2_147_483_647
+    maxCommentBytes: 2_147_483_647
+    maxDirectoryBytes: 2_147_483_647
+    maxWorkUnits: 2_147_483_647
+}
+
+writer configured: zip_archive.WriterLimits -> Result<zip_archive.Writer, zip_archive.Error> {
+    zip_archive.Limits {
+        maxEncodedBytes: 512
+        maxDecodedBytes: 64
+        maxNameBytes: 32
+        maxExtraBytes: 16
+        maxCommentBytes: 16
+    } -> codec? => codec
+    codec -> writer(configured)
+}
+
+matches left: [UInt8], right: [UInt8] -> Bool {
+    (left -> len) == (right -> len) -> unless { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+build bytewise: Bool -> Result<[UInt8; ~], zip_archive.Error> {
+    limits() -> writer? => archive!
+    [UInt8; ~] => output!
+    archive! -> beginStored(['e', 'm', 'p', 't', 'y', '.', 'b', 'i', 'n'], [UInt8; ~], 0, 0, output!)? => emptyHeaderBytes
+    archive! -> write([UInt8; ~], output!)? => emptyWrittenBytes
+    archive! -> finishEntry?
+    [UInt8(0), 1, 2, 3, 255, 10, 20] => payload
+    archive! -> beginStored(['d', 'a', 't', 'a', '.', 'b', 'i', 'n'], [UInt8; ~], 7, 1_625_880_655, output!)? => dataHeaderBytes
+    bytewise -> if {
+        0 => index!
+        index! < (payload -> len) -> while {
+            archive! -> write([payload[index!]], output!)? => accepted
+            accepted == 1 -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error { kind: zip_errors.Kind.SizeMismatch, offset: UIntSize(index!) }) -> return }
+            index! + 1 => index!
+        }
+    } else {
+        archive! -> write(payload, output!)? => accepted
+        accepted == 7 -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error { kind: zip_errors.Kind.SizeMismatch, offset: 0 }) -> return }
+    }
+    archive! -> finishEntry?
+    archive! -> finish(['z', 'i', 'p'], output!)? => finalBytes
+    emptyHeaderBytes == 39 and emptyWrittenBytes == 0 and dataHeaderBytes == 38 and finalBytes == 134
+        -> unless { Result<[UInt8; ~], zip_archive.Error>.Err(zip_archive.Error { kind: zip_errors.Kind.SizeMismatch, offset: 0 }) -> return }
+    Result<[UInt8; ~], zip_archive.Error>.Ok(output!)
+}
+
+invalid configured: zip_archive.WriterLimits -> Bool {
+    configured -> writer -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == 0 }
+    }
+}
+
+transactionalBegin: -> Result<Bool, zip_archive.Error> {
+    zip_archive.WriterLimits {
+        maxEncodedBytes: 512
+        maxEntryBytes: 64
+        maxEntries: 4
+        maxNameBytes: 0
+        maxExtraBytes: 16
+        maxCommentBytes: 16
+        maxDirectoryBytes: 256
+        maxWorkUnits: 512
+    } -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    output! -> len => before
+    archive! -> beginStored([1], [UInt8; ~], 0, 0, output!) -> when {
+        Ok(_) { Result<Bool, zip_archive.Error>.Ok(false) }
+        Err(error) { Result<Bool, zip_archive.Error>.Ok((error.kind -> kindCode) == 3 and (output! -> len) == before and output![0] == 9) }
+    }
+}
+
+transactionalWrite: -> Result<Bool, zip_archive.Error> {
+    limits() -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    archive! -> beginStored([1], [UInt8; ~], 0, 0, output!)? => headerBytes
+    headerBytes == 31 -> unless { Result<Bool, zip_archive.Error>.Ok(false) -> return }
+    output! -> len => before
+    archive! -> write([1], output!) -> when {
+        Ok(_) { Result<Bool, zip_archive.Error>.Ok(false) }
+        Err(error) { Result<Bool, zip_archive.Error>.Ok((error.kind -> kindCode) == 10 and (output! -> len) == before) }
+    }
+}
+
+transactionalEntry: -> Result<Bool, zip_archive.Error> {
+    limits() -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    archive! -> beginStored([1], [UInt8; ~], 1, 0, output!)? => headerBytes
+    headerBytes == 31 -> unless { Result<Bool, zip_archive.Error>.Ok(false) -> return }
+    output! -> len => before
+    archive! -> finishEntry -> when {
+        Ok(_) { Result<Bool, zip_archive.Error>.Ok(false) }
+        Err(error) { Result<Bool, zip_archive.Error>.Ok((error.kind -> kindCode) == 10 and (output! -> len) == before) }
+    }
+}
+
+transactionalFinish: -> Result<Bool, zip_archive.Error> {
+    limits() -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    archive! -> beginStored([1], [UInt8; ~], 1, 0, output!)? => headerBytes
+    headerBytes == 31 -> unless { Result<Bool, zip_archive.Error>.Ok(false) -> return }
+    output! -> len => before
+    archive! -> finish([UInt8; ~], output!) -> when {
+        Ok(_) { Result<Bool, zip_archive.Error>.Ok(false) }
+        Err(error) { Result<Bool, zip_archive.Error>.Ok((error.kind -> kindCode) == 17 and (output! -> len) == before) }
+    }
+}
+
+beginLimit configured: zip_archive.WriterLimits, name: [UInt8], extra: [UInt8], declaredBytes: Int, expectedKind: Int -> Result<Bool, zip_archive.Error> {
+    configured -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    output! -> len => before
+    archive! -> beginStored(name, extra, declaredBytes, 0, output!) -> when {
+        Ok(_) { Result<Bool, zip_archive.Error>.Ok(false) }
+        Err(error) { Result<Bool, zip_archive.Error>.Ok((error.kind -> kindCode) == expectedKind and (output! -> len) == before and output![0] == 9) }
+    }
+}
+
+runtimeLimitChecks: -> Result<(encoded: Bool, entry: Bool, entries: Bool, name: Bool, extra: Bool, comment: Bool, directory: Bool, work: Bool), zip_archive.Error> {
+    zip_archive.WriterLimits { maxEncodedBytes: 52, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 512 }
+        -> beginLimit([1], [UInt8; ~], 0, 2)? => encoded
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 0, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 512 }
+        -> beginLimit([1], [UInt8; ~], 1, 1)? => entry
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 0, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 512 }
+        -> beginLimit([1], [UInt8; ~], 0, 18)? => entries
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 0, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 512 }
+        -> beginLimit([1], [UInt8; ~], 0, 3)? => name
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 0, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 512 }
+        -> beginLimit([1], [1], 0, 4)? => extra
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 0, maxDirectoryBytes: 256, maxWorkUnits: 512 } -> writer? => commentWriter!
+    [UInt8(9),; ~] => commentOutput!
+    commentWriter! -> beginStored([1], [UInt8; ~], 0, 0, commentOutput!)? => commentHeader
+    commentWriter! -> finishEntry?
+    commentOutput! -> len => commentBefore
+    commentWriter! -> finish([1], commentOutput!) -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == 5 and (commentOutput! -> len) == commentBefore and commentHeader == 31 }
+    } => comment
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 46, maxWorkUnits: 512 }
+        -> beginLimit([1], [UInt8; ~], 0, 19)? => directory
+    zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 64, maxEntries: 4, maxNameBytes: 32, maxExtraBytes: 16, maxCommentBytes: 16, maxDirectoryBytes: 256, maxWorkUnits: 99 }
+        -> beginLimit([1], [UInt8; ~], 0, 20)? => work
+    Result<(encoded: Bool, entry: Bool, entries: Bool, name: Bool, extra: Bool, comment: Bool, directory: Bool, work: Bool), zip_archive.Error>.Ok((encoded: encoded, entry: entry, entries: entries, name: name, extra: extra, comment: comment, directory: directory, work: work))
+}
+
+overflowBoundary: -> Result<Bool, zip_archive.Error> {
+    maximumLimits() -> writer? => archive!
+    [UInt8(9),; ~] => output!
+    output! -> len => before
+    archive! -> beginStored([1], [UInt8; ~], 2_147_483_647, 0, output!) -> when {
+        Ok(_) { false }
+        Err(error) { (error.kind -> kindCode) == 2 and (output! -> len) == before and output![0] == 9 }
+    } => rejected
+    archive! -> beginStored([1], [UInt8; ~], 0, 0, output!)? => retried
+    Result<Bool, zip_archive.Error>.Ok(rejected and retried == 31)
+}
+
+errorChecks: -> Result<(invalidState: Bool, checksumMismatch: Bool, sizeMismatch: Bool, zip64Rejected: Bool, activeRejected: Bool), zip_archive.Error> {
+    limits() -> writer? => idle!
+    [UInt8; ~] => idleOutput!
+    idle! -> write([1], idleOutput!) -> when { Ok(_) { false } Err(error) { (error.kind -> kindCode) == 17 } } => invalidState
+
+    limits() -> writer? => checksum!
+    [UInt8; ~] => checksumOutput!
+    checksum! -> beginStored([1], [UInt8; ~], 1, 0, checksumOutput!)? => checksumHeaderBytes
+    checksum! -> write([1], checksumOutput!)? => checksumWrittenBytes
+    checksum! -> finishEntry -> when { Ok(_) { false } Err(error) { (error.kind -> kindCode) == 9 } } => checksumMismatch
+
+    limits() -> writer? => size!
+    [UInt8; ~] => sizeOutput!
+    size! -> beginStored([1], [UInt8; ~], 1, 0, sizeOutput!)? => sizeHeaderBytes
+    size! -> finishEntry -> when { Ok(_) { false } Err(error) { (error.kind -> kindCode) == 10 } } => sizeMismatch
+
+    limits() -> writer? => zip64!
+    [UInt8; ~] => zip64Output!
+    zip64! -> beginStored([1], [1, 0, 0, 0], 0, 0, zip64Output!) -> when { Ok(_) { false } Err(error) { (error.kind -> kindCode) == 13 } } => zip64Rejected
+
+    limits() -> writer? => active!
+    [UInt8; ~] => activeOutput!
+    active! -> beginStored([1], [UInt8; ~], 1, 0, activeOutput!)? => activeHeaderBytes
+    active! -> finish([UInt8; ~], activeOutput!) -> when { Ok(_) { false } Err(error) { (error.kind -> kindCode) == 17 } } => activeRejected
+    Result<(invalidState: Bool, checksumMismatch: Bool, sizeMismatch: Bool, zip64Rejected: Bool, activeRejected: Bool), zip_archive.Error>.Ok((invalidState: invalidState, checksumMismatch: checksumMismatch, sizeMismatch: sizeMismatch, zip64Rejected: zip64Rejected, activeRejected: activeRejected))
+}
+
+run: -> Result<Unit, zip_archive.Error> uses Console {
+    build(false)? => bulk
+    build(true)? => bytewise
+    [UInt8(80), 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 101, 109, 112, 116, 121, 46, 98, 105, 110, 80, 75, 3, 4, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 79, 248, 232, 96, 7, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 100, 97, 116, 97, 46, 98, 105, 110, 0, 1, 2, 3, 255, 10, 20, 80, 75, 1, 2, 20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 0, 0, 0, 0, 101, 109, 112, 116, 121, 46, 98, 105, 110, 80, 75, 1, 2, 20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 33, 0, 79, 248, 232, 96, 7, 0, 0, 0, 7, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 1, 39, 0, 0, 0, 100, 97, 116, 97, 46, 98, 105, 110, 80, 75, 5, 6, 0, 0, 0, 0, 2, 0, 2, 0, 109, 0, 0, 0, 84, 0, 0, 0, 3, 0, 122, 105, 112] => expected
+    bulk -> matches(expected) => bulkMatches
+    bytewise -> matches(expected) => bytewiseMatches
+
+    transactionalBegin()? => beginTransactional
+    transactionalWrite()? => writeTransactional
+    transactionalEntry()? => entryTransactional
+    transactionalFinish()? => finishTransactional
+
+    zip_archive.WriterLimits { maxEncodedBytes: -1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => encodedLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: -1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => entryLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: -1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => entriesLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: -1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => nameLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: -1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => extraLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: -1, maxDirectoryBytes: 1, maxWorkUnits: 1 } -> invalid => commentLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: -1, maxWorkUnits: 1 } -> invalid => directoryLimit
+    zip_archive.WriterLimits { maxEncodedBytes: 1, maxEntryBytes: 1, maxEntries: 1, maxNameBytes: 1, maxExtraBytes: 1, maxCommentBytes: 1, maxDirectoryBytes: 1, maxWorkUnits: -1 } -> invalid => workLimit
+
+    errorChecks()? => errors
+    runtimeLimitChecks()? => runtimeLimits
+    overflowBoundary()? => overflowSafe
+    "zip-writer=$(bulkMatches)" -> println
+    "zip-writer-entries=$((bulk -> len) == 218),$((bytewise -> len) == 218)" -> println
+    "zip-writer-transactional=$beginTransactional,$writeTransactional,$entryTransactional,$finishTransactional" -> println
+    "zip-writer-limits=$encodedLimit,$entryLimit,$entriesLimit,$nameLimit,$extraLimit,$commentLimit,$directoryLimit,$workLimit" -> println
+    "zip-writer-errors=$(errors.invalidState),$(errors.checksumMismatch),$(errors.sizeMismatch),$(errors.zip64Rejected),$(errors.activeRejected)" -> println
+    "zip-writer-runtime-limits=$(runtimeLimits.encoded),$(runtimeLimits.entry),$(runtimeLimits.entries),$(runtimeLimits.name),$(runtimeLimits.extra),$(runtimeLimits.comment),$(runtimeLimits.directory),$(runtimeLimits.work)" -> println
+    "zip-writer-boundaries=$overflowSafe" -> println
+    Result<Unit, zip_archive.Error>.Ok
+}
+
+main {
+    run() -> when {
+        Ok(_) {}
+        Err(error) { "zip-writer-failure=$(error.kind -> kindCode),$(error.offset)" -> println }
+    }
+}

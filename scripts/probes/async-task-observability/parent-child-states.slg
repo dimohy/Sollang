@@ -1,0 +1,129 @@
+namespace probes.async_task_observability.parent_child_states
+
+import std.async.diagnostics as diagnostics
+import std.time as time
+
+printParent value: Option<UInt64> -> Unit uses Console {
+    value -> when {
+        Some(id) { "Some($id)" -> print }
+        None { "None" -> print }
+    }
+}
+
+printLifecycle value: diagnostics.Lifecycle -> Unit uses Console {
+    value -> when {
+        diagnostics.Lifecycle.Pending { "Pending" -> print }
+        diagnostics.Lifecycle.Running { "Running" -> print }
+        diagnostics.Lifecycle.Completed { "Completed" -> print }
+        diagnostics.Lifecycle.Cancelled { "Cancelled" -> print }
+    }
+}
+
+printWait value: diagnostics.WaitState -> Unit uses Console {
+    value -> when {
+        diagnostics.WaitState.None { "None" -> print }
+        diagnostics.WaitState.Ready { "Ready" -> print }
+        diagnostics.WaitState.Timer { "Timer" -> print }
+        diagnostics.WaitState.AwaitBlocked { "AwaitBlocked" -> print }
+    }
+}
+
+printSuspension value: Option<diagnostics.SuspensionLocator> -> Unit uses Console {
+    value -> when {
+        Some(locator) { "Some(sourceModule=$(locator.sourceModule);functionSymbol=$(locator.functionSymbol);resumeState=$(locator.resumeState);byteOffset=$(locator.byteOffset);line=$(locator.line);column=$(locator.column))" -> print }
+        None { "None" -> print }
+    }
+}
+
+printDeadline value: UInt64 -> Unit uses Console {
+    value == 0 -> if { "0" -> print } else { "nonzero" -> print }
+}
+
+printTask value: diagnostics.TaskSnapshot -> Unit uses Console {
+    "task taskId=$(value.taskId) parentTaskId=" -> print
+    value.parentTaskId -> printParent
+    " lifecycle=" -> print
+    value.lifecycle -> printLifecycle
+    " waitState=" -> print
+    value.waitState -> printWait
+    " awaitedTaskId=" -> print
+    value.awaitedTaskId -> printParent
+    " timerDeadlineMillis=" -> print
+    value.timerDeadlineMillis -> printDeadline
+    " suspension=" -> print
+    value.suspension -> printSuspension
+    "" -> println
+}
+
+printSnapshot result: diagnostics.SnapshotResult, snapshots: move [diagnostics.TaskSnapshot; 3] -> [diagnostics.TaskSnapshot; 3] uses Console {
+    "snapshot sessionId=$(result.sessionId) written=$(result.written) available=$(result.available) truncated=$(result.truncated)" -> println
+    snapshots[0] -> printTask
+    result.written > 1 -> if { snapshots[1] -> printTask }
+    result.written > 2 -> if { snapshots[2] -> printTask }
+    snapshots
+}
+
+emptySnapshot: -> diagnostics.TaskSnapshot => diagnostics.TaskSnapshot {
+    taskId: 0,
+    parentTaskId: Option<UInt64>.None,
+    lifecycle: diagnostics.Lifecycle.Pending,
+    waitState: diagnostics.WaitState.None,
+    awaitedTaskId: Option<UInt64>.None,
+    timerDeadlineMillis: 0,
+    suspension: Option<diagnostics.SuspensionLocator>.None
+}
+
+child: -> async Int uses Clock, Console {
+    time.milliseconds(5) -> when {
+        Ok(delay) { delay -> sleep -> await }
+        Err(error) { "duration-error" -> println }
+    }
+    7
+}
+
+parent: -> async Int uses Clock, Console {
+    child() => childTask
+    childTask -> await
+}
+
+public observe: -> async Unit uses Clock, Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 3 }) => opened
+    opened -> when {
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Ok(session) {
+            session => activeSession!
+            parent() => parentTask
+            activeSession! -> track(parentTask) => trackedResult
+            trackedResult -> when {
+                Ok(tracked) {
+                    [emptySnapshot(), emptySnapshot(), emptySnapshot()] => output!
+                    activeSession! -> snapshot<3>(output!) => rootReady
+                    rootReady -> printSnapshot(output!) => output1!
+                    yield
+                    activeSession! -> snapshot<3>(output1!) => parentBlocked
+                    parentBlocked -> printSnapshot(output1!) => output2!
+                    yield
+                    activeSession! -> snapshot<3>(output2!) => childBlocked
+                    childBlocked -> printSnapshot(output2!) => output3!
+                    yield
+                    activeSession! -> snapshot<3>(output3!) => timerBlocked
+                    timerBlocked -> printSnapshot(output3!) => output4!
+                    tracked -> await -> println
+                    activeSession! -> snapshot<3>(output4!) => terminal
+                    terminal -> printSnapshot(output4!) => output5
+                    activeSession! -> close => closed
+                }
+                Err(failure) {
+                    "track-error" -> println
+                    failure._0 -> await => failedTaskValue
+                    activeSession! -> close => failedClose
+                }
+            }
+        }
+        Result<diagnostics.DiagnosticSession, diagnostics.DiagnosticError>.Err(error) { "open-error" -> println }
+    }
+}
+
+main {
+    probes.async_task_observability.parent_child_states.observe() => observation
+    observation -> await
+}

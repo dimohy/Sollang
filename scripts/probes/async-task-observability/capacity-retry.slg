@@ -1,0 +1,60 @@
+namespace probes.async_task_observability.capacity_retry
+
+import std.async.diagnostics as diagnostics
+
+value input: Int -> async Int { input }
+
+public observe: -> async Unit uses Console {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) -> when {
+        Ok(session) {
+            session => active!
+            11 -> value => firstTask
+            22 -> value => secondTask
+            active! -> track(firstTask) -> when {
+                Ok(first) {
+                    active! -> track(secondTask) -> when {
+                        Err(capacityFailure) {
+                            "Capacity" -> println
+                            capacityFailure._0 => retryTask
+                            active! -> track(retryTask) -> when {
+                                Err(retryFailure) {
+                                    "Capacity" -> println
+                                    first -> await => firstValue
+                                    retryFailure._0 -> await => secondValue
+                                    active! -> close -> when {
+                                        Ok(summary) { "close sessionId=$(summary.sessionId) trackedTasks=$(summary.trackedTasks) untrackedTasks=$(summary.untrackedTasks)" -> println }
+                                        Err(failure) { "close-error" -> println }
+                                    }
+                                }
+                                Ok(unexpected) {
+                                    unexpected -> await => unexpectedValue
+                                    first -> await => firstValue
+                                    active! -> close => recoveredClose
+                                    "unexpected-retry-success" -> println
+                                }
+                            }
+                        }
+                        Ok(unexpected) {
+                            unexpected -> await => unexpectedValue
+                            first -> await => firstValue
+                            active! -> close => recoveredClose
+                            "unexpected-second-success" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => failedValue
+                    secondTask -> await => secondValue
+                    active! -> close => recoveredClose
+                    "first-track-error" -> println
+                }
+            }
+        }
+        Err(error) { "open-error" -> println }
+    }
+}
+
+main {
+    probes.async_task_observability.capacity_retry.observe() => observation
+    observation -> await
+}

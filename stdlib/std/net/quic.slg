@@ -196,9 +196,21 @@ protocolFailure value: errors.Error -> QuicError {
     QuicError { kind: value.kind, code: value.code }
 }
 
+protocolSuccess outcome: Result<Unit, errors.Error> -> Result<Unit, QuicError> => outcome -> when {
+    Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) }
+    Ok(_) { Result<Unit, QuicError>.Ok }
+}
+
 internalFailure: -> QuicError => QuicError {
     kind: errors.Kind.Internal
     code: errors.internalError()
+}
+
+unsupportedApplicationFrame frameType: UInt64 -> Result<Unit, QuicError> {
+    Result<Unit, QuicError>.Err(QuicError {
+        kind: errors.Kind.Internal
+        code: frameType
+    })
 }
 
 defaultConnectionOptions: -> ConnectionOptions => ConnectionOptions {
@@ -386,8 +398,7 @@ handshakeMessage bytes: [UInt8], offset: UIntSize -> Result<HandshakeMessage, Qu
 }
 
 encodeHandshakePacket version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], bytes: [UInt8], secret: [UInt8; 32] -> Result<[UInt8; ~], QuicError> {
-    handshakeEngine.encode(
-    version,
+    version -> handshakeEngine.encode(
     destinationConnectionId,
     sourceConnectionId,
     0,
@@ -708,14 +719,14 @@ sameBytes left: [UInt8], right: [UInt8] -> Bool {
 }
 
 encodeParameter id: UInt64, value: [UInt8] -> Result<[UInt8; ~], QuicError> {
-    transport.encode(id, value) -> when {
+    id -> transport.encode(value) -> when {
         Ok(encoded) { encoded -> Result<[UInt8; ~], QuicError>.Ok }
         Err(value) { Result<[UInt8; ~], QuicError>.Err(protocolFailure(value)) }
     }
 }
 
 encodeIntegerParameter id: UInt64, value: UInt64 -> Result<[UInt8; ~], QuicError> {
-    transport.encodeInteger(id, value) -> when {
+    id -> transport.encodeInteger(value) -> when {
         Ok(encoded) { encoded -> Result<[UInt8; ~], QuicError>.Ok }
         Err(value) { Result<[UInt8; ~], QuicError>.Err(protocolFailure(value)) }
     }
@@ -1037,10 +1048,7 @@ validateTransportParameters bytes: [UInt8], version: UInt32, expectedSourceConne
                 decodeVersionInformation(parameter.value)? => information
                 information.chosen == version -> unless { invalidPeerTransport() -> return }
                 fromServer -> unless {
-                    information -> validateClient -> when {
-                        Ok(valid) {}
-                        Err(value) { Result<PeerTransport, QuicError>.Err(protocolFailure(value)) -> return }
-                    }
+                    information -> validateClient -> protocolSuccess?
                 }
                 true => hasVersion!
             }
@@ -1339,6 +1347,19 @@ copyRangeBytes bytes: [UInt8], start: UIntSize -> [UInt8; ~] {
     copied!
 }
 
+handshakeCandidate bytes: move [UInt8; ~] -> Result<Option<[UInt8; ~]>, QuicError> {
+    packets.longHeaderKind(bytes) -> when {
+        Err(error) { Result<Option<[UInt8; ~]>, QuicError>.Err(protocolFailure(error)) }
+        Ok(kind) {
+            kind == 0 or kind == 2 -> if {
+                Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.Some(bytes))
+            } else {
+                Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.None)
+            }
+        }
+    }
+}
+
 handshakePacket endpoint: mut Endpoint, connectionId: [UInt8] -> Result<[UInt8; ~], QuicError> uses Network {
     [UInt8; ~] => selected!
     false => found!
@@ -1357,14 +1378,15 @@ handshakePacket endpoint: mut Endpoint, connectionId: [UInt8] -> Result<[UInt8; 
                                 header.packetEnd < UIntSize(received.bytes -> len)
                                     -> if {
                                         copyRangeBytes(received.bytes, header.packetEnd) => remaining
-                                        packets.longHeaderKind(remaining) -> when {
-                                            Ok(remainingKind) {
-                                                remainingKind == 2 -> if {
-                                                    selected! -> appendBytes(remaining)
-                                                    true => found!
-                                                }
+                                        remaining -> handshakeCandidate? -> when {
+                                            None { false }
+                                            Some(packet) {
+                                                selected! -> appendBytes(packet)
+                                                true
                                             }
-                                            Err(value) {}
+                                        } => appended
+                                        appended -> if {
+                                            true => found!
                                         }
                                     }
                             }
@@ -1412,14 +1434,8 @@ completeClient endpoint: mut Endpoint, connection: mut Connection -> Result<Unit
     connection.originalDestinationConnectionId,
     true)? => peerTransport
     connection.flow -> onMaxData(peerTransport.initialMaxData) => connection.flow
-    connection.streams -> onPeerBidirectionalLimit(peerTransport.initialMaxStreamsBidi) -> when {
-        Ok(done) {}
-        Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-    }
-    connection.streams -> onPeerUnidirectionalLimit(peerTransport.initialMaxStreamsUni) -> when {
-        Ok(done) {}
-        Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-    }
+    connection.streams -> onPeerBidirectionalLimit(peerTransport.initialMaxStreamsBidi) -> protocolSuccess?
+    connection.streams -> onPeerUnidirectionalLimit(peerTransport.initialMaxStreamsUni) -> protocolSuccess?
     peerTransport.initialMaxStreamDataBidiRemote => connection.localInitiatedStreamSendMaximum
     peerTransport.initialMaxStreamDataBidiLocal => connection.peerInitiatedStreamSendMaximum
     peerTransport.initialMaxStreamDataUni => connection.localInitiatedUnidirectionalStreamSendMaximum
@@ -1776,16 +1792,10 @@ queueStreamFrame connection: mut Connection, value: move frames.Stream -> Result
     ensurePendingApplicationCapacity(connection, length)?
     streamState.identity(value.id).direction -> when {
         Bidirectional {
-            connection.streams -> observeInboundBidirectional(value.id) -> when {
-                Ok(done) {}
-                Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-            }
+            connection.streams -> observeInboundBidirectional(value.id) -> protocolSuccess?
         }
         Unidirectional {
-            connection.streams -> observeInboundUnidirectional(value.id) -> when {
-                Ok(done) {}
-                Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-            }
+            connection.streams -> observeInboundUnidirectional(value.id) -> protocolSuccess?
         }
     }
     connection.pendingStreamFrames -> push(value)
@@ -1900,26 +1910,20 @@ pumpApplicationPacket endpoint: mut Endpoint, connection: mut Connection -> Resu
             Padding(count) {}
             Ping {}
             Ack(ack) { processApplicationAck(connection, ack)? }
-            NewConnectionId(value) {}
-            RetireConnectionId(sequence) {}
+            NewConnectionId(value) { unsupportedApplicationFrame(24)? }
+            RetireConnectionId(sequence) { unsupportedApplicationFrame(25)? }
             MaxData(maximum) { connection.flow -> onMaxData(maximum) => connection.flow }
             MaxStreamData(limit) { queueMaxStreamData(connection, limit)? }
             MaxStreams(limit) {
                 limit.bidirectional -> if {
-                    connection.streams -> onPeerBidirectionalLimit(limit.maximum) -> when {
-                        Ok(done) {}
-                        Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-                    }
+                    connection.streams -> onPeerBidirectionalLimit(limit.maximum) -> protocolSuccess?
                 } else {
-                    connection.streams -> onPeerUnidirectionalLimit(limit.maximum) -> when {
-                        Ok(done) {}
-                        Err(error) { Result<Unit, QuicError>.Err(protocolFailure(error)) -> return }
-                    }
+                    connection.streams -> onPeerUnidirectionalLimit(limit.maximum) -> protocolSuccess?
                 }
             }
-            DataBlocked(limit) {}
-            StreamDataBlocked(blocked) {}
-            StreamsBlocked(blocked) {}
+            DataBlocked(limit) { continue }
+            StreamDataBlocked(blocked) { continue }
+            StreamsBlocked(blocked) { continue }
             Crypto(crypto) {
                 Result<Unit, QuicError>.Err(QuicError {
                     kind: errors.Kind.ProtocolViolation
@@ -2091,7 +2095,7 @@ receiveDirectionImpl endpoint: mut Endpoint, connection: mut Connection, streamI
         connection.pendingApplicationBytes - (bytesBefore - bytesAfter)
             => connection.pendingApplicationBytes
         contiguous -> when {
-            Ok(value) {
+            Some(value) {
                 UInt64(value.data -> len) => length
                 output! -> appendBytes(value.data)
                 state.receiveFlow -> onConsumed(length) -> when {
@@ -2107,13 +2111,14 @@ receiveDirectionImpl endpoint: mut Endpoint, connection: mut Connection, streamI
                     -> if { true => state.readFinished }
                 Result<[UInt8; ~], QuicError>.Ok(output!) -> return
             }
-            Err(error) {}
-        }
-        pumpApplicationPacket(endpoint, connection)?
-        applyPendingResetStream(connection, streamId, state)?
-        state.peerReset -> if {
-            Result<[UInt8; ~], QuicError>.Err(
-            streamDirectionError(errors.Kind.StreamReset, state.peerResetCode)) -> return
+            None {
+                pumpApplicationPacket(endpoint, connection)?
+                applyPendingResetStream(connection, streamId, state)?
+                state.peerReset -> if {
+                    Result<[UInt8; ~], QuicError>.Err(
+                    streamDirectionError(errors.Kind.StreamReset, state.peerResetCode)) -> return
+                }
+            }
         }
     }
     Result<[UInt8; ~], QuicError>.Err(internalFailure())

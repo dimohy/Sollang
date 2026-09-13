@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "defectId", "status", "compilerSha256", "expectedCompilerSha256",
+    "candidateShaMatched", "inputStable", "inputDrift", "inputHashes", "contextual",
+    "lexicalPredicates", "expressionFixtures", "wholeSelfhostDiagnostic", "failureIds", "failure"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-12-394" },
+    "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "$ref": "#/$defs/sha256" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha256" },
+    "candidateShaMatched": { "type": "boolean" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashes": { "type": "object", "minProperties": 13, "additionalProperties": { "$ref": "#/$defs/sha256" } },
+    "contextual": { "$ref": "#/$defs/contextual" },
+    "lexicalPredicates": { "$ref": "#/$defs/lexical" },
+    "expressionFixtures": { "$ref": "#/$defs/expression" },
+    "wholeSelfhostDiagnostic": { "$ref": "#/$defs/diagnostic" },
+    "processAudit": { "$ref": "#/$defs/processAudit" },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "candidateShaMatched": { "const": true },
+          "inputStable": { "const": true },
+          "inputDrift": { "maxItems": 0 },
+          "contextual": { "$ref": "#/$defs/contextualPassed" },
+          "lexicalPredicates": { "$ref": "#/$defs/lexicalPassed" },
+          "expressionFixtures": { "$ref": "#/$defs/expressionPassed" },
+          "wholeSelfhostDiagnostic": { "$ref": "#/$defs/diagnosticPassed" },
+          "failureIds": { "maxItems": 0 },
+          "failure": { "type": "null" }
+        }
+      },
+      "else": {
+        "properties": {
+          "failureIds": { "minItems": 1 },
+          "failure": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "contextual": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "result"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 17 }, "total": { "const": 17 }, "result": { "type": ["string", "null"] } }
+    },
+    "lexical": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 62 }, "total": { "const": 62 } }
+    },
+    "expression": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "result"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 2 }, "total": { "const": 2 }, "result": { "type": ["string", "null"] } }
+    },
+    "diagnostic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "exitCode", "llvmProduced"],
+      "properties": {
+        "completed": { "type": "integer", "minimum": 0, "maximum": 1 }, "total": { "const": 1 },
+        "exitCode": { "type": ["integer", "null"] }, "llvmProduced": { "type": ["boolean", "null"] }
+      }
+    },
+    "contextualPassed": { "allOf": [{ "$ref": "#/$defs/contextual" }, { "properties": { "completed": { "const": 17 }, "result": { "type": "string", "minLength": 1 } } }] },
+    "lexicalPassed": { "allOf": [{ "$ref": "#/$defs/lexical" }, { "properties": { "completed": { "const": 62 } } }] },
+    "expressionPassed": { "allOf": [{ "$ref": "#/$defs/expression" }, { "properties": { "completed": { "const": 2 }, "result": { "type": "string", "minLength": 1 } } }] },
+    "diagnosticPassed": { "allOf": [{ "$ref": "#/$defs/diagnostic" }, { "properties": { "completed": { "const": 1 }, "exitCode": { "type": "integer", "not": { "const": 0 } }, "llvmProduced": { "const": false } } }] },
+    "processAudit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["recorded", "residualProcessIds"],
+      "properties": {
+        "recorded": { "const": true },
+        "residualProcessIds": { "type": "array", "maxItems": 0, "items": { "type": "integer", "minimum": 1 } }
+      }
+    }
+  }
+}

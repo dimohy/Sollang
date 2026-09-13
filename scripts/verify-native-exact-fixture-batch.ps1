@@ -412,7 +412,12 @@ param(
         "1690-selfhost-associated-type-specialization-isolation",
         "1686-selfhost-trait-associated-result",
         "1687-selfhost-chained-call-local-precedence",
-        "1682-selfhost-retained-array-branch-moves"
+        "1682-selfhost-retained-array-branch-moves",
+        "1749-async-two-ready-task-reverse-await",
+        "1750-async-enum-payload-across-nested-yield",
+        "1751-async-product-owned-field-transfer",
+        "1752-borrowed-owned-enum-payload",
+        "1753-zstd-fse-huffman-weights"
     )
 )
 

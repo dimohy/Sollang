@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "status", "module", "api", "semantics", "ownership", "fixtures", "acceptance"],
+  "properties": {
+    "$schema": { "const": "general-algorithms-partition.schema.json" },
+    "schemaVersion": { "const": 2 },
+    "status": { "const": "implemented-static-managed-pending" },
+    "module": { "const": "stdlib/std/algorithm.slg" },
+    "api": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner", "method", "signature", "callShape", "receiverDecision", "forbiddenAlternatives"],
+      "properties": {
+        "owner": { "const": "Algorithms" },
+        "method": { "const": "partitionInPlace" },
+        "signature": { "const": "public partitionInPlace<T>: self, values: mut [T; ~] -> Int block item: ref T -> Bool" },
+        "callShape": { "const": "algorithms -> partitionInPlace(values!) item { predicate }" },
+        "receiverDecision": { "const": "exact Algorithms inherent receiver with typed block" },
+        "forbiddenAlternatives": { "const": ["Predicate trait", "array-primary wrapper", "copying helper", "same-index branch"] }
+      }
+    },
+    "semantics": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "predicateEvaluation", "partition", "stability", "result", "time", "additionalStorage"],
+      "properties": {
+        "kind": { "const": "single forward scan with boundary exchange" },
+        "predicateEvaluation": { "const": "exactly once per original element in original index order" },
+        "partition": { "const": "true prefix followed by false suffix" },
+        "stability": { "const": "unstable" },
+        "result": { "const": "first false boundary in the inclusive range zero through original length" },
+        "time": { "const": "O(n)" },
+        "additionalStorage": { "const": "O(1)" }
+      }
+    },
+    "ownership": {
+      "type": "object", "additionalProperties": false,
+      "required": ["values", "item", "mutation", "preserves", "noncopyable", "heapAllocationsInsideMethod", "bulkStorageCopiesInsideMethod", "elementDropsInsideMethod"],
+      "properties": {
+        "values": { "const": "mutable borrow of caller-owned growable array" },
+        "item": { "const": "readonly ref T block role" },
+        "mutation": { "const": "values -> exchange(boundary!, index!)" },
+        "preserves": { "const": ["owner", "length", "capacity", "element multiset"] },
+        "noncopyable": { "const": "complete owned element representations move only through exchange" },
+        "heapAllocationsInsideMethod": { "const": 0 },
+        "bulkStorageCopiesInsideMethod": { "const": 0 },
+        "elementDropsInsideMethod": { "const": 0 }
+      }
+    },
+    "fixtures": {
+      "type": "array", "minItems": 5, "maxItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "kind", "source", "expected", "assertion"],
+        "properties": {
+          "id": { "enum": ["P-BOUNDARIES", "P-NONCOPYABLE", "N-CALLBACK-RESULT", "N-WRONG-OWNER", "N-READONLY-OWNER"] },
+          "kind": { "enum": ["native-success", "native-success-audit", "compile-failure"] },
+          "source": { "type": "string", "minLength": 1 },
+          "expected": { "type": "string", "minLength": 1 },
+          "assertion": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "acceptance": { "const": "five exact managed Windows cases; positives require warning-note-free LLVM, llvm-as, V004, exact native output, no forbidden partition body calls, owner reuse, and balanced noncopyable cleanup; negatives require one expected semantic diagnostic and no LLVM" }
+  }
+}

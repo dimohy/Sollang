@@ -1,0 +1,24 @@
+namespace probes.async_task_observability.session_id_exhaustion
+
+import std.async.diagnostics as diagnostics
+
+public printError value: diagnostics.DiagnosticError -> Unit uses Console {
+    value -> when {
+        diagnostics.DiagnosticError.InvalidCapacity { "InvalidCapacity" -> println }
+        diagnostics.DiagnosticError.SessionIdExhausted { "SessionIdExhausted" -> println }
+        diagnostics.DiagnosticError.AllocationFailed { "AllocationFailed" -> println }
+    }
+}
+
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) -> when {
+        Ok(session) {
+            session => active
+            active -> close -> when {
+                Ok(summary) { "unexpected-session=$(summary.sessionId)" -> println }
+                Err(failure) { "unexpected-busy" -> println }
+            }
+        }
+        Err(error) { error -> probes.async_task_observability.session_id_exhaustion.printError }
+    }
+}

@@ -18,6 +18,7 @@ $constantManifest = Join-Path $root 'examples/regression/expected/1733-selfhost-
 $selfhostGuidFixture = Join-Path $root 'examples/regression/1734-selfhost-guid-character-ranges.slg'
 $selfhostGuidExpected = Join-Path $root 'examples/regression/expected/1734-selfhost-guid-character-ranges.stdout.txt'
 $selfhostGuidManifest = Join-Path $root 'examples/regression/expected/1734-selfhost-guid-character-ranges.sources.txt'
+$runtimeManifest = Join-Path $root 'tests/Sollang.ExampleTests/Fixtures/selfhost-compiler-runtime.sources.txt'
 $output = Join-Path $root ('artifacts/scratch/character-literals-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $resultPath = Join-Path $output 'result.json'
@@ -71,6 +72,8 @@ try {
         $selfhostGuidFixture,
         $selfhostGuidExpected,
         $selfhostGuidManifest,
+        $runtimeManifest,
+        (Join-Path $root 'scripts/verify-source-manifest-closure.ps1'),
         (Join-Path $root 'syntax/sollang.lexer'),
         (Join-Path $root 'syntax/sollang.grammar'),
         (Join-Path $root 'syntax/generated/sollang_grammar.slg'),
@@ -89,6 +92,10 @@ try {
     }
     foreach ($path in $required) {
         if (-not (Test-Path -LiteralPath $path)) { throw "character literal input is missing: $path" }
+    }
+    $sourceClosureVerifier = Join-Path $root 'scripts/verify-source-manifest-closure.ps1'
+    foreach ($manifest in @($selfhostManifest, $constantManifest, $selfhostGuidManifest)) {
+        & $sourceClosureVerifier -Manifest @($manifest, $runtimeManifest) -RepositoryRoot $root
     }
     $record.inputHashes = [ordered]@{}
     foreach ($path in $required | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }) {

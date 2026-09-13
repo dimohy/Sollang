@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "defectId", "status", "compilerSha256", "expectedCompilerSha256", "candidateShaMatched", "inputStable", "inputDrift", "inputHashes", "selfhostContract", "productionDifferential", "failureIds", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "defectId": { "const": "C2026-09-06-341" },
+    "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "$ref": "#/$defs/sha" },
+    "expectedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "candidateShaMatched": { "type": "boolean" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "inputHashes": { "type": "object", "minProperties": 10, "additionalProperties": { "$ref": "#/$defs/sha" } },
+    "selfhostContract": { "$ref": "#/$defs/selfhost" },
+    "productionDifferential": { "$ref": "#/$defs/production" },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "candidateShaMatched": { "const": true }, "inputStable": { "const": true },
+          "inputDrift": { "maxItems": 0 }, "failureIds": { "maxItems": 0 }, "failure": { "type": "null" },
+          "selfhostContract": { "$ref": "#/$defs/selfhostPassed" },
+          "productionDifferential": { "$ref": "#/$defs/productionPassed" }
+        }
+      },
+      "else": { "properties": { "failureIds": { "minItems": 1 }, "failure": { "type": "string", "minLength": 1 } } }
+    }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "selfhost": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "result"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 20 }, "total": { "const": 20 }, "result": { "type": ["string", "null"] } }
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "passed", "compileExit", "llvmProduced", "llvmAsExit", "closureExit", "nativeExit", "stdoutExact", "diagnosticCount", "diagnosticMatched", "warningNoteFree", "failure"],
+      "properties": {
+        "id": { "enum": ["W01", "X01R", "X01S"] }, "kind": { "enum": ["positive", "negative"] }, "passed": { "type": "boolean" },
+        "compileExit": { "type": "integer" }, "llvmProduced": { "type": "boolean" }, "llvmAsExit": { "type": ["integer", "null"] },
+        "closureExit": { "type": ["integer", "null"] }, "nativeExit": { "type": ["integer", "null"] }, "stdoutExact": { "type": ["boolean", "null"] },
+        "diagnosticCount": { "type": "integer", "minimum": 0, "maximum": 1 }, "diagnosticMatched": { "type": ["boolean", "null"] },
+        "warningNoteFree": { "type": "boolean" }, "failure": { "type": ["string", "null"] }
+      }
+    },
+    "production": {
+      "type": "object", "additionalProperties": false,
+      "required": ["completed", "total", "cases"],
+      "properties": { "completed": { "type": "integer", "minimum": 0, "maximum": 3 }, "total": { "const": 3 }, "cases": { "type": "array", "maxItems": 3, "items": { "$ref": "#/$defs/case" } } }
+    },
+    "selfhostPassed": { "allOf": [{ "$ref": "#/$defs/selfhost" }, { "properties": { "completed": { "const": 20 }, "result": { "type": "string", "minLength": 1 } } }] },
+    "productionPassed": { "allOf": [{ "$ref": "#/$defs/production" }, { "properties": { "completed": { "const": 3 }, "cases": { "minItems": 3, "prefixItems": [{ "$ref": "#/$defs/w01" }, { "$ref": "#/$defs/x01r" }, { "$ref": "#/$defs/x01s" }] } } }] },
+    "positivePassed": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "kind": { "const": "positive" }, "passed": { "const": true }, "compileExit": { "const": 0 }, "llvmProduced": { "const": true }, "llvmAsExit": { "const": 0 }, "closureExit": { "const": 0 }, "nativeExit": { "const": 0 }, "stdoutExact": { "const": true }, "diagnosticCount": { "const": 0 }, "diagnosticMatched": { "type": "null" }, "warningNoteFree": { "const": true }, "failure": { "type": "null" } } }] },
+    "negativePassed": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "kind": { "const": "negative" }, "passed": { "const": true }, "compileExit": { "const": 1 }, "llvmProduced": { "const": false }, "llvmAsExit": { "type": "null" }, "closureExit": { "type": "null" }, "nativeExit": { "type": "null" }, "stdoutExact": { "type": "null" }, "diagnosticCount": { "const": 1 }, "diagnosticMatched": { "const": true }, "warningNoteFree": { "const": true }, "failure": { "type": "null" } } }] },
+    "w01": { "allOf": [{ "$ref": "#/$defs/positivePassed" }, { "properties": { "id": { "const": "W01" } } }] },
+    "x01r": { "allOf": [{ "$ref": "#/$defs/negativePassed" }, { "properties": { "id": { "const": "X01R" } } }] },
+    "x01s": { "allOf": [{ "$ref": "#/$defs/negativePassed" }, { "properties": { "id": { "const": "X01S" } } }] }
+  }
+}

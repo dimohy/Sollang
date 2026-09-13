@@ -1,0 +1,23 @@
+namespace contracts.stdlib.scalar_instance_migration
+
+import std.crypto.bits as bits
+import std.net.quic.loss_recovery as recovery
+
+exerciseBits left32: UInt32, right32: UInt32, left64: UInt64, right64: UInt64 -> UInt64 {
+    left32 -> bits.xor(right32) => xor32
+    xor32 -> bits.and(right32) => and32
+    and32 -> bits.not -> bits.shiftRight(1) -> bits.rotateRight(3) => mixed32
+    mixed32 -> bits.powerOfTwo => power32
+
+    left64 -> bits.xor64(right64) => xor64
+    xor64 -> bits.and64(right64) => and64
+    and64 -> bits.not64 -> bits.shiftRight64(1) -> bits.rotateRight64(3) => mixed64
+    mixed64 + (UInt64(power32) -> bits.powerOfTwo64)
+}
+
+exerciseRecovery maxDatagramSize: UInt64, largestAcknowledged: UInt64, packetNumber: UInt64 -> Bool {
+    maxDatagramSize -> recovery.initialCongestionWindow => initial
+    maxDatagramSize -> recovery.minimumCongestionWindow => minimum
+    initial >= minimum
+        and (largestAcknowledged -> recovery.lostByPacketThreshold(packetNumber))
+}

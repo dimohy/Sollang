@@ -41,24 +41,26 @@ sameBytes left: [UInt8], right: [UInt8] -> Bool {
     UInt32(0) => difference!
     0 => index!
     index! < (left -> len) -> while {
-        bits.xor(UInt32(left[index!]), UInt32(right[index!])) => different
+        UInt32(left[index!]) -> bits.xor(UInt32(right[index!])) => different
         difference! + different => difference!
         index! + 1 => index!
     }
     difference! == 0
 }
 
-public encode version: UInt32, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumber: UInt64, cryptoOffset: UInt64, handshakeBytes: [UInt8], trafficSecret: [UInt8; 32] -> Result<[UInt8; ~], errors.Error> {
-    handshakeBytes -> copyBytes => data
-    frames.Value.Crypto(frames.Crypto { offset: cryptoOffset, data: data }) -> frames.encodeValue? => plaintext
-    traffic_keys.derive(version, trafficSecret) => keys
-    keys.protector -> sealHandshake(
-    version,
-    destinationConnectionId,
-    sourceConnectionId,
-    packetNumber,
-    4,
-    plaintext)
+impl UInt32 {
+    public encode: self, destinationConnectionId: [UInt8], sourceConnectionId: [UInt8], packetNumber: UInt64, cryptoOffset: UInt64, handshakeBytes: [UInt8], trafficSecret: [UInt8; 32] -> Result<[UInt8; ~], errors.Error> {
+        handshakeBytes -> copyBytes => data
+        frames.Value.Crypto(frames.Crypto { offset: cryptoOffset, data: data }) -> frames.encodeValue? => plaintext
+        traffic_keys.derive(self, trafficSecret) => keys
+        keys.protector -> sealHandshake(
+        self,
+        destinationConnectionId,
+        sourceConnectionId,
+        packetNumber,
+        4,
+        plaintext)
+    }
 }
 
 public open datagram: [UInt8], expectedDestinationConnectionId: [UInt8], expectedPacketNumber: UInt64, trafficSecret: [UInt8; 32] -> Result<Opened, errors.Error> {
