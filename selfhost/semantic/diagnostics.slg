@@ -245,6 +245,7 @@ public firstInferredInputConflict prepared: ref semanticContext.SemanticSnapshot
 # Codes 11/12 reject indexed assignment value/index type mismatches.
 # Code 13 rejects an unresolved inferred return before lowering.
 # Code 14 rejects an indexed read whose concrete index has the wrong type.
+# Code 15 rejects a heterogeneous ordinary array element before lowering.
 public struct BindingDeclarationDiagnostic {
     public code: Int
     public sourceModule: Int
@@ -756,6 +757,95 @@ firstIndexedOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, re
     selected!
 }
 
+arrayElementUsesNumericLiteralContext package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], firstChild: ref [Int; ~], valueGlobal: Int, expected: Int, sourceModule: Int -> Bool {
+    package.nodes[valueGlobal] => value
+    -1 => number!
+    value.kind == 14 -> if { valueGlobal => number! }
+    value.kind == 22 and value.operatorKind == grammar.tokenIdMinus()
+        -> if {
+            firstChild[valueGlobal] => operand
+            operand >= 0 and package.nodes[operand].kind == 14
+                -> if { operand => number! }
+        }
+    number! < 0 -> if { false -> return }
+    types[expected] => expectedType
+    expectedType.symbol -> typeIds.canonicalBuiltinSymbol => symbol
+    package.nodes[number!] => literal
+    package.sources[sourceModule] -> slice(UIntSize(0), package.sources[sourceModule] -> len) => source
+    source -> numericLiteralRange.literalUsesFloatingSyntax(literal.start, literal.start + literal.length) => floating
+    expectedType.kind == 1 and expectedType.origin == 1
+        and (((symbol >= 2 and symbol <= 14) and not floating) or symbol == 20 or symbol == 21)
+}
+
+firstArrayLiteralOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], previous: BindingDeclarationDiagnostic -> BindingDeclarationDiagnostic {
+    previous => selected!
+    [Int; ~] => firstChild!
+    [Int; ~] => lastChild!
+    [Int; ~] => nextChild!
+    prepared.package.nodes -> each node {
+        firstChild! -> push(-1)
+        lastChild! -> push(-1)
+        nextChild! -> push(-1)
+    }
+    prepared.package.ranges -> each range {
+        0 => child!
+        child! < range.astCount -> while {
+            range.astStart + child! => global
+            prepared.package.nodes[global].parent => parent
+            parent >= 0 and parent < range.astCount -> if {
+                range.astStart + parent => parentGlobal
+                firstChild![parentGlobal] < 0 -> if { global => firstChild![parentGlobal] } else {
+                    global => nextChild![lastChild![parentGlobal]]
+                }
+                global => lastChild![parentGlobal]
+            }
+            child! + 1 => child!
+        }
+    }
+    prepared.package.ranges -> each range {
+        0 => arrayAst!
+        arrayAst! < range.astCount -> while {
+            range.astStart + arrayAst! => global
+            prepared.package.nodes[global].kind == 37
+                and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, arrayAst!))
+                -> if {
+                    -1 => expected!
+                    typeByAst[global] => arrayType
+                    arrayType >= 0 and arrayType < (resolved.types -> len)
+                        -> if {
+                            resolved.types[arrayType] => owner
+                            owner.kind == 2 or owner.kind == 3 or owner.kind == 4 or owner.kind == 12
+                                -> if { owner.first => expected! }
+                        }
+                    firstChild![global] => element!
+                    element! >= 0 -> while {
+                        prepared.package.nodes[element!] => value
+                        value.kind != 12 and value.kind != 16 -> if {
+                            typeByAst[element!] => actual!
+                            value.kind == 15 -> if {
+                                resolved.types -> typeIds.materializedReadTypeId(actual!) => actual!
+                            }
+                            actual! >= 0 and actual! < (resolved.types -> len)
+                                -> if {
+                                    expected! < 0 -> if { actual! => expected! }
+                                    prepared.package -> arrayElementUsesNumericLiteralContext(resolved.types, firstChild!, element!, expected!, range.sourceModule) => contextualLiteral
+                                    not resolved.types[expected!].containsParameter and not resolved.types[actual!].containsParameter
+                                        and not contextualLiteral and not (resolved.types -> indexedOperandTypesMatch(actual!, expected!))
+                                        and (prepared.package -> diagnosticOriginBefore(range.sourceModule, element! - range.astStart, selected!.sourceModule, selected!.valueAst))
+                                        -> if {
+                                            BindingDeclarationDiagnostic { code: 15, sourceModule: range.sourceModule, bindingAst: arrayAst!, valueAst: element! - range.astStart, nameToken: value.firstToken, expectedTypeId: expected!, actualTypeId: actual! } => selected!
+                                        }
+                                }
+                        }
+                        nextChild![element!] => element!
+                    }
+                }
+            arrayAst! + 1 => arrayAst!
+        }
+    }
+    selected!
+}
+
 public firstBindingDeclarationDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~], libraryCalls: ref [libraryImports.LibraryFunctionResolution; ~] -> BindingDeclarationDiagnostic {
     BindingDeclarationDiagnostic { code: 0, sourceModule: -1, bindingAst: -1, valueAst: -1, nameToken: -1, expectedTypeId: -1, actualTypeId: -1 } => selected!
     [Int; ~] => typeByAst!
@@ -816,6 +906,7 @@ public firstBindingDeclarationDiagnostic prepared: ref semanticContext.SemanticS
         }
     prepared -> firstContainerTransformDiagnostic(resolved, typeByAst!) => selected!
     prepared -> firstIndexedOperandDiagnostic(resolved, typeByAst!, selected!) => selected!
+    prepared -> firstArrayLiteralOperandDiagnostic(resolved, typeByAst!, selected!) => selected!
     prepared.package.ranges -> each range {
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
@@ -2844,6 +2935,41 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
     # virtual module identity distinguishes them from unresolved source calls.
     # Share signed spelling/range checks with ordinary and specialized calls.
     ir -> each call {
+        # Concrete array context owns element literal bounds as well as type
+        # admission. Reuse the canonical scalar diagnostic before the legacy
+        # initializer fallback; Float mismatches remain array type errors.
+        call.kind == 14 and call.typeId >= 0 and call.typeId < (resolved.types -> len)
+            and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                resolved.types -> typeIds.materializedReadTypeId(call.typeId) => arrayTypeId
+                arrayTypeId >= 0 -> if {
+                    resolved.types[arrayTypeId] => arrayType
+                    (arrayType.kind == 2 or arrayType.kind == 3 or arrayType.kind == 4 or arrayType.kind == 12)
+                        and arrayType.first >= 0 and not resolved.types[arrayType.first].containsParameter
+                        -> if {
+                            resolved.types[arrayType.first] => elementType
+                            elementType.symbol -> typeIds.canonicalBuiltinSymbol => elementSymbol
+                            elementType.kind == 1 and elementType.origin == 1
+                                and elementSymbol >= 2 and elementSymbol <= 14
+                                -> if {
+                                    call.operand0 => elementIndex!
+                                    elementIndex! >= 0 and elementIndex! < (ir -> len)
+                                        -> while {
+                                            ir[elementIndex!] => element
+                                            element.sourceModule >= 0 and element.sourceModule < (prepared.package.ranges -> len)
+                                                and (prepared -> declarationBodyIsActive(resolved, element.sourceModule, element.astNode))
+                                                -> if {
+                                                    prepared -> numericCallLiteralAt(element.sourceModule, element.astNode, elementSymbol, pointerBitWidth) => candidate
+                                                    (candidate.code == 1 or candidate.code == 2)
+                                                        and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                                        -> if { candidate => selected! }
+                                                }
+                                            element.nextOperand => elementIndex!
+                                        }
+                                }
+                        }
+                }
+            }
         call.kind == 6 and call.targetModule >= (prepared.package.ranges -> len)
             and call.symbol >= 0 -> if {
                 call.operand0 => argumentIndex!
@@ -4387,9 +4513,11 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     package -> expressionTypeIds.continuationFlags => continuationByAst
     package -> semanticContext.indexExpressionSourceAsts => sourceAstByExpression
     [Int; ~] => typeIdByAst!
+    [Int; ~] => floatingLiteralTypeByAst!
     0 => astSeed!
     astSeed! < (package.nodes -> len) -> while {
         typeIdByAst! -> push(-1)
+        floatingLiteralTypeByAst! -> push(-1)
         astSeed! + 1 => astSeed!
     }
     0 => typeIndex!
@@ -4400,7 +4528,16 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                 package.ranges[expression.sourceModule] => range
                 expression.astNode >= 0 and expression.astNode < range.astCount
                     and expression.typeId >= 0 and expression.typeId < (resolved.types -> len)
-                    -> if { expression.typeId => typeIdByAst![range.astStart + expression.astNode] }
+                    -> if {
+                        range.astStart + expression.astNode => expressionGlobal
+                        expression.typeId => typeIdByAst![expressionGlobal]
+                        resolved.types[expression.typeId] => expressionType
+                        package.nodes[expressionGlobal].kind == 14
+                            and expressionType.kind == 1 and expressionType.origin == 1
+                            and ((expressionType.symbol -> typeIds.canonicalBuiltinSymbol) == 20
+                            or (expressionType.symbol -> typeIds.canonicalBuiltinSymbol) == 21)
+                            -> if { expression.typeId => floatingLiteralTypeByAst![expressionGlobal] }
+                    }
             }
         typeIndex! + 1 => typeIndex!
     }
@@ -4526,6 +4663,50 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     repeatDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, repeatDiagnostic, selected!))
         -> if { repeatDiagnostic => selected! }
     ir -> each binary {
+        # Templates defer to their concrete array instances. Keep independently
+        # typed operands intact and share literal context with pre-IR admission.
+        binary.kind == 14 and binary.typeId >= 0 and binary.typeId < (resolved.types -> len)
+            and binary.sourceModule >= 0 and binary.sourceModule < (package.ranges -> len)
+            -> if {
+                resolved.types -> typeIds.materializedReadTypeId(binary.typeId) => arrayTypeId
+                arrayTypeId >= 0 -> if {
+                    resolved.types[arrayTypeId] => arrayType
+                    (arrayType.kind == 2 or arrayType.kind == 3 or arrayType.kind == 4 or arrayType.kind == 12)
+                        and arrayType.first >= 0 and not resolved.types[arrayType.first].containsParameter
+                        -> if {
+                            package.ranges[binary.sourceModule] => arrayRange
+                            binary.operand0 => elementIndex!
+                            elementIndex! >= 0 and elementIndex! < (ir -> len)
+                                -> while {
+                                    ir[elementIndex!] => element
+                                    element.astNode >= 0 and element.astNode < arrayRange.astCount
+                                        and element.typeId >= 0 and element.typeId < (resolved.types -> len)
+                                        and not resolved.types[element.typeId].containsParameter
+                                        -> if {
+                                            arrayRange.astStart + element.astNode => elementGlobal
+                                            element.typeId => actual!
+                                            # A numeric IR carrier cannot turn an originally floating
+                                            # literal into an integer during generic specialization.
+                                            floatingLiteralTypeByAst![elementGlobal] => floatingType
+                                            resolved.types[arrayType.first] => expectedType
+                                            expectedType.symbol -> typeIds.canonicalBuiltinSymbol => expectedSymbol
+                                            element.kind == 3 and floatingType >= 0
+                                                and expectedType.kind == 1 and expectedType.origin == 1
+                                                and expectedSymbol >= 2 and expectedSymbol <= 14
+                                                -> if { floatingType => actual! }
+                                            package -> arrayElementUsesNumericLiteralContext(resolved.types, firstChildByAst!, elementGlobal, arrayType.first, binary.sourceModule) => contextualLiteral
+                                            not contextualLiteral and not (resolved.types -> indexedOperandTypesMatch(actual!, arrayType.first))
+                                                -> if {
+                                                    ExpressionOperandDiagnostic { code: 43, sourceModule: binary.sourceModule, astNode: binary.astNode, operandAst: element.astNode, operatorKind: -1, locationOffset: package.nodes[elementGlobal].start, operandTypeSymbol: actual!, operandTypeId: -1, firstTypeId: arrayType.first } => candidate
+                                                    package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                                        -> if { candidate => selected! }
+                                                }
+                                        }
+                                    element.nextOperand => elementIndex!
+                                }
+                        }
+                }
+            }
         binary.kind == 8 and binary.sourceModule >= 0 and binary.sourceModule < (package.ranges -> len)
             and binary.operand0 >= 0 and binary.operand0 < (ir -> len)
             and binary.operand1 >= 0 and binary.operand1 < (ir -> len) => completeBinary

@@ -2539,82 +2539,97 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
                 compositeHomogeneous! -> push(true)
                 compositeSeed! + 1 => compositeSeed!
             }
-        0 => childCandidateIndex!
-        childCandidateIndex! < (expressions -> len)
+        # Canonical AST order owns element order. Literal facts are inserted
+        # before resolved names, so arena append order is not source order.
+        0 => childCandidateAst!
+        childCandidateAst! < (prepared.package.nodes -> len)
             -> while {
-                expressions[childCandidateIndex!] => childCandidate
-                prepared.package.ranges[childCandidate.sourceModule] => childRange
-                prepared.package.nodes[childRange.astStart + childCandidate.astNode].parent => childAncestor!
-                1 => childDistance!
-                childAncestor! >= 0 -> while {
-                    prepared.package.nodes[childRange.astStart + childAncestor!] => childAncestorNode
-                    childRange.astStart + childAncestor! => childAncestorGlobal
-                    childCandidate.typeId => childValueTypeId!
-                    childAncestorNode.kind == 37 -> if {
-                        types -> typeIds.materializedReadTypeId(childCandidate.typeId) => childValueTypeId!
-                    }
-                    (childAncestorNode.kind == 23 or childAncestorNode.kind == 37 or childAncestorNode.kind == 38) and expressionIndexByAst[childAncestorGlobal] < 0
-                        -> if {
-                            childDistance! < compositeChildDistance![childAncestorGlobal]
-                                -> if {
-                                    childDistance! => compositeChildDistance![childAncestorGlobal]
-                                    -1 => compositeFirstChildType![childAncestorGlobal]
-                                    -1 => compositeSecondChildType![childAncestorGlobal]
-                                    0 => compositeChildCount![childAncestorGlobal]
-                                    true => compositeHomogeneous![childAncestorGlobal]
-                                }
-                            childDistance! == compositeChildDistance![childAncestorGlobal]
-                                -> if {
-                                    compositeChildCount![childAncestorGlobal] => childPosition
-                                    childAncestorNode.kind == 38 -> if {
-                                        childPosition % 2 == 0 -> if {
+                expressionIndexByAst[childCandidateAst!] => childCandidateIndex
+                childCandidateIndex >= 0 -> if {
+                    expressions[childCandidateIndex] => childCandidate
+                    prepared.package.ranges[childCandidate.sourceModule] => childRange
+                    prepared.package.nodes[childRange.astStart + childCandidate.astNode].parent => childAncestor!
+                    1 => childDistance!
+                    childAncestor! >= 0 -> while {
+                        prepared.package.nodes[childRange.astStart + childAncestor!] => childAncestorNode
+                        childRange.astStart + childAncestor! => childAncestorGlobal
+                        childCandidate.typeId => childValueTypeId!
+                        childAncestorNode.kind == 37 -> if {
+                            types -> typeIds.materializedReadTypeId(childCandidate.typeId) => childValueTypeId!
+                        }
+                        (childAncestorNode.kind == 23 or childAncestorNode.kind == 37 or childAncestorNode.kind == 38) and expressionIndexByAst[childAncestorGlobal] < 0
+                            -> if {
+                                childDistance! < compositeChildDistance![childAncestorGlobal]
+                                    -> if {
+                                        childDistance! => compositeChildDistance![childAncestorGlobal]
+                                        -1 => compositeFirstChildType![childAncestorGlobal]
+                                        -1 => compositeSecondChildType![childAncestorGlobal]
+                                        0 => compositeChildCount![childAncestorGlobal]
+                                        true => compositeHomogeneous![childAncestorGlobal]
+                                    }
+                                childDistance! == compositeChildDistance![childAncestorGlobal]
+                                    -> if {
+                                        compositeChildCount![childAncestorGlobal] => childPosition
+                                        childAncestorNode.kind == 38 -> if {
+                                            childPosition % 2 == 0 -> if {
+                                                compositeFirstChildType![childAncestorGlobal] < 0
+                                                    -> if { childValueTypeId! => compositeFirstChildType![childAncestorGlobal] } else {
+                                                        childValueTypeId! != compositeFirstChildType![childAncestorGlobal]
+                                                            -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                                                    }
+                                            } else {
+                                                compositeSecondChildType![childAncestorGlobal] < 0
+                                                    -> if { childValueTypeId! => compositeSecondChildType![childAncestorGlobal] } else {
+                                                        childValueTypeId! != compositeSecondChildType![childAncestorGlobal]
+                                                            -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                                                    }
+                                            }
+                                        } else {
                                             compositeFirstChildType![childAncestorGlobal] < 0
                                                 -> if { childValueTypeId! => compositeFirstChildType![childAncestorGlobal] } else {
                                                     childValueTypeId! != compositeFirstChildType![childAncestorGlobal]
-                                                        -> if { false => compositeHomogeneous![childAncestorGlobal] }
-                                                }
-                                        } else {
-                                            compositeSecondChildType![childAncestorGlobal] < 0
-                                                -> if { childValueTypeId! => compositeSecondChildType![childAncestorGlobal] } else {
-                                                    childValueTypeId! != compositeSecondChildType![childAncestorGlobal]
-                                                        -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                                                        -> if {
+                                                            false => contextualNumericArrayElement!
+                                                            false => deferredGenericArrayElement!
+                                                            childAncestorNode.kind == 37 -> if {
+                                                                types[compositeFirstChildType![childAncestorGlobal]] => contextualArrayElementType
+                                                                # Retain a generic storage owner until specialization.
+                                                                # Every operand keeps its own type; concrete admission
+                                                                # must still validate the specialized element contract.
+                                                                contextualArrayElementType.containsParameter => deferredGenericArrayElement!
+                                                                prepared.package.nodes[childRange.astStart + childCandidate.astNode] => contextualArrayElementNode
+                                                                prepared.package.sources[childCandidate.sourceModule] -> slice(UIntSize(0), prepared.package.sources[childCandidate.sourceModule] -> len) => contextualArraySource
+                                                                contextualArrayElementNode.kind == 14
+                                                                    and contextualArrayElementType.kind == 1
+                                                                    and contextualArrayElementType.origin == 1
+                                                                    and ((contextualArrayElementType.symbol >= 2 and contextualArrayElementType.symbol <= 14)
+                                                                    or (contextualArrayElementType.symbol >= 19 and contextualArrayElementType.symbol <= 22))
+                                                                    and ((contextualArrayElementType.symbol >= 19 and contextualArrayElementType.symbol <= 22)
+                                                                    or not (contextualArraySource -> numericLiteralRange.literalUsesFloatingSyntax(contextualArrayElementNode.start, contextualArrayElementNode.start + contextualArrayElementNode.length)))
+                                                                    -> if {
+                                                                        true => contextualNumericArrayElement!
+                                                                    }
+                                                            }
+                                                            contextualNumericArrayElement! -> if {
+                                                                expressions[childCandidateIndex] => contextualNumericCandidate!
+                                                                compositeFirstChildType![childAncestorGlobal] => contextualNumericCandidate!.typeId
+                                                                contextualNumericCandidate! => expressions[childCandidateIndex]
+                                                            } else {
+                                                                not deferredGenericArrayElement! -> if {
+                                                                    false => compositeHomogeneous![childAncestorGlobal]
+                                                                }
+                                                            }
+                                                        }
                                                 }
                                         }
-                                    } else {
-                                        compositeFirstChildType![childAncestorGlobal] < 0
-                                            -> if { childValueTypeId! => compositeFirstChildType![childAncestorGlobal] } else {
-                                                childValueTypeId! != compositeFirstChildType![childAncestorGlobal]
-                                                    -> if {
-                                                        false => contextualNumericArrayElement!
-                                                        childAncestorNode.kind == 37 -> if {
-                                                            types[compositeFirstChildType![childAncestorGlobal]] => contextualArrayElementType
-                                                            prepared.package.nodes[childRange.astStart + childCandidate.astNode] => contextualArrayElementNode
-                                                            contextualArrayElementNode.kind == 14
-                                                                and contextualArrayElementType.kind == 1
-                                                                and contextualArrayElementType.origin == 1
-                                                                and ((contextualArrayElementType.symbol >= 2 and contextualArrayElementType.symbol <= 14)
-                                                                or (contextualArrayElementType.symbol >= 19 and contextualArrayElementType.symbol <= 22))
-                                                                -> if {
-                                                                    true => contextualNumericArrayElement!
-                                                                }
-                                                        }
-                                                        contextualNumericArrayElement! -> if {
-                                                            expressions[childCandidateIndex!] => contextualNumericCandidate!
-                                                            compositeFirstChildType![childAncestorGlobal] => contextualNumericCandidate!.typeId
-                                                            contextualNumericCandidate! => expressions[childCandidateIndex!]
-                                                        } else {
-                                                            false => compositeHomogeneous![childAncestorGlobal]
-                                                        }
-                                                    }
-                                            }
+                                        childPosition + 1 => compositeChildCount![childAncestorGlobal]
                                     }
-                                    childPosition + 1 => compositeChildCount![childAncestorGlobal]
-                                }
-                        }
-                    childAncestorNode.parent => childAncestor!
-                    childDistance! + 1 => childDistance!
+                            }
+                        childAncestorNode.parent => childAncestor!
+                        childDistance! + 1 => childDistance!
+                    }
                 }
-                childCandidateIndex! + 1 => childCandidateIndex!
+                childCandidateAst! + 1 => childCandidateAst!
             }
         0 => compositeSourceIndex!
         compositeSourceIndex! < (prepared.package.sources -> len)
