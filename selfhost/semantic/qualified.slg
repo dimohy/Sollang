@@ -671,7 +671,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                                             }
                                                                         }
                                                                 } else { qualifiedSymbolSearch! => qualifiedModuleSymbol! }
-                                                                not qualifiedMethodResolved! and qualifiedCandidate.flags / 4 % 2 == 1
+                                                                not qualifiedMethodResolved! and (qualifiedCandidate.flags / 4 % 2 == 1
+                                                                    or modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, qualifiedSourceIndex, package.tokens, package.ranges))
                                                                     -> if { true => qualifiedModulePublic! }
                                                                 qualifiedModuleSymbol! >= 0 -> if {
                                                                     qualifiedRange.symbolCount => qualifiedSymbolSearch!
@@ -843,6 +844,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         }
                                         2 => status!
                                         targetSymbol! >= 0 -> if {
+                                            # Visibility belongs to the selected declaration's logical
+                                            # module, including another fragment behind an import facade.
+                                            modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, identities[selectedTargetModule!].sourceIndex, package.tokens, package.ranges)
+                                                -> if { true => targetPublic! }
                                             targetPublic! -> if { 0 => status! } else { 3 => status! }
                                         }
                                         QualifiedResolution {

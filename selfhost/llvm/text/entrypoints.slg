@@ -690,6 +690,28 @@ emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Un
     identity.pathLength > 0 -> if {
         source -> slice(identity.pathStart, identity.pathLength) => moduleName!
     }
+    diagnostic.code == 14 -> if {
+        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+        source -> syntaxDiagnostics.sourceLocation(annotation.start) => location
+        rejection.prepared.qualified -> each candidate {
+            candidate.sourceModule == diagnostic.sourceModule and candidate.pathAst == diagnostic.typeAst
+                and candidate.status == 3
+                -> if {
+                    rejection.prepared.modules[candidate.targetModule] => owner
+                    rejection.prepared.package.ranges[owner.sourceIndex] => ownerRange
+                    rejection.prepared.package.symbols[ownerRange.symbolStart + candidate.targetSymbol] => declaration
+                    rejection.prepared.package.tokens[ownerRange.tokenStart + declaration.nameToken] => typeToken
+                    rejection.prepared.package.sources[owner.sourceIndex] -> slice(typeToken.span.start, typeToken.span.length) => typeName
+                    rejection.prepared.package.sources[owner.sourceIndex] -> slice(owner.pathStart, owner.pathLength) => ownerName
+                    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] type '" -> print
+                    owner.pathLength > 0 -> if { "$ownerName." -> print }
+                    "$typeName' is internal to module '$ownerName'" -> println
+                    return
+                }
+        }
+        "; sollang compiler invariant QUALIFIED_PRIVATE_TYPE_DIAGNOSTIC_IDENTITY_MISSING" -> println
+        return
+    }
     diagnostic.code == 13 -> if {
         rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => declaration
         source -> syntaxDiagnostics.sourceLocation(declaration.start) => location

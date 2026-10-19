@@ -1279,6 +1279,36 @@ firstPreparedValueLayoutDiagnostic prepared: ref semanticContext.SemanticSnapsho
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
+firstPreparedPrivateNominalDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+    prepared.qualified -> each candidate {
+        candidate.status == 3 and candidate.sourceModule >= 0
+            and candidate.sourceModule < (prepared.package.ranges -> len)
+            and candidate.targetModule >= 0 and candidate.targetModule < (prepared.modules -> len)
+            -> if {
+                prepared.modules[candidate.targetModule].sourceIndex => targetSource
+                targetSource >= 0 and targetSource < (prepared.package.ranges -> len)
+                    -> if {
+                        prepared.package.ranges[targetSource] => targetRange
+                        candidate.targetSymbol >= 0 and candidate.targetSymbol < targetRange.symbolCount
+                            -> if {
+                                prepared.package.symbols[targetRange.symbolStart + candidate.targetSymbol] => declaration
+                                prepared.package.ranges[candidate.sourceModule] => range
+                                declaration.parent < 0 and (declaration.kind == 3 or declaration.kind == 4)
+                                    and candidate.pathAst >= 0 and candidate.pathAst < range.astCount
+                                    -> if {
+                                        prepared.package.nodes[range.astStart + candidate.pathAst] => path
+                                        path.firstToken >= 0 and path.firstToken < range.tokenCount
+                                            -> if {
+                                                SignatureTypeDiagnostic { code: 14, sourceModule: candidate.sourceModule, functionSymbol: -1, typeAst: candidate.pathAst, nameToken: path.firstToken, genericToken: -1 } -> return
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+}
+
 public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
     prepared -> firstPreparedNominalSignatureDiagnostic => nominalDiagnostic
     # Import ambiguity is a path-resolution error before semantic admission.
@@ -1286,7 +1316,11 @@ public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.Semant
     prepared -> firstPreparedValueLayoutDiagnostic => layoutDiagnostic
     layoutDiagnostic.code != 0 -> if { layoutDiagnostic -> return }
     prepared -> firstPreparedExplicitSignatureTypeDiagnostic => explicitDiagnostic
-    explicitDiagnostic.code == 0 -> if { nominalDiagnostic } else { explicitDiagnostic }
+    explicitDiagnostic.code != 0 -> if { explicitDiagnostic -> return }
+    nominalDiagnostic.code != 0 -> if { nominalDiagnostic -> return }
+    # Reject inaccessible nominal paths before an unresolved constructor can
+    # enter typed IR. Existing declaration/signature errors keep their priority.
+    prepared -> firstPreparedPrivateNominalDiagnostic
 }
 
 # Unchecked emission preserves its explicit-signature contract. Nominal path
