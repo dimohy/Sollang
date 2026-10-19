@@ -9756,8 +9756,13 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
-        if (expression is null || expression is NumberExpression)
+        if (expression is null)
         {
+            return;
+        }
+        if (expression is NumberExpression && IsNumericType(expectedType))
+        {
+            ValidateNumericLiteralConversion(expression, expectedType, FormatType(expectedType));
             return;
         }
         var actualType = InferExpression(expression, functions, bindings,
@@ -12204,6 +12209,10 @@ internal sealed partial class SemanticCompiler
                 {
                     throw Error(target.Line, target.Column, "Text byte expects one UIntSize index");
                 }
+                if (target.Arguments[0] is NumberExpression)
+                {
+                    ValidateNumericLiteralConversion(target.Arguments[0], BoundType.UIntSize, "UIntSize");
+                }
                 var byteIndexType = target.Arguments[0] is NumberExpression
                     ? BoundType.UIntSize
                     : InferExpression(target.Arguments[0], functions, bindings,
@@ -12223,6 +12232,10 @@ internal sealed partial class SemanticCompiler
                 }
                 foreach (var argument in target.Arguments)
                 {
+                    if (argument is NumberExpression)
+                    {
+                        ValidateNumericLiteralConversion(argument, BoundType.UIntSize, "UIntSize");
+                    }
                     var argumentType = argument is NumberExpression
                         ? BoundType.UIntSize
                         : InferExpression(argument, functions, bindings,

@@ -2927,14 +2927,209 @@ numericCallLiteralAt prepared: ref semanticContext.SemanticSnapshot, sourceModul
     NumericCallLiteralDiagnostic { code: 1, sourceModule: sourceModule, locationAst: expressionAst, literalAst: literalAst!, expectedSymbol: expectedSymbol, negative: negative! }
 }
 
+textIntrinsicOpcode call: typedIr.TypedIrNode, types: ref [typeIds.SemanticType; ~], ir: ref [typedIr.TypedIrNode; ~] -> Int {
+    (call.kind == 6 or call.kind == 9) and call.targetModule < 0
+        and (call.opcode == -202 or call.opcode == -203)
+        and call.operand0 >= 0 and call.operand0 < (ir -> len)
+        -> unless { 0 -> return }
+    types -> typeIds.materializedReadTypeId(ir[call.operand0].typeId) => receiverId
+    receiverId >= 0 and receiverId < (types -> len)
+        -> unless { 0 -> return }
+    types[receiverId] => receiver
+    receiver.kind == 1 and receiver.origin == 1 and (receiver.symbol == 1 or receiver.symbol == 24)
+        -> if { call.opcode } else { 0 }
+}
+
+textIntrinsicSourceAst call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~] -> Int {
+    call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+        -> unless { -1 -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    call.astNode >= 0 and call.astNode < range.astCount
+        -> unless { -1 -> return }
+    call.astNode => ownerAst!
+    prepared.package.nodes[range.astStart + ownerAst!] => sourceCall
+    sourceCall.kind != 10 and sourceCall.parent >= 0
+        -> if {
+            range.astStart + sourceCall.parent => parentGlobal
+            prepared.package.nodes[parentGlobal].kind == 10
+                and flowSources[parentGlobal] != range.astStart + call.astNode
+                -> if { sourceCall.parent => ownerAst! }
+        }
+    prepared.package.nodes[range.astStart + ownerAst!].kind => ownerKind
+    ownerKind == 10 or ownerKind == 11 or ownerKind == 77
+        -> if { ownerAst! } else { -1 }
+}
+
+textIntrinsicArgumentAsts call: typedIr.TypedIrNode, prepared: ref semanticContext.SemanticSnapshot, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> [Int; ~] {
+    [Int; ~] => explicitArguments!
+    call -> textIntrinsicSourceAst(prepared, flowSources) => ownerAst
+    ownerAst < 0 -> if { explicitArguments! -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    prepared.package.nodes[range.astStart + ownerAst].kind => ownerKind
+    calls.ModuleCallResolution { sourceModule: call.sourceModule, callAst: ownerAst, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => intrinsic
+    prepared.package -> semanticContext.indexedCallArgumentAsts(intrinsic, flowSources, firstChildByAst, nextSiblingByAst) => arguments
+    ownerKind == 10 -> if { 1 } else { 0 } => firstArgument
+    firstArgument => ordinal!
+    ordinal! < (arguments -> len) -> while {
+        explicitArguments! -> push(arguments[ordinal!])
+        ordinal! + 1 => ordinal!
+    }
+    explicitArguments!
+}
+
+firstTextIntrinsicOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~] -> ExpressionOperandDiagnostic {
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    ir -> each call {
+        call -> textIntrinsicOpcode(resolved.types, ir) => opcode
+        opcode < 0 and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[call.sourceModule] => range
+                call.astNode >= 0 and call.astNode < range.astCount
+                    and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
+                    -> if {
+                        prepared.directFlowTargetPathByAst[range.astStart + call.astNode] => pathAst!
+                        # A target call and its enclosing flow can name the same
+                        # source invocation. Follow those exact parent identities.
+                        pathAst! < 0 -> if {
+                            call -> textIntrinsicSourceAst(prepared, flowSources) => ownerAst
+                            ownerAst >= 0 -> if {
+                                prepared.directFlowTargetPathByAst[range.astStart + ownerAst] => pathAst!
+                            }
+                        }
+                        pathAst! >= 0 -> if {
+                            call -> textIntrinsicArgumentAsts(prepared, flowSources, firstChildByAst, nextSiblingByAst) => arguments
+                            arguments -> len => argumentCount
+                            opcode == -202 -> if { 1 } else { 2 } => expectedCount
+                            argumentCount != expectedCount -> if {
+                                ExpressionOperandDiagnostic { code: 68, sourceModule: call.sourceModule, astNode: pathAst!, operandAst: pathAst!, operatorKind: opcode, locationOffset: prepared.package.nodes[range.astStart + pathAst!].start, operandTypeSymbol: argumentCount, operandTypeId: -1, firstTypeId: -1 } => candidate
+                                prepared.package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                    -> if { candidate => selected! }
+                            } else {
+                                0 => ordinal!
+                                call.operand1 => argumentIndex!
+                                ordinal! < (arguments -> len) and argumentIndex! >= 0 and argumentIndex! < (ir -> len)
+                                    -> while {
+                                        arguments[ordinal!] => argumentGlobal
+                                        prepared.package.nodes[argumentGlobal] => syntaxArgument
+                                        resolved.types -> typeIds.materializedReadTypeId(ir[argumentIndex!].typeId) => actualId
+                                        syntaxArgument.kind != 14 and actualId >= 0 and actualId < (resolved.types -> len)
+                                            and not resolved.types[actualId].containsParameter
+                                            -> if {
+                                                resolved.types[actualId] => actual
+                                                not (actual.kind == 1 and actual.origin == 1 and actual.symbol == 13)
+                                                    -> if {
+                                                        argumentGlobal - range.astStart => argumentAst
+                                                        ExpressionOperandDiagnostic { code: 69, sourceModule: call.sourceModule, astNode: argumentAst, operandAst: argumentAst, operatorKind: opcode, locationOffset: syntaxArgument.start, operandTypeSymbol: -1, operandTypeId: actualId, firstTypeId: -1 } => candidate
+                                                        prepared.package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                                            -> if { candidate => selected! }
+                                                    }
+                                            }
+                                        ir[argumentIndex!].nextOperand => argumentIndex!
+                                        ordinal! + 1 => ordinal!
+                                    }
+                            }
+                        }
+                    }
+            }
+    }
+    selected!
+}
+
 # Check committed binary contexts and every concrete generic instance before
 # collapsing shared source facts into the final diagnostics.
 public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~], pointerBitWidth: Int -> NumericCallLiteralDiagnostic {
     NumericCallLiteralDiagnostic { code: 0, sourceModule: -1, locationAst: -1, literalAst: -1, expectedSymbol: -1, negative: false } => selected!
+    # A binary peer also supplies context outside a generic clone. Reuse the
+    # source value-edge walk rather than treating every IR literal as scalar:
+    # container elements can carry provisional widths owned by their container.
+    [Int; ~] => firstChild!
+    [Int; ~] => lastChild!
+    [Int; ~] => nextChild!
+    prepared.package.nodes -> each slot {
+        firstChild! -> push(-1)
+        lastChild! -> push(-1)
+        nextChild! -> push(-1)
+    }
+    prepared.package.ranges -> each range {
+        0 => ast!
+        ast! < range.astCount -> while {
+            range.astStart + ast! => global
+            prepared.package.nodes[global].parent => parent
+            parent >= 0 -> if {
+                range.astStart + parent => owner
+                firstChild![owner] < 0 -> if { global => firstChild![owner] } else {
+                    global => nextChild![lastChild![owner]]
+                }
+                global => lastChild![owner]
+            }
+            ast! + 1 => ast!
+        }
+    }
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     # Imported calls acquire validated ABI context at library projection. Their
     # virtual module identity distinguishes them from unresolved source calls.
     # Share signed spelling/range checks with ordinary and specialized calls.
     ir -> each call {
+        # Intrinsic numeric context belongs to the original source argument,
+        # never to an IR producer that can point back to a named binding.
+        call -> textIntrinsicOpcode(resolved.types, ir) => textOpcode
+        textOpcode < 0 -> if {
+            call -> textIntrinsicArgumentAsts(prepared, flowSources, firstChild!, nextChild!) => arguments
+            textOpcode == -202 -> if { 1 } else { 2 } => expectedTotal
+            (arguments -> len) == expectedTotal -> if {
+                prepared.package.ranges[call.sourceModule] => range
+                0 => ordinal!
+                ordinal! < (arguments -> len) -> while {
+                    arguments[ordinal!] => argumentGlobal
+                    prepared.package.nodes[argumentGlobal].kind == 14
+                        and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
+                        -> if {
+                            prepared -> numericCallLiteralAt(call.sourceModule, argumentGlobal - range.astStart, 13, pointerBitWidth) => candidate
+                            candidate.code > 0
+                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                -> if { candidate => selected! }
+                        }
+                    ordinal! + 1 => ordinal!
+                }
+            }
+        }
+        call.kind == 9 and (call.opcode == -306 or call.opcode == -307)
+            and call.operand0 >= 0 and call.operand0 < (ir -> len)
+            and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                resolved.types -> typeIds.materializedReadTypeId(ir[call.operand0].typeId) => pathTypeId
+                pathTypeId >= 0 and pathTypeId < (resolved.types -> len)
+                    and resolved.types[pathTypeId].kind == 1 and resolved.types[pathTypeId].origin == 1
+                    and resolved.types[pathTypeId].symbol == 1
+                    -> if {
+                        prepared.package.ranges[call.sourceModule] => range
+                        call.astNode >= 0 and call.astNode < range.astCount
+                            -> if {
+                                firstChild![range.astStart + call.astNode] => pathAst
+                                pathAst >= 0 -> if {
+                                    nextChild![pathAst] => argumentGlobal!
+                                    0 => ordinal!
+                                    argumentGlobal! >= 0 -> while {
+                                        11 => expectedSymbol!
+                                        call.flags % 2 == 1 -> if { 1 } else { 0 } => lengthOrdinal
+                                        call.flags / 2 % 2 == 1 and ordinal! == lengthOrdinal
+                                            -> if { 13 => expectedSymbol! }
+                                        prepared.package.nodes[argumentGlobal!].kind == 14
+                                            and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.astNode))
+                                            -> if {
+                                                prepared -> numericCallLiteralAt(call.sourceModule, argumentGlobal! - range.astStart, expectedSymbol!, pointerBitWidth) => candidate
+                                                candidate.code > 0
+                                                    and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                                    -> if { candidate => selected! }
+                                            }
+                                        nextChild![argumentGlobal!] => argumentGlobal!
+                                        ordinal! + 1 => ordinal!
+                                    }
+                                }
+                            }
+                    }
+            }
         # Concrete array context owns element literal bounds as well as type
         # admission. Reuse the canonical scalar diagnostic before the legacy
         # initializer fallback; Float mismatches remain array type errors.
@@ -2994,32 +3189,6 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
                         argument.nextOperand => argumentIndex!
                     }
             }
-    }
-    # A binary peer also supplies context outside a generic clone. Reuse the
-    # source value-edge walk rather than treating every IR literal as scalar:
-    # container elements can carry provisional widths owned by their container.
-    [Int; ~] => firstChild!
-    [Int; ~] => lastChild!
-    [Int; ~] => nextChild!
-    prepared.package.nodes -> each slot {
-        firstChild! -> push(-1)
-        lastChild! -> push(-1)
-        nextChild! -> push(-1)
-    }
-    prepared.package.ranges -> each range {
-        0 => ast!
-        ast! < range.astCount -> while {
-            range.astStart + ast! => global
-            prepared.package.nodes[global].parent => parent
-            parent >= 0 -> if {
-                range.astStart + parent => owner
-                firstChild![owner] < 0 -> if { global => firstChild![owner] } else {
-                    global => nextChild![lastChild![owner]]
-                }
-                global => lastChild![owner]
-            }
-            ast! + 1 => ast!
-        }
     }
     ir -> each binary {
         binary.kind == 8 and binary.operand0 >= 0 and binary.operand0 < (ir -> len)
@@ -4662,6 +4831,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     prepared -> firstRepeatBlockDiagnostic(resolved, ir) => repeatDiagnostic
     repeatDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, repeatDiagnostic, selected!))
         -> if { repeatDiagnostic => selected! }
+    prepared -> firstTextIntrinsicOperandDiagnostic(resolved, ir, firstChildByAst!, nextChildByAst!) => textDiagnostic
+    textDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, textDiagnostic, selected!))
+        -> if { textDiagnostic => selected! }
     ir -> each binary {
         # Templates defer to their concrete array instances. Keep independently
         # typed operands intact and share literal context with pre-IR admission.

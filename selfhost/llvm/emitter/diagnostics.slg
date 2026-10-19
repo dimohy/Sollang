@@ -3520,12 +3520,10 @@ public emitInterpolationDiagnostics context: ref emitterContext.EmitContext -> U
                     context -> interpolationSourceModule(nodeIndex!) => sourceModule
                     context.interpolations -> semanticDiagnostics.interpolationCallTargetLocation(context.sources[sourceModule], nodeIndex!) => location
                     context -> emitInterpolationSemanticPrefixAt(nodeIndex!, sourceModule, location)
-                    interpolationNode.opcode == -202 -> if {
-                        "Text byte expects one UIntSize index" -> println
-                    }
-                    interpolationNode.opcode == -203 -> if {
-                        "Text slice expects UIntSize start and byte length" -> println
-                    }
+                    interpolationNode.opcode == -202 or interpolationNode.opcode == -203
+                        -> if {
+                            interpolationNode.opcode -> emitTextIntrinsicArityDiagnostic
+                        }
                     interpolationNode.opcode == -101 -> if {
                         "len does not accept arguments" -> println
                     }
@@ -3540,11 +3538,7 @@ public emitInterpolationDiagnostics context: ref emitterContext.EmitContext -> U
                 -> if {
                     context -> interpolationSourceModule(nodeIndex!) => sourceModule
                     context -> emitInterpolationSemanticPrefix(context.invalidTextIntrinsicArgumentByNode[nodeIndex!], sourceModule)
-                    interpolationNode.opcode == -202 -> if {
-                        "Text byte index must be UIntSize" -> println
-                    } else {
-                        "Text slice start and length must be UIntSize" -> println
-                    }
+                    interpolationNode.opcode -> emitTextIntrinsicIndexDiagnostic
                 }
             context.collectionMembershipDiagnosticByNode[nodeIndex!].code > 0
                 -> if {
@@ -5129,6 +5123,16 @@ numericCallLiteralDiagnosticCount context: ref emitterContext.EmitContext -> Int
         -> if { 1 } else { 0 }
 }
 
+emitTextIntrinsicArityDiagnostic opcode: Int -> Unit uses Console {
+    opcode == -202 -> if { "Text byte expects one UIntSize index" -> println }
+    opcode == -203 -> if { "Text slice expects UIntSize start and byte length" -> println }
+}
+
+emitTextIntrinsicIndexDiagnostic opcode: Int -> Unit uses Console {
+    opcode == -202 -> if { "Text byte index must be UIntSize" -> println }
+    opcode == -203 -> if { "Text slice start and length must be UIntSize" -> println }
+}
+
 emitNumericCallLiteralDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
     context -> emitNumericLiteralDiagnostic(context.numericCallLiteralDiagnostic)
 }
@@ -5349,6 +5353,17 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
             diagnostic.code == 65 -> if { "arena store expects UIntSize offset and UInt8 value" -> println }
             diagnostic.code == 66 -> if { "arena load offset must be UIntSize" -> println }
             diagnostic.code == 67 -> if { "unknown value-flow target '$operation'" -> println }
+            return
+        }
+    diagnostic.code == 68 or diagnostic.code == 69
+        -> if {
+            context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+            context -> emitExpressionSemanticPrefix(diagnostic, location)
+            diagnostic.code == 68 -> if {
+                diagnostic.operatorKind -> emitTextIntrinsicArityDiagnostic
+            } else {
+                diagnostic.operatorKind -> emitTextIntrinsicIndexDiagnostic
+            }
             return
         }
     diagnostic.code == 49 -> if {
