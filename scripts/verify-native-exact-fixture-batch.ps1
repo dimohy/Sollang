@@ -490,6 +490,9 @@ if (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract)) {
     }
     $phaseFixtureNames = @($phaseContext.Contract.cases | Where-Object { 'compile' -cin @($_.expectedStages.PSObject.Properties.Name) -and (Get-NativeExactPhaseExpectedStage $_ compile $CompilerSide).exitCode -eq 0 } |
         ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.fixture.path) })
+    foreach ($fixtureName in $phaseFixtureNames | Where-Object { $_ -cnotin $Fixture }) {
+        Assert-NativeExactCompilerSourceClosure -RepositoryRoot $RepositoryRoot -Fixture $fixtureName
+    }
 } elseif (-not [string]::IsNullOrWhiteSpace($CompilerSide)) { throw 'PHASE_EXECUTION_CONTRACT_REQUIRED' }
 if ($ValidateInputsOnly) {
     Write-Host "[native exact input preflight] PASS $($Fixture.Count) fixture inputs; compilation and execution remain unverified."
@@ -629,6 +632,15 @@ Write-NativeExactBatchReport -State passed
 Write-Host "[native exact batch] PASS $Label $Platform $($Fixture.Count) fixtures."
 
 if ($null -ne $phaseContext) {
+    foreach ($fixtureName in $phaseFixtureNames | Where-Object { $_ -cnotin $Fixture }) {
+        Assert-VerificationCancellationNotRequested
+        & $verifierPath -Compiler $compilerPath -Label "$Label-phase-extra" -Fixture $fixtureName `
+            -Platform $Platform -LlvmRoot $llvmPath -StdlibRoot $stdlibPath -RepositoryRoot $repositoryPath `
+            -OutputDirectory $outputPath -Jobs $Jobs -TimeoutMilliseconds $TimeoutMilliseconds `
+            -PhaseExecutionContract $PhaseExecutionContract -CompilerSide $CompilerSide `
+            -CancellationRequestPath $CancellationRequestPath -CancellationRunId $CancellationRunId `
+            -CancellationAcknowledgementPath $CancellationAcknowledgementPath
+    }
     $closed = Complete-NativeExactPhaseExecution $phaseContext
     if (-not $closed) { Write-Host '[phase execution] INCOMPLETE: compile-only negatives or other contracted outcomes remain pending; outputs retained.' }
 }

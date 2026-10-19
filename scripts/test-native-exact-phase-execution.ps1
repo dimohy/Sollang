@@ -264,6 +264,31 @@ $gateContract=@{schemaVersion=1;phase='test';wholeFixturePlan=$plan;decisionIds=
 $gateContractPath=Join-Path $gateRoot 'contract.json'; Save-Json $gateContractPath $gateContract
 $validContext=Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') (Join-Path $gateRoot 'scripts/verify-native-exact-fixture-batch.ps1') $plan
 $passed.Add('reviewed-authority-shape')
+# A required phase witness may be newer than the frozen405 suite. Its exact
+# source/oracle closure is still pinned, and the405 plan remains mandatory.
+$originalCase = $gateContract.cases[0]
+$extraSource = Join-Path $gateRoot 'examples/regression/extra-phase-witness.slg'
+$extraExpected = Join-Path $gateRoot 'examples/regression/expected/extra-phase-witness.stdout.txt'
+[IO.File]::WriteAllText($extraSource, 'extra-source')
+$extraCase = $originalCase | ConvertTo-Json -Depth 15 | ConvertFrom-Json -AsHashtable
+$extraCase.id = 'extra-phase-witness'
+$extraCase.fixture = Get-NativeExactPhaseReference $gateRoot $extraSource
+$gateContract.cases += @($extraCase); Save-Json $gateContractPath $gateContract
+Assert-Rejected 'extra-positive-missing-oracle' { Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') $PSCommandPath } 'PHASE_EXECUTION_FILE_BOUNDARY'
+[IO.File]::WriteAllText($extraExpected, "extra-output`n")
+$extraDependency = Join-Path $gateRoot 'extra-dependency.slg'
+[IO.File]::WriteAllText($extraDependency, 'extra-dependency')
+[IO.File]::WriteAllText((Join-Path $gateRoot 'examples/regression/expected/extra-phase-witness.sources.txt'), "examples/regression/extra-phase-witness.slg`nextra-dependency.slg`n")
+$extraContext = Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') (Join-Path $gateRoot 'scripts/verify-native-exact-fixture-batch.ps1') $plan
+if (-not $extraContext.InputHashes.Contains('examples/regression/expected/extra-phase-witness.stdout.txt') -or
+    -not $extraContext.InputHashes.Contains('extra-dependency.slg')) { throw 'TEST_EXTRA_POSITIVE_INPUT_NOT_PINNED' }
+[IO.File]::AppendAllText($extraDependency, '-changed')
+Assert-Rejected 'extra-positive-dependency-drift' { Assert-NativeExactPhaseHashes $gateRoot $extraContext.InputHashes } 'PHASE_EXECUTION_INPUT_DRIFT'
+$extraCase.fixture = Get-NativeExactPhaseReference $gateRoot 'fixture.slg'
+Save-Json $gateContractPath $gateContract
+Assert-Rejected 'extra-positive-source-boundary' { Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') $PSCommandPath } 'PHASE_EXECUTION_POSITIVE_FIXTURE_BOUNDARY'
+$gateContract.cases = @($originalCase); Save-Json $gateContractPath $gateContract
+$passed.Add('extra-positive-keeps-frozen405')
 # Progress fields must not invalidate the immutable reviewed inventory or force
 # another whole batch. Semantic changes still require a new review contract.
 $authorityPath=Join-Path $gateRoot 'scripts/contracts/structural-parity-detail.json'

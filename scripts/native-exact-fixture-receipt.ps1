@@ -596,8 +596,24 @@ function Get-NativeExactPhaseContext {
             continue
         }
         $compileExpected = Get-NativeExactPhaseExpectedStage $case compile $CompilerSide
-        if ($compileExpected.exitCode -eq 0 -and $case.fixture.path -cnotin
-            @($defaultPlan | ForEach-Object { "examples/regression/$_.slg" })) { throw 'PHASE_EXECUTION_POSITIVE_OUTSIDE_WHOLE_PLAN' }
+        if ($compileExpected.exitCode -eq 0) {
+            # Additional phase witnesses supplement, rather than replace, the
+            # immutable405 batch. They use the same canonical fixture verifier.
+            if ($case.fixture.path -cnotmatch '^examples/regression/[^/\\]+\.slg$') {
+                throw 'PHASE_EXECUTION_POSITIVE_FIXTURE_BOUNDARY'
+            }
+            $fixtureName = [IO.Path]::GetFileNameWithoutExtension($case.fixture.path)
+            $wholeInputs.Add((Get-NativeExactPhaseFile $root "examples/regression/expected/$fixtureName.stdout.txt"))
+            foreach ($gold in Get-ChildItem -LiteralPath (Join-Path $root 'examples/regression/expected') -File -Filter "$fixtureName.*") {
+                $wholeInputs.Add($gold.FullName)
+            }
+            $manifest = Join-Path $root "examples/regression/expected/$fixtureName.sources.txt"
+            if (Test-Path -LiteralPath $manifest) {
+                foreach ($line in [IO.File]::ReadAllLines($manifest)) {
+                    if (-not [string]::IsNullOrWhiteSpace($line)) { $wholeInputs.Add((Get-NativeExactPhaseFile $root $line.Trim())) }
+                }
+            }
+        }
         foreach ($id in $case.decisionIds) { if ($id -cnotin $ids) { throw 'PHASE_EXECUTION_UNKNOWN_DECISION' }; [void]$covered.Add($id) }
         $stageNames = @($case.expectedStages.PSObject.Properties.Name)
         if ('compile' -cnotin $stageNames -or @($stageNames | Where-Object { $_ -cnotin @('compile','run') }).Count -gt 0 -or
