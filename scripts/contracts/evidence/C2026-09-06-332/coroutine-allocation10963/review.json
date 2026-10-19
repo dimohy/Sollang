@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "status": "unresolved-original-allocation-contract",
+  "existingDefect": "C2026-09-06-332",
+  "newDefectIdAdded": false,
+  "originalExpected": {
+    "allocations": 14,
+    "releases": 14,
+    "invalid": 0
+  },
+  "currentCSharp": {
+    "allocations": 14,
+    "releases": 14,
+    "invalid": 0
+  },
+  "currentSlg": {
+    "allocations": 19,
+    "releases": 19,
+    "invalid": 0
+  },
+  "observedCause": "printSnapshot returns a moving fixed-array parameter five times. Current SLG fixedArrayReturnNeedsPromotion always copies parameter views and call_arguments emitCallTemporaryDrop frees caller backing after each call. Exactly five copies explain current delta.",
+  "sourceComparison": [
+    "LlvmEmitter.Structs.cs:449-457 copies only a borrowed local fixed storage result. LlvmEmitter.FunctionDeclarations.cs:195-205 transfers result owner and drops other locals.",
+    "SLG function_returns.slg:9-37 promotes parameter views; call_arguments.slg:1721-1755 releases named moving fixed backing; ownership.slg:1411-1431 treats internal fixed-array call results as promoted owners."
+  ],
+  "safetyBoundary": "Do not suppress the copy alone: callers currently free the original backing. Existing C3321519-1526 stack/named/explicit/implicit/owned/additional/branch safety controls must remain. Investigate whole return backing provenance and caller cleanup together.",
+  "remaining": "Resolve original allocation8 without hiding the difference or changing expected14. Current allocation failure is not evidence of a leak: both current sides balance and invalid releases are zero.",
+  "candidate632ScopeUnaffected": "Original runtime outputs and native29 all passed. No full semantic unit closure claimed."
+}
