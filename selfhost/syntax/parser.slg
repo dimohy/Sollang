@@ -103,28 +103,8 @@ struct NumericSyntaxIssue {
     tokenIndex: Int
 }
 
-numericExtentTokenValue source: Text, token: syntax.SyntaxToken -> Int {
-    0 => extent!
-    UIntSize(0) => index!
-    index! < token.span.length -> while {
-        source -> byte(token.span.start + index!) => digit
-        # Managed LexNumber removes digit separators before numeric admission.
-        digit == 95 -> if {
-            index! + 1 => index!
-            continue
-        }
-        digit < 48 or digit > 57 -> if { -1 -> return }
-        Int(digit - 48) => value
-        extent! > (2_147_483_647 - value) / 10 -> if { -1 -> return }
-        extent! * 10 + value => extent!
-        index! + 1 => index!
-    }
-    token.span.length == 0 -> if { -1 -> return }
-    extent!
-}
-
 numericExtentTokenValid source: Text, token: syntax.SyntaxToken, positive: Bool -> Bool {
-    source -> numericExtentTokenValue(token) => extent
+    source -> syntax.numericExtentTokenValue(token) => extent
     extent >= 0 and (not positive or extent > 0)
 }
 
@@ -419,7 +399,7 @@ public parsePreparedRuleEvents request: ParseRequest, tokens: ref [syntax.Syntax
                                 not bounded and following < (tokens -> len)
                                     and tokens[following].kind == grammar.tokenIdTilde() => hint
                                 bounded or hint -> if {
-                                    source -> numericExtentTokenValue(tokens[tokenIndex!]) => extent
+                                    source -> syntax.numericExtentTokenValue(tokens[tokenIndex!]) => extent
                                     events! -> dictionaryInitializerCount(eventDepth!, activeRules![callDepth!], activeRuleStarts![callDepth!]) => entries
                                     extent < 0 or (bounded and (extent == 0 or entries > extent))
                                         -> if {
