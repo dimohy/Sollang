@@ -1,0 +1,186 @@
+namespace sollang.compiler.library_paths
+
+import sollang.compiler.syntax as syntax
+import sys.path as path
+
+public struct ManifestPath {
+    public status: Int
+    public value: path.Path
+}
+
+isSeparator value: UInt8, style: path.Style -> Bool {
+    style -> when {
+        Posix { value == 47 }
+        Windows { value == 47 or value == 92 }
+    }
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+hexValue value: UInt8 -> UInt8 {
+    value >= 48 and value <= 57 -> if {
+        value - 48
+    } else {
+        value >= 65 and value <= 70 -> if {
+            value - 65 + 10
+        } else {
+            value - 97 + 10
+        }
+    }
+}
+
+# Paths are decoded directly from the import token. This supports the ordinary
+# JSON-style escapes accepted by Sollang strings while rejecting raw/multiline
+# paths and control escapes that cannot denote a portable library filename.
+public manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: Text, style: path.Style -> ManifestPath {
+    [UInt8; ~] => bytes!
+    0 => status!
+    token.span.length >= 2 => valid!
+    token.span.start + 1 => literalStart
+    token.span.start + token.span.length - 1 => literalEnd
+    valid! -> if {
+        (source -> byte(token.span.start)) != 34 -> if { false => valid! }
+        (source -> byte(literalEnd)) != 34 -> if { false => valid! }
+        token.span.length >= 6
+            and (source -> byte(token.span.start + 1)) == 34
+            and (source -> byte(token.span.start + 2)) == 34
+            -> if {
+                false => valid!
+            }
+    }
+    not valid! -> if { 1 => status! }
+
+    false => absolute!
+    status! == 0 -> if {
+        literalStart < literalEnd -> if {
+            source -> byte(literalStart) => first
+            first -> isSeparator(style) => absolute!
+            style -> when {
+                Posix { false }
+                Windows {
+                    (literalStart + 2 < literalEnd
+                        and (source -> byte(literalStart + 1)) == 58) => hasDrivePrefix
+                    hasDrivePrefix -> if {
+                        (source -> byte(literalStart + 2)) == 47
+                            or (source -> byte(literalStart + 2)) == 92
+                    } else {
+                        false
+                    } => hasDriveSeparator
+                    hasDrivePrefix and hasDriveSeparator
+                }
+            } => driveAbsolute
+            driveAbsolute -> if { true => absolute! }
+        }
+        not absolute! -> if {
+            UIntSize(0) => sourceIndex!
+            UIntSize(0) => directoryEnd!
+            sourceIndex! < (sourcePath -> len) -> while {
+                (sourcePath -> byte(sourceIndex!)) -> isSeparator(style)
+                    -> if {
+                        sourceIndex! + 1 => directoryEnd!
+                    }
+                sourceIndex! + 1 => sourceIndex!
+            }
+            UIntSize(0) => directoryIndex!
+            directoryIndex! < directoryEnd! -> while {
+                bytes! -> push(sourcePath -> byte(directoryIndex!))
+                directoryIndex! + 1 => directoryIndex!
+            }
+        }
+
+        literalStart => literalIndex!
+        status! == 0 and literalIndex! < literalEnd
+            -> while {
+                source -> byte(literalIndex!) => current
+                current == 92 -> if {
+                    literalIndex! + 1 => literalIndex!
+                    literalIndex! < literalEnd -> if {
+                        source -> byte(literalIndex!) => escaped
+                        escaped == 92 -> if {
+                            bytes! -> push(92)
+                        } else {
+                            escaped == 34 -> if {
+                                bytes! -> push(34)
+                            } else {
+                                escaped == 47 -> if {
+                                    bytes! -> push(47)
+                                } else {
+                                    escaped == 117 -> if {
+                                        literalIndex! + 4 < literalEnd -> if {
+                                            UInt8(0) => decoded!
+                                            UIntSize(0) => hexIndex!
+                                            status! == 0 and hexIndex! < 4 -> while {
+                                                source -> byte(literalIndex! + 1 + hexIndex!) => digit
+                                                (digit >= 48 and digit <= 57)
+                                                    or (digit >= 65 and digit <= 70)
+                                                    or (digit >= 97 and digit <= 102) -> if {
+                                                        decoded! * 16 + (digit -> hexValue) => decoded!
+                                                    } else {
+                                                        2 => status!
+                                                    }
+                                                hexIndex! + 1 => hexIndex!
+                                            }
+                                            status! == 0 -> if {
+                                                decoded! >= 32 -> if {
+                                                    bytes! -> push(decoded!)
+                                                    literalIndex! + 4 => literalIndex!
+                                                } else {
+                                                    2 => status!
+                                                }
+                                            }
+                                        } else {
+                                            2 => status!
+                                        }
+                                    } else {
+                                        2 => status!
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        2 => status!
+                    }
+                } else {
+                    current < 32 -> if { 2 => status! } else { bytes! -> push(current) }
+                }
+                literalIndex! + 1 => literalIndex!
+            }
+    }
+
+    status! == 0 -> if {
+        bytes! -> appendText(".")
+        bytes! -> appendText(target)
+        bytes! -> appendText(".slglib.json")
+    }
+    status! != 0 -> if {
+        ManifestPath { status: status!, value: path.fromText("", style) } => failure
+        failure -> return
+    }
+    path.fromBytes(bytes!, style) -> when {
+        Ok(value) { value }
+        Err(error) {
+            ManifestPath { status: 3, value: path.fromText("", style) } => failure
+            failure -> return
+        }
+    } => unresolved
+    status! == 0 -> if {
+        unresolved -> path.normalizeConfined -> when {
+            Ok(normalized) {
+                ManifestPath { status: 0, value: normalized } => success
+                success -> return
+            }
+            Err(error) {
+                ManifestPath { status: 3, value: path.fromText("", style) } => failure
+                failure -> return
+            }
+        }
+    }
+    ManifestPath { status: status!, value: unresolved } => result
+    result
+}

@@ -1,0 +1,29 @@
+# A duplicate owned nominal key is discarded without replacing the first entry.
+struct Key {
+    id: Int
+    payload: box Int
+}
+
+trait Hash { hash: self -> Int }
+trait Eq { eq: self -> Int }
+
+impl Hash for Key {
+    hash: self -> Int => self.id
+}
+
+impl Eq for Key {
+    eq: self -> Int => self.id
+}
+
+main {
+    {Key: Text; 2~} => values!
+    Key { id: 7, payload: box 11 } => first
+    values! -> putIfAbsent(first, "first") => inserted
+    Key { id: 7, payload: box 22 } => duplicate
+    values! -> putIfAbsent(duplicate, "discarded") => duplicateInserted
+    Key { id: 7, payload: box 33 } => lookup
+    inserted -> if { "inserted=true" -> println } else { "inserted=false" -> println }
+    duplicateInserted -> if { "duplicate=true" -> println } else { "duplicate=false" -> println }
+    values![lookup] -> println
+    values! -> len -> println
+}

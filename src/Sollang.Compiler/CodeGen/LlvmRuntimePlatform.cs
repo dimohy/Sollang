@@ -1509,7 +1509,7 @@ internal abstract class LlvmRuntimePlatform
 
             define internal ptr @sollang_task_start(ptr %worker, ptr %destroy, ptr %cancel, ptr %context) #0 {
             entry:
-              %control = call ptr @sollang_alloc(i64 152)
+              %control = call ptr @sollang_alloc(i64 168)
               %allocated = icmp ne ptr %control, null
               br i1 %allocated, label %initialize, label %fail
 
@@ -1556,6 +1556,10 @@ internal abstract class LlvmRuntimePlatform
               store i32 0, ptr %file_explicit_slot, align 4
               %file_operation_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 20
               store i32 0, ptr %file_operation_slot, align 4
+              %result_address_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 21
+              store ptr null, ptr %result_address_slot, align 8
+              %result_completion_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 22
+              store ptr null, ptr %result_completion_slot, align 8
               %tail = load ptr, ptr @sollang_task_ready_tail, align 8
               %empty = icmp eq ptr %tail, null
               br i1 %empty, label %first, label %append
@@ -1693,12 +1697,27 @@ internal abstract class LlvmRuntimePlatform
 
             check_file_waiting:
               %waiting_file = icmp eq i32 %status, 6
-              br i1 %waiting_file, label %cancel_file, label %fail
+              br i1 %waiting_file, label %cancel_file, label %check_socket_completion_waiting
+
+            check_socket_completion_waiting:
+              %waiting_socket_completion = icmp eq i32 %status, 7
+              br i1 %waiting_socket_completion, label %cancel_socket_completion, label %fail
 
             cancel_file:
               %file_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 12
               store atomic i32 3, ptr %file_phase_slot release, align 4
               store i32 3, ptr %status_slot, align 4
+              ret i1 true
+
+            cancel_socket_completion:
+              %socket_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 12
+              store atomic i32 3, ptr %socket_phase_slot release, align 4
+              store i32 3, ptr %status_slot, align 4
+              %socket_cancel_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19
+              store atomic i32 1, ptr %socket_cancel_phase_slot release, align 4
+              %socket_cancel_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 6
+              %socket_cancel_fn = load ptr, ptr %socket_cancel_slot, align 8
+              call void %socket_cancel_fn(ptr %handle)
               ret i1 true
 
             detach_child:

@@ -1,0 +1,177 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+import sys.io as io
+import sys.runtime as runtime
+
+consume terminal: move socket.SocketTerminalOutcome -> socket.CompletionReactor uses Network, Console {
+    terminal -> when {
+        socket.SocketTerminalOutcome.Succeeded(completion) {
+            completion.slot => slot
+            completion.reactor => reactor
+            slot -> applicationKey => key
+            slot -> transferredCount -> when {
+                None { UIntSize(999) }
+                Some(count) { count }
+            } => count
+            slot -> operationState -> when {
+                Completed { true }
+                else { false }
+            } => state
+            slot -> byteAt(0) => byte
+            key -> when {
+                == 801 { byte == 81 }
+                == 802 { byte == 82 }
+                else { false }
+            } => keyByteMatch
+            slot -> intoBytes => returned
+            "completion=true,count=$count,state=$state,len=$(returned -> len),keyByteMatch=$keyByteMatch" -> io.println
+            reactor
+        }
+        socket.SocketTerminalOutcome.Failed(completion) {
+            completion.slot => slot
+            completion.reactor => reactor
+            slot -> intoBytes => returned
+            "completion=false,kind=failed,len=$(returned -> len)" -> io.println
+            reactor
+        }
+        socket.SocketTerminalOutcome.Cancelled(completion) {
+            completion.slot => slot
+            completion.reactor => reactor
+            slot -> intoBytes => returned
+            "completion=false,kind=cancelled,len=$(returned -> len)" -> io.println
+            reactor
+        }
+    }
+}
+
+main {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 2
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { "listen-error=$(error.code)" -> io.println }
+        Ok(listener) {
+            listener -> localPort -> when {
+                Err(error) {
+                    listener -> close
+                    "port-error=$(error.code)" -> io.println
+                }
+                Ok(port) {
+                    "peer-port=$port" -> io.println
+                    runtime.flushStandardOutput()
+                    listener -> accept -> when {
+                        Err(error) {
+                            listener -> close
+                            "accept-first-error=$(error.code)" -> io.println
+                        }
+                        Ok(first) {
+                            listener -> accept -> when {
+                                Err(error) {
+                                    first -> close
+                                    listener -> close
+                                    "accept-second-error=$(error.code)" -> io.println
+                                }
+                                Ok(second) {
+                                    socket.CompletionReactorOptions {
+                                        registrations: 2
+                                        pendingOperations: 2
+                                        completionBatch: 1
+                                    } -> socket.completionReactor -> when {
+                                        Err(error) {
+                                            first -> close
+                                            second -> close
+                                            listener -> close
+                                            "create-error=$(error.code)" -> io.println
+                                        }
+                                        Ok(reactor) {
+                                            reactor -> registerStream(first, 81) -> when {
+                                                Err(failure) {
+                                                    failure.reactor -> close
+                                                    failure.connection -> close
+                                                    second -> close
+                                                    listener -> close
+                                                    "register-first-error=$(failure.error.code)" -> io.println
+                                                }
+                                                Ok(firstRegistered) {
+                                                    firstRegistered -> registerStream(second, 82) -> when {
+                                                        Err(failure) {
+                                                            failure.reactor -> close
+                                                            failure.connection -> close
+                                                            listener -> close
+                                                            "register-second-error=$(failure.error.code)" -> io.println
+                                                        }
+                                                        Ok(registered) {
+                                                            [0; ~] -> socket.operationSlot(801, socket.OperationDirection.Receive) => firstSlot
+                                                            registered -> submit(81, firstSlot) -> when {
+                                                                Err(failure) {
+                                                                    failure.slot => failedSlot
+                                                                    failure.reactor => failedReactor
+                                                                    failedSlot -> intoBytes => returned
+                                                                    failedReactor -> close
+                                                                    listener -> close
+                                                                    "submit-first-error=$(failure.error.code),len=$(returned -> len)" -> io.println
+                                                                }
+                                                                Ok(firstSubmission) {
+                                                                    firstSubmission -> when {
+                                                                        socket.CompletionSubmission.Completed(completion) {
+                                                                            completion.slot => completedSlot
+                                                                            completion.reactor => completedReactor
+                                                                            completedSlot -> intoBytes => returned
+                                                                            completedReactor -> close
+                                                                            listener -> close
+                                                                            "first-pending=false,len=$(returned -> len)" -> io.println
+                                                                        }
+                                                                        socket.CompletionSubmission.Pending(firstPending) {
+                                                                            [0; ~] -> socket.operationSlot(802, socket.OperationDirection.Receive) => secondSlot
+                                                                            firstPending -> submit(82, secondSlot) -> when {
+                                                                                Err(failure) {
+                                                                                    failure.slot => failedSlot
+                                                                                    failure.reactor => failedReactor
+                                                                                    failedSlot -> intoBytes => returned
+                                                                                    failedReactor -> close
+                                                                                    listener -> close
+                                                                                    "submit-second-error=$(failure.error.code),len=$(returned -> len)" -> io.println
+                                                                                }
+                                                                                Ok(secondSubmission) {
+                                                                                    secondSubmission -> when {
+                                                                                        socket.CompletionSubmission.Completed(completion) {
+                                                                                            completion.slot => completedSlot
+                                                                                            completion.reactor => completedReactor
+                                                                                            completedSlot -> intoBytes => returned
+                                                                                            completedReactor -> close
+                                                                                            listener -> close
+                                                                                            "second-pending=false,len=$(returned -> len)" -> io.println
+                                                                                        }
+                                                                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                                                                            "pending=true" -> io.println
+                                                                                            runtime.flushStandardOutput()
+                                                                                            pendingReactor -> dequeueTerminal(asyncio.Cancellation { requested: false }) -> await -> consume => afterFirst
+                                                                                            afterFirst -> dequeueTerminal(asyncio.Cancellation { requested: false }) -> await -> consume => afterSecond
+                                                                                            afterSecond -> close
+                                                                                            listener -> close
+                                                                                            "l08=complete" -> io.println
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

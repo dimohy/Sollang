@@ -1,0 +1,35 @@
+struct Payload {
+    output: [Int; ~]
+    spare: [Int; ~]
+    marker: Int
+}
+
+struct Kept {
+    output: [Int; ~]
+    marker: Int
+}
+
+makePayload: -> Result<Payload, Int> {
+    Result<Payload, Int>.Ok(Payload { output: [7, 8, 9; ~], spare: [4, 5; ~], marker: 17 })
+}
+
+keepPayload: -> async Result<Kept, Int> {
+    makePayload() => result
+    result -> when {
+        Err(error) { Result<Kept, Int>.Err(error) }
+        Ok(payload) {
+            payload.output => output
+            payload.marker => marker
+            yield
+            Result<Kept, Int>.Ok(Kept { output: output, marker: marker })
+        }
+    }
+}
+
+main {
+    keepPayload() => task
+    task -> await -> when {
+        Err(_) { "unexpected-error" -> println }
+        Ok(kept) { "named=$(kept.output[0]),$(kept.output -> len),$(kept.marker)" -> println }
+    }
+}

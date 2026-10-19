@@ -3,7 +3,11 @@ param(
     [string]$NativeCompiler = "",
     [ValidateSet("windows-x64", "linux-x64")]
     [string]$Target = "windows-x64",
-    [string]$Distribution = "Ubuntu"
+    [string]$Distribution = "Ubuntu",
+    [string]$FocusedContract = "",
+    [string]$JsonAdmissionContract = "",
+    [ValidateSet("paired", "managed", "native")]
+    [string]$CompilerMode = "paired"
 )
 
 $ErrorActionPreference = "Stop"
@@ -441,6 +445,119 @@ function Assert-EquivalentFrames {
     }
 }
 
+function Invoke-FocusedPositionCases {
+    param([string]$FocusedContract, [string]$CompilerMode)
+    $contract = Get-Content -LiteralPath $FocusedContract -Raw | ConvertFrom-Json
+    if ($contract.schemaVersion -ne 1 -or $contract.cases.Count -eq 0) {
+        throw "LSP_FOCUSED_CONTRACT_INVALID"
+    }
+    $expectedById = @{}
+    foreach ($case in $contract.cases) {
+        if ($case.id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or
+            $expectedById.ContainsKey($case.id) -or
+            $case.kind -notin @("diagnostic", "formatting") -or
+            $case.source -isnot [string] -or $case.expected -isnot [array]) {
+            throw "LSP_FOCUSED_CASE_INVALID"
+        }
+        $expectedById[$case.id] = [Text.Json.Nodes.JsonNode]::Parse((ConvertTo-Json -InputObject $case.expected -Compress -Depth 20))
+    }
+    $results = [Collections.Generic.List[object]]::new()
+    $variants = switch ($CompilerMode) {
+        "managed" { @($false) }
+        "native" { @($true) }
+        "paired" { @($false, $true) }
+    }
+    foreach ($native in $variants) {
+        foreach ($case in $contract.cases) {
+            $uri = "file:///focused-$($case.id).slg"
+            $messages = [Collections.Generic.List[string]]::new()
+            $messages.Add((@{
+                jsonrpc = "2.0"
+                method = "textDocument/didOpen"
+                params = @{ textDocument = @{ uri = $uri; languageId = "sollang"; version = 1; text = $case.source } }
+            } | ConvertTo-Json -Compress -Depth 8))
+            if ($case.kind -eq "formatting") {
+                $messages.Add((@{
+                    jsonrpc = "2.0"; id = "fmt"; method = "textDocument/formatting"
+                    params = @{ textDocument = @{ uri = $uri }; options = @{ tabSize = 4; insertSpaces = $true } }
+                } | ConvertTo-Json -Compress -Depth 8))
+            } elseif ($case.kind -ne "diagnostic") { throw "LSP_FOCUSED_CASE_KIND_INVALID" }
+            $messages.Add('{"jsonrpc":"2.0","id":"close","method":"shutdown","params":null}')
+            $messages.Add('{"jsonrpc":"2.0","method":"exit"}')
+            $inputBytes = [Collections.Generic.List[byte]]::new()
+            foreach ($message in $messages) { $inputBytes.AddRange([byte[]](ConvertTo-LspFrame $message)) }
+            $session = Invoke-RawSession $native $inputBytes.ToArray()
+            $frameFailure = ""
+            try { $frames = @(Read-AllFrames $session.Stdout) }
+            catch {
+                $frames = @()
+                $frameFailure = $_.Exception.Message
+            }
+            $frameIndex = if ($case.kind -eq "formatting") { 1 } else { 0 }
+            $expectedFrameCount = if ($case.kind -eq "formatting") { 3 } else { 2 }
+            $actual = $null
+            if ($frames.Count -eq $expectedFrameCount) {
+                $frame = [Text.Json.Nodes.JsonNode]::Parse($frames[$frameIndex])
+                if ($case.kind -eq "formatting") {
+                    $actual = $frame["result"]
+                } else {
+                    $actual = $frame["params"]["diagnostics"]
+                }
+            }
+            $expected = $expectedById[$case.id]
+            $passed = $session.ExitCode -eq 0 -and $session.Stderr -eq "" -and $frameFailure -eq "" -and
+                $null -ne $actual -and [Text.Json.Nodes.JsonNode]::DeepEquals($actual, $expected)
+            $results.Add([pscustomobject]@{
+                id = $case.id; compiler = $(if ($native) { "native" } else { "managed" })
+                passed = $passed; exit = $session.ExitCode; stderr = $session.Stderr
+                frames = $frames; expected = $case.expected
+                frameFailure = $frameFailure
+                stdoutBase64 = [Convert]::ToBase64String($session.Stdout)
+            })
+        }
+    }
+    $completed = @($results | Where-Object passed).Count
+    [pscustomobject]@{ completed = $completed; total = $results.Count; cases = $results } | ConvertTo-Json -Depth 25
+    if ($completed -ne $results.Count) { throw "LSP_FOCUSED_POSITION_ORACLE_MISMATCH" }
+    return
+}
+
+function Invoke-JsonAdmissionCases {
+    param([string]$ContractPath, [string]$Mode)
+    $contract = Get-Content -LiteralPath $ContractPath -Raw | ConvertFrom-Json
+    if ($contract.schemaVersion -ne 1 -or $contract.cases.Count -eq 0) { throw "LSP_JSON_CONTRACT_INVALID" }
+    $ids = [Collections.Generic.HashSet[string]]::new()
+    foreach ($case in $contract.cases) {
+        if ($case.id -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or -not $ids.Add($case.id) -or
+            $case.payload -isnot [string] -or $case.expectedRuntimeExit -notin @(0, 1) -or
+            $case.expectedStderr -isnot [string]) { throw "LSP_JSON_CASE_INVALID" }
+    }
+    $modes = switch ($Mode) { "managed" { @($false) }; "native" { @($true) }; default { @($false, $true) } }
+    $results = @()
+    foreach ($native in $modes) {
+        foreach ($case in $contract.cases) {
+            $actual = Invoke-RawSession $native (ConvertTo-LspFrame $case.payload)
+            $passed = $actual.ExitCode -eq $case.expectedRuntimeExit -and $actual.Stdout.Length -eq 0 -and
+                $actual.Stderr.Replace("`r`n", "`n") -ceq $case.expectedStderr
+            $results += [pscustomobject]@{ id = $case.id; compiler = $(if ($native) { "native" } else { "managed" })
+                passed = $passed; exit = $actual.ExitCode; stdout = $actual.Stdout; stderr = $actual.Stderr }
+        }
+    }
+    $completed = @($results | Where-Object passed).Count
+    [pscustomobject]@{ completed = $completed; total = $results.Count; cases = $results } | ConvertTo-Json -Depth 10
+    if ($completed -ne $results.Count) { throw "LSP_JSON_ADMISSION_MISMATCH" }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($JsonAdmissionContract)) {
+    Invoke-JsonAdmissionCases $JsonAdmissionContract $CompilerMode
+    return
+}
+
+if (-not [string]::IsNullOrWhiteSpace($FocusedContract)) {
+    Invoke-FocusedPositionCases $FocusedContract $CompilerMode
+    return
+}
+
 Assert-StreamingInitialize $false
 Write-Output "[1/4] PASS managed streaming initialize"
 Assert-StreamingInitialize $true
@@ -485,3 +602,7 @@ if ($nativeArgument.ExitCode -ne 1 -or $managedArgument.ExitCode -ne 1 -or $nati
     throw "language-server argument rejection differs: managed='$($managedArgument.Output)', native='$($nativeArgument.Output)'"
 }
 Write-Output "[4/4] PASS framing, EOF, shutdown, and argument parity"
+Invoke-FocusedPositionCases (Join-Path $PSScriptRoot "contracts\lsp-newline-positions.json") "paired"
+Invoke-FocusedPositionCases (Join-Path $PSScriptRoot "contracts\lsp-diagnostic-messages.json") "paired"
+
+Invoke-JsonAdmissionCases (Join-Path $PSScriptRoot "contracts\lsp-json-admission.json") "paired"

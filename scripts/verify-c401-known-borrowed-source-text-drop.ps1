@@ -37,7 +37,7 @@ $output = Join-Path $root ('artifacts/scratch/c401-known-borrowed-source-text-dr
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $generated = Join-Path $output 'c401-known-borrowed-source-text-drop.slg'
 $executable = Join-Path $output 'c401-known-borrowed-source-text-drop.exe'
-$llvmPath = Join-Path $output 'c401-known-borrowed-source-text-drop.ll'
+$llvmPath = $executable + '.ll'
 $resultPath = Join-Path $output 'result.json'
 
 $inputs = @($source, $template, $compiler, $formatter, $closureVerifier, $PSCommandPath,

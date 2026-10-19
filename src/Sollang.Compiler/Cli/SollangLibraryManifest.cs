@@ -138,12 +138,12 @@ internal static class SollangLibraryManifest
     public static (IReadOnlyList<FunctionDeclaration> Functions, CompilationInput Input) Load(
         NativeLibraryImport import,
         string sourcePath,
-        CompilationTarget target)
+        CompilationTarget target,
+        string moduleName)
     {
         var sourceDirectory = Path.GetDirectoryName(sourcePath)
             ?? Directory.GetCurrentDirectory();
         var libraryBase = Path.GetFullPath(import.Library, sourceDirectory);
-        var runtimeLibrary = RuntimeLibraryPath(libraryBase, target);
         var manifestPath = libraryBase + "." + TargetName(target) + ".slglib.json";
         if (!File.Exists(manifestPath))
         {
@@ -158,6 +158,7 @@ internal static class SollangLibraryManifest
             bytes = File.ReadAllBytes(manifestPath);
             document = JsonSerializer.Deserialize<SollangLibraryManifestDocument>(bytes, JsonOptions)
                 ?? throw new InvalidDataException("document is empty");
+            ValidateShape(document);
         }
         catch (Exception error) when (error is IOException or JsonException or InvalidDataException)
         {
@@ -167,6 +168,8 @@ internal static class SollangLibraryManifest
         }
 
         ValidateDocument(document, target, manifestPath);
+        var runtimeLibrary = RuntimeLibraryPath(
+            Path.Combine(Path.GetDirectoryName(manifestPath)!, document.LibraryFile), target);
         var names = new HashSet<string>(StringComparer.Ordinal);
         var functions = new List<FunctionDeclaration>(document.Exports.Count);
         foreach (var export in document.Exports)
@@ -188,7 +191,7 @@ internal static class SollangLibraryManifest
                     import.Column))
                 .ToArray();
             functions.Add(new FunctionDeclaration(
-                import.Alias + "." + export.Name,
+                (moduleName.Length == 0 ? "" : moduleName + ".") + import.Alias + "." + export.Name,
                 first?.Name,
                 first?.Type,
                 FunctionInputOwnership.Default,
@@ -202,6 +205,7 @@ internal static class SollangLibraryManifest
                 import.Column,
                 IsIntrinsic: false,
                 IsStandardLibrary: false,
+                ModuleName: moduleName,
                 AdditionalParameters: additional,
                 NativeLibrary: runtimeLibrary,
                 NativeSymbol: export.Symbol));
@@ -356,6 +360,46 @@ internal static class SollangLibraryManifest
             .Select(static parameter => new SollangLibraryParameter(parameter.Name, parameter.TypeName)));
         return parameters;
     }
+
+    private static void ValidateShape(SollangLibraryManifestDocument document)
+    {
+        RequireText(document.Abi, "abi");
+        RequireText(document.Target, "target");
+        RequireText(document.LibraryFile, "libraryFile");
+        RequireText(document.AbiHash, "abiHash");
+        var exports = RequireArray(document.Exports, "exports");
+        for (var exportIndex = 0; exportIndex < exports.Count; exportIndex++)
+        {
+            var member = $"exports[{exportIndex}]";
+            var export = exports[exportIndex]
+                ?? throw new InvalidDataException($"'{member}' must be a non-null object");
+            RequireText(export.Name, member + ".name");
+            RequireText(export.QualifiedName, member + ".qualifiedName");
+            RequireText(export.Symbol, member + ".symbol");
+            var parameters = RequireArray(export.Parameters, member + ".parameters");
+            for (var parameterIndex = 0; parameterIndex < parameters.Count; parameterIndex++)
+            {
+                var parameterMember = $"{member}.parameters[{parameterIndex}]";
+                var parameter = parameters[parameterIndex]
+                    ?? throw new InvalidDataException($"'{parameterMember}' must be a non-null object");
+                RequireText(parameter.Name, parameterMember + ".name");
+                RequireText(parameter.Type, parameterMember + ".type");
+            }
+            RequireText(export.Result, member + ".result");
+            RequireText(export.SignatureHash, member + ".signatureHash");
+        }
+    }
+
+    private static void RequireText(string? value, string member)
+    {
+        if (value is null)
+        {
+            throw new InvalidDataException($"'{member}' must be a non-null string");
+        }
+    }
+
+    private static IReadOnlyList<T> RequireArray<T>(IReadOnlyList<T>? value, string member) =>
+        value ?? throw new InvalidDataException($"'{member}' must be a non-null array");
 
     private static void ValidateDocument(
         SollangLibraryManifestDocument document,

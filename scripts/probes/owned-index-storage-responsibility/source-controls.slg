@@ -1,0 +1,73 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sys.file as file
+
+public ownedIndexPlaceControl input: Text, additional: Text -> Int {
+    [Text; ~] => sources!
+    sources! -> push(input)
+    additional -> len => additionalLength
+    additionalLength > 0 -> if { sources! -> push(additional) }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    context.ownedIndexReadDiagnostic.sourceModule
+}
+
+public ownedIndexLateDiagnosticCount input: Text -> Int {
+    [Text; ~] => sources!
+    sources! -> push(input)
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    0 => count!
+    context.ownershipDiagnostics -> each diagnostic {
+        diagnostic.code == 31 -> if { count! + 1 => count! }
+    }
+    count!
+}
+
+public ownedStorageMoveCount input: Text -> Int {
+    [Text; ~] => sources!
+    sources! -> push(input)
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    context.moves -> len
+}
+
+public ownedIndexExactDiagnosticFile filename: Text, expectedTypeKind: Int, expectedLine: Int, expectedColumn: Int, expectedAstKind: Int -> Bool uses File {
+    filename -> file.mapText => mapped
+    mapped -> slice(UIntSize(0), mapped -> len) => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    context.ownedIndexReadDiagnostic => diagnostic
+    diagnostic.sourceModule != 0 or diagnostic.elementTypeId < 0
+        -> if { false -> return }
+    context.ranges[diagnostic.sourceModule] => range
+    context.nodes[range.astStart + diagnostic.indexAst] => node
+    context.tokens[range.tokenStart + node.payloadToken] => token
+    context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(token.span.start) => location
+    context.types[diagnostic.elementTypeId] => selectedType
+    selectedType.kind != expectedTypeKind or node.kind != expectedAstKind
+        or location.line != expectedLine or location.column != expectedColumn
+        -> if { false -> return }
+    expectedTypeKind == 3 -> if {
+        selectedType.first < 0 -> if { false -> return }
+        context.types[selectedType.first] => element
+        element.kind == 1 and element.origin == 1 and element.symbol == 2 -> return
+    }
+    selectedType.kind == 1 and selectedType.module >= 0 and selectedType.symbol >= 0
+        -> if {
+            context.ranges[selectedType.module] => typeRange
+            context.symbols[typeRange.symbolStart + selectedType.symbol] => declaration
+            context.tokens[typeRange.tokenStart + declaration.nameToken] => nameToken
+            context.sources[selectedType.module] -> slice(nameToken.span.start, nameToken.span.length) => name
+            name == "Entry" -> return
+        }
+    false
+}

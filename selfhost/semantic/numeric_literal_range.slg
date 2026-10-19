@@ -1,0 +1,206 @@
+namespace sollang.compiler.semantic.numeric_literal_range
+
+import sollang.compiler.semantic.type_ids as typeIds
+
+public literalUsesFloatingSyntax source: ref Text, start: UIntSize, end: UIntSize -> Bool {
+    start >= end or end > (source -> len) -> if { false -> return }
+    source -> byte(start) => first
+    first < 48 or first > 57 -> if { false -> return }
+    start => cursor!
+    cursor! < end -> while {
+        source -> byte(cursor!) => character
+        character == 46 or character == 101 or character == 69
+            -> if { true -> return }
+        cursor! + 1 => cursor!
+    }
+    false
+}
+
+public magnitudeLimit symbol: Int, pointerBitWidth: Int, negative: Bool -> Text {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical == 3 -> if { negative -> if { "128" -> return } else { "127" -> return } }
+    canonical == 4 -> if { negative -> if { "32768" -> return } else { "32767" -> return } }
+    canonical == 2 -> if { negative -> if { "2147483648" -> return } else { "2147483647" -> return } }
+    canonical == 8 -> if { "255" -> return }
+    canonical == 9 -> if { "65535" -> return }
+    canonical == 10 -> if { "4294967295" -> return }
+    canonical == 14 -> if { "1114111" -> return }
+    canonical == 11 -> if { "18446744073709551615" -> return }
+    canonical == 13 -> if {
+        pointerBitWidth == 32 -> if { "4294967295" -> return }
+        "18446744073709551615" -> return
+    }
+    canonical == 12 and pointerBitWidth == 32 -> if {
+        negative -> if { "2147483648" -> return } else { "2147483647" -> return }
+    }
+    negative -> if { "9223372036854775808" -> return }
+    "9223372036854775807"
+}
+
+public minimumText symbol: Int, pointerBitWidth: Int -> Text {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical == 3 -> if { "-128" -> return }
+    canonical == 4 -> if { "-32768" -> return }
+    canonical == 2 -> if { "-2147483648" -> return }
+    canonical == 6 or canonical == 12 -> if {
+        canonical == 12 and pointerBitWidth == 32 -> if { "-2147483648" -> return }
+        "-9223372036854775808" -> return
+    }
+    "0"
+}
+
+public maximumText symbol: Int, pointerBitWidth: Int -> Text {
+    symbol -> magnitudeLimit(pointerBitWidth, false)
+}
+
+# 0 = outside the destination range, 1 = valid, 2 = Unicode surrogate.
+# Compare decimal digits lexically so UInt64 and Long.min need no host parser.
+public integerLiteralStatus source: ref Text, start: UIntSize, end: UIntSize, symbol: Int, pointerBitWidth: Int, negative: Bool, foldedLiteral: Bool, foldedValue: Long, foldedPlace: Long -> Int {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical -> magnitudeLimit(pointerBitWidth, negative) => limit
+    canonical == 8 or canonical == 9 or canonical == 10 or canonical == 11
+        or canonical == 13 or canonical == 14 => unsigned
+    start => cursor!
+    foldedPlace => place!
+    UIntSize(0) => digits!
+    false => significant!
+    false => sawDigit!
+    false => previousDigit!
+    0 => comparison!
+    0 => codePoint!
+    cursor! < end -> while {
+        UInt8(0) => digit!
+        foldedLiteral -> if {
+            UInt8(-(foldedValue / place! % 10) + 48) => digit!
+            place! / 10 => place!
+        } else { source -> byte(cursor!) => digit! }
+        digit! == 95 -> if {
+            not previousDigit! -> if { 0 -> return }
+            false => previousDigit!
+        } else {
+            digit! < 48 or digit! > 57 -> if { 0 -> return }
+            true => sawDigit!
+            true => previousDigit!
+            digit! != 48 -> if { true => significant! }
+            significant! -> if {
+                digits! < (limit -> len) and comparison! == 0
+                    -> if {
+                        digit! < (limit -> byte(digits!)) -> if { -1 => comparison! }
+                        digit! > (limit -> byte(digits!)) -> if { 1 => comparison! }
+                    }
+                canonical == 14 and digits! < 7 -> if { codePoint! * 10 + Int(digit!) - 48 => codePoint! }
+                digits! + 1 => digits!
+            }
+        }
+        cursor! + 1 => cursor!
+    }
+    not sawDigit! or not previousDigit! or (negative and unsigned and significant!)
+        -> if { 0 -> return }
+    canonical == 14 and codePoint! >= 55_296 and codePoint! <= 57_343
+        -> if { 2 -> return }
+    digits! < (limit -> len) or (digits! == (limit -> len) and comparison! <= 0)
+        -> if { 1 -> return }
+    0
+}
+
+# The lexer resolves a character literal to one scalar before C# numeric
+# conversion checks. Every scalar fits Int, Int64, Size, and their wide unsigned
+# counterparts; only the narrow destinations need an explicit upper bound.
+public characterLiteralStatus scalar: Int, symbol: Int, negative: Bool -> Int {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    negative and scalar != 0 and (canonical == 8 or canonical == 9 or canonical == 10
+        or canonical == 11 or canonical == 13 or canonical == 14)
+        -> if { 0 -> return }
+    127 => int8Maximum!
+    32767 => int16Maximum!
+    negative -> if {
+        128 => int8Maximum!
+        32768 => int16Maximum!
+    }
+    canonical == 3 and scalar > int8Maximum! -> if { 0 -> return }
+    canonical == 4 and scalar > int16Maximum! -> if { 0 -> return }
+    canonical == 8 and scalar > 255 -> if { 0 -> return }
+    canonical == 9 and scalar > 65535 -> if { 0 -> return }
+    1
+}
+
+# .NET parses numeric literals as Float64 before comparing a Float32 target to
+# float.MaxValue. Decimal inputs at the Float32 midpoint round back to that
+# finite Float64 value; the Float64 overflow midpoint rounds to infinity.
+# Compare the exact decimal thresholds without a host floating parser.
+public floatingLiteralWithinRange source: ref Text, start: UIntSize, end: UIntSize, symbol: Int -> Bool {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical != 20 and canonical != 21 -> if { false -> return }
+    start >= end or end > (source -> len) -> if { false -> return }
+    [UInt8; ~] => digits!
+    start => cursor!
+    false => decimalPoint!
+    0 => integerDigits!
+    false => mantissaDigit!
+    cursor! < end and (source -> byte(cursor!)) != 101 and (source -> byte(cursor!)) != 69
+        -> while {
+            source -> byte(cursor!) => character
+            character >= 48 and character <= 57 -> if {
+                digits! -> push(character)
+                not decimalPoint! -> if { integerDigits! + 1 => integerDigits! }
+                true => mantissaDigit!
+            } else {
+                character == 46 and not decimalPoint! -> if { true => decimalPoint! } else {
+                    character != 95 -> if { false -> return }
+                }
+            }
+            cursor! + 1 => cursor!
+        }
+    not mantissaDigit! -> if { false -> return }
+    0 => exponent!
+    false => negativeExponent!
+    cursor! < end -> if {
+        cursor! + 1 => cursor!
+        cursor! < end -> if {
+            source -> byte(cursor!) => exponentSign
+            exponentSign == 43 or exponentSign == 45 -> if {
+                exponentSign == 45 -> if { true => negativeExponent! }
+                cursor! + 1 => cursor!
+            }
+        }
+        false => exponentDigit!
+        cursor! < end -> while {
+            source -> byte(cursor!) => character
+            character >= 48 and character <= 57 -> if {
+                true => exponentDigit!
+                exponent! < 10000 -> if { exponent! * 10 + Int(character) - 48 => exponent! }
+            } else { character != 95 -> if { false -> return } }
+            cursor! + 1 => cursor!
+        }
+        not exponentDigit! -> if { false -> return }
+    }
+    negativeExponent! -> if { -exponent! => exponent! }
+    0 => firstSignificant!
+    firstSignificant! < (digits! -> len) and digits![firstSignificant!] == 48
+        -> while { firstSignificant! + 1 => firstSignificant! }
+    firstSignificant! == (digits! -> len) -> if { true -> return }
+    integerDigits! - firstSignificant! + exponent! => effectiveDigits
+    "340282346638528878701170114963097780224" => limit!
+    canonical == 21 -> if {
+        "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792" => limit!
+    }
+    effectiveDigits < Int(limit! -> len) -> if { true -> return }
+    effectiveDigits > Int(limit! -> len) -> if { false -> return }
+    0 => digitIndex!
+    digitIndex! < Int(limit! -> len) -> while {
+        UInt8(48) => valueDigit!
+        firstSignificant! + digitIndex! < (digits! -> len)
+            -> if { digits![firstSignificant! + digitIndex!] => valueDigit! }
+        limit! -> byte(UIntSize(digitIndex!)) => limitDigit
+        valueDigit! < limitDigit -> if { true -> return }
+        valueDigit! > limitDigit -> if { false -> return }
+        digitIndex! + 1 => digitIndex!
+    }
+    firstSignificant! + digitIndex! < (digits! -> len)
+        -> while {
+            digits![firstSignificant! + digitIndex!] != 48
+                -> if { false -> return }
+            digitIndex! + 1 => digitIndex!
+        }
+    canonical == 20
+}

@@ -119,6 +119,77 @@ if (-not $contractDirectory.StartsWith($temporaryRoot, [System.StringComparison]
     throw "verification process contract directory escaped the temporary root: $contractDirectory"
 }
 New-Item -ItemType Directory -Path $contractDirectory | Out-Null
+$cancellationRequest = Join-Path $contractDirectory 'cancellation-request.json'
+$cancellationAcknowledgement = Join-Path $contractDirectory 'cancellation-acknowledgement.json'
+$cancellationRunId = [Guid]::NewGuid().ToString('N')
+$publicationBarrier = [Threading.Barrier]::new(8)
+try {
+    Initialize-VerificationCancellation $cancellationRequest $cancellationRunId $cancellationAcknowledgement
+    if (Test-VerificationCancellationRequested) { throw 'missing cancellation request was accepted' }
+    $request = @{schemaVersion=1; runId=$cancellationRunId; requestedAtUtc=[DateTimeOffset]::UtcNow.ToString('O')}
+    [IO.File]::WriteAllText($cancellationRequest, ($request | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    $verificationHelperPath = Join-Path $PSScriptRoot 'verification-process.ps1'
+    $publicationResults = @(1..8 | ForEach-Object -ThrottleLimit 8 -Parallel {
+        $ErrorActionPreference = 'Stop'
+        . $using:verificationHelperPath
+        $acknowledgementPath = $using:cancellationAcknowledgement
+        $barrier = $using:publicationBarrier
+        $observation = @{synchronized=$false}
+        # Force every worker to observe absence before any publishes its acknowledgement.
+        function Test-Path {
+            param([string]$LiteralPath, [string]$PathType)
+            $exists = Microsoft.PowerShell.Management\Test-Path @PSBoundParameters
+            if ($LiteralPath -ceq $acknowledgementPath -and -not $exists -and -not $observation.synchronized) {
+                $observation.synchronized = $true
+                if (-not $barrier.SignalAndWait(10000)) { throw 'cancellation publication barrier timed out' }
+            }
+            return $exists
+        }
+        try {
+            Initialize-VerificationCancellation $using:cancellationRequest $using:cancellationRunId $acknowledgementPath
+            [pscustomobject]@{requested=(Test-VerificationCancellationRequested); error=$null}
+        } catch {
+            [pscustomobject]@{requested=$false; error=$_.Exception.Message}
+        }
+    })
+    if ($publicationResults.Count -ne 8 -or @($publicationResults | Where-Object {
+        $_.requested -ne $true -or $null -ne $_.error
+    }).Count -ne 0) {
+        throw "concurrent cancellation acknowledgement failed: $($publicationResults | ConvertTo-Json -Compress)"
+    }
+    $acknowledgement = Get-Content -LiteralPath $cancellationAcknowledgement -Raw | ConvertFrom-Json
+    if ($acknowledgement.runId -cne $cancellationRunId -or $acknowledgement.targetProcessId -ne $PID) {
+        throw 'concurrent acknowledgement lost the exact run/process identity'
+    }
+    $acknowledgementHash = (Get-FileHash -LiteralPath $cancellationAcknowledgement).Hash
+    if (-not (Test-VerificationCancellationRequested) -or
+        (Get-FileHash -LiteralPath $cancellationAcknowledgement).Hash -cne $acknowledgementHash) {
+        throw 'repeated cancellation observation changed an existing acknowledgement'
+    }
+    Initialize-VerificationCancellation $cancellationRequest 'different-run' $cancellationAcknowledgement
+    $wrongRunRejected = $false
+    try { $null = Test-VerificationCancellationRequested } catch {
+        if ($_.Exception.Message -cne 'Cancellation request does not match the active verification target') { throw }
+        $wrongRunRejected = $true
+    }
+    if (-not $wrongRunRejected -or
+        (Get-FileHash -LiteralPath $cancellationAcknowledgement).Hash -cne $acknowledgementHash) {
+        throw 'wrong cancellation run was accepted or modified the acknowledgement'
+    }
+    Initialize-VerificationCancellation $cancellationRequest $cancellationRunId $cancellationAcknowledgement
+    $cancelRejected = $false
+    try { Assert-VerificationCancellationNotRequested } catch [OperationCanceledException] {
+        if ($_.Exception.Message -cne 'CANCELLATION_REQUESTED') { throw }
+        $cancelRejected = $true
+    }
+    if (-not $cancelRejected) { throw 'acknowledged cancellation lost its exact exception' }
+    Write-Host '[verification cancellation publication] PASS concurrent8, missing/repeated request, wrong run, and exact cancellation exception.'
+} finally {
+    $publicationBarrier.Dispose()
+    $script:VerificationCancellationRequestPath = ''
+    $script:VerificationCancellationRunId = ''
+    $script:VerificationCancellationAcknowledgementPath = ''
+}
 $failureOutput = Join-Path $contractDirectory "compiler.stdout.tmp"
 $failureError = Join-Path $contractDirectory "compiler.stderr.tmp"
 $partialOutput = Join-Path $contractDirectory "compiler.ll.partial"

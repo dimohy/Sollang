@@ -311,7 +311,7 @@ internal static class LexerEmitter
             if (hasNumber)
             {
                 builder.Append(hasIdentifier ? "                    else if" : "                    if")
-                    .AppendLine(" (char.IsDigit(c))");
+                    .AppendLine(" (IsDecimalDigit(c))");
                 builder.AppendLine("                    {");
                 builder.AppendLine("                        LexNumber();");
                 builder.AppendLine("                    }");
@@ -442,22 +442,22 @@ internal static class LexerEmitter
             builder.AppendLine("        var byteOffset = CurrentByteOffset;");
             builder.AppendLine("        var start = _index;");
             builder.AppendLine();
-            builder.AppendLine("        while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1]))))");
+            builder.AppendLine("        while (!IsAtEnd && (IsDecimalDigit(Current) || (Current == '_' && _index + 1 < source.Length && IsDecimalDigit(source[_index + 1]))))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
-            builder.AppendLine("        if (!IsAtEnd && Current == '.' && _index + 1 < source.Length && char.IsDigit(source[_index + 1]))");
+            builder.AppendLine("        if (!IsAtEnd && Current == '.' && _index + 1 < source.Length && IsDecimalDigit(source[_index + 1]))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
-            builder.AppendLine("            while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1])))) Advance();");
+            builder.AppendLine("            while (!IsAtEnd && (IsDecimalDigit(Current) || (Current == '_' && _index + 1 < source.Length && IsDecimalDigit(source[_index + 1])))) Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
             builder.AppendLine("        if (!IsAtEnd && (Current == 'e' || Current == 'E'))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
             builder.AppendLine("            if (!IsAtEnd && (Current == '+' || Current == '-')) Advance();");
-            builder.AppendLine("            while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1])))) Advance();");
+            builder.AppendLine("            while (!IsAtEnd && (IsDecimalDigit(Current) || (Current == '_' && _index + 1 < source.Length && IsDecimalDigit(source[_index + 1])))) Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
             builder.AppendLine("        _tokens.Add(new Token(TokenKind.Number, source[start.._index].Replace(\"_\", \"\"), line, column, ByteOffset: byteOffset));");
@@ -664,6 +664,8 @@ internal static class LexerEmitter
         builder.AppendLine();
         builder.AppendLine("        return offsets;");
         builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private static bool IsDecimalDigit(char c) => c is >= '0' and <= '9';");
         builder.AppendLine();
         builder.AppendLine("    private static bool IsIdentifierStart(char c)");
         builder.AppendLine("    {");

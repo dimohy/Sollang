@@ -5,10 +5,9 @@ import sollang.compiler.ir.module_artifact_types as artifactTypes
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.type_ids as typeIds
 
-# Canonical typed-IR cache envelope. Package-local module indexes are replaced
-# by path hashes, and IR indexes are replaced by module-local one-based
-# ordinals. Schema 2 embeds a canonical structural type table and replaces each
-# session-local typeId with its stable structural hash.
+# Canonical typed-IR storage requires exact source identities before syntax-local
+# ordinals can be restored. The internal schema-2 payload uses unique module
+# ordinals from the exact envelope, and canonical structural type hashes.
 public struct ArtifactValidation {
     public status: Int
     public moduleCount: Int
@@ -22,9 +21,193 @@ public struct DecodedArtifact {
     public status: Int
 }
 
+# 0 valid, 1 missing IR type, 2 invalid structural dependency,
+# 3 conflicting structural hash. Failed encodings contain no payload.
+public struct EncodedArtifact {
+    public words: [UInt64; ~]
+    public status: Int
+}
+
 struct ResolvedReference {
     index: Int
     status: Int
+}
+
+# Complete IR contains source-local syntax and symbol ordinals. Its owning
+# source bytes therefore form the identity, rather than a namespace hash.
+sourcePrecedes left: Text, right: Text -> Bool {
+    UIntSize(0) => index!
+    index! < (left -> len) and index! < (right -> len)
+        -> while {
+            left -> byte(index!) => a
+            right -> byte(index!) => b
+            a != b -> if { a < b -> return }
+            index! + 1 => index!
+        }
+    (left -> len) < (right -> len)
+}
+
+exactSourceOrder sources: [Text; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    [Bool; ~] => emitted!
+    sources -> each { emitted! -> push(false) }
+    (order! -> len) < (sources -> len) -> while {
+        -1 => selected!
+        0 => index!
+        index! < (sources -> len) -> while {
+            not emitted![index!] -> if {
+                selected! < 0 -> if { index! => selected! } else {
+                    sources[index!] -> sourcePrecedes(sources[selected!])
+                        -> if { index! => selected! }
+                }
+            }
+            index! + 1 => index!
+        }
+        true => emitted![selected!]
+        order! -> push(selected!)
+    }
+    order!
+}
+
+exactIdentities order: [Int; ~] -> [modules.ModuleIdentity; ~] {
+    [modules.ModuleIdentity; ~] => identities!
+    0 => index!
+    index! < (order -> len) -> while {
+        identities! -> push(modules.ModuleIdentity {
+            sourceIndex: order[index!]
+            pathHash: UInt64(index! + 1)
+            pathStart: 0
+            pathLength: 0
+            importCount: 0
+        })
+        index! + 1 => index!
+    }
+    identities!
+}
+
+# Exact envelope schema 1: magic, schema, source count, total words, payload
+# offset, checksum, length-prefixed source bytes, then the structural IR payload.
+public encodeExact ir: [typed.TypedIrNode; ~], sources: [Text; ~], types: [typeIds.SemanticType; ~] -> EncodedArtifact {
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!].typeId => typeId
+        typeId < -1 or typeId >= (types -> len)
+            -> if {
+                EncodedArtifact { words: [UInt64; ~], status: 1 } -> return
+            }
+        irIndex! + 1 => irIndex!
+    }
+    sources -> exactSourceOrder => order
+    order -> exactIdentities => identities
+    ir -> encodePayload(identities, types) => payload
+    payload.status != 0 -> if { payload -> return }
+    [UInt64; ~] => words!
+    words! -> push(6002245291164258114)
+    words! -> push(1)
+    words! -> push(UInt64(sources -> len))
+    words! -> push(0)
+    words! -> push(0)
+    words! -> push(0)
+    order -> each sourceIndex {
+        sources[sourceIndex] => source
+        words! -> push(UInt64(source -> len))
+        UIntSize(0) => index!
+        index! < (source -> len) -> while {
+            words! -> push(UInt64(source -> byte(index!)))
+            index! + 1 => index!
+        }
+    }
+    UInt64(words! -> len) => words![4]
+    payload.words -> each word { words! -> push(word) }
+    UInt64(words! -> len) => words![3]
+    words! -> checksum(6) => words![5]
+    EncodedArtifact { words: words!, status: 0 }
+}
+
+exactPayload words: [UInt64; ~] -> [UInt64; ~] {
+    [UInt64; ~] => payload!
+    Int(words[4]) => index!
+    index! < (words -> len) -> while {
+        payload! -> push(words[index!])
+        index! + 1 => index!
+    }
+    payload!
+}
+
+public validateExact words: [UInt64; ~] -> ArtifactValidation {
+    ArtifactValidation { status: 1, moduleCount: 0, nodeCount: 0, typeCount: 0 } => result!
+    (words -> len) < 6 -> if { result! -> return }
+    words[0] != 6002245291164258114 or words[1] != 1
+        -> if {
+            2 => result!.status
+            result! -> return
+        }
+    words[3] != UInt64(words -> len) or words[4] > UInt64(words -> len)
+        -> if {
+            5 => result!.status
+            result! -> return
+        }
+    (words -> checksum(6)) != words[5]
+        -> if {
+            6 => result!.status
+            result! -> return
+        }
+    words[2] > UInt64((words -> len) - 6)
+        -> if { result! -> return }
+    6 => index!
+    0 => sourceIndex!
+    sourceIndex! < Int(words[2]) -> while {
+        index! >= Int(words[4]) -> if { result! -> return }
+        words[index!] => length
+        index! + 1 => index!
+        length > UInt64(Int(words[4]) - index!)
+            -> if { result! -> return }
+        0 => byteIndex!
+        byteIndex! < Int(length) -> while {
+            words[index! + byteIndex!] > 255 -> if { result! -> return }
+            byteIndex! + 1 => byteIndex!
+        }
+        index! + Int(length) => index!
+        sourceIndex! + 1 => sourceIndex!
+    }
+    index! != Int(words[4]) -> if { result! -> return }
+    words -> exactPayload => payload
+    payload -> validatePayload => inner
+    inner.status == 0 and inner.moduleCount != Int(words[2])
+        -> if { result! -> return }
+    inner
+}
+
+public decodeExact words: [UInt64; ~], sources: [Text; ~] -> DecodedArtifact {
+    words -> validateExact => validation
+    DecodedArtifact {
+        ir: [typed.TypedIrNode; ~]
+        typeTable: artifactTypes.DecodedTypeTable { types: [typeIds.SemanticType; ~], hashes: [UInt64; ~], status: validation.status }
+        status: validation.status
+    } => result!
+    validation.status != 0 -> if { result! -> return }
+    # Never rebind source-local ordinals to a changed or missing source.
+    15 => result!.status
+    (sources -> len) != validation.moduleCount -> if { result! -> return }
+    sources -> exactSourceOrder => order
+    6 => index!
+    0 => ordinal!
+    ordinal! < (order -> len) -> while {
+        sources[order[ordinal!]] => source
+        words[index!] != UInt64(source -> len) -> if { result! -> return }
+        index! + 1 => index!
+        UIntSize(0) => byteIndex!
+        byteIndex! < (source -> len) -> while {
+            words[index! + Int(byteIndex!)] != UInt64(source -> byte(byteIndex!))
+                -> if { result! -> return }
+            byteIndex! + 1 => byteIndex!
+        }
+        index! + Int(source -> len) => index!
+        ordinal! + 1 => ordinal!
+    }
+    order -> exactIdentities => identities
+    words -> exactPayload => payload
+    payload -> decodePayload(identities)
 }
 
 mix hash: UInt64, value: UInt64 -> UInt64 {
@@ -112,8 +295,11 @@ resolveReference moduleHashes: [UInt64; ~], moduleStarts: [Int; ~], moduleCounts
     }
 }
 
-public encode ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~], types: [typeIds.SemanticType; ~] -> [UInt64; ~] {
+encodePayload ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~], types: [typeIds.SemanticType; ~] -> EncodedArtifact {
     types -> artifactTypes.encode(identities) => encodedTypes
+    encodedTypes.status != 0 -> if {
+        EncodedArtifact { words: [UInt64; ~], status: encodedTypes.status + 1 } -> return
+    }
     [Int; ~] => ordinals!
     [Int; ~] => moduleNodeCounts!
     0 => moduleIndex!
@@ -258,10 +444,10 @@ public encode ir: [typed.TypedIrNode; ~], identities: [modules.ModuleIdentity; ~
     wordCount => words![7]
     words! -> checksum(9) => artifactChecksum
     artifactChecksum => words![8]
-    words!
+    EncodedArtifact { words: words!, status: 0 }
 }
 
-public validate words: [UInt64; ~] -> ArtifactValidation {
+validatePayload words: [UInt64; ~] -> ArtifactValidation {
     0 => status!
     0 => moduleCount!
     0 => nodeCount!
@@ -319,8 +505,8 @@ public validate words: [UInt64; ~] -> ArtifactValidation {
     ArtifactValidation { status: status!, moduleCount: moduleCount!, nodeCount: nodeCount!, typeCount: typeCount! }
 }
 
-public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> DecodedArtifact {
-    words -> validate => validation
+decodePayload words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> DecodedArtifact {
+    words -> validatePayload => validation
     validation.status => status!
     validation.typeCount => validatedTypeCount
     [typed.TypedIrNode; ~] => ir!

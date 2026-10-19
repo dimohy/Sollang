@@ -24,7 +24,7 @@
   "properties": {
     "schemaVersion": { "enum": [1, 2, 3] },
     "runId": { "type": "string", "minLength": 1 },
-    "verification": { "enum": ["Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "ExpressionBatch", "PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe"] },
+    "verification": { "enum": ["Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ArrayInherent", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "C437CurrentSource", "ExpressionBatch", "PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe"] },
     "executionMode": { "const": "detached-supervisor" },
     "supervisorPid": { "type": "integer", "minimum": 1 },
     "startedAtUtc": { "type": "string", "format": "date-time" },
@@ -40,6 +40,10 @@
     "logPath": { "type": "string", "minLength": 1 },
     "standardErrorPath": { "type": "string", "minLength": 1 },
     "cancellationRequestPath": { "type": "string", "minLength": 1 },
+    "cancellationDisposition": { "enum": ["none", "honored", "afterCommit", "notHonored"] },
+    "stage3PublicationCommitSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+    "stage3PublicationCompleteSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+    "publicationMayBePartial": { "type": "boolean" },
     "cancellationAcknowledgementPath": { "type": "string", "minLength": 1 },
     "cancellationAcknowledgement": {
       "type": ["object", "null"],
@@ -80,6 +84,26 @@
     }
   },
   "allOf": [
+    {
+      "if": { "properties": { "cancellationDisposition": { "const": "afterCommit" } }, "required": ["cancellationDisposition"] },
+      "then": { "required": ["stage3PublicationCommitSha256", "stage3PublicationCompleteSha256", "publicationMayBePartial"], "properties": {
+        "verification": { "const": "Stage3" },
+        "status": { "const": "passed" },
+        "targetExitCode": { "const": 0 },
+        "cancellationAcknowledgement": { "type": "null" },
+        "stage3PublicationCommitSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "stage3PublicationCompleteSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "publicationMayBePartial": { "const": false }
+      } }
+    },
+    {
+      "if": { "properties": { "cancellationDisposition": { "const": "honored" } }, "required": ["cancellationDisposition"] },
+      "then": { "properties": { "status": { "const": "cancelled" } } }
+    },
+    {
+      "if": { "properties": { "cancellationDisposition": { "const": "notHonored" } }, "required": ["cancellationDisposition"] },
+      "then": { "properties": { "status": { "const": "failed" } } }
+    },
     {
       "if": { "properties": { "verification": { "const": "AdditionalMoveOwnership" } } },
       "then": {

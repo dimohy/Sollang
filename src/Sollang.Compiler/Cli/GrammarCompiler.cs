@@ -16,6 +16,7 @@ internal static class GrammarCompiler
     private const int Jump = 6;
     private const int LookaheadToken = 7;
     private const int RejectKeyword = 8;
+    private const int FunctionStart = 9;
 
     public static void Build(string[] args)
     {
@@ -186,6 +187,7 @@ internal static class GrammarCompiler
             switch (op)
             {
                 case Return:
+                case FunctionStart:
                     break;
                 case MatchToken:
                 case LookaheadToken:
@@ -279,6 +281,9 @@ internal static class GrammarCompiler
                 program.Add(RejectKeyword);
                 program.Add(rejectKeyword.StringId);
                 break;
+            case FunctionStartNode:
+                program.Add(FunctionStart);
+                break;
             default:
                 throw new InvalidOperationException($"unknown grammar node {node.GetType().Name}");
         }
@@ -314,7 +319,7 @@ internal static class GrammarCompiler
         builder.AppendLine($"# Grammar source: {Path.GetFileName(grammarPath)}");
         builder.AppendLine($"# Source SHA-256: {sourceHash}");
         builder.AppendLine("# Opcodes: 0 return, 1 token, 2 keyword, 3 call, 4 choice,");
-        builder.AppendLine("# 5 commit, 6 jump, 7 token lookahead, 8 reject keyword.");
+        builder.AppendLine("# 5 commit, 6 jump, 7 token lookahead, 8 reject keyword, 9 function start.");
         builder.AppendLine("# Lexer kinds: 0 whitespace, 1 line comment, 2 identifier,");
         builder.AppendLine("# 3 quoted string, 4 number, 5 newline, 6 end, 7 literal,");
         builder.AppendLine("# 8 character literal.");
@@ -418,6 +423,7 @@ internal static class GrammarCompiler
     private sealed record CallNode(int RuleId) : Node;
     private sealed record LookaheadNode(int TokenId) : Node;
     private sealed record RejectKeywordNode(int StringId) : Node;
+    private sealed record FunctionStartNode : Node;
 
     private sealed class ProductionParser(
         string text,
@@ -494,6 +500,11 @@ internal static class GrammarCompiler
                     var value = ReadString();
                     Require(')');
                     return new RejectKeywordNode(getStringId(value));
+                }
+                if (name == "functionStart")
+                {
+                    Require(')');
+                    return new FunctionStartNode();
                 }
                 if (name == "Identifier")
                 {

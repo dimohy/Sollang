@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$Compiler,
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$LlvmRoot = '',
+    [string]$StandardLibraryRoot = (Join-Path (Split-Path $PSScriptRoot -Parent) 'stdlib'),
+    [string]$OutputDirectory = '',
     [string[]]$Fixture = @()
 )
 $ErrorActionPreference = 'Stop'
@@ -14,8 +16,25 @@ if ([string]::IsNullOrWhiteSpace($LlvmRoot)) { $LlvmRoot = Join-Path $repoRoot '
 $assembler = (Resolve-Path (Join-Path $LlvmRoot 'bin/llvm-as.exe')).Path
 $clang = (Resolve-Path (Join-Path $LlvmRoot 'bin/clang.exe')).Path
 $shim = (Resolve-Path (Join-Path $repoRoot 'tests/native-interop/owned_array_audit.c')).Path
+if ([string]::IsNullOrWhiteSpace($StandardLibraryRoot)) { throw 'Standard library source root is required' }
+$standardLibrary = (Resolve-Path -LiteralPath $StandardLibraryRoot).Path
+if (-not (Test-Path -LiteralPath $standardLibrary -PathType Container)) {
+    throw 'Standard library source root must be a directory'
+}
+$standardLibrarySources = @(Get-ChildItem -LiteralPath $standardLibrary -Recurse -File -Filter '*.slg' |
+    Sort-Object FullName | ForEach-Object FullName)
+if ($standardLibrarySources.Count -eq 0) { throw 'Standard library source root is empty' }
 $compilerHash = (Get-FileHash -LiteralPath $compilerPath).Hash
-$outputRoot = Join-Path $repoRoot "artifacts/owned-array-cleanup/$compilerHash"
+$outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $repoRoot "artifacts/owned-array-cleanup/$compilerHash"
+} else {
+    $selectedOutput = [IO.Path]::GetFullPath($OutputDirectory, $repoRoot)
+    $artifactRoot = (Join-Path $repoRoot 'artifacts') + [IO.Path]::DirectorySeparatorChar
+    if (-not $selectedOutput.StartsWith($artifactRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Cleanup audit output must stay inside repository artifacts'
+    }
+    $selectedOutput
+}
 [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 $cases = @(
     @{name='882-stdlib-hmac-hkdf';expected='hmac-hkdf=ok';allocations=65},
@@ -43,7 +62,7 @@ $cases = @(
     @{name='1512-named-fixed-early-scalar-return-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1512-named-fixed-early-scalar-return-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
     @{name='1513-named-fixed-owned-element-named-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1513-named-fixed-owned-element-named-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
     @{name='1514-named-fixed-moved-owner-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1514-named-fixed-moved-owner-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
-    @{name='1515-named-fixed-ref-return-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1515-named-fixed-ref-return-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=0},
+    @{name='1515-named-fixed-ref-return-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1515-named-fixed-ref-return-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
     @{name='1516-named-fixed-before-binding-return-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1516-named-fixed-before-binding-return-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
     @{name='1517-named-fixed-loop-region-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1517-named-fixed-loop-region-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=2},
     @{name='1519-fixed-stack-argument-return';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1519-fixed-stack-argument-return.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
@@ -90,7 +109,8 @@ $cases = @(
     @{name='1578-borrowed-named-enum-reuse';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1578-borrowed-named-enum-reuse.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
     @{name='1579-borrowed-record-literal-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1579-borrowed-record-literal-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
     @{name='1580-borrowed-array-literal-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1580-borrowed-array-literal-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
-    @{name='1581-borrowed-enum-literal-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1581-borrowed-enum-literal-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1}
+    @{name='1581-borrowed-enum-literal-cleanup';expected=(Get-Content (Join-Path $repoRoot 'examples/regression/expected/1581-borrowed-enum-literal-cleanup.stdout.txt') -Raw).Replace("`r`n","`n").TrimEnd();allocations=1},
+    @{name='2723-invalid-artifact-type-count-admission';expected='rejected';allocations=1}
 )
 if ($Fixture.Count -gt 0) {
     $unknown = @($Fixture | Where-Object { $_ -notin $cases.name })
@@ -100,6 +120,9 @@ if ($Fixture.Count -gt 0) {
     $selectionHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($selection))
     $outputRoot = Join-Path $outputRoot "selected-$selectionHash"
     [IO.Directory]::CreateDirectory($outputRoot) | Out-Null
+}
+if (Test-Path -LiteralPath (Join-Path $outputRoot 'results.json')) {
+    throw 'Cleanup audit results already exist; select a new OutputDirectory to preserve the previous run'
 }
 foreach ($case in $cases) {
     $source = (Resolve-Path (Join-Path $repoRoot "examples/regression/$($case.name).slg")).Path
@@ -121,16 +144,31 @@ function Invoke-CleanupProcess {
 $results = foreach ($case in $cases) {
     $source = Join-Path $repoRoot "examples/regression/$($case.name).slg"
     $prefix = Join-Path $outputRoot $case.name
-    $item = [ordered]@{fixture=$case.name;sourceSha256=(Get-FileHash $source).Hash;sourceInputs=@($case.sourcePaths | ForEach-Object { @{path=$_;sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash} });passed=$false;output='';error=$null}
+    $item = [ordered]@{fixture=$case.name;sourceSha256=(Get-FileHash $source).Hash;sourceInputs=@((@($standardLibrarySources) + @($case.sourcePaths)) | ForEach-Object { @{path=$_;sha256=(Get-FileHash -LiteralPath $_ -Algorithm SHA256).Hash} });passed=$false;output='';error=$null}
     try {
-        $llvm = Invoke-CleanupProcess $compilerPath (@('windows') + $case.sourcePaths) "$($case.name) emit"
-        if ($llvm -notmatch '(?m)^target triple' -or $llvm -notmatch 'define i32 @main\(\)') { throw 'Missing LLVM target or main entry' }
+        # Use the same public build contract as the paired fixture runner.
+        # Retained LLVM is an output of this build, not compiler stdout.
+        $buildExecutable = "$prefix.original.exe"
+        $null = Invoke-CleanupProcess $compilerPath (@('build') + $case.sourcePaths +
+            @('-o', $buildExecutable, '--target', 'windows-x64', '--llvm', $LlvmRoot,
+              '--stdlib', $standardLibrary, '-O1', '--jobs', '1', '--keep-temps')) "$($case.name) build"
+        $llvmPath = "$buildExecutable.ll"
+        if (-not (Test-Path -LiteralPath $llvmPath -PathType Leaf)) { throw 'Public build did not retain LLVM' }
+        $llvm = [IO.File]::ReadAllText($llvmPath)
         [IO.File]::WriteAllText("$prefix.ll",$llvm,[Text.UTF8Encoding]::new($false))
+        $entries = [regex]::Matches($llvm, '(?m)^define (?:dso_local )?i32 @(?:main|sollang_start)\(\)')
+        if ($llvm -notmatch '(?m)^target triple' -or $entries.Count -ne 1) { throw 'Missing LLVM target or unique supported program entry' }
         $null = Invoke-CleanupProcess $assembler @("$prefix.ll",'-o',"$prefix.bc") "$($case.name) assemble"
         # Instrument only the generated program; C library allocations are excluded.
-        $auditLlvm = $llvm.Replace('@malloc(', '@audit_malloc(').Replace('@realloc(', '@audit_realloc(').Replace('@free(', '@audit_free(').Replace('@main()', '@slg_program_main()')
+        $auditLlvm = $llvm.Replace('call ptr @malloc(', 'call ptr @audit_malloc(').
+            Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').
+            Replace('call ptr @realloc(', 'call ptr @audit_realloc(').
+            Replace('call void @free(', 'call void @audit_free(').
+            Replace('call void @sollang_free(', 'call void @audit_free(').
+            Replace('@sollang_start()', '@slg_program_main()').Replace('@main()', '@slg_program_main()')
+        $auditLlvm += "`ndeclare ptr @audit_malloc(i64)`ndeclare ptr @audit_realloc(ptr,i64)`ndeclare void @audit_free(ptr)`n"
         [IO.File]::WriteAllText("$prefix.audit.ll",$auditLlvm,[Text.UTF8Encoding]::new($false))
-        $null = Invoke-CleanupProcess $clang @('-Wno-override-module',"-DEXPECTED_ALLOCATIONS=$($case.allocations)","$prefix.audit.ll",$shim,'-O1','-o',"$prefix.exe") "$($case.name) link"
+        $null = Invoke-CleanupProcess $clang @('-Wno-override-module',"-DEXPECTED_ALLOCATIONS=$($case.allocations)","$prefix.audit.ll",$shim,'-O1','-o',"$prefix.exe",'-lws2_32','-lshell32','-lbcrypt','-lole32') "$($case.name) link"
         $item.output = (Invoke-CleanupProcess "$prefix.exe" @() "$($case.name) execute").Replace("`r`n","`n").TrimEnd()
         if ($item.output -cne "$($case.expected)`nallocations=$($case.allocations),releases=$($case.allocations)") { throw "Cleanup count or stdout mismatch: $($item.output)" }
         $item.passed = $true

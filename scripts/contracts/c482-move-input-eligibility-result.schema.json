@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "managedCompilerSha256", "managedDllSha256", "selfhostCompilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "historicalBaselineReexecuted", "proofScope", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c482-move-input-eligibility-target" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 6 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 6 },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "managedDllSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "historicalBaselineReexecuted": { "const": false },
+    "proofScope": { "const": "Source and toolchain SHA stability, compiler diagnostic boundary, LLVM assembly and exact native stdout; no full Stage or ownership-lifetime proof." },
+    "cases": { "type": "array", "minItems": 6, "maxItems": 6, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": {
+      "completed": { "const": 6 }, "passed": { "const": 6 }, "inputsStable": { "const": true },
+      "inputFingerprintEnd": { "$ref": "#/$defs/sha" },
+      "failureId": { "type": "null" }, "failure": { "type": "null" },
+      "cases": { "items": { "$ref": "#/$defs/passedCase" } }
+    } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": {
+      "failureId": { "type": "string", "minLength": 1 },
+      "failure": { "type": "string", "minLength": 1 }
+    } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "nullableSha": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "case": { "type": "object", "additionalProperties": false,
+      "required": ["compiler", "fixture", "classification", "state", "directory", "sourceSha256", "buildExitCode", "buildStdoutSha256", "buildStderrSha256", "diagnosticMatched", "semanticCount", "irCount", "productsAbsent", "llvmSha256", "llvmAsExitCode", "bitcodeSha256", "exeSha256", "nativeExitCode", "nativeStdoutSha256", "stdoutMatched", "failure"],
+      "properties": {
+        "compiler": { "enum": ["managed", "selfhost"] },
+        "fixture": { "enum": ["additional-bounded-negative", "arena-control", "fixed-control"] },
+        "classification": { "enum": ["semantic-negative", "positive"] },
+        "state": { "enum": ["not-run", "running", "passed", "failed"] },
+        "directory": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "buildStdoutSha256": { "$ref": "#/$defs/nullableSha" },
+        "buildStderrSha256": { "$ref": "#/$defs/nullableSha" },
+        "diagnosticMatched": { "type": ["boolean", "null"] },
+        "semanticCount": { "type": ["integer", "null"], "minimum": 0 },
+        "irCount": { "type": ["integer", "null"], "minimum": 0 },
+        "productsAbsent": { "type": ["boolean", "null"] },
+        "llvmSha256": { "$ref": "#/$defs/nullableSha" },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "bitcodeSha256": { "$ref": "#/$defs/nullableSha" },
+        "exeSha256": { "$ref": "#/$defs/nullableSha" },
+        "nativeExitCode": { "type": ["integer", "null"] },
+        "nativeStdoutSha256": { "$ref": "#/$defs/nullableSha" },
+        "stdoutMatched": { "type": ["boolean", "null"] },
+        "failure": { "type": ["string", "null"] }
+      }
+    },
+    "passedCase": { "allOf": [{ "$ref": "#/$defs/case" },
+      { "properties": { "state": { "const": "passed" }, "buildStdoutSha256": { "$ref": "#/$defs/sha" }, "buildStderrSha256": { "$ref": "#/$defs/sha" }, "failure": { "type": "null" } } },
+      { "if": { "properties": { "classification": { "const": "semantic-negative" } } }, "then": { "properties": {
+        "buildExitCode": { "const": 1 }, "diagnosticMatched": { "const": true }, "productsAbsent": { "const": true },
+        "llvmSha256": { "type": "null" }, "llvmAsExitCode": { "type": "null" }, "bitcodeSha256": { "type": "null" },
+        "exeSha256": { "type": "null" }, "nativeExitCode": { "type": "null" }, "nativeStdoutSha256": { "type": "null" }, "stdoutMatched": { "type": "null" }
+      } } },
+      { "if": { "properties": { "classification": { "const": "positive" } } }, "then": { "properties": {
+        "buildExitCode": { "const": 0 }, "diagnosticMatched": { "type": "null" }, "productsAbsent": { "type": "null" },
+        "llvmSha256": { "$ref": "#/$defs/sha" }, "llvmAsExitCode": { "const": 0 }, "bitcodeSha256": { "$ref": "#/$defs/sha" },
+        "exeSha256": { "$ref": "#/$defs/sha" }, "nativeExitCode": { "const": 0 }, "nativeStdoutSha256": { "$ref": "#/$defs/sha" }, "stdoutMatched": { "const": true }
+      } } },
+      { "if": { "properties": { "compiler": { "const": "selfhost" } } }, "then": { "properties": {
+        "semanticCount": { "type": "integer", "minimum": 0 }, "irCount": { "const": 0 }
+      } }, "else": { "properties": { "semanticCount": { "type": "null" }, "irCount": { "type": "null" } } } }
+    ] }
+  }
+}

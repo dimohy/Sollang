@@ -61,10 +61,13 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
         parentIrIndex! + 1 => parentIrIndex!
     }
 
+    [Int; ~] => childHeads!
+    [Int; ~] => childNext!
+    nodes -> indexSourceOrderedChildren(expressionIrStart, expressionIrEnd, childHeads!, childNext!)
     expressionIrStart => operandIrIndex!
     operandIrIndex! < expressionIrEnd -> while {
         nodes[operandIrIndex!] => operatorIr!
-        operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and (operatorIr!.opcode == -27 or (operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228 or operatorIr!.opcode == -229 or operatorIr!.opcode == -236)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or (operatorIr!.opcode -> isArrayExchangeOpcode))) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
+        operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and (operatorIr!.opcode == -27 or (operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228 or operatorIr!.opcode == -229 or operatorIr!.opcode == -236)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -320 or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
             -> if {
                 -1 => firstOperand!
                 -1 => secondOperand!
@@ -76,56 +79,67 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                         -> if { true => operatorHasDirectQualifiedTarget! }
                 }
                 expressionIrStart => childIrIndex!
-                childIrIndex! < expressionIrEnd -> while {
-                    nodes[childIrIndex!] => childIr
-                    operatorIr!.kind == 17 and childIr.kind == 6
-                        and childIr.astNode == operatorIr!.astNode
-                        and prepared.package.nodes[sourceRange.astStart + childIr.astNode].kind == 48
-                        -> if {
-                            childIr => boundBlockCall!
-                            operandIrIndex! => boundBlockCall!.parent
-                            boundBlockCall! => nodes[childIrIndex!]
-                        }
-                    nodes[childIrIndex!].parent == operandIrIndex!
-                        and not (operatorHasDirectQualifiedTarget!
-                        and (childIr.kind == 18 or childIr.kind == 20 or childIr.kind == 27 or childIr.kind == 33 or childIr.kind == 34))
-                        -> if {
-                            prepared.package.nodes[sourceRange.astStart + childIr.astNode].start => childStart
-                            firstOperand! < 0 -> if {
-                                childIrIndex! => firstOperand!
-                                childStart => firstStart!
-                            } else {
-                                # Nested collection constructors share the initializer's
-                                # start with transparent element-type wrappers. Select the
-                                # widest outer collection value without changing ordinary
-                                # binding selection (for example, a parallel product).
-                                (operatorIr!.kind == 17
-                                    and childIr.kind == 6
-                                    and ((childIr.typeKind == 7
-                                    and childIr.typeOrigin == 4
-                                    and childIr.typeSymbol >= 5
-                                    and childIr.typeSymbol <= 7)
-                                    or (childIr.typeKind == 14
-                                    and childIr.typeOrigin == 4
-                                    and childIr.typeSymbol == 8))
-                                    and prepared.package.nodes[sourceRange.astStart + childIr.astNode].length > prepared.package.nodes[sourceRange.astStart + nodes[firstOperand!].astNode].length)
-                                    or (operatorIr!.kind != 17 and childStart < firstStart!)
-                                    -> if {
-                                        firstOperand! => secondOperand!
-                                        firstStart! => secondStart!
-                                        childIrIndex! => firstOperand!
-                                        childStart => firstStart!
-                                    } else {
-                                        secondOperand! < 0 or childStart < secondStart!
-                                            -> if {
-                                                childIrIndex! => secondOperand!
-                                                childStart => secondStart!
-                                            }
-                                    }
-                            }
-                        }
-                    childIrIndex! + 1 => childIrIndex!
+                # Keep binding reparenting ordered; indexed operators retain the
+                # live parent check so moved block calls cannot remain operands.
+                operatorIr!.kind != 17 -> if {
+                    childHeads![operandIrIndex! - expressionIrStart] => childIrIndex!
                 }
+                childIrIndex! >= expressionIrStart and childIrIndex! < expressionIrEnd
+                    -> while {
+                        nodes[childIrIndex!] => childIr
+                        operatorIr!.kind == 17 and childIr.kind == 6
+                            and childIr.astNode == operatorIr!.astNode
+                            and prepared.package.nodes[sourceRange.astStart + childIr.astNode].kind == 48
+                            -> if {
+                                childIr => boundBlockCall!
+                                operandIrIndex! => boundBlockCall!.parent
+                                boundBlockCall! => nodes[childIrIndex!]
+                            }
+                        nodes[childIrIndex!].parent == operandIrIndex!
+                            and not (operatorHasDirectQualifiedTarget!
+                            and (childIr.kind == 18 or childIr.kind == 20 or childIr.kind == 27 or childIr.kind == 33 or childIr.kind == 34))
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + childIr.astNode].start => childStart
+                                firstOperand! < 0 -> if {
+                                    childIrIndex! => firstOperand!
+                                    childStart => firstStart!
+                                } else {
+                                    # Nested collection constructors share the initializer's
+                                    # start with transparent element-type wrappers. Select the
+                                    # widest outer collection value without changing ordinary
+                                    # binding selection (for example, a parallel product).
+                                    (operatorIr!.kind == 17
+                                        and childIr.kind == 6
+                                        and ((childIr.typeKind == 7
+                                        and childIr.typeOrigin == 4
+                                        and childIr.typeSymbol >= 5
+                                        and childIr.typeSymbol <= 7)
+                                        or (childIr.typeKind == 14
+                                        and childIr.typeOrigin == 4
+                                        and childIr.typeSymbol == 8))
+                                        and prepared.package.nodes[sourceRange.astStart + childIr.astNode].length > prepared.package.nodes[sourceRange.astStart + nodes[firstOperand!].astNode].length)
+                                        or (operatorIr!.kind != 17 and childStart < firstStart!)
+                                        -> if {
+                                            firstOperand! => secondOperand!
+                                            firstStart! => secondStart!
+                                            childIrIndex! => firstOperand!
+                                            childStart => firstStart!
+                                        } else {
+                                            secondOperand! < 0 or childStart < secondStart!
+                                                -> if {
+                                                    childIrIndex! => secondOperand!
+                                                    childStart => secondStart!
+                                                }
+                                        }
+                                }
+                            }
+                        operatorIr!.kind == 17
+                            -> if {
+                                childIrIndex! + 1 => childIrIndex!
+                            } else {
+                                childNext![childIrIndex! - expressionIrStart] => childIrIndex!
+                            }
+                    }
                 firstOperand! => operatorIr!.operand0
                 operatorIr!.kind == 7 and operatorIr!.opcode != -26 and firstOperand! >= 0
                     -> if {
@@ -137,7 +151,7 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                         unaryOperand.typeKind => operatorIr!.typeKind
                         unaryOperand.typeFlags => operatorIr!.typeFlags
                     }
-                operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -229)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -243) or (operatorIr!.opcode <= -246 and operatorIr!.opcode >= -247) or operatorIr!.opcode == -252 or (operatorIr!.opcode <= -255 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or (operatorIr!.opcode -> isArrayExchangeOpcode))) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
+                operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -229)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -243) or (operatorIr!.opcode <= -246 and operatorIr!.opcode >= -247) or operatorIr!.opcode == -252 or (operatorIr!.opcode <= -255 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -320 or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
                     -> if { secondOperand! => operatorIr!.operand1 }
                 operatorIr!.kind == 8 -> if {
                     # A binary's AST children are its authoritative left/right
@@ -284,7 +298,7 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
                     expressionIrStart => tapStageSearch!
                     tapStageSearch! < expressionIrEnd -> while {
                         nodes[tapStageSearch!] => tapStageCandidate
-                        tapStageCandidate.parent == tapIrIndex! and tapStageCandidate.kind == 6
+                        tapStageCandidate.parent == tapIrIndex! and (tapStageCandidate.kind == 6 or (tapStageCandidate.kind == 9 and (tapStageCandidate.opcode == -227 or tapStageCandidate.opcode == -228)))
                             -> if {
                                 prepared.package.nodes[sourceRange.astStart + tapStageCandidate.astNode].start => tapStageStart
                                 previousTapStage! < 0 or tapStageStart > previousTapStageStart!
@@ -786,44 +800,7 @@ finalizeOrdinaryCanonicalCalls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~
             canonicalConstructorMemberIr! + 1 => canonicalConstructorMemberIr!
         }
 
-    expressionIrStart => siblingIrIndex!
-    siblingIrIndex! < expressionIrEnd -> while {
-        nodes[siblingIrIndex!] => sibling!
-        false => preserveTapArgumentLink!
-        -1 => nextSibling!
-        UIntSize(0) => nextSiblingStart!
-        expressionIrStart => siblingSearch!
-        siblingSearch! < expressionIrEnd -> while {
-            nodes[siblingSearch!] => siblingCandidate
-            siblingCandidate.kind == 6
-                and siblingCandidate.parent >= 0
-                and nodes[siblingCandidate.parent].kind == 36
-                and siblingCandidate.operand0 == siblingIrIndex!
-                -> if { true => preserveTapArgumentLink! }
-            sibling!.parent >= 0
-                and (nodes[sibling!.parent].kind == 14 or nodes[sibling!.parent].kind == 16)
-                and siblingCandidate.kind == 3 and sibling!.kind == 3 => numericLiteralOrder
-            siblingCandidate.parent == sibling!.parent
-                and ((numericLiteralOrder and siblingCandidate.astNode > sibling!.astNode)
-                or (not numericLiteralOrder and prepared.package.nodes[sourceRange.astStart + siblingCandidate.astNode].start > prepared.package.nodes[sourceRange.astStart + sibling!.astNode].start))
-                -> if {
-                    prepared.package.nodes[sourceRange.astStart + siblingCandidate.astNode].start => siblingCandidateStart
-                    nextSibling! < 0
-                        or (numericLiteralOrder and nodes[nextSibling!].kind == 3 and siblingCandidate.astNode < nodes[nextSibling!].astNode)
-                        or ((not numericLiteralOrder or nodes[nextSibling!].kind != 3) and siblingCandidateStart < nextSiblingStart!)
-                        -> if {
-                            siblingSearch! => nextSibling!
-                            siblingCandidateStart => nextSiblingStart!
-                        }
-                }
-            siblingSearch! + 1 => siblingSearch!
-        }
-        preserveTapArgumentLink! -> unless {
-            nextSibling! => sibling!.nextOperand
-        }
-        sibling! => nodes[siblingIrIndex!]
-        siblingIrIndex! + 1 => siblingIrIndex!
-    }
+    nodes -> sealSourceOrderedSiblingLinks(prepared, sourceIndex, expressionIrStart, expressionIrEnd)
 
     # Map operands are only the expressions that actually occur in source.
     # The generic sibling chain already preserves their source order, so seal
@@ -920,7 +897,8 @@ finalizeOrdinaryCanonicalCalls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~
                 foldSourceCandidate.typeId >= 0 -> if {
                     frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(foldSourceCandidate.typeId) => foldSourceCandidateValueType
                     foldSourceCandidateValueType >= 0
-                        and (frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 3
+                        and (frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 2
+                        or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 3
                         or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 4)
                         -> if { true => foldSourceSupported! }
                 }
@@ -1055,11 +1033,7 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                 }
                 tryOperandIr! >= 0 -> if {
                     nodes[tryOperandIr!] => directTryOperand
-                    directTryOperand.typeId < 0
-                        or directTryOperand.typeId >= (frozenRecursiveSemanticTypes -> len)
-                        or frozenRecursiveSemanticTypes[directTryOperand.typeId].kind != 7
-                        or frozenRecursiveSemanticTypes[directTryOperand.typeId].origin != 4
-                        or frozenRecursiveSemanticTypes[directTryOperand.typeId].symbol != 1
+                    (directTryOperand.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes)) < 0
                         -> if { -1 => tryOperandIr! }
                 }
                 # A flow-level `?` wraps the preserved FlowExpression
@@ -1086,11 +1060,7 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                                                 }
                                         }
                                     tryFlowOperandDescends!
-                                        and tryFlowOperandCandidate.typeId >= 0
-                                        and tryFlowOperandCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
-                                        and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].kind == 7
-                                        and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].origin == 4
-                                        and frozenRecursiveSemanticTypes[tryFlowOperandCandidate.typeId].symbol == 1
+                                        and (tryFlowOperandCandidate.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes)) >= 0
                                         -> if {
                                             prepared.package.nodes[sourceRange.astStart + tryFlowOperandCandidate.astNode].start => tryFlowOperandCandidateStart
                                             tryOperandIr! < 0 or tryFlowOperandCandidateStart >= tryFlowOperandStart!
@@ -1120,9 +1090,10 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                 tryOperandIr! >= 0 -> if {
                     tryOperandIr! => control!.operand0
                     nodes[tryOperandIr!] => tryOperand
-                    tryOperand.typeId >= 0 and frozenRecursiveSemanticTypes[tryOperand.typeId].kind == 7 and frozenRecursiveSemanticTypes[tryOperand.typeId].origin == 4 and frozenRecursiveSemanticTypes[tryOperand.typeId].symbol == 1 and frozenRecursiveSemanticTypes[tryOperand.typeId].first >= 0
+                    tryOperand.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes) => tryResultTypeId
+                    tryResultTypeId >= 0 and frozenRecursiveSemanticTypes[tryResultTypeId].first >= 0
                         -> if {
-                            frozenRecursiveSemanticTypes[tryOperand.typeId].first => tryPayloadTypeId
+                            frozenRecursiveSemanticTypes[tryResultTypeId].first => tryPayloadTypeId
                             frozenRecursiveSemanticTypes[tryPayloadTypeId] => tryPayloadType
                             tryPayloadTypeId => control!.typeId
                             tryPayloadType.kind => control!.typeKind
@@ -1223,8 +1194,9 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                 matchCandidate.typeModule => matchCandidateEnumModule!
                 matchCandidate.typeSymbol => matchCandidateEnumSymbol!
                 matchCandidate.typeOrigin => matchCandidateEnumOrigin!
-                matchCandidate.typeId >= 0 -> if {
-                    frozenRecursiveSemanticTypes[matchCandidate.typeId] => matchCandidateResolvedType
+                frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(matchCandidate.typeId) => matchCandidateValueTypeId
+                matchCandidateValueTypeId >= 0 -> if {
+                    frozenRecursiveSemanticTypes[matchCandidateValueTypeId] => matchCandidateResolvedType
                     # Canonical identity is authoritative. Legacy
                     # typeKind can still describe an earlier
                     # wrapper and must not classify a nominal
@@ -1241,7 +1213,7 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                     and matchCandidate.typeId >= 0
                     -> if {
                         prepared.package.tokens[sourceRange.tokenStart + matchPatternToken!] => matchCandidatePattern
-                        frozenRecursiveSemanticTypes[matchCandidate.typeId] => matchCandidatePatternType
+                        frozenRecursiveSemanticTypes[matchCandidateValueTypeId] => matchCandidatePatternType
                         sourceIndex -> nominalVariantTagForType(matchCandidatePatternType, matchCandidatePattern, prepared) => matchCandidatePatternTag
                         matchCandidatePatternTag < 0 -> if { false => matchCandidatePatternCompatible! }
                     }
@@ -1259,7 +1231,6 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                         3 => matchCandidateValueRank!
                     }
                 not matchCandidateEnum!
-                    and matchCandidate.typeId < 0
                     and (matchCandidateEnumOrigin! == 0 or matchCandidateEnumOrigin! == 2)
                     and matchCandidateEnumModule! >= 0
                     and matchCandidateEnumModule! < (prepared.package.ranges -> len)
@@ -1289,6 +1260,8 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                             }
                     }
                 matchCandidateBelongs!
+                    and matchCandidate.astNode != matchFlowAst
+                    and matchCandidateValueRank! > 0
                     and matchCandidatePatternCompatible!
                     and matchCandidateAst.start < matchControlNode.start
                     and ((matchUsesEnumPattern! and matchCandidateEnum!) or (not matchUsesEnumPattern! and matchCandidateInteger))
@@ -1344,7 +1317,8 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
             control! => nodes[controlIrIndex!]
             matchSubject! >= 0 and nodes[matchSubject!].typeId >= 0 and matchFirstArm! >= 0
                 -> if {
-                    frozenRecursiveSemanticTypes[nodes[matchSubject!].typeId] => matchSubjectType
+                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(nodes[matchSubject!].typeId) => matchSubjectValueTypeId
+                    frozenRecursiveSemanticTypes[matchSubjectValueTypeId] => matchSubjectType
                     matchFirstArm! => matchArmTagIndex!
                     matchArmTagIndex! >= 0 and matchArmTagIndex! < expressionIrEnd and nodes[matchArmTagIndex!].parent == controlIrIndex!
                         -> while {
@@ -1788,7 +1762,7 @@ finalizeOrdinaryBindings nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
             -> if {
                 expressionIrStart => roleCallSearch!
                 roleCallSearch! < expressionIrEnd -> while {
-                    nodes[roleCallSearch!].kind == 6 and nodes[roleCallSearch!].astNode == roleBinding!.astNode and (nodes[roleCallSearch!].opcode == -207 or nodes[roleCallSearch!].opcode == -208 or nodes[roleCallSearch!].opcode == -209)
+                    nodes[roleCallSearch!].kind == 6 and nodes[roleCallSearch!].astNode == roleBinding!.astNode and (nodes[roleCallSearch!].opcode == -207 or (nodes[roleCallSearch!].opcode -> isDirectIterationOpcode) or nodes[roleCallSearch!].opcode == -209)
                         -> if { roleCallSearch! => roleBinding!.operand0 }
                     roleCallSearch! + 1 => roleCallSearch!
                 }
@@ -1863,6 +1837,7 @@ finalizeOrdinaryBindings nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
     # A binding's initializer is the authoritative canonical
     # type. The legacy nearest-descendant heuristic can select
     # a loop index type from inside the binding's later use.
+    nodes -> repairDirectIntrinsicBindingSources(expressionIrStart, expressionIrEnd)
     expressionIrStart => canonicalBindingIr!
     canonicalBindingIr! < expressionIrEnd -> while {
         nodes[canonicalBindingIr!] => canonicalBinding!
@@ -2198,6 +2173,12 @@ finalizeOrdinaryReturn nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], resol
             }
     }
     mergedReturnControl! >= 0 -> if { mergedReturnControl! => returnOperandIr! }
+    # A terminal declaration contributes Unit, independently of its initializer.
+    # Do not turn the initializer into the function's fallthrough result.
+    resultRootAst >= 0 and resultRootAst < sourceRange.astCount
+        and (prepared.package.nodes[sourceRange.astStart + resultRootAst].kind == 9
+        or prepared.package.nodes[sourceRange.astStart + resultRootAst].kind == 61)
+        -> if { -1 => returnOperandIr! }
     returnOperandIr! => returnNode!.operand0
     returnNode! => nodes[returnIr]
 

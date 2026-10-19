@@ -1,0 +1,71 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+import sys.process as process
+import sys.runtime as runtime
+
+# Observe the complete production entry plans, including their failure facts.
+# The optional root uses the same source discovery and ordering as the CLI.
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 2 -> if {
+        arguments[2] -> path.fromText(path.nativeStyle()) => root
+        root -> sourceRoot.discoverDirect
+    } else {
+        [path.Path; ~]
+    } => stdlibPaths
+    [Text; ~] => paths!
+    0 => stdlibIndex!
+    stdlibIndex! < (stdlibPaths -> len) -> while {
+        stdlibPaths[stdlibIndex!] -> pathText => sourceText
+        paths! -> push(sourceText)
+        stdlibIndex! + 1 => stdlibIndex!
+    }
+    paths! -> push(arguments[1])
+    [file.SourceText; ~] => owners!
+    paths! -> each sourcePath {
+        sourcePath -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    runtime.nowMillis() => started
+    request -> prepareLibraryFiles(paths!, "windows-x64", path.nativeStyle()) => context
+    context -> checkedContextDiagnosticCount => checkedDiagnostics
+    runtime.nowMillis() => checked
+    context -> prepareScheduledCoreEmitterState => state
+    context -> preparedEmitterDiagnosticCount(state) => scheduleDiagnostics
+    runtime.nowMillis() => scheduled
+    checked - started => checkedMilliseconds
+    scheduled - checked => scheduledMilliseconds
+    "timing=$checkedMilliseconds,$scheduledMilliseconds" -> println
+    checkedDiagnostics + scheduleDiagnostics => diagnostics
+    "diagnostic=$diagnostics" -> println
+    state.bodySchedules -> each schedule {
+        context.ir[schedule.functionIndex].kind => kind
+        schedule.emitMutableSlots -> if { 1 } else { 0 } => slots
+        "schedule=$(schedule.functionIndex),$kind,$slots,$(schedule.failureNode),$(schedule.failureTerminal)" -> println
+        schedule.order -> each node {
+            "order=$(schedule.functionIndex),$node" -> println
+        }
+        0 => index!
+        index! < (schedule.scheduled -> len) -> while {
+            schedule.scheduled[index!] -> if { 1 } else { 0 } => selected
+            "scheduled=$(schedule.functionIndex),$(index!),$selected" -> println
+            index! + 1 => index!
+        }
+    }
+    owners! -> len => ownerCount
+    stdlibPaths -> len => stdlibCount
+}

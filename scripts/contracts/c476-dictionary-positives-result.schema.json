@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "compilerPath", "compilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "orphanProcessIds", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-dictionary-positives" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 10 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "compilerPath": { "type": "string", "minLength": 1 },
+    "compilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "cases": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 10 }, "passed": { "const": 10 }, "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "inputsStable": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" }, "cases": { "minItems": 10, "items": { "properties": { "state": { "const": "passed" }, "buildExitCode": { "const": 0 }, "llvmAsExitCode": { "const": 0 }, "runExitCode": { "const": 0 }, "failure": { "type": "null" } } } } } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "source", "sourceSha256", "expected", "expectedSha256", "state", "buildExitCode", "llvmAsExitCode", "runExitCode", "buildStdoutPath", "buildStderrPath", "runStdoutPath", "runStderrPath", "exePath", "llvmPath", "bitcodePath", "failure"],
+      "properties": {
+        "id": { "type": "string" }, "source": { "type": "string" }, "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expected": { "type": "string" }, "expectedSha256": { "$ref": "#/$defs/sha" },
+        "state": { "enum": ["not-run", "running", "passed", "failed"] },
+        "buildExitCode": { "type": ["integer", "null"] }, "llvmAsExitCode": { "type": ["integer", "null"] }, "runExitCode": { "type": ["integer", "null"] },
+        "buildStdoutPath": { "type": ["string", "null"] }, "buildStderrPath": { "type": ["string", "null"] },
+        "runStdoutPath": { "type": ["string", "null"] }, "runStderrPath": { "type": ["string", "null"] },
+        "exePath": { "type": ["string", "null"] }, "llvmPath": { "type": ["string", "null"] }, "bitcodePath": { "type": ["string", "null"] },
+        "failure": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

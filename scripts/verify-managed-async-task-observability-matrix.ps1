@@ -173,8 +173,10 @@ try {
             } else {
                 $failureId = ('ASYNC_TASK_OBSERVABILITY_' + $case.id.Replace('-', '_').ToUpperInvariant() + '_EXECUTION_FAILED')
                 if ($compile.ExitCode -ne 0 -or $compile.StderrBytes.Length -ne 0 -or $item.warningCount -ne 0 -or $item.noteCount -ne 0) { throw "$($case.id) compile failed or emitted diagnostics" }
-                $ll = Get-ChildItem $caseDirectory -Recurse -Filter '*.ll' | Where-Object FullName -Like '*slg-tmp*' | Select-Object -First 1 -ExpandProperty FullName
-                if (-not $ll) { throw "$($case.id) emitted no LLVM" }
+                # NativeOutputTransaction publishes retained LLVM beside the product.
+                # Select that exact product's IR, never an arbitrary temporary unit.
+                $ll = $nativePath + '.ll'
+                if (-not (Test-Path -LiteralPath $ll -PathType Leaf)) { throw "$($case.id) emitted no LLVM" }
                 $native = Run $nativePath @() "$($case.id) native"
                 Save-Capture $caseDirectory 'native' $native
                 Add-ProcessEvidence $native $item

@@ -1,3 +1,4 @@
+using System.Globalization;
 using Sollang.Compiler.Diagnostics;
 
 namespace Sollang.Compiler.Cli;
@@ -11,7 +12,8 @@ internal sealed record CliOptions(
     bool KeepTemps,
     string? OptimizationLevel,
     bool Locked,
-    CompilationOutputKind OutputKind)
+    CompilationOutputKind OutputKind,
+    int? Jobs = null)
 {
     public static CliOptions Parse(string[] args)
     {
@@ -32,6 +34,7 @@ internal sealed record CliOptions(
         var locked = false;
         var outputKind = CompilationOutputKind.Executable;
         string? optimizationLevel = null;
+        int? jobs = null;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -62,6 +65,14 @@ internal sealed record CliOptions(
                     break;
                 case "--keep-temps":
                     keepTemps = true;
+                    break;
+                case "--jobs":
+                    if (!int.TryParse(RequireValue(args, ref i, arg), NumberStyles.None,
+                            CultureInfo.InvariantCulture, out var requestedJobs) || requestedJobs < 1)
+                    {
+                        throw new SollangException("--jobs expects a positive integer");
+                    }
+                    jobs = requestedJobs;
                     break;
                 case "--locked":
                     locked = true;
@@ -177,7 +188,8 @@ internal sealed record CliOptions(
             keepTemps,
             optimizationLevel,
             locked,
-            outputKind);
+            outputKind,
+            jobs);
     }
 
     private static string DefaultSourceOutput(
@@ -269,7 +281,7 @@ internal sealed record CliOptions(
         "usage: sollang build [<source.slg> ... | --project <sollang.project|directory> "
         + "| --workspace <sollang.workspace|directory> --package <name>] [--product <name>] "
         + "[-o <output>] [--target windows-x64|linux-x64|wasm32-browser] "
-        + "[--library] [--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps] [--locked]";
+        + "[--library] [--llvm <dir>] [--jobs <positive-integer>] [-O0|-O1|-O2|-O3] [--keep-temps] [--locked]";
 
     private static CompilationTarget ParseTarget(string value)
     {

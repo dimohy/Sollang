@@ -1,0 +1,244 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.parser as parser
+
+verify sources: [Text; ~], label: Text, trusted: Int, expected: Int -> Unit uses Console {
+    sources -> each source {
+        source -> parser.parseEvents => events
+        events[(events -> len) - 1].value == 0 -> if {
+            "$label parse-error" -> println
+            return
+        }
+    }
+    sources -> semanticContext.prepareWithStandardLibrarySources(trusted)
+        -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    committed.types => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    [diagnostics.UnresolvedMutableNameDiagnostic; ~] => mutableNames
+    prepared.package -> diagnostics.firstExpressionOperandDiagnostic(prepared, resolved, ir, mutableNames, 64) => result
+    "$label code=$(result.code) expected=$expected" -> println
+}
+
+main {
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Long uses Clock { rt.nowMillis() => stamp
+     stamp }
+    main {}
+    """; ~] -> verify("clock-binding", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    main { rt.nowMillis() => stamp }
+    """; ~] -> verify("clock-main", 1, 0)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Long uses Clock { rt.nowMillis() => stamp
+     stamp }
+    main {}
+    """; ~] -> verify("clock-stdlib-caller", 2, 0)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Long uses Clock => rt.nowMillis()
+    main {}
+    """; ~] -> verify("clock-stdlib-callee-only", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    outer: -> Long uses Clock {
+        local: -> Long uses Clock => rt.nowMillis()
+        1
+    }
+    main {}
+    """; ~] -> verify("clock-nested-local", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify<T> value: T -> Long uses Clock { rt.nowMillis() => stamp
+     stamp }
+    main { 1 -> verify => stamp }
+    """; ~] -> verify("clock-generic", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Long => rt.nowMillis()
+    main {}
+    """; ~] -> verify("clock-missing-effect", 1, 32)
+    [
+    """
+    namespace sys.runtime
+    public readInt prompt: Text -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Int uses Console { "" -> rt.readInt => value
+     value }
+    main {}
+    """; ~] -> verify("read-binding", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public readInt prompt: Text -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Int uses Console => rt.readInt("")
+    main {}
+    """; ~] -> verify("read-direct", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public readInt prompt: Text -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Int uses Console => rt.readInt(missing)
+    main {}
+    """; ~] -> verify("read-before-argument", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public readInt prompt: Text -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Int => rt.readInt(missing)
+    main {}
+    """; ~] -> verify("effect-before-main", 1, 32)
+    [
+    """
+    namespace sys.runtime
+    public readInt prompt: Text -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    main { rt.readInt("") => value }
+    """; ~] -> verify("read-main", 1, 0)
+    [
+    """
+    namespace sys.file
+    public struct SourceText { value: Int }
+    public readStandardInput: -> SourceText uses File = intrinsic
+    public readStandardInputChunk count: UIntSize -> SourceText uses File = intrinsic
+    """,
+    """
+    import sys.file as file
+    verify: -> file.SourceText uses File => file.readStandardInput()
+    main {}
+    """; ~] -> verify("stdin-function", 1, 48)
+    [
+    """
+    namespace sys.file
+    public struct SourceText { value: Int }
+    public readStandardInput: -> SourceText uses File = intrinsic
+    public readStandardInputChunk count: UIntSize -> SourceText uses File = intrinsic
+    """,
+    """
+    import sys.file as file
+    main { file.readStandardInput() => source }
+    """; ~] -> verify("stdin-main", 1, 0)
+    [
+    """
+    namespace sys.file
+    public struct SourceText { value: Int }
+    public readStandardInput: -> SourceText uses File = intrinsic
+    public readStandardInputChunk count: UIntSize -> SourceText uses File = intrinsic
+    """,
+    """
+    import sys.file as file
+    verify: -> file.SourceText uses File => UIntSize(4096) -> file.readStandardInputChunk
+    main {}
+    """; ~] -> verify("stdin-chunk", 1, 48)
+    [
+    """
+    namespace sample
+    public nowMillis: -> Int => 1
+    """,
+    """
+    import sample as sample
+    verify: -> Int => sample.nowMillis()
+    main {}
+    """; ~] -> verify("ordinary-same-name", 0, 0)
+    [
+    """
+    namespace sys.runtime
+    public nowMillis: -> Int => 1
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Int => rt.nowMillis()
+    main {}
+    """; ~] -> verify("ordinary-runtime-name", 1, 0)
+    [
+    """
+    namespace sys.io
+    public readInt prompt: Text -> Int uses Console => 1
+    """,
+    """
+    import sys.io as io
+    verify: -> Int uses Console => io.readInt("")
+    main {}
+    """; ~] -> verify("read-wrapper", 1, 48)
+    [
+    """
+    namespace sys.runtime
+    public flushStandardOutput: -> Unit uses Console = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    verify: -> Unit uses Console { rt.flushStandardOutput() }
+    main {}
+    """; ~] -> verify("flush-control", 1, 0)
+    [
+    """
+    namespace sys.io
+    public readInt prompt: Text -> Int uses Console => 1
+    """,
+    """
+    verify: -> Int uses Console => "" -> readInt
+    main {}
+    """; ~] -> verify("bare-read", 1, 48)
+    [
+    """
+    namespace sys.random
+    seed value: Int -> Unit uses Random {}
+    """,
+    """
+    verify: -> Unit uses Random { 1 -> seedRandom }
+    main {}
+    """; ~] -> verify("private-before-main", 1, 47)
+}

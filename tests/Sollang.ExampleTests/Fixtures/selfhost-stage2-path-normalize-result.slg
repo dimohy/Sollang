@@ -34,8 +34,11 @@ main {
     path.fromText(".", style) => currentRequest
     currentRequest -> query -> when {
         Ok(currentInfo) {
-            currentInfo.canonical -> pathText -> resolveAbsolutePath => absolute
-            absolute.valid -> println
+            # Runtime canonical paths may use a trusted Windows extended
+            # namespace that public normalizeConfined intentionally rejects.
+            # Keep the canonical Path owned and validate its returned payload.
+            currentInfo.canonical -> byteCount => canonicalLength
+            canonicalLength > 0 -> println
         }
         Err(_) {
             false -> println

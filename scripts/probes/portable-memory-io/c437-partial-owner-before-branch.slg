@@ -15,8 +15,39 @@ observe value: move Wrapper, chooseFirst: Bool -> async Int {
     (owner -> len) + selected
 }
 
+struct Payload {
+    output: [UInt8; ~]
+    spare: [UInt8; ~]
+    value: Int
+}
+
+struct Kept {
+    output: [UInt8; ~]
+    value: Int
+}
+
+makePayload: -> Result<Payload, Int> {
+    Result<Payload, Int>.Ok(Payload { output: [1, 2, 3; ~], spare: [4, 5; ~], value: 17 })
+}
+
+retainPayload: -> Result<Kept, Int> {
+    makePayload() -> when {
+        Err(error) { Result<Kept, Int>.Err(error) }
+        Ok(payload) {
+            Result<Kept, Int>.Ok(Kept { output: payload.output, value: payload.value })
+        }
+    }
+}
+
 main {
     Wrapper { owner: [5, 6,; ~], marker: 2 } -> observe(true) => task
     task -> await => result
     "reduced=$result" -> println
+    retainPayload() -> when {
+        Err(_) { "unexpected-payload-error" -> println }
+        Ok(kept) {
+            kept.output[0] == 1 and (kept.output -> len) == 3 and kept.value == 17
+                -> unless { "unexpected-payload-value" -> println }
+        }
+    }
 }

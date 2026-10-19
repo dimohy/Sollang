@@ -1,0 +1,29 @@
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    [
+    """
+    main {
+        7 => count
+        UIntSize(3) => capacity
+        "$count,$capacity" -> println
+    }
+    """; ~
+    ] => sources
+    sources -> expressionTypeIds.resolve => resolved
+
+    0 => intBindings!
+    0 => sizeBindings!
+    resolved.ordinaryBindingTypeBySymbol -> each typeId {
+        typeId >= 0 -> if {
+            resolved.types[typeId] => bindingType
+            bindingType.kind == 1 and bindingType.origin == 1
+                -> if {
+                    bindingType.symbol == 2 -> if { intBindings! + 1 => intBindings! }
+                    bindingType.symbol == 13 -> if { sizeBindings! + 1 => sizeBindings! }
+                }
+        }
+    }
+    intBindings! == 1 and sizeBindings! == 1 => valid
+    valid -> if { "pre-ir lexical binding types = valid" } else { "pre-ir lexical binding types = invalid" } -> println
+}

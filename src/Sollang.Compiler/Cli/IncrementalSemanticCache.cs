@@ -16,7 +16,7 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 8;
+    private const ulong Schema = 9;
     private const int DigestLength = 32;
     private const int HeaderWords = 13;
     private const int MaximumRecords = 1_000_000;
@@ -28,6 +28,7 @@ internal sealed class IncrementalSemanticCache
     private readonly SemanticStaticArrayReuse[] _staticArrays;
     private readonly string[] _functions;
     private readonly KeyValuePair<string, string>[] _calls;
+    private readonly IReadOnlyDictionary<string, string> _contextualNumericTypes;
     private readonly KeyValuePair<string, byte[]>[] _modules;
     private readonly SemanticFunctionReuse[] _reusableFunctions;
     private readonly SemanticSpecializationReuse[] _specializations;
@@ -41,6 +42,7 @@ internal sealed class IncrementalSemanticCache
         SemanticStaticArrayReuse[] staticArrays,
         string[] functions,
         KeyValuePair<string, string>[] calls,
+        IReadOnlyDictionary<string, string> contextualNumericTypes,
         KeyValuePair<string, byte[]>[] modules,
         SemanticFunctionReuse[] reusableFunctions,
         SemanticSpecializationReuse[] specializations,
@@ -59,6 +61,7 @@ internal sealed class IncrementalSemanticCache
         _staticArrays = staticArrays;
         _functions = functions;
         _calls = calls;
+        _contextualNumericTypes = contextualNumericTypes;
         _modules = modules;
         _reusableFunctions = reusableFunctions;
         _specializations = specializations;
@@ -123,6 +126,7 @@ internal sealed class IncrementalSemanticCache
                     old.StaticArrays,
                     reusable,
                     old.Calls.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal),
+                    old.ContextualNumericTypes,
                     specializations,
                     mainBindings is null ? null : old.MainModuleName,
                     mainBindings,
@@ -187,6 +191,7 @@ internal sealed class IncrementalSemanticCache
             staticArrays,
             functions,
             calls,
+            StableBindings(program.Types, program.StableContextualNumericTypes),
             modules,
             reusableFunctions,
             specializations,
@@ -237,6 +242,7 @@ internal sealed class IncrementalSemanticCache
                 WriteUInt64(stream, checksum, checked((ulong)_warnings.Length));
                 WriteUInt64(stream, checksum, checked((ulong)_staticArrays.Length));
                 WriteDigest(stream, checksum, _declarationFingerprint);
+                WriteBindings(stream, checksum, _contextualNumericTypes);
                 if (_mainBindings is not null)
                 {
                     WriteString(stream, checksum, _mainModuleName!);
@@ -477,6 +483,7 @@ internal sealed class IncrementalSemanticCache
         var warningCount = CheckedCount(ReadUInt64(stream, checksum));
         var fixedArrayCount = CheckedCount(ReadUInt64(stream, checksum));
         var declarationFingerprint = ReadDigest(stream, checksum);
+        var contextualNumericTypes = ReadBindings(stream, checksum);
         var mainModuleName = hasMain ? ReadString(stream, checksum) : null;
         var mainBindings = hasMain ? ReadBindings(stream, checksum) : null;
         var staticArrays = new SemanticStaticArrayReuse[fixedArrayCount];
@@ -545,6 +552,7 @@ internal sealed class IncrementalSemanticCache
             staticArrays,
             functions,
             calls,
+            contextualNumericTypes,
             modules,
             reusable,
             specializations,
@@ -813,6 +821,7 @@ internal sealed class IncrementalSemanticCache
         IReadOnlyList<SemanticStaticArrayReuse> StaticArrays,
         IReadOnlyList<string> Functions,
         IReadOnlyList<KeyValuePair<string, string>> Calls,
+        IReadOnlyDictionary<string, string> ContextualNumericTypes,
         IReadOnlyList<KeyValuePair<string, byte[]>> Modules,
         IReadOnlyList<SemanticFunctionReuse> ReusableFunctions,
         IReadOnlyList<SemanticSpecializationReuse> Specializations,

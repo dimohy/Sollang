@@ -1,10 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [switch]$StaticAssertionsOnly,
+    [string]$LlvmEmitterSplitAbiOutputDirectory = ''
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+& (Join-Path $PSScriptRoot 'verify-regression-fixture-names.ps1') -RepositoryRoot $RepositoryRoot
+if (-not $?) { throw 'Regression fixture name validation failed' }
 
 function Invoke-CheckedContract {
     param(
@@ -19,6 +24,7 @@ function Invoke-CheckedContract {
     }
 }
 
+if (-not $StaticAssertionsOnly) {
 $childFailureRejected = $false
 try {
     Invoke-CheckedContract `
@@ -36,6 +42,7 @@ if (-not $childFailureRejected) {
 }
 
 $repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
+Invoke-CheckedContract -Name "verify-formal-exact-source-closures.ps1" -Parameters $repositoryParameters
 foreach ($name in @(
     "verify-ai-slg-best-practices.ps1"
     "verify-focused-slg-format.ps1"
@@ -82,12 +89,18 @@ foreach ($name in @(
     "verify-selfhost-fragment-manifests.ps1"
     "verify-selfhost-source-structure.ps1"
     "verify-llvm-emitter-modules.ps1"
-    "verify-llvm-emitter-split-abi.ps1"
     "verify-input-fingerprint-stability-contract.ps1"
     "verify-verified-stage3-install-contract.ps1"
     "verify-browser-stage2-input-fingerprint-contract.ps1"
 )) {
     Invoke-CheckedContract -Name $name
+}
+if ([string]::IsNullOrWhiteSpace($LlvmEmitterSplitAbiOutputDirectory)) {
+    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1"
+} else {
+    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1" -Parameters @{
+        OutputDirectory = $LlvmEmitterSplitAbiOutputDirectory
+    }
 }
 foreach ($name in @(
     "verify-selfhost-llvm-function-diff.ps1"
@@ -97,6 +110,9 @@ foreach ($name in @(
 )) {
     Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
 }
+}
+
+$RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 
 function Assert-Contains {
     param([string]$Text, [string]$Expected, [string]$Description)
@@ -199,6 +215,7 @@ $invariantRulesPath = Join-Path $RepositoryRoot "selfhost/llvm/invariant_rules.s
 $invariantDiagnosticsPath = Join-Path $RepositoryRoot "selfhost/llvm/text/invariant_diagnostics.slg"
 $emitterContextPath = Join-Path $RepositoryRoot "selfhost/llvm/emitter/context.slg"
 $emitterDiagnosticsPath = Join-Path $RepositoryRoot "selfhost/llvm/emitter/diagnostics.slg"
+$semanticDiagnosticsPath = Join-Path $RepositoryRoot "selfhost/semantic/diagnostics.slg"
 $processRuntimePath = Join-Path $RepositoryRoot "selfhost/llvm/emitter/process_runtime.slg"
 $managedWindowsProcessRuntimePath = Join-Path $RepositoryRoot "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs"
 $managedLinuxProcessRuntimePath = Join-Path $RepositoryRoot "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs"
@@ -491,6 +508,7 @@ $standardProcess = [IO.File]::ReadAllText($standardProcessPath)
 $standardProcessRuntime = [IO.File]::ReadAllText($standardProcessRuntimePath)
 $ownership = [IO.File]::ReadAllText($ownershipPath)
 $semanticOwnership = [IO.File]::ReadAllText($semanticOwnershipPath)
+$semanticDiagnostics = [IO.File]::ReadAllText($semanticDiagnosticsPath)
 $storedArrayReferenceDiagnostic = [IO.File]::ReadAllText($storedArrayReferenceDiagnosticPath)
 $semanticParityDiagnostic = [IO.File]::ReadAllText($semanticParityDiagnosticPath)
 $borrowedProjectedTextFixture = [IO.File]::ReadAllText($borrowedProjectedTextFixturePath)
@@ -758,13 +776,14 @@ Assert-Contains $incrementalVerifier '-Arguments (@("typed-ir-normalize") + $fix
 Assert-Contains $incrementalVerifier '-Arguments (@("typed-ir-seal") + $fixturePaths)' "expanded-source Typed IR sealing profile"
 Assert-MatchCount $typedCore 'functionRequests\[requestIndex!\] -> lowerFunctionRequest' 1 "browser direct sequential function lowering"
 Assert-MatchCount $typedCore 'sourceFunctionRequests! -> lowerFunctionRequests\(parallelFunctions, profileFunctionLimit, prepared' 1 "one source-local function-lowering dispatch site"
-Assert-MatchCount $typedCore 'results! -> appendAndReleaseFunctionResults\(sourceFunctionResults!\)' 1 "prompt source-local function-result merge"
+Assert-MatchCount $typedCore 'results! -> appendAndReleaseFunctionResults\(awaitedFunctionResults!\)' 1 "prompt source-local function-result merge"
+Assert-Contains $typedSourceLowering 'functionAwaitResult!.nodes -> repairDiscardedDirectAsyncAwaits(prepared)' "source-local async await repair before result merge"
 Assert-NotContains $typedCore 'globalFunctionRequests!' "rejected compiler-wide function request lifetime"
 Assert-NotContains $typedCore 'appendAndReleaseFunctionResultRange' "rejected long-lived compiler-wide result ranges"
 $sourceLoweringDeclarationOffset = $typedSourceLowering.IndexOf('lowerSource requestedSourceIndex: Int, parallelFunctions: Bool', [StringComparison]::Ordinal)
 $sourceRequestCollectionOffset = $typedSourceLowering.IndexOf('[FunctionLowerRequest; ~] => sourceFunctionRequests!', $sourceLoweringDeclarationOffset, [StringComparison]::Ordinal)
 $sourceFunctionDispatchOffset = $typedSourceLowering.IndexOf('sourceFunctionRequests! -> lowerFunctionRequests(parallelFunctions, profileFunctionLimit, prepared', $sourceRequestCollectionOffset, [StringComparison]::Ordinal)
-$sourceFunctionMergeOffset = $typedSourceLowering.IndexOf('results! -> appendAndReleaseFunctionResults(sourceFunctionResults!)', $sourceFunctionDispatchOffset, [StringComparison]::Ordinal)
+$sourceFunctionMergeOffset = $typedSourceLowering.IndexOf('results! -> appendAndReleaseFunctionResults(awaitedFunctionResults!)', $sourceFunctionDispatchOffset, [StringComparison]::Ordinal)
 $orderedSourceAssemblyOffset = $typed.IndexOf('0 => sourceLowerIndex!', [StringComparison]::Ordinal)
 if ($sourceLoweringDeclarationOffset -lt 0 -or
     $sourceRequestCollectionOffset -le $sourceLoweringDeclarationOffset -or
@@ -840,11 +859,11 @@ Assert-NotContains $typedOrdinaryFunction 'declaredBodyCandidate.kind == 10' "ex
 Assert-Contains $typedFunctionLowering 'normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode, matchIndex: Int, unitTypeId: Int' "complete-arm authoritative late match result normalization"
 Assert-Contains $typedFunctionLowering 'arm.parent != matchIndex -> if {' "late match result exact arm ownership"
 Assert-Contains $typedFunctionLowering 'and allContinuingArmsAgree!' "late match result full-arm agreement gate"
-Assert-Matches $typedFunctionLowering 'terminal\.kind != 23\s+and not \(terminalIndex -> terminalValueReturnsFromArm\(armIndex!, nodes\)\)' "late match result skips direct returns and values consumed by returning arms"
+Assert-Matches $typedFunctionLowering 'not terminating\[terminalIndex\]\s+and not \(terminalIndex -> terminalValueReturnsFromArm\(armIndex!, nodes\)\)' "late match result skips all terminating controls and values consumed by returning arms"
 Assert-NotContains $typedFunctionLowering 'sealMatchResultTypeFromCanonicalArm' "rejected first-arm match result promotion"
 Assert-Contains $typedFunctionLowering 'match -> sealNodeTypeIdentity(unitTypeId, types, flags)' "incomplete late match result demotion to canonical Unit"
 Assert-Contains $typedFunctionLowering '0 -> builtinTypeId(types) => unitTypeId' "global match closure resolves canonical Unit once"
-Assert-Contains $typedFunctionLowering 'match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags)' "global match closure uses the complete-arm normalizer"
+Assert-Contains $typedFunctionLowering 'match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags, terminating)' "global match closure uses the complete-arm normalizer"
 Assert-Contains $typedFunctionLowering 'sealCompletedIfAndRegionTypes nodes: mut [TypedIrNode; ~] -> Unit' "late enclosing if and region type closure"
 Assert-Matches $typedFunctionLowering '(?s)sealCompletedIfAndRegionTypes nodes: mut \[TypedIrNode; ~\].*?nodes -> len => controlIndex!.*?control!\.kind == 19.*?control!\.kind == 18.*?thenRegion\.typeId >= 0 and thenRegion\.typeId == elseRegion\.typeId.*?branchTypesMatch!.*?control! => nodes\[controlIndex!\]' "late control closure is reverse ordered and requires exact continuing branch agreement"
 Assert-Contains $typedFunctionLowering 'public terminatingControlFlags nodes: ref [TypedIrNode; ~] -> [Bool; ~]' "shared single-pass terminating control index"
@@ -860,13 +879,25 @@ Assert-Contains $semanticOwnership 'and (alternativeMove -> moveConsumesWholeBin
 Assert-Contains $semanticOwnership 'existingAlternativeDiagnostic.code == 33' "ownership joins deduplicate mixed-alternative diagnostics"
 Assert-Contains $emitterDiagnostics 'diagnostic.code == 33 -> if {' "mixed-alternative ownership diagnostic emission"
 Assert-Contains $emitterDiagnostics "must be consumed on every control-flow branch or on none of them" "mixed-alternative ownership diagnostic contract"
-Assert-Contains $emitterDiagnostics 'diagnosticCode == 33 -> if { count! + 1 => count! }' "mixed-alternative ownership diagnostic blocks code generation"
+Assert-Contains $emitterDiagnostics "has inconsistent ownership across branch paths" "mixed-alternative CFG diagnostic contract"
+Assert-Contains $emitterDiagnostics 'diagnosticIndex! -> ownershipCheck.isBlockingDiagnostic(context.ownershipDiagnostics, context.ir)' "ownership diagnostics use one blocking classifier"
+Assert-Contains $semanticOwnership 'public isBlockingDiagnostic diagnosticIndex: Int' "ownership blocking classifier is authoritative"
+Assert-Contains $semanticOwnership 'public isSupersededByBranchJoin diagnostic: OwnershipDiagnostic' "branch join diagnostics own overlapping field precedence"
+Assert-Contains $emitterDiagnostics 'diagnostic -> ownershipCheck.isSupersededByBranchJoin(context.ownershipDiagnostics)' "diagnostic rendering shares branch join precedence"
+Assert-Contains $emitterDiagnostics 'context -> emitOwnedBranchJoinDiagnostic(diagnostic)' "branch join diagnosis uses source order field and binding identity"
+Assert-Contains $semanticOwnership 'public branchJoinDiagnosticsMatch left: OwnershipDiagnostic' "branch join diagnostics use one source-region-binding group"
+Assert-Contains $semanticOwnership 'public isDuplicateBranchJoinDiagnostic diagnosticIndex: Int' "branch join diagnostics emit once per group"
+Assert-Contains $semanticOwnership 'public isBranchJoinSupersededByOverlap diagnostic: OwnershipDiagnostic' "an earlier same-region overlap owns duplicate move precedence"
+Assert-Contains $emitterDiagnostics 'diagnostic -> ownershipCheck.isBranchJoinSupersededByOverlap(context.ownershipDiagnostics, context.ir)' "branch join rendering shares duplicate move precedence"
+Assert-Contains $emitterDiagnostics 'context -> compareOwnedBranchFieldTokens(diagnostic.sourceModule' "branch join field mask has deterministic lexical order"
+Assert-Contains $semanticOwnership '(diagnostic.code >= 17 and diagnostic.code <= 28)' "ownership blocking classifier covers first diagnostic group"
+Assert-Contains $semanticOwnership '(diagnostic.code >= 31 and diagnostic.code <= 40)' "ownership blocking classifier covers field-overlap and retained diagnostic group"
+Assert-Contains $semanticOwnership 'diagnostic.code == 24 -> if { not (diagnostic -> isConsumedBindingRead(typed)) }' "consumed binding reads retain their dedicated blocking path"
 Assert-Contains $semanticOwnership 'directOwnedCopy.kind == 17' "direct owned-copy binding classification"
 Assert-Contains $semanticOwnership 'typed[directOwnedCopy.operand0].kind == 5' "direct owned-copy source identity"
 Assert-Contains $semanticOwnership 'moves[directOwnedCopyMoveIndex!].siteIr == directOwnedCopy.operand0' "explicit direct ownership transfer exclusion"
 Assert-Contains $semanticOwnership 'directOwnedCopySourceCandidate.kind == 10' "moved parameter alias exclusion"
 Assert-Contains $emitterDiagnostics 'owned container values must be created directly at their binding site' "direct owned-copy diagnostic contract"
-Assert-Contains $emitterDiagnostics 'diagnosticCode == 34 -> if { count! + 1 => count! }' "direct owned-copy diagnostic blocks code generation"
 Assert-Contains $semanticOwnership 'partialMove.memberIr -> placeRootBinding => directFieldOwner' "direct owned-field owner uses canonical place root"
 Assert-Contains $semanticOwnership '(directFieldOwner! -> lexicalExecutableAst) == (partialMove.siteIr -> lexicalExecutableAst)' "captured direct owned-field owner is rejected across lexical executables"
 Assert-Contains $semanticOwnership 'directFieldOwnerNode.flags % 2 == 1 -> if { true => directFieldAllowed! }' "move input permits direct owned-field transfer"
@@ -876,7 +907,12 @@ Assert-Matches $semanticOwnership '(?s)assignmentMayExitEarly.*?candidate\.kind 
 Assert-Contains $semanticOwnership 'code: directFieldNeedsRepair! -> if { 36 } else { 34 }' "direct owned-field diagnostics distinguish readonly and missing repair"
 Assert-Contains $emitterDiagnostics 'diagnostic.code == 36 -> if {' "mutable direct owned-field repair diagnostic emission"
 Assert-Contains $emitterDiagnostics 'must be reinitialized by the immediately following infallible statement' "mutable direct owned-field repair diagnostic contract"
-Assert-Contains $emitterDiagnostics 'diagnosticCode == 36 -> if { count! + 1 => count! }' "mutable direct owned-field repair diagnostic blocks code generation"
+Assert-Contains $semanticOwnership 'partialMove.memberIr -> placesOverlap(movedUseMember!)' "owned field reuse shares canonical place overlap"
+Assert-Contains $semanticOwnership 'typed[movedUseAncestor!].kind == 13 -> if { movedUseAncestor! => movedUseField! }' "owned field reuse retains the projected field beneath indexed reads"
+Assert-Contains $emitterDiagnostics 'diagnostic.code == 38 and not (diagnostic -> ownershipCheck.isSupersededByBranchJoin(context.ownershipDiagnostics))' "owned field overlap diagnostic emission respects branch join precedence"
+Assert-Contains $emitterDiagnostics 'overlappingFieldAst.firstToken => overlappingFieldTokenIndex!' "owned field overlap renders the parsed place tokens"
+Assert-Contains $emitterDiagnostics 'overlappingFieldToken.kind != grammar.triviaIdWhitespace()' "owned field overlap ignores source spacing"
+Assert-Contains $emitterDiagnostics "' overlaps an already moved field" "owned field overlap retains the managed diagnostic contract"
 Assert-Contains $invariants 'typedControlTerminates controlIndex: Int, context: ref emitterContext.EmitContext -> Bool' "LLVM invariant has a state-free structural termination resolver"
 Assert-Contains $invariants 'typedIfThenValueIndex -> typedControlTerminates(context) => typedIfThenTerminates' "typed if invariant excludes a terminating then path"
 Assert-Contains $invariants 'typedIfElseValueIndex -> typedControlTerminates(context) => typedIfElseTerminates' "typed if invariant excludes a terminating else path"
@@ -978,7 +1014,7 @@ Assert-NotMatches $interpolationIr '(?s)flowTarget\.parent == fragmentAstIndex! 
 Assert-Contains $projectedInterpolationCallFixture '"$(outer.inner -> read)" -> println' "projected interpolation executable fixture"
 Assert-Contains $projectedInterpolationCallCounts '= call i32 @sollang_m' "projected interpolation direct-call count fixture"
 Assert-Contains $projectedInterpolationCallOrder '= extractvalue %sollang\.struct' "projected interpolation receiver-before-call ordering fixture"
-Assert-Contains $projectedInterpolationCallOrder 'call void @sollang_runtime_print_i64' "projected interpolation call-before-format ordering fixture"
+Assert-Contains $projectedInterpolationCallOrder 'call void @sollang_runtime_print_i32' "projected interpolation call-before-format ordering fixture"
 Assert-Contains $projectedInterpolationTopologyFixture "and interpolations[node.operand0].kind == 5" "projected interpolation call-to-member topology fixture"
 Assert-Contains $projectedInterpolationTopologyFixture '"$(42 -> formatter.render)" -> println' "qualified interpolation target negative control"
 Assert-Contains $projectedInterpolationTopologyFixture '"projected-call-payload=$(projectedCallPayload!)" -> println' "projected interpolation complete call-span fixture"
@@ -1100,9 +1136,11 @@ Assert-Contains $grammar 'rule ValueFlowComparisonExpression = ValueFlowExpressi
 Assert-Contains $grammar 'rule ValueFlowExpression = EqualityExpression' "value flow preserves compare-then-flow"
 Assert-Contains $valueFlowPrecedenceFixture 'true and "abc" -> sameText("abc")' "logical right-hand value-flow fixture"
 Assert-Contains $valueFlowPrecedenceFixture '"abc" -> len == 3 and rightFlow' "flow-result comparison fixture"
-Assert-Contains $generatedGrammar 'public ruleIdTopLevelDeclaration: -> Int => 117' "existing grammar rule ids stay stable"
-Assert-Contains $generatedGrammar 'public ruleIdValueFlowComparisonExpression: -> Int => 118' "value-flow comparison rule is appended"
-Assert-Contains $generatedGrammar 'public ruleIdValueFlowExpression: -> Int => 119' "value-flow rule is appended"
+Assert-Contains $generatedGrammar 'public ruleIdAbiMarker: -> Int => 117' "ABI marker grammar rule retains its generated identity"
+Assert-Contains $generatedGrammar 'public ruleIdTopLevelDeclaration: -> Int => 118' "top-level declaration follows the ABI marker"
+Assert-Contains $generatedGrammar 'public ruleIdValueFlowComparisonExpression: -> Int => 119' "value-flow comparison rule follows top-level declarations"
+Assert-Contains $generatedGrammar 'public ruleIdValueFlowExpression: -> Int => 120' "value-flow rule follows value-flow comparison"
+Assert-Contains $ast 'typeApplicationNode.ruleId == grammar.ruleIdStandardGenericEnumFlowTarget()' "standard generic enum flow owns its balanced type angles"
 Assert-Matches $ast '(?s)node\.ruleId == grammar\.ruleIdFlowExpression\(\).*?node\.ruleId == grammar\.ruleIdValueFlowExpression\(\).*?candidateOperator == grammar\.tokenIdArrow\(\).*?arrowOwnedByDirectChild.*?not arrowOwnedByDirectChild! -> if \{.*?10 => astKind!' "only the CST node that directly owns an arrow becomes its semantic flow owner"
 Assert-NotContains $ast 'arrowChildSearch' "flow-owner selection stays constant-time instead of rescanning the CST"
 Assert-NotContains $ast 'rule == grammar.ruleIdFlowExpression() -> if { 10 => kind! }' "outer flow CST envelope stays transparent when a nested value flow owns the arrow"
@@ -1115,12 +1153,12 @@ Assert-Matches $typedFunctionLowering '(?s)sealLateNumericSubjectConditionOperan
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealLateNumericSubjectControls\(frozenRecursiveSemanticTypes\).*?nodes -> sealLateNumericSubjectConditionOperands.*?0 => finalSubjectOperandIndex!' "late numeric subject and comparison sealing precede final arm refresh"
 Assert-Matches $typedFunctionLowering '(?s)repairAssignmentsToCompletedSubjectControls results: mut \[TypedIrNode; ~\].*?candidate\.kind == 27 or candidate\.kind == 34.*?candidate\.operand0 == assignment!\.operand0.*?controlIndex! => assignment!\.operand0' "member and index assignments consume completed enum or numeric subject controls"
 Assert-Matches $typedFunctionLowering '(?s)public matchArmTerminalValueIndex armIndex: Int.*?nodes\[candidate!\]\.kind == 19.*?nodes\[candidate!\]\.operand1 => candidate!.*?nodes\[candidate!\]\.kind != 19' "direct and structurally nested match arms share one bounded terminal resolver"
-Assert-Matches $typedFunctionLowering '(?s)normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode.*?true => allContinuingArmsAgree!.*?terminal\.kind != 23.*?terminal\.typeId != resultTypeId!.*?false => allContinuingArmsAgree!.*?allContinuingArmsAgree! and hasContinuingValue! and selectedTerminal! >= 0' "late enum and numeric-subject controls require complete canonical agreement across continuing arms"
-Assert-Matches $typedFunctionLowering '(?s)sealEnumMatchTypesFromTerminalArms results: mut \[TypedIrNode; ~\].*?match! -> normalizeMatchResultTypeFromCompleteArms\(matchIndex!, unitTypeId, results, types, flags\).*?match!\.typeOrigin == 1 and match!\.typeSymbol == 0' "every match re-enters authoritative complete-arm normalization and propagates canonical Unit to its parent region"
+Assert-Matches $typedFunctionLowering '(?s)normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode.*?true => allContinuingArmsAgree!.*?not terminating\[terminalIndex\].*?terminal\.typeId != resultTypeId!.*?false => allContinuingArmsAgree!.*?allContinuingArmsAgree! and hasContinuingValue! and selectedTerminal! >= 0' "late enum and numeric-subject controls require complete canonical agreement across continuing arms"
+Assert-Matches $typedFunctionLowering '(?s)sealEnumMatchTypesFromTerminalArms results: mut \[TypedIrNode; ~\].*?results -> terminatingControlFlags => terminating.*?match! -> normalizeMatchResultTypeFromCompleteArms\(matchIndex!, unitTypeId, results, types, flags, terminating\).*?match!\.typeOrigin == 1 and match!\.typeSymbol == 0' "every match re-enters authoritative complete-arm normalization and propagates canonical Unit to its parent region"
 Assert-Matches $typedFunctionLowering '(?s)sealControlBindingAliasTypes results: mut \[TypedIrNode; ~\].*?binding!\.kind == 17.*?read!\.kind == 5' "control result bindings and direct reads share one linear alias seal"
 Assert-Matches $typedFunctionLowering '(?s)repairEnumMatchSubjectsFromControlBindings results: mut \[TypedIrNode; ~\], types: ref \[typeIds\.SemanticType; ~\].*?read\.kind == 5.*?results\[read\.operand0\] => subjectBinding.*?subjectBinding\.kind == 29.*?subjectBinding\.kind == 17.*?subjectBinding\.flags != 1.*?results\[subjectBinding\.operand0\]\.kind == 18.*?kind == 27.*?kind == 33.*?kind == 34.*?directControlSubject! and read\.typeId >= 0.*?types\[read\.typeId\] => readType.*?readType\.kind == 1.*?readType\.kind == 7.*?readType\.origin == 4.*?readType\.symbol == 0 or readType\.symbol == 1.*?read\.parent.*?results\[read\.parent\]\.kind == 27.*?read\.nextOperand.*?results\[read\.nextOperand\]\.kind == 27.*?results\[subjectMatchIndex!\]\.operand0 != readIndex!.*?readIndex! => subjectMatch!\.operand0' "enum rematch subjects require an exact payload-or-control binding chain, a copyable scalar or Option/Result enum, and a direct match edge"
 Assert-Matches $typedFunctionLowering '(?s)enumPayloadArmIndex payloadIndex: Int, nodes: ref \[TypedIrNode; ~\].*?nodes\[payloadIndex\]\.kind == 29.*?nodes\[payloadParent\]\.kind == 19.*?nodes\[payloadParent\]\.kind == 8.*?nodes\[payloadParent\]\.operand0 == payloadIndex.*?nodes\[nodes\[payloadParent\]\.parent\]\.kind == 19' "enum payload arm lookup accepts only the direct arm or canonical pattern-condition ownership edge"
-Assert-MatchCount $typedFunctionLowering '-> enumPayloadArmIndex\((results|nodes)\)' 2 "nominal and final projected payload sealing share the exact enum payload arm lookup"
+Assert-MatchCount $typedFunctionLowering '-> enumPayloadArmIndex\((results|nodes)\)' 3 "nominal, nested, and final projected payload sealing share the exact enum payload arm lookup"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealControlBindingAliasTypes\s+nodes -> repairEnumMatchSubjectsFromControlBindings\(frozenRecursiveSemanticTypes\)\s+# The final projected-method pass' "the final projected producer closure repairs control-bound enum rematch subjects before arm sealing"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> repairPostfixMatchArmResults.*?nodes -> sealBooleanOperatorTypes\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?# A nominal terminal can become typed only in sealLateTypes\..*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\)' "late Bool, match, alias, and nominal-member sealing close the bounded dependency chain"
 Assert-Matches $typedResolvedContextFinalize '(?s)# Repeat the same bounded closure after the second and final projected.*?nodes -> sealFinalProjectedMatchSubjectsAndPayloads\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealFinalEnumArmTagsAndPayloads\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealNominalEnumPayloadsByArmTags\(frozenRecursiveSemanticTypes, recursiveTypeFlags, prepared, recursiveTypes\).*?nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\).*?nodes -> sealCompletedIfAndRegionTypes.*?nodes -> sealControlBindingAliasTypes.*?nodes -> sealLateValueAliasTypes\(prepared\)' "final mutable projected Result call restores canonical match subjects, arm tags, payloads, and binding types"
@@ -1175,7 +1213,7 @@ Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealFinalProjectedMatc
 Assert-Contains $typedCore '(finalPatternSubject!.kind == 27 or finalPatternSubject!.kind == 34)' "nested enum and subject when share canonical arm-payload repair"
 Assert-Contains $typedCore 'finalPatternSubject!.operand0 < 0 => finalPatternSubjectNeedsRepair!' "missing nested enum subjects enter canonical payload repair"
 Assert-Contains $typedFunctionLowering 'repairNestedEnumPayloadSubjects results: mut [TypedIrNode; ~] -> Unit' "nested enum payload subject repair has one shared lowering helper"
-Assert-Matches $typedFunctionLowering '(?s)\[Int; ~\] => payloadByArm!.*?payloadCandidate\.kind == 29.*?payloadIndex! => payloadByArm!\[payloadCandidate\.parent\].*?-2 => payloadByArm!\[payloadCandidate\.parent\]' "nested enum payload subjects use one ambiguity-preserving arm index"
+Assert-Matches $typedFunctionLowering '(?s)\[Int; ~\] => payloadByArm!.*?payloadCandidate\.kind == 29.*?payloadIndex! -> enumPayloadArmIndex\(results\) => payloadArmIndex.*?payloadIndex! => payloadByArm!\[payloadArmIndex\].*?-2 => payloadByArm!\[payloadArmIndex\]' "nested enum payload subjects use one ambiguity-preserving arm index"
 Assert-Matches $typedFunctionLowering '(?s)match!\.kind == 27 and match!\.operand0 < 0.*?owner\.kind == 19.*?results\[owner\.parent\]\.kind == 27.*?payloadByArm!\[ownerArm!\] => payload.*?payload => match!\.operand0' "nested enum payload repair requires an exact enclosing enum arm and unique payload"
 Assert-Matches $typedResolvedContextSeal '(?s)nodes -> repairNestedEnumPayloadSubjects\s+# Enum payload bindings use.*?0 => enumPayloadTypeRepairIndex!' "nested enum subjects are repaired before enum payload typing"
 Assert-Matches $typedFunctionLowering '(?s)\[Int; ~\] => resolvedRoleNameByAst!.*?receiverName\.symbol >= 0.*?prepared\.package\.symbols\[receiverSourceRange\.symbolStart \+ receiverName\.symbol\]\.kind == 35.*?receiverNameIndex => resolvedRoleNameByAst!' "structured callback receiver fallback indexes only exact semantic role names"
@@ -1199,9 +1237,15 @@ Assert-Matches $semanticResolve '(?s)nameAst\.kind == 16.*?nodes\[nameAst\.paren
 Assert-Contains $semanticResolve 'nameAst.kind == 15 or dottedDirectCallRoot! -> if {' "ordinary names and dotted direct roots share one lexical scope resolver"
 Assert-Contains $typedOrdinaryFunction 'knownLocalBindingReference! and expression.kind == 16' "ordinary dotted direct roots lower as lexical name values"
 Assert-Contains $typedSourceLowering 'knownEntryLocalBindingReference! and entryExpression.kind == 16' "entry dotted direct roots lower as lexical name values"
-Assert-Matches $typedFunctionLowering '(?s)repairDirectAsyncAwaitBindings.*?\(call\.flags / 8\) % 2 == 1.*?callAst\.kind == 10.*?callAst\.firstToken == awaitFlowAst\.firstToken.*?sourceMatches\(awaitToken\.span\.start, awaitToken\.span\.length, "await"\).*?kind: 5.*?operand0: callIndex.*?awaitValueIndex => binding!\.operand0' "direct async await creates one pre-LLVM value edge from the exact Task-producing call"
-Assert-Contains $typedResolvedContextFinalize 'nodes -> repairDirectAsyncAwaitBindings(prepared)' "resolved Typed IR finalization repairs direct async await before LLVM"
-Assert-Matches $textContext '(?s)awaitSourceNode\.parent >= 0.*?nodes\[awaitSourceRange\.astStart \+ awaitSourceNode\.parent\]\.kind == 10.*?awaitSourceNode\.firstToken == prepared\.package\.nodes\[awaitSourceRange\.astStart \+ awaitSourceNode\.parent\]\.firstToken' "await source indexing admits the exact direct child expression rather than names only"
+Assert-Matches $typedFunctionLowering '(?s)directAwaitCallSource call: ref TypedIrNode.*?\(call\.flags / 8\) % 2 != 1.*?callAst\.kind != 10.*?callAst\.firstToken != awaitFlowAst\.firstToken.*?sourceMatches\(awaitToken\.span\.start, awaitToken\.span\.length, "await"\)' "direct async await identifies the exact Task-producing call"
+Assert-Matches $typedFunctionLowering '(?s)ensureDirectAwaitValue results: mut \[TypedIrNode; ~\].*?kind: 5.*?operand0: callIndex.*?repairDirectAsyncAwaitConsumers.*?ensureDirectAwaitValue\(callIndex, consumerIndex!\) => consumer!\.operand0' "direct async await creates one shared pre-LLVM value edge"
+Assert-Contains $typedResolvedContextFinalize 'nodes -> repairDirectAsyncAwaitConsumers(prepared)' "resolved Typed IR finalization repairs direct async await before LLVM"
+Assert-Contains $textContext 'prepared.awaitSourceByAst -> each source { awaitSourceByAst! -> push(source) }' "LLVM copies the semantic snapshot await-source index"
+Assert-Matches $semanticContext '(?s)indexFlowSourcesByAst package: ref analysis\.PackageAnalysis.*?node\.firstToken == package\.nodes\[range\.astStart \+ node\.parent\]\.firstToken' "semantic preparation shares exact flow-source identity"
+Assert-Matches $semanticContext '(?s)indexAwaitSourcesByAst package: ref analysis\.PackageAnalysis.*?indexFlowSourcesByAst.*?targetName == "await"' "semantic preparation indexes the exact await source expression"
+Assert-Matches $semanticContext '(?s)indexDeclaredMoveArgumentsByAst package: ref analysis\.PackageAnalysis.*?selectedParameter\.flags % 2 == 1.*?true => moved!\[argumentAst!\]' "semantic preparation plans declared move arguments by source AST before Typed IR"
+Assert-Contains $semanticContext 'packageAnalysis -> indexDeclaredMoveReadsByAst(declaredMoveArgumentByAst) => declaredMoveReadByAst' "semantic snapshot freezes declared move reads"
+Assert-Matches $textContext '(?s)consumedBindingReadsFromAst\(prepared\.declaredMoveReadByAst\) => earlyConsumedBindingReads.*?expressionTypeIds\.resolveContext' "semantic consumed reads precede dependent expression typing"
 Assert-Matches $typedCore '(?s)canonicalReference!\.symbol >= 0.*?canonicalReferenceSymbol\.kind == 9 or canonicalReferenceSymbol\.kind == 61.*?canonicalReferenceSymbol\.flags % 2 == 1 => canonicalReferenceSymbolMutable!.*?canonicalReferenceMutableMismatch.*?canonicalReferenceCandidate\.symbol == canonicalReference!\.symbol or \(canonicalReferenceSymbolIsBinding! and not canonicalReferenceMutableMismatch\)' "late local reference recovery preserves exact symbols and limits storage aliases to the same mutable-name capability"
 Assert-Matches $functions '(?s)\[Bool; ~\] => lateMoveConsumedSymbols!.*?lateMoveCall\.kind == 6.*?callTargetParameter\(lateMoveArgumentOrdinal!, context, state\).*?flags % 2 == 1.*?lateMoveArgumentIndex! -> ownedValueSourceIndex.*?lateMoveSource\.kind == 5.*?lateMoveSource\.sourceModule == function\.sourceModule.*?true => lateMoveConsumedSymbols!\[lateMoveSource\.symbol\].*?lateMoveConsumedSymbols!\[ownedParameter\.symbol\].*?true => ownedParameterMoved!' "final resolved move calls feed one function-local consumed-symbol index before parameter cleanup"
 Assert-Matches $ownership '(?s)owningBindingSourceParameterSymbol bindingIndex: Int.*?binding\.kind == 17 and binding\.operand0 >= 0.*?context\.ir\[binding\.operand0\] => directBindingSource.*?parameterIndexForFunction\(functionIndex, directBindingSource\.symbol\).*?context\.ir\[directParameterIndex\]\.flags % 2 == 1.*?directBindingSource\.symbol => resolved!.*?resolved! < 0.*?binding\.operand0 -> ownedValueSourceIndex.*?parameterIndexForFunction\(functionIndex, bindingSource\.symbol\).*?context\.ir\[sourceParameterIndex\]\.flags % 2 == 1.*?bindingSource\.symbol => resolved!' "owning lexical bindings preserve exact direct and canonical fallback move-parameter identity without a nominal ownership guess"
@@ -1488,6 +1532,20 @@ Assert-Contains $controlAllocasMeasurement 'inputStable = $sourceFingerprint -eq
 Assert-Contains $controlAllocasMeasurement 'checkedDiagnosticsZero = $stdout.Contains(' "Windows control-allocas completion criterion"
 Assert-Contains $controlAllocasMeasurement 'Invoke-VerificationProcessToFile' "Windows control-allocas bounded process execution"
 Assert-Contains $typedCore "public isBuiltinTargetlessCall" "canonical targetless builtin-call predicate"
+Assert-Contains $typedCore "public isBuiltinFloatConversionCall" "builtin float conversion classification"
+Assert-Contains $typedCore "public isBuiltinNumericConversionCall" "shared numeric conversion classification"
+Assert-Contains $expressionTypeIds "resolveArithmeticExpressionTypes prepared:" "canonical arithmetic result type phase"
+Assert-Contains $expressionTypeIds "resolveArithmeticExpressionTypes(prepared, types!, expressions!, expressionIndexByAst!)" "arithmetic result type committed before paths"
+Assert-Contains $typedSourceLowering "knownEntryNumericIndex >= 0 and recursiveEntryExpressionTypeId! < 0" "entry canonical numeric type precedes nearest legacy descendant"
+Assert-Contains $typedOrdinaryFunction "knownNumericIndex >= 0 and recursiveExpressionTypeId! < 0" "function canonical numeric type precedes nearest legacy descendant"
+Assert-Contains $typedResolvedContextFinalize "finalArithmeticLeftIsFloat or finalArithmeticRightIsFloat or finalArithmeticLeftRank > 0 or finalArithmeticRightRank > 0" "float arithmetic cannot be resealed as an integer"
+Assert-Contains $typedFunctionLowering "rightIsFloat and not leftIsFloat" "late arithmetic gives canonical float operands precedence over integer literals"
+Assert-Contains $typedFunctionLowering "leftIsFloat or rightIsFloat or leftRank > 0 or rightRank > 0" "late arithmetic handles float and integer types through one fixed point"
+Assert-Contains $coreCalls 'eachRoleOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Int' 'one exact each-role source resolver shared by LLVM and invariants'
+Assert-Contains $containers 'request.nodeIndex -> eachRoleOwner(context) => whileEachRoleOwner' 'LLVM each-role value source uses the shared resolver'
+Assert-Contains $invariants '(node.operand0 -> eachRoleOwner(context)) < 0' 'S009 rejects missing sources only after exact each-role resolution'
+Assert-Contains $typedResolvedContextFinalize "finalArithmeticLeftResolveRank! == 0 and not finalArithmeticLeftResolveIsFloat!" "left float conversion is a terminal arithmetic type"
+Assert-Contains $typedResolvedContextFinalize "finalArithmeticRightResolveRank! == 0 and not finalArithmeticRightResolveIsFloat!" "right float conversion is a terminal arithmetic type"
 Assert-Contains $invariants "not (node -> typedIr.isBuiltinTargetlessCall)" "V006 targetless builtin exclusion"
 Assert-Contains $expressionTypes "public builtinTypeApplicationSymbol" "single semantic builtin type-application spelling authority"
 Assert-MatchCount $typedOrdinaryFunction "expressionTypes.builtinTypeApplicationSymbol" 1 "function builtin type-application identity consumer"
@@ -1505,9 +1563,17 @@ Assert-Contains $typedSourceLowering '-> if { false => targetlessEntryBuiltinTyp
 Assert-MatchCount $calls "indexQualifiedPathCallOwners" 3 "single qualified-path call-owner index and both semantic consumers"
 Assert-Matches $calls '(?s)indexQualifiedPathCallOwners.*?candidate\.kind == 11 and candidate\.cstRuleId == grammar\.ruleIdCallExpression\(\).*?candidate\.parent => ancestor!.*?ancestorNode\.kind == 36 and ancestorNode\.start == candidate\.start.*?candidate\.length < nodes\[nodeOffset \+ existingOwner\]\.length.*?callOwnerSearch! => owners!\[ancestor!\]' "qualified paths index the smallest exact nested call owner through AST ancestry"
 Assert-MatchCount $calls "or qualifiedPathCallOwners\[moduleQualifiedCall.pathAst\] == callAstIndex!" 2 "standalone and prepared qualified-call discovery route nested paths to their exact call owner"
-Assert-Contains $text "entryExpression -> typedIr.isBuiltinIntegerConversionCall" "entry builtin integer conversion classification"
-Assert-Contains $functions "expression -> typedIr.isBuiltinIntegerConversionCall" "function builtin integer conversion classification"
-Assert-Contains $control "regionNode -> typedIr.isBuiltinIntegerConversionCall" "control builtin integer conversion classification"
+Assert-Contains $text "entryExpression -> typedIr.isBuiltinNumericConversionCall" "entry builtin numeric conversion classification"
+Assert-Contains $functions "expression -> typedIr.isBuiltinNumericConversionCall" "function builtin numeric conversion classification"
+Assert-Contains $control "regionNode -> typedIr.isBuiltinNumericConversionCall" "control builtin numeric conversion classification"
+Assert-Contains $coreCalls "emitBuiltinFloatConversion" "shared float conversion LLVM emission"
+Assert-Contains $coreCalls "builtinFloatToIntegerOpcode" "shared float-to-integer signedness policy"
+Assert-Contains $functions "expression -> builtinFloatToIntegerOpcode(context, state)" "function float-to-integer signedness"
+Assert-Contains $text "entryExpression -> builtinFloatToIntegerOpcode(context, state)" "entry float-to-integer signedness"
+Assert-Contains $control "regionNode -> builtinFloatToIntegerOpcode(context, state)" "control float-to-integer signedness"
+Assert-Contains $functions "functionTargetWidth == functionInputWidth and not functionInputIsFloat" "function float-to-integer cast keeps target type"
+Assert-Contains $text "entryTargetWidth == entryInputWidth and not entryInputIsFloat" "entry float-to-integer cast keeps target type"
+Assert-Contains $control "regionTargetWidth == regionInputWidth and not regionInputIsFloat" "control float-to-integer cast keeps target type"
 Assert-Contains $typed 'and node.operand1 < 0' "builtin integer conversion accepts exactly one linked argument"
 Assert-Contains $control 'ast-span $(propagationCandidateAstFound!)/$(propagationCandidateAstStart!)/$(propagationCandidateAstLength!)' "result propagation diagnostics include candidate AST spans"
 Assert-Contains $invariantDiagnostics 'V006 ast candidate' "unresolved-call diagnostics include local AST topology"
@@ -1737,15 +1803,16 @@ Assert-Contains $emitterDiagnostics 'ambiguous! -> if { -1 -> return }' "trait s
 Assert-Matches $emitterDiagnostics '(?s)signatureNominalIdentity.*?source -> sourceTokenIs\(term.nameToken, "Result", context\).*?context.nominal -> each nominal' "trait signature gives intrinsic constructors precedence over provisional nominal ids"
 Assert-Contains $emitterDiagnostics 'rightSource -> signatureTypeMatches(associated.typeNode, rightSource, rightAst, implSymbol, context) -> return' "trait signature resolves the exact implementation associated binding before cached type ids"
 Assert-Contains $emitterDiagnostics "use -> typedIr.isSetIntrinsicCall" "reachable Set implicit trait-call edge"
-Assert-Contains $emitterDiagnostics 'traitMethodSymbol("Hash", "hash", context)' "reachable Set Hash edge"
-Assert-Contains $emitterDiagnostics 'traitMethodSymbol("Eq", "eq", context)' "reachable Set Eq edge"
+Assert-Contains $emitterDiagnostics 'collectionTraitMethodFunction("Hash", "hash", functionBySymbol!, context)' "reachable collection Hash edge"
+Assert-Contains $emitterDiagnostics 'collectionTraitMethodFunction("Eq", "eq", functionBySymbol!, context)' "reachable collection Eq edge"
+Assert-Contains $emitterDiagnostics 'keyTypeId -> traitMethodSymbol(traitName, methodName, context)' "collection trait resolver edge"
 Assert-Contains $coreCalls "diagnostics.traitMethodSymbol" "LLVM implicit trait resolver consumer"
 Assert-Contains $emitterDiagnostics "instanceInterpolation.kind == 8 or instanceInterpolation.kind == 10" "resolved and deferred interpolation call-graph edges"
 Assert-Contains $emitterDiagnostics "interpolationFormatterTypeDeferred" "deferred interpolation scalar formatter capability"
 Assert-Contains $emitterDiagnostics "kind == 5 or kind == 7 or kind == 8 or kind == 10" "member, index, and source-call interpolation formatter coverage"
 Assert-Contains $foundation "diagnostics.interpolationCallNameMatches" "canonical interpolation call-name resolver consumer"
 Assert-Contains $foundation 'writeInterpolationIntegerLiteral node: interpolation.InterpolationNode' "interpolation integer literal canonical LLVM writer"
-Assert-Matches $foundation '(?s)writeInterpolationIntegerLiteral node: interpolation\.InterpolationNode.*?byte\(byteIndex!\)\) == 95.*?slice\(segmentStart!, byteIndex! - segmentStart!\).*?literalEnd - segmentStart!' "interpolation integer writer removes every visual separator"
+Assert-Matches $foundation '(?s)writeInterpolationIntegerLiteral node: interpolation\.InterpolationNode.*?byte\(byteIndex!\) => character.*?character == 95.*?slice\(segmentStart!, byteIndex! - segmentStart!\).*?literalEnd - segmentStart!' "interpolation integer writer removes every visual separator"
 Assert-NotContains $foundation 'slice(callArgument.payloadStart, callArgument.payloadLength)' "interpolation call arguments must not copy numeric source spelling into LLVM"
 Assert-NotContains $functionCalls 'slice(functionExpressionLeft.payloadStart, functionExpressionLeft.payloadLength)' "function interpolation left operand canonical numeric writer"
 Assert-NotContains $functionCalls 'slice(functionExpressionUnary.payloadStart, functionExpressionUnary.payloadLength)' "function interpolation unary operand canonical numeric writer"
@@ -1755,7 +1822,8 @@ Assert-NotContains $controlRegions 'slice(regionExpressionLeft.payloadStart, reg
 Assert-NotContains $controlRegions 'slice(regionExpressionUnary.payloadStart, regionExpressionUnary.payloadLength)' "control interpolation unary operand canonical numeric writer"
 Assert-NotContains $controlRegions 'slice(regionExpressionRight.payloadStart, regionExpressionRight.payloadLength)' "control interpolation right operand canonical numeric writer"
 Assert-NotContains $controlRegions 'slice(regionExpressionRoot.payloadStart, regionExpressionRoot.payloadLength)' "control interpolation root canonical numeric writer"
-Assert-Matches $controlRegions '(?s)regionExpressionNode\.kind == 2 and regionExpressionNode\.opcode != -26.*?writeInterpolationValue\(regionExpressionNode\.operand0.*?regionExpressionNode\.kind == 2.*?writeInterpolationValue\(regionExpressionNode\.operand0.*?else \{.*?writeInterpolationValue\(regionExpressionNode\.operand1' "control-region arithmetic delegates literal, parameter, lexical, mutable, and pattern operands to the canonical interpolation value writer"
+Assert-Contains $controlRegions 'regionNodeIndex -> emitInterpolationOperation(' "control-region arithmetic delegates to the shared interpolation operation emitter"
+Assert-Matches $foundation '(?s)emitInterpolationOperation labelIndex:.*?writeInterpolationScalarValue\(node\.operand0.*?writeInterpolationScalarValue\(node\.operand1' "shared interpolation operation emits both operands through the canonical scalar writer"
 Assert-NotContains $controlRegions 'context.ir[context.ir[regionExpressionLeftBinding].operand0]' "control-region interpolation never assumes every resolved binding has an initializer operand"
 Assert-NotContains $text 'slice(entryExpressionLeft.payloadStart, entryExpressionLeft.payloadLength)' "entry interpolation left operand canonical numeric writer"
 Assert-NotContains $text 'slice(entryExpressionUnary.payloadStart, entryExpressionUnary.payloadLength)' "entry interpolation unary operand canonical numeric writer"
@@ -1823,17 +1891,56 @@ Assert-Contains $functions 'and context.types[foldSource -> effectiveTypeId(cont
 Assert-Contains $entryExpressions 'and context.types[entryFoldSource -> effectiveTypeId(context, state)].kind == 4' "entry fold fixed-array LLVM carrier selection"
 Assert-Contains $emitterDiagnostics "value-generic function '`$valueGenericName' requires a fixed array input" "selfhost value-generic fixed-array-required diagnostic"
 Assert-Contains $emitterDiagnostics '"; $(valueGenericLength!)] but received [" -> print' "selfhost value-generic fixed-array-size diagnostic"
-Assert-Contains $semanticOwnership "current.kind == 4 or current.kind == 7 -> if {" "fixed-array ownership follows recursive element classification"
-Assert-Contains $semanticOwnership "current.first >= 0 -> if { pending! -> push(current.first) }" "fixed-array element ownership is traversed"
+Assert-Contains $semanticContext "current.kind == 4 or current.kind == 7 -> if {" "fixed-array ownership follows recursive element classification"
+Assert-Contains $semanticContext "current.first >= 0 -> if { pending! -> push(current.first) }" "fixed-array element ownership is traversed"
+Assert-Contains $semanticOwnership 'prepared -> semanticContext.typeContainsOwnedStorage(types, typeId)' "ownership analysis uses the canonical semantic ownership query"
+Assert-Contains $typed 'prepared -> semanticContext.typeContainsOwnedStorage(types, value.typeId)' "Typed IR moves use the canonical semantic ownership query"
 Assert-Contains $semanticOwnership 'not referenceBorrowUsedAfterMutation! -> if {' "E23 index/call mutation falls back to field-sensitive carrier liveness"
 Assert-Contains $semanticOwnership 'prepared -> borrowedBindingUsedAfterSite(typed, referenceBindingIndex!, referenceMutationIndex!, referenceBindingCarrierType!) => referenceBorrowUsedAfterMutation!' "E23 follows live when-payload aliases after carrier direct use"
 Assert-Contains $storedArrayReferenceDiagnostic "`$result.ExitCode -ne 1" "stored-array E23 validator rejects abnormal compiler termination"
 Assert-Contains $storedArrayReferenceDiagnostic "`$matches.Count -ne 1" "stored-array E23 validator requires exactly one source diagnostic"
 Assert-Contains $storedArrayReferenceDiagnostic 'S052|compiler-integrity defect|^target (datalayout|triple)' "stored-array E23 validator rejects late backend failure"
-Assert-Contains $emitterDiagnostics "logicalOperandDiagnosticCount" "logical Bool operand blocking diagnostic"
+Assert-Contains $emitterDiagnostics "expressionOperandDiagnosticCount" "expression operand blocking diagnostic"
+Assert-Contains $semanticDiagnostics 'logical.kind == 22 and (logical.operatorKind == -26 or logical.operatorKind == 16)' "unary operands are checked by semantic diagnostic ownership"
+Assert-Contains $semanticDiagnostics 'logical.operatorKind == 16' "unary negate operand is checked by semantic diagnostic ownership"
+Assert-Contains $semanticDiagnostics 'typeIds.isSignedNumericBuiltinSymbol' "unary negate diagnostic shares canonical signed numeric contract"
+Assert-Contains $expressionTypes 'typeIds.isSignedNumericBuiltinSymbol' "unary negate result inference shares canonical signed numeric contract"
+Assert-Contains $typeIds 'public isBoxableBuiltinSymbol symbol: Int -> Bool' "boxable builtin rule has one canonical semantic owner"
+Assert-Contains $semanticDiagnostics 'boxOperandType.symbol -> typeIds.isBoxableBuiltinSymbol' "box builtin rejection belongs to semantic diagnostics"
+Assert-Contains $expressionTypes 'operand.targetSymbol -> typeIds.isBoxableBuiltinSymbol' "box expression inference uses the shared builtin rule"
+Assert-Contains $emitterDiagnostics 'cannot be boxed in this slice at' "box diagnostic reports its source location"
+Assert-Contains $semanticDiagnostics 'boxOperandType.kind == 4 or boxOperandType.kind == 5' "collection boxing is rejected in semantic type commitment"
+Assert-Contains $emitterDiagnostics 'semanticType.kind == 4' "fixed array box diagnostic formats the semantic element and length"
+Assert-Contains $semanticDiagnostics 'boxOperandType.kind == 14' "inline BitSet boxing is rejected with other unregistered collections"
+Assert-Contains $emitterDiagnostics 'BitSet<$(semanticType.length)>' "BitSet box diagnostic formats its size"
+Assert-Contains $semanticDiagnostics 'boxOperandType.kind == 7 and boxOperandType.origin == 4' "intrinsic generic boxing is rejected in semantic type commitment"
+Assert-Contains $semanticDiagnostics 'boxTypeChild.start == boxOperand.start' "box operand type walks transparent same-span wrappers"
+Assert-Contains $emitterDiagnostics 'typeIds.intrinsicGenericName' "intrinsic generic box diagnostic formats the constructor name"
+Assert-Contains $semanticDiagnostics 'excludedBoxNominal' "excluded registered nominal boxes are decided in semantic type commitment"
+Assert-Contains $semanticDiagnostics '"sys.path", "sys.path"' "path nominal exclusions share the C# registered type decision"
+Assert-Contains $emitterDiagnostics 'typeModule.pathLength > 0' "nominal box diagnostic preserves the qualified module name"
+Assert-Contains $semanticDiagnostics 'logical.kind == 49' "map path validity is checked from the semantic MapExpression"
+Assert-Contains $semanticDiagnostics 'mapPathChild.parent == mapPathAst!' "map path type follows transparent expression wrappers"
+Assert-Contains $emitterDiagnostics 'map path must be Text at' "map path diagnostic reports the C# source location"
+Assert-Contains $semanticDiagnostics 'mapChildOrdinal! == 1 and mapDirectChildCount! == 2 and mapOpcode == -307' "map write size clause is distinguished from offset"
+Assert-Contains $semanticDiagnostics 'mapClauseCode! == 9 -> if { 13 } else { 11 }' "map clause values use UIntSize for length and UInt64 otherwise"
+Assert-Contains $emitterDiagnostics 'mapped file size must be UInt64 or an integer literal' "map clause diagnostic reports the C# size rule"
+Assert-Contains (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'selfhost/syntax/diagnostics.slg') -Raw) 'mapChildCount! == 2 or mapChildCount! == 4' "read-map size rejection follows accepted AST clause shape"
+Assert-Contains (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'selfhost/syntax/diagnostics.slg') -Raw) "only map write accepts 'size'" "read-map size rejection matches C# parser diagnostic"
+Assert-Contains $semanticDiagnostics 'logical.kind == 9 and logical.flags % 2 == 0' "write-map owner mutability is checked on the binding AST"
+Assert-Contains $semanticDiagnostics 'bindingValueType.symbol == 18' "mutable mapped bytes from maps and calls require mutable owner binding"
+Assert-Contains $semanticDiagnostics 'bindingValue.parent == astIndex!' "mapped call owner check reads the binding expression's semantic type"
+Assert-Contains $emitterDiagnostics "map write requires a mutable owner binding; use '=> name!'" "write-map owner diagnostic matches C#"
+Assert-Contains (Get-Content -LiteralPath (Join-Path $RepositoryRoot 'selfhost/llvm/text/invariants.slg') -Raw) 'candidate.kind == 9 and (candidate.opcode == -306 or candidate.opcode == -307)' "map producer identity excludes an enclosing body with the same AST index"
+Assert-Matches $semanticDiagnostics 'candidate\.sourceModule != selected\.sourceModule\s+-> if \{' "same-source nested logical diagnostic precedence reaches ancestor comparison"
+Assert-Contains $emitterDiagnostics "'not' expects Bool at" "unary not diagnostic reports the operand location"
+Assert-Contains $emitterDiagnostics "operand of unary '-' must be a signed numeric value at" "unary negate diagnostic reports the operand location"
 Assert-Contains $emitterDiagnostics "enumExhaustivenessDiagnosticCount" "enum exhaustiveness blocking diagnostic"
 Assert-Contains $emitterDiagnostics "error[E29]: right operand of" "actionable logical operand diagnostic"
-Assert-Contains $emitterDiagnostics "error[E30]: non-exhaustive enum when" "actionable enum exhaustiveness diagnostic"
+Assert-Contains $emitterDiagnostics "non-exhaustive enum when; missing " "canonical enum exhaustiveness diagnostic names missing variants"
+Assert-Contains $semanticDiagnostics "public missingEnumVariants" "enum coverage is computed from semantic source facts"
+Assert-Contains $emitterContext "public missingEnumVariants: [semanticDiagnostics.MissingEnumVariant; ~]" "enum renderer receives semantic coverage facts"
+Assert-Matches $textContext 'semanticDiagnostics\.missingEnumVariants\(recursiveTypes!\) => missingEnumVariants\s+prepared -> lowerPreparedIr' "enum coverage is fixed before Typed IR lowering"
 Assert-Contains $semanticParityDiagnostic 'logical-and-flow-result' "logical operand parity fixture"
 Assert-Contains $semanticParityDiagnostic '1546-logical-flow-bool' "logical Bool flow positive fixture"
 Assert-Contains $semanticParityDiagnostic 'enum-non-exhaustive' "enum exhaustiveness parity fixture"
@@ -1889,7 +1996,7 @@ Assert-Contains $typedResolvedContextSeal "nodes -> len => lateCallControlTypeIn
 Assert-Contains $typedResolvedContextSeal "nodes[lateCallControlType!.operand1] => lateCallRegionValue" "late call-result region type propagation"
 Assert-Contains $typedCore "false => lateNonValueContinuingArm!" "non-value continuing enum-arm classification"
 Assert-Contains $typedResolvedContextSeal "nodes -> len => lateNonValueMatchIndex!" "nested non-value match reverse convergence"
-Assert-Contains $typedResolvedContextSeal "and nodes[lateNonValueTerminalIndex].kind != 23" "explicit return exclusion from enum value joins"
+Assert-Contains $typedResolvedContextSeal "and not lateMatchTerminating[lateNonValueTerminalIndex]" "terminating control exclusion from enum value joins"
 Assert-Contains $typedCore 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "receiveFromInto")' "socket receiveFromInto intrinsic identity"
 Assert-Contains $typedCore "-> if { -287 => finalSocketIntrinsic!.opcode }" "socket receiveFromInto opcode"
 Assert-NotMatches $typedCore 'sourceMatches\(targetName\.span\.start, targetName\.span\.length, "collect"\)\s*-> if \{ -287 => opcode! \}' "process and socket opcode collision"
@@ -1925,8 +2032,8 @@ Assert-Contains $processRuntime '@sollang_process_capture_append' "selfhost boun
 Assert-Contains $processRuntime 'public emitWindowsProcessCaptureRuntime' "selfhost Windows concurrent capture runtime"
 Assert-Contains $processRuntime 'public emitLinuxProcessCaptureRuntime' "selfhost Linux concurrent capture runtime"
 Assert-Contains $processRuntime '@CreateThread' "selfhost Windows concurrent stream readers"
-Assert-Matches $textContext 'capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins\s+-> if \{\s+"declare dllimport ptr @CreateThread' "Windows thread creation is a capture capability"
-Assert-Matches $textContext 'capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins\s+-> if \{\s+"declare dllimport i32 @WaitForSingleObject' "ordinary process wait retains its independent declaration"
+Assert-Matches $textContext 'capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsAsyncFileRuntime\s+-> if \{\s+"declare dllimport ptr @CreateThread' "Windows thread creation covers capture and async file runtime"
+Assert-Matches $textContext 'capturesParallelOutput or needsProcessRuntime or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsAsyncFileRuntime\s+-> if \{\s+"declare dllimport i32 @WaitForSingleObject' "process and async file waits retain their declarations"
 Assert-Contains $processRuntime '@pthread_create' "selfhost Linux concurrent stream readers"
 Assert-Contains $processRuntime '@pipe2(ptr %stdout_pipe, i32 524288)' "selfhost Linux close-on-exec capture pipes"
 Assert-Contains $processRuntime '@sollang_process_null_windows' "selfhost Windows null-device path"
@@ -2224,9 +2331,9 @@ Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealLateResolvedCallRe
 Assert-Matches $typedFunctionLowering 'finalProjectedMethod!\.opcode == -1\s+or finalProjectedMethod!\.opcode == -225\s+or finalProjectedMethod!\.opcode == -226\s+or finalProjectedMethod!\.opcode == -215\s+or finalProjectedMethod!\.opcode == -230' "provisional path and generic trait opcode final declaration resolution"
 Assert-MatchCount $typedCore 'nodes -> sealPathRuntimeOpcodes\(prepared\)' 3 "path opcode identity validation checkpoints"
 Assert-Matches $typedValueAliases 'binding!\.typeId < 0\s+or \(binding!\.typeOrigin == 1 and binding!\.typeSymbol == 0\)' "late value alias provisional-type boundary"
-Assert-Matches $typedValueAliases 'binding!\.flags != 1\s+and nodes\[binding!\.operand0\]\.kind == 15\s+and binding!\.typeId != nodes\[binding!\.operand0\]\.typeId' "immutable indexed binding follows its canonical element type"
+Assert-Matches $typedValueAliases 'binding!\.flags != 1\s+and \(nodes\[binding!\.operand0\]\.kind == 5\s+or nodes\[binding!\.operand0\]\.kind == 15\)\s+and binding!\.typeId != nodes\[binding!\.operand0\]\.typeId' "immutable binding-read and indexed aliases follow their canonical producer type"
 Assert-Matches $typedValueAliases '(?s)sealLateResultPropagations nodes: mut \[TypedIrNode; ~\].*?wrapper\.operand1 == producerChild!.*?nodes\[propagationParent!\]\.kind == 30.*?not hasFollowingProducer!.*?resultValue\.typeId -> intrinsicResultTypeId\(types\).*?resultValueIndex! => resultValueByPropagation!\[propagationParent!\].*?producerIndex => propagation!\.operand0' "late Result propagation follows the terminal merged value, including named reads and transparent flow shells"
-Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealLateValueAliasTypes' 11 "Result producers and projected-control aliases seal before and after propagation"
+Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealLateValueAliasTypes' 12 "Result producers, projected-control aliases, and final arithmetic reads seal after propagation"
 Assert-Contains $lateTypeSealingVerifier 'scripts\contracts\late-type-sealing.sources.txt' "late type sealing uses one authoritative focused source manifest"
 Assert-Contains $lateTypeSealingVerifier 'verify-source-manifest-closure.ps1' "late type sealing rejects an incomplete focused source closure before compilation"
 Assert-Contains $lateTypeSealingVerifier '$compileOutput$compileErrors' "late type sealing failure reports stdout diagnostics as well as stderr"
@@ -2234,7 +2341,7 @@ Assert-Contains $invariants 'context.ir[node.operand0].kind == 17' "immutable bi
 Assert-Contains $invariants 'node.opcode == -1 or node.opcode == -215 or node.opcode == -230' "ordinary and provisional path unresolved call identity invariant"
 Assert-Contains $invariantDiagnostics 'compiler verification failure V010: immutable value binding read disagrees with its canonical binding' "immutable binding read type mismatch compiler diagnostic"
 Assert-Contains $invariantDiagnostics 'do not rewrite the valid `value => name` source' "tap mismatch source repair guidance"
-Assert-Contains $typedFunctionLowering 'match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags)' "late enum match authoritative complete-arm closure"
+Assert-Contains $typedFunctionLowering 'match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags, terminating)' "late enum match authoritative complete-arm closure"
 Assert-Contains $invariants 'matchHasCompleteCanonicalNonUnitTerminals context: ref emitterContext.EmitContext' "complete value-producing match terminal invariant"
 Assert-Contains $invariants 'typedIr.matchArmTerminalValueIndex(context.ir)' "V011 shares the Typed IR arm-terminal resolver"
 Assert-Contains $invariants 'and (context -> matchHasCompleteCanonicalNonUnitTerminals(irIndex))' "V011 production rule integration"
@@ -2249,7 +2356,7 @@ Assert-Contains $typedResolvedContextFinalize 'nodes -> settleLateFinalFunctionC
 Assert-Contains $typedResolvedContextFinalize 'sealFinalFunctionReturnAncestors nodes:' "final implicit return ancestor authority"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> settleLateFinalFunctionControlResults\(prepared\).*?nodes -> sealFinalFunctionReturnAncestors' "function return ancestor sealing is the final result-edge pass"
 Assert-Contains $typedResolvedContextFinalize 'sealFinalContextualNumericLiterals nodes:' "final contextual numeric literal closure"
-Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealCompletedIfAndRegionTypes\s+nodes -> sealControlBindingAliasTypes' "late aliases feed the final nominal-member, binary, arithmetic, numeric, enum, and control consumers in bounded order"
+Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\).*?nodes -> sealLateValueAliasTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared\)\s+nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealCompletedIfAndRegionTypes\s+nodes -> sealControlBindingAliasTypes' "late aliases feed the final nominal-member, binary, arithmetic, alias, numeric, enum, and control consumers in bounded order"
 Assert-Contains $typedResolvedContextFinalize 'canonicalLeft.typeId == canonicalRight.typeId' "final arithmetic width requires exact operand identity"
 Assert-Contains $typedResolvedContextSeal 'not finalReturnRootInsideControl! -> if {' "branch-local returned aggregate parent preservation"
 Assert-Contains $functionReturns 'scheduledTopLevelReturnCandidate.kind != 26' "straight-line return excludes contextual enum wrapper candidates"
@@ -2291,11 +2398,14 @@ $windowsStage2Emission = $stage2Verifier.IndexOf('Write-Host "[stage2 2/7] Build
 if ($windowsLateArraySeedGate -lt 0 -or $windowsStage2Emission -lt 0 -or $windowsLateArraySeedGate -gt $windowsStage2Emission) {
     throw "Windows late indexed-array seed gate must run before complete Stage2 emission"
 }
+$linuxCharacterLiteralSeedGate = $linuxStage2.IndexOf('-Label "linux-stage1-seed-character-literals"', [StringComparison]::Ordinal)
 $linuxLateArraySeedGate = $linuxStage2.IndexOf('-Label "linux-stage1-seed"', [StringComparison]::Ordinal)
 $linuxStage2Emission = $linuxStage2.IndexOf('Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compiler."', [StringComparison]::Ordinal)
-if ($linuxLateArraySeedGate -lt 0 -or $linuxStage2Emission -lt 0 -or $linuxLateArraySeedGate -gt $linuxStage2Emission) {
-    throw "Linux late indexed-array seed gate must run before complete Stage2 emission"
+if ($linuxCharacterLiteralSeedGate -lt 0 -or $linuxLateArraySeedGate -lt 0 -or $linuxStage2Emission -lt 0 -or
+    $linuxCharacterLiteralSeedGate -gt $linuxLateArraySeedGate -or $linuxLateArraySeedGate -gt $linuxStage2Emission) {
+    throw "Linux character-literal and late indexed-array seed gates must run in order before complete Stage2 emission"
 }
+Assert-Contains $linuxStage2 '-Fixture "1731-character-literals"' "Linux character-literal seed capability fixture"
 Assert-Contains $linuxStage2 '-CompilerHost windows' "Linux Stage1 seed exact gate declares its Windows compiler host"
 Assert-Contains $linuxStage2 '-CompilationMode raw-llvm' "Linux Stage1 seed exact gate uses the explicit raw Linux LLVM path"
 Assert-Contains $linuxStage2 '-AdditionalSource $compilerRuntimeSources' "Linux Stage1 seed exact gate includes its runtime source closure"
@@ -2820,7 +2930,8 @@ Assert-Contains $emitterDiagnostics "in main, match the Result explicitly with '
 Assert-Contains $resultPropagationDiagnosticVerifier 'result-propagation-in-entry.slg' "selfhost entry Result propagation negative fixture"
 Assert-Contains $resultPropagationDiagnosticVerifier 'compiler verification failure V006' "selfhost entry Result propagation invariant-cascade rejection"
 Assert-Contains $semanticContext 'calls.resolveModulesTyped(semanticSet)' "semantic context typed multi-fragment call resolver"
-Assert-Matches $foundation 'node\.kind == 6 and \(node\.opcode == -101 or node\.opcode == -236\)\s*-> if \{ 64 => width! \}' "selfhost interpolation length/capacity emitted-storage width override"
+Assert-Matches $foundation '(?s)node\.kind == 6 and node\.opcode == -101 -> if \{\s*64 => width!.*?lengthReceiverTypeId! >= 0 and context\.types\[lengthReceiverTypeId!\]\.kind == 14\s*-> if \{ 32 => width! \}' "selfhost interpolation length follows BitSet result width and retained container ABI"
+Assert-Matches $foundation '(?s)node\.kind == 6 and node\.opcode == -236 and node\.operand0 >= 0.*?32 => width!.*?capacityReceiverType\.origin == 1.*?capacityReceiverType\.symbol == 15 or capacityReceiverType\.symbol == 17 or capacityReceiverType\.symbol == 18.*?context\.pointerBitWidth => width!' "selfhost interpolation capacity follows the resolved receiver ABI width"
 Assert-NotContains $foundation '(node.kind == 6 and node.opcode == -101)' "selfhost interpolation redundant whole-condition parentheses"
 Assert-Contains $ownership 'symbol == 24 -> if { 32 => result! }' "SourceText target-independent emitted ABI size"
 Assert-Contains $ownership 'symbol == 24 -> if { 8 => result! }' "SourceText i64-bearing emitted ABI alignment"
@@ -2983,7 +3094,7 @@ Assert-Contains $typedCore 'whenBinaryRepairCandidate.astNode == prepared.packag
 Assert-Contains $typedCore 'whenBinaryRepairCandidateRoot! == whenBinaryRepairRoot!' "cross-region when-arm exact owner root identity"
 Assert-NotContains $typedFunctionLowering 'baseChanged!' "final nominal member seal avoids the former per-member changed-index rescan"
 Assert-Contains $typedFunctionLowering 'public terminalValueReturnsFromArm terminalIndex: Int, armIndex: Int' "shared match terminal return-ancestor classifier"
-Assert-Matches $typedFunctionLowering '(?s)terminalValueReturnsFromArm.*?nodes\[ancestor!\]\.kind == 23.*?nodes\[ancestor!\]\.parent => ancestor!.*?terminal\.kind != 23.*?terminalIndex -> terminalValueReturnsFromArm\(armIndex!, nodes\)' "match result sealing rejects values consumed by an enclosing explicit return"
+Assert-Matches $typedFunctionLowering '(?s)terminalValueReturnsFromArm.*?nodes\[ancestor!\]\.kind == 23.*?nodes\[ancestor!\]\.parent => ancestor!.*?not terminating\[terminalIndex\].*?terminalIndex -> terminalValueReturnsFromArm\(armIndex!, nodes\)' "match result sealing rejects terminating controls and values consumed by an enclosing explicit return"
 Assert-Contains $invariants 'terminalIndex -> typedIr.terminalValueReturnsFromArm(armIndex!, context.ir)' "V011 shares returned-terminal classification with late match result sealing"
 Assert-Matches $typedFunctionLowering '(?s)field\.status == 0 and field\.ownerType == ownerType! and fieldMatches!.*?field\.ordinal => member!\.symbol.*?field\.fieldType => member!\.typeId' "final nominal member seal restores field ordinal and type together"
 Assert-Contains $typedFunctionLowering 'results[receiverPathNext!].operand0 == canonicalReceiverIndex!' "projected flow receiver follows exact contiguous member identity"
@@ -3121,7 +3232,7 @@ Assert-Contains $managedUtilitiesEmitter 'parameters[index].Ownership == BoundFu
 Assert-Contains $managedEnumEmitter 'RemoveOwnedLiteralSources(expression.Arguments[0], payloadType);' "managed enum payload recursive owner transfer"
 Assert-NotContains $managedEnumEmitter 'expression.Arguments[0] is NameExpression sourceName' "managed enum payload direct-name-only transfer"
 Assert-Matches $managedEnumEmitter '(?s)if \(armTransfers\[arm\]\)\s*\{\s*DropOwnedStructFieldsExcept\(.*?\}\s*else\s*\{\s*DropOwnedProjectedSubjectIfRetained' "managed projected enum payload known-transfer cleanup"
-Assert-Matches $managedEnumEmitter '(?s)anonymousSubject \|\| removedNamedSubject.*?payloadTransferFlag is not null\)\s*\{\s*if \(!armTransfers\[arm\]\)\s*\{\s*DropOwnedRuntimeValueIfRetained' "managed enum payload known transfer omits unreachable root drop"
+Assert-Matches $managedEnumEmitter '(?s)anonymousSubject \|\| removedNamedSubject.*?payloadTransferFlag is not null\)\s*\{.*?MovedOwnedStructFields\.TryGetValue\(.*?DropOwnedStructFieldsExceptTransferredIfRetained\(.*?else if \(!armTransfers\[arm\]\)\s*\{\s*DropOwnedRuntimeValueIfRetained' "managed enum payload preserves partial-field transfer and omits unreachable root drop"
 Assert-NotContains $managedEnumEmitter 'var outerOwnerTransfers = _locals' "managed enum arms do not balance ownership by dropping live outer owners"
 Assert-Contains $managedEnumEmitter 'var continuingPaths = new List<EnumContinuingPath>();' "managed enum ownership normalization records only continuing predecessors"
 Assert-Contains $managedEnumEmitter 'NormalizeEnumOuterOwnerScopes(outerOwnedLocals, continuingPaths);' "managed enum outer-owner cleanup uses continuing-path normalization"
@@ -3217,42 +3328,6 @@ Assert-Contains $controlProducerFixture 'typedIr.isTransparentControlProducerWra
 Assert-Contains $controlProducerExpected 'control producer wrappers=1,invalid trailing calls=0,take control subjects=1' "control-producer wrapper expected topology"
 & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure-contract.ps1")
 
-$formalExactFixtures = [regex]::Matches("$stage2Verifier`n$stage3Verifier", '--exact\s+(?<name>[a-zA-Z0-9_/-]+)') |
-    ForEach-Object { $_.Groups['name'].Value } |
-    Sort-Object -Unique
-foreach ($fixtureName in $formalExactFixtures) {
-    $isDiagnostic = $fixtureName.StartsWith('diagnostic/', [System.StringComparison]::Ordinal)
-    $fixtureLeaf = if ($isDiagnostic) { $fixtureName.Substring('diagnostic/'.Length) } else { $fixtureName }
-    $fixtureRelativePath = if ($isDiagnostic) {
-        "examples/regression/diagnostics/$fixtureLeaf.slg"
-    } else {
-        "examples/regression/$fixtureLeaf.slg"
-    }
-    $fixturePath = Join-Path $RepositoryRoot $fixtureRelativePath
-    if (-not (Test-Path -LiteralPath $fixturePath -PathType Leaf)) {
-        throw "Formal exact compiler fixture source is missing: $fixtureName"
-    }
-    $fixtureSource = [IO.File]::ReadAllText($fixturePath)
-    if ($fixtureSource.Contains("import sollang.compiler.")) {
-        $fixtureSourcesRelativePath = if ($isDiagnostic) {
-            "examples/regression/diagnostics/$fixtureLeaf.sources.txt"
-        } else {
-            "examples/regression/expected/$fixtureLeaf.sources.txt"
-        }
-        $fixtureSourcesPath = Join-Path $RepositoryRoot $fixtureSourcesRelativePath
-        if (-not (Test-Path -LiteralPath $fixtureSourcesPath -PathType Leaf)) {
-            throw "Formal exact compiler fixture is missing its source closure: $fixtureName"
-        }
-        $fixtureSources = [IO.File]::ReadAllLines($fixtureSourcesPath)
-        $expectedRoot = $fixtureRelativePath
-        if ($fixtureSources.Count -eq 0 -or $fixtureSources[0] -cne $expectedRoot) {
-            throw "Formal exact compiler fixture source closure must start with '$expectedRoot'"
-        }
-        & (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
-            -Manifest @($fixtureSourcesPath, $runtimeSupportManifestPath) `
-            -RepositoryRoot $RepositoryRoot
-    }
-}
 Assert-NotContains $functionScheduling "scheduleNode.kind == 6 and (scheduleNode.symbol == -101" "function console scheduling"
 Assert-NotContains $functions "(expression.kind == 6 and expression.symbol != -103" "function general console emission"
 Assert-NotContains $control "(regionNode.kind == 6 and regionNode.symbol != -103" "control-region general console emission"
@@ -3266,7 +3341,7 @@ Assert-Contains $incrementalVerifier 'The receipt proves artifact identity, not 
 Assert-Matches $incrementalVerifier '(?s)Assert-SlgSeedBootstrapCapabilities \$SlgSeedCompiler.*?\[fast 1/5\] SLG-first selfhost compiler cache MISS' "seed capability preflight precedes expensive compiler emission"
 
 Assert-Contains $semanticContext 'public nominalIsOwnedResource snapshot: SemanticSnapshot, typeId: Int -> Bool' "single affine native-resource semantic authority"
-Assert-Contains $semanticOwnership 'prepared -> semanticContext.nominalIsOwnedResource(currentTypeId)' "ownership checker uses the affine native-resource authority"
+Assert-Contains $semanticContext 'snapshot -> nominalIsOwnedResource(currentTypeId)' "canonical owned-storage query uses the affine native-resource authority"
 Assert-Contains $typedFunctionLowering 'prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds' "Typed IR seeds affine native-resource traits from the semantic authority"
 Assert-Contains $typedResolvedContextFinalize 'and (recursiveTypeFlags[ownedResourceNode!.typeId] / 4) % 2 == 1' "Typed IR finalization publishes the frozen affine native-resource trait"
 Assert-Contains $typedCore 'or (ir[site.operand0].typeFlags / 4) % 2 == 1)' "affine native-resource member move classification"
@@ -3348,13 +3423,14 @@ Assert-Contains $detachedVerification '"artifacts\scratch\browser-focused-" + $R
 Assert-Contains $detachedVerification 'if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" } else { $targetArguments += "-Rebuild" }' "detached Linux Stage2 fresh rebuild or receipt-bound resume"
 Assert-Matches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-PassThru' "supervised process with authoritative exit code"
 Assert-NotMatches $detachedVerification '(?s)Start-Process.*?-RedirectStandardOutput \$LogPath.*?-Wait\b' "no inherited-handle Start-Process wait"
-Assert-Contains $detachedVerification '$targetProcess.WaitForExit(1000)' "exact supervised-process bounded wait sampling"
+Assert-Contains $detachedVerification '$targetProcess.WaitForExit(100)' "exact supervised-process bounded wait sampling"
 Assert-Contains $detachedVerification '$targetExitCode = $targetProcess.ExitCode' "actual supervised process exit code capture"
 Assert-Contains $detachedVerification 'finally {' "completion record termination guarantee"
 Assert-Contains $detachedVerification 'failureIds = @($failureIds)' "exact failure identifier recording"
-Assert-Matches $detachedVerification '(?s)if \(-not \$cancelled -and \$exitCode -ne 0.*?fail\(\?:ed\|ure\)\?.*?\[regex\]::Matches\(\$line' "failure identifiers require nonzero exit and failure context"
+Assert-Matches $detachedVerification '(?s)if \(-not \$cooperativeCancellationTimedOut -and -not \$cancelled -and\s+\$exitCode -ne 0.*?foreach \(\$line.*?fail\(\?:ed\|ure\)\?.*?\[regex\]::Matches\(\$line' "failure identifiers require nonzero exit and failure context"
 Assert-Contains $detachedVerification 'Move-Item -LiteralPath $temporaryPath -Destination $Path -Force' "atomic completion record publication"
-Assert-Contains $detachedVerification '$targetProcess.Kill($true)' "supported cancellation terminates the supervised process tree"
+Assert-NotMatches $detachedVerification '\.Kill\s*\(' "detached supervisor raw process termination"
+Assert-Contains $detachedVerification "`$failureIds.Add('COOPERATIVE_CANCELLATION_TIMEOUT')" "noncooperative cancellation fail-closed identifier"
 Assert-Matches $detachedVerification '(?s)function Update-ObservedProcessTree.*?CreationDate.*?\$parentCreated.*?\$created -lt \$parentCreated' "detached observation rejects stale PID-reuse descendants"
 Assert-Contains $detachedVerification 'Complete-ObservedProcessAudit' "normal and cancelled exits audit observed descendants"
 Assert-Contains $detachedVerification 'ORPHAN_PROCESSES_REMAIN' "normal exit fails closed when observed children remain"
@@ -3383,6 +3459,10 @@ Assert-Matches $detachedResultSchema '(?s)"status": \{ "const": "passed" \}.*?"o
 Assert-Contains $detachedVerificationContract 'result schema accepted an orphan process on success' "successful completion orphan negative control"
 Assert-Contains $detachedResultSchema '"status": { "const": "cancelled" }' "completion schema defines cancelled terminal state"
 Assert-Contains $detachedResultSchema '"failureIds": { "const": ["CANCELLATION_REQUESTED"] }' "cancelled completion requires the exact failure ID"
-Assert-Contains $detachedVerificationContract 'supported cancellation preserved cancelled, non-zero exit, CANCELLATION_REQUESTED, and zero orphans' "supported cancellation behavior evidence"
+Assert-Contains $detachedVerificationContract 'cooperative parent/child cancellation preserved cancelled, exit 130, exact acknowledgement, CANCELLATION_REQUESTED, and zero orphans' "supported cancellation behavior evidence"
 
-Write-Host "[selfhost compiler contracts] PASS native/browser analysis routing, exact runtime intrinsic identity, native-library ABI separation, explicit socket/process opcodes, affine Child cleanup, fixed-point artifact provenance, materialized console effects, reachable parallel callbacks, and Set intrinsic regression gates."
+if ($StaticAssertionsOnly) {
+    Write-Host "[selfhost compiler static assertions] PASS source-contract assertions only; child contracts unverified by this invocation."
+} else {
+    Write-Host "[selfhost compiler contracts] PASS native/browser analysis routing, exact runtime intrinsic identity, native-library ABI separation, explicit socket/process opcodes, affine Child cleanup, fixed-point artifact provenance, materialized console effects, reachable parallel callbacks, and Set intrinsic regression gates."
+}

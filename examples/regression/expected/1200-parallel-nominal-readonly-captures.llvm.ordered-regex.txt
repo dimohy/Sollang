@@ -1,12 +1,14 @@
-define internal void @sollang_parallel_callback_[0-9]+\(ptr %group, i64 %index\)
-%input_address = getelementptr (?:i8|%sollang\.struct\.)
-%item = load %sollang\.struct\.
-%capture_environment_slot = getelementptr %sollang\.compute_group
-%capture_environment = load ptr
-%capture_address_0 = getelementptr
-%capture_value_0 = load ptr
-%capture_address_1 = getelementptr
-%capture_value_1 = load i32
-%mapped = call %sollang\.struct\..*ptr %capture_value_0, i32 %capture_value_1
-store %sollang\.struct\.
-call void @sollang_compute_execute\(ptr
+(?ms)\A(?=.*?^define internal void @sollang_parallel_callback_(?:[0-9]+|x(?:[0-9A-F]{2})+)\(ptr %group, i64 %index\)(?: #[0-9]+)? \{\r?\n(?:(?!^\}).)*?^[ \t]*%item = load (?<input>%sollang\.struct\.[0-9]+), ptr %input_address, align 4\r?$(?:(?!^\}).)*?^[ \t]*%mapped = call (?<output>%sollang\.struct\.[0-9]+) @[^\s(]+\([^\r\n]*\k<input> %item\)\r?$(?:(?!^\}).)*?^[ \t]*store \k<output> %mapped, ptr %output_address, align 8\r?$)(?=.*?^\k<input> = type \{ i32, i32 \}\r?$)(?=.*?^\k<output> = type \{ %sollang\.dynamic_int_array \}\r?$)(?=.*?^%sollang\.dynamic_int_array = type \{ ptr, i64, i64 \}\r?$)
+(?m)^define internal void @sollang_parallel_callback_(?:[0-9]+|x(?:[0-9A-F]{2})+)\(ptr %group, i64 %index\)(?: #[0-9]+)? \{\r?$
+(?m)^[ \t]*(?:%input_offset = mul i64 %index, 8\r?\n[ \t]+%input_address = getelementptr i8, ptr %input, i64 %input_offset|%input_address = getelementptr %sollang\.struct\.[0-9]+, ptr %input, i64 %index)\r?$
+(?m)^[ \t]*%item = load %sollang\.struct\.[0-9]+, ptr %input_address, align 4\r?$
+(?m)^[ \t]*%capture_environment_slot = getelementptr %sollang\.compute_group, ptr %group, i32 0, i32 4\r?$
+(?m)^[ \t]*%capture_environment = load ptr, ptr %capture_environment_slot, align 8\r?$
+(?m)^[ \t]*%capture_address_0 = getelementptr [^\r\n]+, ptr %capture_environment, i32 0, i32 0\r?$
+(?m)^[ \t]*%capture_value_0 = load ptr, ptr %capture_address_0, align 8\r?$
+(?m)^[ \t]*%capture_address_1 = getelementptr [^\r\n]+, ptr %capture_environment, i32 0, i32 1\r?$
+(?m)^[ \t]*%capture_value_1 = load i32, ptr %capture_address_1, align 4\r?$
+(?m)^[ \t]*%mapped = call %sollang\.struct\.[0-9]+ @[^\s(]+\([^\r\n]*ptr %capture_value_0, i32 %capture_value_1, %sollang\.struct\.[0-9]+ %item\)\r?$
+(?m)^[ \t]*(?:%output_offset = mul i64 %index, 24\r?\n[ \t]+%output_address = getelementptr i8, ptr %output, i64 %output_offset|%output_address = getelementptr %sollang\.struct\.[0-9]+, ptr %output, i64 %index)\r?$
+(?m)^[ \t]*store %sollang\.struct\.[0-9]+ %mapped, ptr %output_address, align 8\r?$
+(?m)^[ \t]*call void @sollang_compute_execute\(ptr

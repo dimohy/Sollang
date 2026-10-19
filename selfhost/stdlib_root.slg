@@ -1,0 +1,91 @@
+namespace sollang.compiler.stdlib_root
+
+import sys.path as path
+import sys.directory.kind as kinds
+
+parentDirectory value: Text -> Text {
+    UIntSize(0) => separator!
+    false => found!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => byte
+        byte == '/' or byte == '\\' -> if {
+            index! => separator!
+            true => found!
+        }
+        index! + 1 => index!
+    }
+    found! -> unless { "" -> return }
+    separator! == 0 -> if { 1 => separator! }
+    separator! == 2 and (value -> byte(UIntSize(1))) == ':'
+        -> if { 3 => separator! }
+    value -> slice(UIntSize(0), separator!)
+}
+
+childHasKind directory: Text, child: Text, expected: Int, style: path.Style -> Bool uses File {
+    path.fromText(directory, style) -> join(child) -> when {
+        Ok(candidate) {
+            candidate -> query -> when {
+                Ok(info) {
+                    ((info.kind -> kinds.code) == expected) -> return
+                }
+                Err(_) { false -> return }
+            }
+        }
+        Err(_) { false -> return }
+    }
+}
+
+findAbove directory: Text, style: path.Style -> Option<path.Path> uses File {
+    (directory -> len) == 0 -> if { Option<path.Path>.None -> return }
+    directory -> childHasKind("Sollang.slnx", 0, style)
+        and directory -> childHasKind("stdlib", 1, style)
+        -> if {
+            Option<path.Path>.Some(path.fromText(directory, style)) -> return
+        }
+    directory -> parentDirectory => parent
+    parent == directory -> if { Option<path.Path>.None -> return }
+    parent -> findAbove(style)
+}
+
+findFrom directory: Text, style: path.Style -> Option<path.Path> uses File {
+    path.fromText(directory, style) -> absolute -> when {
+        Ok(value) {
+            value -> pathText => absoluteDirectory
+            absoluteDirectory -> findAbove(style) -> return
+        }
+        Err(_) { Option<path.Path>.None -> return }
+    }
+}
+
+public resolveStarts sourceDirectory: Text, currentDirectory: Text, compilerDirectory: Text, style: path.Style -> Result<path.Path, Text> uses File {
+    sourceDirectory -> findFrom(style) -> when {
+        Some(root) { root -> join("stdlib") -> return }
+        None { }
+    }
+    currentDirectory -> findFrom(style) -> when {
+        Some(root) { root -> join("stdlib") -> return }
+        None { }
+    }
+    compilerDirectory -> findFrom(style) -> when {
+        Some(root) { root -> join("stdlib") -> return }
+        None { }
+    }
+    Result<path.Path, Text>.Err("could not locate the Sollang standard library root")
+}
+
+public resolve explicit: Text, sourcePath: Text, compilerDirectory: Text, style: path.Style -> Result<path.Path, Text> uses File {
+    (explicit -> len) > 0 -> if {
+        explicit -> childHasKind(".", 1, style) -> unless {
+            Result<path.Path, Text>.Err("Sollang standard library directory could not be read") -> return
+        }
+        path.fromText(explicit, style) -> absolute -> return
+    }
+    path.fromText(sourcePath, style) -> absolute -> when {
+        Ok(source) {
+            source -> pathText -> parentDirectory => sourceDirectory
+            resolveStarts(sourceDirectory, ".", compilerDirectory, style) -> return
+        }
+        Err(error) { Result<path.Path, Text>.Err(error) -> return }
+    }
+}

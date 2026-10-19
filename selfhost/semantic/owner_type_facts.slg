@@ -1,0 +1,208 @@
+namespace sollang.compiler.semantic.owner_type_facts
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+public struct BindingTypeFact {
+    public symbol: Int
+    public typeId: Int
+}
+
+public struct EncodedOwnerTypeFacts {
+    public words: [UInt64; ~]
+    public recipeBySourceType: [Int; ~]
+    public status: Int
+}
+
+public struct RestoredOwnerTypeFacts {
+    public sourceModule: Int
+    public semantic: typeIds.SemanticTypeSet
+    public bindings: [BindingTypeFact; ~]
+    public values: [expressions.ExpressionTypeId; ~]
+    public recipeTypes: [Int; ~]
+    public status: Int
+}
+
+# Valid only for the unchanged prepared snapshot and final type set that
+# produced it. Normal capture prepares this once after semantic resolution.
+public struct CaptureMetadata {
+    public details: artifacts.TypeDetails
+    public declarations: interfaces.DeclarationIdentityIndex
+}
+
+public prepareCaptureMetadata prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet -> CaptureMetadata {
+    prepared.package -> artifacts.captureTypeDetailsAnalyzed(finalTypes.types, finalTypes.references, finalTypes.fields) => details
+    prepared.package -> interfaces.declarationIdentitiesAnalyzed(prepared.modules) => declarations
+    CaptureMetadata { details: details, declarations: declarations }
+}
+
+failedEncoding status: Int -> EncodedOwnerTypeFacts {
+    EncodedOwnerTypeFacts { words: [UInt64; ~], recipeBySourceType: [Int; ~], status: status }
+}
+
+failedRestoration status: Int -> RestoredOwnerTypeFacts {
+    typeIds.SemanticTypeSet { types: [typeIds.SemanticType; ~], references: [typeIds.TypeReference; ~], fields: [typeIds.NominalField; ~] } => semantic
+    RestoredOwnerTypeFacts { sourceModule: -1, semantic: semantic, bindings: [BindingTypeFact; ~], values: [expressions.ExpressionTypeId; ~], recipeTypes: [Int; ~], status: status }
+}
+
+# Auxiliary source-owner type facts, not normal-cache admission. Calls,
+# specializations and compiler/target/config/declaration/module/SHA256 checks
+# must also succeed before a caller may reuse a normal semantic owner.
+# Exact source bytes authorize local syntax/symbol positions; cross-module
+# nominal types are rebound by the existing full declaration recipe contract.
+public capture prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, sourceModule: Int -> EncodedOwnerTypeFacts {
+    [Int; ~] => roots
+    prepared -> captureWithRoots(finalTypes, sourceModule, roots)
+}
+
+# Call/specialization consumers contribute their type roots to the same payload.
+public captureWithRoots prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, sourceModule: Int, extraRoots: ref [Int; ~] -> EncodedOwnerTypeFacts {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { 1 -> failedEncoding -> return }
+    prepared -> prepareCaptureMetadata(finalTypes) => metadata
+    prepared -> capturePreparedWithRoots(finalTypes, sourceModule, extraRoots, metadata)
+}
+
+public capturePreparedWithRoots prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, sourceModule: Int, extraRoots: ref [Int; ~], metadata: ref CaptureMetadata -> EncodedOwnerTypeFacts {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { 1 -> failedEncoding -> return }
+    prepared.package.ranges[sourceModule] => range
+    [BindingTypeFact; ~] => bindings!
+    [expressions.ExpressionTypeId; ~] => values!
+    [Int; ~] => roots!
+    extraRoots -> each root { roots! -> push(root) }
+    0 => symbol!
+    symbol! < range.symbolCount -> while {
+        range.symbolStart + symbol! >= (finalTypes.lexicalBindingTypeBySymbol -> len)
+            -> if { 1 -> failedEncoding -> return }
+        finalTypes.lexicalBindingTypeBySymbol[range.symbolStart + symbol!] => typeId
+        typeId < -1 -> if { 1 -> failedEncoding -> return }
+        typeId >= 0 -> if {
+            bindings! -> push(BindingTypeFact { symbol: symbol!, typeId: typeId })
+            roots! -> push(typeId)
+        }
+        symbol! + 1 => symbol!
+    }
+    [Bool; ~] => seenValues!
+    0..<range.astCount -> each { seenValues! -> push(false) }
+    finalTypes.expressions -> each value {
+        value.sourceModule == sourceModule and value.status == 0
+            -> if {
+                value.astNode < 0 or value.astNode >= range.astCount or value.typeId < 0
+                    -> if { 1 -> failedEncoding -> return }
+                seenValues![value.astNode] -> if { 1 -> failedEncoding -> return }
+                true => seenValues![value.astNode]
+                values! -> push(value)
+                roots! -> push(value.typeId)
+            }
+    }
+    finalTypes.types -> artifacts.encodeSelectedRecipes(metadata.details, metadata.declarations, roots!) => recipes
+    recipes.status != 0 -> if { recipes.status -> failedEncoding -> return }
+    prepared.package.sources[sourceModule] -> len => sourceLength
+    [UInt64(6002245308478540870), 1, 7, UInt64(sourceLength), UInt64(recipes.words -> len), UInt64(bindings! -> len), UInt64(values! -> len); ~] => words!
+    UIntSize(0) => sourceByte!
+    sourceByte! < sourceLength -> while {
+        words! -> push(UInt64(prepared.package.sources[sourceModule] -> byte(sourceByte!)))
+        sourceByte! + 1 => sourceByte!
+    }
+    recipes.words -> each word { words! -> push(word) }
+    bindings! -> each binding {
+        words! -> push(UInt64(binding.symbol))
+        words! -> push(UInt64(recipes.recipeBySourceType[binding.typeId]))
+    }
+    values! -> each value {
+        words! -> push(UInt64(value.astNode))
+        words! -> push(UInt64(recipes.recipeBySourceType[value.typeId]))
+    }
+    UInt64(words! -> len) => words![2]
+    EncodedOwnerTypeFacts { words: words!, recipeBySourceType: recipes.recipeBySourceType, status: 0 }
+}
+
+# All identity, bounds, duplicate and type/field checks precede publication.
+# Failure returns empty owned arrays and never mutates current semantic state.
+public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref typeIds.SemanticTypeSet -> RestoredOwnerTypeFacts {
+    (words -> len) < 7 -> if { 1 -> failedRestoration -> return }
+    words[0] != 6002245308478540870 or words[1] != 1 or words[2] != UInt64(words -> len)
+        or words[3] > UInt64((words -> len) - 7)
+        -> if { 1 -> failedRestoration -> return }
+    Int(words[3]) => sourceLength
+    7 + sourceLength => typeStart
+    words[4] > UInt64((words -> len) - typeStart)
+        -> if { 1 -> failedRestoration -> return }
+    Int(words[4]) => typeLength
+    typeStart + typeLength => factStart
+    words[5] > UInt64(((words -> len) - factStart) / 2)
+        -> if { 1 -> failedRestoration -> return }
+    Int(words[5]) => bindingCount
+    factStart + bindingCount * 2 => valueStart
+    words[6] != UInt64(((words -> len) - valueStart) / 2)
+        or ((words -> len) - valueStart) % 2 != 0
+        -> if { 1 -> failedRestoration -> return }
+    Int(words[6]) => valueCount
+    0..<sourceLength -> each offset {
+        words[7 + offset] > 255 -> if { 1 -> failedRestoration -> return }
+    }
+    -1 => sourceModule!
+    0 => candidate!
+    candidate! < (package.sources -> len) -> while {
+        (package.sources[candidate!] -> len) == UIntSize(sourceLength) => equal!
+        0 => byte!
+        equal! and byte! < sourceLength -> while {
+            UInt64(package.sources[candidate!] -> byte(UIntSize(byte!))) != words[7 + byte!]
+                -> if { false => equal! }
+            byte! + 1 => byte!
+        }
+        equal! -> if {
+            sourceModule! >= 0 -> if { 3 -> failedRestoration -> return }
+            candidate! => sourceModule!
+        }
+        candidate! + 1 => candidate!
+    }
+    sourceModule! < 0 -> if { 2 -> failedRestoration -> return }
+    package.ranges[sourceModule!] => range
+    [Bool; ~] => seenSymbols!
+    [Bool; ~] => seenValues!
+    0..<range.symbolCount -> each { seenSymbols! -> push(false) }
+    0..<range.astCount -> each { seenValues! -> push(false) }
+    0 => index!
+    index! < bindingCount -> while {
+        words[factStart + index! * 2] => symbol
+        symbol >= UInt64(range.symbolCount) -> if { 1 -> failedRestoration -> return }
+        seenSymbols![Int(symbol)] -> if { 1 -> failedRestoration -> return }
+        true => seenSymbols![Int(symbol)]
+        index! + 1 => index!
+    }
+    0 => valueIndex!
+    valueIndex! < valueCount -> while {
+        words[valueStart + valueIndex! * 2] => node
+        node >= UInt64(range.astCount) -> if { 1 -> failedRestoration -> return }
+        seenValues![Int(node)] -> if { 1 -> failedRestoration -> return }
+        true => seenValues![Int(node)]
+        valueIndex! + 1 => valueIndex!
+    }
+    [UInt64; ~] => typeWords!
+    0..<typeLength -> each offset { typeWords! -> push(words[typeStart + offset]) }
+    typeWords! -> artifacts.restoreRecipes(package, current) => restored
+    restored.status != 0 -> if { restored.status -> failedRestoration -> return }
+    [BindingTypeFact; ~] => bindings!
+    [expressions.ExpressionTypeId; ~] => values!
+    0 => bindingIndex!
+    bindingIndex! < bindingCount -> while {
+        words[factStart + bindingIndex! * 2 + 1] => recipe
+        recipe >= UInt64(restored.typeIds -> len) -> if { 1 -> failedRestoration -> return }
+        bindings! -> push(BindingTypeFact { symbol: Int(words[factStart + bindingIndex! * 2]), typeId: restored.typeIds[Int(recipe)] })
+        bindingIndex! + 1 => bindingIndex!
+    }
+    0 => expressionIndex!
+    expressionIndex! < valueCount -> while {
+        words[valueStart + expressionIndex! * 2 + 1] => recipe
+        recipe >= UInt64(restored.typeIds -> len) -> if { 1 -> failedRestoration -> return }
+        values! -> push(expressions.ExpressionTypeId { sourceModule: sourceModule!, astNode: Int(words[valueStart + expressionIndex! * 2]), typeId: restored.typeIds[Int(recipe)], status: 0 })
+        expressionIndex! + 1 => expressionIndex!
+    }
+    RestoredOwnerTypeFacts { sourceModule: sourceModule!, semantic: restored.semantic, bindings: bindings!, values: values!, recipeTypes: restored.typeIds, status: 0 }
+}

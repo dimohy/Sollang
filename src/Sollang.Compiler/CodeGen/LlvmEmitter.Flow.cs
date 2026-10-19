@@ -34,7 +34,8 @@ internal sealed partial class LlvmEmitter
             && TryResolveFunction(expression.Targets[0].Path, out var directFunction)
             && TryGetRuntimePrinterKind(directFunction, out var directPrinterKind))
         {
-            var standardError = directPrinterKind == BoundFunctionKind.RuntimePrintErrorLine;
+            var standardError = directPrinterKind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine;
             ok = EmitPrintFlowSource(expression.Source, ok, standardError);
             if (directPrinterKind is BoundFunctionKind.RuntimePrintLine
                 or BoundFunctionKind.RuntimePrintErrorLine)
@@ -79,7 +80,7 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
 
-            if (TryEmitContainerFlowTarget(expression.Source, target, path, current, isLast, out var containerResult))
+            if (TryEmitContainerFlowTarget(expression.Source, target, path, current, isLast, ownsFlowTemporary, out var containerResult))
             {
                 if (containerResult.Value is null)
                 {
@@ -212,13 +213,15 @@ internal sealed partial class LlvmEmitter
                 {
                     case BoundFunctionKind.RuntimePrint:
                     case BoundFunctionKind.RuntimePrintLine:
+                    case BoundFunctionKind.RuntimePrintError:
                     case BoundFunctionKind.RuntimePrintErrorLine:
                         if (!isLast)
                         {
                             throw new SollangException($"{path} must be the final value-flow target");
                         }
 
-                        var standardError = flowKind == BoundFunctionKind.RuntimePrintErrorLine;
+                        var standardError = flowKind is BoundFunctionKind.RuntimePrintError
+                            or BoundFunctionKind.RuntimePrintErrorLine;
                         ok = EmitWriteValue(current, ok, standardError);
                         if (flowKind is BoundFunctionKind.RuntimePrintLine
                             or BoundFunctionKind.RuntimePrintErrorLine)
@@ -298,6 +301,10 @@ internal sealed partial class LlvmEmitter
                             ? EmitRuntimeAtomicReplaceFile(function, replaceRequest)
                             : throw new SollangException($"{path} expects an AtomicReplaceRequest");
                         continue;
+                    case BoundFunctionKind.RuntimeCreateExclusiveFile:
+                    case BoundFunctionKind.RuntimeRemoveFile:
+                        current = EmitRuntimeFilePathStatus(function, current);
+                        continue;
                     case BoundFunctionKind.RuntimeBorrowSourceText:
                         current = EmitBorrowSourceText(current);
                         continue;
@@ -322,6 +329,9 @@ internal sealed partial class LlvmEmitter
                         continue;
                     case BoundFunctionKind.RuntimeCreateDirectory:
                         current = EmitRuntimeCreateDirectory(function, current);
+                        continue;
+                    case BoundFunctionKind.RuntimePathAbsolute:
+                        current = EmitRuntimePathAbsolute(function, current);
                         continue;
                     case BoundFunctionKind.RuntimePathQuery:
                         current = EmitRuntimePathQuery(function, current);
@@ -434,6 +444,7 @@ internal sealed partial class LlvmEmitter
         string path,
         RuntimeValue current,
         bool isLast,
+        bool ownsFlowTemporary,
         out RuntimeFlowResult result)
     {
         result = new RuntimeFlowResult(null, null, _mainOk);
@@ -533,6 +544,12 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("cancel must be final and takes no arguments");
                 }
                 EmitCancelTask(task);
+                if (source is NameExpression cancelledSource
+                    && _locals.TryGetValue(cancelledSource.Name, out var cancelledSourceValue)
+                    && ReferenceEquals(cancelledSourceValue, task))
+                {
+                    RemoveLocal(cancelledSource.Name);
+                }
                 result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
                 return true;
             case "used" when current is RuntimeArena usedArena:
@@ -770,12 +787,12 @@ internal sealed partial class LlvmEmitter
 
                 result = current switch
                 {
-                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
-                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
-                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.CapacityName, "dict_capacity_value"), null, _mainOk),
-                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(EmitCapacityAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
+                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(EmitCapacityAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
+                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitCapacityAsInt(dictionaryView.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitCapacityAsInt(intDictionary.CapacityName, "dict_capacity_value"), null, _mainOk),
                     RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(
-                        EmitSizeAsInt(
+                        EmitCapacityAsInt(
                             _program.Types.IsBoundedDictionary(inlineMap.DictionaryType)
                                 ? _program.Types.GetBoundedDictionary(inlineMap.DictionaryType).MaxEntries.ToString(CultureInfo.InvariantCulture)
                                 : inlineMap.CapacityName,
@@ -1030,7 +1047,9 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("append must be bound directly with '=>'");
                 }
 
-                RequireMoveContainerSource(source, "append");
+                // A preceding call owns its returned container independently of the source place.
+                if (!ownsFlowTemporary)
+                    RequireMoveContainerSource(source, "append");
 
                 if (target.Arguments.Count != 1)
                 {
@@ -1143,7 +1162,8 @@ internal sealed partial class LlvmEmitter
                     throw new SollangException("updated must be bound directly with '=>'");
                 }
 
-                RequireMoveContainerSource(source, "updated");
+                if (!ownsFlowTemporary)
+                    RequireMoveContainerSource(source, "updated");
 
                 if (target.Arguments.Count != 2)
                 {

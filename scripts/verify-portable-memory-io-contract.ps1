@@ -203,6 +203,7 @@ foreach ($required in @(
 }
 $managedSemantic = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs'))
 $managedEmitter = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeIntrinsics.cs'))
+$managedFlow = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Flow.cs'))
 $managedStructsPath = Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs'
 $managedStructs = [IO.File]::ReadAllText($managedStructsPath)
 $selfhostTyped = [IO.File]::ReadAllText((Join-Path $root 'selfhost/ir/typed.slg'))
@@ -221,6 +222,7 @@ foreach ($check in @(
     @{ Text = $managedEmitter; Needle = 'EmitRuntimeWriteBytesAtAsync' },
     @{ Text = $managedEmitter; Needle = 'EmitAsyncFileBufferCancelFunctions' },
     @{ Text = $managedEmitter; Needle = 'EmitRuntimeErrorText("io")' },
+    @{ Text = $managedFlow; Needle = 'RemoveLocal(cancelledSource.Name);' },
     @{ Text = $managedStructs; Needle = 'CollectOwnedLiteralTransfers' },
     @{ Text = $managedStructs; Needle = 'DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths)' },
     @{ Text = $selfhostTyped; Needle = '-> if { -304 => opcode! }' },

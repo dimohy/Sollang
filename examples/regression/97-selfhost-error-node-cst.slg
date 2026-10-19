@@ -1,5 +1,7 @@
 # Verifies the self-host CST preserves a recoverable parser error node.
 import sollang.compiler.cst as cst
+import sollang.compiler.lexer as lexer
+import sollang.compiler.ast as ast
 
 main {
     """
@@ -16,4 +18,40 @@ main {
             "error = $(node.parent),$(node.firstToken),$(node.tokenCount),$(node.start),$(node.length)" -> println
         }
     }
+
+    # Recovery must retain the first skipped range before later matched tokens.
+    """
+    struct MemoryBox {
+        memory: Arena
+    }
+    
+    inspect seed: Int -> [Int; ~] {
+        addUsage value: Int -> Int {
+            value + Int(box.memory -> used)
+        }
+    
+        MemoryBox { memory: Arena(8) } => box
+        [1, 2, 3; ~] => values!
+        values! -> parallel value {
+            value -> addUsage
+        } => shifted!
+        shifted!
+    }
+    
+    main {
+        0 -> inspect => shifted!
+    }
+    """ => malformed
+    malformed -> lexer.lex -> len => tokenCount
+    malformed -> cst.build => recovered
+    0 => errorCount!
+    0 => invalidSpans!
+    recovered -> each node {
+        node.ruleId == -1 -> if { errorCount! + 1 => errorCount! }
+        node.tokenCount > 0
+            and (node.firstToken < 0 or node.firstToken + node.tokenCount > tokenCount)
+            -> if { invalidSpans! + 1 => invalidSpans! }
+    }
+    malformed -> ast.lower -> len => astCount
+    "nested-errors=$(errorCount!),spans=$(invalidSpans!),ast=$(astCount > 0)" -> println
 }

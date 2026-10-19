@@ -15,6 +15,7 @@ internal readonly partial record struct SemanticVersion(
     {
         var match = VersionPattern().Match(text);
         if (!match.Success
+            || match.Length != text.Length
             || !int.TryParse(match.Groups["major"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var major)
             || !int.TryParse(match.Groups["minor"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var minor)
             || !int.TryParse(match.Groups["patch"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var patch))

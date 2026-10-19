@@ -1,0 +1,129 @@
+import sollang.compiler.llvm.text as compiler
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+
+check source: Text -> Int {
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> semanticContext.prepare -> expressionTypes.resolveCallContext => context
+    typeIds.enumPayloadEdges(context.types.types, context.types.references, context.prepared.package.ranges, context.prepared.package.symbols, context.types.referenceIndexByTypeAst) => edges
+    context.prepared -> semanticContext.ownedResourceSeeds(context.types.types) => seeds
+    typeIds.classifyWithResources(context.types.types, context.types.fields, edges, seeds) => traits
+    [libraryImports.LibraryFunctionResolution; ~] => libraryCalls
+    context.prepared -> diagnostics.firstBindingDeclarationDiagnostic(context.types, traits, libraryCalls) => diagnostic
+    diagnostic.code
+}
+
+reject source: Text -> Int uses Console, File {
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> compiler.emitChecked
+}
+
+main {
+    """
+    main { [1, 2; ~] => values!
+     UIntSize(0) => index
+     9 => values![index]
+    }
+    """ -> check => indexCode
+    "index=$(indexCode)" -> println
+    """
+    main { [1, 2; ~] => values!
+     UIntSize(9) => wide
+     wide => values![0]
+    }
+    """ -> check => valueCode
+    "value=$(valueCode)" -> println
+    """
+    main { [1, 2; ~] => values!
+     UIntSize(9) => wide
+     UIntSize(0) => index
+     wide => values![index]
+    }
+    """ -> check => valuefirstCode
+    "value-first=$(valuefirstCode)" -> println
+    """
+    main { [1, 2; ~] => values!
+     9 => values![0]
+    }
+    """ -> check => validCode
+    "valid=$(validCode)" -> println
+    """
+    main { [1, 2; ~] => values!
+     UIntSize(9) => wide
+     Int(wide) => values![0]
+    }
+    """ -> check => explicitCode
+    "explicit=$(explicitCode)" -> println
+    """
+    main { [UInt8(1); ~] => values!
+     9 => values![0]
+    }
+    """ -> check => byteliteralCode
+    "byte-literal=$(byteliteralCode)" -> println
+    """
+    main { [UInt8(1); ~] => values!
+     9 => wide
+     wide => values![0]
+    }
+    """ -> check => bytetypedCode
+    "byte-typed=$(bytetypedCode)" -> println
+    """
+    write values: mut [Int; ~], index: UIntSize -> Unit {
+     9 => values[index]
+    }
+    main {}
+    """ -> check => parameterindexCode
+    "parameter-index=$(parameterindexCode)" -> println
+    """
+    main { [UIntSize(1): 2] => values!
+     UIntSize(1) => index
+     9 => values![index]
+    }
+    """ -> check => dictionarykeyCode
+    "dictionary-key=$(dictionarykeyCode)" -> println
+    """
+    write values: mut MutableMappedBytes, index: UIntSize -> Unit {
+     UInt8(9) => values[index]
+    }
+    main {}
+    """ -> check => mappedindexCode
+    "mapped-index=$(mappedindexCode)" -> println
+    """
+    main {
+        [1, 2; ~] => values!
+        UIntSize(0) => index
+        9 => values![index]
+    }
+    """ -> reject => rejectedIndex
+
+    """
+    main {
+        [1, 2; ~] => values!
+        UIntSize(9) => wide
+        wide => values![0]
+    }
+    """ -> reject => rejectedValue
+    "checked=$(rejectedIndex),$(rejectedValue)" -> println
+
+    """
+    main {
+        [1, 2; ~] => values!
+        Long(9) => wide
+        -wide => values![0]
+    }
+    """ -> check => unaryTypedCode
+    "unary-typed=$unaryTypedCode" -> println
+    """
+    main {
+        [Int8(1); ~] => values!
+        -9 => values![0]
+    }
+    """ -> check => unaryLiteralCode
+    "unary-literal=$unaryLiteralCode" -> println
+
+}

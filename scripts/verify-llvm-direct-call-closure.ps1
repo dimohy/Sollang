@@ -32,14 +32,14 @@ $functionRecords |
 $functionRecords |
     Where-Object {
         $_.Groups['kind'].Value -eq 'define' -and
-        $_.Groups['symbol'].Value -match '^sollang_m\d+_s\d+$'
+        $_.Groups['symbol'].Value -match '^sollang_m-?\d+_s-?\d+(?:_g\d+)?$'
     } |
     ForEach-Object { [void]$defined.Add($_.Groups['symbol'].Value) }
 
 $unresolved = [System.Collections.Generic.SortedSet[string]]::new([System.StringComparer]::Ordinal)
 [regex]::Matches(
     $llvm,
-    '(?m)^\s*(?:%[-a-zA-Z$._0-9]+\s*=\s*)?(?:(?:musttail|tail|notail)\s+)?(?:call|invoke)\s+[^\r\n]*?@(?<symbol>(?:sollang_m-?\d+_s-?\d+|sollang_runtime_[-a-zA-Z$._0-9]+))\(') |
+    '(?m)^\s*(?:%[-a-zA-Z$._0-9]+\s*=\s*)?(?:(?:musttail|tail|notail)\s+)?(?:call|invoke)\s+[^\r\n]*?@(?<symbol>(?:sollang_m-?\d+_s-?\d+(?:_g\d+)?|sollang_runtime_[-a-zA-Z$._0-9]+))\(') |
     ForEach-Object {
         $symbol = $_.Groups['symbol'].Value
         $isResolved = if ($symbol.StartsWith('sollang_runtime_', [System.StringComparison]::Ordinal)) {

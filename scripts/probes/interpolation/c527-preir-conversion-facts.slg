@@ -1,0 +1,50 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+
+main {
+    [
+    """
+    main {
+        "value=$(Float(1))" -> println
+    }
+    """; ~
+    ] -> semanticContext.prepare => floatPrepared
+    floatPrepared -> expressionTypeIds.resolveContext => floatFacts
+    floatPrepared -> interpolationInference.preIrFlowCallTargets(floatFacts) => floatTargets
+    floatPrepared -> interpolationInference.preIrInvalidDirectDisplayTypeByNode(floatFacts, floatTargets, 64) => floatInvalid
+    -1 => floatSymbol!
+    0 => floatIndex!
+    floatIndex! < (floatPrepared.interpolations -> len)
+        -> while {
+            floatPrepared.interpolations[floatIndex!] => node
+            node.kind == 9 and node.parent < 0 and floatInvalid[floatIndex!] >= 0
+                -> if {
+                    floatFacts.types[floatInvalid[floatIndex!]].symbol => floatSymbol!
+                }
+            floatIndex! + 1 => floatIndex!
+        }
+    "float=$(floatSymbol!)" -> println
+
+    [
+    """
+    main {
+        "value=$(Float(true))" -> println
+    }
+    """; ~
+    ] -> semanticContext.prepare => invalidPrepared
+    invalidPrepared -> expressionTypeIds.resolveContext => invalidFacts
+    invalidPrepared -> interpolationInference.preIrFlowCallTargets(invalidFacts) => invalidTargets
+    invalidPrepared -> interpolationInference.preIrInvalidDirectDisplayTypeByNode(invalidFacts, invalidTargets, 64) => invalidDisplay
+    -2 => invalidType!
+    0 => invalidIndex!
+    invalidIndex! < (invalidPrepared.interpolations -> len)
+        -> while {
+            invalidPrepared.interpolations[invalidIndex!] => node
+            node.kind == 9 and node.parent < 0 -> if {
+                invalidDisplay[invalidIndex!] => invalidType!
+            }
+            invalidIndex! + 1 => invalidIndex!
+        }
+    "invalid=$(invalidType!)" -> println
+}

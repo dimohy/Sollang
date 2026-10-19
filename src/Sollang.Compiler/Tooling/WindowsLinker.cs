@@ -7,6 +7,7 @@ namespace Sollang.Compiler.Tooling;
 internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
     private const long TargetBytesPerPartition = 1024 * 1024;
+    public int? MaximumWorkers { get; init; }
 
     public void LinkLlvmIr(
         string llPath,
@@ -87,7 +88,11 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         string optimizationLevel)
     {
         var processorCount = Math.Max(1, Environment.ProcessorCount);
-        var maxPartitionCount = NativeJobLimit(processorCount);
+        var workerLimit = NativeJobLimit(processorCount);
+        // Explicit worker limits bound concurrency while retaining small IR
+        // partitions. A single worker must not merge a large module back into
+        // one high-memory optimization. Preserve legacy environment partitioning.
+        var maxPartitionCount = MaximumWorkers.HasValue ? processorCount : workerLimit;
         var llvmByteLength = new FileInfo(llPath).Length;
         // llvm-split and each clang process have a fixed cost. Keep small modules
         // whole and add parallelism only as the amount of IR grows.
@@ -124,7 +129,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             .ToArray();
         var completed = 0;
         var progressGate = new object();
-        var tasks = Enumerable.Range(0, partitionCount).Select(index => Task.Run(() =>
+        Parallel.For(0, partitionCount, new ParallelOptions { MaxDegreeOfParallelism = workerLimit }, index =>
         {
             var partitionPath = partitionPrefix + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
             Run(toolchain.Clang,
@@ -138,13 +143,20 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
                 completed++;
                 Console.WriteLine($"[native {completed}/{partitionCount}] optimized partition");
             }
-        })).ToArray();
-        Task.WhenAll(tasks).GetAwaiter().GetResult();
+        });
         return objectPaths;
     }
 
-    private static int NativeJobLimit(int processorCount)
+    private int NativeJobLimit(int processorCount)
     {
+        if (MaximumWorkers is { } explicitLimit)
+        {
+            if (explicitLimit < 1)
+            {
+                throw new SollangException("--jobs expects a positive integer");
+            }
+            return Math.Min(explicitLimit, processorCount);
+        }
         var configured = Environment.GetEnvironmentVariable("SOLLANG_NATIVE_JOBS");
         if (string.IsNullOrWhiteSpace(configured))
         {
@@ -187,6 +199,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             SetFilePointerEx
             GetFileSizeEx
             GetFinalPathNameByHandleW
+            GetFullPathNameW
             GetFileInformationByHandle
             SetEndOfFile
             CreateFileMappingA
@@ -194,6 +207,9 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             FlushViewOfFile
             FlushFileBuffers
             MoveFileExA
+            MoveFileExW
+            DeleteFileA
+            DeleteFileW
             UnmapViewOfFile
             GetTickCount64
             GetSystemTimePreciseAsFileTime
@@ -216,9 +232,13 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             SetFileCompletionNotificationModes
             FreeLibrary
             CreateDirectoryA
+            CreateDirectoryW
             GetFileAttributesA
+            GetFileAttributesW
             FindFirstFileA
+            FindFirstFileW
             FindNextFileA
+            FindNextFileW
             FindClose
             LocalFree
             GetProcessHeap
@@ -344,6 +364,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             WSARecv
             send
             WSASend
+            WSAGetOverlappedResult
             recvfrom
             WSARecvFrom
             sendto

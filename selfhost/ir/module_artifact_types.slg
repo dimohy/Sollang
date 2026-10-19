@@ -2,6 +2,9 @@ namespace sollang.compiler.ir.module_artifact_types
 
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.analysis as analysis
+import syntax.generated.slg as grammar
 
 # A canonical type record contains its structural hash followed by thirteen
 # stable fields. Module references carry an explicit presence word because a
@@ -17,6 +20,452 @@ public struct DecodedTypeTable {
     public types: [typeIds.SemanticType; ~]
     public hashes: [UInt64; ~]
     public status: Int
+}
+
+# Materialization is a transaction: the caller publishes this owned table only
+# after its field/binding/call restoration also succeeds. typeIds maps decoded
+# recipe positions to current-session interned types, never persisted TypeIds.
+public struct ReboundTypeTable {
+    public types: [typeIds.SemanticType; ~]
+    public typeIds: [Int; ~]
+    public status: Int
+    public details: TypeDetails
+}
+
+# One bounded word range per type. Products contain an ordered field count,
+# then presence/length, exact UTF-8 label bytes, and a type recipe reference.
+# Product-field terms contain just their exact label; all other types are empty.
+public struct TypeDetails {
+    public starts: [Int; ~]
+    public lengths: [Int; ~]
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+public struct MaterializedTypeFields {
+    public fields: [typeIds.NominalField; ~]
+    public status: Int
+}
+
+# Semantic generations use full declaration keys and recipe positions. The
+# retained complete-IR hash payload below remains a separate, unchanged format.
+public struct EncodedTypeRecipes {
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+public struct SelectedTypeRecipes {
+    public words: [UInt64; ~]
+    public recipeBySourceType: [Int; ~]
+    public status: Int
+}
+
+struct RecipeDependencies {
+    ids: [Int; ~]
+    status: Int
+}
+
+public struct DecodedTypeRecipes {
+    public types: [typeIds.SemanticType; ~]
+    public details: TypeDetails
+    public declarations: interfaces.DeclarationIdentityIndex
+    public status: Int
+}
+
+public struct RestoredTypeRecipes {
+    public semantic: typeIds.SemanticTypeSet
+    public typeIds: [Int; ~]
+    public status: Int
+}
+
+struct FieldLabelLocation {
+    sourceModule: Int
+    token: Int
+    status: Int
+}
+
+# Product labels are values, not declarations. An exact current identifier
+# token supplies their text storage; no cached source/token ordinal is reused.
+locateFieldLabel package: ref analysis.PackageAnalysis, words: ref [UInt64; ~], start: Int, length: Int -> FieldLabelLocation {
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        0 => tokenIndex!
+        tokenIndex! < range.tokenCount -> while {
+            package.tokens[range.tokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdIdentifier() and token.span.length == UIntSize(length)
+                -> if {
+                    true => matches!
+                    0 => byteIndex!
+                    matches! and byteIndex! < length -> while {
+                        UInt64(package.sources[sourceIndex!] -> byte(token.span.start + UIntSize(byteIndex!))) != words[start + byteIndex!]
+                            -> if { false => matches! }
+                        byteIndex! + 1 => byteIndex!
+                    }
+                    matches! -> if {
+                        FieldLabelLocation { sourceModule: sourceIndex!, token: tokenIndex!, status: 0 } -> return
+                    }
+                }
+            tokenIndex! + 1 => tokenIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    FieldLabelLocation { sourceModule: -1, token: -1, status: 1 }
+}
+
+# Reuse current fields and populate newly interned product owners from the
+# normalized detail arena. The caller commits this table with rebound.types.
+# 1 invalid detail, 5 no exact current label token. Failure publishes no fields.
+public materializeProductFields table: ref ReboundTypeTable, package: ref analysis.PackageAnalysis, currentFields: ref [typeIds.NominalField; ~], currentTypeCount: Int -> MaterializedTypeFields {
+    table.status != 0 -> if {
+        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: table.status } -> return
+    }
+    currentTypeCount < 0 or currentTypeCount > (table.types -> len)
+        or (table.details.starts -> len) != (table.types -> len)
+        or (table.details.lengths -> len) != (table.types -> len)
+        -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
+    [typeIds.NominalField; ~] => fields!
+    currentFields -> each field { fields! -> push(field) }
+    currentTypeCount => owner!
+    owner! < (table.types -> len) -> while {
+        table.types[owner!] => type
+        type.kind == 10 -> if {
+            table.details.starts[owner!] => start
+            table.details.lengths[owner!] => length
+            start < 0 or length <= 0 or start > (table.details.words -> len)
+                -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
+            length > (table.details.words -> len) - start or type.length < 0
+                -> if { MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return }
+            start + length => end
+            table.details.words[start] != UInt64(type.length)
+                -> if {
+                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                }
+            start + 1 => cursor!
+            0 => ordinal!
+            ordinal! < type.length -> while {
+                cursor! >= end -> if {
+                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                }
+                table.details.words[cursor!] => label
+                cursor! + 1 => cursor!
+                FieldLabelLocation { sourceModule: -1, token: -1, status: 0 } => location!
+                label > 0 -> if {
+                    label <= 1 or label - 1 > UInt64(end - cursor!)
+                        -> if {
+                            MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                        }
+                    Int(label - 1) => labelLength
+                    package -> locateFieldLabel(table.details.words, cursor!, labelLength) => location!
+                    location!.status != 0 -> if {
+                        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 5 } -> return
+                    }
+                    cursor! + labelLength => cursor!
+                }
+                cursor! >= end -> if {
+                    MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                }
+                table.details.words[cursor!] >= UInt64(table.types -> len)
+                    -> if {
+                        MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+                    }
+                fields! -> push(typeIds.NominalField { ownerType: owner!, sourceModule: location!.sourceModule, ownerSymbol: -1, fieldSymbol: -1, labelToken: location!.token, ordinal: ordinal!, fieldType: Int(table.details.words[cursor!]), status: 0 })
+                cursor! + 1 => cursor!
+                ordinal! + 1 => ordinal!
+            }
+            cursor! != end -> if {
+                MaterializedTypeFields { fields: [typeIds.NominalField; ~], status: 1 } -> return
+            }
+        }
+        owner! + 1 => owner!
+    }
+    MaterializedTypeFields { fields: fields!, status: 0 }
+}
+
+emptyTypeDetails: -> TypeDetails => TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 0 }
+
+appendLabel package: ref analysis.PackageAnalysis, sourceModule: Int, labelToken: Int, words: mut [UInt64; ~] -> Bool {
+    labelToken == -1 -> if {
+        words -> push(0)
+        true -> return
+    }
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { false -> return }
+    package.ranges[sourceModule] => range
+    labelToken < 0 or labelToken >= range.tokenCount
+        -> if { false -> return }
+    package.tokens[range.tokenStart + labelToken] => token
+    token.span.start > (package.sources[sourceModule] -> len)
+        -> if { false -> return }
+    token.span.length > (package.sources[sourceModule] -> len) - token.span.start
+        -> if { false -> return }
+    words -> push(UInt64(token.span.length) + 1)
+    UIntSize(0) => byteIndex!
+    byteIndex! < token.span.length -> while {
+        words -> push(UInt64(package.sources[sourceModule] -> byte(token.span.start + byteIndex!)))
+        byteIndex! + 1 => byteIndex!
+    }
+    true
+}
+
+public captureTypeDetails package: ref analysis.PackageAnalysis, types: ref typeIds.SemanticTypeSet -> TypeDetails {
+    package -> captureTypeDetailsAnalyzed(types.types, types.references, types.fields)
+}
+
+public captureTypeDetailsAnalyzed package: ref analysis.PackageAnalysis, sourceTypes: ref [typeIds.SemanticType; ~], sourceReferences: ref [typeIds.TypeReference; ~], sourceFields: ref [typeIds.NominalField; ~] -> TypeDetails {
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => words!
+    0 => status!
+    0 => typeIndex!
+    typeIndex! < (sourceTypes -> len) and status! == 0
+        -> while {
+            words! -> len => start
+            starts! -> push(start)
+            sourceTypes[typeIndex!] => type
+            type.kind == 10 -> if {
+                type.length < 0 -> if { 1 => status! }
+                words! -> push(UInt64(type.length))
+                0 => ordinal!
+                ordinal! < type.length and status! == 0 -> while {
+                    -1 => selected!
+                    0 => fieldIndex!
+                    fieldIndex! < (sourceFields -> len) -> while {
+                        sourceFields[fieldIndex!] => field
+                        field.ownerType == typeIndex! and field.ordinal == ordinal!
+                            -> if {
+                                selected! >= 0 -> if { 1 => status! }
+                                fieldIndex! => selected!
+                            }
+                        fieldIndex! + 1 => fieldIndex!
+                    }
+                    selected! < 0 -> if { 1 => status! } else {
+                        sourceFields[selected!] => field
+                        field.status != 0 or field.fieldType < 0 or field.fieldType >= typeIndex!
+                            -> if { 1 => status! } else {
+                                package -> appendLabel(field.sourceModule, field.labelToken, words!)
+                                    -> unless { 1 => status! }
+                                words! -> push(UInt64(field.fieldType))
+                            }
+                    }
+                    ordinal! + 1 => ordinal!
+                }
+            }
+            type.kind == 11 -> if {
+                false => found!
+                0 => referenceIndex!
+                referenceIndex! < (sourceReferences -> len) and not found!
+                    -> while {
+                        sourceReferences[referenceIndex!] => reference
+                        reference.typeId == typeIndex! -> if {
+                            package.ranges[reference.sourceModule] => range
+                            0 => termIndex!
+                            termIndex! < range.termCount and not found!
+                                -> while {
+                                    package.terms[range.termStart + termIndex!] => term
+                                    term.astNode == reference.typeAst and term.kind == 11
+                                        -> if {
+                                            package -> appendLabel(reference.sourceModule, term.nameToken, words!)
+                                                -> if { true => found! }
+                                        }
+                                    termIndex! + 1 => termIndex!
+                                }
+                        }
+                        referenceIndex! + 1 => referenceIndex!
+                    }
+                not found! -> if { 1 => status! }
+            }
+            lengths! -> push((words! -> len) - start)
+            typeIndex! + 1 => typeIndex!
+        }
+    status! != 0 -> if {
+        TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: status! } -> return
+    }
+    TypeDetails { starts: starts!, lengths: lengths!, words: words!, status: 0 }
+}
+
+normalizedDetail details: ref TypeDetails, typeIndex: Int, type: typeIds.SemanticType, mapped: ref [Int; ~] -> TypeDetails {
+    type.kind != 10 and type.kind != 11 -> if { emptyTypeDetails() -> return }
+    details.status != 0 or typeIndex < 0 or typeIndex >= (details.starts -> len)
+        or typeIndex >= (details.lengths -> len)
+        -> if { TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 4 } -> return }
+    details.starts[typeIndex] => start
+    details.lengths[typeIndex] => length
+    start < 0 or length <= 0 or start > (details.words -> len)
+        -> if { TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return }
+    length > (details.words -> len) - start
+        -> if { TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return }
+    [UInt64; ~] => words!
+    start => cursor!
+    start + length => end
+    1 => count!
+    type.kind == 10 -> if {
+        type.length < 0 or details.words[cursor!] != UInt64(type.length)
+            -> if { TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return }
+        type.length => count!
+        words! -> push(details.words[cursor!])
+        cursor! + 1 => cursor!
+    }
+    0 => field!
+    field! < count! -> while {
+        cursor! >= end -> if {
+            TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+        }
+        details.words[cursor!] => label
+        words! -> push(label)
+        cursor! + 1 => cursor!
+        label > 0 -> if {
+            label - 1 > UInt64(end - cursor!) -> if {
+                TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+            }
+            Int(label - 1) => bytes
+            0 => byteIndex!
+            byteIndex! < bytes -> while {
+                details.words[cursor!] > 255 -> if {
+                    TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+                }
+                words! -> push(details.words[cursor!])
+                cursor! + 1 => cursor!
+                byteIndex! + 1 => byteIndex!
+            }
+        }
+        type.kind == 10 -> if {
+            cursor! >= end -> if {
+                TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+            }
+            details.words[cursor!] >= UInt64(mapped -> len)
+                -> if {
+                    TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+                }
+            words! -> push(UInt64(mapped[Int(details.words[cursor!])]))
+            cursor! + 1 => cursor!
+        }
+        field! + 1 => field!
+    }
+    cursor! != end -> if {
+        TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: [UInt64; ~], status: 1 } -> return
+    }
+    TypeDetails { starts: [Int; ~], lengths: [Int; ~], words: words!, status: 0 }
+}
+
+sameMaterializedType left: typeIds.SemanticType, right: typeIds.SemanticType -> Bool {
+    left.origin == right.origin
+        or ((left.origin == 0 or left.origin == 2) and (right.origin == 0 or right.origin == 2)) => sameOrigin
+    left.kind == right.kind and sameOrigin and left.module == right.module
+        and left.symbol == right.symbol and left.first == right.first and left.second == right.second
+        and left.length == right.length and left.lengthHash == right.lengthHash
+        and ((left.containsParameter and right.containsParameter)
+        or (not left.containsParameter and not right.containsParameter)) and left.status == right.status
+}
+
+# Decoded types refer to a generation-local declaration dictionary. Its old
+# coordinates select a full key; only matching that key authorizes rebinding.
+# 1 invalid recipe/dictionary, 2 missing declaration, 3 ambiguous declaration,
+# 4 product field metadata required. Product identity includes exact labels and
+# ordered field types stored outside SemanticType; a length/hash is insufficient.
+public rebind recipes: ref [typeIds.SemanticType; ~], cachedDeclarations: ref interfaces.DeclarationIdentityIndex, currentDeclarations: ref interfaces.DeclarationIdentityIndex, currentTypes: ref [typeIds.SemanticType; ~] -> ReboundTypeTable {
+    emptyTypeDetails() => cachedDetails
+    emptyTypeDetails() => currentDetails
+    recipes -> rebindWithDetails(cachedDetails, cachedDeclarations, currentDeclarations, currentTypes, currentDetails)
+}
+
+public rebindWithDetails recipes: ref [typeIds.SemanticType; ~], cachedDetails: ref TypeDetails, cachedDeclarations: ref interfaces.DeclarationIdentityIndex, currentDeclarations: ref interfaces.DeclarationIdentityIndex, currentTypes: ref [typeIds.SemanticType; ~], currentDetails: ref TypeDetails -> ReboundTypeTable {
+    cachedDeclarations.sourceModules -> len => declarationCount
+    cachedDeclarations.status != 0 or currentDeclarations.status != 0
+        or (cachedDeclarations.symbols -> len) != declarationCount
+        or (cachedDeclarations.starts -> len) != declarationCount
+        or (cachedDeclarations.lengths -> len) != declarationCount
+        -> if { ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: 1 } -> return }
+    [typeIds.SemanticType; ~] => staged!
+    currentTypes -> each type { staged! -> push(type) }
+    [Int; ~] => mapped!
+    [Int; ~] => detailStarts!
+    [Int; ~] => detailLengths!
+    [UInt64; ~] => detailWords!
+    [Int; ~] => currentMap!
+    0 => currentIndex!
+    currentIndex! < (currentTypes -> len) -> while {
+        currentMap! -> push(currentIndex!)
+        currentIndex! + 1 => currentIndex!
+    }
+    0 => detailIndex!
+    detailIndex! < (currentTypes -> len) -> while {
+        currentDetails -> normalizedDetail(detailIndex!, currentTypes[detailIndex!], currentMap!) => detail
+        detail.status != 0 -> if {
+            ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: detail.status } -> return
+        }
+        detailStarts! -> push(detailWords! -> len)
+        detailLengths! -> push(detail.words -> len)
+        detail.words -> each word { detailWords! -> push(word) }
+        detailIndex! + 1 => detailIndex!
+    }
+    0 => recipeIndex!
+    recipeIndex! < (recipes -> len) -> while {
+        recipes[recipeIndex!] => recipe!
+        recipe!.status != 0 or recipe!.first < -1 or recipe!.second < -1
+            or recipe!.first >= recipeIndex! or recipe!.second >= recipeIndex!
+            or recipe!.module < -1
+            -> if { ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: 1 } -> return }
+        cachedDetails -> normalizedDetail(recipeIndex!, recipe!, mapped!) => detail
+        detail.status != 0 -> if {
+            ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: detail.status } -> return
+        }
+        recipe!.first >= 0 -> if { mapped![recipe!.first] => recipe!.first }
+        recipe!.second >= 0 -> if { mapped![recipe!.second] => recipe!.second }
+        recipe!.module >= 0 -> if {
+            -1 => declaration!
+            0 => candidate!
+            candidate! < declarationCount -> while {
+                cachedDeclarations.sourceModules[candidate!] == recipe!.module
+                    and cachedDeclarations.symbols[candidate!] == recipe!.symbol
+                    -> if {
+                        declaration! >= 0 -> if {
+                            ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: 1 } -> return
+                        }
+                        candidate! => declaration!
+                    }
+                candidate! + 1 => candidate!
+            }
+            declaration! < 0 -> if {
+                ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: 2 } -> return
+            }
+            currentDeclarations -> interfaces.findDeclarationIdentityRange(cachedDeclarations.words, cachedDeclarations.starts[declaration!], cachedDeclarations.lengths[declaration!]) => target
+            target.status != 0 -> if {
+                target.status == 2 -> if { 3 } else { 2 } => status
+                ReboundTypeTable { types: [typeIds.SemanticType; ~], typeIds: [Int; ~], details: emptyTypeDetails(), status: status } -> return
+            }
+            target.sourceModule => recipe!.module
+            target.symbol => recipe!.symbol
+        }
+        -1 => found!
+        0 => existing!
+        existing! < (staged! -> len) and found! < 0
+            -> while {
+                staged![existing!] -> sameMaterializedType(recipe!)
+                    -> if {
+                        detailLengths![existing!] == (detail.words -> len) => equal!
+                        0 => wordIndex!
+                        equal! and wordIndex! < (detail.words -> len)
+                            -> while {
+                                detailWords![detailStarts![existing!] + wordIndex!] != detail.words[wordIndex!]
+                                    -> if { false => equal! }
+                                wordIndex! + 1 => wordIndex!
+                            }
+                        equal! -> if { existing! => found! }
+                    }
+                existing! + 1 => existing!
+            }
+        found! < 0 -> if {
+            staged! -> len => found!
+            staged! -> push(recipe!)
+            detailStarts! -> push(detailWords! -> len)
+            detailLengths! -> push(detail.words -> len)
+            detail.words -> each word { detailWords! -> push(word) }
+        }
+        mapped! -> push(found!)
+        recipeIndex! + 1 => recipeIndex!
+    }
+    ReboundTypeTable { types: staged!, typeIds: mapped!, details: TypeDetails { starts: detailStarts!, lengths: detailLengths!, words: detailWords!, status: 0 }, status: 0 }
 }
 
 struct CanonicalTypeRecord {
@@ -187,6 +636,9 @@ public encode types: [typeIds.SemanticType; ~], identities: [modules.ModuleIdent
         (current.first >= typeIndex!) or (current.second >= typeIndex!)
             -> if { 1 => status! }
         current.first < -1 or current.second < -1 -> if { 1 => status! }
+        status! != 0 -> if {
+            EncodedTypeTable { words: [UInt64; ~], hashes: [UInt64; ~], count: 0, status: status! } -> return
+        }
         current -> canonicalRecord(hashes!, identities) => record
         record -> recordHash => currentHash
         hashes! -> push(currentHash)
@@ -357,7 +809,7 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
     }
     [Bool; ~] => decoded!
     0 => seed!
-    seed! < count! -> while {
+    status! == 0 and seed! < count! -> while {
         decoded! -> push(false)
         seed! + 1 => seed!
     }
@@ -425,4 +877,323 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
     status! == 0 and decodedCount! != count! -> if { 7 => status! }
     DecodedTypeTable { types: types!, hashes: hashes!, status: status! } => result
     result
+}
+
+failedTypeRecipeEncoding status: Int -> EncodedTypeRecipes {
+    EncodedTypeRecipes { words: [UInt64; ~], status: status }
+}
+
+failedTypeRecipeDecoding status: Int -> DecodedTypeRecipes {
+    [UInt64; ~] => empty
+    empty -> interfaces.decodeDeclarationKeys => declarations
+    DecodedTypeRecipes { types: [typeIds.SemanticType; ~], details: emptyTypeDetails(), declarations: declarations, status: status }
+}
+
+# Auxiliary generation payload. The enclosing normal cache must supply and
+# validate compiler/target/config/module digests and its SHA-256 checksum.
+# A type payload owns only the declaration keys its nominal recipes reference.
+# Unrelated local pattern bindings and repeated impl containers are not type
+# identities. Referenced duplicate keys still reach the strict dictionary encoder.
+typeRecipeDeclarations types: ref [typeIds.SemanticType; ~], declarations: ref interfaces.DeclarationIdentityIndex -> interfaces.DeclarationIdentityIndex {
+    [Int; ~] => sourceModules!
+    [Int; ~] => symbols!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => hashes!
+    [UInt64; ~] => words!
+    declarations.sourceModules -> len => count
+    declarations.status == 0 and (declarations.symbols -> len) == count
+        and (declarations.starts -> len) == count and (declarations.lengths -> len) == count
+        and (declarations.hashes -> len) == count => valid
+    0 => status!
+    not valid -> if { 1 => status! }
+    0 => index!
+    status! == 0 and index! < count -> while {
+        false => needed!
+        types -> each type {
+            type.module >= 0 and type.module == declarations.sourceModules[index!]
+                and type.symbol == declarations.symbols[index!]
+                -> if { true => needed! }
+        }
+        needed! -> if {
+            declarations.starts[index!] => start
+            declarations.lengths[index!] => length
+            start < 0 or length <= 0 or start > (declarations.words -> len)
+                -> if { 1 => status! }
+            status! == 0 -> if {
+                length > (declarations.words -> len) - start
+                    -> if { 1 => status! }
+            }
+            status! == 0 -> if {
+                sourceModules! -> push(declarations.sourceModules[index!])
+                symbols! -> push(declarations.symbols[index!])
+                starts! -> push(words! -> len)
+                lengths! -> push(length)
+                hashes! -> push(declarations.hashes[index!])
+                0..<length -> each offset { words! -> push(declarations.words[start + offset]) }
+            }
+        }
+        index! + 1 => index!
+    }
+    interfaces.DeclarationIdentityIndex { keyIndexBySymbol: [Int; ~], sourceModules: sourceModules!, symbols: symbols!, starts: starts!, lengths: lengths!, hashes: hashes!, words: words!, status: status! }
+}
+
+public encodeRecipes types: ref [typeIds.SemanticType; ~], details: ref TypeDetails, allDeclarations: ref interfaces.DeclarationIdentityIndex -> EncodedTypeRecipes {
+    types -> typeRecipeDeclarations(allDeclarations) => declarations
+    declarations -> interfaces.encodeDeclarationKeys => keys
+    keys.status != 0 or details.status != 0
+        or (declarations.symbols -> len) != (declarations.sourceModules -> len)
+        -> if { 1 -> failedTypeRecipeEncoding -> return }
+    [UInt64(6002245308444529748), 1, 0, 0, 7, UInt64(types -> len), UInt64(keys.words -> len); ~] => words!
+    keys.words -> each word { words! -> push(word) }
+    [Int; ~] => mapped!
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => type
+        type.status != 0 or type.kind < 1 or type.kind > 14
+            or type.module < -1 or type.first < -1 or type.second < -1
+            or type.first >= typeIndex! or type.second >= typeIndex!
+            -> if { 1 -> failedTypeRecipeEncoding -> return }
+        UInt64(0) => declarationId!
+        type.module >= 0 -> if {
+            -1 => found!
+            0 => keyIndex!
+            keyIndex! < (declarations.sourceModules -> len)
+                -> while {
+                    declarations.sourceModules[keyIndex!] == type.module
+                        and declarations.symbols[keyIndex!] == type.symbol
+                        -> if {
+                            found! >= 0 -> if { 1 -> failedTypeRecipeEncoding -> return }
+                            keyIndex! => found!
+                        }
+                    keyIndex! + 1 => keyIndex!
+                }
+            found! < 0 -> if { 2 -> failedTypeRecipeEncoding -> return }
+            UInt64(keys.keyIds[found!]) + 1 => declarationId!
+        }
+        details -> normalizedDetail(typeIndex!, type, mapped!) => detail
+        detail.status != 0 -> if { detail.status -> failedTypeRecipeEncoding -> return }
+        words! -> push(UInt64(type.kind))
+        words! -> push(type.origin -> signedWord)
+        words! -> push(declarationId!)
+        declarationId! > 0 -> if { words! -> push(0) } else { words! -> push(type.symbol -> signedWord) }
+        words! -> push(UInt64(type.first + 1))
+        words! -> push(UInt64(type.second + 1))
+        words! -> push(type.length -> signedWord)
+        words! -> push(type.lengthHash)
+        type.containsParameter -> if { words! -> push(1) } else { words! -> push(0) }
+        words! -> push(UInt64(detail.words -> len))
+        detail.words -> each word { words! -> push(word) }
+        mapped! -> push(typeIndex!)
+        typeIndex! + 1 => typeIndex!
+    }
+    UInt64(words! -> len) => words![4]
+    EncodedTypeRecipes { words: words!, status: 0 }
+}
+
+public decodeRecipes words: ref [UInt64; ~] -> DecodedTypeRecipes {
+    (words -> len) < 7 -> if { 1 -> failedTypeRecipeDecoding -> return }
+    words[0] != 6002245308444529748 or words[1] != 1 or words[2] != 0 or words[3] != 0
+        or words[4] != UInt64(words -> len) or words[6] < 7 or words[6] > UInt64((words -> len) - 7)
+        -> if { 1 -> failedTypeRecipeDecoding -> return }
+    Int(words[6]) => keyLength
+    [UInt64; ~] => keyWords!
+    0 => keyIndex!
+    keyIndex! < keyLength -> while {
+        keyWords! -> push(words[7 + keyIndex!])
+        keyIndex! + 1 => keyIndex!
+    }
+    keyWords! -> interfaces.decodeDeclarationKeys => declarations
+    declarations.status != 0 -> if { 1 -> failedTypeRecipeDecoding -> return }
+    7 + keyLength => cursor!
+    words[5] > UInt64(((words -> len) - cursor!) / 10)
+        -> if { 1 -> failedTypeRecipeDecoding -> return }
+    Int(words[5]) => count
+    [typeIds.SemanticType; ~] => types!
+    [Int; ~] => mapped!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => details!
+    0 => typeIndex!
+    typeIndex! < count -> while {
+        (words -> len) - cursor! < 10 -> if { 1 -> failedTypeRecipeDecoding -> return }
+        words[cursor!] => kind
+        words[cursor! + 1] => origin
+        words[cursor! + 2] => declarationId
+        words[cursor! + 3] => symbol
+        words[cursor! + 4] => first
+        words[cursor! + 5] => second
+        words[cursor! + 6] => length
+        words[cursor! + 7] => lengthHash
+        words[cursor! + 8] => containsParameter
+        words[cursor! + 9] => detailLength
+        kind < 1 or kind > 14 or origin > 4294967295 or symbol > 4294967295 or length > 4294967295
+            or declarationId > UInt64(declarations.symbols -> len) or (declarationId > 0 and symbol != 0)
+            or first > UInt64(typeIndex!) or second > UInt64(typeIndex!) or containsParameter > 1
+            -> if { 1 -> failedTypeRecipeDecoding -> return }
+        cursor! + 10 => cursor!
+        detailLength > UInt64((words -> len) - cursor!)
+            or (kind != 10 and kind != 11 and detailLength != 0)
+            -> if { 1 -> failedTypeRecipeDecoding -> return }
+        [UInt64; ~] => rawDetail!
+        0 => wordIndex!
+        wordIndex! < Int(detailLength) -> while {
+            rawDetail! -> push(words[cursor! + wordIndex!])
+            wordIndex! + 1 => wordIndex!
+        }
+        declarationId > 0 -> if { 0 } else { -1 } => module
+        declarationId > 0 -> if { Int(declarationId - 1) } else { symbol -> signedValue } => typeSymbol
+        typeIds.SemanticType { kind: Int(kind), origin: origin -> signedValue, module: module, symbol: typeSymbol, first: Int(first) - 1, second: Int(second) - 1, length: length -> signedValue, lengthHash: lengthHash, containsParameter: containsParameter == 1, status: 0 } => type
+        TypeDetails { starts: [0; ~], lengths: [Int(detailLength); ~], words: rawDetail!, status: 0 } => rawDetails
+        rawDetails -> normalizedDetail(0, type, mapped!) => detail
+        detail.status != 0 -> if { detail.status -> failedTypeRecipeDecoding -> return }
+        starts! -> push(details! -> len)
+        lengths! -> push(detail.words -> len)
+        detail.words -> each word { details! -> push(word) }
+        types! -> push(type)
+        mapped! -> push(typeIndex!)
+        cursor! + Int(detailLength) => cursor!
+        typeIndex! + 1 => typeIndex!
+    }
+    cursor! != (words -> len) -> if { 1 -> failedTypeRecipeDecoding -> return }
+    DecodedTypeRecipes { types: types!, details: TypeDetails { starts: starts!, lengths: lengths!, words: details!, status: 0 }, declarations: declarations, status: 0 }
+}
+
+failedTypeRecipeRestoration status: Int -> RestoredTypeRecipes {
+    typeIds.SemanticTypeSet { types: [typeIds.SemanticType; ~], references: [typeIds.TypeReference; ~], fields: [typeIds.NominalField; ~] } => semantic
+    RestoredTypeRecipes { semantic: semantic, typeIds: [Int; ~], status: status }
+}
+
+# One transaction for a normal generation reader: no type arena is exposed
+# until exact field labels have also been connected to the current package.
+public restoreRecipes words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref typeIds.SemanticTypeSet -> RestoredTypeRecipes {
+    words -> decodeRecipes => decoded
+    decoded.status != 0 -> if { decoded.status -> failedTypeRecipeRestoration -> return }
+    package -> captureTypeDetails(current) => currentDetails
+    currentDetails.status != 0 -> if { currentDetails.status -> failedTypeRecipeRestoration -> return }
+    package -> modules.identitiesAnalyzed => identities
+    package -> interfaces.declarationIdentitiesAnalyzed(identities) => declarations
+    decoded.types -> rebindWithDetails(decoded.details, decoded.declarations, declarations, current.types, currentDetails) => rebound
+    rebound.status != 0 -> if { rebound.status -> failedTypeRecipeRestoration -> return }
+    rebound -> materializeProductFields(package, current.fields, current.types -> len) => fields
+    fields.status != 0 -> if { fields.status -> failedTypeRecipeRestoration -> return }
+    [typeIds.TypeReference; ~] => references!
+    current.references -> each reference { references! -> push(reference) }
+    typeIds.SemanticTypeSet { types: rebound.types, references: references!, fields: fields.fields } => semantic
+    RestoredTypeRecipes { semantic: semantic, typeIds: rebound.typeIds, status: 0 }
+}
+
+failedSelectedTypeRecipes status: Int -> SelectedTypeRecipes {
+    SelectedTypeRecipes { words: [UInt64; ~], recipeBySourceType: [Int; ~], status: status }
+}
+
+# Detail validation and exact field labels use the same consumer as encoding.
+recipeDependencies type: typeIds.SemanticType, index: Int, details: ref TypeDetails, identityMap: ref [Int; ~] -> RecipeDependencies {
+    identityMap -> len => count
+    type.status != 0 or type.kind < 1 or type.kind > 14 or type.module < -1
+        or type.first < -1 or type.second < -1 or type.first >= count or type.second >= count
+        -> if { RecipeDependencies { ids: [Int; ~], status: 1 } -> return }
+    details -> normalizedDetail(index, type, identityMap) => detail
+    detail.status != 0 -> if { RecipeDependencies { ids: [Int; ~], status: detail.status } -> return }
+    [Int; ~] => ids!
+    type.first >= 0 -> if { ids! -> push(type.first) }
+    type.second >= 0 -> if { ids! -> push(type.second) }
+    type.kind == 10 -> if {
+        1 => cursor!
+        0 => field!
+        field! < type.length -> while {
+            detail.words[cursor!] => label
+            cursor! + 1 => cursor!
+            label > 0 -> if { cursor! + Int(label - 1) => cursor! }
+            ids! -> push(Int(detail.words[cursor!]))
+            cursor! + 1 => cursor!
+            field! + 1 => field!
+        }
+    }
+    RecipeDependencies { ids: ids!, status: 0 }
+}
+
+# Explicit owner roots determine the payload. Unrelated unresolved sentinels
+# remain outside it; a selected unresolved root/dependency is never repaired or
+# dropped. The map translates final owner facts into compact recipe positions.
+public encodeSelectedRecipes types: ref [typeIds.SemanticType; ~], details: ref TypeDetails, declarations: ref interfaces.DeclarationIdentityIndex, roots: ref [Int; ~] -> SelectedTypeRecipes {
+    details.status != 0 -> if { 1 -> failedSelectedTypeRecipes -> return }
+    types -> len => count
+    [Bool; ~] => needed!
+    [Int; ~] => identityMap!
+    [Int; ~] => mapped!
+    [Int; ~] => dependencyStarts!
+    [Int; ~] => dependencyLengths!
+    0..<count -> each index {
+        needed! -> push(false)
+        identityMap! -> push(index)
+        mapped! -> push(-1)
+        dependencyStarts! -> push(0)
+        dependencyLengths! -> push(0)
+    }
+    [Int; ~] => work!
+    roots -> each root {
+        root < 0 or root >= count -> if { 1 -> failedSelectedTypeRecipes -> return }
+        not needed![root] -> if {
+            true => needed![root]
+            work! -> push(root)
+        }
+    }
+    [Int; ~] => dependencyIds!
+    0 => workIndex!
+    workIndex! < (work! -> len) -> while {
+        work![workIndex!] => index
+        types[index] -> recipeDependencies(index, details, identityMap!) => dependencies
+        dependencies.status != 0 -> if { dependencies.status -> failedSelectedTypeRecipes -> return }
+        dependencyIds! -> len => dependencyStarts![index]
+        dependencies.ids -> len => dependencyLengths![index]
+        dependencies.ids -> each dependency {
+            dependencyIds! -> push(dependency)
+            not needed![dependency] -> if {
+                true => needed![dependency]
+                work! -> push(dependency)
+            }
+        }
+        workIndex! + 1 => workIndex!
+    }
+    [typeIds.SemanticType; ~] => selected!
+    [Int; ~] => detailStarts!
+    [Int; ~] => detailLengths!
+    [UInt64; ~] => detailWords!
+    true => changed!
+    (selected! -> len) < (work! -> len) and changed!
+        -> while {
+            false => changed!
+            0 => index!
+            index! < count -> while {
+                needed![index!] and mapped![index!] < 0 -> if {
+                    true => ready!
+                    0 => edge!
+                    edge! < dependencyLengths![index!] -> while {
+                        dependencyIds![dependencyStarts![index!] + edge!] => dependency
+                        mapped![dependency] < 0 -> if { false => ready! }
+                        edge! + 1 => edge!
+                    }
+                    ready! -> if {
+                        types[index!] => type!
+                        details -> normalizedDetail(index!, type!, mapped!) => detail
+                        detail.status != 0 -> if { detail.status -> failedSelectedTypeRecipes -> return }
+                        type!.first >= 0 -> if { mapped![type!.first] => type!.first }
+                        type!.second >= 0 -> if { mapped![type!.second] => type!.second }
+                        selected! -> len => mapped![index!]
+                        selected! -> push(type!)
+                        detailStarts! -> push(detailWords! -> len)
+                        detailLengths! -> push(detail.words -> len)
+                        detail.words -> each word { detailWords! -> push(word) }
+                        true => changed!
+                    }
+                }
+                index! + 1 => index!
+            }
+        }
+    (selected! -> len) != (work! -> len) -> if { 3 -> failedSelectedTypeRecipes -> return }
+    TypeDetails { starts: detailStarts!, lengths: detailLengths!, words: detailWords!, status: 0 } => selectedDetails
+    selected! -> encodeRecipes(selectedDetails, declarations) => encoded
+    encoded.status != 0 -> if { encoded.status -> failedSelectedTypeRecipes -> return }
+    SelectedTypeRecipes { words: encoded.words, recipeBySourceType: mapped!, status: 0 }
 }

@@ -1,0 +1,55 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+
+public observeInterpolationDecisions sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.windowsX64() => target
+    PrepareRequest {
+        sources: sources
+        pointerBitWidth: target.pointerBitWidth
+        targetArchitecture: target.architecture
+        cpuDispatchPolicy: target.dispatchPolicy
+        requiredCpuFeatures: target.requiredFeatures
+        allowedCpuFeatures: target.allowedFeatures
+        forbiddenCpuFeatures: target.forbiddenFeatures
+        supportsComputePool: true
+        expectedPathStyle: 1
+    } => request
+    request -> prepareNative => context
+    (context.ranges -> len) - 1 => sourceModule
+    context.interpolationRanges[sourceModule] => range
+    range.nodeStart => finalIndex!
+    finalIndex! < range.nodeStart + range.nodeCount
+        -> while {
+            context.interpolations[finalIndex!] => node
+            context.sources[sourceModule] -> slice(node.payloadStart, node.payloadLength) => payload
+            "node=$(finalIndex!),kind=$(node.kind),parent=$(node.parent),symbol=$(node.symbol),owner=$(node.ownerSymbol),operand=$(node.operand0),payload=$payload" -> println
+            node.kind == 8 or node.kind == 10 -> if {
+                context.importedInterpolationCallTargetByNode[finalIndex!] => committed
+                context.unresolvedInterpolationCallByNode[finalIndex!] => unresolved
+                "final node=$(finalIndex!),target=$committed,unresolved=$unresolved" -> println
+                context.semanticInterpolationCallTargets[finalIndex!] => semanticTarget
+                "semantic node=$(finalIndex!),status=$(semanticTarget.status),receiver=$(semanticTarget.receiverType),module=$(semanticTarget.sourceModule),symbol=$(semanticTarget.symbol)" -> println
+                0 => functionIndex!
+                functionIndex! < (context.ir -> len) -> while {
+                    context.ir[functionIndex!] => function
+                    function.kind == 0 and function.sourceModule == semanticTarget.sourceModule
+                        and function.symbol == semanticTarget.symbol and function.operand1 >= 0
+                        -> if {
+                            context.ir[function.operand1].typeId => parameterType
+                            context.types -> typeIds.materializedReadTypeId(parameterType) => readType
+                            context.types[readType] => owner
+                            "function ir=$(functionIndex!),parameter=$parameterType,read=$readType,kind=$(owner.kind),origin=$(owner.origin),module=$(owner.module),symbol=$(owner.symbol)" -> println
+                        }
+                    functionIndex! + 1 => functionIndex!
+                }
+            }
+            finalIndex! + 1 => finalIndex!
+        }
+}

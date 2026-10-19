@@ -1,0 +1,68 @@
+namespace probe.text_slice_identity
+
+import sys.process as process
+
+cutNormal text: Text, start: UIntSize, length: UIntSize -> UIntSize {
+    text -> slice(start, length) -> len
+}
+
+nested.cut text: Text, start: UIntSize, length: UIntSize -> UIntSize {
+    text -> slice(start, length) -> len
+}
+
+cutLocal text: Text, start: UIntSize, length: UIntSize -> UIntSize {
+    localCut input: Text, index: UIntSize, size: UIntSize -> UIntSize {
+        input -> slice(index, size) -> len
+    }
+    text -> localCut(start, length)
+}
+
+cutGeneric<T> text: Text, start: UIntSize, length: UIntSize, tag: T -> UIntSize {
+    text -> slice(start, length) -> len
+}
+
+자르기 text: Text, start: UIntSize, length: UIntSize -> UIntSize {
+    text -> slice(start, length) -> len
+}
+
+struct Cutter {
+    text: Text
+}
+
+impl Cutter {
+    cut: self, start: UIntSize, length: UIntSize -> UIntSize {
+        self.text -> slice(start, length) -> len
+    }
+}
+
+main {
+    process.arguments() => arguments
+    arguments[1] => mode
+    UIntSize(0) => start!
+    UIntSize(2) => length!
+    mode == "normal-fail" or mode == "qualified-fail" or mode == "local-fail"
+        or mode == "generic-fail" or mode == "unicode-fail" or mode == "method-fail"
+        -> if {
+            99 => start!
+            0 => length!
+        }
+    mode == "normal-fail" or mode == "normal-ok" -> if {
+        "abcd" -> cutNormal(start!, length!) -> println
+    }
+    mode == "qualified-fail" or mode == "qualified-ok"
+        -> if {
+            "abcd" -> nested.cut(start!, length!) -> println
+        }
+    mode == "local-fail" or mode == "local-ok" -> if {
+        "abcd" -> cutLocal(start!, length!) -> println
+    }
+    mode == "generic-fail" or mode == "generic-ok" -> if {
+        "abcd" -> cutGeneric(start!, length!, 42) -> println
+    }
+    mode == "unicode-fail" or mode == "unicode-ok" -> if {
+        "abcd" -> 자르기(start!, length!) -> println
+    }
+    mode == "method-fail" or mode == "method-ok" -> if {
+        Cutter { text: "abcd" } -> cut(start!, length!) -> println
+    }
+}

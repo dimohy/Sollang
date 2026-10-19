@@ -4,12 +4,17 @@ param(
     [string]$CompilerAssembly = '',
     [string]$ExpectedCompilerSha256 = '',
     [string]$OutputDirectory = '',
-    [switch]$RunManaged
+    [switch]$RunManaged,
+    [switch]$RecoverMissingHistoricalEvidence
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $repo = [IO.Path]::GetFullPath($RepositoryRoot)
+if ($RecoverMissingHistoricalEvidence -and (-not $RunManaged -or
+    [string]::IsNullOrWhiteSpace($ExpectedCompilerSha256))) {
+    throw 'C427_RECOVERY_REQUIRES_PINNED_CURRENT_MANAGED_RUN'
+}
 . (Join-Path $repo 'scripts/verification-process.ps1')
 
 $contractPath = Join-Path $repo 'scripts/contracts/general-algorithms-partition-point.json'
@@ -140,20 +145,28 @@ if ($general.partitionPoint.status -cne $contract.status -or
 }
 $discoveryResult = Join-Path $repo $contract.discovery.result
 $discoveryLlvm = Join-Path $repo $contract.discovery.llvm
-if (-not (Test-Path -LiteralPath $discoveryResult -PathType Leaf) -or
-    -not (Test-Path -LiteralPath $discoveryLlvm -PathType Leaf) -or
-    (Hash $discoveryResult) -cne $contract.discovery.resultSha256 -or
-    (Hash $discoveryLlvm) -cne $contract.discovery.llvmSha256) {
-    throw 'C427 discovery result or LLVM evidence is missing or drifted'
-}
 $managedResult = Join-Path $repo $contract.managedResult.path
-if (-not (Test-Path -LiteralPath $managedResult -PathType Leaf) -or
-    (Hash $managedResult) -cne $contract.managedResult.sha256) {
-    throw 'partitionPoint managed result is missing or drifted'
+$missingHistoricalPaths = @()
+foreach ($pinned in @(
+    @{ path = $discoveryResult; sha = $contract.discovery.resultSha256 },
+    @{ path = $discoveryLlvm; sha = $contract.discovery.llvmSha256 },
+    @{ path = $managedResult; sha = $contract.managedResult.sha256 })) {
+    if (-not (Test-Path -LiteralPath $pinned.path -PathType Leaf)) {
+        $missingHistoricalPaths += [IO.Path]::GetRelativePath($repo, $pinned.path).Replace('\', '/')
+        continue
+    }
+    if ((Hash $pinned.path) -cne $pinned.sha) {
+        throw "C427_HISTORICAL_EVIDENCE_SHA_MISMATCH: $($pinned.path)"
+    }
 }
-$managedRecord = [IO.File]::ReadAllText($managedResult)
-if (-not ($managedRecord | Test-Json -SchemaFile $resultSchemaPath)) {
-    throw 'partitionPoint managed result failed its result schema'
+if ($missingHistoricalPaths.Count -gt 0 -and -not $RecoverMissingHistoricalEvidence) {
+    throw "C427_HISTORICAL_EVIDENCE_MISSING: $($missingHistoricalPaths -join ', ')"
+}
+if (Test-Path -LiteralPath $managedResult -PathType Leaf) {
+    $managedRecord = [IO.File]::ReadAllText($managedResult)
+    if (-not ($managedRecord | Test-Json -SchemaFile $resultSchemaPath)) {
+        throw 'partitionPoint managed result failed its result schema'
+    }
 }
 
 $formatSources = @($modulePath) + @($contract.fixtures | ForEach-Object { Join-Path $repo $_.source })
@@ -250,6 +263,8 @@ foreach ($entry in $paths.GetEnumerator()) {
 $record = [ordered]@{
     schemaVersion = 1
     status = if ($failureIds.Count -eq 0) { 'passed' } else { 'failed' }
+    historicalEvidenceStatus = if ($missingHistoricalPaths.Count -eq 0) { 'available' } else { 'missing-unverified' }
+    missingHistoricalPaths = @($missingHistoricalPaths)
     compilerSha256 = $compilerHash
     inputHashes = $inputHashes
     completed = @($cases | Where-Object passed).Count

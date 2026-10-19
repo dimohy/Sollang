@@ -7,11 +7,27 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
 # Returned inline storage must outlive the callee. Existing promoted result
-# owners transfer directly; literals and parameter views require promotion.
-emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nameRoot: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+# owners and heap literals transfer directly. Stack storage and parameter
+# views require promotion, including parameters whose elements are moved.
+fixedArrayReturnNeedsPromotion valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
     sourceIndex -> promotedFixedArrayCall(context, state) => backingCall
     backingCall >= 0 -> if { false -> return }
+    # Enum arms materialize fixed storage before their local cleanup edge.
+    # The merged descriptor therefore transfers an already-owned backing.
+    sourceIndex >= 0 and sourceIndex < (context.ir -> len)
+        and context.ir[sourceIndex].kind == 27
+        -> if { false -> return }
+    sourceIndex >= 0 and sourceIndex < (context.ir -> len)
+        and context.ir[sourceIndex].kind == 14
+        and (sourceIndex -> fixedArrayLiteralNeedsHeap(context, state))
+        -> if { false -> return }
+    true
+}
+
+emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nameRoot: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    valueIndex -> fixedArrayReturnNeedsPromotion(ownerIndex, context, state)
+        -> unless { false -> return }
     "  %return_fixed$(nameRoot)_source = extractvalue { ptr, i64 } " -> print
     valueIndex -> writeValue(ownerIndex, context, state)
     ", 0" -> println
@@ -25,7 +41,7 @@ emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nam
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
 
-emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, expressionOrder: ref [Int; ~], expressionEmitted: ref [Bool; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, expressionOrder: ref [Int; ~], expressionEmitted: ref [Bool; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[functionIndex] => function
     function.operand0 -> regionReturns(context, state) => functionBodyReturns
     not functionBodyReturns -> if {
@@ -190,7 +206,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         -> if { dropIndex! => dropCandidateValueIndex! }
                 }
             false => dropCandidateTransferredToAggregate!
-            (dropCandidate.kind == 17 or dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))
+            (dropCandidate.kind == 17 or dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and dropCandidate.typeId >= 0 and ((dropCandidate.typeId -> semanticTypeOwns(context, state)) or (dropCandidate.typeId -> directCopyableFixedStructType(context)))
                 -> if {
                     dropIndex! => dropTransferValueIndex!
                     dropCandidate.kind == 17 -> if { dropCandidateValueIndex! => dropTransferValueIndex! }
@@ -213,12 +229,15 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             dropOwnerSearch! != dropIndex! and (dropOwnerCandidate.kind == 12 or dropOwnerCandidate.kind == 14 or dropOwnerCandidate.kind == 16 or dropOwnerCandidate.kind == 35) and dropOwnerCandidate.operand0 >= 0
                                 -> if {
                                     dropOwnerCandidate.operand0 => dropOwnerOperand!
+                                    0 => dropOwnerOperandOrdinal!
                                     dropOwnerOperand! >= 0 and not dropCandidateTransferredToAggregate!
                                         -> while {
                                             dropOwnerOperand! -> ownedValueSourceIndex(context, state) => dropOwnerOperandCarrier
                                             dropOwnerOperandCarrier == dropTransferSource
+                                                and not (dropOwnerSearch! -> aggregateFieldCopiesFixedStorage(dropOwnerOperand!, dropOwnerOperandOrdinal!, context, state))
                                                 -> if { true => dropCandidateTransferredToAggregate! }
                                             context.ir[dropOwnerOperand!].nextOperand => dropOwnerOperand!
+                                            dropOwnerOperandOrdinal! + 1 => dropOwnerOperandOrdinal!
                                         }
                                 }
                             dropOwnerSearch! + 1 => dropOwnerSearch!
@@ -231,7 +250,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             false => dropCandidateHasPartialMoves!
             true => dropCandidateIsRoot!
             dropIndex! => dropCandidateRoot!
-            dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))))
+            dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and ((dropCandidate.typeId -> semanticTypeOwns(context, state)) or (dropCandidate.typeId -> directCopyableFixedStructType(context)))))
                 -> if {
                     dropIndex! -> mutableBindingRoot(context, state) => dropCandidateRoot!
                     dropCandidateRoot! != dropIndex! -> if { false => dropCandidateIsRoot! }
@@ -249,7 +268,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         returnedBindingRoot == dropCandidateRoot! -> if { true => dropCandidateReturned! }
                     }
                 }
-            dropCandidate.kind == 17 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state))))
+            dropCandidate.kind == 17 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and ((dropCandidate.typeId < (context.types -> len) and context.types[dropCandidate.typeId].kind == 4) or (dropCandidate.typeId -> semanticTypeOwns(context, state)) or (dropCandidate.typeId -> directCopyableFixedStructType(context)))))
                 -> if {
                     0 => dropMoveIndex!
                     dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!
@@ -342,8 +361,6 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sollang.dict %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
-                    "  %drop$(dropIndex!)_values = extractvalue %sollang.dict %v$(dropIndex!), 1" -> println
-                    "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
                 -> if {
@@ -365,6 +382,13 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     } -> emitDropGlue(-1, context, state)
                 }
             false => dropCandidateInitialized!
+            dropCandidate.kind == 17 and dropCandidate.parent == function.operand0
+                and dropCandidateIsRoot! and not dropCandidateMoved! and not dropCandidateReturned!
+                and (dropCandidate -> isAsyncTaskValue(context))
+                -> if {
+                    dropIndex! -> emitScopedTaskDrop(functionIndex, function.operand0, -1, functionIndex, context, state)
+                    true => dropCandidateMoved!
+                }
             dropCandidate.kind == 17 and expressionEmitted[dropIndex! - expressionStart]
                 -> if {
                     true => dropCandidateInitialized!
@@ -373,7 +397,29 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             false => dropCandidateInitialized!
                         }
                 }
+            (dropIndex! -> namedBindingNeedsOwnershipFlag(state))
+                and dropCandidateInitialized! and dropCandidateIsRoot!
+                and dropCandidate.parent == function.operand0
+                and not dropCandidateMoved! and not dropCandidateReturned!
+                => dropNamedPathFlagGuard
+            dropNamedPathFlagGuard -> if {
+                "  %localreturn$(functionIndex)_b$(dropIndex!)_owned = load i1, ptr %v$(dropIndex!)_owned, align 1" -> println
+                "  br i1 %localreturn$(functionIndex)_b$(dropIndex!)_owned, label %localreturn$(functionIndex)_b$(dropIndex!)_drop, label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
+                "localreturn$(functionIndex)_b$(dropIndex!)_drop:" -> println
+            }
             dropCandidate.operand0 => dropCandidateDropValueIndex
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot!
+                and dropCandidate.typeId >= 0 and context.types[dropCandidate.typeId].kind == 4
+                and not (dropCandidate.typeId -> semanticTypeOwns(context, state))
+                and dropCandidate.parent == function.operand0
+                and not dropCandidateMoved! and not dropCandidateReturned!
+                and dropCandidateDropValueIndex >= 0
+                and context.ir[dropCandidateDropValueIndex].kind == 14
+                and (dropCandidateDropValueIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                -> if {
+                    "  %dropfixedliteral$(dropIndex!) = extractvalue { ptr, i64 } %v$(dropCandidateDropValueIndex), 0" -> println
+                    "  call void @free(ptr %dropfixedliteral$(dropIndex!))" -> println
+                }
             -1 => dropCandidateParameterIndex!
             dropCandidate.kind == 17 and dropCandidate.flags != 1
                 -> if {
@@ -386,6 +432,15 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not dropCandidateHasPartialMoves!
                 -> if {
+                    dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => dropAsyncRoot
+                    dropAsyncRoot >= 0 -> if {
+                        "  %drop$(dropIndex!)_restored = load " -> print
+                        dropCandidate -> writeIrType(context, state)
+                        ", ptr " -> print
+                        dropAsyncRoot -> writeAsyncLocalAddress(context)
+                        ", align " -> print
+                        dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                    }
                     false => dropBindingNeedsInlineArrayReload!
                     false => dropBindingHasInlineArrayAbi!
                     context.types[dropCandidate.typeId].kind == 4
@@ -413,14 +468,16 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
                     dropCandidate.typeId -> writeSemanticTypeId(context, state)
                     " " -> print
-                    dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
-                        -> if { "%drop$(dropIndex!)_current" -> print } else {
-                            dropBindingNeedsInlineArrayReload! -> if {
-                                "%dropfixedbinding$(dropIndex!)" -> print
-                            } else {
-                                dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                    dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                        dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
+                            -> if { "%drop$(dropIndex!)_current" -> print } else {
+                                dropBindingNeedsInlineArrayReload! -> if {
+                                    "%dropfixedbinding$(dropIndex!)" -> print
+                                } else {
+                                    dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                                }
                             }
-                        }
+                    }
                     ")" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
@@ -448,14 +505,6 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         ", 0" -> println
                     }
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
-                    dropCandidate.flags == 1 -> if {
-                        "  %drop$(dropIndex!)_values = extractvalue %sollang.dict %drop$(dropIndex!)_current, 1" -> println
-                    } else {
-                        "  %drop$(dropIndex!)_values = extractvalue %sollang.dict " -> print
-                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
-                        ", 1" -> println
-                    }
-                    "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
@@ -473,7 +522,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         regionIndex: function.operand0
                     } -> emitEnumDrop(context, state)
                 }
-            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves! or ((dropCandidate.typeId -> directCopyableFixedStructType(context)) and not (dropCandidate.typeId -> semanticTypeOwns(context, state)))) and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
@@ -504,8 +553,14 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             dropIndex! -> bindingPromotedFixedArrayCall(context, state) => dropBackingCall
             returnValueIndex -> ownedValueSourceIndex(context, state) => returnedBackingSource
             dropBackingCall >= 0 and dropCandidateInitialized! and dropCandidate.parent == function.operand0
+                and not dropCandidateMoved!
                 and dropBackingCall != returnedBackingSource
-                -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex) }
+                and (returnedOwnedBindingRoot < 0 or returnedOwnedBindingRoot != dropCandidateRoot!)
+                -> if { dropBackingCall -> emitPromotedFixedBackingDrop(functionIndex, context) }
+            dropNamedPathFlagGuard -> if {
+                "  br label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
+                "localreturn$(functionIndex)_b$(dropIndex!)_done:" -> println
+            }
             dropIndex! + 1 => dropIndex!
         }
         # Call targets can become exact only during final Typed IR convergence.
@@ -658,10 +713,6 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedDictionaryKeyParameterWritten
                             ", 0" -> println
                             "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!)_keys)" -> println
-                            "  %drop_arg$(ownedParameterOrdinal!)_values = extractvalue %sollang.dict " -> print
-                            context -> writeParameterReference(functionIndex, ownedParameter.symbol) => ownedDictionaryValueParameterWritten
-                            ", 1" -> println
-                            "  call void @free(ptr %drop_arg$(ownedParameterOrdinal!)_values)" -> println
                         }
                 }
             (ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!
@@ -717,21 +768,29 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
             ownedParameterOrdinal! + 1 => ownedParameterOrdinal!
         }
         false => transparentReferenceReturn!
+        false => materializedReferenceReturn!
         -1 => transparentReferenceTarget!
         returnOperand.typeId >= 0 and context.types[returnOperand.typeId].kind == 8 and not (function.typeId >= 0 and context.types[function.typeId].kind == 8)
             -> if {
                 true => transparentReferenceReturn!
                 context.types[returnOperand.typeId].first => transparentReferenceTarget!
-                "  %return_ref_value = load " -> print
-                transparentReferenceTarget! -> writeSemanticTypeId(context, state)
-                ", ptr " -> print
-                returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
-                    -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
-                ", align " -> print
-                context.typeAligns[transparentReferenceTarget!] -> writeDecimalLine
+                returnValueIndex -> referenceParameterValueIsMaterialized(functionIndex, context, state) => materializedReferenceReturn!
+                materializedReferenceReturn! -> unless {
+                    "  %return_ref_value = load " -> print
+                    transparentReferenceTarget! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol
+                        -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                    ", align " -> print
+                    context.typeAligns[transparentReferenceTarget!] -> writeDecimalLine
+                }
             }
         function.typeOrigin == 1 and function.typeSymbol == 0
-            -> if { "  ret void" -> println } else {
+            -> if {
+                function.flags / 8 % 2 == 1 -> if {
+                    functionIndex -> emitAsyncFunctionCompletion(functionIndex, "", context, state)
+                } else { "  ret void" -> println }
+            } else {
                 function -> integerNodeWidth(context, state) => returnTargetWidth
                 returnOperand -> integerNodeWidth(context, state) => returnSourceWidth
                 (function.typeOrigin == 4 and function.typeSymbol == 4 and returnOperand.typeOrigin == 4 and returnOperand.typeSymbol == 3) => convertsStreamToEvent
@@ -767,13 +826,16 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         returnValueIndex -> emitFixedArrayReturnPromotion(functionIndex, function.typeId, functionIndex, context, state)
                             => promotedFixedArrayReturn!
                     }
-                "  ret " -> print
+                function.flags / 8 % 2 == 1 -> if { "  %async_completed_result = freeze " -> print } else { "  ret " -> print }
                 function -> writeIrType(context, state)
                 " " -> print
                 promotedFixedArrayReturn! -> if { "%return_fixed$(functionIndex)" -> println } else {
                     convertedIntegerReturn! -> if { "%return_integer" -> println } else {
                         convertsStreamToEvent -> if { "%return_event" -> println } else {
-                            transparentReferenceReturn! -> if { "%return_ref_value" -> println } else {
+                            transparentReferenceReturn! -> if {
+                                materializedReferenceReturn!
+                                    -> if { "%v$(returnValueIndex)" -> println } else { "%return_ref_value" -> println }
+                            } else {
                                 function.typeId >= 0 and context.types[function.typeId].kind == 8
                                     -> if {
                                         functionIndex -> writeReferencePlaceValue(returnValueIndex, context, state)
@@ -800,6 +862,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             }
                         }
                     }
+                }
+                function.flags / 8 % 2 == 1 -> if {
+                    functionIndex -> emitAsyncFunctionCompletion(functionIndex, "%async_completed_result", context, state)
                 }
             }
     }

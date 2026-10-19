@@ -223,7 +223,8 @@ function Assert-ShapingEvidence {
 
     $evidence = $Defect.shapingEvidence
     foreach ($field in @('inputFingerprint', 'baselineReceipt', 'tracePath')) {
-        if ([string]::IsNullOrWhiteSpace($evidence.$field)) {
+        if (-not ($evidence.PSObject.Properties.Name -contains $field) -or
+            [string]::IsNullOrWhiteSpace($evidence.$field)) {
             throw "compiler defect '$($Defect.id)' shapingEvidence is missing $field"
         }
     }
@@ -257,11 +258,20 @@ function Assert-ShapingEvidence {
     # Ledger state tracks defect closure, while the trace tracks whether a
     # durable partial repair has already been structured and applied. An open
     # defect may therefore require candidate evidence without being promoted.
-    $structuredClaim = $trace.decision.claimLevel -in @('structured-and-applied', 'measured-improvement')
-    $requiresCandidateEvidence = $Defect.state -in @('candidate-fixed', 'closed') -or $structuredClaim
+    $claimLevel = if ($trace.decision.PSObject.Properties.Name -contains 'claimLevel') { $trace.decision.claimLevel } else { $null }
+    $structuredClaim = $claimLevel -in @('structured-and-applied', 'measured-improvement')
+    $evaluationExit = $LASTEXITCODE
+    $evaluationResult = ($evaluation -join [Environment]::NewLine) | ConvertFrom-Json
+    $costSelected = $trace.decision.structured -eq $false -and
+        ($trace.decision.PSObject.Properties.Name -contains 'costSelection') -and
+        $trace.decision.costSelection.strategy -in @('model-direct', 'reuse-existing') -and
+        $evaluationResult.allowed -eq $true -and
+        $evaluationResult.code -ceq 'AS-US-001-COST-SELECTED'
+    $requiresCandidateEvidence = $Defect.state -in @('candidate-fixed', 'closed') -or $structuredClaim -or $costSelected
     if ($requiresCandidateEvidence) {
         foreach ($field in @('candidateReceipt')) {
-            if ([string]::IsNullOrWhiteSpace($evidence.$field)) {
+            if (-not ($evidence.PSObject.Properties.Name -contains $field) -or
+            [string]::IsNullOrWhiteSpace($evidence.$field)) {
                 throw "compiler defect '$($Defect.id)' shapingEvidence is missing $field"
             }
         }
@@ -269,8 +279,9 @@ function Assert-ShapingEvidence {
             -ExpectedInputFingerprint $evidence.inputFingerprint `
             -RelativePath $evidence.candidateReceipt
 
-        if ($trace.decision.claimLevel -eq 'measured-improvement') {
-            if ([string]::IsNullOrWhiteSpace($evidence.measurementReceipt)) {
+        if ($claimLevel -eq 'measured-improvement') {
+            if (-not ($evidence.PSObject.Properties.Name -contains 'measurementReceipt') -or
+                [string]::IsNullOrWhiteSpace($evidence.measurementReceipt)) {
                 throw "compiler defect '$($Defect.id)' measured improvement is missing measurementReceipt"
             }
             Assert-ShapingReceipt -DefectId $Defect.id -Phase 'measurement' `
@@ -278,14 +289,19 @@ function Assert-ShapingEvidence {
                 -RelativePath $evidence.measurementReceipt
         }
 
-        if ($trace.decision.asset.inputFingerprint -cne $evidence.inputFingerprint) {
+        # Cost selection classifies the implementation plan only. Candidate
+        # receipts above still certify exact executed exits and output hashes.
+        if ($structuredClaim -and $trace.decision.asset.inputFingerprint -cne $evidence.inputFingerprint) {
             throw "compiler defect '$($Defect.id)' AS-US-001 trace identity does not match the ledger"
         }
-        if (-not $structuredClaim -or $LASTEXITCODE -ne 0 -or
-            $evaluation -notmatch 'AS-US-001-STRUCTURED-(AND-APPLIED|IMPROVEMENT)') {
+        if ($evaluationExit -ne 0 -or $evaluationResult.allowed -ne $true -or
+            (-not $costSelected -and
+                (-not $structuredClaim -or $evaluationResult.code -cnotin @(
+                    'AS-US-001-STRUCTURED-AND-APPLIED', 'AS-US-001-STRUCTURED-IMPROVEMENT')))) {
             throw "compiler defect '$($Defect.id)' AS-US-001 trace was rejected: $evaluation"
         }
-    } elseif ($LASTEXITCODE -ne 0 -or $evaluation -notmatch 'AS-US-001-SIGNAL-OBSERVED') {
+    } elseif ($evaluationExit -ne 0 -or $evaluationResult.allowed -ne $true -or
+        $evaluationResult.code -cne 'AS-US-001-SIGNAL-OBSERVED') {
         throw "compiler defect '$($Defect.id)' open AS-US-001 trace was rejected: $evaluation"
     }
 }

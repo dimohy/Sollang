@@ -1,0 +1,137 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+
+struct Setup {
+    listener: socket.TcpListener
+    sender: socket.TcpStream
+    receiver: socket.TcpStream
+}
+
+setup: -> Result<Setup, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> connect? => sender
+    listener -> accept? => receiver
+    Result<Setup, socket.SocketError>.Ok(Setup {
+        listener: listener
+        sender: sender
+        receiver: receiver
+    })
+}
+
+main {
+    setup() -> when {
+        Err(error) { "setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value.listener => listener
+            value.sender => sender
+            value.receiver => receiver
+            socket.CompletionReactorOptions {
+                registrations: 1
+                pendingOperations: 1
+                completionBatch: 1
+            } -> socket.completionReactor -> when {
+                Err(error) {
+                    receiver -> close
+                    sender -> close
+                    listener -> close
+                    "create-error=$(error.code)" -> println
+                }
+                Ok(reactor) {
+                    reactor -> registerStream(sender, 83) -> when {
+                        Err(failure) {
+                            failure.reactor -> close
+                            failure.connection -> close
+                            receiver -> close
+                            listener -> close
+                            "register-error=$(failure.error.code)" -> println
+                        }
+                        Ok(registered) {
+                            [10, 20, 30, 40, 50; ~]
+                                -> socket.operationSlot(803, socket.OperationDirection.Send)
+                                -> range(0, 3)
+                                -> when {
+                                    Err(failure) {
+                                        failure -> intoSlot -> intoBytes => returned
+                                        registered -> close
+                                        receiver -> close
+                                        listener -> close
+                                        "range-error=true,len=$(returned -> len)" -> println
+                                    }
+                                    Ok(slot) {
+                                        registered -> submit(83, slot) -> when {
+                                            Err(failure) {
+                                                failure.slot => failedSlot
+                                                failure.reactor => failedReactor
+                                                failedSlot -> intoBytes => returned
+                                                failedReactor -> close
+                                                receiver -> close
+                                                listener -> close
+                                                "submit-error=$(failure.error.code),len=$(returned -> len)" -> println
+                                            }
+                                            Ok(submission) {
+                                                submission -> when {
+                                                    socket.CompletionSubmission.Completed(completion) {
+                                                        Result<socket.SocketCompletion, socket.CompletionWaitFailure>.Ok(completion)
+                                                    }
+                                                    socket.CompletionSubmission.Pending(pendingReactor) {
+                                                        pendingReactor -> dequeue(asyncio.Cancellation { requested: false }) => task
+                                                        task -> await
+                                                    }
+                                                } -> when {
+                                                    Err(failure) {
+                                                        failure.reactor -> close
+                                                        receiver -> close
+                                                        listener -> close
+                                                        "dequeue-error=$(failure.error.code)" -> println
+                                                    }
+                                                    Ok(completion) {
+                                                        completion.slot => completedSlot
+                                                        completion.reactor => completedReactor
+                                                        completedSlot -> operationState -> when {
+                                                            Completed { true }
+                                                            else { false }
+                                                        } => completed
+                                                        completedSlot -> transferredCount -> when {
+                                                            None { UIntSize(999) }
+                                                            Some(count) { count }
+                                                        } => count
+                                                        completedSlot -> completionError -> when {
+                                                            None { false }
+                                                            Some(_) { true }
+                                                        } => hasError
+                                                        completedSlot -> byteAt(0) == 10
+                                                            and completedSlot -> byteAt(1) == 20
+                                                            and completedSlot -> byteAt(2) == 30
+                                                            and completedSlot -> byteAt(3) == 40
+                                                            and completedSlot -> byteAt(4) == 50 => unchanged
+                                                        completedSlot -> intoBytes => returned
+                                                        "sent=true,count=$count,state=$completed,error=$hasError,len=$(returned -> len),unchanged=$unchanged" -> println
+                                                        [UInt8; 3~] => peer!
+                                                        receiver -> receiveInto(peer!) -> when {
+                                                            Err(error) { "peer-error=$(error.code)" -> println }
+                                                            Ok(peerCount) {
+                                                                "peer-count=$peerCount,peer=$(peer![0]),$(peer![1]),$(peer![2])" -> println
+                                                            }
+                                                        }
+                                                        completedReactor -> close
+                                                        receiver -> close
+                                                        listener -> close
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

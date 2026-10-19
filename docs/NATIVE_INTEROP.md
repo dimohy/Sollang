@@ -92,9 +92,13 @@ main {
 }
 ```
 
-The current slice expects a suffix-free logical path and maps it to `.dll` on
-Windows and `lib*.so` on Linux. Explicit per-target manifest mapping is a later
-slice. Declaration names are also native symbol names by default.
+Prefer a suffix-free logical path for a library shared across targets. Windows
+preserves an existing `.dll` suffix, ignoring ASCII case, and otherwise appends
+`.dll`. Linux preserves an existing exact `.so` suffix; otherwise it preserves
+the directory, adds `lib` only when the basename lacks that prefix, and appends
+`.so`. Quoted-string escapes are decoded before filename mapping. Explicit
+per-target manifest mapping is a later slice. Declaration names are also
+native symbol names by default.
 `as "symbol"` keeps an inconvenient native export name at the declaration
 boundary while the rest of the program uses the readable Sollang member name.
 
@@ -208,6 +212,11 @@ The import path is resolved relative to the importing source file. Its
 interface is a tracked compiler input, so an ABI change invalidates frontend,
 semantic, codegen, and product caches. Exact warm builds restore and verify the
 cached interface without parsing or linking again.
+
+Filesystem-canonical cache identities do not replace the importing source's
+absolute location. Relative imports keep that source location as their anchor.
+The import context includes both the interface bytes and the selected absolute
+runtime-library path.
 
 The complete ABI hash is embedded in every exported symbol name as well as the
 interface. A stale binary therefore cannot be called through a compatible-

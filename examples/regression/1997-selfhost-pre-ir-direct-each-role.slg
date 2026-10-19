@@ -1,0 +1,47 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    [
+    """
+    main {
+        [7,; ~] -> each value {
+            "value=$value" -> println
+        }
+    }
+    """; ~
+    ] => sourceForSymbols
+    [
+    """
+    main {
+        [7,; ~] -> each value {
+            "value=$value" -> println
+        }
+    }
+    """; ~
+    ] => sourceForTypes
+    sourceForSymbols -> semanticContext.prepare => prepared
+    sourceForTypes -> expressionTypeIds.resolve => resolved
+    0 => roleCount!
+    0 => roleAstTypeCount!
+    0 => roleSemanticTypeCount!
+    0 => symbolIndex!
+    symbolIndex! < (prepared.package.symbols -> len)
+        -> while {
+            prepared.package.symbols[symbolIndex!] => role
+            role.kind == 35 -> if {
+                roleCount! + 1 => roleCount!
+                resolved.directEachRoleTypeBySymbol[symbolIndex!] >= 0
+                    -> if { roleSemanticTypeCount! + 1 => roleSemanticTypeCount! }
+                resolved.expressions -> each expression {
+                    expression.sourceModule == 0 and expression.astNode == role.astNode
+                        and expression.status == 0 and expression.typeId >= 0
+                        -> if { roleAstTypeCount! + 1 => roleAstTypeCount! }
+                }
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    roleCount! -> println
+    roleAstTypeCount! -> println
+    roleSemanticTypeCount! -> println
+}

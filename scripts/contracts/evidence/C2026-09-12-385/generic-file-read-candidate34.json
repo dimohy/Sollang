@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "status": "failed",
+  "scope": "sys.file.read<T> Windows native exact under candidate34",
+  "managedCompilerSha256": "DEDC699EC03A359E3B780F3D5D4A08C0E8C334A769C5466695516741E655E43E",
+  "selfhostCompilerSha256": "4875B974CA63D6558BDCEEDCC9FEFFA546F3D9F2F65BC987F62182F29BAC82E4",
+  "source": {
+    "path": "examples/regression/86-generic-binary-reader.slg",
+    "sha256": "2B880294F3A6141BCE71766E87D616A4993FB3288B663EA011C6C7D3F4779296"
+  },
+  "managed": {
+    "status": "passed",
+    "path": "artifacts/scratch/c385-typeapp-managed34-20260924-01/c385-typeapp-managed34-batch-results.json",
+    "sha256": "B48F025364310E7E6A230CE10B682330A0196A10B132CD09B8CF222334EB7156"
+  },
+  "selfhost": {
+    "status": "failed",
+    "path": "artifacts/scratch/c385-typeapp-selfhost34-20260924-01/c385-typeapp-selfhost34-batch-results.json",
+    "sha256": "70FCC64B71E303CC34EF9E07A31B5EE3ECE32692FDA1761C0DC29976FC614FE4"
+  },
+  "llvm": {
+    "path": "artifacts/scratch/c385-typeapp-capture-candidate34-20260924-01/captured.ll",
+    "sha256": "0B1FE6347E37BAF0461CF062687DE27DC7928E092DF574860312C0353C83A530",
+    "captureResult": "artifacts/scratch/c385-typeapp-capture-candidate34-20260924-01/result.json",
+    "captureResultSha256": "DED5DCF55176DE287A856D73C39BBC4BF7FA668BEADC9F18063DA57AD14934F3",
+    "llvmAsExitCode": 1,
+    "observed": "file.read<UInt16>() emits a call returning %sollang.enum.t248 and passes that value to describeUInt16, which expects %sollang.enum.t1209. The same unspecialized read symbol is used for Bool. llvm-as rejects the first call at line 1615. Direct-call closure and native execution did not run."
+  },
+  "rootCause": {
+    "classification": "missing selfhost sys.file generic scalar intrinsic specialization and lowering",
+    "semanticEvidence": "Managed SemanticCompiler.cs specializes RuntimeReadScalar/RuntimeWriteScalar with a concrete scalar type. The selfhost call path retains the generic sys.file declaration for read<T> and does not materialize a concrete Result<Option<T>, Text> call type: the captured UInt16 and Bool reads both call @sollang_m10_s77() returning %sollang.enum.t248.",
+    "emitterEvidence": "The captured LLVM also calls @sollang_m10_s73_g117504 and @sollang_m10_s73_g117507 for scalar writes. No definition or declaration for these generic sys.file read/write targets exists in the captured module. selfhost/llvm/text/platform_io.slg handles owned File readAt/writeAt opcodes -220/-221, which are distinct from global sys.file read/write.",
+    "requiredFix": "Resolve the global sys.file generic scalar intrinsics to concrete scalar and Result/Option types, lower their calls to runtime operations for open/write/close and open/read/close, and verify exact native output including EOF, truncated scalar and invalid Bool encoding before promotion.",
+    "notYetVerified": ["selfhost LLVM assembly after source fix", "direct-call closure after source fix", "selfhost native exact output", "Stage2", "Stage3"]
+  }
+}

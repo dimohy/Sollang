@@ -1,0 +1,20 @@
+import sollang.compiler.ir.interpolation as interpolation
+
+# Indexing a member after indexing an array must retain the left-to-right
+# chain: array -> selected Row -> values member -> selected Int.
+main {
+    """
+    struct Row { values: [Int; 2] }
+    main {
+        [Row { values: [10, 20] }, Row { values: [30, 40] }] => rows
+        "value=$(rows[1].values[0])" -> println
+    }
+    """ => source
+    source -> interpolation.lower => nodes
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len) -> while {
+        nodes[nodeIndex!] => node
+        "node=$(nodeIndex!),kind=$(node.kind),parent=$(node.parent),operand0=$(node.operand0),operand1=$(node.operand1),operand2=$(node.operand2),payload=$(source -> slice(node.payloadStart, node.payloadLength))" -> println
+        nodeIndex! + 1 => nodeIndex!
+    }
+}

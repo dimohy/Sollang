@@ -3,46 +3,15 @@ import sollang.compiler.llvm.text as llvm
 main {
     [
     """
-    namespace sys.path
-
-    public struct Path {
-        public bytes: [Int; ~]
-        public style: Style
-    }
-
-    public enum Style {
-        Posix
-        Windows
-    }
-
-    public make: -> Path {
-        Path { bytes: [1, 2, 3; ~], style: Style.Posix } => path!
-        path!
-    }
-
-    impl Path {
-        public normalize: move self -> Path {
-            self.style => style
-            self.bytes => bytes!
-            Path { bytes: bytes!, style: style } => normalized!
-            normalized!
-        }
-
-        public byteCount: self -> UIntSize {
-            self.bytes -> len
-        }
-    }
-    """,
-    """
-    import sys.path
-
+    import sys.path as path
     main {
-        path.make() => source!
-        source! -> normalize => normalized!
-        normalized! -> byteCount => length
-
-        length == 3 -> if {
-            "owned path module" -> println
+        path.fromText("a/./b", path.Style.Posix) => source
+        source -> normalizeConfined -> when {
+            Ok(normalized) {
+                normalized -> byteCount => length
+                length == 3 -> if { "owned path module" -> println }
+            }
+            Err(message) { message -> println }
         }
     }
     """; ~

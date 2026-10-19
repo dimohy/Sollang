@@ -1,6 +1,7 @@
 namespace sollang.compiler.ir.typed
 
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.context as semanticContext
 import syntax.generated.slg as grammar
 
 node kind: Int, opcode: Int, operand: Int -> TypedIrNode {
@@ -26,7 +27,54 @@ node kind: Int, opcode: Int, operand: Int -> TypedIrNode {
     }
 }
 
+selectionNode kind: Int, owner: Int, first: Int, second: Int, next: Int, symbol: Int -> TypedIrNode {
+    node(kind, grammar.tokenIdMinus(), first) => value!
+    owner => value!.parent
+    second => value!.operand1
+    next => value!.nextOperand
+    symbol => value!.typeId
+    symbol => value!.typeSymbol
+    value!
+}
+
+verifySelectionCarriers: -> Unit uses Console {
+    [typeIds.SemanticType; ~] => types!
+    [Int; ~] => flags!
+    0 => symbol!
+    symbol! < 24 -> while {
+        types! -> push(typeIds.SemanticType {
+            kind: 1, origin: 1, module: -1, symbol: symbol!, first: -1, second: -1
+            length: -1, lengthHash: 0, containsParameter: false, status: 0
+        })
+        flags! -> push(0)
+        symbol! + 1 => symbol!
+    }
+    [18, 33, 34] -> each selectionKind {
+        [TypedIrNode; ~] => nodes!
+        nodes! -> push(selectionNode(9, -1, 7, 1, -1, 2))
+        selectionKind == 18 -> if { 3 } else { -1 } => elseRegion
+        selectionKind == 33 -> if { 2 } else { 7 } => first
+        selectionKind == 33 -> if { -1 } else { 2 } => second
+        nodes! -> push(selectionNode(selectionKind, 0, first, second, elseRegion, 2))
+        nodes! -> push(selectionNode(19, 1, -1, 4, 3, 2))
+        nodes! -> push(selectionNode(19, 1, -1, 5, -1, 2))
+        nodes! -> push(selectionNode(3, 2, -1, -1, -1, 2))
+        nodes! -> push(selectionNode(7, 3, 6, -1, -1, 2))
+        nodes! -> push(selectionNode(3, 5, -1, -1, -1, 2))
+        nodes! -> push(selectionNode(4, 0, -1, -1, -1, 23))
+        nodes! -> push(selectionNode(5, -1, -1, -1, -1, 3))
+        nodes! -> push(selectionNode(8, -1, 1, 8, -1, 2))
+        nodes![9] => binary!
+        grammar.tokenIdPlus() => binary!.opcode
+        binary! => nodes![9]
+        semanticContext.SemanticSnapshot { marker: 0 } => prepared
+        nodes! -> sealFinalContextualNumericLiterals(prepared, types!, flags!)
+        "carrier-$selectionKind=$(nodes![0].typeSymbol),$(nodes![1].typeSymbol),$(nodes![5].typeSymbol),$(nodes![6].typeSymbol),$(nodes![7].typeSymbol)" -> println
+    }
+}
+
 public run: -> Unit uses Console {
+    verifySelectionCarriers()
     typeIds.SemanticType {
         kind: 1
         origin: 1
@@ -140,7 +188,10 @@ public run: -> Unit uses Console {
     nodes! -> push(node(8, grammar.tokenIdMinus(), 999))
     2 => target!.symbol
     nodes! -> sealIntegerLiteralContext(1, 2, target!, 0)
-    nodes! -> sealFinalContextualNumericLiterals
+    semanticContext.SemanticSnapshot { marker: 0 } => prepared
+    [typeIds.SemanticType; ~] => types
+    [Int; ~] => flags
+    nodes! -> sealFinalContextualNumericLiterals(prepared, types, flags)
     "binary=$(nodes![0].typeId),$(nodes![1].typeId),$(nodes![18].typeId),$(nodes![19].typeId),$(nodes![20].typeId)" -> println
     "identity=$(nodes![0].typeKind),$(nodes![0].typeOrigin),$(nodes![0].typeModule),$(nodes![0].typeSymbol),$(nodes![0].typeFlags)" -> println
 

@@ -99,8 +99,6 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     true -> if { emitProcessRuntimeCommon() }
     """
     declare i64 @_get_osfhandle(i32)
-    declare i32 @_open(ptr, i32, i32)
-    declare i32 @_close(i32)
     define internal ptr @sollang_process_quote_windows_arg(ptr %source, i32 %chars) {
     entry:
       %chars64 = zext i32 %chars to i64
@@ -288,6 +286,28 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     free_fail:
       call void @free(ptr %wide)
       br label %fail
+    fail:
+      ret ptr null
+    }
+    define internal ptr @sollang_process_windows_path(ptr %data, i64 %length) {
+    entry:
+      %present = icmp ugt i64 %length, 0
+      br i1 %present, label %check, label %fail
+    check:
+      %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+      %done = icmp eq i64 %index, %length
+      br i1 %done, label %convert, label %inspect
+    inspect:
+      %byte_ptr = getelementptr i8, ptr %data, i64 %index
+      %byte = load i8, ptr %byte_ptr, align 1
+      %nul = icmp eq i8 %byte, 0
+      br i1 %nul, label %fail, label %advance
+    advance:
+      %next = add i64 %index, 1
+      br label %check
+    convert:
+      %wide = call ptr @sollang_process_windows_text(ptr %data, i64 %length)
+      ret ptr %wide
     fail:
       ret ptr null
     }
@@ -946,13 +966,13 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       %is_null = icmp eq i32 %mode, 2
       br i1 %is_null, label %open_null, label %failure
     copy_path:
-      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
+      %path_copy = call ptr @sollang_process_windows_path(ptr %path, i64 %path_length)
       %path_ok = icmp ne ptr %path_copy, null
       br i1 %path_ok, label %open, label %failure
     open:
       %access = select i1 %input, i32 -2147483648, i32 1073741824
       %creation = select i1 %input, i32 3, i32 2
-      %handle = call ptr @CreateFileA(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+      %handle = call ptr @CreateFileW(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
       call void @free(ptr %path_copy)
       ret ptr %handle
     open_null:
@@ -1135,22 +1155,18 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     }
     define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %path, i64 %path_length) {
     entry:
-      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
+      %path_copy = call ptr @sollang_process_windows_path(ptr %path, i64 %path_length)
       %path_ok = icmp ne ptr %path_copy, null
       br i1 %path_ok, label %open, label %error
     open:
-      %output = call i32 @_open(ptr %path_copy, i32 33537, i32 384)
+      %output = call ptr @CreateFileW(ptr %path_copy, i32 1073741824, i32 1, ptr null, i32 2, i32 128, ptr null)
       call void @free(ptr %path_copy)
-      %opened = icmp sge i32 %output, 0
+      %output_handle_value = ptrtoint ptr %output to i64
+      %opened = icmp ne i64 %output_handle_value, -1
       br i1 %opened, label %run, label %error
     run:
-      %output_handle_value = call i64 @_get_osfhandle(i32 %output)
-      %output_handle = inttoptr i64 %output_handle_value to ptr
-      %handle_ok = icmp ne i64 %output_handle_value, -1
-      br i1 %handle_ok, label %spawn, label %close_error
-    spawn:
-      %spawned = call %sollang.process_spawn_result @sollang_spawn_process_with_stdout(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %output_handle)
-      %closed_output = call i32 @_close(i32 %output)
+      %spawned = call %sollang.process_spawn_result @sollang_spawn_process_with_stdout(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %output)
+      %closed_output = call i32 @CloseHandle(ptr %output)
       %token = extractvalue %sollang.process_spawn_result %spawned, 0
       %spawn_error = extractvalue %sollang.process_spawn_result %spawned, 2
       %spawn_ok = icmp eq i32 %spawn_error, 0
@@ -1158,9 +1174,6 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     wait:
       %result = call %sollang.process_result @sollang_wait_process(i64 %token)
       ret %sollang.process_result %result
-    close_error:
-      %close_output_failed = call i32 @_close(i32 %output)
-      br label %error
     error:
       %error0 = insertvalue %sollang.process_result poison, i32 0, 0
       %error1 = insertvalue %sollang.process_result %error0, i32 1, 1

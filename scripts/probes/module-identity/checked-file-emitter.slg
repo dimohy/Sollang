@@ -1,0 +1,34 @@
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    0 => userSourceStart!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] == "--" -> if {
+            paths! -> len => userSourceStart!
+        } else {
+            paths! -> push(arguments[index!])
+        }
+        index! + 1 => index!
+    }
+    [file.SourceText; ~] => owners!
+    paths! -> each path {
+        path -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len)
+        -> while {
+            owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+            sources! -> push(source)
+            sourceIndex! + 1 => sourceIndex!
+        }
+    sources! -> llvm.emitCheckedWithPaths(paths!, userSourceStart!) => result
+    result -> process.exit
+}

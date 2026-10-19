@@ -13,7 +13,7 @@ function New-RuntimeLlvmProbe {
     $clang = Join-Path $root '.tools/llvm-22.1.8/bin/clang.exe'
     $llvmAs = Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe'
     $harnessLlvm = Join-Path $output 'harness.ll'
-    $compiled = Invoke-VerificationProcessCapture -FilePath $clang -ArgumentList @('-S', '-emit-llvm', '-Wall', '-Wextra', '-Werror', $Harness, '-o', $harnessLlvm) -Description "$Name harness compilation" -TimeoutMilliseconds 20000
+    $compiled = Invoke-VerificationProcessCapture -FilePath $clang -ArgumentList @('-S', '-emit-llvm', '-Wall', '-Wextra', '-Werror', $Harness, '-o', $harnessLlvm) -Description "$Name harness compilation" -TimeoutMilliseconds 20000 -ExecutionRecordPath (Join-Path $output 'harness.compile.execution.json')
     [IO.File]::WriteAllText((Join-Path $output 'harness.compile.stdout.txt'), $compiled.Stdout)
     [IO.File]::WriteAllText((Join-Path $output 'harness.compile.stderr.txt'), $compiled.Stderr)
     if ($compiled.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($compiled.Stderr)) {
@@ -42,7 +42,7 @@ function Invoke-RuntimeLlvmProbe {
         @{ Name = 'link'; Tool = $Probe.Clang; Arguments = @('-Wall', '-Wextra', '-Werror', $Probe.HarnessLlvm, $bitcode, '-o', $executable) },
         @{ Name = 'execute'; Tool = $executable; Arguments = $Arguments }
     )) {
-        $result = Invoke-VerificationProcessCapture -FilePath $step.Tool -ArgumentList $step.Arguments -Description "$Authority runtime $($step.Name)" -TimeoutMilliseconds 20000
+        $result = Invoke-VerificationProcessCapture -FilePath $step.Tool -ArgumentList $step.Arguments -Description "$Authority runtime $($step.Name)" -TimeoutMilliseconds 20000 -ExecutionRecordPath (Join-Path $Probe.Output "$Authority.$($step.Name).execution.json")
         [IO.File]::WriteAllText((Join-Path $Probe.Output "$Authority.$($step.Name).stdout.txt"), $result.Stdout)
         [IO.File]::WriteAllText((Join-Path $Probe.Output "$Authority.$($step.Name).stderr.txt"), $result.Stderr)
         if ($result.ExitCode -ne 0 -or -not [string]::IsNullOrWhiteSpace($result.Stderr)) {

@@ -74,7 +74,7 @@ try {
     $assembly = $false
     $closure = $false
     if ($passed) {
-        $llvmPath = Join-Path $positiveOutput 'positive.ll'
+        $llvmPath = Join-Path $positiveOutput 'positive.exe.ll'
         & (Join-Path $llvm 'bin/llvm-as.exe') $llvmPath -o (Join-Path $positiveOutput 'positive.bc')
         $assembly = $LASTEXITCODE -eq 0
         if (-not $assembly) { throw 'positive LLVM assembly failed' }

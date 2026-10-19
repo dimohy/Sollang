@@ -1,12 +1,14 @@
 namespace sollang.compiler.llvm.source_root
 
 import sollang.compiler.llvm.text as llvm
+import sollang.compiler.semantic.semantic_cache as semanticCache
 import sollang.compiler.source_root as sourceRoot
+import sollang.compiler.syntax.source_decoding as sourceDecoding
 import sys.file as file
 import sys.path as path
 import sys.process as process
 
-emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
+emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -18,8 +20,7 @@ emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -27,7 +28,7 @@ emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
     owners! -> len => ownerCount
 }
 
-emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
+emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -39,8 +40,7 @@ emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -48,7 +48,7 @@ emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
     owners! -> len => ownerCount
 }
 
-emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
+emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -60,8 +60,7 @@ emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -69,7 +68,7 @@ emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
     owners! -> len => ownerCount
 }
 
-public emitRoot root: move path.Path -> Unit uses Console, File {
+public emitRoot root: move path.Path -> Unit uses Console, File, Process {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscovered }
         Err(error) {
@@ -79,7 +78,7 @@ public emitRoot root: move path.Path -> Unit uses Console, File {
     }
 }
 
-public emitLinuxRoot root: move path.Path -> Unit uses Console, File {
+public emitLinuxRoot root: move path.Path -> Unit uses Console, File, Process {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscoveredLinux }
         Err(error) {
@@ -89,7 +88,7 @@ public emitLinuxRoot root: move path.Path -> Unit uses Console, File {
     }
 }
 
-public emitWasmRoot root: move path.Path -> Unit uses Console, File {
+public emitWasmRoot root: move path.Path -> Unit uses Console, File, Process {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscoveredWasm }
         Err(error) {
@@ -99,7 +98,7 @@ public emitWasmRoot root: move path.Path -> Unit uses Console, File {
     }
 }
 
-emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
+emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -111,8 +110,7 @@ emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -121,7 +119,7 @@ emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
     diagnosticCount
 }
 
-emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File {
+emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -133,8 +131,7 @@ emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File 
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -143,7 +140,7 @@ emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File 
     diagnosticCount
 }
 
-emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
+emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File, Process {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -155,8 +152,7 @@ emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
     [Text; ~] => sources!
     0 => sourceIndex!
     sourceIndex! < (owners! -> len) -> while {
-        owners![sourceIndex!] -> len => sourceLength
-        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
@@ -177,7 +173,7 @@ containsCanonicalSource canonicalPaths: ref [path.Path; ~], candidate: Text -> B
     found!
 }
 
-appendUniqueMappedSource sourcePathText: Text, style: path.Style, canonicalPaths: mut [path.Path; ~], owners: mut [file.SourceText; ~] -> Unit uses File {
+appendUniqueMappedSource sourcePathText: Text, style: path.Style, canonicalPaths: mut [path.Path; ~], owners: mut [file.SourceText; ~], mappedPaths: mut [Text; ~] -> Unit uses File {
     sourcePathText -> path.fromText(style) -> query -> when {
         Ok(info) {
             info.canonical -> pathText => canonicalView
@@ -187,85 +183,166 @@ appendUniqueMappedSource sourcePathText: Text, style: path.Style, canonicalPaths
                 canonicalPaths -> push(canonical)
                 sourcePathText -> file.mapText => owner
                 owners -> push(owner)
+                mappedPaths -> push(sourcePathText)
             }
         }
         Err(error) {
             # Preserve the existing file mapping diagnostic when canonicalization fails.
             sourcePathText -> file.mapText => owner
             owners -> push(owner)
+            mappedPaths -> push(sourcePathText)
         }
     }
 }
 
-mapUniqueSources paths: ref [path.Path; ~], explicitPaths: [Text; ~] -> [file.SourceText; ~] uses File {
+struct MappedSourceBatch {
+    canonicalPaths: [path.Path; ~]
+    displayPaths: [path.Path; ~]
+    owners: [file.SourceText; ~]
+    standardLibrarySourceCount: Int
+}
+
+mapUniqueSources paths: ref [path.Path; ~], explicitPaths: [Text; ~], mappedPaths: mut [Text; ~] -> Result<MappedSourceBatch, Text> uses File {
     [path.Path; ~] => canonicalPaths!
     [file.SourceText; ~] => owners!
     paths[0] -> styleKind => style
     0 => sourcePathIndex!
     sourcePathIndex! < (paths -> len) -> while {
         paths[sourcePathIndex!] -> pathText => sourcePathText
-        sourcePathText -> appendUniqueMappedSource(style, canonicalPaths!, owners!)
+        sourcePathText -> appendUniqueMappedSource(style, canonicalPaths!, owners!, mappedPaths)
         sourcePathIndex! + 1 => sourcePathIndex!
     }
+    owners! -> len => standardLibrarySourceCount
     0 => explicitPathIndex!
     explicitPathIndex! < (explicitPaths -> len) -> while {
-        explicitPaths[explicitPathIndex!] -> appendUniqueMappedSource(style, canonicalPaths!, owners!)
+        explicitPaths[explicitPathIndex!] -> appendUniqueMappedSource(style, canonicalPaths!, owners!, mappedPaths)
         explicitPathIndex! + 1 => explicitPathIndex!
     }
-    owners!
+    [path.Path; ~] => displayPaths!
+    0..<Int(mappedPaths -> len) -> each index {
+        mappedPaths[index] -> path.fromText(style) -> absolute -> when {
+            Ok(displayPath) { displayPaths! -> push(displayPath) }
+            Err(error) { Result<MappedSourceBatch, Text>.Err(error) -> return }
+        }
+    }
+    MappedSourceBatch { canonicalPaths: canonicalPaths!, displayPaths: displayPaths!, owners: owners!, standardLibrarySourceCount: standardLibrarySourceCount } => batch
+    Result<MappedSourceBatch, Text>.Ok(batch)
 }
 
-emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
-    (paths -> len) == 0 -> if {
-        "; sollang source root error: source root contains no readable .slg files" -> println
-        1
-    } else {
-        paths -> mapUniqueSources(explicitPaths) => owners
-        [Text; ~] => sources!
-        0 => sourceIndex!
-        sourceIndex! < (owners -> len) -> while {
-            owners[sourceIndex!] -> len => sourceLength
-            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
-            sources! -> push(source)
-            sourceIndex! + 1 => sourceIndex!
-        }
-        sources! -> llvm.emitChecked
+appendPathViews paths: ref [path.Path; ~], views: mut [Text; ~] -> Unit {
+    0..<Int(paths -> len) -> each index {
+        paths[index] -> pathText => view
+        views -> push(view)
     }
 }
 
-emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
+replaceMappedPath paths: mut [Text; ~], index: Int, value: Text -> Unit {
+    value => paths[index]
+}
+
+emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
     (paths -> len) == 0 -> if {
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
     } else {
-        paths -> mapUniqueSources(explicitPaths) => owners
+        [Text; ~] => mappedPaths!
+        paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
+            Ok(value) { value }
+            Err(error) {
+                "; sollang source path error: $error" -> println
+                1 -> return
+            }
+        } => batch
+        [Text; ~] => diagnosticPaths!
+        batch.displayPaths -> appendPathViews(diagnosticPaths!)
+        cache.enabled -> if {
+            (batch.canonicalPaths -> len) != (batch.owners -> len)
+                -> if {
+                    "; sollang semantic cache requires resolved source paths" -> println
+                    1 -> return
+                }
+            0..<Int(batch.canonicalPaths -> len) -> each index {
+                batch.canonicalPaths[index] -> pathText => canonicalText
+                mappedPaths! -> replaceMappedPath(index, canonicalText)
+            }
+        }
+        batch.standardLibrarySourceCount => userSourceStart
+        batch.owners => owners
         [Text; ~] => sources!
         0 => sourceIndex!
         sourceIndex! < (owners -> len) -> while {
-            owners[sourceIndex!] -> len => sourceLength
-            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+            owners[sourceIndex!] -> sourceDecoding.utf8Text => source
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
-        sources! -> llvm.emitLinuxChecked
+        sources! -> llvm.emitCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
     }
 }
 
-emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
+emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths: [Text; ~], cache: ref semanticCache.Request -> Int uses Console, File, Process {
     (paths -> len) == 0 -> if {
         "; sollang source root error: source root contains no readable .slg files" -> println
         1
     } else {
-        paths -> mapUniqueSources(explicitPaths) => owners
+        [Text; ~] => mappedPaths!
+        paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
+            Ok(value) { value }
+            Err(error) {
+                "; sollang source path error: $error" -> println
+                1 -> return
+            }
+        } => batch
+        [Text; ~] => diagnosticPaths!
+        batch.displayPaths -> appendPathViews(diagnosticPaths!)
+        cache.enabled -> if {
+            (batch.canonicalPaths -> len) != (batch.owners -> len)
+                -> if {
+                    "; sollang semantic cache requires resolved source paths" -> println
+                    1 -> return
+                }
+            0..<Int(batch.canonicalPaths -> len) -> each index {
+                batch.canonicalPaths[index] -> pathText => canonicalText
+                mappedPaths! -> replaceMappedPath(index, canonicalText)
+            }
+        }
+        batch.standardLibrarySourceCount => userSourceStart
+        batch.owners => owners
         [Text; ~] => sources!
         0 => sourceIndex!
         sourceIndex! < (owners -> len) -> while {
-            owners[sourceIndex!] -> len => sourceLength
-            owners[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+            owners[sourceIndex!] -> sourceDecoding.utf8Text => source
             sources! -> push(source)
             sourceIndex! + 1 => sourceIndex!
         }
-        sources! -> llvm.emitWasmChecked
+        sources! -> llvm.emitLinuxCheckedWithSourcePathsCached(diagnosticPaths!, mappedPaths!, userSourceStart, cache)
+    }
+}
+
+emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File, Process {
+    (paths -> len) == 0 -> if {
+        "; sollang source root error: source root contains no readable .slg files" -> println
+        1
+    } else {
+        [Text; ~] => mappedPaths!
+        paths -> mapUniqueSources(explicitPaths, mappedPaths!) -> when {
+            Ok(value) { value }
+            Err(error) {
+                "; sollang source path error: $error" -> println
+                1 -> return
+            }
+        } => batch
+        [Text; ~] => diagnosticPaths!
+        batch.displayPaths -> appendPathViews(diagnosticPaths!)
+        batch.standardLibrarySourceCount => userSourceStart
+        batch.owners => owners
+        [Text; ~] => sources!
+        0 => sourceIndex!
+        sourceIndex! < (owners -> len) -> while {
+            owners[sourceIndex!] -> sourceDecoding.utf8Text => source
+            sources! -> push(source)
+            sourceIndex! + 1 => sourceIndex!
+        }
+        sources! -> llvm.emitWasmCheckedWithPaths(diagnosticPaths!, userSourceStart)
     }
 }
 
@@ -287,13 +364,23 @@ collectExplicitPaths explicitStart: UIntSize -> [Text; ~] uses Process {
 # Public CLI builds compile the same complete standard-library source root as
 # the reference compiler, followed by the explicitly selected product sources.
 public emitCheckedRoot root: move path.Path, explicitStart: UIntSize, target: Int -> Int uses Console, File, Process {
+    semanticCache.disabled() => cache
+    root -> emitCachedCheckedRoot(explicitStart, target, cache)
+}
+
+public emitCachedCheckedRoot root: move path.Path, explicitStart: UIntSize, target: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    cache.enabled and target != 0 and target != 1
+        -> if {
+            "; sollang semantic cache target is unsupported" -> println
+            1 -> return
+        }
     target == 0 -> if {
         explicitStart -> collectExplicitPaths => explicitPaths
-        root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitChecked(explicitPaths)
+        root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitChecked(explicitPaths, cache)
     } else {
         target == 1 -> if {
             explicitStart -> collectExplicitPaths => explicitPaths
-            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitLinuxChecked(explicitPaths)
+            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitLinuxChecked(explicitPaths, cache)
         } else {
             explicitStart -> collectExplicitPaths => explicitPaths
             root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitWasmChecked(explicitPaths)

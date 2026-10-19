@@ -1,0 +1,35 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.process as process
+import sys.file as file
+
+runChecks: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    Arena(0) => stageStorage!
+    "$(arguments[0]).semantic-stage" -> materialize(stageStorage!) => stage
+    Arena(0) => invalidStorage!
+    "$(arguments[0]).invalid-stage" -> materialize(invalidStorage!) => invalidStage
+    ["main { 1 -> println }"; ~] -> context.prepare => prepared
+    ["main.slg"; ~] => paths
+    generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
+    stage -> cache.load => cold
+    prepared -> cache.resolve(cold, paths, identity) -> when {
+        Err(_) { false -> println
+            return }
+        Ok(value) {
+            (value.words -> cache.stageExclusive(stage)) == 0 -> println
+            (value.words -> cache.stageExclusive(stage)) == 36 -> println
+            stage -> cache.load => preserved
+            (preserved.status == 0 and preserved.words[8] == value.words[8]) -> println
+            [UInt64; ~] => invalid
+            (invalid -> cache.stageExclusive(invalidStage)) == 21 -> println
+            invalidStage -> cache.load => absent
+            absent.status == 50 -> println
+            (invalidStage -> file.createExclusive) == 1 -> println
+            (value.words -> cache.stage(invalidStage)) == 0 -> println
+        }
+    }
+}
+
+main { runChecks() }

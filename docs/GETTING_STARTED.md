@@ -439,6 +439,12 @@ compiler, keeps both `.ll` files under `artifacts/example-tests`, links both,
 and requires identical exit codes and normalized stdout. It intentionally
 compares observable behavior rather than raw LLVM text because the C# and Sollang
 backends use different platform-runtime implementations.
+An LLVM fixture's `.root.txt` sidecar may supply a source root alongside embedded
+raw programs. The runner discovers that root, passes the materialized programs
+as explicit inputs, and uses those same explicit programs for C# reference
+compilation. For canonical standard-library APIs, use `stdlib` as the root rather
+than redeclaring intrinsic modules in the fixture. A root without embedded raw
+programs retains the root-only discovery behavior.
 
 Use the dedicated stage-2 gate to prove that a C#-bootstrapped Sollang compiler and
 the Sollang compiler rebuilt by that compiler produce the same normalized LLVM:

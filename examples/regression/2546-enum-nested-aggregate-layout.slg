@@ -1,0 +1,27 @@
+struct Bytes3 {
+    first: UInt8
+    second: UInt8
+    third: UInt8
+}
+
+struct Mixed {
+    tag: UInt8
+    value: Bytes3
+    tail: Int
+}
+
+enum Packet {
+    Value(Mixed)
+}
+
+make: -> Packet {
+    Packet.Value(Mixed { tag: 1, value: Bytes3 { first: 4, second: 5, third: 6 }, tail: 9 })
+}
+
+main {
+    # The boxed enum exposes its complete allocation layout to the LLVM oracle.
+    box make() => owner
+    make() -> when {
+        Value(value) { value.tail -> println }
+    }
+}

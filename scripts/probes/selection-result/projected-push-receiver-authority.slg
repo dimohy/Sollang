@@ -1,0 +1,54 @@
+import std.net.quic.reassembly as reassembly
+import std.net.quic.frame as frames
+
+struct Bucket {
+    value: Int
+}
+
+impl Bucket {
+    push: self, value: Int -> Int => self.value + value
+}
+
+struct Holder {
+    field: Bucket
+}
+
+impl Holder {
+    push: self, value: Int -> Int => self.field -> push(value)
+}
+
+struct Limits {
+    value: Int
+}
+
+impl Limits {
+    build: self -> Int => self.value + 10
+}
+
+struct Options {
+    value: Int
+}
+
+impl Options {
+    build: self -> Int => Limits { value: self.value } -> build
+}
+
+push values: [Int; ~], value: Int -> Int => (values -> len) + value
+
+main {
+    reassembly.initial() => queue!
+    frames.Stream {
+        id: 0
+        offset: 0
+        fin: false
+        data: [1, 2]
+    } => frame
+    queue! -> push(frame)
+    "count=$(queue! -> count),bytes=$(queue! -> bytes)" -> println
+    Holder { field: Bucket { value: 5 } } -> push(4) => projected
+    "projected=$projected" -> println
+    [1, 2] -> push(7) => declared
+    "declared=$declared" -> println
+    Options { value: 3 } -> build => literal
+    "literal=$literal" -> println
+}

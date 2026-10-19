@@ -942,5 +942,5 @@ internal sealed partial class LlvmEmitter
         $"@sollang_native_handle_drop_{NativeStableId(structure.Name)}";
 
     private static string NativeStableId(string value) =>
-        LlvmCodegenUnit.StableIdentity(value).ToString("x16", CultureInfo.InvariantCulture);
+        LlvmCodegenUnit.SymbolIdentity(value);
 }

@@ -1,0 +1,44 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.diagnostics as syntaxDiagnostics
+
+inspect source: Text, verifyLeaf: Bool -> Unit uses Console {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    prepared.package -> semanticDiagnostics.firstNumericCallArgumentDiagnostic(resolved) => diagnostic
+    resolved.callArguments -> each argument {
+        "argument=$(argument.status),diagnostic=$(diagnostic.code)" -> println
+        verifyLeaf and argument.status == 3 -> if {
+            resolved.types[argument.mismatchExpectedTypeId] => expected
+            resolved.types[argument.mismatchActualTypeId] => actual
+            "mismatch=$(expected.kind),$(actual.kind)" -> println
+        }
+    }
+    diagnostic.code > 0 -> if {
+        prepared.package.ranges[diagnostic.sourceModule] => range
+        prepared.package.nodes[range.astStart + diagnostic.argumentAst] => node
+        source -> syntaxDiagnostics.sourceLocation(node.start) => location
+        "at=$(location.line):$(location.column)" -> println
+        verifyLeaf -> if {
+            resolved.types[diagnostic.actualTypeId] => actual
+            "actual=$(actual.kind),$(actual.symbol)" -> println
+        }
+    }
+}
+
+main {
+    "readBox<T> value: box T -> Int => 1\nmain { 1 -> readBox }\n" -> inspect(false)
+    """
+    readBox<T> value: box T -> Int => 1
+    main {
+        box 1 => value
+        value -> readBox
+    }
+    """ -> inspect(false)
+    "readBox<T> value: box T -> Int => 1\nmain { readBox(1) }\n" -> inspect(false)
+    "readOptionBox<T> value: Option<box T> -> Int => 1\nmain { Option<Int>.Some(1) -> readOptionBox -> println }\n" -> inspect(true)
+    "readRefBox<T> value: ref box T -> Int => 1\nmain {\n    1 => value\n    value -> readRefBox -> println\n}\n" -> inspect(true)
+    "readOptionBox<T> value: Option<box T> -> Int => 1\nreadRefBox<T> value: ref box T -> Int => 1\nmain {\n    Option<box Int>.Some(box 1) => option\n    option -> readOptionBox -> println\n    box 1 => owner\n    owner -> readRefBox -> println\n}\n" -> inspect(true)
+}

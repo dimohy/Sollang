@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "managedTargetSha256", "managedTargetDllSha256", "selfhostTargetSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "historicalBaselineReexecuted", "processObservationScope", "proofScope", "orphanProcessIds", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-bounded-value-abi-target" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 18 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 18 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 18 },
+    "managedTargetSha256": { "$ref": "#/$defs/sha" },
+    "managedTargetDllSha256": { "$ref": "#/$defs/sha" },
+    "selfhostTargetSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "historicalBaselineReexecuted": { "const": false },
+    "processObservationScope": { "const": "bounded-root-wait-and-post-exit-CIM-descendant-snapshot-with-creation-time;exited-or-reparented-descendants-not-proven" },
+    "proofScope": { "type": "string", "minLength": 1 },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "cases": { "type": "array", "minItems": 18, "maxItems": 18, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": {
+      "completed": { "const": 18 }, "passed": { "const": 18 }, "inputsStable": { "const": true },
+      "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "orphanProcessIds": { "maxItems": 0 },
+      "failureId": { "type": "null" }, "failure": { "type": "null" },
+      "cases": { "items": { "$ref": "#/$defs/passedCase" } }
+    } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": {
+      "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 }
+    } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "case": { "type": "object", "additionalProperties": false,
+      "required": ["compiler", "fixture", "classification", "state", "caseDirectory", "sourceSha256", "expectedSha256", "buildExitCode", "buildStdoutSha256", "buildStderrSha256", "diagnosticPhase", "semanticCount", "irCount", "diagnosticMatched", "productsAbsent", "closureExitCode", "llvmAsExitCode", "runExitCode", "llvmSha256", "bitcodeSha256", "exeSha256", "stdoutSha256", "stdoutMatched", "llvmObservation", "failure"],
+      "properties": {
+        "compiler": { "enum": ["managed", "selfhost"] },
+        "fixture": { "enum": ["direct-populated", "direct-empty", "return-chain", "struct-nested-return", "dynamic-control", "nominal-control", "local-copy-negative", "bounded-move-negative", "readonly-parameter-baseline"] },
+        "classification": { "enum": ["positive", "semantic-negative", "baseline-failing"] },
+        "state": { "enum": ["not-run", "running", "passed", "failed"] },
+        "caseDirectory": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expectedSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "buildStdoutSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "buildStderrSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "diagnosticPhase": { "enum": ["not-run", "accepted-build", "semantic", "failed"] },
+        "semanticCount": { "type": ["integer", "null"], "minimum": 0 },
+        "irCount": { "type": ["integer", "null"], "minimum": 0 },
+        "diagnosticMatched": { "type": ["boolean", "null"] },
+        "productsAbsent": { "type": ["boolean", "null"] },
+        "closureExitCode": { "type": ["integer", "null"] },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "llvmSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "bitcodeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "exeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stdoutSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stdoutMatched": { "type": ["boolean", "null"] },
+        "llvmObservation": { "oneOf": [{ "$ref": "#/$defs/llvmObservation" }, { "type": "null" }] },
+        "failure": { "type": ["string", "null"] }
+      }
+    },
+    "llvmObservation": { "type": "object", "additionalProperties": false,
+      "required": ["wholeModuleSha256", "userFunctionScope", "stackPointerEscapeProvenAbsent", "lifetimeProven"],
+      "properties": {
+        "wholeModuleSha256": { "$ref": "#/$defs/sha" },
+        "userFunctionScope": { "const": "not-yet-isolated;whole-module-assembly-only" },
+        "stackPointerEscapeProvenAbsent": { "const": false },
+        "lifetimeProven": { "const": false }
+      }
+    },
+    "passedCase": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "state": { "const": "passed" }, "failure": { "type": "null" } } }] }
+  }
+}

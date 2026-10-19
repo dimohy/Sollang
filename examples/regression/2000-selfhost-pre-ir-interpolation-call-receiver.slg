@@ -1,0 +1,58 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    [
+    """
+    import sample.interpolation_method_precedence as sample
+
+    main {
+        UInt64(7) -> sample.make => token
+        "value=$(token -> value)" -> println
+    }
+    """,
+    """
+    namespace sample.interpolation_method_precedence
+
+    public struct Token { raw: UInt64 }
+    public make value: UInt64 -> Token => Token { raw: value }
+    public value token: Token -> UInt64 => 99
+
+    impl Token {
+        public value: self -> UInt64 => self.raw
+    }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    0 => unresolvedFlowCallCount!
+    0 => lexicalReceiverCount!
+    0 => preIrReceiverTypeCount!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => call
+            call.kind == 10 and call.operand0 >= 0 -> if {
+                unresolvedFlowCallCount! + 1 => unresolvedFlowCallCount!
+                prepared.interpolations[call.operand0] => receiver
+                receiver.kind == 1 and receiver.symbol >= 0 -> if {
+                    lexicalReceiverCount! + 1 => lexicalReceiverCount!
+                    prepared.interpolationRanges -> each range {
+                        nodeIndex! >= range.nodeStart and nodeIndex! < range.nodeStart + range.nodeCount
+                            -> if {
+                                prepared.package.ranges[range.sourceModule] => sourceRange
+                                sourceRange.symbolStart + receiver.symbol => globalSymbol
+                                resolved.lexicalBindingTypeBySymbol[globalSymbol] >= 0
+                                    -> if {
+                                        preIrReceiverTypeCount! + 1 => preIrReceiverTypeCount!
+                                    }
+                            }
+                    }
+                }
+            }
+            nodeIndex! + 1 => nodeIndex!
+        }
+    unresolvedFlowCallCount! -> println
+    lexicalReceiverCount! -> println
+    preIrReceiverTypeCount! -> println
+}

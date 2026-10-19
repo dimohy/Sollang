@@ -3,6 +3,9 @@ namespace sollang.compiler.cli_format
 import sollang.compiler.diagnostics as diagnostics
 import sollang.compiler.lexer as lexer
 import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import sollang.compiler.source_style as sourceStyle
 import sys.file as file
 import sys.process as process
 import sys.runtime as runtime
@@ -19,20 +22,9 @@ struct ScanResult {
     closes: Int
 }
 
-struct ControlParentheses {
-    found: Bool
-    opening: UIntSize
-    closing: UIntSize
-}
-
 struct SourceControlParentheses {
     opening: UIntSize
     closing: UIntSize
-}
-
-struct SourceLocation {
-    line: Int
-    column: Int
 }
 
 public struct FormatResult {
@@ -209,206 +201,19 @@ multilineRawOpening source: file.SourceText, line: LineSpan -> Bool {
     opening!
 }
 
-controlKeywordAt source: file.SourceText, start: UIntSize, end: UIntSize -> Bool {
-    start + 2 <= end
-        and (source -> byte(start)) == 105
-        and (source -> byte(start + 1)) == 102
-        and (start + 2 == end
-        or not (((source -> byte(start + 2)) -> isAsciiLetterOrDigit)
-        or (source -> byte(start + 2)) == 95))
-        -> if { true -> return }
-    start + 6 <= end
-        and (source -> byte(start)) == 117
-        and (source -> byte(start + 1)) == 110
-        and (source -> byte(start + 2)) == 108
-        and (source -> byte(start + 3)) == 101
-        and (source -> byte(start + 4)) == 115
-        and (source -> byte(start + 5)) == 115
-        and (start + 6 == end
-        or not (((source -> byte(start + 6)) -> isAsciiLetterOrDigit)
-        or (source -> byte(start + 6)) == 95))
-        -> if { true -> return }
-    start + 5 <= end
-        and (source -> byte(start)) == 119
-        and (source -> byte(start + 1)) == 104
-        and (source -> byte(start + 2)) == 105
-        and (source -> byte(start + 3)) == 108
-        and (source -> byte(start + 4)) == 101
-        and (start + 5 == end
-        or not (((source -> byte(start + 5)) -> isAsciiLetterOrDigit)
-        or (source -> byte(start + 5)) == 95))
-}
-
-expressionBoundary source: file.SourceText, line: LineSpan, opening: UIntSize -> Bool {
-    opening == 0 -> if { true -> return }
-    opening => index!
-    index! > 0 and ((source -> byte(line.start + index! - 1)) -> isHorizontalWhitespace)
-        -> while { index! - 1 => index! }
-    index! == 0 -> if { true -> return }
-    source -> byte(line.start + index! - 1) => previous
-    previous == 123 or previous == 91 or previous == 40 or previous == 44 or previous == 58
-        -> if { true -> return }
-    previous == 62 and index! >= 2 and (source -> byte(line.start + index! - 2)) == 61
-}
-
-redundantControlParentheses source: file.SourceText, line: LineSpan -> ControlParentheses {
-    false => inString!
-    false => escaped!
-    0 => depth!
-    UIntSize(0) => opening!
-    UIntSize(0) => closing!
-    false => found!
-    UIntSize(0) => index!
-    index! + 1 < line.length -> while {
-        source -> byte(line.start + index!) => current
-        inString! -> if {
-            escaped! -> if {
-                false => escaped!
-            } else {
-                current == 92 -> if { true => escaped! }
-                current == 34 -> if { false => inString! }
-            }
-        } else {
-            current == 34 -> if {
-                true => inString!
-            } else {
-                current == 40 -> if {
-                    depth! == 0 -> if { index! => opening! }
-                    depth! + 1 => depth!
-                }
-                current == 41 -> if {
-                    depth! - 1 => depth!
-                    depth! == 0 -> if { index! => closing! }
-                }
-                current == 45 and (source -> byte(line.start + index! + 1)) == 62 and depth! == 0
-                    -> if {
-                        index! => beforeArrow!
-                        beforeArrow! > 0 and ((source -> byte(line.start + beforeArrow! - 1)) -> isHorizontalWhitespace)
-                            -> while { beforeArrow! - 1 => beforeArrow! }
-                        index! + 2 => target!
-                        target! < line.length and ((source -> byte(line.start + target!)) -> isHorizontalWhitespace)
-                            -> while { target! + 1 => target! }
-                        beforeArrow! > 0
-                            and closing! == beforeArrow! - 1
-                            and (source -> expressionBoundary(line, opening!))
-                            and (source -> controlKeywordAt(line.start + target!, line.start + line.length))
-                            -> if { true => found! }
-                        line.length => index!
-                    }
-            }
-        }
-        index! + 1 => index!
-    }
-    ControlParentheses { found: found!, opening: opening!, closing: closing! }
-}
-
-longInlineControlArrow source: file.SourceText, line: LineSpan -> Int {
-    false => inString!
-    false => escaped!
-    UIntSize(0) => index!
-    index! + 2 < line.length -> while {
-        source -> byte(line.start + index!) => current
-        inString! -> if {
-            escaped! -> if {
-                false => escaped!
-            } else {
-                current == 92 -> if { true => escaped! }
-                current == 34 -> if { false => inString! }
-            }
-        } else {
-            current == 34 -> if {
-                true => inString!
-            } else {
-                current == 45 and (source -> byte(line.start + index! + 1)) == 62
-                    -> if {
-                        index! => conditionEnd!
-                        conditionEnd! > 0 and ((source -> byte(line.start + conditionEnd! - 1)) -> isHorizontalWhitespace)
-                            -> while { conditionEnd! - 1 => conditionEnd! }
-                        index! + 2 => target!
-                        target! < line.length and ((source -> byte(line.start + target!)) -> isHorizontalWhitespace)
-                            -> while { target! + 1 => target! }
-                        conditionEnd! >= 45
-                            and (source -> controlKeywordAt(line.start + target!, line.start + line.length))
-                            -> if { Int(index!) -> return }
-                    }
-            }
-        }
-        index! + 1 => index!
-    }
-    -1
-}
-
-appendFormattedLine bytes: mut [UInt8; ~], source: file.SourceText, line: LineSpan, indentation: Int -> Bool {
-    source -> redundantControlParentheses(line) => parentheses
-    source -> longInlineControlArrow(line) => arrow!
-    UIntSize(0) => conditionEnd!
-    arrow! >= 0 -> if {
-        UIntSize(arrow!) => conditionEnd!
+appendFormattedLine bytes: mut [UInt8; ~], source: file.SourceText, line: LineSpan, indentation: Int, arrow: Int -> Bool {
+    arrow >= 0 -> if {
+        UIntSize(arrow) => conditionEnd!
         conditionEnd! > 0 and ((source -> byte(line.start + conditionEnd! - 1)) -> isHorizontalWhitespace)
             -> while { conditionEnd! - 1 => conditionEnd! }
-        parentheses.found
-            and parentheses.closing < UIntSize(arrow!)
-            and Int(conditionEnd!) - 2 < 45
-            -> if { -1 => arrow! }
-    }
-    arrow! >= 0 -> if {
-        parentheses.found -> if {
-            bytes -> appendSource(source, line.start, parentheses.opening)
-            bytes -> appendSource(
-            source,
-            line.start + parentheses.opening + 1,
-            parentheses.closing - parentheses.opening - 1)
-            bytes -> appendSource(
-            source,
-            line.start + parentheses.closing + 1,
-            conditionEnd! - parentheses.closing - 1)
-        } else {
-            bytes -> appendSource(source, line.start, conditionEnd!)
-        }
+        bytes -> appendSource(source, line.start, conditionEnd!)
         bytes -> push(10)
         bytes -> appendSpaces(indentation + 4)
-        bytes -> appendSource(source, line.start + UIntSize(arrow!), line.length - UIntSize(arrow!))
+        bytes -> appendSource(source, line.start + UIntSize(arrow), line.length - UIntSize(arrow))
     } else {
-        parentheses.found -> if {
-            bytes -> appendSource(source, line.start, parentheses.opening)
-            bytes -> appendSource(
-            source,
-            line.start + parentheses.opening + 1,
-            parentheses.closing - parentheses.opening - 1)
-            bytes -> appendSource(
-            source,
-            line.start + parentheses.closing + 1,
-            line.length - parentheses.closing - 1)
-        } else {
-            bytes -> appendSource(source, line.start, line.length)
-        }
+        bytes -> appendSource(source, line.start, line.length)
     }
-    arrow! >= 0
-}
-
-appendPositiveInt bytes: mut [UInt8; ~], value: Int -> Unit {
-    [UInt8; ~] => reversed!
-    value => remaining!
-    remaining! == 0 -> if {
-        bytes -> push(48)
-    } else {
-        remaining! > 0 -> while {
-            reversed! -> push(UInt8(remaining! % 10 + 48))
-            remaining! / 10 => remaining!
-        }
-        (reversed! -> len) - 1 => index!
-        index! >= 0 -> while {
-            bytes -> push(reversed![index!])
-            index! - 1 => index!
-        }
-    }
-}
-
-writeDiagnostic bytes: ref [UInt8; ~] -> Unit uses Console {
-    bytes -> file.borrowBytes => source
-    source -> len => length
-    source -> slice(UIntSize(0), length) => message
-    message -> runtime.eprintln
+    arrow >= 0
 }
 
 isHorizontalWhitespace value: UInt8 -> Bool {
@@ -417,12 +222,6 @@ isHorizontalWhitespace value: UInt8 -> Bool {
 
 isWhitespace value: UInt8 -> Bool {
     value == 32 or value == 9 or value == 10 or value == 11 or value == 12 or value == 13
-}
-
-isAsciiLetterOrDigit value: UInt8 -> Bool {
-    (value >= 48 and value <= 57)
-        or (value >= 65 and value <= 90)
-        or (value >= 97 and value <= 122)
 }
 
 textEquals left: Text, right: Text -> Bool {
@@ -475,9 +274,9 @@ startsWith source: file.SourceText, line: LineSpan, value: Text -> Bool {
 startsWithWord source: file.SourceText, line: LineSpan, word: Text -> Bool {
     source -> startsWith(line, word) => matches!
     matches! and line.length > (word -> len) -> if {
-        source -> byte(line.start + (word -> len)) => next
-        (next -> isAsciiLetterOrDigit) or next == 95
-            -> if { false => matches! }
+        source -> slice(line.start, line.length) => lineText
+        lineText -> unicodeIdentifier.continueWidth(word -> len) => continuationWidth
+        continuationWidth > 0 -> if { false => matches! }
     }
     matches!
 }
@@ -587,6 +386,8 @@ public format source: file.SourceText -> FormatResult {
 
     source -> removeSourceControlParentheses => normalizedBytes
     normalizedBytes -> file.borrowBytes => normalizedSource
+    normalizedSource -> slice(0, normalizedSource -> len) => normalizedView
+    normalizedView -> sourceStyle.longInlineControlArrows => controlArrows
 
     normalizedSource -> sourceLines => lines
     lines -> len => logicalLineCount!
@@ -601,23 +402,28 @@ public format source: file.SourceText -> FormatResult {
     0 => depth!
     false => inTripleString!
     0 => tripleStringIndentDelta!
+    0 => controlIndex!
     0 => lineIndex!
     lineIndex! < logicalLineCount! -> while {
         lines[lineIndex!] => original
+        controlIndex! < (controlArrows -> len) and controlArrows[controlIndex!] < original.start
+            -> while { controlIndex! + 1 => controlIndex! }
         inTripleString! -> if {
             original.start => rawStart!
             original.length => rawLength!
-            tripleStringIndentDelta! > 0 -> if {
-                output! -> appendSpaces(tripleStringIndentDelta!)
-            }
+            tripleStringIndentDelta! > 0 and rawLength! > 0
+                -> if {
+                    output! -> appendSpaces(tripleStringIndentDelta!)
+                }
             tripleStringIndentDelta! < 0 -> if {
                 -tripleStringIndentDelta! => remove!
                 remove! > 0
                     and rawLength! > 0
-                    and ((normalizedSource -> byte(rawStart!)) -> isHorizontalWhitespace)
                     -> while {
-                        rawStart! + 1 => rawStart!
-                        rawLength! - 1 => rawLength!
+                        normalizedView -> unicodeIdentifier.whitespaceWidth(rawStart!, rawStart! + rawLength!) => width
+                        width == 0 -> if { break }
+                        rawStart! + width => rawStart!
+                        rawLength! - width => rawLength!
                         remove! - 1 => remove!
                     }
             }
@@ -639,7 +445,12 @@ public format source: file.SourceText -> FormatResult {
                 baseDepth! + continuationCount! => lineDepth!
                 isContinuation -> if { lineDepth! + 1 => lineDepth! }
                 output! -> appendSpaces(lineDepth! * 4)
-                output! -> appendFormattedLine(normalizedSource, trimmed, lineDepth! * 4) => inlineControlContinuation
+                -1 => arrow!
+                controlIndex! < (controlArrows -> len)
+                    and controlArrows[controlIndex!] >= trimmed.start
+                    and controlArrows[controlIndex!] < trimmed.start + trimmed.length
+                    -> if { Int(controlArrows[controlIndex!] - trimmed.start) => arrow! }
+                output! -> appendFormattedLine(normalizedSource, trimmed, lineDepth! * 4, arrow!) => inlineControlContinuation
                 output! -> push(10)
                 depth! + scan.opens - scan.closes => depth!
                 depth! < 0 -> if { 0 => depth! }
@@ -688,85 +499,11 @@ writeSucceeded result: Result<Unit, Text> -> Bool {
     }
 }
 
-sourceLocation source: file.SourceText, offset: UIntSize -> SourceLocation {
-    1 => line!
-    1 => column!
-    UIntSize(0) => index!
-    index! < offset -> while {
-        source -> byte(index!) => value
-        value == 10 -> if {
-            line! + 1 => line!
-            1 => column!
-        } else {
-            value != 13 -> if { column! + 1 => column! }
-        }
-        index! + 1 => index!
-    }
-    SourceLocation { line: line!, column: column! }
-}
-
 writeSyntaxDiagnostic source: file.SourceText -> Unit uses Console {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => sourceView
     sourceView -> diagnostics.analyze => syntaxDiagnostics
-    syntaxDiagnostics[0] => diagnostic
-    source -> sourceLocation(diagnostic.span.start) => position
-    [UInt8; ~] => message!
-    diagnostic.code == 1 -> if {
-        source -> slice(diagnostic.span.start, diagnostic.span.length) => unexpected
-        message! -> appendText("sollang: lex error at ")
-        message! -> appendPositiveInt(position.line)
-        message! -> appendText(":")
-        message! -> appendPositiveInt(position.column)
-        message! -> appendText(": unexpected character '")
-        message! -> appendText(unexpected)
-        message! -> appendText("'")
-    } else {
-        diagnostic.code == 3 -> if {
-            message! -> appendText("sollang: lex error at ")
-            message! -> appendPositiveInt(position.line)
-            message! -> appendText(":")
-            message! -> appendPositiveInt(position.column)
-            message! -> appendText(": unterminated string literal")
-        } else {
-            diagnostic.code == 4 or diagnostic.code == 5 -> if {
-                message! -> appendText("sollang: lex error at ")
-                message! -> appendPositiveInt(position.line)
-                message! -> appendText(":")
-                message! -> appendPositiveInt(position.column)
-                diagnostic.code == 4 -> if {
-                    message! -> appendText(": invalid character literal")
-                } else {
-                    message! -> appendText(": unterminated character literal")
-                }
-            } else {
-                message! -> appendText("sollang: parse error at ")
-                message! -> appendPositiveInt(position.line)
-                message! -> appendText(":")
-                message! -> appendPositiveInt(position.column)
-                diagnostic.code == 6 -> if {
-                    message! -> appendText(": duplicate product field label '")
-                    source -> slice(diagnostic.span.start, diagnostic.span.length) => duplicateLabel
-                    message! -> appendText(duplicateLabel)
-                    message! -> appendText("'")
-                } else {
-                    sourceView -> diagnostics.preferredExpectedCode(diagnostic) => expectedCode
-                    message! -> appendText(": expected ")
-                    expectedCode >= 0 -> if {
-                        grammar.tokenNames() => tokenNames
-                        message! -> appendText(tokenNames[expectedCode])
-                    } else {
-                        grammar.keywordTexts() => keywordTexts
-                        0 - expectedCode - 1 => keywordIndex
-                        message! -> appendText("'")
-                        message! -> appendText(keywordTexts[keywordIndex])
-                        message! -> appendText("'")
-                    }
-                }
-            }
-        }
-    }
-    message! -> writeDiagnostic
+    sourceView -> diagnostics.emit(syntaxDiagnostics[0])
 }
 
 writeFormatted destination: Text, formatted: ref FormatResult -> Bool uses File {
@@ -795,7 +532,26 @@ writeFormatted destination: Text, formatted: ref FormatResult -> Bool uses File 
     } else { false }
 }
 
-public run: -> Int uses Console, File, Process {
+public enum CommandResult {
+    Completed(Int)
+    StandardInput
+}
+
+public formatStandardInput owner: file.SourceText -> Int uses Console {
+    owner -> sourceDecoding.utf8Text -> file.borrowText => source
+    source -> format => formatted
+    formatted.status != 0 -> if {
+        source -> writeSyntaxDiagnostic
+        1 -> return
+    }
+    formatted.bytes -> file.borrowBytes => formattedSource
+    formattedSource -> len => formattedLength
+    formattedSource -> slice(UIntSize(0), formattedLength) => formattedText
+    formattedText -> print
+    0 -> return
+}
+
+public run: -> CommandResult uses Console, File, Process {
     process.arguments() => arguments
     false => check!
     false => stdin!
@@ -821,49 +577,41 @@ public run: -> Int uses Console, File, Process {
         }
         index! + 1 => index!
     }
-    status! != 0 -> if { status! -> return }
+    status! != 0 -> if { CommandResult.Completed(status!) -> return }
     stdin! -> if {
         (paths! -> len) != 0 or check! -> if {
             "sollang: format --stdin cannot be combined with paths or --check" -> runtime.eprintln
-            1 -> return
+            CommandResult.Completed(1) -> return
         }
-        file.readStandardInput() => source
-        source -> format => formatted
-        formatted.status != 0 -> if {
-            source -> writeSyntaxDiagnostic
-            1 -> return
-        }
-        formatted.bytes -> file.borrowBytes => formattedSource
-        formattedSource -> len => formattedLength
-        formattedSource -> slice(UIntSize(0), formattedLength) => formattedText
-        formattedText -> print
-        0 -> return
+        CommandResult.StandardInput -> return
     }
     (paths! -> len) == 0 -> if {
         "sollang: usage: sollang format [--check] <source.slg> ... | --stdin" -> runtime.eprintln
-        1 -> return
+        CommandResult.Completed(1) -> return
     }
 
     false => changed!
     0 => pathIndex!
     pathIndex! < (paths! -> len) -> while {
         paths![pathIndex!] => sourcePath
-        sourcePath -> file.mapText => source
+        sourcePath -> file.mapText => owner
+        owner -> sourceDecoding.utf8Text -> file.borrowText => source
         source -> format => formatted
         formatted.status != 0 -> if {
             source -> writeSyntaxDiagnostic
-            1 -> return
+            CommandResult.Completed(1) -> return
         }
         source -> sameBytes(formatted) -> unless {
             true => changed!
             not check! -> if {
                 sourcePath -> writeFormatted(formatted) -> unless {
                     "sollang: failed to replace formatted source '$sourcePath'" -> runtime.eprintln
-                    1 -> return
+                    CommandResult.Completed(1) -> return
                 }
             }
         }
         pathIndex! + 1 => pathIndex!
     }
-    check! and changed! -> if { 1 } else { 0 }
+    check! and changed! -> if { 1 } else { 0 } => exitCode
+    CommandResult.Completed(exitCode)
 }

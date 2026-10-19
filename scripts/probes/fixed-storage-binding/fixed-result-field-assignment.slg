@@ -1,0 +1,25 @@
+struct Holder { bytes: [UInt8; 4] }
+
+bytes value: UInt8 -> [UInt8; 4] => [value; 4]
+
+replace holder: mut Holder, value: UInt8 -> Unit {
+    bytes(value) => next
+    next => holder.bytes
+}
+
+replaceInRegion holder: mut Holder, enabled: Bool -> Unit {
+    enabled -> if {
+        bytes(9) => next
+        next => holder.bytes
+    }
+}
+
+main {
+    Holder { bytes: bytes(1) } => holder!
+    holder! -> replace(7)
+    "function=$(holder!.bytes[0]),$(holder!.bytes[3])" -> println
+    holder! -> replaceInRegion(false)
+    "skipped=$(holder!.bytes[0])" -> println
+    holder! -> replaceInRegion(true)
+    "region=$(holder!.bytes[0]),$(holder!.bytes[3])" -> println
+}

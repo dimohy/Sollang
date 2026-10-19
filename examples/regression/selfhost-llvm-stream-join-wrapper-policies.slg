@@ -1,0 +1,54 @@
+import sollang.compiler.llvm.text as llvm
+
+# Preserve cold/hot result wrappers across function boundaries for every join policy.
+main {
+    [
+    """
+    import std.sequence
+    make values: Range -> Stream<Int> => values -> defer
+    coldConcat left: move Stream<Int>, right: move Stream<Int> -> Stream<Int> { (left, right) -> concat }
+    coldZip left: move Stream<Int>, right: move Stream<Int> -> Stream<(left: Int, right: Int)> { (left: left, right: right) -> zip }
+    coldLatest left: move Stream<Int>, right: move Stream<Int> -> EventStream<(left: Int, right: Int)> { (left: left, right: right) -> latest }
+    hot left: move Stream<Int>, right: move Stream<Int> -> EventStream<Int> { (left, right) -> merge }
+    mixedConcat left: move EventStream<Int>, right: move Stream<Int> -> EventStream<Int> { (left, right) -> concat }
+    mixedZip left: move EventStream<Int>, right: move Stream<Int> -> EventStream<(left: Int, right: Int)> { (left: left, right: right) -> zip }
+    main {
+        0 => total!
+        1..1 -> make => first
+        2..2 -> make => second
+        first -> coldConcat(second) => ordered
+        ordered -> each value { total! + value => total! }
+        total! -> println
+        0 => pairedTotal!
+        1..1 -> make => zipLeft
+        2..2 -> make => zipRight
+        zipLeft -> coldZip(zipRight) => paired
+        paired -> each value { pairedTotal! + value.left + value.right => pairedTotal! }
+        pairedTotal! -> println
+        0 => latestTotal!
+        1..1 -> make => latestLeft
+        2..2 -> make => latestRight
+        latestLeft -> coldLatest(latestRight) => snapshots
+        snapshots -> each value { latestTotal! + value.left + value.right => latestTotal! }
+        latestTotal! -> println
+        1..1 -> make => hotLeft
+        2..2 -> make => hotRight
+        hotLeft -> hot(hotRight) => events
+        3..3 -> make => coldTail
+        events -> mixedConcat(coldTail) => mixed
+        0 => mixedTotal!
+        mixed -> each value { mixedTotal! + value => mixedTotal! }
+        mixedTotal! -> println
+        1..1 -> make => pairHotLeft
+        2..2 -> make => pairHotRight
+        pairHotLeft -> hot(pairHotRight) => pairEvents
+        10..11 -> make => coldPair
+        pairEvents -> mixedZip(coldPair) => mixedPairs
+        0 => mixedPairTotal!
+        mixedPairs -> each value { mixedPairTotal! + value.left + value.right => mixedPairTotal! }
+        mixedPairTotal! -> println
+    }
+    """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

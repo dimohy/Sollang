@@ -131,6 +131,8 @@ internal sealed partial class LlvmEmitter
     {
         return value switch
         {
+            RuntimeTextChoice choice => ((RuntimeBool)EmitConsumeTextChoice(choice, alternative =>
+                new RuntimeBool(EmitWriteValue(alternative, ok, standardError)))).ValueName,
             RuntimeFormattedText formatted => EmitWriteFormattedText(formatted, ok, standardError),
             RuntimeText text => EmitWriteTextValue(text, ok, standardError),
             RuntimeInt integer => EmitWriteIntegerValue(integer, ok, standardError),
@@ -189,7 +191,7 @@ internal sealed partial class LlvmEmitter
     {
         if (standardError && _platform is WasmBrowserLlvmRuntimePlatform)
         {
-            throw new SollangException("sys.runtime.eprintln is unavailable on wasm32-browser");
+            throw new SollangException("standard error output is unavailable on wasm32-browser");
         }
         var write = NextTemp("write");
         var writer = standardError ? "sollang_write_stderr" : "sollang_write";
@@ -336,6 +338,9 @@ internal sealed partial class LlvmEmitter
     {
         switch (value)
         {
+            case RuntimeTextChoice choice:
+                segments.Add((RuntimeText)EmitConsumeTextChoice(choice, alternative => EmitTransientText(alternative)));
+                return;
             case RuntimeText text:
                 segments.Add(text);
                 return;
@@ -409,6 +414,12 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(value);
     }
 
+    private RuntimeInt EmitCapacityAsInt(string capacity, string prefix)
+    {
+        EmitCheckedIntegerConversion(new RuntimeInt(BoundType.UInt64, capacity), BoundType.Int);
+        return EmitSizeAsInt(capacity, prefix);
+    }
+
     private string EmitIntAsSize(RuntimeInt value, string prefix)
     {
         var size = NextTemp(prefix);
@@ -430,7 +441,16 @@ internal sealed partial class LlvmEmitter
         return combined;
     }
 
+    private readonly Stack<(BoundFunction? Function, Expression Expression)> _expressionContinuations = [];
+
     private RuntimeValue EmitExpression(Expression expression)
+    {
+        _expressionContinuations.Push((_currentFunction, expression));
+        try { return EmitExpressionCore(expression); }
+        finally { _expressionContinuations.Pop(); }
+    }
+
+    private RuntimeValue EmitExpressionCore(Expression expression)
     {
         if (TryEmitCfgAwaitExpression(expression, out var awaited))
         {
@@ -579,8 +599,8 @@ internal sealed partial class LlvmEmitter
             && int.TryParse(setCapacityLiteral.Text, out var requestedSetCapacity)
             && TryResolveRuntimeTypeName(expression.TypeArgument, out var setElementType))
         {
-            var minimumBuckets = checked((requestedSetCapacity * 8 + 6) / 7);
-            var bucketCapacity = 16;
+            var minimumBuckets = checked(((long)requestedSetCapacity * 8 + 6) / 7);
+            var bucketCapacity = 16L;
             while (bucketCapacity < minimumBuckets)
             {
                 bucketCapacity = checked(bucketCapacity * 2);
@@ -661,11 +681,20 @@ internal sealed partial class LlvmEmitter
         }
 
         var arrayType = _program.Types.GetOrAddBoundedArray(elementType.Value, capacity);
+        return EmitBoundedInlineArrayLiteral(arrayType, elements);
+    }
+
+    private RuntimeDynamicInlineArray EmitBoundedInlineArrayLiteral(
+        BoundType arrayType,
+        RuntimeValue[] elements)
+    {
         var definition = _program.Types.GetBoundedArray(arrayType);
+        var capacity = definition.Capacity;
+        var elementType = definition.ElementType;
         var pointer = NextTemp("bounded_array_storage");
         EmitAlloca(
             pointer,
-            $"[{capacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(elementType.Value)}]",
+            $"[{capacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(elementType)}]",
             definition.ElementAlignment);
         for (var index = 0; index < elements.Length; index++)
         {
@@ -677,7 +706,7 @@ internal sealed partial class LlvmEmitter
         }
         return new RuntimeDynamicInlineArray(
             arrayType,
-            elementType.Value,
+            elementType,
             pointer,
             elements.Length.ToString(CultureInfo.InvariantCulture),
             capacity.ToString(CultureInfo.InvariantCulture),
@@ -691,15 +720,33 @@ internal sealed partial class LlvmEmitter
         {
             return new RuntimeInt(ParseNumber(expression).ToString(CultureInfo.InvariantCulture));
         }
-        if (!double.TryParse(expression.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
-            || double.IsNaN(value) || double.IsInfinity(value))
+        return new RuntimeFloat(
+            BoundType.Float32,
+            FormatLlvmFloatingLiteral(expression.Text, BoundType.Float32, expression.Line, expression.Column));
+    }
+
+    private static string FormatLlvmFloatingLiteral(string text, BoundType type, int line, int column)
+    {
+        double value;
+        if (type == BoundType.Float32)
+        {
+            if (!float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var single)
+                || !float.IsFinite(single))
+            {
+                throw new SollangException(
+                    $"codegen error at {line}:{column}: floating-point literal is out of range");
+            }
+            value = single;
+        }
+        else if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+            || !double.IsFinite(value))
         {
             throw new SollangException(
-                $"codegen error at {expression.Line}:{expression.Column}: floating-point literal is out of range");
+                $"codegen error at {line}:{column}: floating-point literal is out of range");
         }
-        return new RuntimeFloat(
-            BoundType.Float64,
-            value.ToString("0.0################E+00", CultureInfo.InvariantCulture));
+        // LLVM float hexadecimal constants use the exact double encoding of
+        // the already rounded single value; decimal 0.1 is not a valid float constant.
+        return $"0x{BitConverter.DoubleToInt64Bits(value):X16}";
     }
 
     private RuntimeValue[] EmitArrayLiteralElements(ArrayLiteralExpression expression)
@@ -793,6 +840,20 @@ internal sealed partial class LlvmEmitter
         var value = contextualElementType is { } expectedElement
             ? EmitFunctionArgumentExpression(expression.Value, expectedElement)
             : EmitExpression(expression.Value);
+        if (contextualArrayType is { } contextualStorage
+            && (contextualStorage == BoundType.DynamicIntArray
+                || _program.Types.IsDynamicArray(contextualStorage)
+                || _program.Types.IsBoundedArray(contextualStorage)))
+        {
+            var elements = Enumerable.Repeat(value, count).ToArray();
+            if (_program.Types.IsBoundedArray(contextualStorage))
+            {
+                return EmitBoundedInlineArrayLiteral(contextualStorage, elements);
+            }
+            return contextualStorage == BoundType.DynamicIntArray
+                ? EmitDynamicIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray())
+                : EmitDynamicInlineArrayLiteral(contextualStorage, elements);
+        }
         var useStackStorage = _currentStackFramePlan.TryGetAllocation(expression, out _);
         if (value.Type == BoundType.Int)
         {
@@ -871,6 +932,17 @@ internal sealed partial class LlvmEmitter
         {
             return true;
         }
+        // Fixed arrays are interned by element identity and length, rather
+        // than by a source spelling in the nominal name table.
+        if (typeName.StartsWith('[') && typeName.EndsWith(']')
+            && typeName.LastIndexOf(';') is var separator && separator > 1
+            && int.TryParse(typeName.AsSpan(separator + 1, typeName.Length - separator - 2).Trim(),
+                NumberStyles.None, CultureInfo.InvariantCulture, out var length)
+            && TryResolveRuntimeTypeName(typeName[1..separator].Trim(), out var elementType)
+            && _program.Types.TryGetFixedStaticArrayForShape(elementType, length, out type))
+        {
+            return true;
+        }
         if (_currentFunction is { } function)
         {
             if (typeName == function.GenericParameterName && function.SpecializedType is { } primaryType)
@@ -896,10 +968,10 @@ internal sealed partial class LlvmEmitter
     }
 
     private RuntimeDynamicIntArray EmitDynamicIntArrayLiteral(
-        ArrayLiteralExpression expression,
+        Expression expression,
         IReadOnlyList<RuntimeInt> elements)
     {
-        var length = expression.Elements.Count;
+        var length = elements.Count;
         var capacity = length;
         var storage = _currentStackFramePlan.TryGetAllocation(expression, out _)
             ? RuntimeContainerStorage.Stack
@@ -1126,11 +1198,14 @@ internal sealed partial class LlvmEmitter
                 boundedKeyType, boundedValueType, boundedCapacity);
             return EmitEmptyBoundedInlineDictionary(boundedType);
         }
-        if (expression.KeyType != "Int" || expression.ValueType != "Int")
+        if (!TryResolveRuntimeTypeName(expression.KeyType, out var keyType)
+            || !TryResolveRuntimeTypeName(expression.ValueType, out var valueType))
         {
-            if (!_program.Types.TryResolve(expression.KeyType, out var keyType)
-                || !_program.Types.TryResolve(expression.ValueType, out var valueType)
-                || !_program.Types.TryGetDictionaryForTypes(keyType, valueType, out var dictionaryType))
+            throw new SollangException($"unknown dictionary type '{{{expression.KeyType}: {expression.ValueType}}}'");
+        }
+        if (keyType != BoundType.Int || valueType != BoundType.Int)
+        {
+            if (!_program.Types.TryGetDictionaryForTypes(keyType, valueType, out var dictionaryType))
             {
                 throw new SollangException($"unknown dictionary type '{{{expression.KeyType}: {expression.ValueType}}}'");
             }
@@ -1152,6 +1227,8 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitIndexExpression(IndexExpression expression)
     {
         var source = EmitExpression(expression.Source);
+        if (source is RuntimeReference reference)
+            source = LoadReference(reference);
         if (source is RuntimeInlineDictionary inlineDictionary)
         {
             var key = expression.Index is DictionaryLiteralExpression contextual
@@ -1206,4 +1283,3 @@ internal sealed partial class LlvmEmitter
     }
 
 }
-

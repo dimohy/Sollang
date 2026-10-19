@@ -1,0 +1,111 @@
+import sollang.regression.owner_binding_value_checks as checks
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.owner_call_facts as facts
+
+copyWords words: ref [UInt64; ~] -> [UInt64; ~] {
+    [UInt64; ~] => result!
+    words -> each word { result! -> push(word) }
+    result!
+}
+
+referenceEnd words: ref [UInt64; ~], start: Int -> Int {
+    words[start] == 1 -> if { start + 2 + Int(words[start + 1]) } else { start + 2 }
+}
+
+main {
+    checks.verify()
+    "import cached.calls as provider\nmain {\n    provider.plus(UInt8(3)) => first\n    provider.plus(UInt16(4)) => second\n    provider.value() => third\n    first -> println\n}\n" => mainSource
+    "namespace cached.calls\npublic plus<T> value: T -> T => value\npublic value: -> Int => 1\n" => providerBefore
+    "namespace cached.calls\nhidden: -> Int => 99\npublic plus<T> value: T -> T { value }\npublic value: -> Int => 2\n" => providerAfter
+    [mainSource, providerBefore; ~] -> context.prepare => before
+    before -> expressions.resolveCallContext => resolved
+    resolved.prepared -> facts.capture(resolved.types, 0) => encoded
+    [providerAfter, mainSource; ~] -> context.prepare => current
+    encoded.words -> facts.restore(current.package, current.semantic) => restored
+    encoded.status == 0 and restored.status == 0 and restored.owner.sourceModule == 1 => valid
+    valid -> println
+    0 => imported!
+    restored.calls -> each target {
+        target.targetSourceModule == 0 and target.functionSymbol > 0
+            -> if { imported! + 1 => imported! }
+    }
+    imported! == 3 => shiftedTargets
+    shiftedTargets -> println
+    false => byteArgument!
+    false => wideArgument!
+    restored.arguments -> each argument {
+        argument.status == 0 and argument.expectedTypeId >= 0 and argument.actualTypeId >= 0
+            -> if {
+                restored.owner.semantic.types[argument.expectedTypeId].symbol => expected
+                restored.owner.semantic.types[argument.actualTypeId].symbol => actual
+                expected == 8 and actual == 8 -> if { true => byteArgument! }
+                expected == 9 and actual == 9 -> if { true => wideArgument! }
+            }
+    }
+    byteArgument! and wideArgument! => specializationTypes
+    specializationTypes -> println
+    true => parameters!
+    restored.arguments -> each argument {
+        argument.parameterSymbol >= 0 -> if {
+            current.package.symbols[current.package.ranges[argument.targetSourceModule].symbolStart + argument.parameterSymbol] => parameter
+            parameter.kind != 35 or parameter.parent != argument.functionSymbol
+                -> if { false => parameters! }
+        }
+    }
+    parameters! and (restored.arguments -> len) >= 2 => parametersRebound
+    parametersRebound -> println
+    (restored.owner.bindings -> len) == 3 and (restored.owner.values -> len) > 0 => ownerCommitted
+    ownerCommitted -> println
+
+    6 + Int(encoded.words[3]) => firstCall
+    encoded.words -> copyWords => badKey!
+    badKey![firstCall + 3] == 1 -> if { 255 => badKey![firstCall + 5] } else { 3 => badKey![firstCall + 3] }
+    badKey! -> facts.restore(current.package, current.semantic) => missingTarget
+    missingTarget.status != 0 and (missingTarget.calls -> len) == 0 and (missingTarget.owner.bindings -> len) == 0 => targetRejected
+    targetRejected -> println
+    firstCall => argumentStart!
+    0..<Int(encoded.words[4]) -> each {
+        encoded.words -> referenceEnd(argumentStart! + 3) => argumentStart!
+    }
+    encoded.words -> copyWords => badType!
+    18446744073709551615 => badType![argumentStart! + 5]
+    badType! -> facts.restore(current.package, current.semantic) => invalidType
+    invalidType.status != 0 and (invalidType.owner.semantic.types -> len) == 0 => typeRejected
+    typeRejected -> println
+    encoded.words -> copyWords => badWarning!
+    2 => badWarning![argumentStart! + 4]
+    badWarning! -> facts.restore(current.package, current.semantic) => invalidWarning
+    invalidWarning.status != 0 and (invalidWarning.arguments -> len) == 0 => warningRejected
+    warningRejected -> println
+    encoded.words -> copyWords => badAst!
+    UInt64(current.package.ranges[1].astCount) => badAst![firstCall]
+    badAst! -> facts.restore(current.package, current.semantic) => invalidAst
+    invalidAst.status != 0 and (invalidAst.owner.values -> len) == 0 => astRejected
+    astRejected -> println
+    [UInt64; ~] => short!
+    0..<((encoded.words -> len) - 1) -> each index { short! -> push(encoded.words[index]) }
+    UInt64(short! -> len) => short![2]
+    short! -> facts.restore(current.package, current.semantic) => truncated
+    truncated.status != 0 and (truncated.calls -> len) == 0 => truncationRejected
+    truncationRejected -> println
+    [mainSource, mainSource, providerAfter; ~] -> context.prepare => duplicate
+    encoded.words -> facts.restore(duplicate.package, duplicate.semantic) => ambiguousOwner
+    ambiguousOwner.status != 0 and (ambiguousOwner.arguments -> len) == 0 => ownerRejected
+    ownerRejected -> println
+    current.semantic.types -> len => count
+    badType! -> facts.restore(current.package, current.semantic) => failed
+    failed.status != 0 and (current.semantic.types -> len) == count
+        and (failed.owner.semantic.fields -> len) == 0 => atomic
+    atomic -> println
+    encoded.words -> copyWords => badOrdinal!
+    2 => badOrdinal![argumentStart! + 2]
+    badOrdinal! -> facts.restore(current.package, current.semantic) => invalidOrdinal
+    invalidOrdinal.status != 0 and (invalidOrdinal.arguments -> len) == 0 => ordinalRejected
+    ordinalRejected -> println
+    [mainSource, "namespace cached.calls\npublic value: -> Int => 2\n"; ~] -> context.prepare => missing
+    encoded.words -> facts.restore(missing.package, missing.semantic) => missingFunction
+    missingFunction.status != 0 and (missingFunction.owner.bindings -> len) == 0 => missingRejected
+    missingRejected -> println
+
+}

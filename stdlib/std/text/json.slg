@@ -62,6 +62,8 @@ public struct Member {
 
 public struct Value {
     public kind: ValueKind
+    public sourceStart: UIntSize
+    public sourceEnd: UIntSize
     public boolean: Bool
     public bytes: [UInt8; ~]
     public items: [Int; ~]
@@ -823,8 +825,10 @@ public writer maxOutputBytes: Int, maxDepth: Int -> Result<Writer, Error> {
     })
 }
 
-modelValue kind: ValueKind -> Value => Value {
+modelValue kind: ValueKind, token: Token -> Value => Value {
     kind: kind
+    sourceStart: token.start
+    sourceEnd: token.start + token.length
     boolean: false
     bytes: [UInt8; ~]
     items: [Int; ~]
@@ -840,40 +844,41 @@ appendModelValue document: mut Document, value: move Value -> Int {
 readModelValue reader: mut Reader, token: Token, document: mut Document -> Result<Int, Error> {
     token.kind -> when {
         Null {
-            document -> appendModelValue(modelValue(model.ValueKind.Null)) => index
+            document -> appendModelValue(modelValue(model.ValueKind.Null, token)) => index
             Result<Int, Error>.Ok(index) -> return
         }
         False {
-            modelValue(model.ValueKind.Boolean) => value!
+            modelValue(model.ValueKind.Boolean, token) => value!
             false => value!.boolean
             document -> appendModelValue(value!) => index
             Result<Int, Error>.Ok(index) -> return
         }
         True {
-            modelValue(model.ValueKind.Boolean) => value!
+            modelValue(model.ValueKind.Boolean, token) => value!
             true => value!.boolean
             document -> appendModelValue(value!) => index
             Result<Int, Error>.Ok(index) -> return
         }
         Number {
-            modelValue(model.ValueKind.Number) => value!
+            modelValue(model.ValueKind.Number, token) => value!
             reader.source -> ownedNumberBytes(token)? => value!.bytes
             document -> appendModelValue(value!) => index
             Result<Int, Error>.Ok(index) -> return
         }
         String {
-            modelValue(model.ValueKind.String) => value!
+            modelValue(model.ValueKind.String, token) => value!
             reader -> decodeString(token, reader.limits.maxStringBytes)? => value!.bytes
             document -> appendModelValue(value!) => index
             Result<Int, Error>.Ok(index) -> return
         }
         BeginArray {
-            modelValue(model.ValueKind.Array) => value!
+            modelValue(model.ValueKind.Array, token) => value!
             true => reading!
             reading! -> while {
                 reader -> next? => itemToken
                 itemToken.kind -> when {
-                    EndArray { false => reading! }
+                    EndArray { itemToken.start + itemToken.length => value!.sourceEnd
+                        false => reading! }
                     DocumentEnd { errorInt(errors.Kind.UnexpectedEnd, itemToken.start) -> return }
                     Name { errorInt(errors.Kind.ExpectedValue, itemToken.start) -> return }
                     EndObject { errorInt(errors.Kind.ExpectedValue, itemToken.start) -> return }
@@ -887,12 +892,13 @@ readModelValue reader: mut Reader, token: Token, document: mut Document -> Resul
             Result<Int, Error>.Ok(index) -> return
         }
         BeginObject {
-            modelValue(model.ValueKind.Object) => value!
+            modelValue(model.ValueKind.Object, token) => value!
             true => reading!
             reading! -> while {
                 reader -> next? => nameToken
                 nameToken.kind -> when {
-                    EndObject { false => reading! }
+                    EndObject { nameToken.start + nameToken.length => value!.sourceEnd
+                        false => reading! }
                     Name {
                         reader -> decodeString(nameToken, reader.limits.maxStringBytes)? => name
                         reader -> next? => memberToken
@@ -934,81 +940,105 @@ impl Reader {
         self.source -> slice(token.start, token.length)
     }
 
-    public decodeString: self, token: Token, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
-        maxOutputBytes >= 0 -> unless {
-            errorBytes(errors.Kind.InvalidLimit, token.start) -> return
+    public nameSeparator: self, token: Token -> Result<Unit, Error> {
+        token.kind -> when { Name { true } else { false } }
+            -> unless {
+                errorUnit(errors.Kind.WrongTokenKind, token.start) -> return
+            }
+        self.source -> checkedTokenEnd(token, errors.Kind.ExpectedColon)? => end
+        token.length < 2 -> if {
+            errorUnit(errors.Kind.WrongTokenKind, token.start) -> return
         }
-        token.kind -> when {
-            String { true }
-            Name { true }
-            else { false }
-        } => stringToken
-        stringToken -> unless {
-            errorBytes(errors.Kind.WrongTokenKind, token.start) -> return
+        (self.source -> byte(token.start)) != '"' -> if {
+        errorUnit(errors.Kind.WrongTokenKind, token.start) -> return
+    }
+    self.source -> scanString(token.start, end, self.limits.maxStringBytes)? => scan
+    scan.end == end -> unless {
+        errorUnit(errors.Kind.WrongTokenKind, token.start) -> return
+    }
+    self.source -> skipWhitespace(end, self.end) => separator
+    separator < self.end and (self.source -> byte(separator)) == ':'
+        -> unless {
+            errorUnit(errors.Kind.ExpectedColon, separator) -> return
         }
-        # Token is a public value, so authenticate both its source span and all
-        # derived string metadata before reserving output or reading content.
-        self.source -> checkedTokenEnd(token, errors.Kind.InvalidStringEscape)? => tokenEnd
-        self.source -> byte(token.start) == '"' -> unless {
+    Result<Unit, Error>.Ok
+}
+
+public decodeString: self, token: Token, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+    maxOutputBytes >= 0 -> unless {
+        errorBytes(errors.Kind.InvalidLimit, token.start) -> return
+    }
+    token.kind -> when {
+        String { true }
+        Name { true }
+        else { false }
+    } => stringToken
+    stringToken -> unless {
+        errorBytes(errors.Kind.WrongTokenKind, token.start) -> return
+    }
+    # Token is a public value, so authenticate both its source span and all
+    # derived string metadata before reserving output or reading content.
+    self.source -> checkedTokenEnd(token, errors.Kind.InvalidStringEscape)? => tokenEnd
+    self.source -> byte(token.start) == '"' -> unless {
+    errorBytes(errors.Kind.InvalidStringEscape, token.start) -> return
+}
+self.source -> scanString(token.start, tokenEnd, self.limits.maxStringBytes)? => authenticated
+authenticated.end == tokenEnd
+    and token.contentStart == token.start + 1
+    and token.contentLength == authenticated.contentEnd - token.contentStart
+    and token.decodedLength == authenticated.decodedLength
+    -> unless {
         errorBytes(errors.Kind.InvalidStringEscape, token.start) -> return
     }
-    self.source -> scanString(token.start, tokenEnd, self.limits.maxStringBytes)? => authenticated
-    authenticated.end == tokenEnd
-        and token.contentStart == token.start + 1
-        and token.contentLength == authenticated.contentEnd - token.contentStart
-        and token.decodedLength == authenticated.decodedLength
-        -> unless {
-            errorBytes(errors.Kind.InvalidStringEscape, token.start) -> return
-        }
-    token.decodedLength <= maxOutputBytes -> unless {
-        errorBytes(errors.Kind.OutputLimitExceeded, token.start) -> return
-    }
-    [UInt8; ~] => output!
-    output! -> reserve(token.decodedLength)
-    token.contentStart => index!
-    token.contentStart + token.contentLength => end
-    index! < end -> while {
-        self.source -> byte(index!) => byte
-        byte != '\\' -> if {
-            byte < 128 -> if {
-                output! -> push(byte)
-                index! + 1 => index!
-            } else {
-                self.source -> utf8SequenceLength(index!, end) => sequenceLength
-                0 => byteIndex!
-                byteIndex! < sequenceLength -> while {
-                    output! -> push(self.source -> byte(index! + UIntSize(byteIndex!)))
-                    byteIndex! + 1 => byteIndex!
-                }
-                index! + UIntSize(sequenceLength) => index!
-            }
+token.decodedLength <= maxOutputBytes -> unless {
+    errorBytes(errors.Kind.OutputLimitExceeded, token.start) -> return
+}
+[UInt8; ~] => output!
+output! -> reserve(token.decodedLength)
+token.contentStart => index!
+token.contentStart + token.contentLength => end
+index! < end -> while {
+    self.source -> byte(index!) => byte
+    byte != '\\' -> if {
+        byte < 128 -> if {
+            output! -> push(byte)
+            index! + 1 => index!
         } else {
-            self.source -> byte(index! + 1) => escaped
-            escaped -> when {
-                == '"' { output! -> push('"') }
-            == '\\' { output! -> push('\\') }
-            == '/' { output! -> push('/') }
-            == 'b' { output! -> push('\b') }
-            == 'f' { output! -> push('\f') }
-            == 'n' { output! -> push('\n') }
-            == 'r' { output! -> push('\r') }
-            == 't' { output! -> push('\t') }
-            == 'u' {
-                self.source -> parseHex4(index! + 2, end) => firstCode
-                firstCode => codePoint!
-                index! + 6 => next!
-                firstCode >= 55_296 and firstCode <= 56_319 -> if {
-                    self.source -> parseHex4(next! + 2, end) => secondCode
-                    65_536 + (firstCode - 55_296) * 1_024 + secondCode - 56_320 => codePoint!
-                    next! + 6 => next!
-                }
-                output! -> appendCodePoint(codePoint!)
-                next! => index!
+            self.source -> utf8SequenceLength(index!, end) => sequenceLength
+            0 => byteIndex!
+            byteIndex! < sequenceLength -> while {
+                output! -> push(self.source -> byte(index! + UIntSize(byteIndex!)))
+                byteIndex! + 1 => byteIndex!
             }
-            else { errorBytes(errors.Kind.InvalidStringEscape, index!) -> return }
+            index! + UIntSize(sequenceLength) => index!
         }
-        escaped != 'u' -> if { index! + 2 => index! }
+    } else {
+        self.source -> byte(index! + 1) => escaped
+        escaped -> when {
+            == '"' { output! -> push('"') }
+        == '\\' { output! -> push('\\') }
+        == '/' { output! -> push('/') }
+        == 'b' { output! -> push('\b') }
+        == 'f' { output! -> push('\f') }
+        == 'n' { output! -> push('\n') }
+        == 'r' { output! -> push('\r') }
+        == 't' { output! -> push('\t') }
+        == 'u' {
+            self.source -> parseHex4(index! + 2, end) => firstCode
+            firstCode => codePoint!
+            index! + 6 => next!
+            firstCode >= 55_296 and firstCode <= 56_319 -> if {
+                self.source -> parseHex4(next! + 2, end) => secondCode
+                65_536 + (firstCode - 55_296) * 1_024 + secondCode - 56_320 => codePoint!
+                next! + 6 => next!
+            }
+            output! -> appendCodePoint(codePoint!)
+            next! => index!
+        }
+        else { errorBytes(errors.Kind.InvalidStringEscape, index!) -> return }
     }
+    escaped != 'u' -> if { index! + 2 => index! }
+}
 }
 Result<[UInt8; ~], Error>.Ok(output!)
 }

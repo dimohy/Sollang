@@ -1,0 +1,24 @@
+# A move in an all-return control cannot reach the later owner read.
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner -> Result<Int, Int> {
+    Result<Int, Int>.Ok(Int(owner.bytes -> len))
+}
+
+remaining flag: Bool -> Int {
+    Owner { bytes: [1, 2, 3; ~] } => owner
+    flag -> if {
+        owner -> consume -> when {
+            Ok(value) { value -> return }
+            Err(_) { -1 -> return }
+        }
+    }
+    Int(owner.bytes -> len)
+}
+
+main {
+    false -> remaining -> println
+    true -> remaining -> println
+}

@@ -1,0 +1,69 @@
+import sollang.compiler.cli_format as formatter
+import sys.file as file
+
+reportFormatted sourceText: Text, label: Text -> Unit uses Console {
+    sourceText -> file.borrowText => source
+    source -> formatter.format => result
+    "case=$label,status=$(result.status)" -> println
+    result.bytes -> file.borrowBytes => formatted
+    formatted -> slice(UIntSize(0), formatted -> len) -> print
+}
+
+main {
+    """
+    check: -> Result<Bool, Int> => Result<Bool, Int>.Ok(true)
+    
+    main {
+        check() -> when {
+            Ok(value) { value }
+            Err(error) { false }
+        } => matched
+        matched -> if {
+            "yes"
+        } else {
+            "no"
+        } -> println
+    }
+    
+    """ => source0
+    source0 -> reportFormatted("bound-control")
+    """
+    check: -> Result<Bool, Int> => Result<Bool, Int>.Ok(false)
+    
+    main {
+        check() -> when {
+            Ok(value) { value }
+            Err(error) { false }
+        } -> if {
+            "yes"
+        } else {
+            "no"
+        } -> println
+    }
+    
+    """ => source1
+    source1 -> reportFormatted("direct-false")
+    """
+    check: -> Result<Bool, Int> => Result<Bool, Int>.Ok(true)
+    
+    main {
+        check() -> when {
+            Ok(value) { value }
+            Err(error) { false }
+        } -> if {
+            "yes"
+        } else {
+            "no"
+        } -> println
+    }
+    
+    """ => source2
+    source2 -> reportFormatted("direct-true")
+    """
+    main {
+        (true) -> if { "yes" -> println }
+    }
+    
+    """ => source3
+    source3 -> reportFormatted("matched-control-parentheses")
+}

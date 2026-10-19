@@ -1,0 +1,41 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.ir.module_artifacts as artifacts
+
+typedCount nodes: [typed.TypedIrNode; ~] -> Int {
+    0 => count!
+    nodes -> each node {
+        node.typeId >= 0 -> if { count! + 1 => count! }
+    }
+    count!
+}
+
+main {
+    ["import sys.process as process\n\nmain {\n    [1, 2; ~] => items!\n    process.arguments() -> len => count\n    0..<Int(count) -> each { items! -> push(3) }\n    items! -> len -> println\n}\n"; ~] => sources
+    sources -> context.prepare => snapshot
+    snapshot -> expressions.resolveContext => finalTypes
+    snapshot -> typed.lowerResolvedContext(finalTypes) => ir
+    [typeIds.SemanticType; ~] => initialTypes!
+    snapshot.semantic.types -> each current { initialTypes! -> push(current) }
+    ir -> artifacts.encodeExact(sources, initialTypes!) => incomplete
+    incomplete.status == 1 -> println
+    [typeIds.SemanticType; ~] => savedTypes!
+    finalTypes.types -> each current { savedTypes! -> push(current) }
+    ir -> artifacts.encodeExact(sources, savedTypes!) => complete
+    complete.words -> artifacts.validateExact => validation
+    validation.status == 0 -> println
+    complete.words -> artifacts.decodeExact(sources) => decoded
+    decoded.status == 0 and (ir -> typedCount) > 0
+        and (decoded.ir -> typedCount) == (ir -> typedCount) => preserved
+    preserved -> println
+
+    finalTypes.types[0] => invalidType!
+    0 => invalidType!.first
+    [invalidType!; ~] => invalidTypes
+    [typed.TypedIrNode; ~] => emptyIr
+    emptyIr -> artifacts.encodeExact(sources, invalidTypes) => invalid
+    invalid.status == 2 and (invalid.words -> len) == 0 => dependencyRejected
+    dependencyRejected -> println
+}

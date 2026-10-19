@@ -1,0 +1,78 @@
+namespace sollang.compiler.probes.context_branch_types
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+traceSelected paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize, allExpressions: Bool -> Unit uses Console, File {
+    paths -> semanticContext.prepareFiles => initialPrepared
+    initialPrepared -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    prepared.package.ranges[sourceIndex] => range
+    allExpressions -> if {
+        prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            prepared.package.nodes[range.astStart + astIndex!] => node
+            node.start >= start and node.start <= end -> if {
+                "ast=$(astIndex!),kind=$(node.kind),rule=$(node.cstRuleId),parent=$(node.parent),start=$(node.start),length=$(node.length),first-token=$(node.firstToken)" -> println
+                0 => nameIndex!
+                nameIndex! < range.nameCount -> while {
+                    prepared.package.names[range.nameStart + nameIndex!] => name
+                    name.astNode == astIndex! and name.symbol >= 0 and name.symbol < range.symbolCount
+                        -> if {
+                            prepared.package.symbols[range.symbolStart + name.symbol] => declaration
+                            "resolved-symbol=$(name.symbol),declaration-ast=$(declaration.astNode),declaration-parent=$(declaration.parent),flags=$(declaration.flags)" -> println
+                        }
+                    nameIndex! + 1 => nameIndex!
+                }
+                prepared.calls -> each call {
+                    call.sourceModule == sourceIndex and call.callAst == astIndex!
+                        -> if {
+                            "resolved-call-status=$(call.status),target-source=$(call.targetSourceModule),function-symbol=$(call.functionSymbol)" -> println
+                            node.kind == 10 -> if {
+                                prepared.package -> semanticContext.callArgumentAsts(call, flowSources) => arguments
+                                "flow-source-global-ast=$(flowSources[range.astStart + astIndex!]),argument-count=$(arguments -> len)" -> println
+                            }
+                        }
+                }
+                types.expressions -> each expression {
+                    expression.sourceModule == sourceIndex and expression.astNode == astIndex!
+                        -> if {
+                            "expression-type=$(expression.typeId),status=$(expression.status)" -> println
+                            expression.typeId >= 0 and expression.typeId < (types.types -> len)
+                                -> if {
+                                    types.types[expression.typeId] => semanticType
+                                    "type=$(expression.typeId),kind=$(semanticType.kind),origin=$(semanticType.origin),module=$(semanticType.module),symbol=$(semanticType.symbol)" -> println
+                                }
+                        }
+                }
+            }
+            astIndex! + 1 => astIndex!
+        }
+        return
+    }
+    types.expressions -> each expression {
+        expression.sourceModule == sourceIndex -> if {
+            prepared.package.nodes[range.astStart + expression.astNode] => node
+            node.start >= start and node.start <= end
+                and (node.kind == 10 or node.kind == 42 or node.kind == 43 or node.kind == 6)
+                -> if {
+                    "ast=$(expression.astNode),kind=$(node.kind),parent=$(node.parent),start=$(node.start),length=$(node.length),type=$(expression.typeId),status=$(expression.status)" -> println
+                    expression.typeId >= 0 and expression.typeId < (types.types -> len)
+                        -> if {
+                            types.types[expression.typeId] => semanticType
+                            "type=$(expression.typeId),kind=$(semanticType.kind),origin=$(semanticType.origin),module=$(semanticType.module),symbol=$(semanticType.symbol)" -> println
+                        }
+                }
+        }
+    }
+}
+
+public trace paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> traceSelected(sourceIndex, start, end, false)
+}
+
+public traceAll paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> traceSelected(sourceIndex, start, end, true)
+}

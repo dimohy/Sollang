@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$CompletionRecordPath,
-    [ValidateRange(1, 120)][int]$TimeoutSeconds = 30
+    [ValidateRange(1, 3600)][int]$TimeoutSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,21 +60,82 @@ while (-not (Test-Path -LiteralPath $completionRecordPath -PathType Leaf)) {
     Start-Sleep -Milliseconds 100
 }
 
-$result = Get-Content -LiteralPath $completionRecordPath -Raw | ConvertFrom-Json
-if ($result.status -cne 'cancelled' -or $result.exitCode -eq 0) {
-    throw 'Detached cancellation did not preserve cancelled status and a non-zero exit code'
+function Assert-Stage3LateCancellation {
+    param(
+        [Parameter(Mandatory)][object]$Result,
+        [Parameter(Mandatory)][object]$Launch,
+        [Parameter(Mandatory)][string]$RequestPath
+    )
+
+    if ($Result.verification -cne 'Stage3' -or $Launch.verification -cne 'Stage3' -or
+        $Result.cancellationDisposition -cne 'afterCommit' -or
+        $Result.status -cne 'passed' -or $Result.exitCode -ne 0 -or $Result.targetExitCode -ne 0 -or
+        @($Result.failureIds).Count -ne 0 -or $null -ne $Result.cancellationAcknowledgement -or
+        $Result.publicationMayBePartial -ne $false) {
+        throw 'Stage3 late cancellation did not complete its publication successfully'
+    }
+    $commitPath = "$RequestPath.commit.json"
+    $publishedPath = "$RequestPath.published.json"
+    if (-not (Test-Path -LiteralPath $commitPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $publishedPath -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $commitPath -Algorithm SHA256).Hash -cne $Result.stage3PublicationCommitSha256 -or
+        (Get-FileHash -LiteralPath $publishedPath -Algorithm SHA256).Hash -cne $Result.stage3PublicationCompleteSha256) {
+        throw 'Stage3 publication records differ from the supervisor-validated hashes'
+    }
+    $commit = Get-Content -LiteralPath $commitPath -Raw | ConvertFrom-Json
+    $published = Get-Content -LiteralPath $publishedPath -Raw | ConvertFrom-Json
+    if ($commit.runId -cne $Launch.runId -or $published.runId -cne $Launch.runId -or
+        [int]$commit.targetProcessId -ne [int]$Result.targetProcessId -or
+        [int]$published.targetProcessId -ne [int]$Result.targetProcessId -or
+        $published.inputFingerprint -cne $commit.inputFingerprint) {
+        throw 'Stage3 publication records do not identify the completed run'
+    }
 }
-if (@($result.failureIds).Count -ne 1 -or $result.failureIds[0] -cne 'CANCELLATION_REQUESTED') {
-    throw 'Detached cancellation did not preserve the exact cancellation failure ID'
+
+function Add-Stage3LateCancellationOutcome {
+    param([Parameter(Mandatory)][object]$Result)
+
+    $Result | Add-Member -NotePropertyName cancellationRequestOutcome `
+        -NotePropertyValue 'accepted-after-publication-commit-not-stopped'
+    $Result | Add-Member -NotePropertyName cancellationRequestMessage `
+        -NotePropertyValue 'Cancellation was requested after the Stage3 publication commit; verification completed and was not stopped.'
 }
-if (@($result.orphanProcessIds).Count -ne 0) {
-    throw 'Detached cancellation left an orphan process'
+
+$resultText = Get-Content -LiteralPath $completionRecordPath -Raw
+$resultSchemaPath = Join-Path $PSScriptRoot 'contracts/detached-selfhost-verification-result.schema.json'
+if (-not ($resultText | Test-Json -SchemaFile $resultSchemaPath -ErrorAction Stop)) {
+    throw 'Detached completion record does not match its schema'
 }
-if ($result.targetExitCode -ne 130 -or $null -eq $result.cancellationAcknowledgement -or
-    $result.cancellationAcknowledgement.runId -cne $launch.runId -or
-    [int]$result.cancellationAcknowledgement.targetProcessId -ne [int]$result.targetProcessId -or
-    $result.cancellationAcknowledgementPath -cne $cancellationAcknowledgementPath) {
-    throw 'Detached cancellation did not preserve exact cooperative target acknowledgement'
+$result = $resultText | ConvertFrom-Json
+if ($result.runId -cne $launch.runId -or $result.verification -cne $launch.verification -or
+    [int]$result.supervisorPid -ne [int]$launch.supervisorPid -or
+    $result.cancellationRequestPath -cne $cancellationRequestPath -or
+    $result.cancellationAcknowledgementPath -cne $cancellationAcknowledgementPath -or
+    [int]$result.targetProcessId -le 0 -or
+    -not $result.processAudit.completed -or @($result.orphanProcessIds).Count -ne 0) {
+    throw 'Detached completion record does not identify the active run and completed process tree'
+}
+$requestOnDisk = Get-Content -LiteralPath $cancellationRequestPath -Raw | ConvertFrom-Json
+if ($requestOnDisk.schemaVersion -ne 1 -or $requestOnDisk.runId -cne $launch.runId) {
+    throw 'Cancellation request no longer identifies the active run'
+}
+$afterCommit = $result.verification -ceq 'Stage3' -and
+    $result.cancellationDisposition -ceq 'afterCommit'
+if ($afterCommit) {
+    Assert-Stage3LateCancellation -Result $result -Launch $launch -RequestPath $cancellationRequestPath
+    Add-Stage3LateCancellationOutcome -Result $result
+} else {
+    if ($result.status -cne 'cancelled' -or $result.exitCode -eq 0) {
+        throw 'Detached cancellation did not preserve cancelled status and a non-zero exit code'
+    }
+    if (@($result.failureIds).Count -ne 1 -or $result.failureIds[0] -cne 'CANCELLATION_REQUESTED') {
+        throw 'Detached cancellation did not preserve the exact cancellation failure ID'
+    }
+    if ($result.targetExitCode -ne 130 -or $null -eq $result.cancellationAcknowledgement -or
+        $result.cancellationAcknowledgement.runId -cne $launch.runId -or
+        [int]$result.cancellationAcknowledgement.targetProcessId -ne [int]$result.targetProcessId) {
+        throw 'Detached cancellation did not preserve exact cooperative target acknowledgement'
+    }
 }
 
 $supervisorDeadline = [DateTimeOffset]::UtcNow.AddSeconds(5)

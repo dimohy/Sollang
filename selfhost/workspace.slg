@@ -2,6 +2,7 @@ namespace sollang.compiler.workspace
 
 import sollang.compiler.lexer
 import sollang.compiler.syntax
+import sollang.compiler.manifest_diagnostics as manifestDiagnostics
 import syntax.generated.slg as grammar
 import sys.file as file
 
@@ -12,6 +13,7 @@ public struct WorkspaceMember {
 
 public struct WorkspaceManifest {
     public status: Int
+    public diagnostic: manifestDiagnostics.ManifestDiagnostic
     public members: [WorkspaceMember; ~]
 }
 
@@ -50,107 +52,113 @@ sameMember source: Text, left: WorkspaceMember, right: WorkspaceMember -> Bool {
     same!
 }
 
-# Status: 0 valid, 1 workspace keyword, 2 opening brace, 3 members field,
-# 4 colon, 5 opening array, 6 string member, 7 duplicate member,
-# 8 missing separator, 9 closing brace, 10 trailing input, 11 empty members.
+# Status is diagnostic.kind; valid empty members are rejected by load.
+# Nested decoded-string diagnostics remain explicit kind 8 until aligned.
 public parse source: Text -> WorkspaceManifest {
     source -> lexer.lex => rawTokens
     [syntax.SyntaxToken; ~] => tokens!
     rawTokens -> each token {
         token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
-            -> if {
-                tokens! -> push(token)
-            }
+            -> if { tokens! -> push(token) }
     }
-
     [WorkspaceMember; ~] => members!
-    0 => status!
+    manifestDiagnostics.none() => error!
+    false => sawMembers!
     0 => index!
-    index! -> skipSeparators(tokens!) => index!
-
-    tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "workspace"))
+    tokens![index!].kind == grammar.tokenIdNewLine()
+        -> while { index! + 1 => index! }
+    tokens![index!].kind != grammar.tokenIdIdentifier()
         -> if {
-            index! + 1 => index!
-        } else { 1 => status! }
-
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdLeftBrace()
-            -> if { index! + 1 => index! } else { 2 => status! }
-    }
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdIdentifier() and (source -> textIs(tokens![index!], "members"))
-            -> if {
-                index! + 1 => index!
-            } else { 3 => status! }
-    }
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdColon()
-            -> if { index! + 1 => index! } else { 4 => status! }
-    }
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdLeftBracket()
-            -> if { index! + 1 => index! } else { 5 => status! }
-    }
-
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket()
-            -> while {
-                tokens![index!].kind == grammar.tokenIdString()
-                    -> if {
-                        tokens![index!] => memberToken
-                        memberToken.span.length >= 2 -> if {
-                            WorkspaceMember {
-                                start: memberToken.span.start + 1
-                                length: memberToken.span.length - 2
-                            } => member
-                            false => duplicate!
-                            0 => memberIndex!
-                            not duplicate! and memberIndex! < (members! -> len)
-                                -> while {
-                                    source -> sameMember(members![memberIndex!], member)
-                                        -> if { true => duplicate! }
-                                    memberIndex! + 1 => memberIndex!
-                                }
-                            duplicate! -> if { 7 => status! } else { members! -> push(member) }
-                        } else { 6 => status! }
-                        index! + 1 => index!
-                    } else { 6 => status! }
-
-                status! == 0 -> if {
-                    index! => separatorStart
-                    index! -> skipSeparators(tokens!) => index!
-                    index! == separatorStart and tokens![index!].kind != grammar.tokenIdRightBracket()
-                        -> if {
-                            8 => status!
-                        }
+            manifestDiagnostics.atToken(1, 2, tokens![index!], 2) => error!
+        } else {
+            source -> textIs(tokens![index!], "workspace")
+                -> if { index! + 1 => index! } else {
+                    manifestDiagnostics.atToken(2, 2, tokens![index!], 0) => error!
                 }
+        }
+    error!.kind == 0 -> if {
+        tokens![index!].kind == grammar.tokenIdLeftBrace()
+            -> if { index! + 1 => index! } else {
+                manifestDiagnostics.atToken(1, 2, tokens![index!], 3) => error!
             }
     }
-
-    status! == 0 -> if {
-        tokens![index!].kind == grammar.tokenIdRightBracket()
-            -> if {
-                (members! -> len) == 0 -> if { 11 => status! } else { index! + 1 => index! }
-            } else { 6 => status! }
+    error!.kind == 0 -> if { index! -> skipSeparators(tokens!) => index! }
+    error!.kind == 0 and tokens![index!].kind != grammar.tokenIdRightBrace()
+        -> while {
+            tokens![index!] => field
+            field.kind != grammar.tokenIdIdentifier() -> if {
+                manifestDiagnostics.atToken(1, 2, field, 10) => error!
+            } else {
+                index! + 1 => index!
+                tokens![index!].kind != grammar.tokenIdColon()
+                    -> if {
+                        manifestDiagnostics.atToken(1, 2, tokens![index!], 5) => error!
+                    } else {
+                        index! + 1 => index!
+                        source -> textIs(field, "members") -> if {
+                            sawMembers! -> if {
+                                manifestDiagnostics.atToken(4, 2, field, 0) => error!
+                            } else {
+                                true => sawMembers!
+                                tokens![index!].kind != grammar.tokenIdLeftBracket()
+                                    -> if {
+                                        manifestDiagnostics.atToken(1, 2, tokens![index!], 7) => error!
+                                    } else {
+                                        index! + 1 => index!
+                                        index! -> skipSeparators(tokens!) => index!
+                                        error!.kind == 0 and tokens![index!].kind != grammar.tokenIdRightBracket()
+                                            -> while {
+                                                tokens![index!] => memberToken
+                                                memberToken.kind != grammar.tokenIdString() -> if {
+                                                    manifestDiagnostics.atToken(1, 2, memberToken, 6) => error!
+                                                } else {
+                                                    source -> syntax.rawStringTokenLayout(memberToken) => memberLayout
+                                                    WorkspaceMember { start: memberLayout.contentStart, length: memberLayout.contentEnd - memberLayout.contentStart } => member
+                                                    false => duplicate!
+                                                    0 => memberIndex!
+                                                    not duplicate! and memberIndex! < (members! -> len)
+                                                        -> while {
+                                                            source -> sameMember(members![memberIndex!], member)
+                                                                -> if { true => duplicate! }
+                                                            memberIndex! + 1 => memberIndex!
+                                                        }
+                                                    duplicate! -> if {
+                                                        manifestDiagnostics.atToken(8, 3, memberToken, 0) => error!
+                                                    } else {
+                                                        members! -> push(member)
+                                                        index! + 1 => index!
+                                                    }
+                                                }
+                                                error!.kind == 0 -> if {
+                                                    tokens![index!].kind != grammar.tokenIdRightBracket() and tokens![index!].kind != grammar.tokenIdNewLine() and tokens![index!].kind != grammar.tokenIdComma()
+                                                        -> if {
+                                                            manifestDiagnostics.atToken(5, 3, tokens![index!], 0) => error!
+                                                        } else { index! -> skipSeparators(tokens!) => index! }
+                                                }
+                                            }
+                                        error!.kind == 0 -> if { index! + 1 => index! }
+                                    }
+                            }
+                        } else { manifestDiagnostics.atToken(3, 2, field, 0) => error! }
+                    }
+            }
+            error!.kind == 0 -> if {
+                tokens![index!].kind != grammar.tokenIdRightBrace() and tokens![index!].kind != grammar.tokenIdNewLine() and tokens![index!].kind != grammar.tokenIdComma()
+                    -> if {
+                        manifestDiagnostics.atToken(5, 2, tokens![index!], 0) => error!
+                    } else { index! -> skipSeparators(tokens!) => index! }
+            }
+        }
+    error!.kind == 0 -> if {
+        index! + 1 => index!
+        tokens![index!].kind == grammar.tokenIdNewLine()
+            -> while { index! + 1 => index! }
+        tokens![index!].kind != grammar.tokenIdEnd() -> if {
+            manifestDiagnostics.atToken(1, 2, tokens![index!], 9) => error!
+        }
     }
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind == grammar.tokenIdRightBrace()
-            -> if { index! + 1 => index! } else { 9 => status! }
-    }
-    status! == 0 -> if {
-        index! -> skipSeparators(tokens!) => index!
-        tokens![index!].kind != grammar.tokenIdEnd()
-            -> if { 10 => status! }
-    }
-
-    WorkspaceManifest { status: status!, members: members! } => result
-    result
+    error!.kind == 0 and not sawMembers! -> if { manifestDiagnostics.withoutToken(6, 2, 3) => error! }
+    WorkspaceManifest { status: error!.kind, diagnostic: error!, members: members! }
 }
 
 public parseSource source: file.SourceText -> WorkspaceManifest {

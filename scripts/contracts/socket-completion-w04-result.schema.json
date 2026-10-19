@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "caseId", "status", "compilerSha256", "inputStable", "inputDrift", "inputHashes", "formatExitCode", "compileExitCode", "compileDiagnosticsClean", "nativeExitCode", "llvmAsExitCode", "closureExitCode", "stdout", "peerBytes", "orphanProcessIds", "irAssertions", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "caseId": { "const": "W04" },
+    "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "inputHashes": { "type": "object", "minProperties": 10, "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" } },
+    "formatExitCode": { "type": ["integer", "null"] },
+    "compileExitCode": { "type": ["integer", "null"] },
+    "compileDiagnosticsClean": { "type": "boolean" },
+    "nativeExitCode": { "type": ["integer", "null"] },
+    "llvmAsExitCode": { "type": ["integer", "null"] },
+    "closureExitCode": { "type": ["integer", "null"] },
+    "stdout": { "type": "array", "items": { "type": "string" } },
+    "peerBytes": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+    "orphanProcessIds": { "type": "array", "maxItems": 0, "items": { "type": "integer" } },
+    "irAssertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sendCallCount", "rangeOffsetApplied", "rangeLengthApplied", "payloadCopyFree", "dequeueOwnerTransferVerified"],
+      "properties": {
+        "sendCallCount": { "type": "integer" },
+        "rangeOffsetApplied": { "type": "boolean" },
+        "rangeLengthApplied": { "type": "boolean" },
+        "payloadCopyFree": { "type": "boolean" },
+        "dequeueOwnerTransferVerified": { "type": "boolean" }
+      }
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+  },
+  "allOf": [{
+    "if": { "properties": { "status": { "const": "passed" } } },
+    "then": { "properties": {
+      "inputStable": { "const": true }, "inputDrift": { "maxItems": 0 },
+      "formatExitCode": { "const": 0 }, "compileExitCode": { "const": 0 }, "compileDiagnosticsClean": { "const": true },
+      "nativeExitCode": { "const": 0 }, "llvmAsExitCode": { "const": 0 }, "closureExitCode": { "const": 0 },
+      "stdout": { "const": ["sent=true,count=3,state=true,error=false,len=5,unchanged=true"] },
+      "peerBytes": { "const": [10, 20, 30] },
+      "irAssertions": { "properties": {
+        "sendCallCount": { "const": 1 }, "rangeOffsetApplied": { "const": true }, "rangeLengthApplied": { "const": true },
+        "payloadCopyFree": { "const": true }, "dequeueOwnerTransferVerified": { "const": true }
+      } },
+      "failureIds": { "maxItems": 0 }
+    } }
+  }]
+}

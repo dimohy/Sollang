@@ -1,0 +1,113 @@
+import sollang.compiler.ir.interpolation as interpolation
+
+# A nested call keeps its own arguments when a later flow call is rebuilt.
+main {
+    """
+    enum Choice { First, Second }
+
+    impl Choice {
+        number: self -> Int => self -> when {
+            First => 1
+            Second => 2
+        }
+    }
+
+    makeChoice value: Int -> Choice {
+        value == 0 -> if { Choice.First } else { Choice.Second }
+    }
+
+    main {
+        "nested=$(makeChoice(0) -> number)" -> println
+    }
+    """ => source
+    source -> interpolation.lower => nodes
+    (nodes -> len) == 3
+        and nodes[0].operand0 == 1
+        and nodes[1].kind == 8
+        and nodes[1].operand0 == 2
+        and nodes[2].kind == 0
+        => nested
+
+    """
+    main {
+        "$(value -> first(1) -> second(2))" -> println
+    }
+    """ => chainSource
+    chainSource -> interpolation.lower => chainNodes
+    (chainNodes -> len) == 5
+        and chainNodes[0].operand0 == 4
+        and chainNodes[0].operand1 == 3
+        and chainNodes[4].operand0 == 1
+        and chainNodes[4].operand1 == 2
+        => chain
+
+    """
+    main {
+        "$(makeChoice(0) -> first(1) -> second(2))" -> println
+    }
+    """ => nestedChainSource
+    nestedChainSource -> interpolation.lower => nestedChainNodes
+    (nestedChainNodes -> len) == 6
+        and nestedChainNodes[0].operand0 == 5
+        and nestedChainNodes[0].operand1 == 4
+        and nestedChainNodes[5].operand0 == 1
+        and nestedChainNodes[5].operand1 == 3
+        and nestedChainNodes[1].operand0 == 2
+        => nestedChain
+
+    """
+    main {
+        "$(combine(makeChoice(0), 2))" -> println
+    }
+    """ => nestedArgumentSource
+    nestedArgumentSource -> interpolation.lower => nestedArgumentNodes
+    (nestedArgumentNodes -> len) == 4
+        and nestedArgumentNodes[0].operand0 == 1
+        and nestedArgumentNodes[0].operand1 == 3
+        and nestedArgumentNodes[1].operand0 == 2
+        => nestedArgument
+
+    """
+    main {
+        "$(makeChoice() -> first(1))" -> println
+    }
+    """ => zeroSource
+    zeroSource -> interpolation.lower => zeroNodes
+    (zeroNodes -> len) == 3
+        and zeroNodes[0].operand0 == 1
+        and zeroNodes[0].operand1 == 2
+        and zeroNodes[1].operand0 < 0
+        => zero
+
+    """
+    main {
+        "$(makeChoice() -> first(1) -> second(2))" -> println
+    }
+    """ => zeroChainSource
+    zeroChainSource -> interpolation.lower => zeroChainNodes
+    (zeroChainNodes -> len) == 5
+        and zeroChainNodes[0].operand0 == 4
+        and zeroChainNodes[0].operand1 == 3
+        and zeroChainNodes[4].operand0 == 1
+        and zeroChainNodes[4].operand1 == 2
+        and zeroChainNodes[1].operand0 < 0
+        => zeroChain
+
+    (source -> slice(nodes[0].callNameStart, nodes[0].callNameLength)) == "number"
+        and (source -> slice(nodes[1].callNameStart, nodes[1].callNameLength)) == "makeChoice"
+        and (chainSource -> slice(chainNodes[0].callNameStart, chainNodes[0].callNameLength)) == "second"
+        and (chainSource -> slice(chainNodes[4].callNameStart, chainNodes[4].callNameLength)) == "first"
+        and (nestedChainSource -> slice(nestedChainNodes[0].callNameStart, nestedChainNodes[0].callNameLength)) == "second"
+        and (nestedChainSource -> slice(nestedChainNodes[5].callNameStart, nestedChainNodes[5].callNameLength)) == "first"
+        and (nestedChainSource -> slice(nestedChainNodes[1].callNameStart, nestedChainNodes[1].callNameLength)) == "makeChoice"
+        and (nestedArgumentSource -> slice(nestedArgumentNodes[0].callNameStart, nestedArgumentNodes[0].callNameLength)) == "combine"
+        and (nestedArgumentSource -> slice(nestedArgumentNodes[1].callNameStart, nestedArgumentNodes[1].callNameLength)) == "makeChoice"
+        and (zeroSource -> slice(zeroNodes[0].callNameStart, zeroNodes[0].callNameLength)) == "first"
+        and (zeroSource -> slice(zeroNodes[1].callNameStart, zeroNodes[1].callNameLength)) == "makeChoice"
+        and (zeroChainSource -> slice(zeroChainNodes[0].callNameStart, zeroChainNodes[0].callNameLength)) == "second"
+        and (zeroChainSource -> slice(zeroChainNodes[4].callNameStart, zeroChainNodes[4].callNameLength)) == "first"
+        and (zeroChainSource -> slice(zeroChainNodes[1].callNameStart, zeroChainNodes[1].callNameLength)) == "makeChoice"
+        => names
+
+    "nested=$nested,chain=$chain,nested-chain=$nestedChain,nested-arg=$nestedArgument,zero=$zero,zero-chain=$zeroChain,names=$names" -> println
+}

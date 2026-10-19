@@ -1,0 +1,85 @@
+import sollang.compiler.ir.module_artifacts as artifacts
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.type_ids as typeIds
+
+sameWords left: [UInt64; ~], right: [UInt64; ~] -> Bool {
+    (left -> len) == (right -> len) => same!
+    0 => index!
+    same! and index! < (left -> len) -> while {
+        left[index!] == right[index!] -> unless { false => same! }
+        index! + 1 => index!
+    }
+    same!
+}
+
+main {
+    # Embedded compiler inputs keep their source structure as raw multiline text.
+    """
+    namespace identity.mmmmmmmmmmmmmmmmmmmmmmmm
+    public struct Entry { public value: Int }
+    public twice value: Entry -> Int => value.value * 2
+    """ => zeta
+    """
+    namespace identity.nkllmlnlmpnjnmnmmomooioj
+    public struct Entry { public value: Int }
+    public next value: Entry -> Int => value.value + 1
+    """ => alpha
+
+    [zeta, alpha; ~] => firstSources
+    firstSources -> context.prepare => firstSnapshot
+    firstSnapshot -> typed.lowerContext => firstIr
+    [typeIds.SemanticType; ~] => firstTypes!
+    firstSnapshot.semantic.types -> each currentType { firstTypes! -> push(currentType) }
+    firstIr -> artifacts.encodeExact(firstSources, firstTypes!) => firstEncoding
+    [UInt64; ~] => first!
+    firstEncoding.words -> each word { first! -> push(word) }
+    first! -> artifacts.validateExact => validation
+    validation.status == 0 and validation.moduleCount == 2 and validation.nodeCount > 0
+        -> if {
+            "canonical artifact valid"
+        } else { "unexpected validation" } -> println
+
+    [alpha, zeta; ~] => secondSources
+    secondSources -> context.prepare => secondSnapshot
+    secondSnapshot -> typed.lowerContext => secondIr
+    [typeIds.SemanticType; ~] => secondTypes!
+    secondSnapshot.semantic.types -> each currentType { secondTypes! -> push(currentType) }
+    secondIr -> artifacts.encodeExact(secondSources, secondTypes!) => second
+    first! -> sameWords(second.words) -> if {
+        "source order independent"
+    } else { "source order leaked" } -> println
+
+    first! -> artifacts.decodeExact(secondSources) => decoded
+    [typed.TypedIrNode; ~] => decodedIr!
+    decoded.ir -> each node { decodedIr! -> push(node) }
+    [typeIds.SemanticType; ~] => decodedTypes!
+    decoded.typeTable.types -> each currentType { decodedTypes! -> push(currentType) }
+    decodedIr! -> artifacts.encodeExact(secondSources, decodedTypes!) => roundTrip
+    decoded.status == 0 and (decoded.ir -> len) == (firstIr -> len) and (first! -> sameWords(roundTrip.words))
+        -> if {
+            "rehydration stable"
+        } else { "rehydration failed" } -> println
+
+    Arena(0) => changedStorage!
+    "$alpha\n# changed owner bytes" -> materialize(changedStorage!) => changedAlpha
+    [changedAlpha, zeta; ~] => changedSources
+    first! -> artifacts.decodeExact(changedSources) => changed
+    changed.status == 15 -> if {
+        "changed source rejected"
+    } else { "changed source accepted" } -> println
+
+    first![4] => originalOffset
+    0 => first![4]
+    first! -> artifacts.validateExact => badOffset
+    badOffset.status != 0 -> if {
+        "bad offset rejected"
+    } else { "bad offset accepted" } -> println
+    originalOffset => first![4]
+
+    first![9] + 1 => first![9]
+    first! -> artifacts.validateExact => corrupted
+    corrupted.status == 6 -> if {
+        "corruption rejected"
+    } else { "corruption accepted" } -> println
+}

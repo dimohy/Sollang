@@ -9,11 +9,16 @@ internal sealed partial class SemanticCompiler
 {
     private SollangProgram _program;
     private readonly TypeDefinitionTable _types;
+    private readonly List<(TypeId KeyType, int Line, int Column, string ModuleName)> _declaredDictionaryKeyChecks = [];
     private readonly IReadOnlyDictionary<string, BoundTraitDefinition> _traits;
     private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Expression, BoundType> _contextualNumericTypes = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<CallExpression, string> _resolvedInstanceCallReceivers = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, ContainerIntrinsicKind> _containerIntrinsics =
         new(ReferenceEqualityComparer.Instance);
     private string? _currentFunctionName;
+    private string? _currentFunctionDeclarationName;
+    private bool _currentFunctionIsMain;
     private readonly Dictionary<object, BoundDynTraitConversion> _dynTraitConversions = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<object, BoundDynTraitDispatch> _dynTraitDispatches = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<ProductExpression, BoundType> _productExpressionTypes =
@@ -31,6 +36,13 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<object, BoundFunction> _resolvedCaptureCalls =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCaptureCandidates =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, IReadOnlySet<string>> _functionCaptureLocalNames =
+        new(ReferenceEqualityComparer.Instance);
+    private HashSet<string>? _collectingCaptureLocalNames;
     private readonly Dictionary<BoundFunction, IReadOnlySet<string>> _borrowedTextReturnOrigins =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlySet<string>> _readonlyReferenceReturnOrigins =
@@ -63,9 +75,17 @@ internal sealed partial class SemanticCompiler
     private BoundType? _currentFunctionReturnType;
     private IReadOnlySet<string> _currentMoveInputNames = new HashSet<string>(StringComparer.Ordinal);
     private IReadOnlySet<string> _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
+    private InterpolationOwnershipScope? _currentInterpolationOwnershipScope;
+    private sealed class InterpolationOwnershipScope(IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        public Dictionary<string, BoundType> Bindings { get; } = new(bindings, StringComparer.Ordinal);
+        public Dictionary<CallExpression, BoundType> EvaluatedConstructors { get; } =
+            new(ReferenceEqualityComparer.Instance);
+    }
     private IReadOnlyDictionary<string, BoundType>? _currentFunctionOuterBindings;
     private bool _currentFunctionAllowsEarlyReturn;
     private bool _currentFunctionIsAsync;
+    private bool _currentFunctionAllowsRuntimeCalls = true;
     private IReadOnlySet<string>? _currentFunctionEffects;
     private BoundType? _currentBlockYieldResultType;
     private IReadOnlyList<BoundType> _currentBlockAdditionalYieldInputTypes = [];
@@ -82,8 +102,15 @@ internal sealed partial class SemanticCompiler
     private List<MutableBindingDeclaration>? _currentMutableDeclarations;
     private Dictionary<string, MutableBindingDeclaration>? _currentMutableDeclarationsByName;
     private Dictionary<string, FixedLengthArrayCandidate>? _currentFixedLengthArrayCandidates;
+    private List<FixedLengthArrayCandidate>? _currentFixedLengthArrayDeclarations;
     private HashSet<BoundType>? _currentUsedTypes;
     private readonly HashSet<int> _reservedReuseStaticArrayIds = [];
+    private ExpressionInferenceContext? _expressionInferenceContext;
+
+    private readonly record struct ExpressionInferenceContext(
+        IReadOnlyDictionary<string, BoundType> Bindings,
+        BoundType? YieldInputType,
+        IReadOnlySet<string>? MutableBindings);
 
     private sealed record MutableBindingDeclaration(string Name, int Line, int Column)
     {
@@ -137,6 +164,15 @@ internal sealed partial class SemanticCompiler
         _program = program;
         _pointerBitWidth = pointerBitWidth;
         _types = BuildTypeDefinitions(program.Structs, program.Enums);
+        var definitionModule = _currentModuleName;
+        foreach (var (keyType, line, column, moduleName) in _declaredDictionaryKeyChecks)
+        {
+            _currentModuleName = moduleName;
+            if (!IsSupportedDictionaryKeyType(keyType))
+                throw Error(line, column,
+                    $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+        }
+        _currentModuleName = definitionModule;
         ValidateAbiStructDefinitions();
         _traits = BindTraits(program.Traits);
     }
@@ -232,6 +268,11 @@ internal sealed partial class SemanticCompiler
         // the final function graph before exporting resolved call annotations.
         syntaxCallSiteIdentities = SemanticStableIdentity.IndexSyntaxCallSites(
             stableFunctionIdentities.Keys, _program.Statements, stableFunctionIdentities);
+        var stableContextualNumericTypes = _contextualNumericTypes.ToDictionary(
+            pair => syntaxCallSiteIdentities[pair.Key],
+            static pair => pair.Value,
+            StringComparer.Ordinal);
+        CompleteSiblingFunctionCaptures(stableFunctionIdentities, syntaxCallSiteIdentities);
         foreach (var callSite in _resolvedGenericCalls.Keys)
         {
             if (!syntaxCallSiteIdentities.TryGetValue(callSite, out var identity))
@@ -254,6 +295,8 @@ internal sealed partial class SemanticCompiler
             _traits,
             functions,
             _resolvedGenericCalls,
+            _contextualNumericTypes,
+            stableContextualNumericTypes,
             _containerIntrinsics,
             _dynTraitConversions,
             _dynTraitDispatches,
@@ -594,6 +637,8 @@ internal sealed partial class SemanticCompiler
             ReferenceEqualityComparer.Instance);
         var restoredBindings = new Dictionary<BoundFunction, SemanticFunctionReuse>(
             ReferenceEqualityComparer.Instance);
+        var reconstructedSyntax = new Dictionary<string, object>(StringComparer.Ordinal);
+        var indexedSpecializations = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
         try
         {
             var pendingOwners = new SortedSet<string>(ownerIdentities, StringComparer.Ordinal);
@@ -604,12 +649,23 @@ internal sealed partial class SemanticCompiler
                 pendingOwners.Remove(owner);
                 if (!restoredOwners.Add(owner))
                     continue;
+                var ownerModule = owner == "main"
+                    ? reusePlan.MainModuleName
+                        ?? throw new InvalidDataException("reused main syntax has no module")
+                    : reusePlan.Functions.TryGetValue(owner, out var reusableOwner)
+                        ? reusableOwner.ModuleName
+                        : declaredFunctionsByIdentity.TryGetValue(owner, out var declaredOwner)
+                            ? declaredOwner.ModuleName
+                            : throw new InvalidDataException("reused syntax owner has no module");
+                var ownerCallPrefix = owner + "/call:";
+                RestoreEnumConstructorAliases(ownerCallPrefix, ownerModule, syntaxCallsByIdentity);
                 var calls = reusePlan.ResolvedCalls
-                    .Where(pair => pair.Key.StartsWith(owner + "/call:", StringComparison.Ordinal))
+                    .Where(pair => pair.Key.StartsWith(ownerCallPrefix, StringComparison.Ordinal))
                     .OrderBy(static pair => pair.Key, StringComparer.Ordinal);
                 foreach (var call in calls)
                 {
-                    if (!syntaxCallsByIdentity.TryGetValue(call.Key, out var syntaxNode)
+                    if (!(reconstructedSyntax.TryGetValue(call.Key, out var syntaxNode)
+                            || syntaxCallsByIdentity.TryGetValue(call.Key, out syntaxNode))
                         || !TryResolveReusableCallTarget(
                             call.Value,
                             syntaxNode,
@@ -622,9 +678,6 @@ internal sealed partial class SemanticCompiler
                     }
 
                     _resolvedGenericCalls[syntaxNode] = target;
-                    if (reusePlan.Specializations.TryGetValue(call.Value, out var specialization)
-                        && specialization.TemplateIdentity is { } templateOwner)
-                        pendingOwners.Add(templateOwner);
                     if (target.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
                         && !declaredFunctionsByIdentity.ContainsKey(call.Value))
                     {
@@ -635,6 +688,22 @@ internal sealed partial class SemanticCompiler
                             return false;
                         }
                         restoredBindings[target] = reusable;
+                        pendingOwners.Add(call.Value);
+                        if (indexedSpecializations.Add(target))
+                        {
+                            // A specialization owns cloned syntax. Restore the
+                            // calls of that concrete owner, not its template.
+                            var identities = SemanticStableIdentity.IndexFunctions(_types, [target], []);
+                            foreach (var syntax in SemanticStableIdentity.IndexSyntaxCallSites(
+                                         [target], [], identities))
+                            {
+                                if (!reconstructedSyntax.TryAdd(syntax.Value, syntax.Key)
+                                    && !ReferenceEquals(reconstructedSyntax[syntax.Value], syntax.Key))
+                                {
+                                    throw new InvalidDataException("cached specialization syntax is ambiguous");
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -649,6 +718,35 @@ internal sealed partial class SemanticCompiler
                     (RestoreBindings(pair.Value.Bindings),
                         RestoreBindings(pair.Value.CapturedBindings)));
             }
+            restoredOwners.UnionWith(restoredBindings.Values.Select(static binding => binding.Identity));
+            var numericAnnotations = reusePlan.ContextualNumericTypes.Where(pair =>
+            {
+                var separator = pair.Key.LastIndexOf("/call:", StringComparison.Ordinal);
+                return separator >= 0 && restoredOwners.Contains(pair.Key[..separator]);
+            }).ToArray();
+            var numericTypes = new Dictionary<Expression, BoundType>(ReferenceEqualityComparer.Instance);
+            if (numericAnnotations.Length > 0)
+            {
+                // Generic bodies have distinct cloned syntax. Re-index only
+                // when this restored owner actually has numeric annotations.
+                var restoredFunctionIdentities = SemanticStableIdentity.IndexFunctions(
+                    _types, _boundFunctions.Values, _resolvedGenericCalls.Values);
+                var restoredSyntax = SemanticStableIdentity.IndexSyntaxCallSites(
+                    restoredFunctionIdentities.Keys, _program.Statements, restoredFunctionIdentities)
+                    .ToDictionary(static pair => pair.Value, static pair => pair.Key, StringComparer.Ordinal);
+                foreach (var (identity, typeIdentity) in numericAnnotations)
+                {
+                    if (!restoredSyntax.TryGetValue(identity, out var node)
+                        || node is not (IfExpression or WhenExpression))
+                        throw new InvalidDataException("cached contextual numeric syntax is missing");
+                    var type = (BoundType)SemanticStableIdentity.ResolveType(_types, typeIdentity);
+                    if (!IsIntegerType(type))
+                        throw new InvalidDataException("cached contextual numeric result is not an integer type");
+                    numericTypes.Add((Expression)node, type);
+                }
+            }
+            foreach (var (expression, type) in numericTypes)
+                _contextualNumericTypes[expression] = type;
             foreach (var (function, bindings) in materializedBindings)
             {
                 _functionBindings[function] = bindings.Bindings;
@@ -945,14 +1043,15 @@ internal sealed partial class SemanticCompiler
             inputType = BoundType.IntDictionaryView;
         }
 
-        var returnTypeTemplate = (isParallelRole
-                || function.ReturnType.StartsWith('[', StringComparison.Ordinal))
-            && function.GenericParameterName is not null
+        var returnTypeTemplate = function.GenericParameterName is not null
             && !genericParameterNames.Contains(function.ReturnType, StringComparer.Ordinal)
             && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames)
                 ? function.ReturnType
                 : null;
-        var returnType = returnTypeTemplate is null
+        // Runtime intrinsic admission checks the abstract signature before any
+        // concrete call exists. Keep that shape while retaining its syntax for
+        // canonical specialization; user templates may defer their layout.
+        var returnType = returnTypeTemplate is null || (function.IsIntrinsic && !isParallelRole)
             ? ParseFunctionType(
                 function.ReturnType,
                 function.GenericParameterName,
@@ -1028,7 +1127,12 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
         }
-        var inputOwnership = BindFunctionInputOwnership(function, inputType);
+        var inputOwnershipType = inputTypeTemplate is not null
+            && !function.HasValueGenericFixedArrayInput
+            && function.InputOwnership != FunctionInputOwnership.Default
+                ? ParseOwnershipTemplateType(inputTypeTemplate, genericParameterNames, function.Line, function.Column)
+                : inputType;
+        var inputOwnership = BindFunctionInputOwnership(function, inputOwnershipType);
         var additionalParameters = (function.AdditionalParameters ?? [])
             .Select(parameter =>
             {
@@ -1055,7 +1159,7 @@ internal sealed partial class SemanticCompiler
                 return new BoundFunctionParameter(
                     parameter.Name,
                     parameterType,
-                    parameterTypeTemplate is not null
+                    parameterTypeTemplate is not null && function.IsValueGeneric
                         ? parameter.Ownership switch
                         {
                             FunctionInputOwnership.Move => BoundFunctionInputOwnership.Move,
@@ -1064,7 +1168,9 @@ internal sealed partial class SemanticCompiler
                         }
                         : BindFunctionInputOwnership(
                             parameter.Ownership,
-                            parameterType,
+                            parameterTypeTemplate is not null && parameter.Ownership != FunctionInputOwnership.Default
+                                ? ParseOwnershipTemplateType(parameterTypeTemplate, genericParameterNames, parameter.Line, parameter.Column)
+                                : parameterType,
                             parameter.Line,
                             parameter.Column),
                     parameter.Line,
@@ -1198,7 +1304,8 @@ internal sealed partial class SemanticCompiler
             Com: function.Com,
             NativeError: function.NativeError,
             NativeSuccessType: nativeSuccessType,
-            GenericParameters: function.GenericParameters);
+            GenericParameters: function.GenericParameters,
+            DeclarationName: function.Name);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -1220,6 +1327,21 @@ internal sealed partial class SemanticCompiler
             }
         }
         return effects;
+    }
+
+    private BoundType ParseOwnershipTemplateType(
+        string typeName,
+        IReadOnlyList<string> genericParameterNames,
+        int line,
+        int column)
+    {
+        // The outer storage shape is already known even though its element or
+        // field types remain generic. Admission uses the canonical type parser;
+        // the function keeps its deferred template for specialization.
+        var parameters = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        for (var index = 0; index < genericParameterNames.Count; index++)
+            parameters[genericParameterNames[index]] = (BoundType)((int)BoundType.GenericParameter + index);
+        return ParseSpecializedFunctionType(typeName, parameters, line, column);
     }
 
     private BoundFunctionInputOwnership BindFunctionInputOwnership(
@@ -1279,12 +1401,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(line, column, "mut input requires an input type");
             }
 
-            if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena)
-                && !_types.IsDynamicArray(inputType.Value)
-                && !_types.IsStaticArray(inputType.Value)
-                && !_types.IsBoundedArray(inputType.Value)
-                && !_types.IsDictionary(inputType.Value)
-                && !_types.IsStruct(inputType.Value))
+            if (!IsMutableBorrowStorageType(inputType.Value))
             {
                 throw Error(line, column, "mut input expects an owned container or struct value");
             }
@@ -1732,6 +1849,90 @@ internal sealed partial class SemanticCompiler
         return functions;
     }
 
+    // Complete already validated sibling captures from actual selected call edges.
+    // A shared lexical owner and an absent caller-local name establish the same
+    // outer binding; type equality alone never establishes shadow identity.
+    private void CompleteSiblingFunctionCaptures(
+        IReadOnlyDictionary<BoundFunction, string> functionIdentities,
+        IReadOnlyDictionary<object, string> callSiteIdentities)
+    {
+        var owners = new Dictionary<BoundFunction, BoundFunction>(ReferenceEqualityComparer.Instance);
+        var ambiguousOwners = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        foreach (var parent in functionIdentities.Keys)
+        {
+            foreach (var child in parent.LocalFunctions.Values)
+            {
+                if (!owners.TryAdd(child, parent) && !ReferenceEquals(owners[child], parent))
+                    ambiguousOwners.Add(child);
+            }
+        }
+        var functionsByIdentity = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+        var ambiguousIdentities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (function, identity) in functionIdentities)
+        {
+            if (!function.IsLocal || !owners.ContainsKey(function)
+                || ambiguousOwners.Contains(function)
+                || !_functionCaptureCandidates.ContainsKey(function))
+                continue;
+            if (!functionsByIdentity.TryAdd(identity, function)
+                && !ReferenceEquals(functionsByIdentity[identity], function))
+                ambiguousIdentities.Add(identity);
+        }
+        var dependencies = new Dictionary<BoundFunction, HashSet<BoundFunction>>(ReferenceEqualityComparer.Instance);
+        foreach (var (site, callee) in _resolvedGenericCalls.Concat(_resolvedCaptureCalls))
+        {
+            if (!callee.IsLocal || !callSiteIdentities.TryGetValue(site, out var callIdentity))
+                continue;
+            var boundary = callIdentity.LastIndexOf("/call:", StringComparison.Ordinal);
+            if (boundary < 0
+                || ambiguousIdentities.Contains(callIdentity[..boundary])
+                || !functionsByIdentity.TryGetValue(callIdentity[..boundary], out var caller)
+                || ReferenceEquals(caller, callee)
+                || ambiguousOwners.Contains(caller)
+                || ambiguousOwners.Contains(callee)
+                || !owners.TryGetValue(caller, out var callerOwner)
+                || !owners.TryGetValue(callee, out var calleeOwner)
+                || !ReferenceEquals(callerOwner, calleeOwner)
+                || !_functionCaptureCandidates.ContainsKey(caller))
+            {
+                continue;
+            }
+            if (!dependencies.TryGetValue(caller, out var callees))
+                dependencies.Add(caller, callees = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance));
+            callees.Add(callee);
+        }
+        var captures = new Dictionary<BoundFunction, Dictionary<string, BoundType>>(ReferenceEqualityComparer.Instance);
+        foreach (var (function, bindings) in _functionCapturedBindings)
+            captures.Add(function, new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal));
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var (caller, callees) in dependencies)
+            foreach (var callee in callees)
+            {
+                if (!captures.TryGetValue(caller, out var callerCaptures)
+                    || !captures.TryGetValue(callee, out var calleeCaptures)
+                    || !_functionBindings.TryGetValue(caller, out var callerBindings))
+                    continue;
+                foreach (var (name, type) in calleeCaptures)
+                {
+                    if (callerCaptures.ContainsKey(name)
+                        || callerBindings.ContainsKey(name)
+                        || !_functionCaptureLocalNames.TryGetValue(caller, out var localNames)
+                        || localNames.Contains(name)
+                        || !_functionCaptureCandidates[caller].TryGetValue(name, out var candidateType)
+                        || candidateType != type)
+                        continue;
+                    callerCaptures.Add(name, type);
+                    changed = true;
+                }
+            }
+        }
+        foreach (var (function, bindings) in captures)
+            _functionCapturedBindings[function] = bindings;
+    }
+
     private IReadOnlyDictionary<string, BoundType> SelectCapturedBindings(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundType> candidates,
@@ -1759,6 +1960,9 @@ internal sealed partial class SemanticCompiler
 
         var referenced = new HashSet<string>(StringComparer.Ordinal);
         var previousCalls = _collectingLocalCalls;
+        var previousLocalNames = _collectingCaptureLocalNames;
+        var localNames = new HashSet<string>(locals, StringComparer.Ordinal);
+        _collectingCaptureLocalNames = localNames;
         _collectingLocalCalls = calledFunctions;
         CollectCapturedNames(function.BlockBody, locals, candidates, referenced);
         if (function.Body is not null)
@@ -1766,6 +1970,8 @@ internal sealed partial class SemanticCompiler
             CollectCapturedNames(function.Body, locals, candidates, referenced);
         }
         _collectingLocalCalls = previousCalls;
+        _collectingCaptureLocalNames = previousLocalNames;
+        _functionCaptureLocalNames[function] = localNames;
 
         return candidates
             .Where(binding => referenced.Contains(binding.Key))
@@ -1778,6 +1984,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> candidates,
         HashSet<string> referenced)
     {
+        _collectingCaptureLocalNames?.UnionWith(locals);
         foreach (var statement in statements)
         {
             switch (statement)
@@ -1785,6 +1992,7 @@ internal sealed partial class SemanticCompiler
                 case BindingStatement binding:
                     CollectCapturedNames(binding.Value, locals, candidates, referenced);
                     locals.Add(binding.Name);
+                    _collectingCaptureLocalNames?.Add(binding.Name);
                     break;
                 case IndexAssignmentStatement assignment:
                     CollectCapturedName(assignment.Name, locals, candidates, referenced);
@@ -1849,6 +2057,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> candidates,
         HashSet<string> referenced)
     {
+        _collectingCaptureLocalNames?.UnionWith(locals);
         CollectCapturedNames(body.Statements, locals, candidates, referenced);
         if (body.Value is not null)
         {
@@ -1862,6 +2071,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> candidates,
         HashSet<string> referenced)
     {
+        _collectingCaptureLocalNames?.UnionWith(locals);
         switch (expression)
         {
             case NameExpression name:
@@ -2231,15 +2441,25 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        var previousExpressionContext = _expressionInferenceContext;
+        _expressionInferenceContext = null;
+        var previousFunctionDeclarationName = _currentFunctionDeclarationName;
+        _currentFunctionDeclarationName = function.DeclarationName ?? function.Name;
+        var previousFunctionIsMain = _currentFunctionIsMain;
+        _currentFunctionIsMain = false;
+        var previousRuntimeCallAuthority = _currentFunctionAllowsRuntimeCalls;
+        _currentFunctionAllowsRuntimeCalls = function.IsStandardLibrary;
         var previousTransferablePayloadNames = _currentTransferableEnumPayloadNames;
         _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
         var previousDeclarations = _currentMutableDeclarations;
         var previousDeclarationsByName = _currentMutableDeclarationsByName;
         var previousFixedLengthCandidates = _currentFixedLengthArrayCandidates;
+        var previousFixedLengthDeclarations = _currentFixedLengthArrayDeclarations;
         var previousUsedTypes = _currentUsedTypes;
         _currentMutableDeclarations = [];
         _currentMutableDeclarationsByName = new Dictionary<string, MutableBindingDeclaration>(StringComparer.Ordinal);
         _currentFixedLengthArrayCandidates = new Dictionary<string, FixedLengthArrayCandidate>(StringComparer.Ordinal);
+        _currentFixedLengthArrayDeclarations = [];
         _currentUsedTypes = [];
         try
         {
@@ -2249,10 +2469,15 @@ internal sealed partial class SemanticCompiler
         }
         finally
         {
+            _expressionInferenceContext = previousExpressionContext;
+            _currentFunctionDeclarationName = previousFunctionDeclarationName;
+            _currentFunctionIsMain = previousFunctionIsMain;
+            _currentFunctionAllowsRuntimeCalls = previousRuntimeCallAuthority;
             _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
             _currentMutableDeclarations = previousDeclarations;
             _currentMutableDeclarationsByName = previousDeclarationsByName;
             _currentFixedLengthArrayCandidates = previousFixedLengthCandidates;
+            _currentFixedLengthArrayDeclarations = previousFixedLengthDeclarations;
             _currentUsedTypes = previousUsedTypes;
         }
     }
@@ -2271,6 +2496,8 @@ internal sealed partial class SemanticCompiler
         _activeBorrowedTextOrigins.Clear();
         _activeReadonlyReferenceBindings.Clear();
         var selectedCapturedBindings = SelectCapturedBindings(function, capturedBindings, out var calledFunctions);
+        _functionCaptureCandidates[function] = new Dictionary<string, BoundType>(
+            capturedBindings, StringComparer.Ordinal);
         var previousStreamElementType = _currentStreamElementType;
         _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
             selectedCapturedBindings,
@@ -2408,6 +2635,7 @@ internal sealed partial class SemanticCompiler
         {
             WarnRedundantNumericType(function.Body, function.ReturnType);
         }
+        _expressionInferenceContext = new ExpressionInferenceContext(bodyBindings, null, mutableBindings);
         var bodyType = function.Body switch
         {
             null => BoundType.Unit,
@@ -2492,7 +2720,7 @@ internal sealed partial class SemanticCompiler
             throw Error(
                 function.Line,
                 function.Column,
-                $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+                $"function '{function.DeclarationName ?? function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
         if (function.Body is not null && FunctionControlFlowFacts.MayReachContinuation(function))
         {
@@ -2572,6 +2800,10 @@ internal sealed partial class SemanticCompiler
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions)
     {
+        // Specialization creates reference-bearing signatures after the initial
+        // declaration-wide origin pass. Analyze only this new owner tree before
+        // validating its return; do not rescan every function for each instance.
+        DiscoverReadonlyReferenceReturnOrigins(parentFunctions, [function]);
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             BindFunctionInputOwnership(FunctionInputOwnership.MutableBorrow, function.InputType, function.Line, function.Column);
@@ -2802,6 +3034,13 @@ internal sealed partial class SemanticCompiler
                 BoundType.Text,
                 BoundType.Unit,
                 BoundFunctionKind.RuntimePrintLine),
+            "sys.runtime.eprint" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                BoundType.Text,
+                BoundType.Unit,
+                BoundFunctionKind.RuntimePrintError),
             "sys.runtime.eprintln" => RequireIntrinsicSignature(
                 function,
                 inputType,
@@ -3032,6 +3271,7 @@ internal sealed partial class SemanticCompiler
             "sys.path.nativeStyle" => RequireIntrinsicSignature(
                 function, inputType, returnType, expectedInputType: null, TypeId.PathStyle,
                 BoundFunctionKind.RuntimePathStyle),
+            "sys.path.Path.absolute" => RequirePathAbsoluteSignature(function, inputType, returnType),
             "sys.path.Path.queryRaw" => RequirePathQuerySignature(
                 function,
                 inputType,
@@ -3088,6 +3328,10 @@ internal sealed partial class SemanticCompiler
                 isAsync: true),
             "sys.file.sync" => RequireOwnedFileSyncSignature(function, inputType, returnType),
             "sys.file.atomicReplace" => RequireAtomicReplaceSignature(function, inputType, returnType),
+            "sys.file.createExclusive" => RequireFilePathStatusSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeCreateExclusiveFile),
+            "sys.file.removePath" => RequireFilePathStatusSignature(
+                function, inputType, returnType, BoundFunctionKind.RuntimeRemoveFile),
             "sys.file.File.readIntoAt" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: false),
             "sys.file.File.readIntoAtAsync" => RequireFileReadIntoAtSignature(function, inputType, returnType, isAsync: true),
             "sys.file.FileWriter.writeRangeAt" => RequireFileWriteRangeAtSignature(function, inputType, returnType, isAsync: false),
@@ -3341,6 +3585,22 @@ internal sealed partial class SemanticCompiler
         return BoundFunctionKind.RuntimeCreateDirectory;
     }
 
+    private BoundFunctionKind RequirePathAbsoluteSignature(
+        FunctionDeclaration function, BoundType? inputType, BoundType returnType)
+    {
+        if (inputType is not { } pathType
+            || !_types.IsStruct(pathType)
+            || _types.GetStruct(pathType).Name != "sys.path.Path"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != pathType
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Path -> Result<Path, Text>");
+        }
+        return BoundFunctionKind.RuntimePathAbsolute;
+    }
+
     private BoundFunctionKind RequirePathQuerySignature(
         FunctionDeclaration function,
         BoundType? inputType,
@@ -3395,6 +3655,22 @@ internal sealed partial class SemanticCompiler
                 $"intrinsic '{function.Name}' must have signature AtomicReplaceRequest -> Bool");
         }
         return BoundFunctionKind.RuntimeAtomicReplaceFile;
+    }
+
+    private BoundFunctionKind RequireFilePathStatusSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType,
+        BoundFunctionKind kind)
+    {
+        if (inputType != BoundType.Text || returnType != BoundType.Int
+            || function.InputOwnership != FunctionInputOwnership.Default)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Text -> Int");
+        }
+
+        return kind;
     }
 
     private BoundFunctionKind RequireSocketListenSignature(
@@ -4567,15 +4843,21 @@ internal sealed partial class SemanticCompiler
 
     private IReadOnlyDictionary<string, BoundType> BindMain(IReadOnlyDictionary<string, BoundFunction> functions)
     {
+        var previousFunctionIsMain = _currentFunctionIsMain;
+        _currentFunctionIsMain = true;
+        var previousExpressionContext = _expressionInferenceContext;
+        _expressionInferenceContext = null;
         var previousTransferablePayloadNames = _currentTransferableEnumPayloadNames;
         _currentTransferableEnumPayloadNames = new HashSet<string>(StringComparer.Ordinal);
         var previousDeclarations = _currentMutableDeclarations;
         var previousDeclarationsByName = _currentMutableDeclarationsByName;
         var previousFixedLengthCandidates = _currentFixedLengthArrayCandidates;
+        var previousFixedLengthDeclarations = _currentFixedLengthArrayDeclarations;
         var previousUsedTypes = _currentUsedTypes;
         _currentMutableDeclarations = [];
         _currentMutableDeclarationsByName = new Dictionary<string, MutableBindingDeclaration>(StringComparer.Ordinal);
         _currentFixedLengthArrayCandidates = new Dictionary<string, FixedLengthArrayCandidate>(StringComparer.Ordinal);
+        _currentFixedLengthArrayDeclarations = [];
         _currentUsedTypes = [];
         try
         {
@@ -4586,10 +4868,13 @@ internal sealed partial class SemanticCompiler
         }
         finally
         {
+            _currentFunctionIsMain = previousFunctionIsMain;
+            _expressionInferenceContext = previousExpressionContext;
             _currentTransferableEnumPayloadNames = previousTransferablePayloadNames;
             _currentMutableDeclarations = previousDeclarations;
             _currentMutableDeclarationsByName = previousDeclarationsByName;
             _currentFixedLengthArrayCandidates = previousFixedLengthCandidates;
+            _currentFixedLengthArrayDeclarations = previousFixedLengthDeclarations;
             _currentUsedTypes = previousUsedTypes;
         }
     }
@@ -4694,7 +4979,8 @@ internal sealed partial class SemanticCompiler
                     statements,
                     statementIndex,
                     borrowRegionResult,
-                    borrowRegionContinuation);
+                    borrowRegionContinuation,
+                    bindings);
             }
 
             var parentBorrowedTextContinuation = _borrowedTextContinuationNames;
@@ -4702,7 +4988,8 @@ internal sealed partial class SemanticCompiler
                 statements,
                 statementIndex,
                 borrowRegionResult,
-                borrowRegionContinuation);
+                borrowRegionContinuation,
+                bindings);
             var statement = statements[statementIndex];
             switch (statement)
             {
@@ -4740,6 +5027,19 @@ internal sealed partial class SemanticCompiler
                     if (isMutableRebind)
                     {
                         MarkMutableBindingMutation(binding.Name);
+                        // Later reads of a freshly rebound scalar view observe its
+                        // new origin. End only this old loan before checking the RHS;
+                        // aliases and RHS reads still retain their existing loans.
+                        if (reboundType == BoundType.Text
+                            && !ReferencesBorrowCarrier(
+                                binding.Value,
+                                CanonicalBorrowOriginName(binding.Name))
+                            && !FunctionControlFlowFacts.MayExitEarly(binding.Value)
+                            && !functions.Values.Any(function => function.IsLocal))
+                        {
+                            CaptureLoopBorrowKill(binding.Name);
+                            _activeBorrowedTextOrigins.Remove(binding.Name);
+                        }
                     }
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value, functions)
                         ?? DirectOwnedBindingSourceName(binding.Value, bindings);
@@ -4770,6 +5070,14 @@ internal sealed partial class SemanticCompiler
                             $"owned field '{movedFieldOwnerPlace}' overlaps an already moved field");
                     }
                     if (mutablyBorrowedFieldMove
+                        && binding.Value is FieldAccessExpression { Source: not NameExpression })
+                    {
+                        throw Error(
+                            binding.Line,
+                            binding.Column,
+                            $"owned nested field '{movedFieldOwnerPlace}' cannot be moved from a mutable borrow in the current slice because nested field assignment is not supported; use a move input for the containing owner or borrow the field for a readonly call");
+                    }
+                    if (mutablyBorrowedFieldMove
                         && (binding.Value is not FieldAccessExpression movedField
                             || statementIndex + 1 >= statements.Count
                             || statements[statementIndex + 1] is not FieldAssignmentStatement repair
@@ -4782,7 +5090,6 @@ internal sealed partial class SemanticCompiler
                             binding.Column,
                             $"owned field '{movedFieldOwnerPlace ?? movedFieldOwnerName}' moved from a mutable borrow must be reinitialized by the immediately following infallible statement; write 'replacement => {movedFieldOwnerPlace ?? movedFieldOwnerName}' without '?' before any use, control flow, or early return");
                     }
-                    var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     var bindingMutationConsumedSourceNames = GetOwnedContainerMutationConsumedSourceNames(
                         binding.Value,
                         bindings);
@@ -4804,6 +5111,9 @@ internal sealed partial class SemanticCompiler
                             allowFlowBindingTarget: false,
                             yieldInputType: yieldInputType,
                             mutableBindings: mutableBindings);
+                    // Inference commits the callee and an instance receiver.
+                    // Collect moves once from that decision before changing bindings.
+                    var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     var copiesFixedStorageBinding = _types.RequiresFixedStorageCopy(valueType)
                         && binding.Value is NameExpression or FieldAccessExpression;
                     _currentUsedTypes?.Add(valueType);
@@ -4812,10 +5122,14 @@ internal sealed partial class SemanticCompiler
                         throw Error(binding.Line, binding.Column, "cannot bind a unit value");
                     }
                     RejectDeferredTextStorage(binding.Value, valueType, "directly");
-                    var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(
+                    var aggregateLiteralTransfers = GetOwnedAggregateLiteralTransfers(
                         binding.Value,
                         bindings,
                         valueType);
+                    var aggregateLiteralSourceNames = aggregateLiteralTransfers
+                        .Select(static transfer => transfer.OwnerName)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
                     var transferredSourceNames = aggregateLiteralSourceNames
                         .Concat(bindingMutationConsumedSourceNames)
                         .Distinct(StringComparer.Ordinal)
@@ -4832,7 +5146,6 @@ internal sealed partial class SemanticCompiler
                     if (bindings.ContainsKey(binding.Name)
                         && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
-                        && !string.Equals(binding.Name, movedFieldOwnerName, StringComparison.Ordinal)
                         && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal)
                         && !aggregateLiteralSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
@@ -4892,10 +5205,20 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(consumedName);
                         mutableBindings.Remove(consumedName);
                     }
-                    foreach (var transferredName in aggregateLiteralSourceNames)
+                    foreach (var transfer in aggregateLiteralTransfers)
                     {
-                        bindings.Remove(transferredName);
-                        mutableBindings.Remove(transferredName);
+                        if (transfer.FieldPath.Count == 0)
+                        {
+                            bindings.Remove(transfer.OwnerName);
+                            mutableBindings.Remove(transfer.OwnerName);
+                            continue;
+                        }
+                        if (!movedImmutableOwnedPlaces.TryGetValue(transfer.OwnerName, out var recordedPlaces))
+                        {
+                            recordedPlaces = new HashSet<string>(StringComparer.Ordinal);
+                            movedImmutableOwnedPlaces.Add(transfer.OwnerName, recordedPlaces);
+                        }
+                        recordedPlaces.Add(transfer.OwnerName + "." + string.Join('.', transfer.FieldPath));
                     }
                     foreach (var transferredName in bindingMutationConsumedSourceNames)
                     {
@@ -4958,6 +5281,8 @@ internal sealed partial class SemanticCompiler
                             _activeReadonlyReferenceBindings.Add(carrierName);
                         }
                     }
+
+                    CaptureLoopBorrowBinding(binding, valueType, isMutableRebind, bindings, functions);
 
                     if (binding.Value is PartitionExpression partition)
                     {
@@ -5025,6 +5350,8 @@ internal sealed partial class SemanticCompiler
                             loopControl.Column,
                             $"'{loopControl.Kind.ToString().ToLowerInvariant()}' is only valid inside a loop");
                     }
+                    CaptureLoopBorrowExit(loopControl.Kind == LoopControlKind.Break
+                        ? BorrowControlExit.Break : BorrowControlExit.Continue);
                     _borrowedTextContinuationNames = parentBorrowedTextContinuation;
                     return;
                 case StreamStopStatement stop:
@@ -5062,6 +5389,8 @@ internal sealed partial class SemanticCompiler
                             $"loop-control guard requires Bool but received {FormatType(guardType)}");
                     }
                     ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions, bindings);
+                    CaptureLoopBorrowExit(BorrowControlExit.Fallthrough |
+                        (guardLoopControl.Kind == LoopControlKind.Break ? BorrowControlExit.Break : BorrowControlExit.Continue));
                     break;
                 case ReturnStatement returnStatement:
                     if (_currentFunctionReturnType is null)
@@ -5138,6 +5467,7 @@ internal sealed partial class SemanticCompiler
                                 MoveInputNameForExpression(returnStatement.Value));
                         }
                     }
+                    CaptureLoopBorrowExit(BorrowControlExit.Return);
                     _borrowedTextContinuationNames = parentBorrowedTextContinuation;
                     return;
                 case ExpressionStatement expressionStatement:
@@ -5229,6 +5559,10 @@ internal sealed partial class SemanticCompiler
                             _activeBorrowedTextOrigins[bindingEffect.Name] = EmptyBorrowOrigins();
                         }
                     }
+
+                    if (effect is FlowBindingEffect loopBindingEffect && TypeCanCarryBorrowedTextOrigin(loopBindingEffect.Type))
+                        CaptureLoopBorrowSeed(expressionStatement.Expression, loopBindingEffect.Name,
+                            loopBindingEffect.Type, expressionStatement.Expression, bindings, functions);
 
                     ValidateOwnedParameterConsumptionExpression(expressionStatement.Expression, functions, bindings);
                     foreach (var consumedName in consumedExpressionSourceNames)
@@ -5435,13 +5769,18 @@ internal sealed partial class SemanticCompiler
             expectedValueType,
             functions,
             bindings,
-            allowReadIntCall: true);
+            allowReadIntCall: true,
+            mutableBindings: mutableBindings,
+            yieldInputType: yieldInputType,
+            allowedOwnedOuterResultName: MoveInputNameForExpression(assignment.Value));
         RejectDeferredTextStorage(assignment.Value, valueType, "in indexed elements");
         if (valueType != expectedValueType)
         {
             throw Error(assignment.Value.Line, assignment.Value.Column,
                 $"indexed assignment value must be {FormatType(expectedValueType)}");
         }
+
+        MarkFixedLengthCandidateRequiresGrowable(assignment.Value, expectedValueType, valueType);
 
         if (_types.ContainsOwnedStorage(expectedValueType))
         {
@@ -5529,33 +5868,34 @@ internal sealed partial class SemanticCompiler
         BlockFunctionPipelineStatement pipeline,
         IReadOnlyDictionary<string, BoundFunction> functions)
     {
-        var first = pipeline.Calls[0];
-        if (first.Source is not FlowExpression flow
-            || flow.Targets.Count == 0
-            || flow.Targets.Any(target => target.TypeArgument is not null
-                || target.CompileTimeValueArgument is not null
-                || !TryGetFunction(string.Join('.', target.Path), functions, out var function)
-                || (function.StreamElementType is null && function.StreamElementTypeTemplate is null)))
+        List<BlockFunctionCallStatement>? calls = null;
+        for (var index = 0; index < pipeline.Calls.Count; index++)
         {
-            return pipeline;
+            var call = pipeline.Calls[index];
+            if (call.Source is FlowExpression flow
+                && flow.Targets.Count != 0
+                && flow.Targets.All(target => target.TypeArgument is null
+                    && target.CompileTimeValueArgument is null
+                    && TryGetFunction(string.Join('.', target.Path), functions, out var function)
+                    && (function.StreamElementType is not null || function.StreamElementTypeTemplate is not null)))
+            {
+                // Parsing can absorb blockless stages after any block call, not
+                // just before the first one. Keep them in the consuming pipeline.
+                calls ??= pipeline.Calls.Take(index).ToList();
+                Expression source = flow.Source;
+                foreach (var target in flow.Targets)
+                {
+                    var name = $"$stream_flow_{target.Line}_{target.Column}";
+                    calls.Add(new BlockFunctionCallStatement(source, target.Path, "it", [], name,
+                        false, target.Line, target.Column, true, ResultIsSynthetic: true,
+                        Arguments: target.Arguments, SourceFlowTarget: target));
+                    source = new NameExpression(name, target.Line, target.Column);
+                }
+            }
+            // Retain each parsed call's identity for generic/cache metadata.
+            calls?.Add(call);
         }
-
-        // Expression parsing may absorb blockless stream stages into the source
-        // of the terminal block. Bind them through the same consuming pipeline.
-        var calls = new List<BlockFunctionCallStatement>();
-        Expression source = flow.Source;
-        foreach (var target in flow.Targets)
-        {
-            var name = $"$stream_flow_{target.Line}_{target.Column}";
-            calls.Add(new BlockFunctionCallStatement(source, target.Path, "it", [], name,
-                false, target.Line, target.Column, true, ResultIsSynthetic: true,
-                Arguments: target.Arguments, SourceFlowTarget: target));
-            source = new NameExpression(name, target.Line, target.Column);
-        }
-        // The terminal is already parsed; retain its identity for generic/cache metadata.
-        calls.Add(first);
-        calls.AddRange(pipeline.Calls.Skip(1));
-        return pipeline with { Calls = calls };
+        return calls is null ? pipeline : pipeline with { Calls = calls };
     }
 
     private BoundFunctionKind RequireFileReadIntoAtSignature(
@@ -5744,14 +6084,7 @@ internal sealed partial class SemanticCompiler
                 BindWhileBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
             default:
-                var inputType = InferExpression(
-                    call.Source,
-                    functions,
-                    bindings,
-                    allowPrintCall: false,
-                    allowReadIntCall: true,
-                    allowFlowBindingTarget: false,
-                    mutableBindings: mutableBindings);
+                var inputType = InferBlockSource(call.Source, functions, bindings, mutableBindings, yieldInputType);
                 if (TryResolveUserBlockFunction(
                         inputType,
                         target,
@@ -5816,7 +6149,8 @@ internal sealed partial class SemanticCompiler
         {
             return;
         }
-        if (TryBindStreamingPipeline(pipeline, functions, bindings, mutableBindings, originalPipeline))
+        if (TryBindStreamingPipeline(pipeline, functions, bindings, mutableBindings, originalPipeline,
+                expandedFromBinding: !ReferenceEquals(pipeline, originalPipeline)))
         {
             return;
         }
@@ -6499,18 +6833,36 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, "while does not bind an iteration item");
         }
 
-        var conditionType = InferExpression(call.Source, functions, bindings,
-            allowPrintCall: false, allowReadIntCall: true, allowFlowBindingTarget: false,
-            mutableBindings: mutableBindings);
-        if (conditionType != BoundType.Bool)
+        // A while condition is evaluated again at every header. Capture its
+        // validated calls together with this loop, rather than as an outer fact.
+        var conditionCapture = new LoopBorrowCapture(
+            _currentModuleName, _currentFunctionName, call.Body, bindings,
+            _currentMutableDeclarationsByName ?? new Dictionary<string, MutableBindingDeclaration>(StringComparer.Ordinal),
+            _currentMutableDeclarations, CaptureBorrowedTextOriginState(), call.Source);
+        var parentCapture = _loopBorrowCapture;
+        var parentFacts = _loopBorrowFacts;
+        var parentControl = _loopBorrowControl;
+        try
         {
-            throw Error(call.Source.Line, call.Source.Column, "while condition must be Bool");
+            _loopBorrowCapture = conditionCapture;
+            _loopBorrowFacts = conditionCapture.Facts;
+            _loopBorrowControl = null;
+            var conditionType = InferBlockSource(call.Source, functions, bindings, mutableBindings, yieldInputType);
+            if (conditionType != BoundType.Bool)
+                throw Error(call.Source.Line, call.Source.Column, "while condition must be Bool");
+        }
+        finally
+        {
+            _loopBorrowCapture = parentCapture;
+            _loopBorrowFacts = parentFacts;
+            _loopBorrowControl = parentControl;
         }
         BindLoopStatements(call.Body, functions,
             new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal),
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
             yieldInputType,
-            allowContainerBindings: true);
+            allowContainerBindings: true,
+            preparedCapture: conditionCapture);
     }
 
     private void BindEachBlockFunctionCall(
@@ -6533,27 +6885,13 @@ internal sealed partial class SemanticCompiler
         var itemType = BoundType.Int;
         if (call.Source is RangeExpression range)
         {
-            var startType = InferExpression(
-                range.Start,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall: true,
-                allowFlowBindingTarget: false,
-                mutableBindings: mutableBindings);
+            var startType = InferBlockSource(range.Start, functions, bindings, mutableBindings, yieldInputType);
             if (startType != BoundType.Int)
             {
                 throw Error(range.Start.Line, range.Start.Column, "range start must be an integer");
             }
 
-            var endType = InferExpression(
-                range.End,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall: true,
-                allowFlowBindingTarget: false,
-                mutableBindings: mutableBindings);
+            var endType = InferBlockSource(range.End, functions, bindings, mutableBindings, yieldInputType);
             if (endType != BoundType.Int)
             {
                 throw Error(range.End.Line, range.End.Column, "range end must be an integer");
@@ -6561,14 +6899,7 @@ internal sealed partial class SemanticCompiler
         }
         else
         {
-            var sourceType = InferExpression(
-                call.Source,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall: true,
-                allowFlowBindingTarget: false,
-                mutableBindings: mutableBindings);
+            var sourceType = InferBlockSource(call.Source, functions, bindings, mutableBindings, yieldInputType);
             itemType = sourceType switch
             {
                 BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray => BoundType.Int,
@@ -6590,7 +6921,25 @@ internal sealed partial class SemanticCompiler
             }
         }
 
-        BindEachBlockBody(call, itemType, functions, bindings, mutableBindings, yieldInputType);
+        // Array iteration borrows its element. A non-copyable aggregate must
+        // not transfer its owned fields out of the collection through storage.
+        var previousOuterBindings = _currentFunctionOuterBindings;
+        if (_types.ContainsOwnedStorage(itemType) && !_types.RequiresFixedStorageCopy(itemType))
+        {
+            var borrowedBindings = previousOuterBindings is null
+                ? new Dictionary<string, BoundType>(StringComparer.Ordinal)
+                : new Dictionary<string, BoundType>(previousOuterBindings, StringComparer.Ordinal);
+            borrowedBindings[call.ItemName] = itemType;
+            _currentFunctionOuterBindings = borrowedBindings;
+        }
+        try
+        {
+            BindEachBlockBody(call, itemType, functions, bindings, mutableBindings, yieldInputType);
+        }
+        finally
+        {
+            _currentFunctionOuterBindings = previousOuterBindings;
+        }
     }
 
     private void BindEachBlockBody(
@@ -6618,6 +6967,14 @@ internal sealed partial class SemanticCompiler
         };
         var previousAllowStreamStop = _allowStreamStop;
         _allowStreamStop = previousAllowStreamStop || allowStreamStop;
+        if (TypeCanCarryBorrowedTextOrigin(itemType))
+            CaptureLoopBorrowSeed(call, call.ItemName, itemType, call.Source, bodyBindings, functions);
+        var hadItemOrigins = _activeBorrowedTextOrigins.TryGetValue(call.ItemName, out var previousItemOrigins);
+        if (TypeCanCarryBorrowedTextOrigin(itemType))
+            _activeBorrowedTextOrigins[call.ItemName] =
+                TryGetEachItemBorrowedTextOrigins(call.Source, functions, bindings, out var itemOrigins)
+                    ? itemOrigins
+                    : EmptyBorrowOrigins();
         try
         {
             BindLoopStatements(
@@ -6631,6 +6988,13 @@ internal sealed partial class SemanticCompiler
         finally
         {
             _allowStreamStop = previousAllowStreamStop;
+            if (hadItemOrigins)
+                _activeBorrowedTextOrigins[call.ItemName] = previousItemOrigins!;
+            else
+            {
+                _activeBorrowedTextOrigins.Remove(call.ItemName);
+                CaptureLoopBorrowKill(call.ItemName);
+            }
         }
     }
 
@@ -6687,6 +7051,43 @@ internal sealed partial class SemanticCompiler
     }
 
     private void BindUserBlockFunctionCall(
+        BlockFunctionCallStatement call,
+        BoundFunction function,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        string target,
+        bool suppressResultBinding = false,
+        BoundType? streamedInputType = null,
+        BoundType? resolvedInputType = null)
+    {
+        var previousExpressionContext = _expressionInferenceContext;
+        _expressionInferenceContext = null;
+        // A user block observes the producer's yielded storage. Its role names
+        // never introduce another owner, including during generic inference.
+        var borrowedRoleNames = new List<string>();
+        if (function.Kind == BoundFunctionKind.UserBlock)
+        {
+            foreach (var roleName in new[] { call.ItemName }.Concat(call.AdditionalItemNames ?? []))
+            {
+                if (_activeReadonlyReferenceBindings.Add(roleName))
+                    borrowedRoleNames.Add(roleName);
+            }
+        }
+        try
+        {
+            BindUserBlockFunctionCallCore(call, function, functions, bindings, mutableBindings,
+                target, suppressResultBinding, streamedInputType, resolvedInputType);
+        }
+        finally
+        {
+            _expressionInferenceContext = previousExpressionContext;
+            foreach (var roleName in borrowedRoleNames)
+                _activeReadonlyReferenceBindings.Remove(roleName);
+        }
+    }
+
+    private void BindUserBlockFunctionCallCore(
         BlockFunctionCallStatement call,
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -6998,12 +7399,17 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(call.Line, call.Column, $"stream function '{target}' must be followed directly by each");
         }
-        if (inputType != function.InputType.Value)
+        if (!CanPassFunctionArgument(inputType, function.InputType.Value))
         {
             throw Error(
                 call.Source.Line,
                 call.Source.Column,
                 $"block function '{target}' expects {FormatType(function.InputType.Value)} but received {FormatType(inputType)}");
+        }
+
+        if (_types.IsReference(function.InputType.Value) && !_types.IsReference(inputType))
+        {
+            EnsureReferenceArgumentPlace(call.Source, bindings, mutableBindings, target);
         }
 
         if (FunctionMutablyBorrowsInput(function))
@@ -7081,6 +7487,8 @@ internal sealed partial class SemanticCompiler
                     $"block callback for '{target}' returns {FormatType(actualCallbackResultType)} but expects {FormatType(callbackResultType)}");
             }
         }
+
+        RejectDeferredUserBlockResultStorage(call, function, bindings);
 
         if (suppressResultBinding)
         {
@@ -7173,6 +7581,15 @@ internal sealed partial class SemanticCompiler
                 borrowedTemplate, borrowedType, function, inferredTypes, line, column);
             return;
         }
+        if (typeTemplate.StartsWith("box ", StringComparison.Ordinal))
+        {
+            if (!_types.IsBox(actualType))
+                throw Error(line, column, $"expected a boxed value but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[4..].Trim(), _types.GetBox(actualType).ElementType,
+                function, inferredTypes, line, column);
+            return;
+        }
         if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
             && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
         {
@@ -7204,6 +7621,26 @@ internal sealed partial class SemanticCompiler
                 arguments[..separator], resultTypes.Ok, function, inferredTypes, line, column);
             InferGenericArgumentsFromTypeTemplate(
                 arguments[(separator + 1)..], resultTypes.Error, function, inferredTypes, line, column);
+            return;
+        }
+
+        if (typeTemplate.StartsWith('{') && typeTemplate.EndsWith('}')
+            && (actualType is BoundType.IntDictionary or BoundType.IntDictionaryView || _types.IsDictionary(actualType))
+            && FindEnclosedTypeSeparator(typeTemplate, ':') is var dictionarySeparator
+            && dictionarySeparator > 1)
+        {
+            var keyType = actualType is BoundType.IntDictionary or BoundType.IntDictionaryView
+                ? BoundType.Int : _types.GetDictionary(actualType).KeyType;
+            var valueType = actualType is BoundType.IntDictionary or BoundType.IntDictionaryView
+                ? BoundType.Int : _types.GetDictionary(actualType).ValueType;
+            var boundedSeparator = FindBoundedTypeSeparator(typeTemplate);
+            var valueEnd = boundedSeparator > dictionarySeparator ? boundedSeparator : typeTemplate.Length - 1;
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[1..dictionarySeparator], keyType,
+                function, inferredTypes, line, column);
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[(dictionarySeparator + 1)..valueEnd], valueType,
+                function, inferredTypes, line, column);
             return;
         }
 
@@ -7240,52 +7677,26 @@ internal sealed partial class SemanticCompiler
         int line,
         int column)
     {
-        typeTemplate = typeTemplate.Trim();
-        if (typeTemplate == function.GenericParameterName)
-        {
-            AssignInferredGenericType(function.GenericParameterName!, actualType, ref primaryType, line, column);
-            return;
-        }
-        if (typeTemplate == function.SecondaryGenericParameterName)
-        {
-            AssignInferredGenericType(function.SecondaryGenericParameterName!, actualType, ref secondaryType, line, column);
-            return;
-        }
-        if (typeTemplate == function.TertiaryGenericParameterName)
-        {
-            AssignInferredGenericType(function.TertiaryGenericParameterName!, actualType, ref tertiaryType, line, column);
-            return;
-        }
-        if (TryGetBorrowedGenericElement(typeTemplate, actualType, line, column,
-                out var borrowedTemplate, out var borrowedType))
-        {
-            InferGenericArgumentsFromTypeTemplate(
-                borrowedTemplate, borrowedType, function,
-                ref primaryType, ref secondaryType, ref tertiaryType, line, column);
-            return;
-        }
-        if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
-            && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
-        {
-            var elementType = actualType == BoundType.DynamicIntArray
-                ? BoundType.Int
-                : _types.IsDynamicArray(actualType)
-                    ? _types.GetDynamicArray(actualType).ElementType
-                    : throw Error(line, column, $"expected a growable array but received {FormatType(actualType)}");
-            InferGenericArgumentsFromTypeTemplate(
-                typeTemplate[1..^4], elementType, function,
-                ref primaryType, ref secondaryType, ref tertiaryType, line, column);
-            return;
-        }
+        // Legacy user-block slots share the recursive inference decisions used
+        // by ordinary generic calls. Seed earlier arguments before visiting the
+        // next template so repeated parameters retain their conflict diagnostic.
+        var inferredTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        if (function.GenericParameterName is { } primaryName && primaryType is { } primary)
+            inferredTypes[primaryName] = primary;
+        if (function.SecondaryGenericParameterName is { } secondaryName && secondaryType is { } secondary)
+            inferredTypes[secondaryName] = secondary;
+        if (function.TertiaryGenericParameterName is { } tertiaryName && tertiaryType is { } tertiary)
+            inferredTypes[tertiaryName] = tertiary;
 
-        var expectedType = ParseType(typeTemplate, line, column);
-        if (expectedType != actualType)
-        {
-            throw Error(
-                line,
-                column,
-                $"generic type pattern {typeTemplate} expects {FormatType(expectedType)} but received {FormatType(actualType)}");
-        }
+        InferGenericArgumentsFromTypeTemplate(
+            typeTemplate, actualType, function, inferredTypes, line, column);
+
+        if (function.GenericParameterName is { } first && inferredTypes.TryGetValue(first, out var firstType))
+            primaryType = firstType;
+        if (function.SecondaryGenericParameterName is { } second && inferredTypes.TryGetValue(second, out var secondType))
+            secondaryType = secondType;
+        if (function.TertiaryGenericParameterName is { } third && inferredTypes.TryGetValue(third, out var thirdType))
+            tertiaryType = thirdType;
     }
 
     private void AssignInferredGenericType(
@@ -7322,14 +7733,7 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
-        var sourceType = InferExpression(
-            call.Source,
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall: true,
-            allowFlowBindingTarget: false,
-            mutableBindings: mutableBindings);
+        var sourceType = InferBlockSource(call.Source, functions, bindings, mutableBindings, yieldInputType);
         BoundType itemType;
         if (sourceType is BoundType.IntDictionary or BoundType.IntDictionaryView)
         {
@@ -7365,11 +7769,22 @@ internal sealed partial class SemanticCompiler
         Dictionary<string, BoundType> bindings,
         HashSet<string> mutableBindings,
         BoundType? yieldInputType = null,
-        bool allowContainerBindings = true)
+        bool allowContainerBindings = true,
+        LoopBorrowCapture? preparedCapture = null)
     {
         _loopDepth++;
-        var loopEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+        var loopEntryBorrowedTextOrigins = preparedCapture?.Entry ?? CaptureBorrowedTextOriginState();
         BorrowOriginState? loopExitBorrowedTextOrigins = null;
+        var parentLoopCapture = _loopBorrowCapture;
+        var parentLoopFacts = _loopBorrowFacts;
+        var parentLoopControl = _loopBorrowControl;
+        var loopCapture = preparedCapture ?? new LoopBorrowCapture(
+            _currentModuleName, _currentFunctionName, statements, bindings,
+            _currentMutableDeclarationsByName ?? new Dictionary<string, MutableBindingDeclaration>(StringComparer.Ordinal),
+            _currentMutableDeclarations, loopEntryBorrowedTextOrigins);
+        _loopBorrowCapture = loopCapture;
+        _loopBorrowFacts = loopCapture.Facts;
+        _loopBorrowControl = null;
         try
         {
             var loopContinuation = new HashSet<string>(
@@ -7394,9 +7809,18 @@ internal sealed partial class SemanticCompiler
                 shortenBorrowRegions: true,
                 borrowRegionContinuation: loopContinuation);
             loopExitBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+            _loopBorrowCapture = parentLoopCapture;
+            _loopBorrowFacts = parentLoopFacts;
+            _loopBorrowControl = parentLoopControl;
+            loopExitBorrowedTextOrigins = ValidateLoopBorrowCapture(loopCapture);
+            if (IsCurrentLoopBorrowCapture)
+                parentLoopFacts!.Add(new LoopBorrowNestedFact(loopCapture));
         }
         finally
         {
+            _loopBorrowCapture = parentLoopCapture;
+            _loopBorrowFacts = parentLoopFacts;
+            _loopBorrowControl = parentLoopControl;
             RestoreBorrowedTextOriginState(loopExitBorrowedTextOrigins is null
                 ? loopEntryBorrowedTextOrigins
                 : MergeBorrowedTextOriginStates(
@@ -7422,14 +7846,7 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
-        var countType = InferExpression(
-            call.Source,
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall: true,
-            allowFlowBindingTarget: false,
-            mutableBindings: mutableBindings);
+        var countType = InferBlockSource(call.Source, functions, bindings, mutableBindings, yieldInputType);
         if (countType != BoundType.Int)
         {
             throw Error(call.Source.Line, call.Source.Column, "repeat expects an integer input");
@@ -7509,6 +7926,16 @@ internal sealed partial class SemanticCompiler
         return FlowEffect.None;
     }
 
+    private BoundType InferBlockSource(
+        Expression source,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string> mutableBindings,
+        BoundType? yieldInputType) =>
+        InferExpression(source, functions, bindings,
+            allowPrintCall: false, allowReadIntCall: true, allowFlowBindingTarget: false,
+            yieldInputType: yieldInputType, mutableBindings: mutableBindings);
+
     private BoundType InferExpression(
         Expression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -7521,9 +7948,52 @@ internal sealed partial class SemanticCompiler
         string? allowedOwnedOuterResultName = null,
         bool allowOwnedElementBorrow = false)
     {
+        var parent = _expressionInferenceContext;
+        var context = ResolveExpressionInferenceContext(bindings, yieldInputType, mutableBindings);
+        _expressionInferenceContext = context;
+        try
+        {
+            return InferExpressionCore(expression, functions, bindings, allowPrintCall, allowReadIntCall,
+                allowFlowBindingTarget, context.YieldInputType, context.MutableBindings,
+                allowedOwnedOuterResultName, allowOwnedElementBorrow);
+        }
+        finally
+        {
+            _expressionInferenceContext = parent;
+        }
+    }
+
+    private ExpressionInferenceContext ResolveExpressionInferenceContext(
+        IReadOnlyDictionary<string, BoundType> bindings,
+        BoundType? yieldInputType,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var parent = _expressionInferenceContext;
+        yieldInputType ??= parent?.YieldInputType;
+        if (mutableBindings is null && parent is { } inherited
+            && ReferenceEquals(inherited.Bindings, bindings))
+            mutableBindings = inherited.MutableBindings;
+        return new ExpressionInferenceContext(bindings, yieldInputType, mutableBindings);
+    }
+
+    private BoundType InferExpressionCore(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowPrintCall,
+        bool allowReadIntCall,
+        bool allowFlowBindingTarget,
+        BoundType? yieldInputType,
+        IReadOnlySet<string>? mutableBindings,
+        string? allowedOwnedOuterResultName,
+        bool allowOwnedElementBorrow)
+    {
+        // Statement binders can enable runtime inference, but only the lexical
+        // function's source authority can grant a main-only runtime call.
+        allowReadIntCall &= _currentFunctionAllowsRuntimeCalls;
         var type = expression switch
         {
-            StringExpression str => InferStringExpression(str, functions, bindings, allowReadIntCall),
+            StringExpression str => InferStringExpression(str, functions, bindings, allowReadIntCall, mutableBindings),
             NumberExpression number => number.Text.Contains('.', StringComparison.Ordinal)
                 || number.Text.Contains('e', StringComparison.OrdinalIgnoreCase)
                 ? BoundType.Float32
@@ -7562,16 +8032,16 @@ internal sealed partial class SemanticCompiler
                 mutableBindings),
             BoxExpression box => InferBoxExpression(box, functions, bindings, allowReadIntCall),
             MapExpression mapping => InferMapExpression(mapping, functions, bindings, allowReadIntCall),
-            AddExpression add => InferAddExpression(add, functions, bindings, allowReadIntCall),
-            SubtractExpression subtract => InferSubtractExpression(subtract, functions, bindings, allowReadIntCall),
-            MultiplyExpression multiply => InferMultiplyExpression(multiply, functions, bindings, allowReadIntCall),
-            DivideExpression divide => InferDivideExpression(divide, functions, bindings, allowReadIntCall),
-            ModuloExpression modulo => InferModuloExpression(modulo, functions, bindings, allowReadIntCall),
-            NegateExpression negate => InferNegateExpression(negate, functions, bindings, allowReadIntCall),
-            CompareExpression compare => InferCompareExpression(compare, functions, bindings, allowReadIntCall),
-            AndExpression and => InferLogicalExpression(and.Left, and.Right, functions, bindings, allowReadIntCall, "and"),
-            OrExpression or => InferLogicalExpression(or.Left, or.Right, functions, bindings, allowReadIntCall, "or"),
-            NotExpression not => InferNotExpression(not, functions, bindings, allowReadIntCall),
+            AddExpression add => InferAddExpression(add, functions, bindings, allowReadIntCall, mutableBindings),
+            SubtractExpression subtract => InferSubtractExpression(subtract, functions, bindings, allowReadIntCall, mutableBindings),
+            MultiplyExpression multiply => InferMultiplyExpression(multiply, functions, bindings, allowReadIntCall, mutableBindings),
+            DivideExpression divide => InferDivideExpression(divide, functions, bindings, allowReadIntCall, mutableBindings),
+            ModuloExpression modulo => InferModuloExpression(modulo, functions, bindings, allowReadIntCall, mutableBindings),
+            NegateExpression negate => InferNegateExpression(negate, functions, bindings, allowReadIntCall, mutableBindings),
+            CompareExpression compare => InferCompareExpression(compare, functions, bindings, allowReadIntCall, mutableBindings),
+            AndExpression and => InferLogicalExpression(and.Left, and.Right, functions, bindings, allowReadIntCall, "and", mutableBindings),
+            OrExpression or => InferLogicalExpression(or.Left, or.Right, functions, bindings, allowReadIntCall, "or", mutableBindings),
+            NotExpression not => InferNotExpression(not, functions, bindings, allowReadIntCall, mutableBindings),
             IfExpression conditional => InferIfExpression(
                 conditional,
                 functions,
@@ -7605,7 +8075,7 @@ internal sealed partial class SemanticCompiler
                 expression.Line,
                 expression.Column,
                 "subject range is only valid inside value-flow when"),
-            FoldExpression fold => InferFoldExpression(fold, functions, bindings, allowReadIntCall),
+            FoldExpression fold => InferFoldExpression(fold, functions, bindings, allowReadIntCall, mutableBindings),
             RangeExpression range => InferRangeExpression(
                 range,
                 functions,
@@ -8129,46 +8599,66 @@ internal sealed partial class SemanticCompiler
         StringExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
     {
-        foreach (var segment in expression.Segments)
+        var previousInterpolationScope = _currentInterpolationOwnershipScope;
+        var interpolationScope = new InterpolationOwnershipScope(bindings);
+        var deferredOrigins = new HashSet<string>(StringComparer.Ordinal);
+        _currentInterpolationOwnershipScope = interpolationScope;
+        bindings = interpolationScope.Bindings;
+        try
         {
-            if (segment is not InterpolationSegment interpolation)
+            foreach (var segment in expression.Segments)
             {
-                continue;
-            }
-
-            if (!interpolation.IsParenthesized
-                && interpolation.Expression is NameExpression name
-                && !bindings.ContainsKey(name.Name)
-                && !TryGetFunction(name.Name, functions, out _))
-            {
-                var prefix = bindings.Keys
-                    .Where(candidate => name.Name.StartsWith(candidate, StringComparison.Ordinal)
-                        && candidate.Length < name.Name.Length)
-                    .OrderByDescending(static candidate => candidate.Length)
-                    .FirstOrDefault();
-                if (prefix is not null)
+                if (segment is not InterpolationSegment interpolation)
                 {
-                    var suffix = name.Name[prefix.Length..];
-                    throw Error(
-                        name.Line,
-                        name.Column,
-                        $"unknown binding '{name.Name}'; use '$({prefix}){suffix}' to mark the interpolation boundary");
+                    continue;
                 }
+
+                if (!interpolation.IsParenthesized
+                    && interpolation.Expression is NameExpression name
+                    && !bindings.ContainsKey(name.Name)
+                    && !TryGetFunction(name.Name, functions, out _))
+                {
+                    var prefix = bindings.Keys
+                        .Where(candidate => name.Name.StartsWith(candidate, StringComparison.Ordinal)
+                            && candidate.Length < name.Name.Length)
+                        .OrderByDescending(static candidate => candidate.Length)
+                        .FirstOrDefault();
+                    if (prefix is not null)
+                    {
+                        var suffix = name.Name[prefix.Length..];
+                        throw Error(
+                            name.Line,
+                            name.Column,
+                            $"unknown binding '{name.Name}'; use '$({prefix}){suffix}' to mark the interpolation boundary");
+                    }
+                }
+
+                var interpolationType = InferExpression(
+                    interpolation.Expression,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
+                EnsureDisplayable(interpolationType, expression.Line, expression.Column, "string interpolation");
+                // Scalar values are captured by value. Text components remain
+                // borrowed until the deferred result's immediate consumer.
+                if (TypeCanCarryBorrowedTextOrigin(interpolationType)
+                    && TryGetBorrowedTextCallOrigins(interpolation.Expression, functions, bindings, out var origins))
+                    deferredOrigins.UnionWith(origins);
             }
 
-            var interpolationType = InferExpression(
-                interpolation.Expression,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
-            EnsureDisplayable(interpolationType, expression.Line, expression.Column, "string interpolation");
+            _deferredTextOrigins[expression] = deferredOrigins;
+            return BoundType.Text;
         }
-
-        return BoundType.Text;
+        finally
+        {
+            _currentInterpolationOwnershipScope = previousInterpolationScope;
+        }
     }
 
     private BoundType InferArrayLiteralExpression(
@@ -8732,6 +9222,31 @@ internal sealed partial class SemanticCompiler
         BoundType? yieldInputType = null,
         string? allowedOwnedOuterResultName = null)
     {
+        var parent = _expressionInferenceContext;
+        var context = ResolveExpressionInferenceContext(bindings, yieldInputType, mutableBindings);
+        _expressionInferenceContext = context;
+        try
+        {
+            return InferContextualValueCore(value, expectedType, functions, bindings, allowReadIntCall,
+                context.MutableBindings, context.YieldInputType, allowedOwnedOuterResultName);
+        }
+        finally
+        {
+            _expressionInferenceContext = parent;
+        }
+    }
+
+    private BoundType InferContextualValueCore(
+        Expression value,
+        BoundType expectedType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings,
+        BoundType? yieldInputType,
+        string? allowedOwnedOuterResultName)
+    {
+        allowReadIntCall &= _currentFunctionAllowsRuntimeCalls;
         WarnRedundantNumericType(value, expectedType);
         if (IsIntegerType(expectedType) && IsIntegerLiteralExpression(value))
         {
@@ -8746,7 +9261,7 @@ internal sealed partial class SemanticCompiler
 
         if (value is WhenExpression whenExpression && IsIntegerType(expectedType))
         {
-            return InferWhenExpression(
+            var result = InferWhenExpression(
                 whenExpression,
                 functions,
                 bindings,
@@ -8754,11 +9269,13 @@ internal sealed partial class SemanticCompiler
                 allowedOwnedOuterResultName,
                 mutableBindings: mutableBindings,
                 expectedResultType: expectedType);
+            _contextualNumericTypes[whenExpression] = expectedType;
+            return result;
         }
 
         if (value is IfExpression conditional && IsIntegerType(expectedType))
         {
-            return InferIfExpression(
+            var result = InferIfExpression(
                 conditional,
                 functions,
                 bindings,
@@ -8766,6 +9283,8 @@ internal sealed partial class SemanticCompiler
                 allowedOwnedOuterResultName,
                 mutableBindings: mutableBindings,
                 expectedResultType: expectedType);
+            _contextualNumericTypes[conditional] = expectedType;
+            return result;
         }
 
         if (IsIntegerType(expectedType)
@@ -8778,7 +9297,8 @@ internal sealed partial class SemanticCompiler
                 operatorText,
                 functions,
                 bindings,
-                allowReadIntCall);
+                allowReadIntCall,
+                mutableBindings);
         }
 
         if (value is DictionaryLiteralExpression structure && _types.IsStruct(expectedType))
@@ -9253,52 +9773,58 @@ internal sealed partial class SemanticCompiler
         AddExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "+");
+        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "+", mutableBindings);
     }
 
     private BoundType InferMultiplyExpression(
         MultiplyExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "*");
+        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "*", mutableBindings);
     }
 
     private BoundType InferSubtractExpression(
         SubtractExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "-");
+        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "-", mutableBindings);
     }
 
     private BoundType InferDivideExpression(
         DivideExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "/");
+        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "/", mutableBindings);
     }
 
     private BoundType InferModuloExpression(
         ModuloExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "%");
+        return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "%", mutableBindings);
     }
 
     private BoundType InferNegateExpression(
         NegateExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var value = InferExpression(
             expression.Value,
@@ -9306,7 +9832,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
         if (!IsSignedIntegerType(value) && !IsFloatType(value))
         {
             throw Error(expression.Value.Line, expression.Value.Column, "operand of unary '-' must be a signed numeric value");
@@ -9321,14 +9848,15 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string operatorText)
+        string operatorText,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var (left, right) = InferNumericOperands(
             leftExpression,
             rightExpression,
             functions,
             bindings,
-            allowReadIntCall);
+            allowReadIntCall, mutableBindings);
         if (left == BoundType.CodePoint)
         {
             throw Error(leftExpression.Line, leftExpression.Column,
@@ -9354,7 +9882,8 @@ internal sealed partial class SemanticCompiler
         Expression expression,
         out Expression left,
         out Expression right,
-        out string operatorText)
+        out string operatorText,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         (left, right, operatorText) = expression switch
         {
@@ -9375,10 +9904,11 @@ internal sealed partial class SemanticCompiler
         string operatorText,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
-        var leftType = InferContextualValue(left, expectedType, functions, bindings, allowReadIntCall);
-        var rightType = InferContextualValue(right, expectedType, functions, bindings, allowReadIntCall);
+        var leftType = InferContextualValue(left, expectedType, functions, bindings, allowReadIntCall, mutableBindings);
+        var rightType = InferContextualValue(right, expectedType, functions, bindings, allowReadIntCall, mutableBindings);
         if (leftType != expectedType || rightType != expectedType)
         {
             var invalid = leftType != expectedType ? left : right;
@@ -9394,14 +9924,15 @@ internal sealed partial class SemanticCompiler
         CompareExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var (left, right) = InferNumericOperands(
             expression.Left,
             expression.Right,
             functions,
             bindings,
-            allowReadIntCall);
+            allowReadIntCall, mutableBindings);
 
         if (left == BoundType.Text || right == BoundType.Text)
         {
@@ -9443,7 +9974,8 @@ internal sealed partial class SemanticCompiler
         Expression rightExpression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         BoundType Infer(Expression expression) => InferExpression(
             expression,
@@ -9451,14 +9983,15 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
 
         if (IsContextualNumericExpression(rightExpression)
             && !IsContextualNumericExpression(leftExpression))
         {
             var left = Infer(leftExpression);
             var right = InferContextualValue(
-                rightExpression, left, functions, bindings, allowReadIntCall);
+                rightExpression, left, functions, bindings, allowReadIntCall, mutableBindings);
             return (left, right);
         }
         if (IsContextualNumericExpression(leftExpression)
@@ -9466,7 +9999,7 @@ internal sealed partial class SemanticCompiler
         {
             var right = Infer(rightExpression);
             var left = InferContextualValue(
-                leftExpression, right, functions, bindings, allowReadIntCall);
+                leftExpression, right, functions, bindings, allowReadIntCall, mutableBindings);
             return (left, right);
         }
 
@@ -9482,7 +10015,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string operatorText)
+        string operatorText,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var left = InferExpression(
             leftExpression,
@@ -9490,14 +10024,16 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
         var right = InferExpression(
             rightExpression,
             functions,
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
 
         if (left != BoundType.Bool)
         {
@@ -9516,7 +10052,8 @@ internal sealed partial class SemanticCompiler
         NotExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var value = InferExpression(
             expression.Value,
@@ -9524,7 +10061,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
         if (value != BoundType.Bool)
         {
             throw Error(expression.Value.Line, expression.Value.Column, "'not' expects Bool");
@@ -9542,6 +10080,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings = null,
         BoundType? expectedResultType = null)
     {
+        using var loopBorrowControl = BeginLoopBorrowControl(expression, bindings);
         if (expression.Else is not null
             && expression.Then.Statements.Count == 0
             && expression.Then.Value is null)
@@ -9560,7 +10099,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
         if (condition != BoundType.Bool)
         {
             throw Error(expression.Condition.Line, expression.Condition.Column, "if expects Bool input");
@@ -9612,7 +10152,8 @@ internal sealed partial class SemanticCompiler
                 [],
                 0,
                 null,
-                _borrowedTextContinuationNames);
+                _borrowedTextContinuationNames,
+                bindings);
             return BoundType.Unit;
         }
 
@@ -9639,7 +10180,8 @@ internal sealed partial class SemanticCompiler
             [],
             0,
             null,
-            _borrowedTextContinuationNames);
+            _borrowedTextContinuationNames,
+            bindings);
         if (thenReachesJoin)
         {
             return thenType;
@@ -9660,6 +10202,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings = null,
         BoundType? expectedResultType = null)
     {
+        using var loopBorrowControl = BeginLoopBorrowControl(expression, bindings);
         var hasSubjectConditions = expression.Arms.Any(arm => IsSubjectWhenCondition(arm.Condition));
         BoundType? subjectType = null;
         if (expression.Subject is not null)
@@ -9700,20 +10243,25 @@ internal sealed partial class SemanticCompiler
             {
                 NoteLongControlCondition(arm.Condition, arm.Body.Line, "when");
             }
-            var condition = expression.Subject is null && !hasSubjectConditions
-                ? InferExpression(
-                    arm.Condition,
-                    functions,
-                    bindings,
-                    allowPrintCall: false,
-                    allowReadIntCall,
-                    allowFlowBindingTarget: false)
-                : InferSubjectWhenCondition(
-                    arm.Condition,
-                    subjectType!.Value,
-                    functions,
-                    bindings,
-                    allowReadIntCall);
+            BoundType condition;
+            using (BeginLoopBorrowWhenCondition(arm.Body))
+            {
+                condition = expression.Subject is null && !hasSubjectConditions
+                    ? InferExpression(
+                        arm.Condition,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false,
+                        mutableBindings: mutableBindings)
+                    : InferSubjectWhenCondition(
+                        arm.Condition,
+                        subjectType!.Value,
+                        functions,
+                        bindings,
+                        allowReadIntCall, mutableBindings);
+            }
             if (condition != BoundType.Bool)
             {
                 throw Error(arm.Condition.Line, arm.Condition.Column, "when arm condition must be Bool");
@@ -9804,7 +10352,8 @@ internal sealed partial class SemanticCompiler
             [],
             0,
             null,
-            _borrowedTextContinuationNames);
+            _borrowedTextContinuationNames,
+            bindings);
         return resultType ?? expectedResultType ?? BoundType.Unit;
     }
 
@@ -9880,6 +10429,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings = null,
         BoundType? expectedResultType = null)
     {
+        using var loopBorrowControl = BeginLoopBorrowControl(expression, bindings);
         var subjectType = InferExpression(
             expression.Subject,
             functions,
@@ -9936,7 +10486,7 @@ internal sealed partial class SemanticCompiler
             IReadOnlyList<string> patternReferenceBindings = [];
             if (variant.PayloadType is { } payloadType)
             {
-                if (pattern.BindingName is null)
+                if (pattern.BindingName is null && payloadType != BoundType.Unit)
                 {
                     throw Error(
                         pattern.Line,
@@ -9944,14 +10494,18 @@ internal sealed partial class SemanticCompiler
                         $"variant '{definition.Name}.{variant.Name}' requires a payload binding");
                 }
 
-                ValidateBindingName(pattern.BindingName, pattern.Line, pattern.Column);
-                armBindings[pattern.BindingName] = payloadType;
-                if (TypeContainsReadonlyReference(payloadType))
+                if (pattern.BindingName is { } bindingName)
                 {
-                    patternReferenceBindings = InstallReadonlyReferenceEnumPatternOrigins(
-                        expression.Subject,
-                        variant,
-                        pattern.BindingName);
+                    ValidateBindingName(bindingName, pattern.Line, pattern.Column);
+                    armBindings[bindingName] = payloadType;
+                    CaptureLoopBorrowPattern(arm.Body, expression.Subject, variant, bindingName);
+                    if (TypeContainsReadonlyReference(payloadType))
+                    {
+                        patternReferenceBindings = InstallReadonlyReferenceEnumPatternOrigins(
+                            expression.Subject,
+                            variant,
+                            bindingName);
+                    }
                 }
             }
             else if (pattern.BindingName is not null)
@@ -10102,7 +10656,8 @@ internal sealed partial class SemanticCompiler
             [],
             0,
             null,
-            _borrowedTextContinuationNames);
+            _borrowedTextContinuationNames,
+            bindings);
         return resultType ?? expectedResultType ?? BoundType.Unit;
     }
 
@@ -10111,19 +10666,21 @@ internal sealed partial class SemanticCompiler
         BoundType subjectType,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         if (condition is SubjectCompareExpression compare)
         {
             var right = IsNumericLiteralExpression(compare.Right)
-                ? InferContextualValue(compare.Right, subjectType, functions, bindings, allowReadIntCall)
+                ? InferContextualValue(compare.Right, subjectType, functions, bindings, allowReadIntCall, mutableBindings)
                 : InferExpression(
                     compare.Right,
                     functions,
                     bindings,
                     allowPrintCall: false,
                     allowReadIntCall,
-                    allowFlowBindingTarget: false);
+                    allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
             if (right != subjectType)
             {
                 throw Error(compare.Right.Line, compare.Right.Column,
@@ -10139,14 +10696,15 @@ internal sealed partial class SemanticCompiler
         }
 
         var start = IsNumericLiteralExpression(range.Start)
-            ? InferContextualValue(range.Start, subjectType, functions, bindings, allowReadIntCall)
+            ? InferContextualValue(range.Start, subjectType, functions, bindings, allowReadIntCall, mutableBindings)
             : InferExpression(
                 range.Start,
                 functions,
                 bindings,
                 allowPrintCall: false,
                 allowReadIntCall,
-                allowFlowBindingTarget: false);
+                allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
         if (start != subjectType)
         {
             throw Error(range.Start.Line, range.Start.Column,
@@ -10154,14 +10712,15 @@ internal sealed partial class SemanticCompiler
         }
 
         var end = IsNumericLiteralExpression(range.End)
-            ? InferContextualValue(range.End, subjectType, functions, bindings, allowReadIntCall)
+            ? InferContextualValue(range.End, subjectType, functions, bindings, allowReadIntCall, mutableBindings)
             : InferExpression(
                 range.End,
                 functions,
                 bindings,
                 allowPrintCall: false,
                 allowReadIntCall,
-                allowFlowBindingTarget: false);
+                allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
         if (end != subjectType)
         {
             throw Error(range.End.Line, range.End.Column,
@@ -10175,7 +10734,8 @@ internal sealed partial class SemanticCompiler
         FoldExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
     {
         ValidateBindingName(expression.AccumulatorName, expression.Line, expression.Column);
         if (expression.ItemName != "it")
@@ -10255,7 +10815,8 @@ internal sealed partial class SemanticCompiler
             [expression.AccumulatorName] = BoundType.Int,
             [expression.ItemName] = BoundType.Int
         };
-        var bodyType = InferBlockBody(expression.Body, functions, bodyBindings, allowReadIntCall);
+        var bodyType = InferBlockBody(expression.Body, functions, bodyBindings, allowReadIntCall,
+            mutableBindings: mutableBindings);
         if (bodyType != BoundType.Int)
         {
             throw Error(expression.Body.Line, expression.Body.Column, "fold body must return the next integer accumulator value");
@@ -10274,6 +10835,7 @@ internal sealed partial class SemanticCompiler
         BoundType? expectedResultType = null,
         IReadOnlyDictionary<string, BoundType>? ownedResultOuterBindings = null)
     {
+        using var loopBorrowArm = BeginLoopBorrowArm(body, bindings);
         var parentMutableDeclarationsByName = _currentMutableDeclarationsByName is null
             ? null
             : new Dictionary<string, MutableBindingDeclaration>(
@@ -10304,11 +10866,13 @@ internal sealed partial class SemanticCompiler
             [],
             0,
             body.Value,
-            _borrowedTextContinuationNames);
+            _borrowedTextContinuationNames,
+            bodyBindings);
 
         var resultType = expectedResultType is { } expected
             && IsIntegerType(expected)
-            && IsContextualNumericExpression(body.Value)
+            && (IsContextualNumericExpression(body.Value)
+                || TryGetNumericBinaryOperands(body.Value, out _, out _, out _))
                 ? InferContextualValue(
                     body.Value,
                     expected,
@@ -10331,6 +10895,17 @@ internal sealed partial class SemanticCompiler
                 body.Value.Line,
                 body.Value.Column,
                 "static array block results are not supported yet; use a growable array or keep the static array inside the block");
+        }
+
+        if (resultType == BoundType.Text
+            && TryGetBorrowedTextCallOrigins(body.Value, functions, bodyBindings, out var textOrigins))
+        {
+            foreach (var origin in textOrigins)
+            {
+                if (!bindings.Keys.Any(name => CanonicalBorrowOriginName(name) == SplitBorrowPlace(origin)[0]))
+                    throw Error(body.Value.Line, body.Value.Column,
+                        $"borrowed origin '{origin}' cannot escape its block through a Text result");
+            }
         }
 
         if (_types.ContainsOwnedStorage(resultType))
@@ -10360,6 +10935,30 @@ internal sealed partial class SemanticCompiler
         BoundType? yieldInputType = null,
         IReadOnlySet<string>? mutableBindings = null)
     {
+        var parent = _expressionInferenceContext;
+        var context = ResolveExpressionInferenceContext(bindings, yieldInputType, mutableBindings);
+        _expressionInferenceContext = context;
+        try
+        {
+            return InferFlowExpressionCore(expression, functions, bindings, allowReadIntCall,
+                allowFlowBindingTarget, context.YieldInputType, context.MutableBindings);
+        }
+        finally
+        {
+            _expressionInferenceContext = parent;
+        }
+    }
+
+    private FlowResult InferFlowExpressionCore(
+        FlowExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        bool allowFlowBindingTarget,
+        BoundType? yieldInputType,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        allowReadIntCall &= _currentFunctionAllowsRuntimeCalls;
         // Resolve a direct collection target before inferring literal elements.
         // Otherwise a wide integer can fail the default Int bounds before its
         // declared parameter element type ever reaches contextual inference.
@@ -10441,7 +11040,9 @@ internal sealed partial class SemanticCompiler
                 continue;
             }
 
-            if (_types.IsDynTrait(currentType))
+            if (_types.IsDynTrait(currentType)
+                && (IsExplicitDynTraitDispatchTarget(currentType, path)
+                    || !TryGetFunction(path, functions, out _)))
             {
                 currentType = InferDynTraitDispatch(target, path, currentType);
                 continue;
@@ -10484,7 +11085,7 @@ internal sealed partial class SemanticCompiler
                     throw Error(
                         target.Line,
                         target.Column,
-                        $"yield() is only valid inside a block function; current function is '{_currentFunctionName ?? "main"}'");
+                        $"yield() is only valid inside a block function; current function is '{_currentFunctionDeclarationName ?? "main"}'");
                 }
 
                 if (!isLast
@@ -10638,7 +11239,8 @@ internal sealed partial class SemanticCompiler
                         throw Error(expression.Line, expression.Column, $"{path} must be the final value-flow target");
                     }
 
-                    if (printerKind == BoundFunctionKind.RuntimePrintErrorLine
+                    if ((printerKind is BoundFunctionKind.RuntimePrintError
+                        or BoundFunctionKind.RuntimePrintErrorLine)
                         && currentType != BoundType.Text)
                     {
                         throw Error(
@@ -10647,7 +11249,8 @@ internal sealed partial class SemanticCompiler
                             $"{path} expects Text but received {FormatType(currentType)}");
                     }
                     EnsureDisplayable(currentType, expression.Line, expression.Column, path);
-                    if (printerKind == BoundFunctionKind.RuntimePrintErrorLine)
+                    if (printerKind is BoundFunctionKind.RuntimePrintError
+                        or BoundFunctionKind.RuntimePrintErrorLine)
                     {
                         _resolvedGenericCalls[target] = function;
                     }
@@ -10730,11 +11333,16 @@ internal sealed partial class SemanticCompiler
                             throw Error(expression.Line, expression.Column,
                                 $"{path} expects [UInt8; ~] but received {FormatType(currentType)}");
                         }
+                        MarkFixedLengthCandidateRequiresGrowable(
+                            expression.Source,
+                            function.InputType,
+                            currentType);
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeMapSourcePath:
                     case BoundFunctionKind.RuntimePathText:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        _resolvedGenericCalls[target] = function;
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeOpenFileAsync:
@@ -10759,8 +11367,11 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeReadDirectory:
                     case BoundFunctionKind.RuntimeCreateDirectory:
                     case BoundFunctionKind.RuntimePathQuery:
+                    case BoundFunctionKind.RuntimePathAbsolute:
                     case BoundFunctionKind.RuntimeSyncFile:
                     case BoundFunctionKind.RuntimeAtomicReplaceFile:
+                    case BoundFunctionKind.RuntimeCreateExclusiveFile:
+                    case BoundFunctionKind.RuntimeRemoveFile:
                     case BoundFunctionKind.RuntimeRangeStream:
                         MarkFixedLengthCandidateRequiresGrowable(
                             expression.Source,
@@ -10971,7 +11582,7 @@ internal sealed partial class SemanticCompiler
 
                         if (FunctionMovesOwnedHeapInput(function))
                         {
-                            EnsureOwnedParameterFlowSource(expression.Source, path);
+                            EnsureOwnedParameterFlowSource(expression.Source, path, bindings, receivesOriginalSource: i == 0);
                         }
 
                         if (FunctionMutablyBorrowsInput(function))
@@ -11059,6 +11670,20 @@ internal sealed partial class SemanticCompiler
         _dynTraitConversions[target] = new BoundDynTraitConversion(
             dynType, concreteType, trait, methods);
         return dynType;
+    }
+
+    private bool IsExplicitDynTraitDispatchTarget(BoundType dynType, string path)
+    {
+        var separator = path.LastIndexOf('.');
+        if (separator < 0)
+        {
+            return false;
+        }
+
+        var requestedTrait = path[..separator];
+        var canonicalTrait = _types.GetDynTrait(dynType).TraitName;
+        var shortTrait = canonicalTrait[(canonicalTrait.LastIndexOf('.') + 1)..];
+        return requestedTrait == canonicalTrait || requestedTrait == shortTrait;
     }
 
     private BoundType InferDynTraitDispatch(FlowTarget target, string path, BoundType dynType)
@@ -11561,10 +12186,6 @@ internal sealed partial class SemanticCompiler
                 result = new FlowResult(BoundType.Bool, FlowEffect.None);
                 return true;
             case "insert" or "remove" when _types.IsSet(currentType):
-                if (!isLast)
-                {
-                    throw Error(target.Line, target.Column, $"Set {path} must be the final value-flow target");
-                }
                 EnsureMutableContainerSource(expression.Source, path, mutableBindings);
                 ValidateSetElementArgument(target, functions, bindings, allowReadIntCall);
                 result = new FlowResult(BoundType.Bool, FlowEffect.None);
@@ -11719,9 +12340,7 @@ internal sealed partial class SemanticCompiler
                 {
                     return false;
                 }
-                if (currentType != BoundType.DynamicIntArray
-                    && !_types.IsDynamicArray(currentType)
-                    && !_types.IsBoundedArray(currentType))
+                if (!TryGetArrayPushElementType(currentType, out var expectedPushedType))
                 {
                     return false;
                 }
@@ -11742,18 +12361,14 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "push expects exactly one argument");
                 }
 
-                var expectedPushedType = currentType == BoundType.DynamicIntArray
-                    ? BoundType.Int
-                    : _types.IsBoundedArray(currentType)
-                        ? _types.GetBoundedArray(currentType).ElementType
-                    : _types.GetDynamicArray(currentType).ElementType;
                 var pushedArgument = target.Arguments[0];
                 var pushedType = InferContextualValue(
                     pushedArgument,
                     expectedPushedType,
                     functions,
                     bindings,
-                    allowReadIntCall);
+                    allowReadIntCall,
+                    mutableBindings);
                 RejectDeferredTextStorage(pushedArgument, pushedType, "in array elements");
                 if (pushedType != expectedPushedType)
                 {
@@ -11765,13 +12380,20 @@ internal sealed partial class SemanticCompiler
                 if (_types.ContainsOwnedStorage(expectedPushedType))
                 {
                     RejectBorrowedOwnedStorageTransfers(
-                        GetOwnedAggregateLiteralSourceNames(
+                        GetOwnedStorageTransferSourceNames(
                             pushedArgument,
                             bindings,
                             expectedPushedType),
                         pushedArgument.Line,
                         pushedArgument.Column,
                         "owned container storage");
+                }
+                if (TypeCanCarryBorrowedTextOrigin(expectedPushedType)
+                    && TryGetBorrowOriginReceiverBinding(expression.Source, bindings, out var receiver))
+                {
+                    CaptureLoopBorrowStore(receiver, pushedArgument, bindings, functions);
+                    if (TryGetBorrowedTextCallOrigins(pushedArgument, functions, bindings, out var storedOrigins))
+                        UnionBorrowOriginCarrier(_activeBorrowedTextOrigins, receiver, storedOrigins);
                 }
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
@@ -11960,6 +12582,7 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Arguments[0].Line, target.Arguments[0].Column, "append expects an Int value");
                 }
 
+                MarkFixedLengthCandidateRequiresGrowableOperation(expression.Source);
                 result = new FlowResult(BoundType.DynamicIntArray, FlowEffect.None);
                 return true;
             case "put" or "putIfAbsent":
@@ -12072,6 +12695,7 @@ internal sealed partial class SemanticCompiler
                     }
                 }
 
+                MarkFixedLengthCandidateRequiresGrowableOperation(expression.Source);
                 result = new FlowResult(currentType, FlowEffect.None);
                 return true;
             default:
@@ -12237,7 +12861,8 @@ internal sealed partial class SemanticCompiler
                 allowPrintCall: false,
                 allowReadIntCall,
                 allowFlowBindingTarget: false);
-            if (printerKind == BoundFunctionKind.RuntimePrintErrorLine
+            if ((printerKind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine)
                 && valueType != BoundType.Text)
             {
                 throw Error(
@@ -12246,7 +12871,8 @@ internal sealed partial class SemanticCompiler
                     $"{path} expects Text but received {FormatType(valueType)}");
             }
             EnsureDisplayable(valueType, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
-            if (printerKind == BoundFunctionKind.RuntimePrintErrorLine)
+            if (printerKind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine)
             {
                 _resolvedGenericCalls[expression] = function;
             }
@@ -12316,6 +12942,10 @@ internal sealed partial class SemanticCompiler
                     throw Error(expression.Line, expression.Column,
                         $"{path} expects [UInt8; ~] but received {FormatType(byteOwnerType)}");
                 }
+                MarkFixedLengthCandidateRequiresGrowable(
+                    expression.Arguments[0],
+                    function.InputType,
+                    byteOwnerType);
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeMapSourcePath:
             case BoundFunctionKind.RuntimePathText:
@@ -12337,6 +12967,7 @@ internal sealed partial class SemanticCompiler
                 {
                     EnsureRuntimeInput(sourcePathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
                 }
+                _resolvedGenericCalls[expression] = function;
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeOpenFileAsync:
             case BoundFunctionKind.RuntimeOpenWriteFileAsync:
@@ -12365,6 +12996,8 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeProcessIdValue:
             case BoundFunctionKind.RuntimeSyncFile:
             case BoundFunctionKind.RuntimeAtomicReplaceFile:
+            case BoundFunctionKind.RuntimeCreateExclusiveFile:
+            case BoundFunctionKind.RuntimeRemoveFile:
                 if (expression.Arguments.Count != 1)
                 {
                     throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
@@ -12378,6 +13011,7 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeReadDirectory:
             case BoundFunctionKind.RuntimeCreateDirectory:
             case BoundFunctionKind.RuntimePathQuery:
+            case BoundFunctionKind.RuntimePathAbsolute:
             case BoundFunctionKind.RuntimeRangeStream:
                 if (expression.Arguments.Count != 1)
                 {
@@ -12431,10 +13065,16 @@ internal sealed partial class SemanticCompiler
                 }
 
                 return BoundType.Unit;
+            case BoundFunctionKind.RuntimePathStyle:
+                if (expression.Arguments.Count != 0)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} does not accept arguments");
+                }
+
+                return function.ReturnType;
             case BoundFunctionKind.RuntimeNowMillis:
             case BoundFunctionKind.RuntimeUtcNowMillis:
             case BoundFunctionKind.RuntimeMonotonicSuspendPolicy:
-            case BoundFunctionKind.RuntimePathStyle:
             case BoundFunctionKind.RuntimeParallelWorkers:
             case BoundFunctionKind.RuntimeParallelPeakWorkers:
             case BoundFunctionKind.RuntimeReadStandardInputSourceText:
@@ -12687,10 +13327,16 @@ internal sealed partial class SemanticCompiler
                     // that semantic result for code generation and reachability
                     // analysis just like generic and runtime calls.
                     _resolvedGenericCalls[expression] = function;
+                    _resolvedInstanceCallReceivers[expression] = receiverName;
                     return AsyncCallType(function);
                 }
 
-                return InferUserCallExpression(expression, function, functions, bindings, allowReadIntCall, mutableBindings, path);
+                var callType = InferUserCallExpression(
+                    expression, function, functions, bindings, allowReadIntCall, mutableBindings, path);
+                // Code generation and reachability must use the declaration
+                // selected in the caller's module, including namespaced main.
+                _resolvedGenericCalls[expression] = function;
+                return callType;
             default:
                 throw Error(expression.Line, expression.Column, $"unsupported function kind '{function.Kind}'");
         }
@@ -12701,9 +13347,6 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings, bool allowReadIntCall)
     {
-        if (target.Arguments.Count == 0 && target.TypeArgument is null)
-            return ResolveGenericSpecialization(template, inputType, functions, target);
-
         var names = GenericParameterNames(template);
         var inferred = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         if (target.TypeArgument is { } explicitType)
@@ -12875,7 +13518,13 @@ internal sealed partial class SemanticCompiler
         if (template.Kind == BoundFunctionKind.RuntimeDiagnosticSessionTrack
             && !_types.IsTask(actualType))
         {
-            throw Error(template.Line, template.Column,
+            var (line, column) = callSite switch
+            {
+                FlowTarget target => (target.Line, target.Column),
+                Expression expression => (expression.Line, expression.Column),
+                _ => throw new InvalidOperationException("Task tracking specialization requires a source call site.")
+            };
+            throw Error(line, column,
                 "DiagnosticSession.track<T> requires T to be Task<U>; the moved owner is not consumed on rejection");
         }
 
@@ -13720,6 +14369,13 @@ internal sealed partial class SemanticCompiler
         out BoundType type)
     {
         type = default;
+        var interpolationScope = _currentInterpolationOwnershipScope;
+        var evaluatesInterpolation = interpolationScope is not null
+            && ReferenceEquals(bindings, interpolationScope.Bindings);
+        // Repeated type queries reuse this exact, already checked constructor's
+        // canonical result; they do not reevaluate its consumed payload place.
+        if (evaluatesInterpolation && interpolationScope!.EvaluatedConstructors.TryGetValue(expression, out type))
+            return true;
         if (expression.Path.Count < 2)
         {
             return false;
@@ -13789,8 +14445,25 @@ internal sealed partial class SemanticCompiler
                     expression.Arguments[0].Column,
                     $"variant '{definition.Name}.{variant.Name}' expects {FormatType(payloadType)}, got {FormatType(actualType)}");
             }
+            RejectBorrowedOwnedStorageTransfers(
+                GetOwnedEnumConstructorTransfers(expression, bindings)
+                    .Where(transfer => !_currentTransferableEnumPayloadNames.Contains(transfer.OwnerName))
+                    .Select(static transfer => transfer.OwnerName),
+                expression.Arguments[0].Line,
+                expression.Arguments[0].Column,
+                "owned enum payload storage",
+                bindings);
         }
 
+        if (evaluatesInterpolation)
+        {
+            interpolationScope!.EvaluatedConstructors.Add(expression, type);
+            foreach (var transfer in GetOwnedEnumConstructorTransfers(expression, bindings))
+            {
+                if (transfer.FieldPath.Count == 0)
+                    interpolationScope.Bindings.Remove(transfer.OwnerName);
+            }
+        }
         return true;
     }
 
@@ -13948,6 +14621,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings,
         string path)
     {
+        mutableBindings = ResolveExpressionInferenceContext(bindings, null, mutableBindings).MutableBindings;
         if (IsMainOnlyRuntimeWrapper(function) && !allowReadIntCall)
         {
             throw Error(expression.Line, expression.Column, $"{path} is only valid in main for the current runtime slice");
@@ -13963,6 +14637,8 @@ internal sealed partial class SemanticCompiler
             }
             ValidateAdditionalFunctionArguments(function, expression.Arguments, functions, bindings,
                 allowReadIntCall, mutableBindings, path);
+            if (function.IsLocal)
+                _resolvedCaptureCalls[expression] = function;
             return AsyncCallType(function);
         }
 
@@ -14004,6 +14680,7 @@ internal sealed partial class SemanticCompiler
                     allowPrintCall: false,
                     allowReadIntCall,
                     allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings,
                     allowOwnedElementBorrow:
                         function.InputOwnership == BoundFunctionInputOwnership.Default);
         WarnRedundantNumericType(expression.Arguments[0], function.InputType.Value);
@@ -14034,7 +14711,7 @@ internal sealed partial class SemanticCompiler
 
         if (FunctionMovesOwnedHeapInput(function))
         {
-            EnsureOwnedParameterCallArgument(expression.Arguments[0], path);
+            EnsureOwnedParameterCallArgument(expression.Arguments[0], path, bindings);
         }
 
         if (FunctionMutablyBorrowsInput(function))
@@ -14056,6 +14733,8 @@ internal sealed partial class SemanticCompiler
             mutableBindings,
             path);
 
+        if (function.IsLocal)
+            _resolvedCaptureCalls[expression] = function;
         return AsyncCallType(function);
     }
 
@@ -14106,6 +14785,7 @@ internal sealed partial class SemanticCompiler
                         mutableBindings)
                     : InferExpression(argument, functions, bindings, allowPrintCall: false,
                     allowReadIntCall, allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings,
                     allowOwnedElementBorrow: parameter.Ownership == BoundFunctionInputOwnership.Default);
             WarnRedundantNumericType(argument, parameter.Type);
             if (actualType == parameter.Type && IsNumericLiteralExpression(argument))
@@ -14126,7 +14806,7 @@ internal sealed partial class SemanticCompiler
             }
             if (parameter.Ownership == BoundFunctionInputOwnership.Move)
             {
-                EnsureOwnedParameterCallArgument(argument, path);
+                EnsureOwnedParameterCallArgument(argument, path, bindings);
             }
             else if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
             {
@@ -14154,6 +14834,7 @@ internal sealed partial class SemanticCompiler
     {
         if (function.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintError
             or BoundFunctionKind.RuntimePrintErrorLine)
         {
             kind = function.Kind;
@@ -14352,6 +15033,7 @@ internal sealed partial class SemanticCompiler
         {
             BoundFunctionKind.RuntimePrint
                 or BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintError
                 or BoundFunctionKind.RuntimePrintErrorLine
                 or BoundFunctionKind.RuntimeFlushStandardOutput
                 or BoundFunctionKind.RuntimeReadInt => ["Console"],
@@ -14362,6 +15044,7 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeUtcNowMillis
                 or BoundFunctionKind.RuntimeSleep => ["Clock"],
             BoundFunctionKind.RuntimeArguments
+                or BoundFunctionKind.RuntimeExitProcess
                 or BoundFunctionKind.RuntimeRunProcess
                 or BoundFunctionKind.RuntimeCollectProcess
                 or BoundFunctionKind.RuntimeSpawnProcess
@@ -14392,6 +15075,10 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeSyncFileAsync
                 or BoundFunctionKind.RuntimeSyncFile
                 or BoundFunctionKind.RuntimeAtomicReplaceFile
+                or BoundFunctionKind.RuntimeCreateExclusiveFile
+                or BoundFunctionKind.RuntimeRemoveFile
+                or BoundFunctionKind.RuntimeReadDirectory
+                or BoundFunctionKind.RuntimeCreateDirectory
                 or BoundFunctionKind.RuntimeMapSourceText
                 or BoundFunctionKind.RuntimeReadStandardInputSourceText
                 or BoundFunctionKind.RuntimeReadStandardInputChunk
@@ -14628,10 +15315,14 @@ internal sealed partial class SemanticCompiler
             [TypeId.UInt8] = TypeId.DynamicUInt8Array,
             [TypeId.DirectoryEntry] = TypeId.DynamicDirectoryEntryArray
         };
+        var predeclaredBitSets = new Dictionary<TypeId, int>();
+        var predeclaredBitSetsByCount = new Dictionary<int, TypeId>();
         var predeclaredBoundedArrays = new Dictionary<TypeId, (TypeId ElementType, int Capacity)>();
         var predeclaredBoundedArraysByShape = new Dictionary<(TypeId ElementType, int Capacity), TypeId>();
         var predeclaredBoundedDictionaries = new Dictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)>();
         var predeclaredBoundedDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType, int MaxEntries), TypeId>();
+        var predeclaredDictionaries = new Dictionary<TypeId, (TypeId KeyType, TypeId ValueType)>();
+        var predeclaredDictionariesByShape = new Dictionary<(TypeId KeyType, TypeId ValueType), TypeId>();
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
@@ -14740,6 +15431,21 @@ internal sealed partial class SemanticCompiler
                 names.TryAdd(typeName, resultType);
                 return resultType;
             }
+            if (typeName.StartsWith("BitSet<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+            {
+                if (!int.TryParse(typeName[7..^1].Trim(), out var bitCount) || bitCount <= 0)
+                {
+                    throw Error(line, column, "BitSet size must be a positive integer literal");
+                }
+                if (!predeclaredBitSetsByCount.TryGetValue(bitCount, out var bitSet))
+                {
+                    bitSet = (TypeId)nextTypeId++;
+                    predeclaredBitSets.Add(bitSet, bitCount);
+                    predeclaredBitSetsByCount.Add(bitCount, bitSet);
+                }
+                names.TryAdd(typeName, bitSet);
+                return bitSet;
+            }
             if (TryResolveDefinitionDynamicArray(typeName, line, column, out var dynamicArray))
             {
                 return dynamicArray;
@@ -14756,6 +15462,8 @@ internal sealed partial class SemanticCompiler
             {
                 return boundedDictionary;
             }
+            if (TryResolveDefinitionDictionary(typeName, line, column, out var dictionary))
+                return dictionary;
             if (typeName.StartsWith("ref ", StringComparison.Ordinal))
             {
                 var elementName = typeName[4..].Trim();
@@ -14914,28 +15622,6 @@ internal sealed partial class SemanticCompiler
 
         ValidateAcyclicValueTypes(structs, enums, predeclaredFixedStaticArrays,
             predeclaredBoundedArrays, predeclaredBoundedDictionaries);
-        foreach (var (id, definition) in enums.ToArray())
-        {
-            var payloadBytes = definition.Variants
-                .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references,
-                    predeclaredFixedStaticArrays, predeclaredDynamicArrays, predeclaredBoundedArrays, predeclaredBoundedDictionaries))
-                .DefaultIfEmpty(0)
-                .Max();
-            enums[id] = definition with { PayloadWords = (payloadBytes + 7) / 8 };
-        }
-
-        foreach (var (id, definition) in boxes.ToArray())
-        {
-            var size = InlineSize(definition.ElementType, structs, enums, boxes, references,
-                predeclaredFixedStaticArrays, predeclaredDynamicArrays, predeclaredBoundedArrays, predeclaredBoundedDictionaries);
-            boxes[id] = definition with
-            {
-                Size = size,
-                Alignment = Math.Min(Math.Max(size, 1), 8)
-            };
-        }
-
         var result = new TypeDefinitionTable(
             names,
             structs,
@@ -14946,10 +15632,8 @@ internal sealed partial class SemanticCompiler
             declaredOptions,
             declaredResults,
             declaredProducts);
-        result.RegisterFixedStaticArrays(predeclaredFixedStaticArrays);
-        result.RegisterDynamicArrays(predeclaredDynamicArrays);
-        result.RegisterBoundedArrays(predeclaredBoundedArrays);
-        result.RegisterBoundedDictionaries(predeclaredBoundedDictionaries);
+        result.RegisterDeclaredLayouts(predeclaredFixedStaticArrays, predeclaredDynamicArrays,
+            predeclaredBoundedArrays, predeclaredBoundedDictionaries, predeclaredBitSets, predeclaredDictionaries);
         return result;
 
         bool TryResolveDefinitionFixedStaticArray(
@@ -15081,6 +15765,7 @@ internal sealed partial class SemanticCompiler
             }
             var keyType = ResolveDefinitionType(keyName, line, column);
             var valueType = ResolveDefinitionType(valueName, line, column);
+            _declaredDictionaryKeyChecks.Add((keyType, line, column, _currentModuleName));
             var shape = (keyType, valueType, capacity);
             if (predeclaredBoundedDictionariesByShape.TryGetValue(shape, out type))
             {
@@ -15089,6 +15774,29 @@ internal sealed partial class SemanticCompiler
             type = (TypeId)nextTypeId++;
             predeclaredBoundedDictionaries.Add(type, shape);
             predeclaredBoundedDictionariesByShape.Add(shape, type);
+            names.TryAdd(typeName, type);
+            return true;
+        }
+
+        bool TryResolveDefinitionDictionary(string typeName, int line, int column, out TypeId type)
+        {
+            type = default;
+            if (typeName.Length < 5 || typeName[0] != '{' || typeName[^1] != '}')
+                return false;
+            var separator = FindEnclosedTypeSeparator(typeName, ':');
+            if (separator <= 1 || FindBoundedTypeSeparator(typeName) >= 0)
+                return false;
+            var key = ResolveDefinitionType(typeName[1..separator].Trim(), line, column);
+            var value = ResolveDefinitionType(typeName[(separator + 1)..^1].Trim(), line, column);
+            _declaredDictionaryKeyChecks.Add((key, line, column, _currentModuleName));
+            if (key == TypeId.Int && value == TypeId.Int)
+                type = TypeId.IntDictionary;
+            else if (!predeclaredDictionariesByShape.TryGetValue((key, value), out type))
+            {
+                type = (TypeId)nextTypeId++;
+                predeclaredDictionaries.Add(type, (key, value));
+                predeclaredDictionariesByShape.Add((key, value), type);
+            }
             names.TryAdd(typeName, type);
             return true;
         }
@@ -15174,120 +15882,6 @@ internal sealed partial class SemanticCompiler
         }
     }
 
-    private int InlineSize(
-        TypeId type,
-        IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
-        IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
-        IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
-        IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
-        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Length)> fixedStaticArrays,
-        IReadOnlyDictionary<TypeId, TypeId> dynamicArrays,
-        IReadOnlyDictionary<TypeId, (TypeId ElementType, int Capacity)> boundedArrays,
-        IReadOnlyDictionary<TypeId, (TypeId KeyType, TypeId ValueType, int MaxEntries)> boundedDictionaries)
-    {
-        if (boxes.ContainsKey(type) || references.ContainsKey(type))
-        {
-            return 8;
-        }
-        if (type == TypeId.SourceText)
-        {
-            return 32;
-        }
-        if (type is TypeId.MappedBytes or TypeId.MutableMappedBytes)
-        {
-            return 40;
-        }
-
-        if (structs.TryGetValue(type, out var structure))
-        {
-            var offset = 0;
-            var maxAlignment = 1;
-            foreach (var field in structure.Fields)
-            {
-                var size = InlineSize(field.Type, structs, enums, boxes, references,
-                    fixedStaticArrays, dynamicArrays, boundedArrays, boundedDictionaries);
-                var alignment = Math.Min(Math.Max(size, 1), 8);
-                offset = AlignUp(offset, alignment);
-                offset += size;
-                maxAlignment = Math.Max(maxAlignment, alignment);
-            }
-
-            return AlignUp(offset, maxAlignment);
-        }
-
-        if (enums.TryGetValue(type, out var enumeration))
-        {
-            var payloadBytes = enumeration.Variants
-                .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references,
-                    fixedStaticArrays, dynamicArrays, boundedArrays, boundedDictionaries))
-                .DefaultIfEmpty(0)
-                .Max();
-            return 8 + AlignUp(payloadBytes, 8);
-        }
-
-        if (dynamicArrays.ContainsKey(type))
-        {
-            return 3 * (_pointerBitWidth / 8);
-        }
-
-        if (fixedStaticArrays.ContainsKey(type))
-        {
-            return 2 * (_pointerBitWidth / 8);
-        }
-
-        if (boundedArrays.TryGetValue(type, out var boundedArray))
-        {
-            var elementSize = InlineSize(boundedArray.ElementType, structs, enums, boxes, references,
-                fixedStaticArrays, dynamicArrays, boundedArrays, boundedDictionaries);
-            var alignment = Math.Max(8, Math.Min(Math.Max(elementSize, 1), 8));
-            return AlignUp(checked(8 + checked(elementSize * boundedArray.Capacity)), alignment);
-        }
-
-        if (boundedDictionaries.TryGetValue(type, out var boundedDictionary))
-        {
-            var keySize = InlineSize(boundedDictionary.KeyType, structs, enums, boxes, references,
-                fixedStaticArrays, dynamicArrays, boundedArrays, boundedDictionaries);
-            var valueSize = InlineSize(boundedDictionary.ValueType, structs, enums, boxes, references,
-                fixedStaticArrays, dynamicArrays, boundedArrays, boundedDictionaries);
-            var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
-            var valueAlignment = Math.Min(Math.Max(valueSize, 1), 8);
-            var valueOffset = AlignUp(keySize, valueAlignment);
-            var stride = AlignUp(checked(valueOffset + valueSize), Math.Max(keyAlignment, valueAlignment));
-            var minimumBuckets = checked((boundedDictionary.MaxEntries * 8 + 6) / 7);
-            var buckets = 16;
-            while (buckets < minimumBuckets)
-            {
-                buckets = checked(buckets * 2);
-            }
-            var entriesOffset = AlignUp(buckets, Math.Max(keyAlignment, valueAlignment));
-            return AlignUp(checked(8 + entriesOffset + checked(buckets * stride)), 8);
-        }
-
-        return type switch
-        {
-            TypeId.Bool => 1,
-            TypeId.Int8 or TypeId.UInt8 => 1,
-            TypeId.Int16 or TypeId.UInt16 => 2,
-            TypeId.Int or TypeId.UInt32 or TypeId.Float32 => 4,
-            TypeId.CodePoint => 4,
-            TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
-            TypeId.Size or TypeId.UIntSize => _pointerBitWidth / 8,
-            TypeId.Text => 16,
-            TypeId.Arguments => 8,
-            TypeId.Arena => 24,
-            TypeId.SourceText => 32,
-            TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
-            TypeId.DynamicIntArray or TypeId.IntDictionary => 24,
-            _ => throw new InvalidOperationException($"type {type} has no inline size")
-        };
-    }
-
-    private int AlignUp(int value, int alignment)
-    {
-        return checked((value + alignment - 1) / alignment * alignment);
-    }
-
     private BoundType ParseAssociatedType(string syntax, IReadOnlyDictionary<string, BoundType> bindings, int line, int column)
     {
         var previous = _activeGenericTypeArguments;
@@ -15304,6 +15898,15 @@ internal sealed partial class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (typeName.StartsWith("box ", StringComparison.Ordinal))
+        {
+            var elementType = ParseType(typeName[4..].Trim(), line, column);
+            var definition = _types.Boxes.FirstOrDefault(box => box.ElementType == elementType);
+            if (definition is null)
+                throw Error(line, column, $"type {FormatType(elementType)} cannot be boxed in this slice");
+            EnsureTypeVisible(definition.Id, line, column);
+            return definition.Id;
+        }
         if (typeName.StartsWith("BitSet<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var countText = typeName[7..^1].Trim();
@@ -15539,70 +16142,25 @@ internal sealed partial class SemanticCompiler
         int column,
         IReadOnlyList<string>? genericParameterNames = null)
     {
+        if (genericParameterName is not null && typeName == $"[Int; {genericParameterName}]")
+            return BoundType.IntSlice;
+
+        // Declaration signatures need the same recursive generic environment as
+        // specialization. A partial wrapper parser loses T inside ref/array and
+        // other nested constructors before the body can ever be specialized.
+        var context = new Dictionary<string, BoundType>(_activeGenericTypeArguments, StringComparer.Ordinal);
         if (genericParameterNames is not null)
         {
-            var genericIndex = -1;
             for (var index = 0; index < genericParameterNames.Count; index++)
-            {
-                if (typeName == genericParameterNames[index])
-                {
-                    genericIndex = index;
-                    break;
-                }
-            }
-            if (genericIndex >= 0)
-            {
-                return (BoundType)((int)BoundType.GenericParameter + genericIndex);
-            }
+                context[genericParameterNames[index]] = (BoundType)((int)BoundType.GenericParameter + index);
         }
-        if (genericParameterName is not null && typeName == genericParameterName)
-        {
-            return BoundType.GenericParameter;
-        }
-        if (secondaryGenericParameterName is not null && typeName == secondaryGenericParameterName)
-        {
-            return BoundType.SecondaryGenericParameter;
-        }
-        if (tertiaryGenericParameterName is not null && typeName == tertiaryGenericParameterName)
-        {
-            return BoundType.TertiaryGenericParameter;
-        }
-        if (genericParameterName is not null && typeName == $"[Int; {genericParameterName}]")
-        {
-            return BoundType.IntSlice;
-        }
-        if (typeName.StartsWith('(') && typeName.EndsWith(')'))
-        {
-            return ParseProductType(
-                typeName,
-                field => ParseFunctionType(field, genericParameterName,
-                    secondaryGenericParameterName, tertiaryGenericParameterName,
-                    line, column, genericParameterNames),
-                line,
-                column);
-        }
-        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var value = ParseFunctionType(typeName[7..^1].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
-            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
-        }
-        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
-        {
-            var arguments = typeName[7..^1];
-            var separator = FindTopLevelTypeComma(arguments);
-            if (separator < 0)
-            {
-                throw Error(line, column, "Result requires success and error types");
-            }
-            var ok = ParseFunctionType(arguments[..separator].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
-            var error = ParseFunctionType(arguments[(separator + 1)..].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
-            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
-        }
-
-        return ParseType(typeName, line, column);
+        if (genericParameterName is not null)
+            context[genericParameterName] = BoundType.GenericParameter;
+        if (secondaryGenericParameterName is not null)
+            context[secondaryGenericParameterName] = BoundType.SecondaryGenericParameter;
+        if (tertiaryGenericParameterName is not null)
+            context[tertiaryGenericParameterName] = BoundType.TertiaryGenericParameter;
+        return ParseAssociatedType(typeName.Trim(), context, line, column);
     }
 
     private BoundType ParseSpecializedFunctionType(
@@ -15982,6 +16540,12 @@ internal sealed partial class SemanticCompiler
             && TryGetContextualArrayElementType(actualType, out var actualElementType)
             && actualElementType == _types.GetSliceElement(declaredType))
         {
+            if (!IsIntegerType(actualElementType)
+                || !ArrayLiteralStorageFacts.HasStaticReadonlyBacking(expression))
+            {
+                throw Error(expression?.Line ?? 0, expression?.Column ?? 0,
+                    "cannot return local array storage as a readonly slice; declare an owned array return type instead");
+            }
             return true;
         }
         if (expression is null || !_types.IsReference(declaredType))
@@ -16415,7 +16979,8 @@ internal sealed partial class SemanticCompiler
 
     private void RegisterFixedLengthArrayCandidate(BindingStatement binding, BoundType valueType)
     {
-        if (_currentFixedLengthArrayCandidates is null || !_types.IsDynamicArray(valueType))
+        if (_currentFixedLengthArrayCandidates is null || _currentFixedLengthArrayDeclarations is null
+            || (valueType != BoundType.DynamicIntArray && !_types.IsDynamicArray(valueType)))
         {
             return;
         }
@@ -16427,9 +16992,9 @@ internal sealed partial class SemanticCompiler
         };
         if (initialLength >= 0)
         {
-            _currentFixedLengthArrayCandidates.TryAdd(
-                binding.Name,
-                new FixedLengthArrayCandidate(binding.Name, binding.Line, binding.Column, initialLength));
+            var candidate = new FixedLengthArrayCandidate(binding.Name, binding.Line, binding.Column, initialLength);
+            _currentFixedLengthArrayCandidates[binding.Name] = candidate;
+            _currentFixedLengthArrayDeclarations.Add(candidate);
         }
     }
 
@@ -16454,11 +17019,11 @@ internal sealed partial class SemanticCompiler
 
     private void WarnFixedLengthGrowableArrays()
     {
-        if (_currentFixedLengthArrayCandidates is null)
+        if (_currentFixedLengthArrayDeclarations is null)
         {
             return;
         }
-        foreach (var candidate in _currentFixedLengthArrayCandidates.Values)
+        foreach (var candidate in _currentFixedLengthArrayDeclarations)
         {
             if (candidate.IsLengthUnknown || candidate.RequiresGrowableType || candidate.Length == 0)
             {
@@ -16485,8 +17050,10 @@ internal sealed partial class SemanticCompiler
         }
         if (expression is not NameExpression name
             || requiredType is null
-            || (!_types.IsDynamicArray(requiredType.Value) && !_types.IsBoundedArray(requiredType.Value))
-            || (!_types.IsDynamicArray(actualType) && !_types.IsBoundedArray(actualType))
+            || (requiredType.Value != BoundType.DynamicIntArray
+                && !_types.IsDynamicArray(requiredType.Value) && !_types.IsBoundedArray(requiredType.Value))
+            || (actualType != BoundType.DynamicIntArray
+                && !_types.IsDynamicArray(actualType) && !_types.IsBoundedArray(actualType))
             || candidates is null
             || !candidates.TryGetValue(name.Name, out var candidate))
         {
@@ -16794,6 +17361,13 @@ internal sealed partial class SemanticCompiler
     private IReadOnlyList<string> GetOwnedAggregateLiteralSourceNames(
         Expression expression,
         IReadOnlyDictionary<string, BoundType> bindings,
+        BoundType? inferredAggregateType = null) =>
+        GetOwnedAggregateLiteralTransfers(expression, bindings, inferredAggregateType)
+            .Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal).ToArray();
+
+    private IReadOnlyList<OwnedLiteralTransfer> GetOwnedAggregateLiteralTransfers(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings,
         BoundType? inferredAggregateType = null)
     {
         var transferred = new List<OwnedLiteralTransfer>();
@@ -16839,7 +17413,7 @@ internal sealed partial class SemanticCompiler
                 expression.Column,
                 $"owned binding '{duplicate}' cannot initialize more than one aggregate position");
         }
-        return transferred.Select(static transfer => transfer.OwnerName).Distinct(StringComparer.Ordinal).ToArray();
+        return transferred;
     }
 
     private string? GetMoveConsumingOwnedFieldOwnerName(
@@ -16869,8 +17443,8 @@ internal sealed partial class SemanticCompiler
         {
             return null;
         }
-        var ownerName = parts[0].TrimEnd('!');
-        if (!bindings.TryGetValue(ownerName, out var currentType)
+        var ownerName = ReferencePlaceRoot(expression);
+        if (ownerName is null || !bindings.TryGetValue(ownerName, out var currentType)
             || ((_currentFunctionOuterBindings?.ContainsKey(ownerName) ?? false)
                 && !_currentMoveInputNames.Contains(ownerName)
                 && !(mutableBindings?.Contains(ownerName) ?? false)))
@@ -16948,6 +17522,7 @@ internal sealed partial class SemanticCompiler
             or StructLiteralExpression
             or FieldAccessExpression { Source: TypeApplicationExpression }
             or CallExpression
+            or TypeApplicationExpression
             or FlowExpression
             or StreamJoinExpression
             or IfExpression
@@ -17012,22 +17587,38 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private IReadOnlyList<string> GetOwnedStorageTransferSourceNames(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        BoundType expectedType)
+    {
+        if (_types.RequiresFixedStorageCopy(expectedType)) return [];
+        var transfers = new List<OwnedLiteralTransfer>();
+        CollectOwnedLiteralSourceNames(expression, expectedType, bindings, transfers);
+        return transfers.Select(static transfer => transfer.OwnerName)
+            .Distinct(StringComparer.Ordinal).ToArray();
+    }
+
     private void RejectBorrowedOwnedStorageTransfers(
         IEnumerable<string> transferredNames,
         int line,
         int column,
-        string destination)
+        string destination,
+        IReadOnlyDictionary<string, BoundType>? bindings = null)
     {
-        if (_currentFunctionOuterBindings is null)
-        {
-            return;
-        }
-
         foreach (var sourceName in transferredNames.Distinct(StringComparer.Ordinal))
         {
-            if (!_currentFunctionOuterBindings.TryGetValue(sourceName, out var sourceType)
+            var isOuterBinding = _currentFunctionOuterBindings is not null
+                && _currentFunctionOuterBindings.TryGetValue(sourceName, out _);
+            var sourceType = isOuterBinding ? _currentFunctionOuterBindings![sourceName]
+                : bindings is not null && bindings.TryGetValue(sourceName, out var localType)
+                    ? localType : default;
+            var isReference = _types.IsReference(sourceType);
+            if (isReference)
+                sourceType = _types.GetReference(sourceType).ElementType;
+            if ((!isOuterBinding && !isReference)
                 || !_types.ContainsOwnedStorage(sourceType)
-                || _currentMoveInputNames.Contains(sourceName))
+                || (!isReference && _currentMoveInputNames.Contains(sourceName)))
             {
                 continue;
             }
@@ -17123,8 +17714,43 @@ internal sealed partial class SemanticCompiler
         || source is FieldAccessExpression { Source: NameExpression owner } && _currentMoveInputNames.Contains(owner.Name)
         || IsContainerCreationExpression(source);
 
-    private void EnsureOwnedParameterFlowSource(Expression source, string functionName)
+    private void RejectBorrowedOwnedMoveSource(
+        Expression source,
+        string functionName,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
+        var root = ReferencePlaceRoot(source);
+        if (root is null || !bindings.TryGetValue(root, out var sourceType))
+            return;
+        var isReference = _types.IsReference(sourceType);
+        if (isReference)
+            sourceType = _types.GetReference(sourceType).ElementType;
+        if (!_types.ContainsOwnedStorage(sourceType))
+            return;
+        var isBorrowed = isReference || _activeReadonlyReferenceBindings.Contains(root)
+            || ((_currentFunctionOuterBindings?.ContainsKey(root) ?? false)
+                && !_currentMoveInputNames.Contains(root)
+                && !_currentTransferableEnumPayloadNames.Contains(root));
+        if (!isBorrowed)
+            return;
+        throw Error(
+            source.Line,
+            source.Column,
+            $"owned value '{root}' is borrowed and cannot be passed to move input of function '{functionName}'; "
+            + $"transfer ownership with a move input such as '{root}: move {FormatType(sourceType)}', "
+            + "or keep the called input readonly/copy the value explicitly");
+    }
+
+    private void EnsureOwnedParameterFlowSource(
+        Expression source,
+        string functionName,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool receivesOriginalSource)
+    {
+        // Only the first edge receives the original binding. Later edges
+        // receive the preceding expression's result, including explicit copies.
+        if (receivesOriginalSource)
+            RejectBorrowedOwnedMoveSource(source, functionName, bindings);
         if (!IsOwnedParameterSource(source))
         {
             throw Error(
@@ -17134,8 +17760,12 @@ internal sealed partial class SemanticCompiler
         }
     }
 
-    private void EnsureOwnedParameterCallArgument(Expression argument, string functionName)
+    private void EnsureOwnedParameterCallArgument(
+        Expression argument,
+        string functionName,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
+        RejectBorrowedOwnedMoveSource(argument, functionName, bindings);
         if (!IsOwnedParameterSource(argument))
         {
             throw Error(
@@ -17151,7 +17781,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings)
     {
         var root = ReferencePlaceRoot(source);
-        if (root is null)
+        if (root is null || !TryGetBorrowPlace(source, out var place))
         {
             throw Error(
                 source.Line,
@@ -17159,7 +17789,7 @@ internal sealed partial class SemanticCompiler
                 $"function '{functionName}' mutably borrows a container, so the flowed input must be a mutable owner place");
         }
 
-        EnsureMutableBorrowName(root, source.Line, source.Column, functionName, mutableBindings);
+        EnsureMutableBorrowName(root, place, source.Line, source.Column, functionName, mutableBindings);
     }
 
     private void EnsureMutableBorrowCallArgument(
@@ -17168,7 +17798,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlySet<string>? mutableBindings)
     {
         var root = ReferencePlaceRoot(argument);
-        if (root is null)
+        if (root is null || !TryGetBorrowPlace(argument, out var place))
         {
             throw Error(
                 argument.Line,
@@ -17176,11 +17806,12 @@ internal sealed partial class SemanticCompiler
                 $"function '{functionName}' mutably borrows a container, so the argument must be a mutable owner place");
         }
 
-        EnsureMutableBorrowName(root, argument.Line, argument.Column, functionName, mutableBindings);
+        EnsureMutableBorrowName(root, place, argument.Line, argument.Column, functionName, mutableBindings);
     }
 
     private void EnsureMutableBorrowName(
         string name,
+        string place,
         int line,
         int column,
         string functionName,
@@ -17193,7 +17824,7 @@ internal sealed partial class SemanticCompiler
                 column,
                 $"function '{functionName}' mutably borrows a container; use a mutable owner binding such as '{name.TrimEnd('!')}!'");
         }
-        RejectBorrowedTextOriginMutation(name, line, column);
+        RejectBorrowedTextOriginMutation(place, line, column);
         MarkMutableBindingMutation(name);
         if (_currentFixedLengthArrayCandidates?.TryGetValue(name, out var candidate) == true)
         {
@@ -17239,6 +17870,19 @@ internal sealed partial class SemanticCompiler
                 }
             }
         }
+        else if (_types.IsSet(containerType))
+        {
+            var elementType = _types.GetSetElement(containerType);
+            foreach (var target in flow.Targets)
+            {
+                if (target.Path.Count == 1
+                    && target.Path[0] == "insert"
+                    && target.Arguments.Count == 1)
+                {
+                    CollectOwnedLiteralSourceNames(target.Arguments[0], elementType, bindings, consumed);
+                }
+            }
+        }
         else if (_types.IsDictionary(containerType))
         {
             var definition = _types.GetDictionary(containerType);
@@ -17260,6 +17904,13 @@ internal sealed partial class SemanticCompiler
                 expression.Line,
                 expression.Column,
                 $"owned value '{duplicatedOwner}' cannot be transferred into a container more than once");
+        }
+        foreach (var transfer in consumed.Where(static transfer => transfer.FieldPath.Count > 0))
+        {
+            RejectBorrowedTextOriginMutation(
+                string.Join(".", new[] { transfer.OwnerName }.Concat(transfer.FieldPath)),
+                expression.Line,
+                expression.Column);
         }
         // Projected transfers retain the owner binding for live sibling fields.
         // Code generation tracks and rejects reuse of the exact moved paths.
@@ -17311,20 +17962,31 @@ internal sealed partial class SemanticCompiler
             }
             return;
         }
-        if (expression is FieldAccessExpression
-            {
-                Source: NameExpression owner,
-                FieldName: var fieldName
-            }
-            && bindings.TryGetValue(owner.Name, out var ownerType)
-            && _types.IsStruct(ownerType)
-            && _types.GetStruct(ownerType).Fields.FirstOrDefault(field =>
-                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } sourceField
-            && sourceField.Type == expectedType
-            && _types.ContainsOwnedStorage(sourceField.Type))
+        if (expression is FieldAccessExpression && TryGetBorrowPlace(expression, out var place))
         {
-            consumed.Add(new OwnedLiteralTransfer(owner.Name, [fieldName]));
-            return;
+            var parts = SplitBorrowPlace(place);
+            var ownerName = parts[0].TrimEnd('!');
+            if (bindings.TryGetValue(ownerName, out var projectedType))
+            {
+                var fieldPath = new List<string>();
+                foreach (var part in parts.Skip(1))
+                {
+                    var fieldName = part.TrimStart('.');
+                    if (!_types.IsStruct(projectedType)
+                        || _types.GetStruct(projectedType).Fields.FirstOrDefault(field =>
+                            string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } field)
+                    {
+                        return;
+                    }
+                    fieldPath.Add(fieldName);
+                    projectedType = field.Type;
+                }
+                if (fieldPath.Count > 0 && projectedType == expectedType)
+                {
+                    consumed.Add(new OwnedLiteralTransfer(ownerName, fieldPath));
+                    return;
+                }
+            }
         }
         if ((_types.IsDynamicArray(expectedType) || _types.IsBoundedArray(expectedType))
             && expression is ArrayLiteralExpression array)
@@ -17432,38 +18094,50 @@ internal sealed partial class SemanticCompiler
             return GetOwnedParameterConsumedSourceNames(attempt.Value, functions, bindings);
         }
 
-        if (expression is CallExpression enumCall
-            && TryGetOwnedEnumConstructorSourceName(enumCall, out var enumSourceName))
+        if (expression is StringExpression text)
         {
-            return [enumSourceName];
+            return text.Segments.OfType<InterpolationSegment>()
+                .SelectMany(segment => GetOwnedParameterConsumedSourceNames(segment.Expression, functions, bindings))
+                .Distinct(StringComparer.Ordinal).ToArray();
         }
 
-        if (expression is CallExpression call
-            && (_resolvedGenericCalls.TryGetValue(call, out var callFunction)
-                || TryGetFunction(call.Path, functions, out callFunction)))
+        if (expression is AddExpression add)
+            return GetOwnedParameterConsumedSourceNames(add.Left, functions, bindings)
+                .Concat(GetOwnedParameterConsumedSourceNames(add.Right, functions, bindings))
+                .Distinct(StringComparer.Ordinal).ToArray();
+
+        if (expression is CallExpression call)
         {
-            var consumed = GetDirectNamedMoveArgumentNames(
-                callFunction,
-                call.Arguments,
-                argumentsIncludePrimary: true,
-                bindings);
-            if (consumed.Count > 0)
+            var consumed = GetOwnedEnumConstructorTransfers(call, bindings)
+                .Where(static transfer => transfer.FieldPath.Count == 0)
+                .Select(static transfer => transfer.OwnerName).ToList();
+            if (_resolvedGenericCalls.TryGetValue(call, out var callFunction)
+                || TryGetFunction(call.Path, functions, out callFunction))
             {
-                return consumed;
+                consumed.AddRange(GetCallNamedMoveArgumentNames(call, callFunction)
+                    .Where(name => bindings.TryGetValue(name, out var type)
+                        && _types.ContainsOwnedStorage(type)));
             }
+            foreach (var argument in call.Arguments)
+                consumed.AddRange(GetOwnedParameterConsumedSourceNames(argument, functions, bindings));
+            return consumed.Distinct(StringComparer.Ordinal).ToArray();
         }
 
         if (expression is FlowExpression flow)
         {
-            var consumed = new List<string>();
+            var consumed = new List<string>(GetOwnedParameterConsumedSourceNames(flow.Source, functions, bindings));
+            foreach (var target in flow.Targets)
+                foreach (var argument in target.Arguments)
+                    consumed.AddRange(GetOwnedParameterConsumedSourceNames(argument, functions, bindings));
             var sourceType = flow.Source is NameExpression typedSource
                 && bindings.TryGetValue(typedSource.Name, out var resolvedSourceType)
                     ? resolvedSourceType
                     : (BoundType?)null;
             // Only the first edge receives flow.Source. Later move parameters
             // consume the preceding call's result, not the original binding.
-            foreach (var target in flow.Targets.Take(1))
+            for (var targetIndex = 0; targetIndex < flow.Targets.Count; targetIndex++)
             {
+                var target = flow.Targets[targetIndex];
                 if (_resolvedContainerFlowTargets.Contains(target))
                 {
                     continue;
@@ -17473,11 +18147,11 @@ internal sealed partial class SemanticCompiler
                 // re-resolution can otherwise pick an unrelated same-name
                 // global and incorrectly consume an instance receiver.
                 if ((_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
-                        || (sourceType is { } receiverType
+                        || (targetIndex == 0 && sourceType is { } receiverType
                             && TryResolveInstanceMethod(receiverType, path, functions, out targetFunction))
                         || TryGetFunction(target.Path, functions, out targetFunction)))
                 {
-                    if (FunctionMovesOwnedHeapInput(targetFunction)
+                    if (targetIndex == 0 && FunctionMovesOwnedHeapInput(targetFunction)
                         && flow.Source is NameExpression sourceName)
                     {
                         consumed.Add(sourceName.Name);
@@ -17587,17 +18261,35 @@ internal sealed partial class SemanticCompiler
         bool argumentsIncludePrimary,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
-        var consumed = new List<string>();
+        return GetDirectNamedMoveArguments(function, arguments, argumentsIncludePrimary)
+            .Where(argument => bindings.TryGetValue(argument.Name, out var type)
+                && _types.ContainsOwnedStorage(type))
+            .Select(static argument => argument.Name).ToArray();
+    }
+
+    private IEnumerable<string> GetCallNamedMoveArgumentNames(CallExpression call, BoundFunction function)
+    {
+        var hasReceiver = _resolvedInstanceCallReceivers.TryGetValue(call, out var receiverName);
+        if (hasReceiver && FunctionMovesOwnedHeapInput(function))
+            yield return receiverName!;
+        foreach (var argument in GetDirectNamedMoveArguments(
+            function, call.Arguments, argumentsIncludePrimary: !hasReceiver))
+            yield return argument.Name;
+    }
+
+    private static IEnumerable<NameExpression> GetDirectNamedMoveArguments(
+        BoundFunction function,
+        IReadOnlyList<Expression> arguments,
+        bool argumentsIncludePrimary)
+    {
         var argumentIndex = 0;
         if (argumentsIncludePrimary && function.InputType is not null)
         {
             if (function.InputOwnership == BoundFunctionInputOwnership.Move
                 && arguments.Count > 0
-                && arguments[0] is NameExpression primary
-                && bindings.TryGetValue(primary.Name, out var primaryType)
-                && _types.ContainsOwnedStorage(primaryType))
+                && arguments[0] is NameExpression primary)
             {
-                consumed.Add(primary.Name);
+                yield return primary;
             }
             argumentIndex = 1;
         }
@@ -17608,39 +18300,53 @@ internal sealed partial class SemanticCompiler
                 break;
             }
             if (parameter.Ownership == BoundFunctionInputOwnership.Move
-                && arguments[argumentIndex] is NameExpression additional
-                && bindings.TryGetValue(additional.Name, out var additionalType)
-                && _types.ContainsOwnedStorage(additionalType))
+                && arguments[argumentIndex] is NameExpression additional)
             {
-                consumed.Add(additional.Name);
+                yield return additional;
             }
             argumentIndex++;
         }
-        return consumed;
     }
 
-    private bool TryGetOwnedEnumConstructorSourceName(CallExpression expression, out string sourceName)
+    private IReadOnlyList<OwnedLiteralTransfer> GetOwnedEnumConstructorTransfers(
+        CallExpression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
-        sourceName = "";
-        if (expression.Path.Count < 2
-            || expression.Arguments.Count != 1
-            || expression.Arguments[0] is not NameExpression name)
-        {
-            return false;
-        }
+        if (expression.Path.Count < 2 || expression.Arguments.Count != 1)
+            return [];
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
         if (!_types.TryResolveInModule(typeName, _currentModuleName, out var type) || !_types.IsEnum(type))
-        {
-            return false;
-        }
+            return [];
         var variant = _types.GetEnum(type).Variants
             .FirstOrDefault(candidate => candidate.Name == expression.Path[^1]);
         if (variant?.PayloadType is not { } payloadType || !_types.ContainsOwnedStorage(payloadType))
+            return [];
+
+        // Match views with a cleanup obligation transfer their owned backing;
+        // genuine readonly fixed-storage inputs keep it and supply a value copy.
+        var owner = ReferencePlaceRoot(expression.Arguments[0]);
+        if (_types.RequiresFixedStorageCopy(payloadType) && owner is not null
+            && !_currentTransferableEnumPayloadNames.Contains(owner)
+            && (_activeReadonlyReferenceBindings.Contains(owner)
+                || (bindings.TryGetValue(owner, out var ownerType) && _types.IsReference(ownerType))
+                || ((_currentFunctionOuterBindings?.ContainsKey(owner) ?? false)
+                    && !_currentMoveInputNames.Contains(owner))))
+            return [];
+
+        var transfers = new List<OwnedLiteralTransfer>();
+        var transferBindings = bindings;
+        if (owner is not null && bindings.TryGetValue(owner, out var referencedOwnerType)
+            && _types.IsReference(referencedOwnerType))
         {
-            return false;
+            // Reading a reference produces its element value, but does not grant
+            // ownership of that value. Preserve its root/path for the storage guard.
+            transferBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+            {
+                [owner] = _types.GetReference(referencedOwnerType).ElementType
+            };
         }
-        sourceName = name.Name;
-        return true;
+        CollectOwnedLiteralSourceNames(expression.Arguments[0], payloadType, transferBindings, transfers);
+        return transfers;
     }
 
     private void EnsureMoveInputReturnCoverage(
@@ -17684,19 +18390,22 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var callFunction)
-            && FunctionMovesOwnedHeapInput(callFunction)
-            && call.Arguments.Count == 1
-            && call.Arguments[0] is NameExpression argumentName
-            && argumentName.Name == inputName)
+            && (_resolvedGenericCalls.TryGetValue(call, out var callFunction)
+                || TryGetFunction(call.Path, functions, out callFunction))
+            && GetCallNamedMoveArgumentNames(call, callFunction).Contains(inputName, StringComparer.Ordinal))
         {
             return MoveInputDisposition.Transferred;
         }
 
         if (expression is FlowExpression flow
-            && flow.Source is NameExpression sourceName
-            && sourceName.Name == inputName
-            && flow.Targets.Take(1).Any(target => IsOwnedParameterFlowTarget(target, functions)))
+            && ((flow.Source is NameExpression sourceName
+                    && sourceName.Name == inputName
+                    && flow.Targets.Take(1).Any(target => IsOwnedParameterFlowTarget(target, functions)))
+                || flow.Targets.Any(target => !_resolvedContainerFlowTargets.Contains(target)
+                    && (_resolvedGenericCalls.TryGetValue(target, out var targetFunction)
+                        || TryGetFunction(target.Path, functions, out targetFunction))
+                    && GetDirectNamedMoveArguments(targetFunction, target.Arguments, argumentsIncludePrimary: false)
+                        .Any(argument => argument.Name == inputName))))
         {
             return MoveInputDisposition.Transferred;
         }
@@ -17722,21 +18431,57 @@ internal sealed partial class SemanticCompiler
 
         if (expression is WhenExpression whenExpression)
         {
-            var disposition = GetMoveInputDisposition(
+            return GetSelectionMoveInputDisposition(
+                whenExpression.Subject,
+                whenExpression.Arms.Select(static arm => arm.Body),
                 whenExpression.Else,
-                inputName,
-                functions, copyResult, continuingPathsOnly);
-            foreach (var arm in whenExpression.Arms)
-            {
-                disposition = CombineAlternativeMoveInputDispositions(
-                    disposition,
-                    GetMoveInputDisposition(arm.Body, inputName, functions, copyResult, continuingPathsOnly));
-            }
+                inputName, functions, copyResult, continuingPathsOnly);
+        }
 
-            return disposition;
+        if (expression is EnumMatchExpression enumMatch)
+        {
+            return GetSelectionMoveInputDisposition(
+                enumMatch.Subject,
+                enumMatch.Arms.Select(static arm => arm.Body),
+                enumMatch.Else,
+                inputName, functions, copyResult, continuingPathsOnly);
         }
 
         return MoveInputDisposition.Retained;
+    }
+
+    private MoveInputDisposition GetSelectionMoveInputDisposition(
+        Expression? subject,
+        IEnumerable<BlockBody> arms,
+        BlockBody? alternative,
+        string inputName,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        bool copyResult,
+        bool continuingPathsOnly)
+    {
+        // The subject runs before every arm. Its transfer remains visible on
+        // every continuation; an all-return enclosing block is excluded above.
+        if (subject is not null)
+        {
+            var subjectDisposition = GetMoveInputDisposition(
+                subject, inputName, functions, isResult: false,
+                copyResult: copyResult, continuingPathsOnly: continuingPathsOnly);
+            if (subjectDisposition != MoveInputDisposition.Retained)
+            {
+                return subjectDisposition;
+            }
+        }
+
+        var disposition = alternative is null
+            ? MoveInputDisposition.NoContinuation
+            : GetMoveInputDisposition(alternative, inputName, functions, copyResult, continuingPathsOnly);
+        foreach (var arm in arms)
+        {
+            disposition = CombineAlternativeMoveInputDispositions(
+                disposition,
+                GetMoveInputDisposition(arm, inputName, functions, copyResult, continuingPathsOnly));
+        }
+        return disposition;
     }
 
     private MoveInputDisposition GetMoveInputDisposition(
@@ -18218,7 +18963,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions)
     {
         return !_resolvedContainerFlowTargets.Contains(target)
-            && TryGetFunction(target.Path, functions, out var function)
+            && (_resolvedGenericCalls.TryGetValue(target, out var function)
+                || TryGetFunction(target.Path, functions, out function))
             && FunctionMovesOwnedHeapInput(function);
     }
 
@@ -18286,16 +19032,20 @@ internal sealed partial class SemanticCompiler
         return name is not null && _currentMoveInputNames.Contains(name) ? name : null;
     }
 
+    private bool IsMutableBorrowStorageType(BoundType type) =>
+        type is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
+        || _types.IsDynamicArray(type)
+        || _types.IsStaticArray(type)
+        || _types.IsBoundedArray(type)
+        || _types.IsBitSet(type)
+        || _types.IsDictionary(type)
+        || _types.IsStruct(type);
+
     private bool FunctionMutablyBorrowsInput(BoundFunction function)
     {
         return function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
             && function.InputType is { } inputType
-            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
-                || _types.IsDynamicArray(inputType)
-                || _types.IsStaticArray(inputType)
-                || _types.IsBoundedArray(inputType)
-                || _types.IsDictionary(inputType)
-                || _types.IsStruct(inputType));
+            && IsMutableBorrowStorageType(inputType);
     }
 
     private HashSet<string> MutableBorrowBindingNames(BoundFunction function)
@@ -18492,9 +19242,15 @@ internal sealed partial class SemanticCompiler
             && str.Segments.All(static segment => segment is TextSegment);
     }
 
-    private SollangException Error(int line, int column, string message)
+    private SollangException Error(int line, int column, string message) =>
+        ErrorAtModule(line, column,
+            _currentFunctionIsMain && _currentInterpolationOwnershipScope is not null
+                ? "<main>" : _currentModuleName,
+            message);
+
+    private static SollangException ErrorAtModule(int line, int column, string moduleName, string message)
     {
-        var module = string.IsNullOrEmpty(_currentModuleName) ? "<main>" : _currentModuleName;
+        var module = string.IsNullOrEmpty(moduleName) ? "<main>" : moduleName;
         return new SollangException($"semantic error at {line}:{column}: [module '{module}'] {message}");
     }
 

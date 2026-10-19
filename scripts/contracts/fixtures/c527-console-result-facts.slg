@@ -1,0 +1,55 @@
+namespace sollang.compiler.probes.console_results
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+
+public consoleResultFacts source: Text -> Bool uses Console {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    types.types -> typeIds.builtinTypeId(0) => unitType
+    0 => outputCalls!
+    0 => committedUnitResults!
+    prepared.calls -> each call {
+        call.functionSymbol == -101 or call.functionSymbol == -102
+            -> if {
+                outputCalls! + 1 => outputCalls!
+                false => committed!
+                types.expressions -> each expression {
+                    expression.sourceModule == call.sourceModule
+                        and expression.astNode == call.callAst
+                        and expression.status == 0 and expression.typeId == unitType
+                        -> if { true => committed! }
+                }
+                committed! -> if {
+                    committedUnitResults! + 1 => committedUnitResults!
+                }
+            }
+    }
+    "output-calls=$(outputCalls!),unit-results=$(committedUnitResults!)" -> println
+    outputCalls! == 2 and committedUnitResults! == 2
+}
+
+public declaredResultFacts source: Text -> Bool {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    types.types -> typeIds.builtinTypeId(2) => intType
+    false => retainedDeclaredResult!
+    prepared.calls -> each call {
+        call.functionSymbol >= 0 -> if {
+            types.expressions -> each expression {
+                expression.sourceModule == call.sourceModule
+                    and expression.astNode == call.callAst
+                    and expression.status == 0 and expression.typeId == intType
+                    -> if { true => retainedDeclaredResult! }
+            }
+        }
+    }
+    retainedDeclaredResult!
+}

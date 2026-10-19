@@ -322,56 +322,18 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitInlineDictionaryLookup(RuntimeInlineDictionary dictionary, RuntimeValue key)
     {
         var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
-        var hash = EmitInlineDictionaryHash(key);
-        var h2 = EmitDictionaryH2Byte(hash);
-        var mask = EmitDictionaryCapacityMask(dictionary.CapacityName);
-        var start = EmitDictionaryStartSlot(hash, mask);
-        var entry = _currentBlockLabel;
-        var loop = NextLabel("generic_dict_lookup");
-        var body = NextLabel("generic_dict_lookup_body");
-        var full = NextLabel("generic_dict_lookup_full");
-        var compare = NextLabel("generic_dict_lookup_compare");
+        var found = EmitInlineDictionaryFindExistingSlot(dictionary, key);
         var match = NextLabel("generic_dict_lookup_match");
-        var next = NextLabel("generic_dict_lookup_next");
         var miss = NextLabel("generic_dict_lookup_miss");
-        var done = NextLabel("generic_dict_lookup_done");
-        var nextProbe = NextTemp("generic_dict_lookup_next_probe");
-        EmitBranch(loop); EmitFunctionLine();
-        EmitLabel(loop);
-        var probe = NextTemp("generic_dict_lookup_probe");
-        EmitPhi(probe, "i64", ("0", entry), (nextProbe, next));
-        var active = NextTemp("generic_dict_lookup_active");
-        EmitCompare(active, "ult", "i64", probe, dictionary.CapacityName);
-        EmitConditionalBranch(active, body, miss); EmitFunctionLine();
-        EmitLabel(body);
-        var unwrapped = NextTemp("generic_dict_lookup_unwrapped");
-        EmitBinary(unwrapped, "add", "i64", start, probe);
-        var slot = NextTemp("generic_dict_lookup_slot");
-        EmitBinary(slot, "and", "i64", unwrapped, mask);
-        var control = LoadInlineDictionaryControl(dictionary, slot);
-        var empty = NextTemp("generic_dict_lookup_empty");
-        EmitCompare(empty, "eq", "i8", control, "0");
-        EmitConditionalBranch(empty, miss, full); EmitFunctionLine();
-        EmitLabel(full);
-        var h2Match = NextTemp("generic_dict_lookup_h2");
-        EmitCompare(h2Match, "eq", "i8", control, h2);
-        EmitConditionalBranch(h2Match, compare, next); EmitFunctionLine();
-        EmitLabel(compare);
-        _currentBlockLabel = compare;
-        var storedKey = LoadInlineDictionaryField(dictionary, slot, definition.KeyType, 0, definition.KeyAlignment, "generic_dict_key");
-        var equal = EmitValuesEqual(storedKey, key);
-        EmitConditionalBranch(equal, match, next); EmitFunctionLine();
-        EmitLabel(match);
-        var value = LoadInlineDictionaryField(dictionary, slot, definition.ValueType, definition.ValueOffset, definition.ValueAlignment, "generic_dict_value");
-        EmitBranch(done); EmitFunctionLine();
-        EmitLabel(next);
-        EmitBinary(nextProbe, "add", "i64", probe, "1");
-        EmitBranch(loop); EmitFunctionLine();
+        EmitConditionalBranch(found.FoundName, match, miss);
+        EmitFunctionLine();
         EmitLabel(miss);
-        EmitTrap(); EmitFunctionLine();
-        EmitLabel(done);
-        _currentBlockLabel = done;
-        return value;
+        EmitTrap();
+        EmitFunctionLine();
+        EmitLabel(match);
+        _currentBlockLabel = match;
+        return LoadInlineDictionaryField(dictionary, found.SlotName, definition.ValueType,
+            definition.ValueOffset, definition.ValueAlignment, "generic_dict_value");
     }
 
     private void EmitInlineDictionaryInsertUnique(RuntimeInlineDictionary dictionary, RuntimeValue key, RuntimeValue value)
@@ -566,6 +528,16 @@ internal sealed partial class LlvmEmitter
         var fallback = NextLabel("generic_dict_insert_first_fallback");
         var vacant = NextLabel("generic_dict_insert_first_vacant");
         var done = NextLabel("generic_dict_insert_first_done");
+        var first = NextLabel("generic_dict_insert_first");
+        var noCapacity = NextLabel("generic_dict_insert_no_capacity");
+        var hasCapacity = NextTemp("generic_dict_insert_has_capacity");
+        EmitCompare(hasCapacity, "ugt", "i64", dictionary.CapacityName, "0");
+        EmitConditionalBranch(hasCapacity, first, noCapacity); EmitFunctionLine();
+
+        EmitLabel(noCapacity); _currentBlockLabel = noCapacity;
+        EmitBranch(done); EmitFunctionLine();
+
+        EmitLabel(first); _currentBlockLabel = first;
         var control = LoadInlineDictionaryControl(dictionary, start);
         var empty = NextTemp("generic_dict_insert_first_empty");
         EmitCompare(empty, "eq", "i8", control, "0");
@@ -597,9 +569,9 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(done);
         var found = NextTemp("generic_dict_insert_first_found");
-        EmitPhi(found, "i1", ("true", matchEnd), ("false", vacantEnd), (grouped.FoundName, fallbackEnd));
+        EmitPhi(found, "i1", ("true", matchEnd), ("false", vacantEnd), (grouped.FoundName, fallbackEnd), ("false", noCapacity));
         var foundSlot = NextTemp("generic_dict_insert_first_slot_result");
-        EmitPhi(foundSlot, "i64", (start, matchEnd), (start, vacantEnd), (grouped.SlotName, fallbackEnd));
+        EmitPhi(foundSlot, "i64", (start, matchEnd), (start, vacantEnd), (grouped.SlotName, fallbackEnd), ("0", noCapacity));
         _currentBlockLabel = done;
         return new DictionaryFindResult(found, foundSlot, h2);
     }

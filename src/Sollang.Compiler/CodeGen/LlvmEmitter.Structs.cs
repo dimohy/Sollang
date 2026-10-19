@@ -184,12 +184,11 @@ internal sealed partial class LlvmEmitter
         }
         foreach (var (ownerName, transferredPaths) in projectedTransfers)
         {
-            if (!_locals.TryGetValue(ownerName, out var ownerValue) || ownerValue is not RuntimeStruct owner)
+            if (!_locals.TryGetValue(ownerName, out var ownerValue) || ownerValue is not RuntimeStruct)
             {
                 continue;
             }
-            DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths);
-            RemoveLocal(ownerName);
+            RecordOwnedFieldProjectionTransfers(ownerName, transferredPaths);
         }
     }
 
@@ -414,8 +413,16 @@ internal sealed partial class LlvmEmitter
     private bool CopiesFixedStorageField(Expression expression, BoundType type) =>
         _program.Types.RequiresFixedStorageCopy(type)
         && (expression is NameExpression
+            || IsBorrowedFixedStorageFieldProjection(expression, type)
             || RegisterOwnedFieldProjectionTransfer(expression, type,
                 new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal)));
+
+    private bool IsBorrowedFixedStorageFieldProjection(Expression expression, BoundType expectedType) =>
+        TryGetOwnedFieldProjection(expression, out var ownerName, out var fieldPath)
+        && _locals.TryGetValue(ownerName, out var ownerValue)
+        && ownerValue is RuntimeReference reference
+        && _program.Types.IsStruct(reference.ElementType)
+        && OwnedFieldProjectionTypeMatches(reference.ElementType, fieldPath, expectedType);
 
     private RuntimeValue CopyFixedStorageValue(RuntimeValue value)
     {
@@ -550,38 +557,21 @@ internal sealed partial class LlvmEmitter
 
         foreach (var (ownerName, transferredPaths) in projectedTransfers)
         {
-            var owner = (RuntimeStruct)_locals[ownerName];
-            var combinedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
-                ? movedFields
-                    .Select(static path => (IReadOnlyList<string>)path.Split('.'))
-                    .Concat(transferredPaths)
-                    .ToArray()
-                : transferredPaths.ToArray();
-            if (OwnedProjectionPathsCoverStorage(owner.Type, combinedPaths))
-            {
-                if (_borrowedOwnedTransferFlags.TryGetValue(ownerName, out var transferFlag))
-                {
-                    EmitStore("i1", "false", transferFlag, 1);
-                }
-                foreach (var path in transferredPaths)
-                {
-                    MarkMovedOwnedStructField(ownerName, string.Join('.', path));
-                }
-                continue;
-            }
-            if (transferredPaths.All(static path => path.Count == 1))
-            {
-                foreach (var path in transferredPaths)
-                    MarkMovedOwnedStructField(ownerName, string.Join('.', path));
-                continue;
-            }
-            DropOwnedStructFieldsExceptMovedAndTransferred(
-                ownerName,
-                owner,
-                transferredPaths);
-            RemoveLocal(ownerName);
+            RecordOwnedFieldProjectionTransfers(ownerName, transferredPaths);
         }
         return true;
+    }
+
+    private void RecordOwnedFieldProjectionTransfers(
+        string ownerName,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths)
+    {
+        // A projected move leaves independent fields live. Their cleanup stays
+        // with the owner's scope; the moved paths exclude transferred storage.
+        foreach (var path in transferredPaths)
+        {
+            MarkMovedOwnedStructField(ownerName, string.Join('.', path));
+        }
     }
 
     private bool OwnedProjectionPathsCoverStorage(
@@ -791,8 +781,13 @@ internal sealed partial class LlvmEmitter
     private RuntimeReference EmitReferenceIndexPlace(IndexExpression expression)
     {
         var source = EmitExpression(expression.Source);
+        if (source is RuntimeReference reference)
+            source = LoadReference(reference);
+        if (source is RuntimeIntDictionaryView dictionaryView)
+            source = new RuntimeIntDictionary(
+                dictionaryView.PointerName, dictionaryView.LengthName, dictionaryView.CapacityName);
         var indexSize = string.Empty;
-        if (source is not RuntimeInlineDictionary)
+        if (source is not RuntimeInlineDictionary and not RuntimeIntDictionary)
         {
             var index = EmitIntExpression(expression.Index);
             indexSize = EmitIntAsSize(index, "ref_index_size");
@@ -878,6 +873,13 @@ internal sealed partial class LlvmEmitter
                     pointer = storedPointer;
                     elementType = _program.Types.GetReference(elementType).ElementType;
                 }
+                break;
+            case RuntimeIntDictionary dictionary:
+                elementType = BoundType.Int;
+                var integerKey = EmitIntExpression(expression.Index);
+                var integerSlot = EmitDictionaryFindSlot(dictionary, integerKey.ValueName);
+                EmitTrapUnless(integerSlot.FoundName, "ref_dictionary_missing");
+                pointer = EmitDictionaryValueSlot(dictionary, integerSlot.SlotName);
                 break;
             default:
                 throw new SollangException("reference indexing currently requires an array, dictionary, or IntSlice place");
@@ -1065,6 +1067,11 @@ internal sealed partial class LlvmEmitter
             var drop = NextTemp("stream_drop");
             EmitAssign(drop, $"extractvalue {llvmType} {valueName}, 2");
             return new RuntimeProducerStream(type, streamElementType, context, next, drop, isEvent);
+        }
+        if (type == BoundType.Arena)
+        {
+            var (pointer, used, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeArena(pointer, used, capacity);
         }
         if (type == BoundType.DynamicIntArray)
         {

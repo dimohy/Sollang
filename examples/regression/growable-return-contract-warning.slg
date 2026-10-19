@@ -1,0 +1,116 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
+
+main {
+    [
+    """
+    trait Encode {
+        encode: self -> [Int; ~]
+    }
+    
+    struct Packet {
+        value: Int
+    }
+    
+    impl Encode for Packet {
+        encode: self -> [Int; ~] {
+            [Int; ~] => values!
+            values! -> push(self.value)
+            values!
+        }
+    }
+    
+    main {
+        Packet { value: 42 } -> Encode.encode => values
+        values[0] -> println
+    }
+    """; ~
+    ] => methodSources
+    methodSources -> semanticContext.prepare -> expressionTypes.resolveCallContext => methodContext
+    methodContext.prepared -> fixedLengthArrays.collect(methodContext.types, methodContext.prepared.interpolations, methodContext.prepared.interpolationRanges) -> len => methodWarnings
+    "method=$methodWarnings" -> println
+
+    [
+    """
+    make value: Int -> [Int; ~] {
+        [Int; ~] => values!
+        values! -> push(value)
+        values!
+    }
+    main {
+        42 -> make => values
+        values[0] -> println
+    }
+    """; ~
+    ] => namedSources
+    namedSources -> semanticContext.prepare -> expressionTypes.resolveCallContext => namedContext
+    namedContext.prepared -> fixedLengthArrays.collect(namedContext.types, namedContext.prepared.interpolations, namedContext.prepared.interpolationRanges) -> len => namedWarnings
+    "named=$namedWarnings" -> println
+
+    [
+    """
+    make value: Int -> [Int; ~] {
+        [Int; ~] => values!
+        values! -> push(value)
+        values! -> return
+    }
+    main {
+        42 -> make => values
+        values[0] -> println
+    }
+    """; ~
+    ] => explicitSources
+    explicitSources -> semanticContext.prepare -> expressionTypes.resolveCallContext => explicitContext
+    explicitContext.prepared -> fixedLengthArrays.collect(explicitContext.types, explicitContext.prepared.interpolations, explicitContext.prepared.interpolationRanges) -> len => explicitWarnings
+    "explicit=$explicitWarnings" -> println
+
+    [
+    """
+    main {
+        [1, 2; ~] => values
+        values[0] -> println
+    }
+    """; ~
+    ] => localcontrolSources
+    localcontrolSources -> semanticContext.prepare -> expressionTypes.resolveCallContext => localcontrolContext
+    localcontrolContext.prepared -> fixedLengthArrays.collect(localcontrolContext.types, localcontrolContext.prepared.interpolations, localcontrolContext.prepared.interpolationRanges) -> len => localcontrolWarnings
+    "local-control=$localcontrolWarnings" -> println
+
+    [
+    """
+    import sample.serialization as serialization
+    
+    struct Packet {
+        first: UInt8
+        second: UInt8
+    }
+    
+    impl serialization.BinarySerializable for Packet {
+        serialize: self -> [UInt8; ~] {
+            [UInt8; ~] => bytes!
+            bytes! -> push(self.first)
+            bytes! -> push(self.second)
+            bytes!
+        }
+    }
+    
+    main {
+        Packet { first: 65, second: 90 } -> serialization.BinarySerializable.serialize => bytes
+        Int(bytes[0]) => first
+        Int(bytes[1]) => second
+        "serialized bytes = $first,$second" -> println
+    }
+    """,
+    """
+    namespace sample.serialization
+    
+    public trait BinarySerializable {
+        serialize: self -> [UInt8; ~]
+    }
+    """; ~
+    ] => importedSources
+    importedSources -> semanticContext.prepare -> expressionTypes.resolveCallContext => importedContext
+    importedContext.prepared -> fixedLengthArrays.collect(importedContext.types, importedContext.prepared.interpolations, importedContext.prepared.interpolationRanges) -> len => importedWarnings
+    "imported=$importedWarnings" -> println
+}

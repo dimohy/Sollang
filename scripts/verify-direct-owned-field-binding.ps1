@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Compiler = '',
+    [ValidateSet('managed', 'native')][string]$CompilerKind = 'managed',
     [string]$OutputDirectory = ''
 )
 
@@ -12,6 +13,9 @@ if ([string]::IsNullOrWhiteSpace($Compiler)) {
     $Compiler = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 }
 $Compiler = (Resolve-Path -LiteralPath $Compiler).Path
+if ($CompilerKind -eq 'native' -and [IO.Path]::GetExtension($Compiler) -ine '.exe') {
+    throw 'C341_NATIVE_COMPILER_EXECUTABLE_REQUIRED'
+}
 $contractPath = Join-Path $root 'scripts/contracts/direct-owned-field-binding.json'
 $schemaPath = Join-Path $root 'scripts/contracts/direct-owned-field-binding.schema.json'
 $resultSchemaPath = Join-Path $root 'scripts/contracts/direct-owned-field-binding-result.schema.json'
@@ -40,7 +44,11 @@ $resultPath = Join-Path $OutputDirectory 'result.json'
 function Normalize([string]$Text) { return $Text.Replace("`r`n", "`n").TrimEnd() }
 function Hash([string]$Path) { return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Run([string]$File, [string[]]$Arguments, [string]$Description) {
-    return Invoke-VerificationProcessCapture -FilePath $File -ArgumentList $Arguments -WorkingDirectory $root -Description $Description -TimeoutMilliseconds 120000
+    $capture = Invoke-VerificationProcessCapture -FilePath $File -ArgumentList $Arguments -WorkingDirectory $root -Description $Description -TimeoutMilliseconds 120000
+    $logPrefix = Join-Path $OutputDirectory ([regex]::Replace($Description, '[^A-Za-z0-9._-]', '-'))
+    [IO.File]::WriteAllText("$logPrefix.stdout.txt", $capture.Stdout, [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText("$logPrefix.stderr.txt", $capture.Stderr, [Text.UTF8Encoding]::new($false))
+    return $capture
 }
 
 $inputPaths = [ordered]@{
@@ -68,7 +76,7 @@ $results = foreach ($case in $contract.cases) {
     $source = $inputPaths["source:$($case.id)"]
     $prefix = Join-Path $OutputDirectory $case.id
     $exe = "$prefix.exe"
-    $ll = "$prefix.ll"
+    $ll = "$exe.ll"
     $item = [ordered]@{
         id = $case.id
         passed = $false
@@ -84,8 +92,16 @@ $results = foreach ($case in $contract.cases) {
         failure = $null
     }
     try {
-        $compile = Run 'dotnet' @($Compiler, 'build', $source, '-o', $exe, '--target', 'windows-x64', '--llvm', $llvmRoot, '-O1', '--keep-temps') "$($case.id) managed compile"
+        $compileArguments = @('build', $source, '-o', $exe, '--target', 'windows-x64', '--llvm', $llvmRoot, '-O1', '--keep-temps')
+        $compile = if ($CompilerKind -eq 'native') {
+            Run $Compiler $compileArguments "$($case.id) native compile"
+        } else {
+            Run 'dotnet' (@($Compiler) + $compileArguments) "$($case.id) managed compile"
+        }
         $item.compileExit = $compile.ExitCode
+        if ($compile.ExitCode -ne $case.expectedBuildExit) {
+            throw "compile exit mismatch: expected=$($case.expectedBuildExit) actual=$($compile.ExitCode)"
+        }
         $item.llvmProduced = Test-Path -LiteralPath $ll -PathType Leaf
         $compileDiagnostics = Normalize ($compile.Stdout + "`n" + $compile.Stderr)
         $item.warningNoteFree = -not [regex]::IsMatch(
@@ -118,11 +134,12 @@ $results = foreach ($case in $contract.cases) {
             if ($case.PSObject.Properties.Name -contains 'auditAllocations') {
                 $auditLl = "$prefix.audit.ll"
                 $llvmText = [IO.File]::ReadAllText($ll)
-                $auditText = $llvmText.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(').Replace('@sollang_start()', '@slg_program_main()')
-                $auditText += "`ndeclare ptr @audit_malloc(i64)`ndeclare void @audit_free(ptr)`n"
+                $auditText = $llvmText.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(').Replace('call ptr @realloc(', 'call ptr @audit_realloc(').Replace('@sollang_start()', '@slg_program_main()').Replace('call ptr @malloc(', 'call ptr @audit_malloc(').Replace('call void @free(', 'call void @audit_free(').Replace('define i32 @main()', 'define i32 @slg_program_main()')
+                if ([regex]::Matches($auditText, '(?m)^define (?:dso_local )?i32 @slg_program_main\(\)').Count -ne 1) { throw 'DIRECT20_AUDIT_ENTRY_MISMATCH' }
+                $auditText += "`ndeclare ptr @audit_malloc(i64)`ndeclare ptr @audit_realloc(ptr, i64)`ndeclare void @audit_free(ptr)`n"
                 [IO.File]::WriteAllText($auditLl, $auditText, [Text.UTF8Encoding]::new($false))
                 $auditExe = "$prefix.audit.exe"
-                $auditLink = Run $clang @('-Wno-override-module', "-DEXPECTED_ALLOCATIONS=$($case.auditAllocations)", $auditLl, $shimPath, '-O1', '-o', $auditExe) "$($case.id) allocation link"
+                $auditLink = Run $clang @('-Wno-override-module', "-DEXPECTED_ALLOCATIONS=$($case.auditAllocations)", $auditLl, $shimPath, '-O1', '-o', $auditExe, '-lws2_32', '-lshell32', '-lbcrypt') "$($case.id) allocation link"
                 if ($auditLink.ExitCode -ne 0) { throw "allocation link failed: $($auditLink.Stdout) $($auditLink.Stderr)" }
                 $audit = Run $auditExe @() "$($case.id) allocation execute"
                 $item.auditExit = $audit.ExitCode
@@ -134,6 +151,7 @@ $results = foreach ($case in $contract.cases) {
     } catch {
         $item.failure = $_.Exception.Message
     }
+    Write-Host "DIRECT_CASE $($case.id) passed=$($item.passed) compileExit=$($item.compileExit)"
     [pscustomobject]$item
 }
 

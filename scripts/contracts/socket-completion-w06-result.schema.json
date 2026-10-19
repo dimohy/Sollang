@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "caseId", "status", "compilerSha256", "inputStable", "inputDrift", "inputHashes", "formatExitCode", "compileExitCode", "compileDiagnosticsClean", "llvmAsExitCode", "closureExitCode", "runs", "orphanProcessIds", "irAssertions", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 }, "caseId": { "const": "W06" }, "status": { "enum": ["passed", "failed"] },
+    "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "inputStable": { "type": "boolean" }, "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "inputHashes": { "type": "object", "minProperties": 11, "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" } },
+    "formatExitCode": { "type": ["integer", "null"] }, "compileExitCode": { "type": ["integer", "null"] },
+    "compileDiagnosticsClean": { "type": "boolean" }, "llvmAsExitCode": { "type": ["integer", "null"] }, "closureExitCode": { "type": ["integer", "null"] },
+    "runs": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "prefixItems": [
+        { "$ref": "#/$defs/cancelRun" },
+        { "$ref": "#/$defs/completionRun" }
+      ]
+    },
+    "orphanProcessIds": { "type": "array", "maxItems": 0, "items": { "type": "integer" } },
+    "irAssertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["cancelCallCount", "cancelMarkerPrecedesNativeCancel", "completionWonRecognized", "successfulCompletionWins", "terminalPublishCount", "dequeueOwnerTransferVerified", "payloadCopyFree"],
+      "properties": {
+        "cancelCallCount": { "type": "integer" }, "cancelMarkerPrecedesNativeCancel": { "type": "boolean" },
+        "completionWonRecognized": { "type": "boolean" }, "successfulCompletionWins": { "type": "boolean" },
+        "terminalPublishCount": { "type": "integer" }, "dequeueOwnerTransferVerified": { "type": "boolean" }, "payloadCopyFree": { "type": "boolean" }
+      }
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }
+  },
+  "$defs": {
+    "runBase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["variant", "exitCode", "peerSent", "stdout", "stderr"],
+      "properties": {
+        "variant": { "type": "string" }, "exitCode": { "type": ["integer", "null"] }, "peerSent": { "type": "integer" },
+        "stdout": { "type": "array", "items": { "type": "string" } }, "stderr": { "type": "string" }
+      }
+    },
+    "cancelRun": {
+      "allOf": [{ "$ref": "#/$defs/runBase" }, { "properties": {
+        "variant": { "const": "cancel-wins" }, "exitCode": { "const": 0 }, "peerSent": { "const": 0 }, "stderr": { "const": "" },
+        "stdout": { "const": ["pending=true", "winnerCompletion=false,count=0,byte=0,state=true,len=1", "secondCancelRejected=true"] }
+      } }]
+    },
+    "completionRun": {
+      "allOf": [{ "$ref": "#/$defs/runBase" }, { "properties": {
+        "variant": { "const": "completion-wins" }, "exitCode": { "const": 0 }, "peerSent": { "const": 1 }, "stderr": { "const": "" },
+        "stdout": { "const": ["pending=true", "winnerCompletion=true,count=1,byte=77,state=true,len=1", "secondCancelRejected=true"] }
+      } }]
+    }
+  },
+  "allOf": [{ "if": { "properties": { "status": { "const": "passed" } } }, "then": { "properties": {
+    "inputStable": { "const": true }, "inputDrift": { "maxItems": 0 }, "formatExitCode": { "const": 0 }, "compileExitCode": { "const": 0 },
+    "compileDiagnosticsClean": { "const": true }, "llvmAsExitCode": { "const": 0 }, "closureExitCode": { "const": 0 },
+    "irAssertions": { "properties": {
+      "cancelCallCount": { "const": 1 }, "cancelMarkerPrecedesNativeCancel": { "const": true }, "completionWonRecognized": { "const": true },
+      "successfulCompletionWins": { "const": true }, "terminalPublishCount": { "const": 1 }, "dequeueOwnerTransferVerified": { "const": true }, "payloadCopyFree": { "const": true }
+    } }, "failureIds": { "maxItems": 0 }
+  } } }]
+}

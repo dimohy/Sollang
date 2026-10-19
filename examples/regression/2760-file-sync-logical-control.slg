@@ -1,0 +1,31 @@
+import sys.file as file
+import sys.process as process
+
+syncCondition writer: file.FileWriter -> Bool uses File {
+    true and (writer -> file.sync)
+}
+
+main {
+    process.arguments() => arguments
+    Arena(0) => storage!
+    "$(arguments[0]).sync" -> materialize(storage!) => path
+    path -> file.openWrite -> when {
+        Err(_) { false -> println }
+        Ok(writer) {
+            writer -> file.sync -> println
+            writer -> syncCondition -> println
+            writer -> file.sync -> unless { false -> println }
+            0 => count!
+            count! < 2 and (writer -> file.sync) -> while {
+                count! + 1 => count!
+            }
+            count! -> println
+        }
+    }
+    Arena(0) => destinationStorage!
+    "$(arguments[0]).replace" -> materialize(destinationStorage!) => destination
+    file.AtomicReplaceRequest { temporary: path, destination: destination } => replacement
+    (true and (replacement -> file.atomicReplace)) -> println
+    replacement -> file.atomicReplace -> unless { true -> println }
+    (destination -> file.removePath) == 1 -> println
+}

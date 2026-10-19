@@ -1,0 +1,56 @@
+namespace sollang.compiler.semantic.semantic_cache
+
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.file as file
+import sys.process as process
+
+frame status: UInt64 -> [UInt64; ~] {
+    [UInt64(6002245308512486735), 1, 41, 0, status, 0, 0, 0, 0; ~] => words!
+    words! -> generations.checksum(9) => digest
+    digest -> each byte { words! -> push(UInt64(byte)) }
+    words!
+}
+
+corrupt destination: Text, words: ref [UInt64; ~] -> Bool uses File {
+    [UInt8; ~] => bytes!
+    words -> each word {
+        word => value!
+        0..<8 -> each {
+            bytes! -> push(UInt8(value! % 256))
+            value! / 256 => value!
+        }
+    }
+    UInt8((words[9] + 1) % 256) => bytes![72]
+    destination -> file.openWrite -> when {
+        Err(_) { false -> return }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
+                Err(_) { false -> return }
+                Ok(count) { count != UIntSize(bytes! -> len) -> if { false -> return } }
+            }
+            writer -> file.sync -> return
+        }
+    }
+}
+
+runChecks: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    Arena(0) => storage!
+    "$(arguments[0]).semantic-stage" -> materialize(storage!) => path
+    UInt64(50) -> frame => original
+    (original -> validate) == 0 -> println
+    (original -> verifyStagedFrame(path)) == 50 -> println
+    (original -> stageExclusive(path)) == 0 -> println
+    (original -> verifyStagedFrame(path)) == 0 -> println
+    (path -> corrupt(original)) -> println
+    (original -> verifyStagedFrame(path)) == 23 -> println
+    UInt64(51) -> frame => different
+    (different -> stage(path)) == 0 -> println
+    (original -> verifyStagedFrame(path)) == 33 -> println
+    Arena(0) => emptyStorage!
+    "$(arguments[0]).empty-stage" -> materialize(emptyStorage!) => empty
+    (empty -> file.createExclusive) == 1 -> println
+    (original -> verifyStagedFrame(empty)) == 21 -> println
+}
+
+main { runChecks() }

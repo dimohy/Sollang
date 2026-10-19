@@ -146,6 +146,14 @@ internal static partial class LanguageServer
         {
             suffix++;
         }
+        // A shared LF suffix cannot leave the CR half of a source CRLF inside
+        // the edit. Keep the complete line ending in the replacement instead.
+        var suffixStart = source.Length - suffix;
+        if (suffix > 0 && suffixStart > 0
+            && source[suffixStart - 1] == '\r' && source[suffixStart] == '\n')
+        {
+            suffix--;
+        }
         return
         [
             new
@@ -167,7 +175,12 @@ internal static partial class LanguageServer
         for (var index = 0; index < offset; index++)
         {
             var value = source[index];
-            if (value == '\n') { line++; character = 0; }
+            if (value is '\r' or '\n')
+            {
+                line++;
+                character = 0;
+                if (value == '\r' && index + 1 < offset && source[index + 1] == '\n') index++;
+            }
             else character++;
         }
         return new { line, character };

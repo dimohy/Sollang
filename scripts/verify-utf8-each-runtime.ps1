@@ -23,7 +23,7 @@ if ($textRoleType.Count -ne 1) {
 }
 $textRoleConversion = [regex]::Matches(
     $foundation,
-    '(?s)interpolationNodeIntegerWidth nodeIndex:.*?node\.kind == 1 and bindingIndex < 0 -> if \{\s*node -> directEachRoleTypeId\(sourceModule, context, state\) => roleTypeId.*?roleWidth! > 0 -> if \{ roleWidth! => width! \}.*?interpolationNodeSigned nodeIndex:.*?bindingIndex < 0 -> if \{\s*node -> directEachRoleTypeId\(sourceModule, context, state\) => roleTypeId.*?integerSigned\(context, state\) => signed!')
+    '(?s)interpolationNodeTypeId nodeIndex:.*?node -> directEachRoleTypeId\(sourceModule, context, state\) => typeId!.*?interpolationNodeIntegerWidth nodeIndex:.*?node\.kind == 1 and bindingIndex < 0 -> if \{\s*nodeIndex -> interpolationNodeTypeId\(nodes, sourceModule, ownerIndex, beforeIndex, context, state\) => roleTypeId.*?roleWidth! > 0 -> if \{ roleWidth! => width! \}.*?interpolationNodeSigned nodeIndex:.*?bindingIndex < 0 -> if \{\s*nodeIndex -> interpolationNodeTypeId\(nodes, sourceModule, ownerIndex, beforeIndex, context, state\) => roleTypeId.*?integerSigned\(context, state\) => signed!')
 if ($textRoleConversion.Count -ne 1) {
     throw 'Text each role conversion must derive integer width and signedness from the canonical role type.'
 }

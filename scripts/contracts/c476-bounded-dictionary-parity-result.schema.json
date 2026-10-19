@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "managedCompilerSha256", "managedDllSha256", "selfhostCompilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "processObservationScope", "structureObservationScope", "orphanProcessIds", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-bounded-dictionary-parity" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 8 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 8 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 8 },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "managedDllSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "processObservationScope": { "const": "bounded-root-wait-and-post-exit-CIM-descendant-snapshot-with-creation-time;exited-or-reparented-descendants-not-proven" },
+    "structureObservationScope": { "const": "selfhost-ast-expression-typed-ir-and-user-function-llvm;managed-user-function-llvm-only;source-abi-and-returned-stack-lifetime-not-proven" },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "cases": { "type": "array", "minItems": 8, "maxItems": 8, "prefixItems": [
+      { "$ref": "#/$defs/managedEntry" }, { "$ref": "#/$defs/managedReturn" },
+      { "$ref": "#/$defs/managedTyped" }, { "$ref": "#/$defs/managedOverflow" },
+      { "$ref": "#/$defs/selfhostEntry" }, { "$ref": "#/$defs/selfhostReturn" },
+      { "$ref": "#/$defs/selfhostTyped" }, { "$ref": "#/$defs/selfhostOverflow" }
+    ] },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": {
+      "completed": { "const": 8 }, "passed": { "const": 8 }, "inputsStable": { "const": true },
+      "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "orphanProcessIds": { "maxItems": 0 },
+      "failureId": { "type": "null" }, "failure": { "type": "null" },
+      "cases": { "prefixItems": [
+        { "$ref": "#/$defs/positivePassed" }, { "$ref": "#/$defs/positivePassed" },
+        { "$ref": "#/$defs/positivePassed" }, { "$ref": "#/$defs/negativePassed" },
+        { "$ref": "#/$defs/positivePassed" }, { "$ref": "#/$defs/positivePassed" },
+        { "$ref": "#/$defs/positivePassed" }, { "$ref": "#/$defs/negativePassed" }
+      ] }
+    } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": {
+      "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 }
+    } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "case": { "type": "object", "additionalProperties": false,
+      "required": ["compiler", "fixture", "kind", "state", "sourceSha256", "expectedSha256", "caseDirectory", "buildExitCode", "closureExitCode", "llvmAsExitCode", "runExitCode", "buildStdoutMatched", "diagnosticMatched", "productsAbsent", "exeSha256", "llvmSha256", "bitcodeSha256", "stdoutSha256", "structureProof", "failure"],
+      "properties": {
+        "compiler": { "enum": ["managed", "selfhost"] },
+        "fixture": { "enum": ["entry", "return", "typed", "overflow"] },
+        "kind": { "enum": ["positive", "negative"] },
+        "state": { "enum": ["not-run", "running", "passed", "failed"] },
+        "sourceSha256": { "$ref": "#/$defs/sha" }, "expectedSha256": { "$ref": "#/$defs/sha" },
+        "caseDirectory": { "type": "string", "minLength": 1 },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "closureExitCode": { "type": ["integer", "null"] },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "buildStdoutMatched": { "type": ["boolean", "null"] },
+        "diagnosticMatched": { "type": ["boolean", "null"] },
+        "productsAbsent": { "type": ["boolean", "null"] },
+        "exeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "llvmSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "bitcodeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stdoutSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "structureProof": { "oneOf": [{ "$ref": "#/$defs/structureProof" }, { "type": "null" }] },
+        "failure": { "type": ["string", "null"] }
+      }
+    },
+    "structureProof": { "type": "object", "additionalProperties": false,
+      "required": ["astSource", "astNode", "expressionTypeId", "expressionTypeKind", "expressionTypeLength", "irTypeId", "irTypeKind", "astOutputSha256", "expressionOutputSha256", "irOutputSha256", "llvmFunctionNames", "llvmBodySha256", "inlineStorageObserved", "dynamicDictionaryHeapAbsent"],
+      "properties": {
+        "astSource": { "type": ["integer", "null"], "minimum": 0 },
+        "astNode": { "type": ["integer", "null"], "minimum": 0 },
+        "expressionTypeId": { "type": ["integer", "null"], "minimum": 0 },
+        "expressionTypeKind": { "type": ["integer", "null"], "minimum": 0 },
+        "expressionTypeLength": { "type": ["integer", "null"], "minimum": 0 },
+        "irTypeId": { "type": ["integer", "null"], "minimum": 0 },
+        "irTypeKind": { "type": ["integer", "null"], "minimum": 0 },
+        "astOutputSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "expressionOutputSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "irOutputSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "llvmFunctionNames": { "type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "llvmBodySha256": { "$ref": "#/$defs/sha" },
+        "inlineStorageObserved": { "type": "boolean" },
+        "dynamicDictionaryHeapAbsent": { "type": "boolean" }
+      }
+    },
+    "managedEntry": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "entry" }, "kind": { "const": "positive" } } }] },
+    "managedReturn": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "return" }, "kind": { "const": "positive" } } }] },
+    "managedTyped": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "typed" }, "kind": { "const": "positive" } } }] },
+    "managedOverflow": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "overflow" }, "kind": { "const": "negative" } } }] },
+    "selfhostEntry": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "entry" }, "kind": { "const": "positive" } } }] },
+    "selfhostReturn": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "return" }, "kind": { "const": "positive" } } }] },
+    "selfhostTyped": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "typed" }, "kind": { "const": "positive" } } }] },
+    "selfhostOverflow": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "overflow" }, "kind": { "const": "negative" } } }] },
+    "positivePassed": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "state": { "const": "passed" }, "buildExitCode": { "const": 0 }, "closureExitCode": { "const": 0 },
+      "llvmAsExitCode": { "const": 0 }, "runExitCode": { "const": 0 },
+      "buildStdoutMatched": { "const": true },
+      "diagnosticMatched": { "type": "null" }, "productsAbsent": { "type": "null" },
+      "exeSha256": { "$ref": "#/$defs/sha" }, "llvmSha256": { "$ref": "#/$defs/sha" },
+      "bitcodeSha256": { "$ref": "#/$defs/sha" }, "stdoutSha256": { "$ref": "#/$defs/sha" },
+      "structureProof": { "$ref": "#/$defs/structureProof", "properties": {
+        "inlineStorageObserved": { "const": true }, "dynamicDictionaryHeapAbsent": { "const": true }
+      } }, "failure": { "type": "null" }
+    } }, { "if": { "properties": { "compiler": { "const": "selfhost" } } }, "then": { "properties": {
+      "structureProof": { "properties": {
+        "astSource": { "type": "integer" }, "astNode": { "type": "integer" },
+        "expressionTypeId": { "type": "integer" }, "expressionTypeKind": { "const": 13 },
+        "expressionTypeLength": { "const": 3 }, "irTypeId": { "type": "integer" }, "irTypeKind": { "const": 13 },
+        "astOutputSha256": { "$ref": "#/$defs/sha" }, "expressionOutputSha256": { "$ref": "#/$defs/sha" },
+        "irOutputSha256": { "$ref": "#/$defs/sha" }
+      } }
+    } }, "else": { "properties": {
+      "structureProof": { "properties": {
+        "astSource": { "type": "null" }, "astNode": { "type": "null" },
+        "expressionTypeId": { "type": "null" }, "expressionTypeKind": { "type": "null" },
+        "expressionTypeLength": { "type": "null" }, "irTypeId": { "type": "null" }, "irTypeKind": { "type": "null" },
+        "astOutputSha256": { "type": "null" }, "expressionOutputSha256": { "type": "null" },
+        "irOutputSha256": { "type": "null" }
+      } }
+    } } }] },
+    "negativePassed": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "state": { "const": "passed" }, "buildExitCode": { "type": "integer", "not": { "const": 0 } },
+      "closureExitCode": { "type": "null" }, "llvmAsExitCode": { "type": "null" }, "runExitCode": { "type": "null" },
+      "buildStdoutMatched": { "const": true },
+      "diagnosticMatched": { "const": true }, "productsAbsent": { "const": true },
+      "exeSha256": { "type": "null" }, "llvmSha256": { "type": "null" },
+      "bitcodeSha256": { "type": "null" }, "stdoutSha256": { "type": "null" },
+      "structureProof": { "type": "null" }, "failure": { "type": "null" }
+    } }] }
+  }
+}

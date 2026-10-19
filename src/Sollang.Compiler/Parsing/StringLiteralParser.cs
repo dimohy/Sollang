@@ -6,7 +6,9 @@ namespace Sollang.Compiler.Parsing;
 
 internal static class StringLiteralParser
 {
-    public static IReadOnlyList<StringSegment> ParseStringSegments(Token token)
+    public static IReadOnlyList<StringSegment> ParseStringSegments(
+        Token token,
+        Func<string, Expression> parseExpression)
     {
         if (token.IsRawString)
         {
@@ -66,7 +68,7 @@ internal static class StringLiteralParser
             }
 
             segments.Add(new InterpolationSegment(
-                ParseInterpolationExpression(expressionText, token),
+                ParseInterpolationExpression(expressionText, token, parseExpression),
                 IsParenthesized: true));
             i = close;
             start = i + 1;
@@ -186,6 +188,11 @@ internal static class StringLiteralParser
         for (var i = start; i < text.Length; i++)
         {
             var c = text[i];
+            if (c == '\'')
+            {
+                i = FindCharacterInterpolationClose(text, i + 1, token);
+                continue;
+            }
             if (c == '"')
             {
                 i = FindStringClose(text, i + 1, token);
@@ -213,6 +220,24 @@ internal static class StringLiteralParser
         throw ErrorAt(token, "unterminated interpolation expression in string literal");
     }
 
+    private static int FindCharacterInterpolationClose(string text, int start, Token token)
+    {
+        for (var i = start; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                continue;
+            }
+            if (text[i] == '\'')
+            {
+                return i;
+            }
+        }
+
+        throw ErrorAt(token, "unterminated interpolation expression in string literal");
+    }
+
     private static int FindStringClose(string text, int start, Token token)
     {
         for (var i = start; i < text.Length; i++)
@@ -226,11 +251,14 @@ internal static class StringLiteralParser
         throw ErrorAt(token, "unterminated string literal inside interpolation expression");
     }
 
-    private static Expression ParseInterpolationExpression(string text, Token token)
+    private static Expression ParseInterpolationExpression(
+        string text,
+        Token token,
+        Func<string, Expression> parseExpression)
     {
         try
         {
-            return new Parser(new Lexer(text).Lex()).ParseExpressionFragment();
+            return parseExpression(text);
         }
         catch (SollangException ex)
         {

@@ -37,10 +37,16 @@ function Test-C435Authority([string]$Control, [string]$Scheduling) {
     $wrapper = '(?s)terminatingControlReturns controlIndex:.*?candidate\.kind == 9\s*and candidate\.opcode == -1\s*and candidate\.operand1 >= 0\s*and candidate\.operand1 < \(context\.ir -> len\)\s*and context\.ir\[candidate\.operand1\]\.parent == candidateIndex!'
     $subjectWhenMerge = '(?s)not \(whenHasArm! and whenHasElse!\) -> if \{ false => whenAllArmsReturn! \}.*?whenAllArmsReturn!\s*and not \(whenIndex -> controlIsLastRegionChild\(context, state\)\)\s*-> if \{ false => whenAllArmsReturn! \}.*?not whenAllArmsReturn! -> if \{'
     $scheduler = '(?s)reachableCandidate -> terminatingControlReturns\(context, state\).*?false => reachableExpressionOpen!'
+    $armRegion = '(?s)whenReturns whenIndex:.*?arm -> sourceNode\(context, state\) => armSource\s+armIndex! => armRegion!\s+armSource\.kind == 58 and arm\.operand1 >= 0\s+-> if \{ arm\.operand1 => armRegion! \} else \{ true => hasElse! \}\s+armRegion! -> regionReturns\(context, state\)'
+    $booleanArmRegion = '(?s)emitBooleanWhen whenIndex:.*?returnArm -> sourceNode\(context, state\) => returnArmSource\s+returnArmIndex! => returnArmRegion!\s+returnArmSource\.kind == 58 and returnArm\.operand1 >= 0\s+-> if \{ returnArm\.operand1 => returnArmRegion! \} else \{ true => whenHasElse! \}\s+returnArmRegion! -> regionReturns\(context, state\)'
+    $subjectArmRegion = '(?s)emitSubjectWhen whenIndex:.*?returnArm -> sourceNode\(context, state\) => returnArmSource\s+returnArmIndex! => returnArmRegion!\s+returnArmSource\.kind == 58 and returnArm\.operand1 >= 0\s+-> if \{ returnArm\.operand1 => returnArmRegion! \} else \{ true => whenHasElse! \}\s+returnArmRegion! -> regionReturns\(context, state\)'
     return $Control -match $directRegion -and
         $Control -match $sharedTerminal -and
         $Control -match $wrapper -and
         $Control -match $subjectWhenMerge -and
+        $Control -match $armRegion -and
+        $Control -match $booleanArmRegion -and
+        $Control -match $subjectArmRegion -and
         $Scheduling -match $scheduler
 }
 
@@ -85,6 +91,14 @@ $mutations = [ordered]@{
         control = $control.Replace('not whenAllArmsReturn! -> if {', 'true -> if {')
         scheduling = $scheduling
     }
+    'misclassify-else-as-conditional' = @{
+        control = $control.Replace('armSource.kind == 58 and arm.operand1 >= 0', 'arm.kind == 19 and arm.operand1 >= 0')
+        scheduling = $scheduling
+    }
+    'inspect-arm-value-instead-of-region' = @{
+        control = $control.Replace('arm.operand1 => armRegion!', 'armIndex! => armRegion!')
+        scheduling = $scheduling
+    }
 }
 
 $expectedMutationIds = @($contract.mutationControls)
@@ -104,4 +118,4 @@ foreach ($id in $expectedMutationIds) {
     $rejected++
 }
 
-Write-Output "C435 terminal control: PASS authority 5/5, probe 1/1, retained fixtures $($fixturePaths.Count)/$($fixturePaths.Count), mutations $rejected/$($expectedMutationIds.Count); rebuilt selfhost 0/1 pending."
+Write-Output "C435 terminal control: PASS authority 8/8, probe 1/1, retained fixtures $($fixturePaths.Count)/$($fixturePaths.Count), mutations $rejected/$($expectedMutationIds.Count); rebuilt selfhost 0/1 pending."

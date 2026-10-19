@@ -58,31 +58,33 @@ runtimeFunctionRef runtimeModule: Int, expectedName: Text, context: ref emitterC
     runtimePathFound! and fragmentIndex! < (context.modules -> len) and matched!.symbol < 0
         -> while {
             context.modules[fragmentIndex!] => fragment
-            fragment.pathHash == runtimePathHash! -> if {
-                fragment.sourceIndex => fragmentModule
-                context.ranges[fragmentModule] => fragmentRange
-                0 => symbolIndex!
-                symbolIndex! < fragmentRange.symbolCount and matched!.symbol < 0
-                    -> while {
-                        context.symbols[fragmentRange.symbolStart + symbolIndex!] => candidate
-                        candidate.parent < 0 and candidate.nameToken >= 0 and candidate.nameToken < fragmentRange.tokenCount
-                            -> if {
-                                context.tokens[fragmentRange.tokenStart + candidate.nameToken] => nameToken
-                                expectedName -> len => expectedLength
-                                nameToken.span.length == expectedLength => matches!
-                                UIntSize(0) => byteIndex!
-                                matches! and byteIndex! < expectedLength -> while {
-                                    (context.sources[fragmentModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!))
-                                        -> if { false => matches! }
-                                    byteIndex! + 1 => byteIndex!
+            fragment.pathHash == runtimePathHash!
+                and modules.sameLogicalSource(context.sources, context.modules, runtimeModule, fragment.sourceIndex, context.tokens, context.ranges)
+                -> if {
+                    fragment.sourceIndex => fragmentModule
+                    context.ranges[fragmentModule] => fragmentRange
+                    0 => symbolIndex!
+                    symbolIndex! < fragmentRange.symbolCount and matched!.symbol < 0
+                        -> while {
+                            context.symbols[fragmentRange.symbolStart + symbolIndex!] => candidate
+                            candidate.parent < 0 and candidate.nameToken >= 0 and candidate.nameToken < fragmentRange.tokenCount
+                                -> if {
+                                    context.tokens[fragmentRange.tokenStart + candidate.nameToken] => nameToken
+                                    expectedName -> len => expectedLength
+                                    nameToken.span.length == expectedLength => matches!
+                                    UIntSize(0) => byteIndex!
+                                    matches! and byteIndex! < expectedLength -> while {
+                                        (context.sources[fragmentModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!))
+                                            -> if { false => matches! }
+                                        byteIndex! + 1 => byteIndex!
+                                    }
+                                    matches! -> if {
+                                        llvmRuntime.RuntimeFunctionRef { module: fragmentModule, symbol: symbolIndex! } => matched!
+                                    }
                                 }
-                                matches! -> if {
-                                    llvmRuntime.RuntimeFunctionRef { module: fragmentModule, symbol: symbolIndex! } => matched!
-                                }
-                            }
-                        symbolIndex! + 1 => symbolIndex!
-                    }
-            }
+                            symbolIndex! + 1 => symbolIndex!
+                        }
+                }
             fragmentIndex! + 1 => fragmentIndex!
         }
     matched!
@@ -95,6 +97,7 @@ isRuntimeSourceModule sourceModule: Int, context: ref emitterContext.EmitContext
         -> while {
             context.modules[moduleIndex!] => identity
             identity.sourceIndex == sourceModule and identity.pathHash == 12254170256457402476
+                and modules.logicalNameIs(context.sources[sourceModule], identity, context.ranges[sourceModule], context.tokens, "sys.runtime")
                 -> if { true => runtimeSource! }
             moduleIndex! + 1 => moduleIndex!
         }
@@ -136,6 +139,7 @@ runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitConte
         nowMillisRef: runtimeModule -> runtimeFunctionRef("nowMillis", context)
         utcNowMillisRef: runtimeModule -> runtimeFunctionRef("utcNowMillis", context)
         monotonicSuspendPolicyRef: runtimeModule -> runtimeFunctionRef("monotonicSuspendPolicy", context)
+        eprintRef: runtimeModule -> runtimeFunctionRef("eprint", context)
         eprintlnRef: runtimeModule -> runtimeFunctionRef("eprintln", context)
         flushStandardOutputRef: runtimeModule -> runtimeFunctionRef("flushStandardOutput", context)
     }
@@ -150,6 +154,7 @@ runtimeModuleSource context: ref emitterContext.EmitContext -> Int {
         -> while {
             context.modules[moduleIndex!] => identity
             identity.pathHash == 12254170256457402476
+                and modules.logicalNameIs(context.sources[identity.sourceIndex], identity, context.ranges[identity.sourceIndex], context.tokens, "sys.runtime")
                 -> if { identity.sourceIndex => runtimeModule! }
             moduleIndex! + 1 => moduleIndex!
         }
@@ -185,6 +190,7 @@ missingRuntimeFunction context: ref emitterContext.EmitContext -> Text {
         -> if { "utcNowMillis" -> return }
     functions.monotonicSuspendPolicyRef -> runtimeRefMissing
         -> if { "monotonicSuspendPolicy" -> return }
+    functions.eprintRef -> runtimeRefMissing -> if { "eprint" -> return }
     functions.eprintlnRef -> runtimeRefMissing -> if { "eprintln" -> return }
     functions.flushStandardOutputRef -> runtimeRefMissing
         -> if { "flushStandardOutput" -> return }

@@ -1,0 +1,122 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+report source: Text -> Unit uses Console {
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> ownershipCheck.analyze => diagnostics
+    0 => blockEscapes!
+    diagnostics -> each diagnostic {
+        diagnostic.code == ownershipCheck.borrowedTextBlockEscapeCode()
+            -> if { blockEscapes! + 1 => blockEscapes! }
+    }
+    "$(diagnostics -> len):$(blockEscapes!)" -> println
+}
+
+main {
+    """
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "value=$text"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    show flag: Bool -> Unit uses Console {
+        Arena(64) => storage!
+        "outer" -> materialize(storage!) => text
+        flag -> if { "value=$text" } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "length=$(text -> len)"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    relay value: Text -> Text { value }
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "value=$(text -> relay)"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    ignore value: Text -> Text { "static" }
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "value=$(text -> ignore)"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    choose value: Text, other: Text -> Text { other }
+    show flag: Bool -> Unit uses Console {
+        "static" => outer
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "value=$(choose(text, outer))"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    choose value: Text, other: Text -> Text { other }
+    show flag: Bool -> Unit uses Console {
+        "static" => outer
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            "value=$(choose(outer, text))"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    struct Record { text: Text, count: Int }
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            Record { text: text, count: 5 } => record
+            "value=$(record.text)"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+
+    """
+    struct Record { text: Text, count: Int }
+    show flag: Bool -> Unit uses Console {
+        flag -> if {
+            Arena(64) => storage!
+            "local" -> materialize(storage!) => text
+            Record { text: text, count: 5 } => record
+            "value=$(record.count)"
+        } else { "other" } -> println
+    }
+    main { show(true) }
+    """ -> report
+}

@@ -27,6 +27,7 @@ try {
     $typedPath = Join-Path $root 'selfhost/ir/typed.slg'
     $helperNames = @('deferredTextStorageConsumes','preservesDeferredText','analyzeDeferredTextStorage','deferredTextStringSeeds')
     $helpers = @($helperNames | ForEach-Object { Read-Declaration $ownershipPath $_ })
+    $failureType = Read-Declaration $ownershipPath 'struct DeferredTextStorageFailure'
     $nodeType = Read-Declaration $typedPath 'public struct TypedIrNode'
     $managedVerifier = Join-Path $root 'scripts/verify-deferred-text-storage.ps1'
     $parseErrors = $null; $parseTokens = $null
@@ -52,6 +53,8 @@ try {
     if ($RequireCandidateGate) {
         $inputs += @($names | ForEach-Object { Join-Path $root "examples/regression/diagnostics/$_.slg" })
         $inputs += Join-Path $root 'examples/regression/1725-materialized-text-storage-boundaries.slg'
+        $inputs += Join-Path $root 'examples/regression/expected/1725-materialized-text-storage-boundaries.stdout.txt'
+        $inputs += Join-Path $root 'examples/regression/expected/581-materialized-text-arena.stdout.txt'
         $inputs += Join-Path $root 'scripts/verify-native-exact-fixture.ps1'
     }
     $hashes = @{}
@@ -122,7 +125,7 @@ try {
         if($LASTEXITCODE -ne 0){throw "Reference literal parser failed: $seedOutput"}
         $seeds=$seedOutput | ConvertFrom-Json -AsHashtable
     }
-    $program=@('namespace sollang.compiler.semantic.ownership_check','import sollang.compiler.ir.typed as typedIr')+$helpers
+    $program=@('namespace sollang.compiler.semantic.ownership_check','import sollang.compiler.ir.typed as typedIr',$failureType)+$helpers
     $expected=@()
     $ordinal=0
     foreach($case in $cases){
@@ -165,11 +168,13 @@ try {
         $record.cases += @{id=$edgeExpected[$i].Split('=')[0];passed=($lines[$cases.Count+$i] -ceq $edgeExpected[$i]);actual=$lines[$cases.Count+$i];expected=$edgeExpected[$i]}
     }
     if(@($record.cases | Where-Object {-not $_.passed}).Count -gt 0){throw 'Production guard acceptance mismatch'}
-    & (Join-Path $llvm 'bin/llvm-as.exe') (Join-Path $output 'guard.ll') -o (Join-Path $output 'guard.bc')
+    $guardLl = "$exe.ll"
+    if (-not (Test-Path -LiteralPath $guardLl -PathType Leaf)) { throw "Production guard LLVM artifact missing: $guardLl" }
+    & (Join-Path $llvm 'bin/llvm-as.exe') $guardLl -o (Join-Path $output 'guard.bc')
     if($LASTEXITCODE -ne 0){throw 'Production guard LLVM did not assemble'}
-    & (Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1') -LlvmPath (Join-Path $output 'guard.ll')
+    & (Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1') -LlvmPath $guardLl
     $record.artifactHashes=@{}
-    foreach($path in @($helperPath,$typesPath,$entryPath,$exe,(Join-Path $output 'guard.ll'),(Join-Path $output 'guard.run.log'))){$record.artifactHashes[$path]=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
+    foreach($path in @($helperPath,$typesPath,$entryPath,$exe,$guardLl,(Join-Path $output 'guard.run.log'))){$record.artifactHashes[$path]=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash}
     foreach($path in $hashes.Keys){if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $hashes[$path]){throw "Input drift: $path"}}
     $record.completed=$record.cases.Count; $record.total=$record.cases.Count
     $record.lexicalSeeds='actual candidate AST spans decoded by existing managed StringLiteralParser; selfhost interpolation adapter requires final integration'
@@ -177,7 +182,7 @@ try {
     if ($RequireCandidateGate) {
         # Run this optional post-rebuild gate under the established supervisor
         # when its complete command may exceed one minute. No compiler is built.
-        $record.candidateGate=@{scope='checked-windows-sixteen-negatives-and-native1725';completed=0;total=17;cases=@();status='running'}
+        $record.candidateGate=@{scope='checked-windows-sixteen-negatives-and-native1725-581';completed=0;total=18;cases=@();status='running'}
         $gateFailures=@()
         foreach($name in $names){
             $path=Join-Path $root "examples/regression/diagnostics/$name.slg"
@@ -193,15 +198,20 @@ try {
             Save-Result
         }
         if($gateFailures.Count -gt 0){$record.candidateGate.status='failed';throw "Selfhost storage gate did not reject before LLVM: $($gateFailures -join ', ')"}
-        $nativeOutput=Join-Path $output '1725-native'
-        & (Join-Path $root 'scripts/verify-native-exact-fixture.ps1') -Compiler $CandidateCompiler -Label 'C400-storage' `
-            -Fixture '1725-materialized-text-storage-boundaries' -Platform windows -LlvmRoot $llvm `
-            -StdlibRoot (Join-Path $root 'stdlib') -RepositoryRoot $root -OutputDirectory $nativeOutput -Jobs 1
-        if(-not $?){throw 'Selfhost1725 native exact gate failed'}
-        $record.candidateGate.cases+=@{id='1725';passed=$true;output=$nativeOutput}
-        $record.candidateGate.completed++
+        foreach($nativeCase in @(
+            @{id='1725';fixture='1725-materialized-text-storage-boundaries'},
+            @{id='581';fixture='581-materialized-text-arena'})) {
+            $nativeOutput=Join-Path $output "$($nativeCase.id)-native"
+            & (Join-Path $root 'scripts/verify-native-exact-fixture.ps1') -Compiler $CandidateCompiler -Label 'C400-storage' `
+                -Fixture $nativeCase.fixture -Platform windows -LlvmRoot $llvm `
+                -StdlibRoot (Join-Path $root 'stdlib') -RepositoryRoot $root -OutputDirectory $nativeOutput -Jobs 1
+            if(-not $?){throw "Selfhost $($nativeCase.id) native exact gate failed"}
+            $record.candidateGate.cases+=@{id=$nativeCase.id;passed=$true;output=$nativeOutput}
+            $record.candidateGate.completed++
+            Save-Result
+        }
         $record.candidateGate.status='passed'
-        $record.integration='checked selfhost Windows16 negatives plus native1725 passed; remaining targets and accumulated Stage2/3 are separate'
+        $record.integration='checked selfhost Windows16 negatives plus native1725 and 581 passed; remaining targets and accumulated Stage2/3 are separate'
     }
     foreach($path in $hashes.Keys){if((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $hashes[$path]){throw "Final input drift: $path"}}
     $record.status='passed'

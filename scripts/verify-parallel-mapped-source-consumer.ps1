@@ -52,7 +52,7 @@ try {
     $exe = Join-Path $output '1727.exe'
     $buildOutput = Invoke-ConsumerStep -Name 'build' -Tool 'dotnet' -Arguments @($compiler, 'build', $fixture, '--llvm', $llvmRoot, '-o', $exe, '--keep-temps')
     if ($buildOutput -match '(?i)warning|\b[NS]00[12]\b') { throw "1727 build emitted a warning: $buildOutput" }
-    $ir = [IO.Path]::ChangeExtension($exe, '.ll')
+    $ir = $exe + '.ll'
     if (-not (Test-Path -LiteralPath $ir)) { throw '1727 retained generated LLVM is missing.' }
     $expected = [IO.File]::ReadAllText($expectedPath).Replace("`r`n", "`n").TrimEnd("`n")
     if ([string]::IsNullOrWhiteSpace($expected)) { throw '1727 expected output is empty.' }

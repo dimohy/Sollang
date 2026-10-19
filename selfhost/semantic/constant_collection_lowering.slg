@@ -9,6 +9,7 @@ import syntax.generated.slg as grammar
 public struct Literal {
     public astNode: Int
     public value: Long
+    public diagnosticStart: UIntSize
 }
 
 public struct Lowering {
@@ -90,7 +91,7 @@ public lower nodes: move [ast.AstNode; ~], source: Text -> Result<Lowering, Fail
             -> if {
                 nodes[node.parent].kind => parentKind
                 (node.kind == 63 and parentKind == 37)
-                    or (node.kind == 83 and (parentKind == 37 or parentKind == 38))
+                    or (node.kind == 84 and (parentKind == 37 or parentKind == 38))
                     -> if { roots! -> push(index!) }
             }
         index! + 1 => index!
@@ -155,7 +156,7 @@ public lower nodes: move [ast.AstNode; ~], source: Text -> Result<Lowering, Fail
             0 => item!
             item! < replacementCount![index!] -> while {
                 constants![start + item!] => value
-                Literal { astNode: lowered! -> len, value: value.value } => literal
+                Literal { astNode: lowered! -> len, value: value.value, diagnosticStart: value.diagnosticStart } => literal
                 literals! -> push(literal)
                 nodes[value.sourceNode] -> number(nodes[index!].parent) => literalNode
                 lowered! -> push(literalNode)
@@ -183,7 +184,7 @@ public lower nodes: move [ast.AstNode; ~], source: Text -> Result<Lowering, Fail
 
 # Ordinary source literals have no entry. Binary search avoids a dense table
 # on every source while keeping expanded collections out of whole-AST scans.
-public find literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> Option<Long> {
+findIndex literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> Int {
     start => low!
     start + count => high!
     low! < high! -> while {
@@ -193,5 +194,15 @@ public find literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> 
         } else { middle => high! }
     }
     low! < start + count and literals[low!].astNode == astNode
-        -> if { literals[low!].value -> Option<Long>.Some } else { Option<Long>.None }
+        -> if { low! } else { -1 }
+}
+
+public find literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> Option<Long> {
+    literals -> findIndex(start, count, astNode) => index
+    index >= 0 -> if { literals[index].value -> Option<Long>.Some } else { Option<Long>.None }
+}
+
+public findDiagnosticStart literals: ref [Literal; ~], start: Int, count: Int, astNode: Int -> Option<UIntSize> {
+    literals -> findIndex(start, count, astNode) => index
+    index >= 0 -> if { literals[index].diagnosticStart -> Option<UIntSize>.Some } else { Option<UIntSize>.None }
 }

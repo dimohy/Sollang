@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "$ref": "#/$defs/contract" },
+    { "$ref": "#/$defs/result" }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "contract": {
+      "type": "object", "additionalProperties": false,
+      "required": ["recordType", "schemaVersion", "id", "status", "platform", "originalContract", "cases", "assertions", "limits"],
+      "properties": {
+        "recordType": { "const": "contract" }, "schemaVersion": { "const": 1 },
+        "id": { "const": "c476-output-alias-safety" },
+        "status": { "const": "supplemental-requirements-unverified" },
+        "platform": { "const": "windows-x64" },
+        "originalContract": { "const": "scripts/contracts/c476-output-transaction.json" },
+        "cases": {
+          "type": "object", "additionalProperties": false,
+          "required": ["reservedBase", "reservedMixed", "reservedLl", "trailingDot", "trailingSpace", "shortNameAlias"],
+          "properties": {
+            "reservedBase": { "$ref": "#/$defs/fixedCase" },
+            "reservedMixed": { "$ref": "#/$defs/fixedCase" },
+            "reservedLl": { "$ref": "#/$defs/fixedCase" },
+            "trailingDot": { "$ref": "#/$defs/fixedCase" },
+            "trailingSpace": { "$ref": "#/$defs/fixedCase" },
+            "shortNameAlias": {
+              "type": "object", "additionalProperties": false,
+              "required": ["outputName", "expectation", "unavailableState"],
+              "properties": {
+                "outputName": { "const": "actual-8dot3-alias-of-existing-long-sentinel" },
+                "expectation": { "const": "reject-before-output-effects-when-available" },
+                "unavailableState": { "const": "unverified-not-passed" }
+              }
+            }
+          }
+        },
+        "assertions": {
+          "const": ["nonzero-exit", "rejection-within-15-seconds", "empty-stdout", "actionable-stderr", "no-new-output-or-stage", "owned-sentinel-unchanged", "input-fingerprint-stable", "no-observed-orphan-process"]
+        },
+        "limits": {
+          "type": "object", "additionalProperties": false,
+          "required": ["preflight-hard-maximum-milliseconds", "short-lived-child-observation", "effects-outside-owned-case", "different-output-concurrency", "two-file-atomicity", "short-name-absent"],
+          "properties": {
+            "preflight-hard-maximum-milliseconds": { "const": 15000 },
+            "short-lived-child-observation": { "const": "sampled-live-processes-not-exhaustive" },
+            "effects-outside-owned-case": { "const": "not-proven-by-this-supplement" },
+            "different-output-concurrency": { "const": "not-proven-by-this-supplement" },
+            "two-file-atomicity": { "const": "not-claimed" },
+            "short-name-absent": { "const": "explicit-unverified" }
+          }
+        }
+      }
+    },
+    "fixedCase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["outputName", "expectation"],
+      "properties": {
+        "outputName": { "enum": ["foo.sollang-txn-lock", "foo.SoLlAnG-TxN-lock", "foo.ll.sollang-txn-lock", "foo.", "foo "] },
+        "expectation": { "const": "reject-before-output-effects" }
+      }
+    },
+    "caseResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "outputPath", "exitCode", "elapsedMilliseconds", "stdoutPath", "stderrPath", "products", "sentinelSha256Before", "sentinelSha256After", "reason", "failure"],
+      "properties": {
+        "state": { "enum": ["not-run", "passed", "failed", "unverified"] },
+        "outputPath": { "type": ["string", "null"] },
+        "exitCode": { "type": ["integer", "null"] },
+        "elapsedMilliseconds": { "type": ["integer", "null"], "minimum": 0, "maximum": 15000 },
+        "stdoutPath": { "type": ["string", "null"] },
+        "stderrPath": { "type": ["string", "null"] },
+        "products": { "type": "array", "items": { "type": "string" } },
+        "sentinelSha256Before": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "sentinelSha256After": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "reason": { "type": ["string", "null"] },
+        "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "exitCode": { "type": "integer", "not": { "const": 0 } }, "elapsedMilliseconds": { "type": "integer" }, "stdoutPath": { "type": "string", "minLength": 1 }, "stderrPath": { "type": "string", "minLength": 1 }, "reason": { "type": "null" }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "unverified" } } }, "then": { "properties": { "exitCode": { "type": "null" }, "elapsedMilliseconds": { "type": "null" }, "reason": { "type": "string", "minLength": 1 }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failure": { "type": "string", "minLength": 1 } } } }
+      ]
+    },
+    "result": {
+      "type": "object", "additionalProperties": false,
+      "required": ["recordType", "schemaVersion", "gate", "state", "contractSha256", "compilerPath", "compilerSha256", "sourcePath", "sourceSha256", "stdlibRoot", "llvmRoot", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "completed", "passed", "unverified", "cases", "orphanProcessIds", "failureId", "failure"],
+      "properties": {
+        "recordType": { "const": "result" }, "schemaVersion": { "const": 1 },
+        "gate": { "const": "c476-output-alias-safety" },
+        "state": { "enum": ["running", "passed", "deterministic-passed-8dot3-unverified", "failed"] },
+        "contractSha256": { "$ref": "#/$defs/sha" },
+        "compilerPath": { "type": "string", "minLength": 1 }, "compilerSha256": { "$ref": "#/$defs/sha" },
+        "sourcePath": { "type": "string", "minLength": 1 }, "sourceSha256": { "$ref": "#/$defs/sha" },
+        "stdlibRoot": { "type": "string", "minLength": 1 }, "llvmRoot": { "type": "string", "minLength": 1 },
+        "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+        "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "inputsStable": { "type": "boolean" },
+        "completed": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "passed": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "unverified": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "cases": {
+          "type": "object", "additionalProperties": false,
+          "required": ["reservedBase", "reservedMixed", "reservedLl", "trailingDot", "trailingSpace", "shortNameAlias"],
+          "properties": {
+            "reservedBase": { "$ref": "#/$defs/caseResult" },
+            "reservedMixed": { "$ref": "#/$defs/caseResult" },
+            "reservedLl": { "$ref": "#/$defs/caseResult" },
+            "trailingDot": { "$ref": "#/$defs/caseResult" },
+            "trailingSpace": { "$ref": "#/$defs/caseResult" },
+            "shortNameAlias": { "$ref": "#/$defs/caseResult" }
+          }
+        },
+        "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "failureId": { "type": ["string", "null"] }, "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 6 }, "passed": { "const": 6 }, "unverified": { "const": 0 }, "inputsStable": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "deterministic-passed-8dot3-unverified" } } }, "then": { "properties": { "completed": { "const": 6 }, "passed": { "const": 5 }, "unverified": { "const": 1 }, "inputsStable": { "const": true }, "cases": { "properties": { "shortNameAlias": { "properties": { "state": { "const": "unverified" } } } } }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } }
+      ]
+    }
+  }
+}

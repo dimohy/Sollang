@@ -1,0 +1,43 @@
+struct Request {
+    base: Int
+    count: Int
+}
+
+struct Batch {
+    values: [Int; ~]
+}
+
+lower request: Request -> Batch {
+    [Int; ~] => values!
+    0 => index!
+    index! < request.count -> while {
+        values! -> push(request.base + index!)
+        index! + 1 => index!
+    }
+    Batch { values: values! }
+}
+
+lowerAll requests: [Request; ~], enabled: Bool -> [Batch; ~] {
+    enabled -> if {
+        requests -> parallel request {
+            request -> lower
+        } => batches
+        batches -> return
+    }
+    [Batch; ~]
+}
+
+makeRequests: -> [Request; ~] {
+    [Request; ~] => requests!
+    requests! -> push(Request { base: 10, count: 2 })
+    requests! -> push(Request { base: 20, count: 3 })
+    requests!
+}
+
+main {
+    makeRequests() => requests
+    requests -> lowerAll(true) => batches
+    "batches=$(batches -> len)" -> println
+    makeRequests() -> lowerAll(false) => skipped
+    "skipped=$(skipped -> len)" -> println
+}

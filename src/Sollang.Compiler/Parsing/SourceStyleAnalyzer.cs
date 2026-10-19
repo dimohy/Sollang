@@ -37,10 +37,13 @@ internal static class SourceStyleAnalyzer
         return notes;
     }
 
-    private static IReadOnlyList<(int Line, int Column, int Length, string Role)> LongInlineControlConditions(
+    public static IReadOnlyList<Token> LongInlineControlArrows(IReadOnlyList<Token> tokens) =>
+        LongInlineControlConditions(tokens).Select(condition => tokens[condition.ArrowIndex]).ToArray();
+
+    private static IReadOnlyList<(int Line, int Column, int Length, string Role, int ArrowIndex)> LongInlineControlConditions(
         IReadOnlyList<Token> tokens)
     {
-        var conditions = new List<(int Line, int Column, int Length, string Role)>();
+        var conditions = new List<(int Line, int Column, int Length, string Role, int ArrowIndex)>();
         for (var arrowIndex = 0; arrowIndex < tokens.Count; arrowIndex++)
         {
             var arrow = tokens[arrowIndex];
@@ -78,7 +81,7 @@ internal static class SourceStyleAnalyzer
             var length = end.Column + end.Text.Length - start.Column;
             if (length >= ControlConditionInlineLimit)
             {
-                conditions.Add((start.Line, start.Column, length, tokens[targetIndex].Text));
+                conditions.Add((start.Line, start.Column, length, tokens[targetIndex].Text, arrowIndex));
             }
         }
         return conditions;

@@ -1,0 +1,48 @@
+namespace contracts.selfhost.scalar_and_move_instance
+
+public struct Buffer {
+    public value: UInt64
+}
+
+public struct Failure {
+    public slot: Buffer
+}
+
+impl Buffer {
+    public intoValue: move self -> UInt64 => self.value
+}
+
+impl UInt64 {
+    public doubled: self -> UInt64 => self * 2
+}
+
+impl UInt32 {
+    public isReserved: self -> Bool => self == 10
+}
+
+public double value: UInt64 -> UInt64 => value -> doubled
+
+public check values: [UInt32], index: Int -> Bool => values[index] -> isReserved
+
+public checkInferred values: [UInt32], index: Int -> Bool {
+    values[index] => candidate
+    candidate -> isReserved
+}
+
+makeFailure buffer: move Buffer -> Result<UInt64, Failure> => Result<UInt64, Failure>.Err(Failure { slot: buffer })
+
+public consumeFailure buffer: move Buffer -> UInt64 {
+    makeFailure(buffer) => result
+    result -> when {
+        Ok(value) { value }
+        Err(failure) {
+            failure.slot => failedSlot
+            failedSlot -> intoValue
+        }
+    }
+}
+
+public consume buffer: move Buffer -> UInt64 {
+    buffer -> intoValue => value
+    value -> doubled
+}

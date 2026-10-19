@@ -47,7 +47,7 @@ public struct Decoder {
     payloadBytes: Int
     decodedBytes: Int
     payloadReadBytes: Int
-    deflate: Option<gzip.RawDeflateDecoder>
+    deflate: [gzip.RawDeflateDecoder; ~]
     allowDeflate: Bool
     deflateLimits: DeflateLimits
     expectedChecksum: UInt32
@@ -270,32 +270,23 @@ failDeflate decoder: mut Decoder, failure: gzip.Error, baseOffset: Int -> Unit {
     }
 }
 
-takeDeflate decoder: mut Decoder -> Option<gzip.RawDeflateDecoder> {
-    decoder.deflate => stored
-    Option<gzip.RawDeflateDecoder>.None => decoder.deflate
-    stored
-}
-
 completeDeflatedPayload decoder: mut Decoder, payloadOffset: Int -> Unit {
-    decoder -> takeDeflate -> when {
-        None {
-            decoder -> fail(errors.Kind.InvalidDeflate, payloadOffset)
+    (decoder.deflate -> len) == 1 -> unless {
+        decoder -> fail(errors.Kind.InvalidDeflate, payloadOffset)
+        return
+    }
+    decoder.deflate -> take(0) => raw
+    raw -> finish(decoder.decodedBytes, decoder.verifiedOutput) -> when {
+        Err(failure) {
+            decoder -> failDeflate(failure, payloadOffset)
             return
         }
-        Some(raw) {
-            raw -> finish(decoder.decodedBytes, decoder.verifiedOutput) -> when {
-                Err(failure) {
-                    decoder -> failDeflate(failure, payloadOffset)
+        Ok(decodedBytes) {
+            decodedBytes == decoder.decodedBytes
+                -> unless {
+                    decoder -> fail(errors.Kind.SizeMismatch, payloadOffset)
                     return
                 }
-                Ok(decodedBytes) {
-                    decodedBytes == decoder.decodedBytes
-                        -> unless {
-                            decoder -> fail(errors.Kind.SizeMismatch, payloadOffset)
-                            return
-                        }
-                }
-            }
         }
     }
     decoder.checksum -> write(decoder.verifiedOutput)
@@ -419,7 +410,7 @@ validateLocalHeader decoder: mut Decoder -> Unit {
                         decoder -> failDeflate(failure, 18)
                         return
                     }
-                    Ok(raw) { Option<gzip.RawDeflateDecoder>.Some(raw) => decoder.deflate }
+                    Ok(raw) { decoder.deflate -> push(raw) }
                 }
             }
         }
@@ -639,22 +630,18 @@ processByte decoder: mut Decoder, byte: UInt8 -> Unit {
         }
         phases.Phase.Payload {
             decoder.method == 8 -> if {
-                decoder -> takeDeflate -> when {
-                    None {
-                        decoder -> fail(errors.Kind.InvalidDeflate, decoder.totalInputBytes)
+                (decoder.deflate -> len) == 1 -> unless {
+                    decoder -> fail(errors.Kind.InvalidDeflate, decoder.totalInputBytes)
+                    return
+                }
+                decoder.deflate -> take(0) => active!
+                active! -> write([byte]) -> when {
+                    Err(failure) {
+                        decoder.deflate -> push(active!)
+                        decoder -> failDeflate(failure, decoder.totalInputBytes)
                         return
                     }
-                    Some(raw) {
-                        raw => active!
-                        active! -> write([byte]) -> when {
-                            Err(failure) {
-                                Option<gzip.RawDeflateDecoder>.Some(active!) => decoder.deflate
-                                decoder -> failDeflate(failure, decoder.totalInputBytes)
-                                return
-                            }
-                            Ok(_) { Option<gzip.RawDeflateDecoder>.Some(active!) => decoder.deflate }
-                        }
-                    }
+                    Ok(_) { decoder.deflate -> push(active!) }
                 }
             } else {
                 decoder.verifiedOutput -> push(byte)
@@ -750,7 +737,7 @@ impl Codec {
             payloadBytes: 0
             decodedBytes: 0
             payloadReadBytes: 0
-            deflate: Option<gzip.RawDeflateDecoder>.None
+            deflate: [gzip.RawDeflateDecoder; ~]
             allowDeflate: false
             deflateLimits: DeflateLimits { maxCompressedBytes: 0, maxExpansionRatio: 1, maxWorkUnits: 0 }
             expectedChecksum: 0

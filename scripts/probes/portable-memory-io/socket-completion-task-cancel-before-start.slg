@@ -1,0 +1,14 @@
+import std.io.async as asyncio
+import std.net.socket as socket
+
+main {
+    socket.CompletionReactorOptions { registrations: 1, pendingOperations: 1, completionBatch: 1 }
+        -> socket.completionReactor -> when {
+            Err(error) { "create-error=$(error.code)" -> println }
+            Ok(reactor) {
+                reactor -> dequeue(asyncio.Cancellation { requested: false }) => task
+                task -> cancel
+                "cancelled-before-start" -> println
+            }
+        }
+}

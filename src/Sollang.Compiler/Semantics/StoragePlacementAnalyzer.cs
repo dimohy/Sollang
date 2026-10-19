@@ -902,7 +902,13 @@ internal static class StoragePlacementAnalyzer
             case DictionaryLiteralExpression { Entries.Count: > 0 } dictionary:
                 kind = PromotedOwnerKind.Dictionary;
                 var capacity = IntDictionaryLayout.CapacityForLength(dictionary.Entries.Count);
-                payloadBytes = IntDictionaryLayout.AllocationBytesForCapacity(capacity);
+                var dictionaryBytes = IntDictionaryLayout.AllocationBytesForCapacity(capacity);
+                if (dictionaryBytes > int.MaxValue)
+                {
+                    payloadBytes = 0;
+                    return false;
+                }
+                payloadBytes = (int)dictionaryBytes;
                 return true;
             default:
                 kind = default;

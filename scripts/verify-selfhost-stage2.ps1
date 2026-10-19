@@ -5,7 +5,10 @@ param(
     [string]$SlgSeedCompiler = "",
     [ValidateRange(1, 64)]
     [int]$Stage2BuildJobs = 8,
-    [switch]$ResumeCandidate
+    [switch]$ResumeCandidate,
+    [string]$CancellationRequestPath = "",
+    [string]$CancellationRunId = "",
+    [string]$CancellationAcknowledgementPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +21,16 @@ if ($Rebuild -and $ResumeCandidate) {
 . (Join-Path $PSScriptRoot "stage3-seed-provenance.ps1")
 . (Join-Path $PSScriptRoot "input-fingerprint-stability.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+$cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
+if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
+    throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
+    Initialize-VerificationCancellation -RequestPath $CancellationRequestPath `
+        -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
+}
+trap [OperationCanceledException] { exit 130 }
+Assert-VerificationCancellationNotRequested
 $selfHostVerificationLock = Enter-SelfHostVerificationLock
 try {
 
@@ -374,7 +387,10 @@ if (@($stage1SeedHeavyFixtures | Select-Object -Unique).Count -ne $stage1SeedHea
     -StdlibRoot $stdlibRoot `
     -RepositoryRoot $repoRoot `
     -OutputDirectory (Join-Path $artifactsDir "stage1-seed-canary-exact") `
-    -Jobs $Stage2BuildJobs
+    -Jobs $Stage2BuildJobs `
+    -CancellationRequestPath $CancellationRequestPath `
+    -CancellationRunId $CancellationRunId `
+    -CancellationAcknowledgementPath $CancellationAcknowledgementPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot "verify-native-exact-fixture-batch.ps1") `
     -Compiler $stage1Path `
@@ -385,7 +401,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     -RepositoryRoot $repoRoot `
     -OutputDirectory (Join-Path $artifactsDir "stage1-seed-heavy-exact") `
     -Jobs $Stage2BuildJobs `
-    -MinimumCompilerJobs $Stage2BuildJobs
+    -MinimumCompilerJobs $Stage2BuildJobs `
+    -CancellationRequestPath $CancellationRequestPath `
+    -CancellationRunId $CancellationRunId `
+    -CancellationAcknowledgementPath $CancellationAcknowledgementPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot "verify-native-exact-fixture-batch.ps1") `
     -Compiler $stage1Path `
@@ -395,7 +414,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     -StdlibRoot $stdlibRoot `
     -RepositoryRoot $repoRoot `
     -OutputDirectory (Join-Path $artifactsDir "stage1-seed-exact") `
-    -Jobs $Stage2BuildJobs
+    -Jobs $Stage2BuildJobs `
+    -CancellationRequestPath $CancellationRequestPath `
+    -CancellationRunId $CancellationRunId `
+    -CancellationAcknowledgementPath $CancellationAcknowledgementPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $fileIntrinsicsControlLlvm = Join-Path $artifactsDir "stage2-check-file-intrinsics-control.ll"
@@ -938,9 +960,13 @@ if ($mutableResetStage1Hash -ne $mutableResetStage2Hash) {
     throw "mutable reset after while normalized LLVM differs: stage1=$mutableResetStage1Hash stage2=$mutableResetStage2Hash"
 }
 $mutableResetStage2Text = [System.IO.File]::ReadAllText($mutableResetAfterWhileStage2Llvm)
-$mutableResetFirstWhileExit = $mutableResetStage2Text.IndexOf("while", [System.StringComparison]::Ordinal)
-$mutableResetStore = $mutableResetStage2Text.IndexOf("store i32 0", $mutableResetFirstWhileExit, [System.StringComparison]::Ordinal)
-if ($mutableResetFirstWhileExit -lt 0 -or $mutableResetStore -lt $mutableResetFirstWhileExit) {
+$mutableResetMatch = [regex]::Match(
+    $mutableResetStage2Text,
+    '(?s)while\d+_exit:\s+store i64 (?<zero>%v\d+), ptr %slot\d+, align 8\s+br label %while\d+_header')
+if (-not $mutableResetMatch.Success -or
+    -not [regex]::IsMatch(
+        $mutableResetStage2Text,
+        '(?m)^\s*' + [regex]::Escape($mutableResetMatch.Groups['zero'].Value) + ' = add i64 0, 0$')) {
     throw "mutable reset after while was not emitted after the first control-flow region"
 }
 Write-Host "[stage2 3/7] PASS mutable-reset-after-while $mutableResetStage2Hash"
@@ -1073,7 +1099,10 @@ for ($streamExecutionIndex = 0; $streamExecutionIndex -lt $streamStage2LlvmPaths
     -StdlibRoot $stdlibRoot `
     -RepositoryRoot $repoRoot `
     -OutputDirectory (Join-Path $artifactsDir "stage2-exact") `
-    -Jobs $Stage2BuildJobs
+    -Jobs $Stage2BuildJobs `
+    -CancellationRequestPath $CancellationRequestPath `
+    -CancellationRunId $CancellationRunId `
+    -CancellationAcknowledgementPath $CancellationAcknowledgementPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $PSScriptRoot "verify-native-exact-fixture.ps1") `
     -Compiler $stage2Path `
@@ -1084,7 +1113,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     -RepositoryRoot $repoRoot `
     -OutputDirectory (Join-Path $artifactsDir "stage2-large-stdout") `
     -Jobs $Stage2BuildJobs `
-    -ExpectedStdoutLength 2097152
+    -ExpectedStdoutLength 2097152 `
+    -CancellationRequestPath $CancellationRequestPath `
+    -CancellationRunId $CancellationRunId `
+    -CancellationAcknowledgementPath $CancellationAcknowledgementPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),

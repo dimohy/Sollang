@@ -1,0 +1,227 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.ir.module_artifact_types as artifacts
+import sollang.compiler.semantic.type_ids as typeIds
+
+nominal types: ref [typeIds.SemanticType; ~], source: Int, symbol: Int -> Int {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!].kind == 1 and types[index!].module == source and types[index!].symbol == symbol
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+recordStart words: ref [UInt64; ~], selected: Int -> Int {
+    7 + Int(words[6]) => cursor!
+    0 => index!
+    index! < selected -> while {
+        cursor! + 10 + Int(words[cursor! + 9]) => cursor!
+        index! + 1 => index!
+    }
+    cursor!
+}
+
+copyWords words: ref [UInt64; ~] -> [UInt64; ~] {
+    [UInt64; ~] => copy!
+    words -> each word { copy! -> push(word) }
+    copy!
+}
+
+duplicateNominalKeys keys: ref interfaces.DeclarationIdentityIndex -> interfaces.DeclarationIdentityIndex {
+    -1 => selected!
+    0 => index!
+    index! < (keys.symbols -> len) -> while {
+        keys.sourceModules[index!] == 0 and keys.symbols[index!] == 0
+            -> if { index! => selected! }
+        index! + 1 => index!
+    }
+    keys.lengths[selected!] => length
+    [UInt64; ~] => words!
+    0..<2 -> each {
+        0..<length -> each offset { words! -> push(keys.words[keys.starts[selected!] + offset]) }
+    }
+    interfaces.DeclarationIdentityIndex { keyIndexBySymbol: [Int; ~], sourceModules: [0, 1; ~], symbols: [0, 0; ~], starts: [0, length; ~], lengths: [length, length; ~], hashes: [keys.hashes[selected!], keys.hashes[selected!]; ~], words: words!, status: 0 }
+}
+
+recipeType kind: Int, first: Int, second: Int, status: Int -> typeIds.SemanticType {
+    typeIds.SemanticType { kind: kind, origin: 0, module: -1, symbol: 0, first: first, second: second, length: 0, lengthHash: 0, containsParameter: false, status: status }
+}
+
+sameWords left: ref [UInt64; ~], right: ref [UInt64; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+main {
+    ["namespace cache.recipes.a\npublic struct Entry { public value: Int }\nimpl Entry { public first: self -> Int => self.value }\nimpl Entry { public second: self -> Int => self.value }\nmain {\n    (left: Entry { value: 1 }, rght: 2) => first\n    (xxxx: Entry { value: 3 }, yyyy: 4) => second\n    first.rght -> println\n    second.yyyy -> println\n}\n", "namespace cache.recipes.b\npublic struct Other { public marker: Int }\n"; ~] => beforeSources
+    beforeSources -> context.prepare => before
+    before -> expressions.resolveContext => finalTypes
+    before.package -> modules.identitiesAnalyzed => beforeModules
+    before.package -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => keys
+    before.package -> artifacts.captureTypeDetailsAnalyzed(finalTypes.types, finalTypes.references, finalTypes.fields) => details
+    keys -> interfaces.encodeDeclarationKeys => allKeys
+    allKeys.status == 2 -> println
+    finalTypes.types -> artifacts.encodeRecipes(details, keys) => encoded
+    keys -> duplicateNominalKeys => ambiguousKeys
+    finalTypes.types -> artifacts.encodeRecipes(details, ambiguousKeys) => ambiguousEncoding
+    ambiguousEncoding.status != 0 and (ambiguousEncoding.words -> len) == 0 => ambiguousRejected
+    ambiguousRejected -> println
+    encoded.words -> artifacts.decodeRecipes => decoded
+    encoded.status == 0 and decoded.status == 0 and (decoded.types -> len) == (finalTypes.types -> len) => valid
+    valid -> println
+
+    ["namespace cache.recipes.b\npublic struct Other { public marker: Int }\n", "namespace cache.recipes.a\nhidden: -> Int => 9\npublic struct Entry { public value: Int }\nimpl Entry { public first: self -> Int => self.value }\nimpl Entry { public second: self -> Int => self.value }\nmain {\n    (left: Entry { value: 5 }, rght: 6) => first\n    (xxxx: Entry { value: 7 }, yyyy: 8) => second\n    first.rght -> println\n    second.yyyy -> println\n}\n"; ~] => afterSources
+    afterSources -> context.prepare => after
+    after.package -> modules.identitiesAnalyzed => afterModules
+    after.package -> interfaces.declarationIdentitiesAnalyzed(afterModules) => currentKeys
+    after.package -> artifacts.captureTypeDetails(after.semantic) => currentDetails
+    decoded.types -> artifacts.rebindWithDetails(decoded.details, decoded.declarations, currentKeys, after.semantic.types, currentDetails) => restored
+    finalTypes.types -> nominal(0, 0) => oldEntry
+    before.package -> interfaces.declarationIdentityAnalyzed(beforeModules, 0, 0) => entryKey
+    currentKeys -> interfaces.findDeclarationIdentity(entryKey.words) => target
+    restored.status == 0 and target.status == 0 and target.sourceModule == 1 and target.symbol > 0
+        and restored.types[restored.typeIds[oldEntry]].module == target.sourceModule
+        and restored.types[restored.typeIds[oldEntry]].symbol == target.symbol => nominalRebound
+    nominalRebound -> println
+
+    -1 => firstProduct!
+    -1 => secondProduct!
+    0 => typeIndex!
+    typeIndex! < (finalTypes.types -> len) -> while {
+        finalTypes.types[typeIndex!].kind == 10 -> if {
+            firstProduct! < 0 -> if { typeIndex! => firstProduct! } else { typeIndex! => secondProduct! }
+        }
+        typeIndex! + 1 => typeIndex!
+    }
+    restored.typeIds[firstProduct!] != restored.typeIds[secondProduct!] => distinctLabels
+    distinctLabels -> println
+    restored -> artifacts.materializeProductFields(after.package, after.semantic.fields, after.semantic.types -> len) => fields
+    fields.status == 0 and (fields.fields -> len) == (after.semantic.fields -> len) + 4 => fieldsRestored
+    fieldsRestored -> println
+    -1 => leftField!
+    0 => fieldIndex!
+    fieldIndex! < (fields.fields -> len) -> while {
+        fields.fields[fieldIndex!].ownerType == restored.typeIds[firstProduct!] and fields.fields[fieldIndex!].ordinal == 0
+            -> if { fieldIndex! => leftField! }
+        fieldIndex! + 1 => fieldIndex!
+    }
+    fields.fields[leftField!] => field
+    after.package.ranges[field.sourceModule] => range
+    after.package.tokens[range.tokenStart + field.labelToken] => token
+    after.package.sources[field.sourceModule] -> slice(token.span.start, token.span.length) => label
+    label == "left" and field.fieldType == restored.typeIds[oldEntry] => fieldConsumed
+    fieldConsumed -> println
+
+    encoded.words -> copyWords => truncated
+    truncated -> len => last
+    [UInt64; ~] => short!
+    0..<(last - 1) -> each index { short! -> push(truncated[index]) }
+    UInt64(short! -> len) => short![4]
+    short! -> artifacts.decodeRecipes => badLength
+    badLength.status != 0 and (badLength.types -> len) == 0 => truncationRejected
+    truncationRejected -> println
+
+    encoded.words -> copyWords => forward!
+    forward! -> recordStart(0) => firstRecord
+    1 => forward![firstRecord + 4]
+    forward! -> artifacts.decodeRecipes => badDependency
+    badDependency.status != 0 and (badDependency.types -> len) == 0 => dependencyRejected
+    dependencyRejected -> println
+
+    encoded.words -> copyWords => missing!
+    missing! -> recordStart(oldEntry) => nominalRecord
+    UInt64(decoded.declarations.symbols -> len) + 1 => missing![nominalRecord + 2]
+    missing! -> artifacts.decodeRecipes => badDeclaration
+    badDeclaration.status != 0 and (badDeclaration.types -> len) == 0 => declarationRejected
+    declarationRejected -> println
+
+    encoded.words -> copyWords => broken!
+    broken! -> recordStart(firstProduct!) => productRecord
+    99 => broken![productRecord + 10]
+    broken! -> artifacts.decodeRecipes => badFields
+    badFields.status != 0 and (badFields.types -> len) == 0 => fieldsRejected
+    fieldsRejected -> println
+
+    after.semantic.types -> len => currentCount
+    encoded.words -> artifacts.restoreRecipes(after.package, after.semantic) => generation
+    generation.status == 0 and (generation.semantic.references -> len) == (after.semantic.references -> len)
+        and (generation.semantic.fields -> len) == (after.semantic.fields -> len) + 4
+        and generation.semantic.types[generation.typeIds[oldEntry]].module == 1 => committed
+    committed -> println
+    broken! -> artifacts.restoreRecipes(after.package, after.semantic) => failedGeneration
+    failedGeneration.status != 0 and (failedGeneration.semantic.types -> len) == 0
+        and (failedGeneration.semantic.fields -> len) == 0 and (failedGeneration.typeIds -> len) == 0
+        and (after.semantic.types -> len) == currentCount => atomicFailure
+    atomicFailure -> println
+    [typeIds.SemanticType; ~] => pool!
+    finalTypes.types -> each type { pool! -> push(type) }
+    pool! -> len => sentinel
+    pool! -> push(recipeType(1, -1, -1, 2))
+    [firstProduct!, secondProduct!; ~] => roots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, roots) => selected
+    selected.words -> artifacts.decodeRecipes => selectedDecoded
+    selected.status == 0 and selectedDecoded.status == 0
+        and selected.recipeBySourceType[sentinel] == -1
+        and (selectedDecoded.types -> len) < (finalTypes.types -> len) => unrelatedExcluded
+    unrelatedExcluded -> println
+    selectedDecoded.types[selected.recipeBySourceType[firstProduct!]].kind == 10
+        and selected.recipeBySourceType[oldEntry] >= 0 => fieldDependencySelected
+    fieldDependencySelected -> println
+    selected.words -> artifacts.restoreRecipes(after.package, after.semantic) => selectedRestored
+    selectedRestored.status == 0 and (selectedRestored.semantic.fields -> len) == (after.semantic.fields -> len) + 4 => selectedConsumed
+    selectedConsumed -> println
+
+    [secondProduct!, firstProduct!, firstProduct!; ~] => reorderedRoots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, reorderedRoots) => reorderedSelection
+    reorderedSelection.status == 0 and (selected.words -> sameWords(reorderedSelection.words)) => deterministic
+    deterministic -> println
+    [sentinel,; ~] => invalidRoot
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, invalidRoot) => invalidSelection
+    invalidSelection.status != 0 and (invalidSelection.words -> len) == 0
+        and (invalidSelection.recipeBySourceType -> len) == 0 => selectedInvalidRejected
+    selectedInvalidRejected -> println
+
+    pool! -> len => invalidOwner
+    pool! -> push(recipeType(2, sentinel, -1, 0))
+    [invalidOwner,; ~] => invalidDependencyRoot
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, invalidDependencyRoot) => invalidDependency
+    invalidDependency.status != 0 and (invalidDependency.words -> len) == 0 => dependencyInvalidRejected
+    dependencyInvalidRejected -> println
+
+    pool! -> len => forwardOwner
+    pool! -> push(recipeType(2, forwardOwner + 1, -1, 0))
+    pool! -> push(recipeType(1, -1, -1, 0))
+    [forwardOwner,; ~] => forwardRoots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, forwardRoots) => forwardSelected
+    forwardSelected.words -> artifacts.decodeRecipes => forwardDecoded
+    forwardSelected.status == 0 and (forwardDecoded.types -> len) == 2
+        and forwardDecoded.types[1].first == 0 => forwardSorted
+    forwardSorted -> println
+
+    pool! -> len => cycleOwner
+    pool! -> push(recipeType(2, cycleOwner + 1, -1, 0))
+    pool! -> push(recipeType(2, cycleOwner, -1, 0))
+    [cycleOwner,; ~] => cycleRoots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, cycleRoots) => cycleSelection
+    cycleSelection.status == 3 and (cycleSelection.words -> len) == 0 => cycleRejected
+    cycleRejected -> println
+    [pool! -> len; ~] => outsideRoots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, outsideRoots) => outsideSelection
+    outsideSelection.status != 0 and (outsideSelection.recipeBySourceType -> len) == 0 => outsideRejected
+    outsideRejected -> println
+    [Int; ~] => emptyRoots
+    pool! -> artifacts.encodeSelectedRecipes(details, keys, emptyRoots) => emptySelection
+    emptySelection.words -> artifacts.decodeRecipes => emptyDecoded
+    emptySelection.status == 0 and emptyDecoded.status == 0 and (emptyDecoded.types -> len) == 0 => emptySelected
+    emptySelected -> println
+
+}

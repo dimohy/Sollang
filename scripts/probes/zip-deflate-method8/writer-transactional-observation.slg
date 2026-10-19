@@ -1,0 +1,44 @@
+import std.archive.zip as zip_archive
+import std.archive.zip.error as zip_errors
+
+kindCode kind: zip_errors.Kind -> Int => kind -> when {
+    OutputLimitExceeded { 2 }
+    else { -1 }
+}
+
+payload: -> [UInt8; ~] => [
+'S', 'o', 'l', 'l', 'a', 'n', 'g', '-', 'Z', 'I', 'P', '-',
+'D', 'E', 'F', 'L', 'A', 'T', 'E', '-',
+'S', 'o', 'l', 'l', 'a', 'n', 'g', '-', 'Z', 'I', 'P', '-',
+'D', 'E', 'F', 'L', 'A', 'T', 'E'
+]
+
+observe: -> Result<Unit, zip_archive.Error> uses Console {
+    zip_archive.Limits { maxEncodedBytes: 512, maxDecodedBytes: 128, maxNameBytes: 32, maxExtraBytes: 8, maxCommentBytes: 8 } -> codec? => codec
+    codec -> writer(zip_archive.WriterLimits { maxEncodedBytes: 512, maxEntryBytes: 128, maxEntries: 1, maxNameBytes: 32, maxExtraBytes: 8, maxCommentBytes: 8, maxDirectoryBytes: 128, maxWorkUnits: 1_024 })? => writer!
+    payload() => input
+    [UInt8; ~] => failedScratch!
+    [UInt8(9),; ~] => output!
+    writer! -> addDeflated(['d'], [UInt8; ~], input, zip_archive.DeflateLimits { maxCompressedBytes: 1, maxExpansionRatio: 16, maxWorkUnits: 512 }, failedScratch!, output!) -> when {
+        Ok(entryBytes) {
+            "first=ok-$entryBytes" -> println
+            false
+        }
+        Err(error) {
+            "first=err-$(error.kind -> kindCode),output=$(output! -> len),scratch=$(failedScratch! -> len),head=$(output![0])" -> println
+            true
+        }
+    } => rejected
+    [UInt8; ~] => retryScratch!
+    writer! -> addDeflated(['d'], [UInt8; ~], input, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 512 }, retryScratch!, output!)? => entryBytes
+    writer! -> finish([UInt8; ~], output!)? => finalBytes
+    "retry=ok-$entryBytes,final=$finalBytes,output=$(output! -> len),scratch=$(retryScratch! -> len),rejected=$rejected" -> println
+    Result<Unit, zip_archive.Error>.Ok
+}
+
+main {
+    observe() -> when {
+        Ok(_) { }
+        Err(error) { "observe=err-$(error.kind -> kindCode)" -> println }
+    }
+}

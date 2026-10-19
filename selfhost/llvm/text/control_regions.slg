@@ -30,7 +30,19 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
-emitRegionStreamPipeline pipelineIndex: Int, ownerIndex: Int, ownerEnd: Int, regionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+writeLoopTransferTarget transfer: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.ir[transfer.operand0] => loop
+    loop.kind == 6 and (loop.opcode -> typedIr.isDirectIterationOpcode)
+        -> if {
+            "  br label %each$(transfer.operand0)_" -> print
+            transfer.opcode == 1 -> if { "continue" -> println } else { "exit" -> println }
+        } else {
+            "  br label %while$(transfer.operand0)_" -> print
+            transfer.opcode == 1 -> if { "header" -> println } else { "exit" -> println }
+        }
+}
+
+emitRegionStreamPipeline pipelineIndex: Int, ownerIndex: Int, ownerEnd: Int, regionOrder: ref [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.pipelines[pipelineIndex] => pipeline
     [Int; ~] => streamOrder!
     streamOrder! -> push(pipeline.terminalIr)
@@ -49,15 +61,20 @@ emitRegionStreamPipeline pipelineIndex: Int, ownerIndex: Int, ownerEnd: Int, reg
         failureNode: -1
         failureTerminal: -1
     } => streamPlan
-    streamPlan -> emitScheduledStreamBody(ownerIndex, ownerEnd, context.pointerBitWidth / 8, context, state)
+    streamPlan -> emitScheduledStreamOrder(ownerIndex, ownerEnd, context.pointerBitWidth / 8, context, state)
 }
 
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
-emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [Int; ~], regionOrder: ref [Int; ~], ifActive: mut [Bool; ~], ifThenReachesMerge: mut [Bool; ~], loopActive: mut [Bool; ~], initialRegionTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [Int; ~], regionOrder: ref [Int; ~], ifActive: mut [Bool; ~], ifThenReachesMerge: mut [Bool; ~], loopActive: mut [Bool; ~], initialRegionTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    regionIndex -> emitRegionOrderState(emissionOrder, regionEventKinds, regionOrder, ifActive, ifThenReachesMerge, loopActive, initialRegionTerminated, context, state) => terminated
+}
+
+emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [Int; ~], regionOrder: ref [Int; ~], ifActive: mut [Bool; ~], ifThenReachesMerge: mut [Bool; ~], loopActive: mut [Bool; ~], initialRegionTerminated: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     context.pointerBitWidth / 8 => regionPointerAlignment
     context.ir[regionIndex] => region
     region.parent => ownerIndex!
+    region.kind == 0 or region.kind == 11 -> if { regionIndex => ownerIndex! }
     ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11
         -> while { context.ir[ownerIndex!].parent => ownerIndex! }
     ownerIndex! + 1 => regionLocalStart
@@ -155,7 +172,8 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                                         returnParameterMove.memberIr >= 0
                                             and returnParameterMove.sourceModule == returnParameter.sourceModule
                                             and returnParameterMove.symbol == returnParameter.symbol
-                                            and (returnParameterMove.regionIr -> ownershipRegionContainsEdge(regionNodeIndex, context, state))
+                                            and ((returnParameterMove.regionIr -> ownershipRegionContainsEdge(regionNodeIndex, context, state))
+                                            or (context.ir[ownerIndex!].operand0 -> regionFullyMovesPlace(returnParameter.sourceModule, returnParameter.symbol, returnParameterMove.memberIr, returnParameter -> sourceStart(context, state), regionNode.astNode, regionNodeIndex, context, state)))
                                             -> if { true => returnParameterHasPartialMoves! }
                                         returnParameterMoveIndex! + 1 => returnParameterMoveIndex!
                                     }
@@ -223,10 +241,6 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                                         context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnDictionaryParameterWritten
                                         ", 0" -> println
                                         "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_keys)" -> println
-                                        "  %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_values = extractvalue %sollang.dict " -> print
-                                        context -> writeParameterReference(ownerIndex!, returnParameter.symbol) => returnDictionaryValuesWritten
-                                        ", 1" -> println
-                                        "  call void @free(ptr %return$(regionNodeIndex)_parameter$(returnParameterIndex!)_drop_arg_values)" -> println
                                     }
                             }
                             returnParameterOrdinal! + 1 => returnParameterOrdinal!
@@ -285,11 +299,7 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                                 }
                             context.ir[guardCleanupAncestor!].parent => guardCleanupAncestor!
                         }
-                    regionNode.opcode == 1 -> if {
-                        "  br label %while$(regionNode.operand0)_header" -> println
-                    } else {
-                        "  br label %while$(regionNode.operand0)_exit" -> println
-                    }
+                    regionNode -> writeLoopTransferTarget(context)
                     "guard$(regionNodeIndex)_next:" -> println
                     false => regionTerminated!
                 }
@@ -304,11 +314,7 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                             }
                             context.ir[cleanupAncestor!].parent => cleanupAncestor!
                         }
-                    regionNode.opcode == 1 -> if {
-                        "  br label %while$(regionNode.operand0)_header" -> println
-                    } else {
-                        "  br label %while$(regionNode.operand0)_exit" -> println
-                    }
+                    regionNode -> writeLoopTransferTarget(context)
                     true => regionTerminated!
                 }
                 regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
@@ -324,7 +330,7 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                                     true => emittedStreamPipelines![regionStreamPipeline!]
                                 }
                         } else {
-                            regionNode.kind == 6 and regionNode.opcode == -208
+                            regionNode.kind == 6 and (regionNode.opcode -> typedIr.isDirectIterationOpcode)
                                 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0
                                 and (regionNodeIndex -> plannedStreamPipeline(context, state)) < 0
                                 -> if {
@@ -337,11 +343,16 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                                 }
                             regionNodeIndex -> emitRegionBindingExpressions(ownerIndex!, emissionOrder, context, state)
                             regionNodeIndex -> emitRegionControlExpressions(ownerIndex!, context, state)
+                            regionNode.kind == 32 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0 and regionNode.nextOperand >= 0
+                                -> if { regionNodeIndex -> emitFoldExpression(ownerIndex!, regionLocalEnd, emissionOrder, context, state) }
                             regionNodeIndex -> emitRegionIntrinsicExpressions(ownerIndex!, regionPointerAlignment, context, state)
                             regionNodeIndex -> emitRegionArrayExpressions(ownerIndex!, context, state)
-                            regionNodeIndex -> emitRegionMemberExpressions(ownerIndex!, context, state)
+                            regionNodeIndex -> emitIndexRead(ownerIndex!, context, state)
                             regionNodeIndex -> emitRegionOperatorExpressions(ownerIndex!, emissionOrder, context, state)
                             regionNodeIndex -> emitRegionCallExpressions(ownerIndex!, emissionOrder, context, state)
+                            regionNodeIndex -> emitAsyncLocalWrite(ownerIndex!, context, state)
+                            regionNodeIndex -> terminatingControlReturns(context, state)
+                                -> if { true => regionTerminated! }
                         }
                     }
             }
@@ -351,32 +362,11 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                 true => ifActive[regionNodeIndex - regionLocalStart]
                 false => nestedIfValueUsed!
                 regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedIfValueUsed!
-                regionNode.operand0 => nestedConditionIndex!
-                true => nestedConditionUnwrap!
-                nestedConditionIndex! >= 0 and nestedConditionUnwrap! and context.ir[nestedConditionIndex!].kind == 9
-                    -> while {
-                        -1 => nestedConditionChild!
-                        UIntSize(0) => nestedConditionChildStart!
-                        regionLocalStart => nestedConditionChildSearch!
-                        nestedConditionChildSearch! < regionLocalEnd
-                            -> while {
-                                context.ir[nestedConditionChildSearch!].parent == nestedConditionIndex!
-                                    -> if {
-                                        context.ir[nestedConditionChildSearch!] -> sourceNode(context, state) => nestedConditionChildAst
-                                        nestedConditionChild! < 0 or nestedConditionChildAst.start > nestedConditionChildStart!
-                                            -> if {
-                                                nestedConditionChildSearch! => nestedConditionChild!
-                                                nestedConditionChildAst.start => nestedConditionChildStart!
-                                            }
-                                    }
-                                nestedConditionChildSearch! + 1 => nestedConditionChildSearch!
-                            }
-                        nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { false => nestedConditionUnwrap! }
-                    }
-                context.ir[nestedConditionIndex!] => nestedCondition
+                regionNode.operand0 -> aggregateValueIndex(context, state) => nestedConditionIndex
+                context.ir[nestedConditionIndex] => nestedCondition
                 (nestedCondition.kind == 8 and (nestedCondition.opcode == -25 or nestedCondition.opcode == -24) or (nestedCondition.kind == 7 and nestedCondition.opcode == -26)) => nestedShortCircuit
                 nestedShortCircuit -> if {
-                    WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex! } -> emitWhileBranch(emissionOrder, context, state)
+                    WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: nestedConditionIndex } -> emitWhileBranch(emissionOrder, context, state)
                     "while$(regionNodeIndex)_body:" -> println
                     regionNode -> writeIfShortCircuitBodyTarget(regionNodeIndex)
                     "while$(regionNodeIndex)_exit:" -> println
@@ -389,7 +379,7 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                             -> if { "1" -> print } else { "0" -> print }
                     } else {
                         ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol
-                            -> if { "%arg" -> print } else { "%v$(nestedConditionIndex!)" -> print }
+                            -> if { "%arg" -> print } else { "%v$nestedConditionIndex" -> print }
                     }
                     regionNode -> writeIfDirectBranchTargets(regionNodeIndex)
                 }
@@ -452,6 +442,10 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
                         }
                 }
         }
+        regionEventKind == 9 and not regionTerminated!
+            -> if {
+                OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+            }
         regionEventKind == 6 -> if {
             not regionTerminated! -> if {
                 true => loopActive[regionNodeIndex - regionLocalStart]
@@ -489,6 +483,10 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
             nextRegionNode! >= 0 -> if {
                 NodeAncestorRequest { nodeIndex: nextRegionNode!, ownerIndex: eachIndex }
                     -> nodeDescendsFrom(context, state) => nextInside!
+                not nextInside! -> if {
+                    NodeAncestorRequest { nodeIndex: nextRegionNode!, ownerIndex: eachIndex }
+                        -> irDescendsFrom(context, state) => nextInside!
+                }
             }
             nextInside! -> if { false => closeEach! } else {
                 eachIndex -> emitDirectEachEnd(regionTerminated!, context)
@@ -498,4 +496,5 @@ emitRegionOrder regionIndex: Int, emissionOrder: [Int], regionEventKinds: ref [I
         }
         regionOrderIndex! + 1 => regionOrderIndex!
     }
+    regionTerminated!
 }

@@ -4,6 +4,7 @@ import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.semantic.type_resolve as typeResolve
@@ -31,6 +32,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
     ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
     package -> typeResolve.resolveAnalyzed => importedTypes
     package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
     [NominalType; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
@@ -40,6 +43,19 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
         0 => typeIndex!
         typeIndex! < sourceRange.typeCount -> while {
             package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
+            typeUse.kind == 15 -> if {
+                0 => termIndex!
+                termIndex! < sourceRange.termCount -> while {
+                    package.terms[sourceRange.termStart + termIndex!] => term
+                    term.astNode == typeUse.astNode and term.kind == 15
+                        -> if {
+                            package.nodes[sourceRange.astStart + term.astNode] => annotation
+                            package -> typeIds.resolveDynTrait(identities, sourceIndex!, term.nameToken, annotation.firstToken + annotation.tokenCount) => resolvedTrait
+                            results! -> push(NominalType { sourceModule: sourceIndex!, typeAst: typeUse.astNode, canonical: typeUse.canonical, origin: 16, targetModule: resolvedTrait.targetSource, targetSymbol: resolvedTrait.targetSymbol, status: resolvedTrait.status })
+                        }
+                    termIndex! + 1 => termIndex!
+                }
+            }
             typeUse.kind == 1 -> if {
                 -1 => importedIndex!
                 0 => importedSearch!
@@ -112,7 +128,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                                 canonical: typeUse.canonical
                                 origin: 1
                                 targetModule: -1
-                                targetSymbol: builtinIndex!
+                                targetSymbol: (builtinIndex! -> typeIds.canonicalBuiltinSymbol)
                                 status: 0
                             } => builtinResult
                             results! -> push(builtinResult)
@@ -161,7 +177,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                                 0 => siblingModuleIndex!
                                 siblingModuleIndex! < (identities -> len) -> while {
                                     identities[siblingModuleIndex!] => siblingIdentity
-                                    siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash
+                                    siblingIdentity.sourceIndex != sourceIndex! and modules.sameLogicalAnalyzedSource(package.sources, identities, siblingIdentity.sourceIndex, currentIdentity.sourceIndex, package.tokens, package.ranges)
                                         -> if {
                                             siblingIdentity.sourceIndex => siblingSourceIndex
                                             package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -208,11 +224,21 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                             2 => localStatus!
                             localSymbol! >= 0 and not siblingTypeAmbiguous!
                                 -> if { 0 => localStatus! }
+                            localSymbol! < 0 and not siblingTypeAmbiguous!
+                                -> if {
+                                    package -> typeIds.resolveOpenNominalType(identities, imports, resolvedImports, sourceIndex!, nameToken!) => opened
+                                    opened.matchCount == 1 -> if {
+                                        2 => localOrigin!
+                                        opened.targetModule => localTargetModule!
+                                        opened.targetSymbol => localSymbol!
+                                        0 => localStatus!
+                                    }
+                                }
                             localSymbol! < 0 and builtinIndex! >= 0 and not siblingTypeAmbiguous!
                                 -> if {
                                     1 => localOrigin!
                                     -1 => localTargetModule!
-                                    builtinIndex! => localSymbol!
+                                    builtinIndex! -> typeIds.canonicalBuiltinSymbol => localSymbol!
                                     0 => localStatus!
                                 }
                             NominalType {

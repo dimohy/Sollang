@@ -1,0 +1,62 @@
+import sollang.compiler.probes.mutable_rebind_types as checks
+
+main {
+    """
+    main {
+        UInt64(0) => hash!
+        true -> if {
+            1469598103934665603 => hash!
+            UInt8(1) => value
+            hash! * 1099511628211 + UInt64(value) => hash!
+        }
+        "hash=$(hash!)" -> println
+    }
+    """ -> checks.check([11, 11, 11], [11, 11, 11]) => hashOwner
+    """
+    main {
+        UInt64(0) => value!
+        true -> if { 18446744073709551615 => value! }
+        "value=$(value!)" -> println
+    }
+    """ -> checks.check([11, 11], [11, 11]) => maxOwner
+    """
+    main {
+        UInt64(0) => hash!
+        1 => value
+        value => hash!
+    }
+    """ -> checks.check([11, 11], [11, 2]) => rejectedOwner
+    """
+    main {
+        true -> if {
+            UInt64(0) => value!
+            18446744073709551615 => value!
+        }
+        true -> if {
+            0 => value!
+            2 => value!
+        }
+    }
+    """ -> checks.check([11, 11, 2, 2], [11, 11, 2, 2]) => siblingOwners
+    """
+    main {
+        UInt64(0) => value!
+        3 => value
+        true -> if { 18446744073709551615 => value! }
+    }
+    """ -> checks.check([11, 11], [11, 11]) => suffixOwner
+    """
+    first: -> UInt64 {
+        UInt64(0) => value!
+        18446744073709551615 => value!
+        value!
+    }
+    second: -> Int {
+        0 => value!
+        2 => value!
+        value!
+    }
+    main { first() -> println }
+    """ -> checks.check([11, 11, 2, 2], [11, 11, 2, 2]) => functionOwners
+    "types=$(hashOwner),$(maxOwner),$(rejectedOwner),$(siblingOwners),$(suffixOwner),$(functionOwners)" -> println
+}

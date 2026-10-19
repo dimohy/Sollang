@@ -1,0 +1,24 @@
+struct Endpoint { nodes: [Int; ~] }
+struct Success { file: Endpoint, buffer: [Int; ~], count: Int }
+struct Failure { file: Endpoint, buffer: [Int; ~], error: Int }
+struct Reader { file: Endpoint, offset: Int }
+struct Completed { reader: Reader, buffer: [Int; ~], count: Int }
+adapt completion: move Result<Success, Failure>, currentOffset: Int -> Result<Completed, Completed> => completion -> when {
+    Result<Success, Failure>.Ok(success) {
+        currentOffset + success.count => nextOffset
+        success.count => count
+        Result<Completed, Completed>.Ok(Completed { reader: Reader { file: success.file, offset: nextOffset }, buffer: success.buffer, count: count })
+    }
+    Result<Success, Failure>.Err(failure) {
+        failure.error => error
+        Result<Completed, Completed>.Err(Completed { reader: Reader { file: failure.file, offset: currentOffset }, buffer: failure.buffer, count: error })
+    }
+}
+consume result: move Result<Completed, Completed> -> Int => result -> when {
+    Ok(completed) => completed.reader.file.nodes[0] + completed.buffer[0] + completed.reader.offset
+    Err(completed) => completed.reader.file.nodes[0] + completed.buffer[0] + completed.reader.offset
+}
+main {
+    Result<Success, Failure>.Ok(Success { file: Endpoint { nodes: [1; ~] }, buffer: [2; ~], count: 3 }) -> adapt(10) -> consume -> println
+    Result<Success, Failure>.Err(Failure { file: Endpoint { nodes: [3; ~] }, buffer: [4; ~], error: 9 }) -> adapt(10) -> consume -> println
+}

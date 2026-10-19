@@ -16,9 +16,21 @@ internal sealed record LlvmCodegenUnit(
     string Text,
     bool Reused)
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
+    // Hashes order and locate records; full identities break ties and name symbols.
+    public static int CompareIdentities(ulong leftHash, string left, ulong rightHash, string right)
+    {
+        var order = leftHash.CompareTo(rightHash);
+        return order != 0 ? order : StringComparer.Ordinal.Compare(left, right);
+    }
+
+    public static string SymbolIdentity(string identity) =>
+        "x" + Convert.ToHexString(StrictUtf8.GetBytes(identity));
+
     public static ulong StableIdentity(string identity)
     {
-        return StableIdentity(Encoding.UTF8.GetBytes(identity));
+        return StableIdentity(StrictUtf8.GetBytes(identity));
     }
 
     public static ulong StableIdentity(ReadOnlySpan<byte> identity)

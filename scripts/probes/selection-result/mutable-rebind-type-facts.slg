@@ -1,0 +1,56 @@
+namespace sollang.compiler.probes.mutable_rebind_types
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+
+public check source: Text, expectedOwners: [Int], expectedValues: [Int] -> Bool {
+    [source,; ~] -> semanticContext.prepare => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    prepared.package -> semanticContext.indexBindingValueAsts => values
+    [Int; ~] => typesByAst!
+    prepared.package.nodes -> each node { typesByAst! -> push(-1) }
+    types.expressions -> each expression {
+        expression.status == 0 -> if {
+            prepared.package.ranges[expression.sourceModule] => range
+            expression.typeId => typesByAst![range.astStart + expression.astNode]
+        }
+    }
+    0 => index!
+    0 => symbol!
+    symbol! < (prepared.package.symbols -> len) -> while {
+        prepared.package.symbols[symbol!] => declaration
+        (declaration.kind == 9 or declaration.kind == 61) and declaration.flags % 2 == 1
+            -> if {
+                index! >= (expectedOwners -> len) or index! >= (expectedValues -> len)
+                    -> if { false -> return }
+                types.lexicalBindingTypeBySymbol[symbol!] => ownerType
+                values[symbol!] < 0 or ownerType < 0 -> if { false -> return }
+                typesByAst![values[symbol!]] => valueType
+                valueType < 0 -> if { false -> return }
+                (types.types[ownerType].symbol -> typeIds.canonicalBuiltinSymbol) != expectedOwners[index!]
+                    or (types.types[valueType].symbol -> typeIds.canonicalBuiltinSymbol) != expectedValues[index!]
+                    -> if { false -> return }
+                index! + 1 => index!
+            }
+        symbol! + 1 => symbol!
+    }
+    index! != (expectedOwners -> len) or index! != (expectedValues -> len)
+        -> if { false -> return }
+    prepared.package.ranges -> each range {
+        0 => nameIndex!
+        nameIndex! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + nameIndex!] => name
+            prepared.package.symbols[range.symbolStart + name.symbol] => declaration
+            (declaration.kind == 9 or declaration.kind == 61) and declaration.flags % 2 == 1
+                -> if {
+                    typesByAst![range.astStart + name.astNode] != types.lexicalBindingTypeBySymbol[range.symbolStart + name.symbol]
+                        -> if { false -> return }
+                }
+            nameIndex! + 1 => nameIndex!
+        }
+    }
+    true
+}

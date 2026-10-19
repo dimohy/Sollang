@@ -88,6 +88,14 @@ internal sealed partial class LlvmEmitter
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _activeStandardLibraryFunctionScans =
         new(ReferenceEqualityComparer.Instance);
+    private readonly List<BoundType> _dropReachabilityRoots;
+    private HashSet<BoundType>? _dropReachableTypes;
+    private long _dropReachabilityRevision = -1;
+    private long _dropReachabilityQueries;
+    private long _dropReachabilityBuilds;
+    private long _dropReachabilityNodeVisits;
+    private long _dropReachabilityEdgeVisits;
+
     private readonly HashSet<BoundFunction> _reachableFunctions =
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundDynTraitConversion> _reachableDynTraitConversions =
@@ -129,6 +137,7 @@ internal sealed partial class LlvmEmitter
         RecordFunctionScopes(program.Functions.Values, program.Functions);
         CollectStandaloneStandardLibraryFunctions();
         CollectReachableDictionaryTraitFunctions();
+        _dropReachabilityRoots = CollectDropReachabilityRoots();
         _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments)
             || _reachableFunctions
                 .Any(function =>
@@ -171,7 +180,11 @@ internal sealed partial class LlvmEmitter
                 || program.ResolvedGenericCalls.Values.Any(function =>
                 function.Kind is BoundFunctionKind.RuntimeParallel
                     or BoundFunctionKind.RuntimeTryParallel
-                    or BoundFunctionKind.RuntimeLimitParallelWorkers));
+                    or BoundFunctionKind.RuntimeLimitParallelWorkers)
+                || _reachableFunctions.Any(static function =>
+                    function.Kind is BoundFunctionKind.RuntimeLimitParallelWorkers
+                        or BoundFunctionKind.RuntimeParallelWorkers
+                        or BoundFunctionKind.RuntimeParallelPeakWorkers));
         _usesMouseEvents = program.EventStreamConsumers.Values.Any(static pipeline => pipeline.IsEvent)
             || program.PartitionConsumers.Values.Any(static pipeline => pipeline.IsEvent)
             || program.StreamJoins.Values.Any(join => join.Inputs.Any(static input => input.IsEvent))
@@ -185,7 +198,8 @@ internal sealed partial class LlvmEmitter
                 (function.Body is not null && UsesRangeStream(function.Body))
                 || function.BlockBody.Any(UsesRangeStream));
         _usesStandardError = _reachableFunctions.Any(
-            static function => function.Kind == BoundFunctionKind.RuntimePrintErrorLine);
+            static function => function.Kind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine);
         _usesDns = _reachableFunctions.Any(static function =>
             function.Kind == BoundFunctionKind.RuntimeDnsLookup);
         _usesNetwork = _reachableFunctions.Any(static function =>
@@ -777,21 +791,12 @@ internal sealed partial class LlvmEmitter
         var moduleGroups = GetEmittableUserFunctions()
             .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal)
             .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
             .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
             .ToArray();
         _usesAes128CpuSpecialization = moduleGroups
             .SelectMany(static group => group.Functions)
             .Any(IsAes128CpuSpecialization);
-        for (var index = 1; index < moduleGroups.Length; index++)
-        {
-            if (LlvmCodegenUnit.StableIdentity(moduleGroups[index - 1].Identity)
-                    == LlvmCodegenUnit.StableIdentity(moduleGroups[index].Identity))
-            {
-                throw new SollangException(
-                    $"codegen module identity collision between '{moduleGroups[index - 1].Identity}' "
-                    + $"and '{moduleGroups[index].Identity}'");
-            }
-        }
         if (reuse is not null && TryCreateFullyReusedOutput(reuse, moduleGroups, out var fullyReused))
         {
             return fullyReused;
@@ -822,7 +827,7 @@ internal sealed partial class LlvmEmitter
             %sollang.stream = type { ptr, ptr, ptr }
             %sollang.event_stream = type { ptr, ptr, ptr }
             %sollang.dyn = type { ptr, ptr }
-            %sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }
+            %sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32, ptr, ptr }
             """;
         if (_usesAsyncDiagnostics)
         {
@@ -838,6 +843,7 @@ internal sealed partial class LlvmEmitter
                 %sollang.directory_result = type { ptr, i64, i64, i32 }
                 %sollang.directory_node = type { ptr, i64, i8, [7 x i8] }
                 %sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }
+                %sollang.path_absolute_result = type { ptr, i64, i32 }
 
                 """;
         }
@@ -867,7 +873,7 @@ internal sealed partial class LlvmEmitter
         EmitGlobalLine("@sollang_writer_buffer_count = internal global i64 0");
         EmitNativeGlobals();
         EmitComGlobals();
-        if (_usesAsync)
+        if (_usesAsync || _usesSocketCompletion)
         {
             EmitGlobalLine("@sollang_task_ready_head = internal global ptr null");
             EmitGlobalLine("@sollang_task_ready_tail = internal global ptr null");
@@ -907,7 +913,7 @@ internal sealed partial class LlvmEmitter
         {
             EmitPlatformFunctionBlock(_platform.EmitConcurrentStreamJoinPrimitives);
         }
-        if (_usesAsync)
+        if (_usesAsync || _usesSocketCompletion)
         {
             EmitPlatformFunctionBlock(_platform.EmitAsyncPrimitives);
         }
@@ -928,6 +934,7 @@ internal sealed partial class LlvmEmitter
         EmitDynTraitTables();
         EmitOwnedDropHelpers();
         EmitAsyncFileBufferCancelFunctions();
+        EmitTaskResultCompletionFunctions();
         EmitStreamJoinRuntimeCallbacks();
         EmitParallelBranchCallbacks();
         EmitParallelCallbacks();
@@ -960,7 +967,7 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
 
-            BeginUnit("module." + LlvmCodegenUnit.StableIdentity(identity).ToString("x16", CultureInfo.InvariantCulture));
+            BeginUnit("module." + LlvmCodegenUnit.SymbolIdentity(identity));
             EmitUserFunctions(group.Functions);
             units.Add(new LlvmCodegenUnit(
                 LlvmCodegenUnitKind.Module,

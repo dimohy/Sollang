@@ -1,5 +1,6 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.llvm.emitter.diagnostics as diagnostics
@@ -22,11 +23,18 @@ usesDirectTextEqualityRuntime context: ref emitterContext.EmitContext -> Bool {
             and node.operand0 < (context.ir -> len)
             and node.operand1 >= 0
             and node.operand1 < (context.ir -> len)
-            and (context.ir[node.operand0] -> isTextType)
-            and (context.ir[node.operand1] -> isTextType)
+            and (node.operand0 -> comparisonReadIsText(context))
+            and (node.operand1 -> comparisonReadIsText(context))
             -> if { true => required! }
         nodeIndex! + 1 => nodeIndex!
     }
+    0 => interpolationIndex!
+    interpolationIndex! < (context.binaryComparisonDiagnosticByNode -> len)
+        -> while {
+            context.binaryComparisonDiagnosticByNode[interpolationIndex!].textEquality
+                -> if { true => required! }
+            interpolationIndex! + 1 => interpolationIndex!
+        }
     required!
 }
 
@@ -390,25 +398,37 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 and (dynTableIndex! -> irNodeReachable(context, state))
                 -> if {
                     context.ir[dynConversion.operand0] => dynConcrete
-                    dynConversion -> diagnostics.dynTraitImplementationSymbol(context) => dynImplementationSymbol
-                    dynImplementationSymbol >= 0 -> if {
-                        "@sollang_dyn_vtable_$(dynTableIndex!) = private constant [2 x ptr] [ptr @sollang_dyn_drop_$(dynTableIndex!), ptr @sollang_dyn_method_$(dynTableIndex!)]" -> println
-                        "define internal void @sollang_dyn_drop_$(dynTableIndex!)(ptr %data) {" -> println
-                        "entry:" -> println
-                        "  call void @free(ptr %data)" -> println
-                        "  ret void" -> println
-                        "}" -> println
-                        "define internal i32 @sollang_dyn_method_$(dynTableIndex!)(ptr %data) {" -> println
-                        "entry:" -> println
-                        "  %receiver = load " -> print
-                        dynConcrete -> writeIrType(context, state)
-                        ", ptr %data, align " -> print
-                        dynConcrete -> storageAlign(context, state) -> writeDecimalLine
-                        "  %result = call i32 @sollang_m$(dynConcrete.typeModule)_s$(dynImplementationSymbol)(" -> print
-                        dynConcrete -> writeIrType(context, state)
-                        " %receiver)" -> println
-                        "  ret i32 %result" -> println
-                        "}" -> println
+                    dynConversion.typeId -> diagnostics.dynTraitMethodCount(context) => dynMethodCount
+                    "@sollang_dyn_vtable_$(dynTableIndex!) = private constant [$(dynMethodCount + 1) x ptr] [ptr @sollang_dyn_drop_$(dynTableIndex!)" -> print
+                    0 => dynSlot!
+                    dynSlot! < dynMethodCount -> while {
+                        ", ptr @sollang_dyn_method_$(dynTableIndex!)_$(dynSlot!)" -> print
+                        dynSlot! + 1 => dynSlot!
+                    }
+                    "]" -> println
+                    "define internal void @sollang_dyn_drop_$(dynTableIndex!)(ptr %data) {" -> println
+                    "entry:" -> println
+                    "  call void @free(ptr %data)" -> println
+                    "  ret void" -> println
+                    "}" -> println
+                    0 => dynMethod!
+                    dynMethod! < dynMethodCount -> while {
+                        dynConversion -> diagnostics.dynTraitImplementationFunction(dynMethod!, context) => implementationIndex
+                        implementationIndex >= 0 -> if {
+                            context.ir[implementationIndex] => implementation
+                            "define internal i32 @sollang_dyn_method_$(dynTableIndex!)_$(dynMethod!)(ptr %data) {" -> println
+                            "entry:" -> println
+                            "  %receiver = load " -> print
+                            dynConcrete -> writeIrType(context, state)
+                            ", ptr %data, align " -> print
+                            dynConcrete -> storageAlign(context, state) -> writeDecimalLine
+                            "  %result = call i32 @sollang_m$(implementation.sourceModule)_s$(implementation.symbol)(" -> print
+                            dynConcrete -> writeIrType(context, state)
+                            " %receiver)" -> println
+                            "  ret i32 %result" -> println
+                            "}" -> println
+                        }
+                        dynMethod! + 1 => dynMethod!
                     }
                 }
             dynTableIndex! + 1 => dynTableIndex!
@@ -418,12 +438,15 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesArrayAllocation!
     false => usesArrayReallocation!
     false => usesArenaAllocation!
+    false => usesArenaConstruction!
+    false => usesRawArenaAllocation!
+    false => usesRawArenaAccess!
     false => usesTextMaterialize!
     false => usesCollectionCapacityTrap!
     false => usesBitSetCount!
     false => usesMutableContainer!
     0 => arrayTypeSearch!
-    false => usesMappedBytes!
+    context -> diagnostics.usesMappedBytesRuntime => usesMappedBytes
     false => usesTextEach!
     arrayTypeSearch! < (context.ir -> len) -> while {
         context.ir[arrayTypeSearch!] => allocationNode
@@ -432,10 +455,6 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 context.ir[allocationNode.operand0] -> isDirectTextEachSource(context)
                     -> if { true => usesTextEach! }
             }
-        allocationNode.typeOrigin == 1 and (allocationNode.typeSymbol == 17 or allocationNode.typeSymbol == 18)
-            -> if { true => usesMappedBytes! }
-        allocationNode.kind == 9 and (allocationNode.opcode == -306 or allocationNode.opcode == -307)
-            -> if { true => usesMappedBytes! }
         allocationNode -> isDynamicArrayType -> if {
             true => usesDynamicArray!
             true => usesArrayAllocation!
@@ -451,10 +470,24 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         allocationNode.kind == 14 and (allocationNode -> isFixedArrayType)
             -> if { true => usesArrayAllocation! }
         # Push and reserve both emit realloc even when no append operation exists.
-        allocationNode.opcode == -204 or allocationNode.opcode == -271
+        allocationNode.opcode == -204 or allocationNode.opcode == -271 or allocationNode.opcode == -322
             -> if { true => usesArrayReallocation! }
         allocationNode.typeOrigin == 1 and allocationNode.typeSymbol == 15
             -> if { true => usesDynamicArray! }
+        allocationNode.opcode -> typedIr.isRawArenaOpcode
+            -> if {
+                true => usesDynamicArray!
+                allocationNode.opcode == -341 -> if {
+                    true => usesRawArenaAllocation!
+                    true => usesArenaAllocation!
+                    true => usesCollectionCapacityTrap!
+                }
+                allocationNode.opcode == -343 or allocationNode.opcode == -344
+                    -> if {
+                        true => usesRawArenaAccess!
+                        true => usesCollectionCapacityTrap!
+                    }
+            }
         allocationNode.opcode == -229 -> if {
             true => usesArrayReallocation!
             true => usesTextMaterialize!
@@ -473,7 +506,11 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             and allocationNode.opcode == -1
             and allocationNode.typeOrigin == 1
             and allocationNode.typeSymbol == 15
-            and allocationNode.operand0 >= 0 -> if { true => usesArenaAllocation! }
+            and allocationNode.operand0 >= 0 -> if {
+                true => usesArenaAllocation!
+                true => usesArenaConstruction!
+                true => usesCollectionCapacityTrap!
+            }
         arrayTypeSearch! + 1 => arrayTypeSearch!
     }
     # The canonical type arena is the dependency closure for emitted helper
@@ -487,9 +524,17 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
                 -> if { true => usesDynamicArray! }
             arraySemanticTypeSearch! + 1 => arraySemanticTypeSearch!
         }
+    false => usesBoundedDictionary!
     0 => bitSetTypeSearch!
     bitSetTypeSearch! < (context.types -> len) -> while {
         context.types[bitSetTypeSearch!] => bitSetType
+        bitSetType.kind == 13 and bitSetType.first >= 0 and bitSetType.second >= 0
+            and context.typeLayoutStatuses[bitSetTypeSearch!] == 0
+            -> if {
+                true => usesBoundedDictionary!
+                bitSetTypeSearch! -> boundedDictionaryLayoutForType(context) => boundedLayout
+                "%sollang.bounded_dictionary.t$(bitSetTypeSearch!) = type { i64, [$(boundedLayout.storageSize) x i8] }" -> println
+            }
         bitSetType.kind == 14 -> if {
             "%sollang.bitset.t$(bitSetTypeSearch!) = type { [$((bitSetType.length + 63) / 64) x i64] }" -> println
         }
@@ -507,8 +552,8 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     # independently of the dynamic-array value layout.
     usesMutableContainer! -> if { "%sollang.mutable_container = type { ptr, ptr, ptr }" -> println }
     usesDynamicArray! -> if { "%sollang.array.i32 = type { ptr, i64, i64 }" -> println }
-    usesMappedBytes! -> if { "%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }" -> println }
-    usesArrayAllocation! or usesArrayReallocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or usesAsyncRuntime or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins
+    usesMappedBytes -> if { "%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }" -> println }
+    usesArrayAllocation! or usesArrayReallocation! or usesArenaAllocation! or usesTextMaterialize! or usesSourceText or usesComputePool or usesAsyncRuntime or (context -> usesReachableAsyncDiagnostics(state)) or intrinsicRuntimeModule >= 0 or usesOwnedDropRuntime or usesDirectoryTraversal or usesDynTrait! or context.usesConcurrentStreamJoins
         -> if {
             context.pointerBitWidth == 32 -> if {
                 """
@@ -547,7 +592,8 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesDictionary!
     0 => dictionaryTypeSearch!
     dictionaryTypeSearch! < (context.ir -> len) -> while {
-        context.ir[dictionaryTypeSearch!] -> isDictionaryType
+        (context.ir[dictionaryTypeSearch!] -> isDictionaryType)
+            and (context.ir[dictionaryTypeSearch!] -> boundedDictionaryValueTypeId(context)) < 0
             -> if { true => usesDictionary! }
         dictionaryTypeSearch! + 1 => dictionaryTypeSearch!
     }
@@ -574,7 +620,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             textDictionaryNode.typeId >= 0 and textDictionaryNode.typeId < (context.types -> len)
                 -> if {
                     context.types[textDictionaryNode.typeId] => textDictionaryType
-                    (textDictionaryType.kind == 5 or (textDictionaryType.kind == 7 and textDictionaryType.origin == 4 and textDictionaryType.symbol == 5)) and textDictionaryType.first >= 0 and textDictionaryType.first < (context.types -> len)
+                    (textDictionaryType.kind == 5 or textDictionaryType.kind == 13 or (textDictionaryType.kind == 7 and textDictionaryType.origin == 4 and textDictionaryType.symbol == 5)) and textDictionaryType.first >= 0 and textDictionaryType.first < (context.types -> len)
                         -> if {
                             context.types[textDictionaryType.first] => textDictionaryKeyType
                             textDictionaryKeyType.kind == 1 and textDictionaryKeyType.origin == 1 and textDictionaryKeyType.symbol == 1
@@ -590,7 +636,7 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         enumMatchSearch! + 1 => enumMatchSearch!
     }
     usesDictionary! -> if {
-        "%sollang.dict = type { ptr, ptr, i64, i64 }" -> println
+        "%sollang.dict = type { ptr, i64, i64 }" -> println
         not usesDynamicArray! and not usesSourceText and not usesComputePool and intrinsicRuntimeModule < 0 and not usesOwnedDropRuntime
             -> if {
                 "declare ptr @malloc(i64)" -> println
@@ -603,6 +649,10 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
     false => usesComInterop!
     0 => nativeInteropSearch!
     nativeInteropSearch! < (context.ir -> len) -> while {
+        (context.ir[nativeInteropSearch!].kind == 6 or context.ir[nativeInteropSearch!].kind == 9)
+            and (context.ir[nativeInteropSearch!] -> targetsNativeFunction(context, state))
+            and (nativeInteropSearch! -> irNodeReachable(context, state))
+            -> if { true => usesNativeInterop! }
         context.ir[nativeInteropSearch!] -> isNativeFunction(context, state)
             -> if {
                 true => hasNativeDeclarations!
@@ -613,8 +663,10 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
             -> if { true => usesComInterop! }
         nativeInteropSearch! + 1 => nativeInteropSearch!
     }
-    usesCollectionCapacityTrap! or usesDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes! or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop!
+    usesCollectionCapacityTrap! or usesDictionary! or usesBoundedDictionary! or usesEnumMatch! or usesSourceText or usesMappedBytes or usesTextEach! or usesAsyncRuntime or hasNativeDeclarations! or usesComInterop! or (context -> diagnostics.usesOwnedFileRuntime)
         -> if { "declare void @llvm.trap()" -> println }
+    emitRawArenaRuntime(usesRawArenaAllocation!, usesRawArenaAccess!, usesArenaConstruction!)
+    usesDictionary! -> if { "declare i16 @llvm.cttz.i16(i16, i1)" -> println }
     usesBitSetCount! -> if { "declare i64 @llvm.ctpop.i64(i64)" -> println }
     hasNativeDeclarations! -> if {
         context.expectedPathStyle == 1 -> if {
@@ -633,16 +685,15 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
         context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
     }
     usesText and not requiresEarlyTextType -> if { "%sollang.text = type { ptr, i64 }" -> println }
-    usesMappedBytes! and context.pointerBitWidth != 32
+    usesMappedBytes and context.pointerBitWidth != 32
         -> if {
             context.expectedPathStyle == 1 -> if {
-                not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesProcessRuntime)) => declareMappedCreateFile
                 not (intrinsicRuntimeModule >= 0 or usesSourceText or (context -> diagnostics.usesOwnedFileRuntime) or (context -> diagnostics.usesDirectoryRuntime) or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesProcessCapture) or (context -> diagnostics.usesMouseEventsRuntime) or context.usesConcurrentStreamJoins) => declareMappedCloseHandle
                 intrinsicRuntimeModule < 0 and not usesSourceText => declareMappedMapping
-                llvmRuntime.emitWindowsMappedBytes(declareMappedCreateFile, declareMappedCloseHandle, declareMappedMapping)
+                llvmRuntime.emitWindowsMappedBytes(declareMappedCloseHandle, declareMappedMapping)
             } else {
                 not (usesSourceText or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedOpen
-                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntime) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedClose
+                not (usesSourceText or (context -> diagnostics.usesParallelRuntime) or (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)) or (context -> diagnostics.usesMouseEventsRuntime) or (context -> diagnostics.usesProcessRuntime) or (context -> diagnostics.usesOwnedFileRuntime)) => declareMappedClose
                 not usesSourceText => declareMappedPosixMapping
                 llvmRuntime.emitLinuxMappedBytes(declareMappedOpen, declareMappedClose, declareMappedPosixMapping)
             }

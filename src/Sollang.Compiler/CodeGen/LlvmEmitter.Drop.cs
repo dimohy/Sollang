@@ -181,7 +181,7 @@ internal sealed partial class LlvmEmitter
                 && _program.Types.ContainsOwnedStorage(type));
     }
 
-    private bool IsDropTypeReachable(BoundType target)
+    private List<BoundType> CollectDropReachabilityRoots()
     {
         var roots = new List<BoundType>(_program.MainBindings.Values);
         foreach (var function in _reachableFunctions)
@@ -215,70 +215,59 @@ internal sealed partial class LlvmEmitter
             }
         }
 
-        return roots.Any(root => TypeContains(root, target, []));
+        return roots;
     }
 
-    private bool TypeContains(BoundType current, BoundType target, HashSet<BoundType> visited)
+    private bool IsDropTypeReachable(BoundType target)
     {
-        if (current == target)
+        _dropReachabilityQueries++;
+        var revision = _program.Types.TypeGraphRevision;
+        if (_dropReachableTypes is null || _dropReachabilityRevision != revision)
         {
-            return true;
+            var reachable = new HashSet<BoundType>();
+            var pending = new Stack<BoundType>(_dropReachabilityRoots);
+            while (pending.TryPop(out var current))
+            {
+                if (!reachable.Add(current)) continue;
+                _dropReachabilityNodeVisits++;
+                void Add(BoundType child)
+                {
+                    _dropReachabilityEdgeVisits++;
+                    pending.Push(child);
+                }
+                if (_program.Types.IsStruct(current))
+                    foreach (var field in _program.Types.GetStruct(current).Fields) Add(field.Type);
+                else if (_program.Types.IsEnum(current))
+                {
+                    foreach (var variant in _program.Types.GetEnum(current).Variants)
+                        if (variant.PayloadType is { } payload) Add(payload);
+                }
+                else if (_program.Types.IsStaticArray(current)) Add(_program.Types.GetStaticArray(current).ElementType);
+                else if (_program.Types.IsDynamicArray(current)) Add(_program.Types.GetDynamicArray(current).ElementType);
+                else if (_program.Types.IsBoundedArray(current)) Add(_program.Types.GetBoundedArray(current).ElementType);
+                else if (_program.Types.IsDictionary(current))
+                {
+                    var dictionary = _program.Types.GetDictionary(current);
+                    Add(dictionary.KeyType);
+                    Add(dictionary.ValueType);
+                }
+                else if (_program.Types.IsBoundedDictionary(current))
+                {
+                    var dictionary = _program.Types.GetBoundedDictionary(current);
+                    Add(dictionary.KeyType);
+                    Add(dictionary.ValueType);
+                }
+                else if (_program.Types.IsBox(current)) Add(_program.Types.GetBox(current).ElementType);
+                else if (_program.Types.IsReference(current)) Add(_program.Types.GetReference(current).ElementType);
+                else if (_program.Types.IsSlice(current)) Add(_program.Types.GetSliceElement(current));
+                else if (_program.Types.TryGetStreamValue(current, out var streamValue)) Add(streamValue);
+                else if (_program.Types.TryGetEventStreamValue(current, out var eventValue)) Add(eventValue);
+            }
+            _dropReachableTypes = reachable;
+            _dropReachabilityRevision = revision;
+            _dropReachabilityBuilds++;
         }
-        if (!visited.Add(current))
-        {
-            return false;
-        }
-        if (_program.Types.IsStruct(current))
-        {
-            return _program.Types.GetStruct(current).Fields.Any(field => TypeContains(field.Type, target, visited));
-        }
-        if (_program.Types.IsEnum(current))
-        {
-            return _program.Types.GetEnum(current).Variants.Any(variant =>
-                variant.PayloadType is { } payload && TypeContains(payload, target, visited));
-        }
-        if (_program.Types.IsStaticArray(current))
-        {
-            return TypeContains(_program.Types.GetStaticArray(current).ElementType, target, visited);
-        }
-        if (_program.Types.IsDynamicArray(current))
-        {
-            return TypeContains(_program.Types.GetDynamicArray(current).ElementType, target, visited);
-        }
-        if (_program.Types.IsBoundedArray(current))
-        {
-            return TypeContains(_program.Types.GetBoundedArray(current).ElementType, target, visited);
-        }
-        if (_program.Types.IsDictionary(current))
-        {
-            var dictionary = _program.Types.GetDictionary(current);
-            return TypeContains(dictionary.KeyType, target, visited)
-                || TypeContains(dictionary.ValueType, target, visited);
-        }
-        if (_program.Types.IsBoundedDictionary(current))
-        {
-            var dictionary = _program.Types.GetBoundedDictionary(current);
-            return TypeContains(dictionary.KeyType, target, visited)
-                || TypeContains(dictionary.ValueType, target, visited);
-        }
-        if (_program.Types.IsBox(current))
-        {
-            return TypeContains(_program.Types.GetBox(current).ElementType, target, visited);
-        }
-        if (_program.Types.IsReference(current))
-        {
-            return TypeContains(_program.Types.GetReference(current).ElementType, target, visited);
-        }
-        if (_program.Types.IsSlice(current))
-        {
-            return TypeContains(_program.Types.GetSliceElement(current), target, visited);
-        }
-        if (_program.Types.TryGetStreamValue(current, out var streamValue))
-        {
-            return TypeContains(streamValue, target, visited);
-        }
-        return _program.Types.TryGetEventStreamValue(current, out var eventValue)
-            && TypeContains(eventValue, target, visited);
+        return _dropReachableTypes.Contains(target);
     }
 
     private void EmitFixedArrayDropHelper(BoundStaticArrayDefinition definition)

@@ -24,15 +24,30 @@ function Test-VerificationCancellationRequested {
         throw 'Cancellation request does not match the active verification target'
     }
     if (-not (Test-Path -LiteralPath $script:VerificationCancellationAcknowledgementPath -PathType Leaf)) {
-        $acknowledgement = [ordered]@{
-            schemaVersion = 1
-            runId = $script:VerificationCancellationRunId
-            targetProcessId = $PID
-            observedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        $identity = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+            [Text.Encoding]::UTF8.GetBytes($script:VerificationCancellationAcknowledgementPath.ToUpperInvariant())))
+        $publicationLock = [Threading.Mutex]::new($false, "SollangVerificationAcknowledgement-$identity")
+        $lockOwned = $false
+        try {
+            try { $lockOwned = $publicationLock.WaitOne(5000) }
+            catch [Threading.AbandonedMutexException] { $lockOwned = $true }
+            if (-not $lockOwned) { throw 'Cancellation acknowledgement publication timed out' }
+            # Recheck under the shared lock: another worker may have published first.
+            if (-not (Test-Path -LiteralPath $script:VerificationCancellationAcknowledgementPath -PathType Leaf)) {
+                $acknowledgement = [ordered]@{
+                    schemaVersion = 1
+                    runId = $script:VerificationCancellationRunId
+                    targetProcessId = $PID
+                    observedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+                }
+                $temporaryPath = "$($script:VerificationCancellationAcknowledgementPath).tmp-$PID-$([guid]::NewGuid().ToString('N'))"
+                $acknowledgement | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
+                [IO.File]::Move($temporaryPath, $script:VerificationCancellationAcknowledgementPath)
+            }
+        } finally {
+            if ($lockOwned) { $publicationLock.ReleaseMutex() }
+            $publicationLock.Dispose()
         }
-        $temporaryPath = "$($script:VerificationCancellationAcknowledgementPath).tmp-$PID"
-        $acknowledgement | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $temporaryPath -Encoding utf8
-        Move-Item -LiteralPath $temporaryPath -Destination $script:VerificationCancellationAcknowledgementPath -Force
     }
     return $true
 }
@@ -73,7 +88,13 @@ function Get-VerificationProcessTreeSnapshot {
         }
         try {
             try {
-                [TimeSpan]$processorTime = $process.TotalProcessorTime
+                $observedProcessorTime = $process.TotalProcessorTime
+                if ($null -eq $observedProcessorTime) {
+                    # An exiting Windows process may no longer expose a CPU
+                    # counter even while its process record is still visible.
+                    continue
+                }
+                [TimeSpan]$processorTime = $observedProcessorTime
                 $cpuSeconds += [double]$processorTime.Ticks / [TimeSpan]::TicksPerSecond
                 $workingBytes += $process.WorkingSet64
                 $observedProcesses += 1
@@ -133,7 +154,9 @@ function Wait-VerificationProcess {
                 $PeakWorkingSetSamples[0] = [long]$observedPeak
             }
         }
-        $maximumWaitSlice = if ($null -ne $PeakWorkingSetSamples) {
+        $maximumWaitSlice = if (-not [string]::IsNullOrWhiteSpace([string]$script:VerificationCancellationRequestPath)) {
+            [Math]::Min(100, $TelemetryIntervalMilliseconds)
+        } elseif ($null -ne $PeakWorkingSetSamples) {
             [Math]::Min(5, $TelemetryIntervalMilliseconds)
         } else {
             [Math]::Min(60000, $TelemetryIntervalMilliseconds)
@@ -156,7 +179,14 @@ function Wait-VerificationProcess {
         $elapsed = $observedAt - $startedAt
         if ($observedAt -ge $nextTelemetryAt) {
             $tree = Get-VerificationProcessTreeSnapshot -RootProcessId $Process.Id
-            [TimeSpan]$telemetryInterval = $observedAt.Subtract($previousTelemetryAt)
+            $telemetryInterval = if ($null -eq $previousTelemetryAt) {
+                [TimeSpan]::Zero
+            } else {
+                $observedAt - [DateTimeOffset]$previousTelemetryAt
+            }
+            if ($null -eq $telemetryInterval) {
+                $telemetryInterval = [TimeSpan]::Zero
+            }
             $intervalSeconds = [Math]::Max(0.001, [double]$telemetryInterval.Ticks / [TimeSpan]::TicksPerSecond)
             $intervalActivity = if ($null -ne $previousTree -and
                 ($tree.ProcessCount -ne $previousTree.ProcessCount -or $tree.CpuSeconds -lt $previousTree.CpuSeconds)) {
@@ -292,6 +322,44 @@ function Invoke-VerificationProcessToFile {
     }
 }
 
+function Write-VerificationExecutionRecord {
+    param([Parameter(Mandatory)][string]$Path,
+          [Parameter(Mandatory)][System.Collections.IDictionary]$Record)
+    $temporary = "$Path.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    [IO.File]::WriteAllText($temporary, ($Record | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+    # Windows readers can briefly deny replacement even after the child exited.
+    # Retry only publication, with a fixed budget; never rerun the child or lose
+    # its complete terminal snapshot when replacement remains unavailable.
+    $attempt = 0
+    while ($true) {
+        $attempt++
+        try {
+            [IO.File]::Move($temporary, $Path, $true)
+            break
+        } catch {
+            $cause = $_.Exception
+            while ($null -ne $cause.InnerException) { $cause = $cause.InnerException }
+            $code = $cause.HResult -band 0xFFFF
+            $retryable = $code -in @(5, 32, 33) -and [IO.File]::Exists($temporary) -and
+                [IO.File]::Exists($Path) -and
+                (([IO.File]::GetAttributes($Path) -band [IO.FileAttributes]::ReadOnly) -eq 0)
+            if (-not $retryable -or $attempt -ge 6) {
+                throw [IO.IOException]::new("VERIFICATION_RECORD_PUBLISH_FAILED: path=$Path attempts=$attempt win32=$code pending=$temporary", $cause)
+            }
+            [Threading.Thread]::Sleep([int](10 * [Math]::Pow(2, $attempt - 1)))
+        }
+    }
+    if ($attempt -gt 1) {
+        $audit = [ordered]@{ schemaVersion = 1; status = 'published'; attempts = $attempt
+            path = $Path; pendingSnapshot = $temporary; childRerun = $false }
+        try {
+            [IO.File]::WriteAllText("$temporary.publication.json", ($audit | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        } catch {
+            throw [IO.IOException]::new("VERIFICATION_RECORD_PUBLICATION_AUDIT_FAILED: published=$Path attempts=$attempt", $_.Exception)
+        }
+    }
+}
+
 function Invoke-VerificationProcessCapture {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -300,9 +368,31 @@ function Invoke-VerificationProcessCapture {
         [string]$WorkingDirectory = "",
         [string]$StandardInputPath = "",
         [int]$TimeoutMilliseconds = 3600000,
-        [switch]$CapturePeakWorkingSet
+        [switch]$CapturePeakWorkingSet,
+        [string]$ExecutionRecordPath = ""
     )
 
+    $executionRecord = $null
+    if (-not [string]::IsNullOrWhiteSpace($ExecutionRecordPath)) {
+        $ExecutionRecordPath = [IO.Path]::GetFullPath($ExecutionRecordPath)
+        if (-not [IO.Directory]::Exists([IO.Path]::GetDirectoryName($ExecutionRecordPath))) {
+            throw 'VERIFICATION_EXECUTION_RECORD_PARENT_MISSING'
+        }
+        foreach ($path in @($ExecutionRecordPath, "$ExecutionRecordPath.stdout.log", "$ExecutionRecordPath.stderr.log")) {
+            if ([IO.File]::Exists($path) -or [IO.Directory]::Exists($path)) {
+                throw 'VERIFICATION_EXECUTION_RECORD_ALREADY_EXISTS'
+            }
+        }
+        $executionRecord = [ordered]@{
+            schemaVersion = 1; status = 'starting'; pid = $null
+            command = @($FilePath) + @($ArgumentList); description = $Description
+            startedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+            finishedAtUtc = $null; exit = $null; processesStopped = $false
+            stdoutPath = "$ExecutionRecordPath.stdout.log"
+            stderrPath = "$ExecutionRecordPath.stderr.log"; failure = $null
+        }
+        Write-VerificationExecutionRecord -Path $ExecutionRecordPath -Record $executionRecord
+    }
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $FilePath
     $startInfo.UseShellExecute = $false
@@ -329,6 +419,11 @@ function Invoke-VerificationProcessCapture {
     try {
         if (-not $process.Start()) {
             throw "$Description could not start '$FilePath'"
+        }
+        if ($null -ne $executionRecord) {
+            $executionRecord.pid = $process.Id
+            $executionRecord.status = 'running'
+            Write-VerificationExecutionRecord -Path $ExecutionRecordPath -Record $executionRecord
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
@@ -366,6 +461,16 @@ function Invoke-VerificationProcessCapture {
         $process.WaitForExit()
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
+        if ($null -ne $executionRecord) {
+            [IO.File]::WriteAllText($executionRecord.stdoutPath, $stdout, [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText($executionRecord.stderrPath, $stderr, [Text.UTF8Encoding]::new($false))
+            $executionRecord.exit = $process.ExitCode
+            $executionRecord.processesStopped = $true
+            $executionRecord.finishedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+            $executionRecord.status = if ($null -ne $waitFailure) { 'failed' } elseif ($process.ExitCode -eq 0) { 'passed' } else { 'failed' }
+            $executionRecord.failure = if ($null -ne $waitFailure) { $waitFailure.Exception.Message } else { $null }
+            Write-VerificationExecutionRecord -Path $ExecutionRecordPath -Record $executionRecord
+        }
         $peakWorkingSet64 = if ($null -ne $peakWorkingSetSamples -and $peakWorkingSetSamples.Count -gt 0) {
             $peakWorkingSetSamples[0]
         } else { 0 }
@@ -382,6 +487,21 @@ function Invoke-VerificationProcessCapture {
             Stderr = $stderr
             PeakWorkingSet64 = $peakWorkingSet64
         }
+    } catch {
+        if ($null -ne $executionRecord -and $executionRecord.status -in @('starting', 'running')) {
+            $executionRecord.failure = $_.Exception.Message
+            $executionRecord.status = 'failed'
+            # An unexpected exception is not evidence that a started child stopped.
+            if ($null -eq $executionRecord.pid) {
+                $executionRecord.processesStopped = $true
+            } elseif ($process.HasExited) {
+                $executionRecord.exit = $process.ExitCode
+                $executionRecord.processesStopped = $true
+            }
+            $executionRecord.finishedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+            Write-VerificationExecutionRecord -Path $ExecutionRecordPath -Record $executionRecord
+        }
+        throw
     } finally {
         $process.Dispose()
     }

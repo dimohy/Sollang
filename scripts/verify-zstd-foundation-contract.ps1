@@ -115,9 +115,9 @@ foreach ($required in @(
     '"zstd-size-header-12=$(mediumOutput -> uniform(98, 32))"',
     '"zstd-size-header-20=$(longOutput -> uniform(99, 4_096))"',
     '"zstd-output-limit=$(outputLimit)"',
-    "codec -> rejects(fseWeightFrame, 11)? => fseWeightExplicit",
+    "codec -> rejects(fseWeightFrame, 12)? => fseWeightInvalid",
     "codec -> rejects(sequenceFrame, 12)? => sequenceInvalid",
-    '"zstd-huffman-explicit=$(fseWeightExplicit)"',
+    '"zstd-huffman-invalid=$(fseWeightInvalid)"',
     '"zstd-sequence-invalid=$(sequenceInvalid)"'
 )) {
     if (-not $compressedLiteralFixture.Contains($required, [System.StringComparison]::Ordinal)) {

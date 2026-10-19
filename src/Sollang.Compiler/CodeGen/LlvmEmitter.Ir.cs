@@ -5,6 +5,8 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private (MemoryOutputSink Owner, string Label, MemoryOutputSink Output)? _scopeJoinPhis;
+
     private void EmitLabel(string label)
     {
         EmitFunctionLine($"{label}:");
@@ -122,6 +124,13 @@ internal sealed partial class LlvmEmitter
 
     private void EmitPhi(string target, string typeName, params (string Value, string Label)[] incoming)
     {
+        if (_scopeJoinPhis is { } join
+            && ReferenceEquals(join.Owner, _activeFunctions)
+            && join.Label == _currentBlockLabel)
+        {
+            join.Output.WriteLine($"  {target} = phi {typeName} {FormatPhiIncoming(incoming)}");
+            return;
+        }
         EmitAssign(target, $"phi {typeName} {FormatPhiIncoming(incoming)}");
     }
 

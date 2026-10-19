@@ -2,45 +2,28 @@ import sollang.compiler.llvm.text as llvm
 
 main {
     [
-        """
-        import sys.file as file
-
-        scan inputs: [file.SourceText; ~] -> UIntSize {
-            [file.SourceText; ~] => owners!
-            0 => inputIndex!
-            inputIndex! < (inputs -> len) -> while {
-                inputs[inputIndex!] => owner
-                owners! -> push(owner)
-                inputIndex! + 1 => inputIndex!
-            }
-            UIntSize(0) => total!
-            0 => index!
-            index! < (owners -> len) -> while {
-                owners[index!] => owner
-                owner -> len => sourceLength
-                total! + sourceLength => total!
-                index! + 1 => index!
-            }
-            total!
+    """
+    import sys.file as file
+    scan inputs: move [file.SourceText; ~] -> UIntSize {
+        inputs => pending!
+        [file.SourceText; ~] => owners!
+        (pending! -> len) > 0 -> while {
+            pending! -> take(0) => owner
+            owners! -> push(owner)
         }
-
-        main { }
-        """,
-        """
-        namespace sys.file
-
-        public struct File {
-            public token: UInt64
+        UIntSize(0) => total!
+        0 => index!
+        index! < (owners! -> len) -> while {
+            owners![index!] -> len => sourceLength
+            total! + sourceLength => total!
+            index! + 1 => index!
         }
-
-        public struct FileWriter {
-            public token: UInt64
-        }
-
-        public struct SourceText {
-            public token: UInt64
-        }
-        """; ~
+        total!
+    }
+    main {
+        [file.borrowText("one"), file.borrowText("four"); ~] -> scan -> println
+    }
+    """; ~
     ] => sources!
     sources! -> llvm.emit
 }

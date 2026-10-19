@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "completed", "total", "remainingFamilyTotal", "inputStable", "inputHashes", "inputHashesEnd", "cases", "failureIds"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 14 },
+    "total": { "type": "integer", "minimum": 1, "maximum": 14 },
+    "remainingFamilyTotal": { "const": 14 },
+    "inputStable": { "type": "boolean" },
+    "inputHashes": { "type": "object", "minProperties": 8, "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" } },
+    "inputHashesEnd": { "type": "object", "minProperties": 8, "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" } },
+    "cases": {
+      "type": "array", "minItems": 1, "maxItems": 14,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["family", "fixture", "passed", "astNodeId", "typedIrKind", "managedBatchSha256", "selfhostBatchSha256", "failure"],
+        "properties": {
+          "family": { "type": "string", "minLength": 1 },
+          "fixture": { "type": "string", "minLength": 1 },
+          "proofMode": { "enum": ["direct", "folded-compile-time"] },
+          "unfoldedAstKindAbsent": { "type": ["boolean", "null"] },
+          "passed": { "type": "boolean" },
+          "astNodeId": { "type": ["integer", "null"] },
+          "typedIrKind": { "type": ["integer", "null"] },
+          "managedBatchSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+          "selfhostBatchSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+          "failure": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "inputStable": { "const": true },
+          "failureIds": { "maxItems": 0 },
+          "cases": { "items": { "properties": { "passed": { "const": true }, "failure": { "type": "null" }, "astNodeId": { "type": "integer" }, "typedIrKind": { "type": "integer" } } } }
+        }
+      }
+    }
+  ]
+}

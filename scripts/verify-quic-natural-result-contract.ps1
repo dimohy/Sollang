@@ -47,16 +47,18 @@ function Assert-NegotiationContract([string]$Source, [string]$Fixture) {
 }
 
 function Assert-HandshakeCandidateContract([string]$Source) {
-    $body = Get-SlgFunctionBody $Source 'handshakeCandidate bytes: move [UInt8; ~] -> Result<Option<[UInt8; ~]>, QuicError>'
+    $body = Get-SlgFunctionBody $Source 'handshakeCandidate bytes: [UInt8] -> Result<Bool, QuicError>'
     foreach ($expected in @(
         'packets.longHeaderKind(bytes) -> when',
-        'Err(error) { Result<Option<[UInt8; ~]>, QuicError>.Err(protocolFailure(error)) }',
-        'kind == 0 or kind == 2 -> if',
-        'Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.Some(bytes))',
-        'Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.None)'
+        'Err(error) { Result<Bool, QuicError>.Err(protocolFailure(error)) }',
+        'Result<Bool, QuicError>.Ok(kind == 0 or kind == 2)'
     )) { Assert-Contains $body $expected 'coalesced handshake candidate function body' }
     $caller = Get-SlgFunctionBody $Source 'handshakePacket endpoint: mut Endpoint, connectionId: [UInt8] -> Result<[UInt8; ~], QuicError> uses Network'
-    foreach ($expected in @('remaining -> handshakeCandidate? -> when', 'None { false }', 'Some(packet)')) {
+    foreach ($expected in @(
+        'remaining -> handshakeCandidate? => appended',
+        'appended -> if',
+        'selected! -> appendBytes(remaining)'
+    )) {
         Assert-Contains $caller $expected 'coalesced handshake caller body'
     }
 }
@@ -132,7 +134,9 @@ $negotiationDecoy = $negotiation.Replace(
     'Result<Unit, errors.Error>.Ok -> return') + "`n# Result<Unit, errors.Error>.Err(error(errors.versionNegotiationError())) -> return"
 Assert-Rejects { Assert-NegotiationContract $negotiationDecoy $negotiationFixture } 'validateClient body decoy'
 
-$handshakeDecoy = $quic.Replace('kind == 0 or kind == 2 -> if', 'kind == 2 -> if') + "`n# kind == 0 or kind == 2 -> if"
+$handshakeDecoy = $quic.Replace(
+    'Result<Bool, QuicError>.Ok(kind == 0 or kind == 2)',
+    'Result<Bool, QuicError>.Ok(kind == 2)') + "`n# Result<Bool, QuicError>.Ok(kind == 0 or kind == 2)"
 Assert-Rejects { Assert-HandshakeCandidateContract $handshakeDecoy } 'handshakeCandidate body decoy'
 
 $reassemblyDecoy = $reassembly.Replace('Option<frames.Stream>.None', 'Option<frames.Stream>.Some(value!)') + "`n# Option<frames.Stream>.None"

@@ -1,0 +1,24 @@
+import sollang.compiler.library_paths as libraries
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] => sourcePath
+    sourcePath -> file.mapText => owner
+    owner -> sourceDecoding.utf8Text => source
+    source -> lexer.lex => tokens
+    tokens -> each token {
+        token.span.length >= 2 and (source -> byte(token.span.start)) == 34 -> if {
+            sourcePath -> libraries.manifestPath(source, token, "windows-x64", path.nativeStyle()) => result
+            "manifest = $(result.status)" -> println
+            result.status == 0 -> if {
+                result.value -> pathText -> println
+                "bytes = $(result.value -> byteCount)" -> println
+            }
+        }
+    }
+}

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "manifestPath", "manifestSha256", "managedCompilerPath", "managedCompilerSha256", "selfhostCompilerPath", "selfhostCompilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "negativeProofScope", "negativeArtifactAuditScope", "positiveArtifactAuditScope", "processObservationScope", "completed", "passed", "steps", "orphanProcessIds", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c477-mutable-binding-parity" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "manifestPath": { "$ref": "#/$defs/path" },
+    "manifestSha256": { "$ref": "#/$defs/sha" },
+    "managedCompilerPath": { "$ref": "#/$defs/path" },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerPath": { "$ref": "#/$defs/path" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "negativeProofScope": { "const": "pre-llvm-semantic-count-positive-and-strict-cli-nonzero-diagnostic-substring" },
+    "negativeArtifactAuditScope": { "const": "validation-directory-exact-and-strict-nested-compiler-output-only;negative-pair-root-and-cwd-stage-not-audited" },
+    "positiveArtifactAuditScope": { "const": "exact-case-tree-including-managed-cache-and-keep-temps" },
+    "processObservationScope": { "const": "single-post-exit-CIM-parent-chain-snapshot;exited-intermediate-descendants-not-proven" },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 5 },
+    "steps": {
+      "type": "object", "additionalProperties": false,
+      "required": ["negativePair", "managedLocal", "selfhostLocal", "managedParameter", "selfhostParameter"],
+      "properties": {
+        "negativePair": { "$ref": "#/$defs/step" },
+        "managedLocal": { "$ref": "#/$defs/step" },
+        "selfhostLocal": { "$ref": "#/$defs/step" },
+        "managedParameter": { "$ref": "#/$defs/step" },
+        "selfhostParameter": { "$ref": "#/$defs/step" }
+      }
+    },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 5 }, "passed": { "const": 5 }, "inputsStable": { "const": true }, "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" }, "steps": { "properties": { "negativePair": { "$ref": "#/$defs/negativePassedStep" }, "managedLocal": { "$ref": "#/$defs/positivePassedStep" }, "selfhostLocal": { "$ref": "#/$defs/positivePassedStep" }, "managedParameter": { "$ref": "#/$defs/positivePassedStep" }, "selfhostParameter": { "$ref": "#/$defs/positivePassedStep" } } } } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "path": { "type": "string", "minLength": 1 },
+    "step": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "fixtureId", "compiler", "resultPath", "buildExitCode", "runExitCode", "buildStdoutPath", "buildStderrPath", "assemblyStdoutPath", "assemblyStderrPath", "runStdoutPath", "runStderrPath", "llvmPath", "bitcodePath", "executablePath", "validationExitCode", "validationStdoutPath", "validationStderrPath", "diagnosticCountsExitCode", "diagnosticCountsStdoutPath", "diagnosticCountsStderrPath", "semanticDiagnosticCount", "irDiagnosticCount", "failure"],
+      "properties": {
+        "state": { "enum": ["not-run", "passed", "failed"] },
+        "fixtureId": { "type": "string", "minLength": 1 },
+        "compiler": { "enum": ["managed", "selfhost", "pair"] },
+        "resultPath": { "type": ["string", "null"] },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "buildStdoutPath": { "type": ["string", "null"] },
+        "buildStderrPath": { "type": ["string", "null"] },
+        "assemblyStdoutPath": { "type": ["string", "null"] },
+        "assemblyStderrPath": { "type": ["string", "null"] },
+        "runStdoutPath": { "type": ["string", "null"] },
+        "runStderrPath": { "type": ["string", "null"] },
+        "llvmPath": { "type": ["string", "null"] },
+        "bitcodePath": { "type": ["string", "null"] },
+        "executablePath": { "type": ["string", "null"] },
+        "validationExitCode": { "type": ["integer", "null"] },
+        "validationStdoutPath": { "type": ["string", "null"] },
+        "validationStderrPath": { "type": ["string", "null"] },
+        "diagnosticCountsExitCode": { "type": ["integer", "null"] },
+        "diagnosticCountsStdoutPath": { "type": ["string", "null"] },
+        "diagnosticCountsStderrPath": { "type": ["string", "null"] },
+        "semanticDiagnosticCount": { "type": ["integer", "null"], "minimum": 0 },
+        "irDiagnosticCount": { "type": ["integer", "null"], "minimum": 0 },
+        "failure": { "type": ["string", "null"] }
+      }
+    },
+    "passedStep": { "allOf": [{ "$ref": "#/$defs/step" }, { "properties": { "state": { "const": "passed" }, "failure": { "type": "null" } } }] },
+    "negativePassedStep": { "allOf": [{ "$ref": "#/$defs/passedStep" }, { "properties": { "resultPath": { "$ref": "#/$defs/path" }, "validationExitCode": { "const": 0 }, "validationStdoutPath": { "$ref": "#/$defs/path" }, "validationStderrPath": { "$ref": "#/$defs/path" }, "diagnosticCountsExitCode": { "const": 0 }, "diagnosticCountsStdoutPath": { "$ref": "#/$defs/path" }, "diagnosticCountsStderrPath": { "$ref": "#/$defs/path" }, "semanticDiagnosticCount": { "type": "integer", "minimum": 1 }, "irDiagnosticCount": { "const": 0 } } }] },
+    "positivePassedStep": { "allOf": [{ "$ref": "#/$defs/passedStep" }, { "properties": { "buildExitCode": { "const": 0 }, "runExitCode": { "const": 0 }, "llvmPath": { "$ref": "#/$defs/path" }, "bitcodePath": { "$ref": "#/$defs/path" }, "executablePath": { "$ref": "#/$defs/path" } } }] }
+  }
+}

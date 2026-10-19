@@ -1,0 +1,45 @@
+declare i32 @puts(ptr)
+@worker_probe_ok = private constant [18 x i8] c"worker-runtime-ok\00"
+define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %configure = icmp eq i32 %argc, 1
+  br i1 %configure, label %configured, label %choose_query
+configured:
+  %selected = call i32 @sollang_compute_limit_workers(i32 0)
+  %reselected = call i32 @sollang_compute_limit_workers(i32 65)
+  %workers = call i32 @sollang_compute_workers()
+  %peak = call i32 @sollang_compute_peak_workers()
+  %selected_ok = icmp eq i32 %selected, 1
+  %reselected_ok = icmp eq i32 %reselected, 1
+  %workers_ok = icmp eq i32 %workers, 1
+  %peak_ok = icmp eq i32 %peak, 0
+  %configuration_ok = and i1 %selected_ok, %reselected_ok
+  %queries_ok = and i1 %workers_ok, %peak_ok
+  %configured_ok = and i1 %configuration_ok, %queries_ok
+  br label %finish
+choose_query:
+  %query_workers = icmp eq i32 %argc, 2
+  br i1 %query_workers, label %workers_only, label %peak_only
+workers_only:
+  %queried = call i32 @sollang_compute_workers()
+  %positive = icmp sgt i32 %queried, 0
+  %bounded = icmp sle i32 %queried, 64
+  %worker_query_ok = and i1 %positive, %bounded
+  br label %finish
+peak_only:
+  %initial_peak = call i32 @sollang_compute_peak_workers()
+  %unstarted_workers = load i32, ptr @sollang_compute_worker_count, align 4
+  %initial_peak_ok = icmp eq i32 %initial_peak, 0
+  %unstarted_ok = icmp eq i32 %unstarted_workers, 0
+  %peak_query_ok = and i1 %initial_peak_ok, %unstarted_ok
+  br label %finish
+finish:
+  %ok = phi i1 [ %configured_ok, %configured ], [ %worker_query_ok, %workers_only ], [ %peak_query_ok, %peak_only ]
+  call void @sollang_compute_shutdown()
+  br i1 %ok, label %success, label %failure
+success:
+  %printed = call i32 @puts(ptr @worker_probe_ok)
+  ret i32 0
+failure:
+  ret i32 1
+}

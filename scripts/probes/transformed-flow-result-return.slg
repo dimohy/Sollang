@@ -1,0 +1,111 @@
+produce value: Int -> Result<Int, Int> => Result<Int, Int>.Err(value)
+
+transform value: Int -> Result<Int, Int> {
+    produce(value) -> when {
+        Ok(item) { Result<Int, Int>.Ok(item + 1) }
+        Err(error) { Result<Int, Int>.Err(error + 1) }
+    }
+}
+
+identity value: Int -> Int => value
+
+select value: Int -> Int {
+    identity(value) -> when {
+        == 35 { 36 }
+        else { value + 2 }
+    }
+}
+
+transformFlow value: Int -> Result<Int, Int> {
+    value -> produce -> when {
+        Ok(item) { Result<Int, Int>.Ok(item + 1) }
+        Err(error) { Result<Int, Int>.Err(error + 1) }
+    }
+}
+
+selectFlow value: Int -> Int {
+    value -> identity -> when {
+        == 35 { 36 }
+        else { value + 2 }
+    }
+}
+
+struct Payload {
+    bytes: [UInt8; 2]
+}
+
+struct Failure {
+    offset: UIntSize
+}
+
+producePayload value: UIntSize -> Result<Payload, Failure> => Result<Payload, Failure>.Err(Failure { offset: value })
+
+transformPayload value: UIntSize -> Result<Payload, Failure> {
+    producePayload(value) -> when {
+        Ok(item) { Result<Payload, Failure>.Err(Failure { offset: 1 }) }
+        Err(error) { Result<Payload, Failure>.Err(Failure { offset: error.offset + 1 }) }
+    }
+}
+
+struct Mapper {
+    marker: Int
+}
+
+impl Mapper {
+    public produceOwned: self, value: UIntSize -> Result<Payload, Failure> => producePayload(value)
+
+    public transformPayloadFlow: self, value: UIntSize -> Result<Payload, Failure> {
+        self -> produceOwned(value) -> when {
+            Ok(item) { Result<Payload, Failure>.Err(Failure { offset: 1 }) }
+            Err(error) { Result<Payload, Failure>.Err(Failure { offset: error.offset + 1 }) }
+        }
+    }
+
+    public transform: self, value: Int -> Result<Int, Int> {
+        produce(value) -> when {
+            Ok(item) { Result<Int, Int>.Ok(item + 1) }
+            Err(error) { Result<Int, Int>.Err(error + 1) }
+        }
+    }
+
+    public transformPayload: self, value: UIntSize -> Result<Payload, Failure> {
+        producePayload(value) -> when {
+            Ok(item) { Result<Payload, Failure>.Err(Failure { offset: 1 }) }
+            Err(error) { Result<Payload, Failure>.Err(Failure { offset: error.offset + 1 }) }
+        }
+    }
+}
+
+main {
+    transform(35) -> when {
+        Ok(value) { value -> println }
+        Err(value) { value -> println }
+    }
+    select(35) -> println
+    produce(35) -> when {
+        Ok(value) { value -> println }
+        Err(value) { value -> println }
+    }
+    Mapper { marker: 0 } => mapper
+    mapper -> transform(35) -> when {
+        Ok(value) { value -> println }
+        Err(value) { value -> println }
+    }
+    transformPayload(35) -> when {
+        Ok(value) { 0 -> println }
+        Err(error) { error.offset -> println }
+    }
+    mapper -> transformPayload(35) -> when {
+        Ok(value) { 0 -> println }
+        Err(error) { error.offset -> println }
+    }
+    transformFlow(35) -> when {
+        Ok(value) { value -> println }
+        Err(value) { value -> println }
+    }
+    selectFlow(35) -> println
+    mapper -> transformPayloadFlow(35) -> when {
+        Ok(value) { 0 -> println }
+        Err(error) { error.offset -> println }
+    }
+}

@@ -1,0 +1,75 @@
+import sollang.compiler.llvm.text as llvmText
+
+check input: Text -> Unit uses Console {
+    [Text; ~] => sources!
+    sources! -> push(input)
+    """namespace std.net.socket
+public struct CompletionReactor { token: UInt64 }
+""" => resourceSource
+    sources! -> push(resourceSource)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+main {
+    """namespace regression.owned_resource
+
+import std.net.socket as socket
+consume reactor: move socket.CompletionReactor -> Int { 1 }
+choose reactor: move socket.CompletionReactor, requested: Bool -> Int uses Console {
+    requested -> if {
+        reactor -> consume -> println
+    } else {
+        0 -> println
+    }
+    1
+}
+main { 1 -> println }
+""" -> check
+    """consume values: move [Int; ~] -> Int => values -> len
+
+main {
+    [1; ~] => values
+    true -> if {
+        values -> consume -> println
+    } else {
+        0 -> println
+    }
+}
+""" -> check
+    """consume values: move [Int; ~] -> Int => values -> len
+
+main {
+    [1; ~] => values!
+    true -> if {
+        values! -> consume -> println
+    } else {
+        0 -> println
+    }
+}
+""" -> check
+    """# A continuing branch after a move fails at the ownership join.
+struct Owner {
+    bytes: [UInt8; ~]
+}
+
+consume owner: move Owner -> Result<Int, Int> {
+    Result<Int, Int>.Ok(Int(owner.bytes -> len))
+}
+
+remaining flag: Bool -> Int {
+    Owner { bytes: [1, 2, 3; ~] } => owner
+    flag -> if {
+        owner -> consume -> when {
+            Ok(value) { value -> return }
+            Err(_) { 0 => ignored }
+        }
+    }
+    Int(owner.bytes -> len)
+}
+
+main {
+    false -> remaining -> println
+}
+""" -> check
+}

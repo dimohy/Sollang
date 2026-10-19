@@ -1,0 +1,43 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.calls as calls
+
+same left: ref [calls.ModuleCallResolution; ~], right: ref [calls.ModuleCallResolution; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<(left -> len) -> each index {
+        left[index] => first
+        right[index] => second
+        first.sourceModule != second.sourceModule or first.callAst != second.callAst
+            or first.origin != second.origin or first.targetModule != second.targetModule
+            or first.targetSourceModule != second.targetSourceModule
+            or first.functionSymbol != second.functionSymbol or first.status != second.status
+            -> if { false -> return }
+    }
+    true
+}
+
+main {
+    [
+    "import model as model\nidentity value: Int -> Int { value + 1 }\nmain {\nmodel.identity(1) => first\n2 -> identity => second\n}",
+    "namespace model\npublic identity value: Int -> Int { value }"; ~
+    ] => sources
+    sources -> context.prepare => prepared
+    prepared.package -> calls.resolveModulesTyped(prepared.semantic) => standalone
+    prepared.package -> calls.resolveModulesTypedPrepared(prepared.semantic, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified) => reused
+    ((standalone -> len) > 0) -> println
+    standalone -> same(reused) -> println
+
+    -1 => intType!
+    0..<(prepared.semantic.types -> len) -> each index {
+        prepared.semantic.types[index] => candidate
+        candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 2
+            -> if { index => intType! }
+    }
+    (intType! >= 0) -> println
+    [Int; ~] => receivers!
+    prepared.package.nodes -> each node { receivers! -> push(intType!) }
+    [true, false; ~] => owners
+    prepared.package -> calls.resolveModulesTypedWithReceiverTypeSeeds(prepared.semantic, receivers!, prepared.semantic.types, owners, prepared.calls) => seededStandalone
+    prepared.package -> calls.resolveModulesTypedWithPreparedFacts(prepared.semantic, receivers!, prepared.semantic.types, owners, prepared.calls, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified) => seededReused
+    ((seededStandalone -> len) > 0) -> println
+    seededStandalone -> same(seededReused) -> println
+}

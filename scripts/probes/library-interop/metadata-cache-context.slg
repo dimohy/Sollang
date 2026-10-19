@@ -1,0 +1,45 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.library_imports as libraries
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sys.path as path
+import sys.process as process
+
+# Execute repeatedly against the same source and cache paths. The caller owns
+# the immutable metadata variants and records each generated metadata snapshot.
+observe sourcePath: Text, identityPath: Text, destination: Text, staged: Text -> Unit uses Console, File {
+    [Text; ~] => paths!
+    paths! -> push(sourcePath)
+    paths! -> context.prepareFiles => prepared
+    prepared.package -> libraries.load(paths!, "windows-x64", path.nativeStyle()) => catalog
+    "catalog = $(catalog.diagnosticCount)" -> println
+    prepared.package -> libraries.resolveQualified(catalog) => calls
+    prepared.package -> libraries.callResultTypes(prepared.semantic.types, catalog, calls) => facts
+    catalog -> libraries.semanticContextBytes => metadata
+    "facts = $(facts -> len)" -> println
+    destination -> cache.load => loaded
+    [Text; ~] => identityPaths!
+    identityPaths! -> push(identityPath)
+    generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
+    prepared -> cache.resolveWithExternalResults(loaded, identityPaths!, identity, facts, metadata) -> when {
+        Err(code) { "resolve error = $code" -> println }
+        Ok(value) {
+            "cache = $(value.loadStatus),$(value.reused),$(value.rejected),$(value.skipped)" -> println
+            "external = $(value.resolved.types.externalCallResults -> len)" -> println
+            "frame = $(value.words -> cache.validate)" -> println
+            value.words -> cache.stageExclusive(staged) => stageStatus
+            "stage = $stageStatus" -> println
+            stageStatus == 0 -> if {
+                staged -> cache.publish(destination) -> when {
+                    Err(code) { "publish error = $code" -> println }
+                    Ok(report) { "published = $(report.total),$(report.reused),$(report.skipped)" -> println }
+                }
+            }
+        }
+    }
+}
+
+main {
+    process.arguments() => arguments
+    observe(arguments[1], arguments[4], arguments[2], arguments[3])
+}

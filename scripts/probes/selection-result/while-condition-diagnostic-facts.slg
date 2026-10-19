@@ -1,0 +1,21 @@
+namespace sollang.compiler.probes.while_condition
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.diagnostics as syntaxDiagnostics
+
+public check source: Text, expectedCode: Int -> Bool uses Console {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    [typedIr.TypedIrNode; ~] => ir
+    prepared.package -> diagnostics.unresolvedMutableLocalReads => mutableNames
+    prepared.package -> diagnostics.firstExpressionOperandDiagnostic(prepared, types, ir, mutableNames, 64) => diagnostic
+    source -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+    "code=$(diagnostic.code),line=$(location.line),column=$(location.column)" -> println
+    diagnostic.code == expectedCode
+}

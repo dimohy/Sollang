@@ -1,0 +1,146 @@
+namespace sollang.compiler.semantic.mutable_binding_warnings
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.ownership_check as ownership
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.ir.typed as typedIr
+
+public struct Warning {
+    public sourceModule: Int
+    public bindingSymbol: Int
+    public code: Int
+    public offset: UIntSize
+}
+
+# These are committed runtime operations, not guesses from a callee spelling.
+# Read-only collection operations and owner-returning transforms are excluded.
+mutatesReceiver opcode: Int -> Bool {
+    opcode == -204 or opcode == -213 or opcode == -223 or opcode == -303
+        or opcode == -241 or opcode == -242 or opcode == -246 or opcode == -247
+        or opcode == -250 or opcode == -251 or opcode == -252 or opcode == -254
+        or opcode == -255 or opcode == -257 or opcode == -271 or opcode == -310
+        or (opcode -> typedIr.isRawArenaMutationOpcode)
+}
+
+markBinding prepared: ref semanticContext.SemanticSnapshot, owners: ref [Int; ~], sourceModule: Int, bindingSymbol: Int, mutated: mut [Bool; ~] -> Unit {
+    sourceModule >= 0 and sourceModule < (prepared.package.ranges -> len)
+        -> if {
+            prepared.package.ranges[sourceModule] => range
+            bindingSymbol >= 0 and bindingSymbol < range.symbolCount
+                -> if {
+                    true => mutated[owners[range.symbolStart + bindingSymbol]]
+                }
+        }
+}
+
+markPlace prepared: ref semanticContext.SemanticSnapshot, owners: ref [Int; ~], ir: ref [typedIr.TypedIrNode; ~], place: Int, mutated: mut [Bool; ~] -> Unit {
+    ir -> ownership.resolvedPlaceRootBinding(place) => root
+    root >= 0 and root < (ir -> len) -> if {
+        ir[root] => binding
+        prepared -> markBinding(owners, binding.sourceModule, binding.symbol, mutated)
+    }
+}
+
+public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypes.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~] -> [Warning; ~] {
+    [Bool; ~] => mutated!
+    [Int; ~] => functionBySymbol!
+    prepared.package.symbols -> each symbol {
+        mutated! -> push(false)
+        functionBySymbol! -> push(-1)
+    }
+    0 => symbolIndex!
+    symbolIndex! < (resolved.mutableBindingOwners -> len)
+        -> while {
+            resolved.mutableBindingOwners[symbolIndex!] != symbolIndex!
+                -> if { true => mutated![resolved.mutableBindingOwners[symbolIndex!]] }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => node
+        node.kind == 0 and node.sourceModule >= 0
+            and node.sourceModule < (prepared.package.ranges -> len) and node.symbol >= 0
+            -> if {
+                prepared.package.ranges[node.sourceModule] => range
+                irIndex! => functionBySymbol![range.symbolStart + node.symbol]
+            }
+        irIndex! + 1 => irIndex!
+    }
+    ir -> each node {
+        node.kind == 24 -> if {
+            prepared.package.ranges[node.sourceModule] => range
+            prepared.package.nodes[range.astStart + node.astNode] => assignment
+            prepared.package -> semanticContext.nearestVisibleMutableBinding(node.sourceModule, node.astNode, assignment.payloadToken) => owner
+            owner >= 0 -> if { true => mutated![resolved.mutableBindingOwners[owner]] }
+        }
+        node.kind == 25 -> if {
+            prepared -> markBinding(resolved.mutableBindingOwners, node.sourceModule, node.symbol, mutated!)
+            prepared -> markPlace(resolved.mutableBindingOwners, ir, node.operand1, mutated!)
+        }
+        node.kind == 6 or node.kind == 9 -> if {
+            node.opcode -> mutatesReceiver -> if {
+                prepared -> markPlace(resolved.mutableBindingOwners, ir, node.operand0, mutated!)
+            }
+            # Mapped flush retains its committed runtime alias rather than an opcode.
+            # Like the managed mutable-owner check, it counts as a writable use.
+            node.symbol == -114 and node.targetModule < 0
+                and node.operand0 >= 0 and node.operand0 < (ir -> len)
+                -> if {
+                    ir[node.operand0] => receiver
+                    receiver.typeOrigin == 1 and receiver.typeSymbol == 18
+                        -> if {
+                            prepared -> markPlace(resolved.mutableBindingOwners, ir, node.operand0, mutated!)
+                        }
+                }
+            node.opcode == -229 -> if {
+                prepared -> markPlace(resolved.mutableBindingOwners, ir, node.operand1, mutated!)
+            }
+            node.targetModule >= 0 and node.targetModule < (prepared.package.ranges -> len) and node.symbol >= 0
+                -> if {
+                    prepared.package.ranges[node.targetModule] => targetRange
+                    node.symbol < targetRange.symbolCount -> if {
+                        functionBySymbol![targetRange.symbolStart + node.symbol] => functionIndex
+                        functionIndex >= 0 -> if {
+                            ir[functionIndex] => function
+                            function.operand1 => parameter!
+                            node.operand0 => argument!
+                            parameter! >= 0 and argument! >= 0 -> while {
+                                ir[parameter!] => formal
+                                formal.flags / 2 % 2 == 1 -> if {
+                                    prepared -> markPlace(resolved.mutableBindingOwners, ir, argument!, mutated!)
+                                }
+                                argument! => previousArgument
+                                ir[previousArgument].nextOperand => argument!
+                                parameter! == function.operand1 -> if {
+                                    function.nextOperand => parameter!
+                                } else { formal.nextOperand => parameter! }
+                            }
+                        }
+                    }
+                }
+        }
+    }
+    [Warning; ~] => warnings!
+    prepared.package.ranges -> each range {
+        0 => localSymbol!
+        localSymbol! < range.symbolCount -> while {
+            range.symbolStart + localSymbol! => globalSymbol
+            prepared.package.symbols[globalSymbol] => binding
+            binding.kind == 9 and binding.flags % 2 == 1 and resolved.mutableBindingOwners[globalSymbol] == globalSymbol
+                and not mutated![globalSymbol]
+                and (prepared -> diagnostics.declarationBodyIsActive(resolved, range.sourceModule, binding.astNode))
+                -> if {
+                    prepared.package.tokens[range.tokenStart + binding.nameToken] => nameToken
+                    prepared.package.sources[range.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+                    name -> symbols.reservedBindingName -> if { 5 } else { 2 } => code
+                    prepared.package.nodes[range.astStart + binding.astNode] => declaration
+                    declaration.kind == 48 -> if { declaration.start } else { nameToken.span.start } => offset
+                    warnings! -> push(Warning { sourceModule: range.sourceModule, bindingSymbol: localSymbol!, code: code, offset: offset })
+                }
+            localSymbol! + 1 => localSymbol!
+        }
+    }
+    warnings!
+}

@@ -1,0 +1,29 @@
+import sollang.compiler.semantic.context as context
+
+pathStatus sources: [Text; ~], expectedPath: Text -> Int {
+    sources -> context.prepare => prepared
+    -1 => selected!
+    prepared.qualified -> each value {
+        value.sourceModule == 0 -> if {
+            prepared.package.nodes[prepared.package.ranges[0].astStart + value.pathAst] => node
+            prepared.package.sources[0] -> slice(node.start, node.length) => name
+            name == expectedPath -> if { value.status => selected! }
+        }
+    }
+    selected!
+}
+
+main {
+    "import stored.header as provider\nmain { provider.Item.count() -> println }\n" => caller
+    "namespace stored . header\npublic struct Item {}\n" => owner
+    "namespace stored.header\nimpl Item { public count: -> Int => 7 }\n" => method
+    pathStatus([caller, owner, method; ~], "provider.Item.count") -> println
+    "namespace stored . header\nstruct Item {}\n" => privateOwner
+    pathStatus([caller, privateOwner, method; ~], "provider.Item.count") -> println
+    "namespace stored.header\nimpl Item { count: -> Int => 7 }\n" => privateMethod
+    pathStatus([caller, owner, privateMethod; ~], "provider.Item.count") -> println
+    "namespace stored . header\nmain { stored.header.Item.count() -> println }\n" => sameModuleCaller
+    pathStatus([sameModuleCaller, privateOwner, privateMethod; ~], "stored.header.Item.count") -> println
+    "namespace stored.other\npublic struct Item {}\nimpl Item { public count: -> Int => 7 }\n" => foreignMethod
+    pathStatus([caller, owner, foreignMethod; ~], "provider.Item.count") -> println
+}

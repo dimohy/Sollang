@@ -1,0 +1,42 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    """"
+    struct Ordering { }
+    impl Ordering {
+        copy<T>: self, value: ref T -> T => value
+    }
+
+    main {
+        42 => number
+        "text" => text
+        Ordering { } -> copy(number) -> println
+        Ordering { } -> copy(text) -> println
+    }
+    """" => source
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => nodes!
+    [typeIds.SemanticType; ~] => types!
+    resolved.types -> each type { types! -> push(type) }
+    nodes! -> typedIr.planGenericCalls(prepared, types!) => plans
+    "plans=$(plans -> len),nodes=$(nodes! -> len)" -> println
+    plans -> each plan {
+        "call=$(plan.callNode),template=$(plan.templateNode),status=$(plan.status),result=$(plan.resultType),inputs=$(plan.inputTemplates -> len)/$(plan.actualInputs -> len)" -> println
+        0 => inputIndex!
+        inputIndex! < (plan.inputTemplates -> len) and inputIndex! < (plan.actualInputs -> len)
+            -> while {
+                types![plan.inputTemplates[inputIndex!]] => template
+                types![plan.actualInputs[inputIndex!]] => actual
+                "input=$inputIndex!,template=$(template.kind)/$(template.first)/$(template.containsParameter),actual=$(actual.kind)/$(actual.first)/$(actual.containsParameter)" -> println
+                inputIndex! + 1 => inputIndex!
+            }
+    }
+    nodes! -> typedIr.materializeGenericBodies(types!, resolved.fields, plans) => instances
+    instances -> each instance {
+        "instance-call=$(instance.callNode),status=$(instance.status),function=$(instance.functionNode),nodes=$(instance.nodeCount)" -> println
+    }
+}

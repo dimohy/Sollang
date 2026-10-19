@@ -1,5 +1,8 @@
 namespace sollang.compiler.llvm.emitter.context
 
+import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
+import sollang.compiler.semantic.mutable_binding_warnings as mutableBindingWarnings
+
 import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.ir.stream as streamIr
@@ -8,6 +11,9 @@ import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
 import sollang.compiler.semantic.library_imports as libraryImports
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.module_resolve as moduleResolve
@@ -25,7 +31,30 @@ public struct InitializerDiagnostic {
 }
 
 public struct EmitContext {
+    public globalFunctionAliasDiagnostic: calls.GlobalFunctionAliasDiagnostic
+    public unusedMutableBindingWarnings: [mutableBindingWarnings.Warning; ~]
     public initializerDiagnostics: [InitializerDiagnostic; ~]
+    public missingEnumVariants: [semanticDiagnostics.MissingEnumVariant; ~]
+    public nominalFieldMismatch: semanticDiagnostics.NominalFieldMismatchDiagnostic
+    public signatureTypeDiagnostic: semanticDiagnostics.SignatureTypeDiagnostic
+    public inferredInputConflict: semanticDiagnostics.InferredInputConflictDiagnostic
+    public bindingDeclarationDiagnostic: semanticDiagnostics.BindingDeclarationDiagnostic
+    public callOwnershipDiagnostic: semanticDiagnostics.CallOwnershipDiagnostic
+    public dictionaryKeyDiagnostic: semanticDiagnostics.DictionaryKeyDiagnostic
+    public ownedIndexReadDiagnostic: semanticDiagnostics.OwnedIndexReadDiagnostic
+    public firstDeclarationRootDiagnostic: Int
+    public firstOwnedBindingDiagnostic: Int
+    public callArityDiagnostic: semanticDiagnostics.CallArityDiagnostic
+    public unresolvedMutableNames: [semanticDiagnostics.UnresolvedMutableNameDiagnostic; ~]
+    public consumedBindingReads: [semanticDiagnostics.ConsumedBindingReadDiagnostic; ~]
+    public expressionOperandDiagnostic: semanticDiagnostics.ExpressionOperandDiagnostic
+    public numericCallLiteralDiagnostic: semanticDiagnostics.NumericCallLiteralDiagnostic
+    public numericCallArgumentDiagnostic: semanticDiagnostics.NumericCallArgumentDiagnostic
+    public redundantNumericConversions: [semanticDiagnostics.RedundantNumericConversion; ~]
+    public fixedLengthArrayWarnings: [fixedLengthArrays.FixedLengthArrayWarning; ~]
+    public interpolationNumericWarningByNode: [Int; ~]
+    public interpolationCallArgumentDiagnosticByNode: [interpolationInference.InterpolationCallArgumentDiagnostic; ~]
+    public memberFieldCollision: semanticDiagnostics.MemberFieldCollisionDiagnostic
     public sources: [Text; ~]
     public ranges: [analysis.SourceAnalysisRange; ~]
     public nodes: [ast.AstNode; ~]
@@ -34,13 +63,63 @@ public struct EmitContext {
     public tokens: [syntax.SyntaxToken; ~]
     public symbols: [symbols.Symbol; ~]
     public calls: [calls.ModuleCallResolution; ~]
+    public unsupportedNominalEnumFlowPathByAst: [Int; ~]
     public finalCallResolvedByAst: [Bool; ~]
     public awaitSourceByAst: [Bool; ~]
     public libraries: libraryImports.LibraryCatalog
     public libraryCalls: [libraryImports.LibraryFunctionResolution; ~]
     public libraryCallDiagnostics: [libraryImports.LibraryCallDiagnostic; ~]
     public interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+    public activeInterpolationBodyByNode: [Bool; ~]
     public interpolations: [interpolation.InterpolationNode; ~]
+    public interpolationEnumConstructors: [expressionTypeIds.ResolvedEnumConstructorArgument; ~]
+    public interpolationEnumConstructorByNode: [Int; ~]
+    public interpolationArrayByNode: [expressionTypeIds.InterpolationArrayFact; ~]
+    public interpolationOwnedParameterCallByNode: [Bool; ~]
+    public interpolationPayloadTransfers: [typedIr.InterpolationPayloadTransfer; ~]
+    public enumPayloadStorageDiagnostics: [ownershipCheck.EnumPayloadStorageDiagnostic; ~]
+    public intrinsicFlowResultBuiltinByNode: [Int; ~]
+    public invalidIntrinsicFlowArityByNode: [Bool; ~]
+    public invalidTextIntrinsicArgumentByNode: [Int; ~]
+    public collectionMembershipDiagnosticByNode: [interpolationInference.CollectionMembershipDiagnostic; ~]
+    public unresolvedInterpolationBindingByNode: [Bool; ~]
+    public uninvokedAssociatedMemberByNode: [Bool; ~]
+    public missingLocalAssociatedMemberByNode: [Bool; ~]
+    public localEnumMemberDecisionByNode: [interpolationInference.LocalEnumMemberDecision; ~]
+    public uninvokedInterpolationFunctionByNode: [Bool; ~]
+    public unresolvedInterpolationCallByNode: [Bool; ~]
+    public semanticInterpolationCallTargets: [interpolationInference.SemanticInterpolationCallTarget; ~]
+    public importedInterpolationCallTargetByNode: [Int; ~]
+    public directCallExpectedArityByNode: [Int; ~]
+    public invalidArgumentsInterpolationIndexByNode: [Bool; ~]
+    public invalidMappedIndexByNode: [Bool; ~]
+    public invalidCollectionIndexExpectedTypeByNode: [Int; ~]
+    public interpolationContextualDiagnosticByNode: [expressionTypeIds.ContextualStructDiagnostic; ~]
+    public interpolationContextualFieldByNode: [Int; ~]
+    public interpolationIndexedTypeByNode: [Int; ~]
+    public interpolationMemberTypeByNode: [Int; ~]
+    public interpolationUnaryTypeByNode: [Int; ~]
+    public interpolationNumericLiteralContextByNode: [interpolationInference.InterpolationNumericLiteralContext; ~]
+    public interpolationBinaryTypeByNode: [Int; ~]
+    public interpolationFlowTypeByNode: [Int; ~]
+    public interpolationResultPropagationByNode: [interpolationInference.ResultPropagationDecision; ~]
+    public interpolationMemberFieldByNode: [Int; ~]
+    public interpolationPrivateFieldByNode: [Int; ~]
+    public interpolationMissingMemberOwnerTypeByNode: [Int; ~]
+    public interpolationOwnedIndexElementTypeByNode: [Int; ~]
+    public interpolationOwnedIndexContainerByNode: [Int; ~]
+    public invalidSignedUnaryByNode: [Bool; ~]
+    public invalidNotUnaryByNode: [Bool; ~]
+    public binaryArithmeticDiagnosticByNode: [interpolationInference.InterpolationBinaryArithmeticDiagnostic; ~]
+    public binaryComparisonDiagnosticByNode: [interpolationInference.InterpolationBinaryComparisonDiagnostic; ~]
+    public binaryLogicalDiagnosticByNode: [Int; ~]
+    public unsupportedIndexOwnerTypeByNode: [Int; ~]
+    public invalidDisplayTypeByNode: [Int; ~]
+    public invalidNumericConversionTypeByNode: [Int; ~]
+    public invalidCodePointFloatConversionByNode: [Bool; ~]
+    public invalidNumericConversionLiteralByNode: [Int; ~]
+    public invalidNumericConversionArityByNode: [Bool; ~]
+    public numericConversionResultTypeByNode: [Int; ~]
     public ir: [typedIr.TypedIrNode; ~]
     public genericCallPlans: [typedIr.GenericCallPlan; ~]
     public genericBodies: typedIr.GenericBodyBindings
@@ -59,6 +138,7 @@ public struct EmitContext {
     public typeAligns: [Int; ~]
     public typeLayoutStatuses: [Int; ~]
     public typeTraits: [Int; ~]
+    public ownedStorageByType: [Bool; ~]
     public pointerBitWidth: Int
     public targetArchitecture: Int
     public cpuDispatchPolicy: Int
@@ -69,6 +149,7 @@ public struct EmitContext {
     public expectedPathStyle: Int
     public usesConcurrentStreamJoins: Bool
     public ownershipDiagnostics: [ownershipCheck.OwnershipDiagnostic; ~]
+    public readonlyReferencePaths: [ownershipCheck.ReadonlyReferenceLoan; ~]
 }
 
 public genericFunctionForCall context: ref EmitContext, callIndex: Int -> Int {
@@ -212,4 +293,74 @@ public streamCallbackInput context: ref EmitContext, pipelineIndex: Int, sourceM
             stageIndex! + 1 => stageIndex!
         }
     missing
+}
+
+public isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref EmitContext -> Bool {
+    false => matched!
+    sourceModule >= 0 and sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[sourceModule] => roleRange
+            symbolIndex >= 0 and symbolIndex < roleRange.symbolCount
+                -> if {
+                    context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
+                    roleSymbol.kind == 35 and roleSymbol.parent >= 0 and roleSymbol.parent < roleRange.symbolCount
+                        -> if {
+                            context.symbols[roleRange.symbolStart + roleSymbol.parent] => roleOwner
+                            roleOwner.kind == 48 and roleOwner.astNode == roleSymbol.astNode and roleOwner.astNode >= 0
+                                -> if {
+                                    context.nodes[roleRange.astStart + roleOwner.astNode] => roleAst
+                                    roleAst.payloadToken >= 0 -> if {
+                                        context.tokens[roleRange.tokenStart + roleAst.payloadToken] => roleName
+                                        (roleName.span.length == 4
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 1)) == 97
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 2)) == 99
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 3)) == 104)
+                                            or (roleName.span.length == 6
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == 114
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 1)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 2)) == 112
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 3)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 4)) == 97
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 5)) == 116)
+                                            -> if {
+                                                true => matched!
+                                            }
+                                    }
+                                }
+                        }
+                }
+        }
+    matched!
+}
+
+
+public directEachRoleSourceIr sourceModule: Int, symbolIndex: Int, context: ref EmitContext -> Int {
+    -1 => sourceIr!
+    sourceModule -> isDirectEachRoleSymbol(symbolIndex, context)
+        -> if {
+            context.ranges[sourceModule] => roleRange
+            context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
+            0 => eachSearch!
+            eachSearch! < (context.ir -> len) and sourceIr! < 0
+                -> while {
+                    context.ir[eachSearch!] => eachCandidate
+                    eachCandidate.kind == 6 and (eachCandidate.opcode -> typedIr.isDirectIterationOpcode)
+                        and eachCandidate.sourceModule == sourceModule
+                        and eachCandidate.astNode == roleSymbol.astNode
+                        and eachCandidate.operand0 >= 0 -> if {
+                            false => plannedPipeline!
+                            0 => pipelineIndex!
+                            pipelineIndex! < (context.streamPlan.pipelines -> len) and not plannedPipeline!
+                                -> while {
+                                    context.streamPlan.pipelines[pipelineIndex!].terminalIr == eachSearch!
+                                        -> if { true => plannedPipeline! }
+                                    pipelineIndex! + 1 => pipelineIndex!
+                                }
+                            not plannedPipeline! -> if { eachCandidate.operand0 => sourceIr! }
+                        }
+                    eachSearch! + 1 => eachSearch!
+                }
+        }
+    sourceIr!
 }

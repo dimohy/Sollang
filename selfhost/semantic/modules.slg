@@ -3,6 +3,8 @@ namespace sollang.compiler.semantic.modules
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.syntax as syntax
+import sys.file as file
 import syntax.generated.slg as grammar
 
 public struct ModuleIdentity {
@@ -19,6 +21,97 @@ public struct ImportEdge {
     public pathStart: UIntSize
     public pathLength: UIntSize
     public aliasToken: Int
+}
+
+# Namespace trivia does not participate in parsed module identity. Keep the
+# token comparison after the hash prefilter so collisions never grant access.
+nextPathToken tokens: ref [syntax.SyntaxToken; ~], cursor: Int, tokenEnd: Int, identity: ModuleIdentity -> Int {
+    cursor => current!
+    current! < tokenEnd -> while {
+        tokens[current!] => token
+        token.span.start >= identity.pathStart + identity.pathLength
+            -> if { tokenEnd -> return }
+        token.span.start >= identity.pathStart
+            and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+            -> if { current! -> return }
+        current! + 1 => current!
+    }
+    tokenEnd
+}
+sameLogicalPath leftText: Text, rightText: Text, left: ModuleIdentity, right: ModuleIdentity, leftRange: analysis.SourceAnalysisRange, rightRange: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~] -> Bool {
+    left.pathHash != right.pathHash -> if { false -> return }
+    left.pathLength == 0 or right.pathLength == 0
+        -> if { left.pathLength == 0 and right.pathLength == 0 -> return }
+    leftRange.tokenStart + leftRange.tokenCount => leftEnd
+    rightRange.tokenStart + rightRange.tokenCount => rightEnd
+    tokens -> nextPathToken(leftRange.tokenStart, leftEnd, left) => leftIndex!
+    tokens -> nextPathToken(rightRange.tokenStart, rightEnd, right) => rightIndex!
+    leftIndex! == leftEnd or rightIndex! == rightEnd
+        -> if { false -> return }
+    leftIndex! < leftEnd and rightIndex! < rightEnd
+        -> while {
+            tokens[leftIndex!] => leftToken
+            tokens[rightIndex!] => rightToken
+            leftToken.kind != rightToken.kind or leftToken.span.length != rightToken.span.length
+                -> if { false -> return }
+            UIntSize(0) => byteIndex!
+            byteIndex! < leftToken.span.length -> while {
+                (leftText -> byte(leftToken.span.start + byteIndex!)) != (rightText -> byte(rightToken.span.start + byteIndex!))
+                    -> if { false -> return }
+                byteIndex! + 1 => byteIndex!
+            }
+            tokens -> nextPathToken(leftIndex! + 1, leftEnd, left) => leftIndex!
+            tokens -> nextPathToken(rightIndex! + 1, rightEnd, right) => rightIndex!
+        }
+    leftIndex! == leftEnd and rightIndex! == rightEnd
+}
+public logicalNameIs source: Text, identity: ModuleIdentity, range: analysis.SourceAnalysisRange, tokens: ref [syntax.SyntaxToken; ~], expected: Text -> Bool {
+    range.tokenStart + range.tokenCount => tokenEnd
+    tokens -> nextPathToken(range.tokenStart, tokenEnd, identity) => tokenIndex!
+    UIntSize(0) => expectedIndex!
+    tokenIndex! < tokenEnd -> while {
+        tokens[tokenIndex!] => token
+        UIntSize(0) => tokenByte!
+        tokenByte! < token.span.length -> while {
+            expectedIndex! >= (expected -> len)
+                -> if { false -> return }
+            (source -> byte(token.span.start + tokenByte!)) != (expected -> byte(expectedIndex!))
+                -> if { false -> return }
+            tokenByte! + 1 => tokenByte!
+            expectedIndex! + 1 => expectedIndex!
+        }
+        tokens -> nextPathToken(tokenIndex! + 1, tokenEnd, identity) => tokenIndex!
+    }
+    expectedIndex! == (expected -> len)
+}
+public sameLogicalSource sources: ref [Text; ~], identities: ref [ModuleIdentity; ~], leftSource: Int, rightSource: Int, tokens: ref [syntax.SyntaxToken; ~], ranges: ref [analysis.SourceAnalysisRange; ~] -> Bool {
+    leftSource < 0 or leftSource >= (identities -> len) or leftSource >= (sources -> len) or leftSource >= (ranges -> len)
+        or rightSource < 0 or rightSource >= (identities -> len) or rightSource >= (sources -> len) or rightSource >= (ranges -> len)
+        -> if { false -> return }
+    sameLogicalPath(sources[leftSource], sources[rightSource], identities[leftSource], identities[rightSource], ranges[leftSource], ranges[rightSource], tokens)
+}
+public sameLogicalAnalyzedSource sources: ref [file.SourceText; ~], identities: ref [ModuleIdentity; ~], leftSource: Int, rightSource: Int, tokens: ref [syntax.SyntaxToken; ~], ranges: ref [analysis.SourceAnalysisRange; ~] -> Bool {
+    leftSource < 0 or leftSource >= (identities -> len) or leftSource >= (sources -> len) or leftSource >= (ranges -> len)
+        or rightSource < 0 or rightSource >= (identities -> len) or rightSource >= (sources -> len) or rightSource >= (ranges -> len)
+        -> if { false -> return }
+    sources[leftSource] -> slice(UIntSize(0), sources[leftSource] -> len) => leftText
+    sources[rightSource] -> slice(UIntSize(0), sources[rightSource] -> len) => rightText
+    sameLogicalPath(leftText, rightText, identities[leftSource], identities[rightSource], ranges[leftSource], ranges[rightSource], tokens)
+}
+
+public importTargetsAnalyzedModule package: ref analysis.PackageAnalysis, identities: ref [ModuleIdentity; ~], edge: ImportEdge, moduleIndex: Int -> Bool {
+    moduleIndex < 0 or moduleIndex >= (identities -> len)
+        or edge.sourceModule < 0 or edge.sourceModule >= (package.sources -> len)
+        or edge.sourceModule >= (package.ranges -> len) or edge.pathLength == 0
+        -> if { false -> return }
+    identities[moduleIndex] => target
+    target.sourceIndex < 0 or target.sourceIndex >= (package.sources -> len)
+        or target.sourceIndex >= (package.ranges -> len)
+        -> if { false -> return }
+    ModuleIdentity { sourceIndex: edge.sourceModule, pathHash: edge.targetHash, pathStart: edge.pathStart, pathLength: edge.pathLength, importCount: 0 } => requested
+    package.sources[edge.sourceModule] -> slice(UIntSize(0), package.sources[edge.sourceModule] -> len) => leftText
+    package.sources[target.sourceIndex] -> slice(UIntSize(0), package.sources[target.sourceIndex] -> len) => rightText
+    sameLogicalPath(leftText, rightText, requested, target, package.ranges[edge.sourceModule], package.ranges[target.sourceIndex], package.tokens)
 }
 
 public identities sources: [Text; ~] -> [ModuleIdentity; ~] {

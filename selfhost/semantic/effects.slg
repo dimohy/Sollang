@@ -1,6 +1,9 @@
 namespace sollang.compiler.semantic.effects
 
+import sollang.compiler.semantic.modules as modules
+
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
@@ -53,6 +56,293 @@ public effectProcess: -> Int => 16
 public effectEnvironment: -> Int => 32
 public effectNetwork: -> Int => 64
 
+# Production call admission shares the closed names with the analysis product.
+# Owners are global AST indices; main deliberately has no function contract.
+public struct DeclaredEffectIndex {
+    public owners: [Int; ~]
+    public masks: [Int; ~]
+    public failureCode: Int
+    public failureSourceModule: Int
+    public failureFunctionAst: Int
+    public failureReferenceAst: Int
+}
+
+public declaredEffectBit name: Text -> Int {
+    when {
+        name == "Console" => 1
+        name == "File" => 2
+        name == "Clock" => 4
+        name == "Random" => 8
+        name == "Process" => 16
+        name == "Environment" => 32
+        name == "Network" => 64
+        else => 0
+    }
+}
+
+public declaredEffectName bit: Int -> Text {
+    bit -> when {
+        == 1 => "Console"
+        == 2 => "File"
+        == 4 => "Clock"
+        == 8 => "Random"
+        == 16 => "Process"
+        == 32 => "Environment"
+        == 64 => "Network"
+        else => ""
+    }
+}
+
+# Older sys.runtime intrinsic declarations omit uses. Their canonical runtime
+# operation still owns its capability; a same-named ordinary function does not.
+intrinsicDeclarationEffect prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, symbolIndex: Int -> Int {
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.symbols[range.symbolStart + symbolIndex] => symbol
+    symbol.astNode < 0 or symbol.astNode >= range.astCount
+        -> if { 0 -> return }
+    prepared.package.nodes[range.astStart + symbol.astNode] => node
+    node.flags / 128 % 2 == 0 -> if { 0 -> return }
+    false => runtimeModule!
+    prepared.package.sources[sourceModule] -> slice(UIntSize(0), prepared.package.sources[sourceModule] -> len) => sourceText
+    prepared.modules -> each identity {
+        identity.sourceIndex == sourceModule and identity.pathHash == 12254170256457402476
+            and modules.logicalNameIs(sourceText, identity, range, prepared.package.tokens, "sys.runtime")
+            -> if { true => runtimeModule! }
+    }
+    not runtimeModule! -> if { 0 -> return }
+    node.firstToken + node.tokenCount - 1 => end!
+    false => foundEnd!
+    false => intrinsic!
+    end! >= node.firstToken and not foundEnd! -> while {
+        prepared.package.tokens[range.tokenStart + end!] => token
+        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+            and token.kind != grammar.tokenIdNewLine()
+            -> if {
+                true => foundEnd!
+                (prepared.package.sources[sourceModule] -> slice(token.span.start, token.span.length)) == "intrinsic" => intrinsic!
+            }
+        end! - 1 => end!
+    }
+    not intrinsic! or symbol.nameToken < 0 or symbol.nameToken >= range.tokenCount
+        -> if { 0 -> return }
+    prepared.package.tokens[range.tokenStart + symbol.nameToken] => nameToken
+    prepared.package.sources[sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+    when {
+        name == "print" or name == "println" or name == "readInt" or name == "eprint"
+            or name == "eprintln" or name == "flushStandardOutput" => 1
+        name == "openIntWriter" or name == "writeInt" or name == "closeIntWriter"
+            or name == "openIntReader" or name == "closestInt" or name == "closeIntReader" => 2
+        name == "nowMillis" or name == "utcNowMillis" => 4
+        name == "seedRandom" or name == "randomBelow"
+            or name == "secureRandomBytes" => 8
+        else => 0
+    }
+}
+
+# Main-only authority belongs to the nearest lexical function's source, not to
+# a statement form or an intrinsic-looking name at the call site.
+public disallowedMainOnlyCall prepared: ref semanticContext.SemanticSnapshot, index: ref DeclaredEffectIndex, call: calls.ModuleCallResolution -> Bool {
+    call.status != 0 or call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+        -> if { false -> return }
+    prepared.package.ranges[call.sourceModule] => callerRange
+    call.callAst < 0 or call.callAst >= callerRange.astCount
+        -> if { false -> return }
+    index.owners[callerRange.astStart + call.callAst] < 0
+        or (prepared -> semanticContext.isStandardLibrarySource(call.sourceModule))
+        -> if { false -> return }
+    call.origin == 2 and (call.functionSymbol == -103
+        or (call.functionSymbol <= -104 and call.functionSymbol >= -111)
+        or call.functionSymbol == -115)
+        -> if { true -> return }
+    call.targetSourceModule < 0 or call.targetSourceModule >= (prepared.package.ranges -> len)
+        -> if { false -> return }
+    prepared.package.ranges[call.targetSourceModule] => range
+    call.functionSymbol < 0 or call.functionSymbol >= range.symbolCount
+        -> if { false -> return }
+    prepared.package.symbols[range.symbolStart + call.functionSymbol] => target
+    target.nameToken < 0 or target.nameToken >= range.tokenCount
+        or target.astNode < 0 or target.astNode >= range.astCount
+        -> if { false -> return }
+    prepared.package.tokens[range.tokenStart + target.nameToken] => token
+    prepared.package.sources[call.targetSourceModule] -> slice(token.span.start, token.span.length) => name
+    "" => moduleName!
+    prepared.modules -> each identity {
+        identity.sourceIndex == call.targetSourceModule
+            -> if {
+                prepared.package.sources[identity.sourceIndex] -> slice(identity.pathStart, identity.pathLength) => moduleName!
+            }
+    }
+    (moduleName! == "sys.io" and name == "readInt")
+        or (moduleName! == "sys.random" and (name == "seed" or name == "below"))
+        or (moduleName! == "sys.file" and (name == "openIntWriter" or name == "writeInt"
+        or name == "closeIntWriter" or name == "openIntReader" or name == "closestInt" or name == "closeIntReader"))
+        -> if { true -> return }
+    prepared.package.nodes[range.astStart + target.astNode] => declaration
+    declaration.flags / 128 % 2 != 1 -> if { false -> return }
+    declaration.firstToken + declaration.tokenCount - 1 => end!
+    false => intrinsic!
+    false => foundEnd!
+    end! >= declaration.firstToken and not foundEnd!
+        -> while {
+            prepared.package.tokens[range.tokenStart + end!] => last
+            last.kind != grammar.triviaIdWhitespace() and last.kind != grammar.triviaIdComment()
+                and last.kind != grammar.tokenIdNewLine()
+                -> if {
+                    true => foundEnd!
+                    (prepared.package.sources[call.targetSourceModule] -> slice(last.span.start, last.span.length)) == "intrinsic" => intrinsic!
+                }
+            end! - 1 => end!
+        }
+    not intrinsic! -> if { false -> return }
+    moduleName! == "sys.runtime" -> if {
+        (name == "readInt" or name == "seedRandom" or name == "randomBelow" or name == "secureRandomBytes"
+            or name == "openIntWriter" or name == "writeInt" or name == "closeIntWriter"
+            or name == "openIntReader" or name == "closestInt" or name == "closeIntReader"
+            or name == "limitParallelWorkers" or name == "parallelWorkers" or name == "parallelPeakWorkers"
+            or name == "nowMillis" or name == "utcNowMillis" or name == "monotonicSuspendPolicy") -> return
+    }
+    moduleName! == "sys.file" and (name == "readStandardInput" or name == "readStandardInputChunk")
+        -> if { true -> return }
+    moduleName! == "sys.input.mouse" and name == "events" and target.parent >= 0 and target.parent < range.symbolCount
+        -> if {
+            prepared.package.symbols[range.symbolStart + target.parent] => owner
+            owner.nameToken >= 0 and owner.nameToken < range.tokenCount
+                -> if {
+                    prepared.package.tokens[range.tokenStart + owner.nameToken] => ownerToken
+                    (prepared.package.sources[call.targetSourceModule] -> slice(ownerToken.span.start, ownerToken.span.length)) == "Source" -> return
+                }
+        }
+    false
+}
+
+public indexDeclaredEffects prepared: ref semanticContext.SemanticSnapshot -> DeclaredEffectIndex {
+    [Int; ~] => owners!
+    [Int; ~] => masks!
+    0 => failureCode!
+    -1 => failureSource!
+    -1 => failureFunction!
+    -1 => failureReference!
+    prepared.package.nodes -> each node {
+        owners! -> push(-1)
+        masks! -> push(0)
+    }
+    prepared.package.ranges -> each range {
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            range.astStart + astIndex! => globalAst
+            prepared.package.nodes[globalAst] => node
+            node.kind == 7 or node.kind == 31 -> if {
+                globalAst => owners![globalAst]
+            } else {
+                node.kind != 8 and node.parent >= 0 and node.parent < astIndex!
+                    -> if { owners![range.astStart + node.parent] => owners![globalAst] }
+            }
+            owners![globalAst] => owner
+            node.kind == 52 and owner >= 0 and node.tokenCount == 1
+                and node.firstToken >= 0 and node.firstToken < range.tokenCount
+                -> if {
+                    prepared.package.tokens[range.tokenStart + node.firstToken] => token
+                    prepared.package.sources[range.sourceModule] -> slice(token.span.start, token.span.length)
+                        -> declaredEffectBit => bit
+                    bit == 0 or (bit > 0 and masks![owner] / bit % 2 == 1)
+                        -> if {
+                            failureCode! == 0 -> if {
+                                bit == 0 -> if { 44 } else { 45 } => failureCode!
+                                range.sourceModule => failureSource!
+                                owner - range.astStart => failureFunction!
+                                astIndex! => failureReference!
+                            }
+                        }
+                    bit > 0 -> if {
+                        masks![owner] / bit % 2 == 0 -> if { masks![owner] + bit => masks![owner] }
+                    }
+                }
+            astIndex! + 1 => astIndex!
+        }
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+            symbol.kind == 7 or symbol.kind == 31 -> if {
+                prepared -> intrinsicDeclarationEffect(range.sourceModule, symbolIndex!) => intrinsicBit
+                intrinsicBit > 0 -> if { intrinsicBit => masks![range.astStart + symbol.astNode] }
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    }
+    DeclaredEffectIndex {
+        owners: owners!
+        masks: masks!
+        failureCode: failureCode!
+        failureSourceModule: failureSource!
+        failureFunctionAst: failureFunction!
+        failureReferenceAst: failureReference!
+    }
+}
+
+# Return the first missing declared capability, in the callee's source order.
+# Valid calls use the indexed masks; only a missing contract scans its signature.
+public missingCallEffect prepared: ref semanticContext.SemanticSnapshot, index: ref DeclaredEffectIndex, call: calls.ModuleCallResolution -> Int {
+    call.status != 0 or call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+        -> if { 0 -> return }
+    prepared.package.ranges[call.sourceModule] => range
+    call.callAst < 0 or call.callAst >= range.astCount
+        -> if { 0 -> return }
+    index.owners[range.astStart + call.callAst] => caller
+    caller < 0 -> if { 0 -> return }
+    index.masks[caller] => callerMask
+    call.origin == 2 and call.functionSymbol == -114
+        -> if {
+            callerMask / 2 % 2 == 0 -> if { 2 -> return }
+            0 -> return
+        }
+    call.origin == 2 and (call.functionSymbol == -101 or call.functionSymbol == -102
+        or call.functionSymbol == -103
+        or call.functionSymbol == -116 or call.functionSymbol == -117)
+        -> if {
+            callerMask % 2 == 0 -> if { 1 -> return }
+            0 -> return
+        }
+    call.functionSymbol < 0 or call.targetSourceModule < 0
+        or call.targetSourceModule >= (prepared.package.ranges -> len)
+        -> if { 0 -> return }
+    prepared.package.ranges[call.targetSourceModule] => targetRange
+    call.functionSymbol >= targetRange.symbolCount
+        -> if { 0 -> return }
+    prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => target
+    target.astNode < 0 or target.astNode >= targetRange.astCount
+        -> if { 0 -> return }
+    targetRange.astStart + target.astNode => callee
+    index.masks[callee] => requiredMask
+    requiredMask == 0 or callerMask == 127 -> if { 0 -> return }
+    false => missing!
+    1 => bit!
+    bit! <= 64 and not missing! -> while {
+        requiredMask / bit! % 2 == 1 and callerMask / bit! % 2 == 0
+            -> if { true => missing! }
+        bit! * 2 => bit!
+    }
+    not missing! -> if { 0 -> return }
+    prepared -> intrinsicDeclarationEffect(call.targetSourceModule, call.functionSymbol) => intrinsicBit
+    intrinsicBit > 0 -> if { intrinsicBit -> return }
+    target.astNode + 1 => astIndex!
+    astIndex! < targetRange.astCount -> while {
+        targetRange.astStart + astIndex! => globalAst
+        prepared.package.nodes[globalAst] => node
+        node.kind == 52 and index.owners[globalAst] == callee and node.tokenCount == 1
+            and node.firstToken >= 0 and node.firstToken < targetRange.tokenCount
+            -> if {
+                prepared.package.tokens[targetRange.tokenStart + node.firstToken] => token
+                prepared.package.sources[call.targetSourceModule] -> slice(token.span.start, token.span.length)
+                    -> declaredEffectBit => bit
+                bit > 0 -> if {
+                    callerMask / bit % 2 == 0 -> if { bit -> return }
+                }
+            }
+        astIndex! + 1 => astIndex!
+    }
+    0
+}
+
 tokenTextIs request: TokenTextRequest -> Bool {
     request.token.span.length == (request.expected -> len) => equal!
     UIntSize(0) => index!
@@ -68,26 +358,7 @@ tokenTextIs request: TokenTextRequest -> Bool {
 }
 
 effectMask request: EffectMaskRequest -> Int {
-    TokenTextRequest { source: request.source, token: request.token, expected: "Console" } -> tokenTextIs
-        -> if { 1 } else {
-            TokenTextRequest { source: request.source, token: request.token, expected: "File" } -> tokenTextIs
-                -> if { 2 } else {
-                    TokenTextRequest { source: request.source, token: request.token, expected: "Clock" } -> tokenTextIs
-                        -> if { 4 } else {
-                            TokenTextRequest { source: request.source, token: request.token, expected: "Random" } -> tokenTextIs
-                                -> if { 8 } else {
-                                    TokenTextRequest { source: request.source, token: request.token, expected: "Process" } -> tokenTextIs
-                                        -> if { 16 } else {
-                                            TokenTextRequest { source: request.source, token: request.token, expected: "Environment" } -> tokenTextIs
-                                                -> if { 32 } else {
-                                                    TokenTextRequest { source: request.source, token: request.token, expected: "Network" } -> tokenTextIs
-                                                        -> if { 64 } else { 0 }
-                                                }
-                                        }
-                                }
-                        }
-                }
-        }
+    request.source -> slice(request.token.span.start, request.token.span.length) -> declaredEffectBit
 }
 
 hasEffect request: HasEffectRequest -> Bool {

@@ -1,12 +1,50 @@
+using System.Globalization;
+using System.Numerics;
 using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.Semantics;
 
 internal sealed partial class SemanticCompiler
 {
+    private readonly Dictionary<StringExpression, IReadOnlySet<string>> _deferredTextOrigins =
+        new(ReferenceEqualityComparer.Instance);
+
     private sealed record BorrowOriginState(
         IReadOnlyDictionary<string, IReadOnlySet<string>> Origins,
         IReadOnlySet<string> ReadonlyReferenceBindings);
+
+    // Contract discovery precedes body validation; types and origin scope travel together.
+    private sealed class BorrowOriginInferenceLocals : Dictionary<string, IReadOnlySet<string>>
+    {
+        public string ModuleName { get; }
+        public Dictionary<string, BoundType> Types { get; }
+
+        public BorrowOriginInferenceLocals(
+            BoundFunction function,
+            IEnumerable<KeyValuePair<string, IReadOnlySet<string>>> origins)
+            : base(origins, StringComparer.Ordinal)
+        {
+            ModuleName = function.ModuleName;
+            Types = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+            if (function.InputType is { } input)
+                Types[function.InputName ?? "it"] = input;
+            foreach (var parameter in function.AdditionalParameters ?? [])
+                Types[parameter.Name] = parameter.Type;
+        }
+
+        public BorrowOriginInferenceLocals(BorrowOriginInferenceLocals parent)
+            : base(parent, StringComparer.Ordinal)
+        {
+            ModuleName = parent.ModuleName;
+            Types = new Dictionary<string, BoundType>(parent.Types, StringComparer.Ordinal);
+        }
+    }
+
+    private static Dictionary<string, IReadOnlySet<string>> CopyBorrowOriginInferenceLocals(
+        IReadOnlyDictionary<string, IReadOnlySet<string>> parent) =>
+        parent is BorrowOriginInferenceLocals typed
+            ? new BorrowOriginInferenceLocals(typed)
+            : new Dictionary<string, IReadOnlySet<string>>(parent, StringComparer.Ordinal);
 
     [Flags]
     private enum BorrowControlExit
@@ -27,7 +65,7 @@ internal sealed partial class SemanticCompiler
         {
             if (function.Kind != BoundFunctionKind.User)
                 continue;
-            var sources = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+            var sources = new BorrowOriginInferenceLocals(function, []);
             if (function.InputType is { } input && _types.IsSlice(input)
                 && TypeContains(function.ReturnType, input))
                 sources.Add(function.InputName ?? "it", new HashSet<string>([function.InputName ?? "it"], StringComparer.Ordinal));
@@ -48,9 +86,14 @@ internal sealed partial class SemanticCompiler
 
     private void DiscoverReadonlyReferenceReturnOrigins(
         IReadOnlyDictionary<string, BoundFunction> functions)
+        => DiscoverReadonlyReferenceReturnOrigins(functions, functions.Values);
+
+    private void DiscoverReadonlyReferenceReturnOrigins(
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IEnumerable<BoundFunction> roots)
     {
         var candidates = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
-        foreach (var function in functions.Values)
+        foreach (var function in roots)
         {
             CollectFunctionTree(function, candidates);
         }
@@ -61,16 +104,19 @@ internal sealed partial class SemanticCompiler
             changed = false;
             foreach (var function in candidates)
             {
-                if (_readonlyReferenceReturnOrigins.ContainsKey(function)
-                    || !TypeContainsReadonlyReference(function.ReturnType)
+                if (!TypeContainsReadonlyReference(function.ReturnType)
                     || !ReadonlyReferenceOriginParameterNames(function).Any())
                 {
                     continue;
                 }
 
-                if (TryInferFunctionReadonlyReferenceOrigins(function, functions, out var origins))
+                if (TryInferFunctionReadonlyReferenceOrigins(function, functions, out var origins)
+                    && (!_readonlyReferenceReturnOrigins.TryGetValue(function, out var previous)
+                        || !previous.IsSupersetOf(origins)))
                 {
-                    _readonlyReferenceReturnOrigins.Add(function, origins);
+                    _readonlyReferenceReturnOrigins[function] = previous is null
+                        ? origins
+                        : new HashSet<string>(previous.Concat(origins), StringComparer.Ordinal);
                     changed = true;
                 }
             }
@@ -298,7 +344,7 @@ internal sealed partial class SemanticCompiler
             if (TryGetFunction(target.Path, functions, out var flowed)
                 && _readonlyReferenceReturnOrigins.TryGetValue(flowed, out var flowedReturnOrigins))
             {
-                var arguments = new Expression[] { flow.Source }.Concat(target.Arguments).ToArray();
+                var arguments = new Expression[] { BorrowOriginFlowReceiver(flow) }.Concat(target.Arguments).ToArray();
                 return TryMapReadonlyReferenceReturnOrigins(
                     flowed, flowedReturnOrigins, arguments, functions, locals, out origins);
             }
@@ -408,16 +454,19 @@ internal sealed partial class SemanticCompiler
             changed = false;
             foreach (var function in candidates)
             {
-                if (_borrowedTextReturnOrigins.ContainsKey(function)
-                    || !TypeCanCarryBorrowedTextOrigin(function.ReturnType)
+                if (!TypeCanCarryBorrowedTextOrigin(function.ReturnType)
                     || !BorrowedTextOriginParameterNames(function).Any())
                 {
                     continue;
                 }
 
-                if (TryInferFunctionBorrowedTextOrigins(function, functions, out var origins))
+                if (TryInferFunctionBorrowedTextOrigins(function, functions, out var origins)
+                    && (!_borrowedTextReturnOrigins.TryGetValue(function, out var previous)
+                        || !previous.IsSupersetOf(origins)))
                 {
-                    _borrowedTextReturnOrigins.Add(function, origins);
+                    _borrowedTextReturnOrigins[function] = previous is null
+                        ? origins
+                        : new HashSet<string>(previous.Concat(origins), StringComparer.Ordinal);
                     changed = true;
                 }
             }
@@ -465,31 +514,26 @@ internal sealed partial class SemanticCompiler
         return (type == BoundType.SourceText
                 && ownership == BoundFunctionInputOwnership.Default)
             || type == BoundType.Arena
-            || IsBorrowedTextByteStorage(type)
+            || (ownership != BoundFunctionInputOwnership.Move
+                && IsBorrowedTextByteStorage(type))
             || TypeContains(type, BoundType.Text)
             || (type != BoundType.SourceText
                 && TypeContains(type, BoundType.SourceText));
     }
 
-    private bool IsBorrowedTextByteStorage(BoundType type)
-    {
-        if (_types.IsReference(type))
-        {
-            return _types.GetReference(type).ElementType == TypeId.DynamicUInt8Array;
-        }
-        return _types.IsDynamicArray(type)
-            && _types.GetDynamicArray(type).ElementType == BoundType.UInt8;
-    }
+    private bool IsBorrowedTextByteStorage(BoundType type) =>
+        TypeContains(type, TypeId.DynamicUInt8Array);
 
     private bool TryInferFunctionBorrowedTextOrigins(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> functions,
         out IReadOnlySet<string> origins)
     {
-        var locals = BorrowedTextOriginParameterNames(function).ToDictionary(
-            static name => name,
-            static name => (IReadOnlySet<string>)new HashSet<string>([name], StringComparer.Ordinal),
-            StringComparer.Ordinal);
+        var locals = new BorrowOriginInferenceLocals(
+            function,
+            BorrowedTextOriginParameterNames(function).Select(static name =>
+                new KeyValuePair<string, IReadOnlySet<string>>(
+                    name, new HashSet<string>([name], StringComparer.Ordinal))));
         var union = new HashSet<string>(StringComparer.Ordinal);
         CollectBorrowedTextReturnOrigins(
             function.BlockBody,
@@ -526,6 +570,11 @@ internal sealed partial class SemanticCompiler
                     {
                         locals[binding.Name] = bindingOrigins;
                     }
+                    else
+                    {
+                        locals.Remove(binding.Name);
+                    }
+                    RecordBorrowOriginInferenceBinding(binding, functions, locals);
                     break;
                 case ReturnStatement { Value: { } value }:
                     if (TryInferBorrowedTextOrigins(value, functions, locals, out var returnOrigins))
@@ -535,6 +584,7 @@ internal sealed partial class SemanticCompiler
                     CollectNestedBorrowedTextReturnOrigins(value, functions, locals, union);
                     break;
                 case ExpressionStatement expression:
+                    RecordBorrowOriginInferencePush(expression.Expression, functions, locals);
                     CollectNestedBorrowedTextReturnOrigins(
                         expression.Expression,
                         functions,
@@ -543,19 +593,19 @@ internal sealed partial class SemanticCompiler
                     break;
                 case BlockFunctionCallStatement block:
                     CollectNestedBorrowedTextReturnOrigins(block.Source, functions, locals, union);
-                    var blockLocals = new Dictionary<string, IReadOnlySet<string>>(
-                        locals,
-                        StringComparer.Ordinal);
+                    var blockLocals = CopyBorrowOriginInferenceLocals(locals);
+                    SeedBorrowOriginInferenceEachItem(block, functions, blockLocals);
                     CollectBorrowedTextReturnOrigins(block.Body, functions, blockLocals, union);
+                    MergeBorrowOriginInferenceMutations(locals, blockLocals, block.Body, block.ItemName);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
                     foreach (var block in pipeline.Calls)
                     {
                         CollectNestedBorrowedTextReturnOrigins(block.Source, functions, locals, union);
-                        var pipelineLocals = new Dictionary<string, IReadOnlySet<string>>(
-                            locals,
-                            StringComparer.Ordinal);
+                        var pipelineLocals = CopyBorrowOriginInferenceLocals(locals);
+                        SeedBorrowOriginInferenceEachItem(block, functions, pipelineLocals);
                         CollectBorrowedTextReturnOrigins(block.Body, functions, pipelineLocals, union);
+                        MergeBorrowOriginInferenceMutations(locals, pipelineLocals, block.Body, block.ItemName);
                     }
                     break;
             }
@@ -598,6 +648,282 @@ internal sealed partial class SemanticCompiler
                 CollectBlockBorrowedTextReturnOrigins(fold.Body, functions, locals, union);
                 break;
         }
+    }
+
+    private static bool IsBorrowedStorageViewIntrinsic(BoundFunctionKind kind) =>
+        kind is BoundFunctionKind.RuntimeBorrowSourceBytes
+            or BoundFunctionKind.RuntimeBorrowSourceText
+            or BoundFunctionKind.RuntimePathText;
+
+    private static Expression BorrowOriginFlowReceiver(FlowExpression flow)
+    {
+        // The final stage determines the returned view's origin. Preserve its
+        // exact preceding flow for source-preserving and ordinary call mapping;
+        // a materialize stage instead replaces that origin with its Arena.
+        return flow.Targets.Count == 1
+            ? flow.Source
+            : new FlowExpression(
+                flow.Source, flow.Targets.Take(flow.Targets.Count - 1).ToArray(), flow.Line, flow.Column);
+    }
+
+    private bool TryGetArrayPushElementType(BoundType type, out BoundType element)
+    {
+        if (type == BoundType.DynamicIntArray)
+        {
+            element = BoundType.Int;
+            return true;
+        }
+        if (_types.IsBoundedArray(type))
+        {
+            element = _types.GetBoundedArray(type).ElementType;
+            return true;
+        }
+        if (_types.IsDynamicArray(type))
+        {
+            element = _types.GetDynamicArray(type).ElementType;
+            return true;
+        }
+        element = default;
+        return false;
+    }
+
+    private static bool TryGetBorrowOriginReceiverBinding(
+        Expression receiver,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out string binding)
+    {
+        if (TryGetBorrowPlace(receiver, out var place))
+        {
+            var root = SplitBorrowPlace(place)[0];
+            foreach (var name in bindings.Keys)
+            {
+                if (CanonicalBorrowOriginName(name) == root)
+                {
+                    binding = name;
+                    return true;
+                }
+            }
+        }
+        binding = "";
+        return false;
+    }
+
+    private static void UnionBorrowOriginCarrier(
+        IDictionary<string, IReadOnlySet<string>> carriers,
+        string receiver,
+        IReadOnlySet<string> storedOrigins)
+    {
+        if (storedOrigins.Count == 0)
+            return;
+        var union = carriers.TryGetValue(receiver, out var previous)
+            ? new HashSet<string>(previous, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        union.UnionWith(storedOrigins);
+        carriers[receiver] = union;
+    }
+
+    private void RecordBorrowOriginInferencePush(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, IReadOnlySet<string>> locals)
+    {
+        if (expression is not FlowExpression { Targets.Count: 1 } flow
+            || flow.Targets[0] is not { Path.Count: 1, Arguments.Count: 1 } target
+            || target.Path[0] != "push"
+            || locals is not BorrowOriginInferenceLocals typed
+            || !TryGetBorrowOriginInferenceType(flow.Source, functions, typed, out var receiverType)
+            || !TryGetArrayPushElementType(receiverType, out var elementType)
+            || !TypeCanCarryBorrowedTextOrigin(elementType))
+            return;
+        // Match declared-target precedence in TryInferContainerFlowTarget.
+        if (TryGetBorrowOriginInferenceFunction(target, target.Path, flow.Source, functions, locals, out var declared)
+            && declared.IsVisibleFrom(typed.ModuleName)
+            && declared.Kind is BoundFunctionKind.User or BoundFunctionKind.Native)
+            return;
+        if (TryGetBorrowOriginReceiverBinding(flow.Source, typed.Types, out var receiver)
+            && TryInferBorrowedTextOrigins(target.Arguments[0], functions, locals, out var origins))
+            UnionBorrowOriginCarrier(locals, receiver, origins);
+    }
+
+    private void SeedBorrowOriginInferenceEachItem(
+        BlockFunctionCallStatement call,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, IReadOnlySet<string>> locals)
+    {
+        // BindBlockFunctionCall selects builtin each before user block targets.
+        if (call.Target.Count != 1 || call.Target[0] != "each"
+            || locals is not BorrowOriginInferenceLocals typed
+            || !TryGetBorrowOriginInferenceType(call.Source, functions, typed, out var sourceType))
+            return;
+        if (!TryGetContextualArrayElementType(sourceType, out var elementType))
+            return;
+        typed.Types[call.ItemName] = elementType;
+        if (TypeCanCarryBorrowedTextOrigin(elementType)
+            && TryInferBorrowedTextOrigins(call.Source, functions, locals, out var origins))
+            locals[call.ItemName] = origins;
+        else
+            locals.Remove(call.ItemName);
+    }
+
+    private static void MergeBorrowOriginInferenceMutations(
+        Dictionary<string, IReadOnlySet<string>> parent,
+        Dictionary<string, IReadOnlySet<string>> child,
+        IReadOnlyList<Statement> statements,
+        string? itemName = null)
+    {
+        if (parent is not BorrowOriginInferenceLocals typedParent)
+            return;
+        // Only existing outer bindings survive this lexical block. Declarations
+        // and callback items never replace an outer receiver by matching spelling.
+        var localNames = statements.OfType<BindingStatement>()
+            .Select(static binding => binding.Name).ToHashSet(StringComparer.Ordinal);
+        if (itemName is not null)
+            localNames.Add(itemName);
+        var updates = child.Where(pair => typedParent.Types.ContainsKey(pair.Key)
+            && !localNames.Contains(pair.Key)).ToDictionary(
+                static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
+        var merged = MergeBorrowedTextOriginStates([
+            new BorrowOriginState(parent, new HashSet<string>(StringComparer.Ordinal)),
+            new BorrowOriginState(updates, new HashSet<string>(StringComparer.Ordinal))]);
+        foreach (var pair in merged.Origins)
+            parent[pair.Key] = pair.Value;
+    }
+
+    private void RecordBorrowOriginInferenceBinding(
+        BindingStatement binding,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> locals)
+    {
+        if (locals is not BorrowOriginInferenceLocals typed)
+            return;
+        if (TryGetBorrowOriginInferenceType(binding.Value, functions, typed, out var type))
+            typed.Types[binding.Name] = type;
+        else
+            typed.Types.Remove(binding.Name);
+    }
+
+    private bool TryGetBorrowOriginInferenceFunction(
+        object site,
+        IReadOnlyList<string> path,
+        Expression? receiver,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> locals,
+        out BoundFunction function)
+    {
+        if (_resolvedGenericCalls.TryGetValue(site, out function!))
+            return true;
+        if (locals is BorrowOriginInferenceLocals typed)
+        {
+            var previousModule = _currentModuleName;
+            _currentModuleName = typed.ModuleName;
+            try
+            {
+                // Flow retains canonical receiver-first dispatch. Direct calls
+                // retain global declaration priority before named-receiver dispatch.
+                if (receiver is not null
+                    && TryGetBorrowOriginInferenceType(receiver, functions, typed, out var receiverType)
+                    && TryResolveInstanceMethod(receiverType, string.Join('.', path), functions, out function))
+                    return true;
+                if (TryGetFunction(path, functions, out function))
+                    return true;
+                if (receiver is null
+                    && TryResolveInstanceMethodCall(path, functions, typed.Types, out function, out _, out _))
+                    return true;
+            }
+            finally
+            {
+                _currentModuleName = previousModule;
+            }
+            function = null!;
+            return false;
+        }
+        return TryGetFunction(path, functions, out function);
+    }
+
+    private bool TryGetBorrowOriginInferenceType(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        BorrowOriginInferenceLocals locals,
+        out BoundType type)
+    {
+        if (expression is NameExpression name)
+        {
+            if (!locals.Types.TryGetValue(name.Name, out type))
+                return false;
+            // Match InferNameExpression's single reference read; binding metadata
+            // remains unchanged for ownership and call-parameter decisions.
+            if (_types.IsReference(type))
+                type = _types.GetReference(type).ElementType;
+            return true;
+        }
+        if (expression is TypedEmptyArrayExpression empty)
+        {
+            var previousModule = _currentModuleName;
+            _currentModuleName = locals.ModuleName;
+            try
+            {
+                type = InferTypedEmptyArrayExpression(empty);
+                return true;
+            }
+            finally
+            {
+                _currentModuleName = previousModule;
+            }
+        }
+        if (expression is FieldAccessExpression field
+            && TryGetBorrowOriginInferenceType(field.Source, functions, locals, out var owner))
+        {
+            if (_types.IsReference(owner))
+                owner = _types.GetReference(owner).ElementType;
+            if (_types.IsStruct(owner))
+            {
+                var selected = _types.GetStruct(owner).Fields.FirstOrDefault(candidate =>
+                    StringComparer.Ordinal.Equals(candidate.Name, field.FieldName));
+                if (selected is not null)
+                {
+                    type = selected.Type;
+                    return true;
+                }
+            }
+        }
+        if (expression is IndexExpression indexed
+            && TryGetBorrowOriginInferenceType(indexed.Source, functions, locals, out var container)
+            && TryGetContextualArrayElementType(container, out type))
+            return true;
+        if (expression is CallExpression call
+            && TryGetBorrowOriginInferenceFunction(call, call.Path, null, functions, locals, out var called))
+        {
+            type = called.ReturnType;
+            return true;
+        }
+        if (expression is FlowExpression flow
+            && TryGetBorrowOriginInferenceType(flow.Source, functions, locals, out type))
+        {
+            foreach (var target in flow.Targets)
+            {
+                // Return types come from actual declarations, not builtin spelling.
+                var previousModule = _currentModuleName;
+                _currentModuleName = locals.ModuleName;
+                try
+                {
+                    if (!_resolvedGenericCalls.TryGetValue(target, out var selected)
+                        && !TryResolveInstanceMethod(type, string.Join('.', target.Path), functions, out selected)
+                        && !TryGetFunction(target.Path, functions, out selected))
+                    {
+                        type = default;
+                        return false;
+                    }
+                    type = selected.ReturnType;
+                }
+                finally
+                {
+                    _currentModuleName = previousModule;
+                }
+            }
+            return true;
+        }
+        type = default;
+        return false;
     }
 
     private bool TryInferBorrowedTextOrigins(
@@ -701,15 +1027,23 @@ internal sealed partial class SemanticCompiler
         }
 
         if (expression is CallExpression call
-            && TryGetFunction(call.Path, functions, out var called))
+            && TryGetBorrowOriginInferenceFunction(call, call.Path, null, functions, locals, out var called))
         {
-            if (called.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
-                or BoundFunctionKind.RuntimeBorrowSourceText)
+            IReadOnlyList<Expression> arguments = call.Arguments;
+            if (locals is BorrowOriginInferenceLocals typed
+                && call.Path.Count == 2
+                && typed.Types.ContainsKey(call.Path[0])
+                && !TryGetFunction(call.Path, functions, out _))
             {
-                if (call.Arguments.Count > 0)
+                arguments = new Expression[] { new NameExpression(call.Path[0], call.Line, call.Column) }
+                    .Concat(call.Arguments).ToArray();
+            }
+            if (IsBorrowedStorageViewIntrinsic(called.Kind))
+            {
+                if (arguments.Count > 0)
                 {
                     return TryInferBorrowedTextOrigins(
-                        call.Arguments[0], functions, locals, out origins);
+                        arguments[0], functions, locals, out origins);
                 }
                 origins = EmptyBorrowOrigins();
                 return false;
@@ -719,7 +1053,7 @@ internal sealed partial class SemanticCompiler
                 return TryMapBorrowedReturnOrigins(
                     called,
                     returnOrigins,
-                    call.Arguments,
+                    arguments,
                     functions,
                     locals,
                     out origins);
@@ -728,75 +1062,29 @@ internal sealed partial class SemanticCompiler
 
         if (expression is FlowExpression flow)
         {
-            Expression current = flow.Source;
-            for (var targetIndex = 0; targetIndex < flow.Targets.Count; targetIndex++)
+            if (flow.Targets.Count == 0)
+                return TryInferBorrowedTextOrigins(flow.Source, functions, locals, out origins);
+
+            var target = flow.Targets[^1];
+            var current = BorrowOriginFlowReceiver(flow);
+            var path = string.Join('.', target.Path);
+            if (path == "materialize" && target.Arguments.Count == 1)
+                return TryInferBorrowedTextOrigins(target.Arguments[0], functions, locals, out origins);
+            if (path == "slice")
+                return TryInferBorrowedTextOrigins(current, functions, locals, out origins);
+            if (TryGetBorrowOriginInferenceFunction(target, target.Path, current, functions, locals, out var flowedFunction))
             {
-                var target = flow.Targets[targetIndex];
-                var path = string.Join('.', target.Path);
-                if (path == "materialize" && target.Arguments.Count == 1)
+                if (IsBorrowedStorageViewIntrinsic(flowedFunction.Kind))
+                    return TryInferBorrowedTextOrigins(current, functions, locals, out origins);
+                if (_borrowedTextReturnOrigins.TryGetValue(flowedFunction, out var flowedReturnOrigins))
                 {
-                    if (targetIndex != flow.Targets.Count - 1
-                        || !TryInferBorrowedTextOrigins(
-                            target.Arguments[0],
-                            functions,
-                            locals,
-                            out origins))
-                    {
-                        origins = EmptyBorrowOrigins();
-                        return false;
-                    }
-                    return true;
-                }
-                if (path == "slice")
-                {
-                    // Slicing preserves the receiver's storage origin.  Keep
-                    // walking when another flow target follows so an owning
-                    // operation such as materialize can replace that origin.
-                    if (targetIndex == flow.Targets.Count - 1)
-                    {
-                        if (TryInferBorrowedTextOrigins(current, functions, locals, out origins))
-                        {
-                            return true;
-                        }
-                        origins = EmptyBorrowOrigins();
-                        return false;
-                    }
-                    origins = EmptyBorrowOrigins();
-                    continue;
-                }
-                if (TryGetFunction(target.Path, functions, out var borrowedSourceFunction)
-                    && borrowedSourceFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
-                        or BoundFunctionKind.RuntimeBorrowSourceText)
-                {
-                    if (targetIndex == flow.Targets.Count - 1)
-                    {
-                        return TryInferBorrowedTextOrigins(
-                            current, functions, locals, out origins);
-                    }
-                    continue;
-                }
-                if (TryGetFunction(target.Path, functions, out var flowedFunction)
-                    && _borrowedTextReturnOrigins.TryGetValue(flowedFunction, out var flowedReturnOrigins))
-                {
-                    if (targetIndex != flow.Targets.Count - 1)
-                    {
-                        origins = EmptyBorrowOrigins();
-                        return false;
-                    }
                     var arguments = new Expression[] { current }.Concat(target.Arguments).ToArray();
                     return TryMapBorrowedReturnOrigins(
-                        flowedFunction,
-                        flowedReturnOrigins,
-                        arguments,
-                        functions,
-                        locals,
-                        out origins);
+                        flowedFunction, flowedReturnOrigins, arguments, functions, locals, out origins);
                 }
-
-                origins = EmptyBorrowOrigins();
-                return false;
             }
-            return TryInferBorrowedTextOrigins(current, functions, locals, out origins);
+            origins = EmptyBorrowOrigins();
+            return false;
         }
 
         if (expression is IfExpression conditional && conditional.Else is not null)
@@ -863,20 +1151,17 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, IReadOnlySet<string>> parentLocals,
         HashSet<string> union)
     {
-        var locals = new Dictionary<string, IReadOnlySet<string>>(parentLocals, StringComparer.Ordinal);
-        foreach (var statement in block.Statements)
+        var locals = CopyBorrowOriginInferenceLocals(parentLocals);
+        CollectBorrowedTextReturnOrigins(block.Statements, functions, locals, union);
+        if (block.Value is not null)
         {
-            if (statement is BindingStatement binding
-                && TryInferBorrowedTextOrigins(binding.Value, functions, locals, out var bindingOrigins))
-            {
-                locals[binding.Name] = bindingOrigins;
-            }
+            RecordBorrowOriginInferencePush(block.Value, functions, locals);
+            CollectNestedBorrowedTextReturnOrigins(block.Value, functions, locals, union);
+            if (TryInferBorrowedTextOrigins(block.Value, functions, locals, out var origins))
+                union.UnionWith(origins);
         }
-        if (block.Value is not null
-            && TryInferBorrowedTextOrigins(block.Value, functions, locals, out var origins))
-        {
-            union.UnionWith(origins);
-        }
+        if (parentLocals is Dictionary<string, IReadOnlySet<string>> mutableParent)
+            MergeBorrowOriginInferenceMutations(mutableParent, locals, block.Statements);
     }
 
     private void CollectBlockBorrowedTextReturnOrigins(
@@ -885,12 +1170,15 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, IReadOnlySet<string>> parentLocals,
         HashSet<string> union)
     {
-        var locals = new Dictionary<string, IReadOnlySet<string>>(parentLocals, StringComparer.Ordinal);
+        var locals = CopyBorrowOriginInferenceLocals(parentLocals);
         CollectBorrowedTextReturnOrigins(block.Statements, functions, locals, union);
         if (block.Value is not null)
         {
+            RecordBorrowOriginInferencePush(block.Value, functions, locals);
             CollectNestedBorrowedTextReturnOrigins(block.Value, functions, locals, union);
         }
+        if (parentLocals is Dictionary<string, IReadOnlySet<string>> mutableParent)
+            MergeBorrowOriginInferenceMutations(mutableParent, locals, block.Statements);
     }
 
     private bool TryMapBorrowedReturnOrigins(
@@ -936,6 +1224,11 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         out IReadOnlySet<string> origins)
     {
+        if (expression is StringExpression text
+            && _deferredTextOrigins.TryGetValue(text, out origins!))
+        {
+            return origins.Count > 0;
+        }
         if (expression is NameExpression name
             && _activeBorrowedTextOrigins.TryGetValue(name.Name, out origins!))
         {
@@ -1034,8 +1327,7 @@ internal sealed partial class SemanticCompiler
         if (expression is CallExpression call
             && TryGetBorrowedCallSiteFunction(call, call.Path, functions, out var called))
         {
-            if (called.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
-                or BoundFunctionKind.RuntimeBorrowSourceText)
+            if (IsBorrowedStorageViewIntrinsic(called.Kind))
             {
                 if (call.Arguments.Count > 0)
                 {
@@ -1054,61 +1346,27 @@ internal sealed partial class SemanticCompiler
 
         if (expression is FlowExpression flow)
         {
-            Expression current = flow.Source;
-            for (var targetIndex = 0; targetIndex < flow.Targets.Count; targetIndex++)
+            if (flow.Targets.Count == 0)
+                return TryGetBorrowedTextCallOrigins(flow.Source, functions, bindings, out origins);
+
+            var target = flow.Targets[^1];
+            var current = BorrowOriginFlowReceiver(flow);
+            if (target.Path.Count == 1 && target.Path[0] == "materialize"
+                && target.Arguments.Count == 1)
+                return TryGetConcreteBorrowOrigins(target.Arguments[0], bindings, out origins);
+            if (target.Path.Count == 1 && target.Path[0] == "slice")
+                return TryGetBorrowedTextCallOrigins(current, functions, bindings, out origins)
+                    || TryGetConcreteBorrowOrigins(current, bindings, out origins);
+            if (TryGetBorrowedCallSiteFunction(target, target.Path, functions, out var targetFunction))
             {
-                var target = flow.Targets[targetIndex];
-                var hasTargetFunction = TryGetBorrowedCallSiteFunction(
-                    target,
-                    target.Path,
-                    functions,
-                    out var targetFunction);
-                if (target.Path.Count == 1
-                    && target.Path[0] == "materialize"
-                    && target.Arguments.Count == 1)
+                if (IsBorrowedStorageViewIntrinsic(targetFunction.Kind))
+                    return TryGetBorrowedSourceCallSiteOrigins(current, functions, bindings, out origins);
+                if (_borrowedTextReturnOrigins.TryGetValue(targetFunction, out var flowedReturnOrigins))
                 {
-                    if (targetIndex == flow.Targets.Count - 1
-                        && TryGetConcreteBorrowOrigins(
-                            target.Arguments[0],
-                            bindings,
-                            out origins))
-                    {
-                        return true;
-                    }
-                    break;
-                }
-                if (target.Path.Count == 1 && target.Path[0] == "slice")
-                {
-                    if (targetIndex == flow.Targets.Count - 1
-                        && TryGetConcreteBorrowOrigins(current, bindings, out origins))
-                    {
-                        return true;
-                    }
-                    continue;
-                }
-                if (hasTargetFunction
-                    && targetFunction.Kind is BoundFunctionKind.RuntimeBorrowSourceBytes
-                        or BoundFunctionKind.RuntimeBorrowSourceText)
-                {
-                    if (targetIndex == flow.Targets.Count - 1)
-                    {
-                        return TryGetBorrowedSourceCallSiteOrigins(
-                            current, functions, bindings, out origins);
-                    }
-                    continue;
-                }
-                if (hasTargetFunction
-                    && _borrowedTextReturnOrigins.TryGetValue(targetFunction, out var flowedReturnOrigins))
-                {
-                    if (targetIndex != flow.Targets.Count - 1)
-                    {
-                        break;
-                    }
                     var arguments = new Expression[] { current }.Concat(target.Arguments).ToArray();
                     return TryMapCallSiteBorrowedOrigins(
                         targetFunction, flowedReturnOrigins, arguments, functions, bindings, out origins);
                 }
-                break;
             }
         }
 
@@ -1251,7 +1509,7 @@ internal sealed partial class SemanticCompiler
             if (TryGetFunction(target.Path, functions, out var flowed)
                 && TypeContainsReadonlyReference(flowed.ReturnType))
             {
-                var arguments = new Expression[] { flow.Source }
+                var arguments = new Expression[] { BorrowOriginFlowReceiver(flow) }
                     .Concat(target.Arguments)
                     .ToArray();
                 return TryMapReadonlyReferenceCallOrigins(
@@ -1329,19 +1587,18 @@ internal sealed partial class SemanticCompiler
                             StringComparer.Ordinal),
                     _ => null
                 };
-                if (initializers is null)
+                if (initializers is not null)
                 {
+                    foreach (var field in _types.GetStruct(valueType).Fields)
+                    {
+                        if (TypeContainsReadonlyReference(field.Type)
+                            && initializers.TryGetValue(field.Name, out var initializer))
+                        {
+                            Collect(initializer, field.Type, path + "." + field.Name);
+                        }
+                    }
                     return;
                 }
-                foreach (var field in _types.GetStruct(valueType).Fields)
-                {
-                    if (TypeContainsReadonlyReference(field.Type)
-                        && initializers.TryGetValue(field.Name, out var initializer))
-                    {
-                        Collect(initializer, field.Type, path + "." + field.Name);
-                    }
-                }
-                return;
             }
 
             if (_types.IsEnum(valueType)
@@ -1758,9 +2015,19 @@ internal sealed partial class SemanticCompiler
                 return false;
             }
 
-            if (parameterTypes[ordinal] is BoundType.SourceText or BoundType.Arena)
+            // A moved owner carried into the result is not a loan from the caller frame.
+            // Existing upstream Text loans still propagate through the ordinary branch.
+            var ownership = called.InputType is not null && ordinal == 0
+                ? called.InputOwnership
+                : (called.AdditionalParameters ?? [])[ordinal - (called.InputType is null ? 0 : 1)].Ownership;
+            if (parameterTypes[ordinal] is BoundType.SourceText or BoundType.Arena
+                || (IsBorrowedTextByteStorage(parameterTypes[ordinal])
+                    && (parameterTypes[ordinal] == TypeId.DynamicUInt8Array
+                        || ownership != BoundFunctionInputOwnership.Move)
+                    && !ReturnsTransferredBorrowedTextOwner(called, ordinal, functions)))
             {
-                if (!TryGetConcreteBorrowOrigins(arguments[ordinal], bindings, out var sourceOrigins))
+                if (!TryGetBorrowedSourceCallSiteOrigins(
+                        arguments[ordinal], functions, bindings, out var sourceOrigins))
                 {
                     origins = EmptyBorrowOrigins();
                     return false;
@@ -1778,6 +2045,212 @@ internal sealed partial class SemanticCompiler
         }
         origins = union;
         return union.Count > 0;
+    }
+
+    private bool ReturnsTransferredBorrowedTextOwner(
+        BoundFunction function, int ordinal, IReadOnlyDictionary<string, BoundFunction> functions) =>
+        ReturnsTransferredBorrowedTextOwner(function, ordinal, functions,
+            new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance));
+
+    private bool ReturnsTransferredBorrowedTextOwner(
+        BoundFunction function, int ordinal, IReadOnlyDictionary<string, BoundFunction> functions,
+        HashSet<BoundFunction> visited)
+    {
+        if (!visited.Add(function))
+            return false;
+        var parameters = FunctionParameters(function);
+        var parameterTypes = FunctionParameterTypes(function);
+        if (ordinal < 0 || ordinal >= parameters.Count || ordinal >= parameterTypes.Count
+            || function.Body is null || FunctionControlFlowFacts.HasEarlyReturn(function)
+            || function.LocalFunctions.Count > 0 || function.GenericParameterName is not null
+            || function.GenericParameters?.Count > 0)
+            return false;
+        var ownership = function.InputType is not null && ordinal == 0
+            ? function.InputOwnership
+            : (function.AdditionalParameters ?? [])[ordinal - (function.InputType is null ? 0 : 1)].Ownership;
+        if (ownership != BoundFunctionInputOwnership.Move
+            || !_types.ContainsOwnedStorage(parameterTypes[ordinal]))
+            return false;
+
+        var parameterName = parameters[ordinal];
+        // A later binding with the same spelling is not proof of transferring the formal.
+        if (function.BlockBody.Any(statement => statement switch
+            {
+                BindingStatement binding => StringComparer.Ordinal.Equals(binding.Name, parameterName),
+                BlockFunctionCallStatement block => StringComparer.Ordinal.Equals(block.ResultName, parameterName),
+                BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(block =>
+                    StringComparer.Ordinal.Equals(block.ResultName, parameterName)),
+                _ => false
+            }))
+            return false;
+
+        // Compose only an exact final whole-owner forwarding call. The ordinary
+        // origin mapper still propagates upstream loans and other arguments.
+        var proofLocals = new BorrowOriginInferenceLocals(function, []);
+        Expression? forwardingReceiver = null;
+        object? callSite = null;
+        IReadOnlyList<string>? callPath = null;
+        IReadOnlyList<Expression>? callArguments = null;
+        if (function.Body is CallExpression directCall)
+        {
+            callSite = directCall;
+            callPath = directCall.Path;
+            callArguments = directCall.Arguments;
+        }
+        else if (function.Body is FlowExpression { Targets.Count: 1 } forwarding)
+        {
+            forwardingReceiver = forwarding.Source;
+            callSite = forwarding.Targets[0];
+            callPath = forwarding.Targets[0].Path;
+            callArguments = new Expression[] { forwarding.Source }
+                .Concat(forwarding.Targets[0].Arguments).ToArray();
+        }
+        if (callSite is not null && callPath is not null && callArguments is not null
+            && !function.BlockBody.Any(statement => ReferencesBorrowCarrier(statement, parameterName)))
+        {
+            var previousForwardModule = _currentModuleName;
+            _currentModuleName = function.ModuleName;
+            try
+            {
+                if ((forwardingReceiver is null
+                        || TryGetBorrowOriginInferenceType(forwardingReceiver, functions, proofLocals, out _))
+                    && !(forwardingReceiver is null && callPath.Count == 2
+                        && proofLocals.Types.ContainsKey(callPath[0]))
+                    && TryGetBorrowOriginInferenceFunction(callSite, callPath, forwardingReceiver,
+                        functions, proofLocals, out var callee)
+                    && callee.ReturnType == function.ReturnType)
+                {
+                    var calleeTypes = FunctionParameterTypes(callee);
+                    var matchingArguments = callArguments.Select((argument, index) => (argument, index))
+                        .Where(item => ReferencesBorrowCarrier(item.argument, parameterName)).ToArray();
+                    if (matchingArguments.Length == 1
+                        && matchingArguments[0] is { argument: NameExpression argument, index: var calleeOrdinal }
+                        && argument.Name == parameterName && calleeOrdinal < calleeTypes.Count
+                        && calleeTypes[calleeOrdinal] == parameterTypes[ordinal]
+                        && ReturnsTransferredBorrowedTextOwner(callee, calleeOrdinal, functions, visited))
+                        return true;
+                }
+            }
+            finally { _currentModuleName = previousForwardModule; }
+        }
+
+        var formalBindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        for (var index = 0; index < parameters.Count && index < parameterTypes.Count; index++)
+            formalBindings[parameters[index]] = parameterTypes[index];
+        var transfers = new List<OwnedLiteralTransfer>();
+        CollectOwnedLiteralSourceNames(function.Body, function.ReturnType, formalBindings, transfers);
+        if (transfers.Any(transfer => transfer.FieldPath.Count == 0
+            && StringComparer.Ordinal.Equals(transfer.OwnerName, parameterName)))
+            return true;
+        if (function.Body is not NameExpression finalOwner)
+            return false;
+        var ownerBindings = function.BlockBody.Select((statement, index) => (statement, index))
+            .Where(item => item.statement is BindingStatement binding
+                && StringComparer.Ordinal.Equals(binding.Name, finalOwner.Name)).ToArray();
+        if (ownerBindings.Length != 1 || ownerBindings[0].statement is not BindingStatement ownerBinding)
+            return false;
+        transfers.Clear();
+        CollectOwnedLiteralSourceNames(ownerBinding.Value, function.ReturnType, formalBindings, transfers);
+        if (!transfers.Any(transfer => transfer.FieldPath.Count == 0
+                && StringComparer.Ordinal.Equals(transfer.OwnerName, parameterName)))
+            return false;
+        // Record only direct destination slots proven by the authoritative transfer collector.
+        var retainedFields = ownerBinding.Value switch
+        {
+            NameExpression name when name.Name == parameterName => new HashSet<string>([""], StringComparer.Ordinal),
+            StructLiteralExpression literal when _types.IsStruct(function.ReturnType) =>
+                literal.Fields.Where(initializer => initializer.Value is NameExpression name
+                        && name.Name == parameterName
+                        && _types.GetStruct(function.ReturnType).Fields.Any(field =>
+                            field.Name == initializer.Name && field.Type == parameterTypes[ordinal]))
+                    .Select(initializer => initializer.Name).ToHashSet(StringComparer.Ordinal),
+            _ => new HashSet<string>(StringComparer.Ordinal)
+        };
+        if (retainedFields.Count == 0)
+            return false;
+        var previousModule = _currentModuleName;
+        _currentModuleName = function.ModuleName;
+        try
+        {
+            return function.BlockBody.Skip(ownerBindings[0].index + 1).All(statement =>
+                PreservesTransferredOwner(statement, finalOwner.Name, retainedFields, function.ReturnType, functions));
+        }
+        finally { _currentModuleName = previousModule; }
+    }
+
+    private bool PreservesTransferredOwner(
+        Statement statement, string owner, IReadOnlySet<string> fields, BoundType ownerType,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        if (statement is BindingStatement declaredBinding && declaredBinding.Name == owner
+            || statement is BlockFunctionCallStatement declaredCall && (declaredCall.ItemName == owner || declaredCall.ResultName == owner
+                || (declaredCall.AdditionalItemNames ?? []).Contains(owner, StringComparer.Ordinal))
+            || statement is BlockFunctionPipelineStatement declaredPipeline && declaredPipeline.Calls.Any(call =>
+                call.ItemName == owner || call.ResultName == owner
+                || (call.AdditionalItemNames ?? []).Contains(owner, StringComparer.Ordinal)))
+            return false;
+        if (statement is FieldAssignmentStatement assignment && assignment.Name == owner)
+            return !fields.Contains("") && !fields.Contains(assignment.FieldName)
+                && _types.IsStruct(ownerType)
+                && _types.GetStruct(ownerType).Fields.Any(field => field.Name == assignment.FieldName)
+                && PreservesTransferredOwnerRead(assignment.Value, owner, ownerType, functions);
+        if (!ReferencesBorrowCarrier(statement, owner))
+            return true;
+        return statement switch
+        {
+            BindingStatement binding => PreservesTransferredOwnerRead(binding.Value, owner, ownerType, functions),
+            ExpressionStatement expression => PreservesTransferredOwnerRead(expression.Expression, owner, ownerType, functions),
+            BlockFunctionCallStatement block => block.ItemName != owner && block.ResultName != owner
+                && !ReferencesBorrowCarrier(block.Source, owner)
+                && !(block.Arguments ?? []).Any(argument => ReferencesBorrowCarrier(argument, owner))
+                && block.Body.All(child => PreservesTransferredOwner(child, owner, fields, ownerType, functions)),
+            BlockFunctionPipelineStatement pipeline => pipeline.Calls.All(block =>
+                PreservesTransferredOwner(block, owner, fields, ownerType, functions)),
+            _ => false
+        };
+    }
+
+    private bool PreservesTransferredOwnerRead(
+        Expression expression, string owner, BoundType ownerType,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        if (!ReferencesBorrowCarrier(expression, owner))
+            return true;
+        bool BlockPreserves(BlockBody block) => block.Statements.All(statement =>
+                PreservesTransferredOwner(statement, owner, new HashSet<string>([""], StringComparer.Ordinal), ownerType, functions))
+            && (block.Value is null || PreservesTransferredOwnerRead(block.Value, owner, ownerType, functions));
+        bool CallPreserves(object site, IReadOnlyList<string> path, IReadOnlyList<Expression> arguments)
+        {
+            if (!TryGetBorrowedCallSiteFunction(site, path, functions, out var called)
+                || called.GenericParameterName is not null || called.GenericParameters?.Count > 0)
+                return false;
+            var types = FunctionParameterTypes(called);
+            for (var index = 0; index < arguments.Count; index++)
+            {
+                var argument = arguments[index];
+                if (!ReferencesBorrowCarrier(argument, owner)) continue;
+                if (index >= types.Count) return false;
+                var ownership = called.InputType is not null && index == 0
+                    ? called.InputOwnership
+                    : (called.AdditionalParameters ?? [])[index - (called.InputType is null ? 0 : 1)].Ownership;
+                if (index >= types.Count || argument is not NameExpression name || name.Name != owner
+                    || ownership != BoundFunctionInputOwnership.Default || !_types.IsReference(types[index])
+                    || _types.GetReference(types[index]).ElementType != ownerType)
+                    return false;
+            }
+            return true;
+        }
+        return expression switch
+        {
+            CallExpression call => CallPreserves(call, call.Path, call.Arguments),
+            FlowExpression flow when flow.Targets.Count == 1 => CallPreserves(flow.Targets[0],
+                flow.Targets[0].Path, new Expression[] { flow.Source }.Concat(flow.Targets[0].Arguments).ToArray()),
+            AndExpression logical => PreservesTransferredOwnerRead(logical.Left, owner, ownerType, functions)
+                && PreservesTransferredOwnerRead(logical.Right, owner, ownerType, functions),
+            IfExpression conditional => PreservesTransferredOwnerRead(conditional.Condition, owner, ownerType, functions)
+                && BlockPreserves(conditional.Then) && (conditional.Else is null || BlockPreserves(conditional.Else)),
+            _ => false
+        };
     }
 
     private bool TryUnionBlockCallSiteBorrowedOrigins(
@@ -1799,12 +2272,45 @@ internal sealed partial class SemanticCompiler
         return union.Count > 0;
     }
 
+    private bool TryGetEachItemBorrowedTextOrigins(
+        Expression source,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        // The item carries the source's payload loan, including a known-empty
+        // loan for static Text. Only an untracked source needs concrete-place
+        // recovery; the callback's local item name is never a new owner.
+        return TryGetBorrowedTextCallOrigins(source, functions, bindings, out origins)
+            || TryGetBorrowedSourceCallSiteOrigins(source, functions, bindings, out origins);
+    }
+
     private bool TryGetBorrowedSourceCallSiteOrigins(
         Expression source,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         out IReadOnlySet<string> origins)
     {
+        if (source is IndexExpression { Source: NameExpression carrier }
+            && bindings.TryGetValue(carrier.Name, out var carrierType))
+        {
+            // Name reads a reference once. The selected Text payload borrows its
+            // backing bytes, not the array/Arguments descriptor storing the span.
+            if (_types.IsReference(carrierType))
+                carrierType = _types.GetReference(carrierType).ElementType;
+            if (carrierType == BoundType.Arguments)
+            {
+                // Arguments is a process-lifetime view; only the runtime owns
+                // its UTF-8 bytes, so the local count descriptor is not an origin.
+                origins = EmptyBorrowOrigins();
+                return true;
+            }
+            if (TryGetContextualArrayElementType(carrierType, out var elementType)
+                && elementType == BoundType.Text
+                && _activeBorrowedTextOrigins.TryGetValue(carrier.Name, out origins!))
+                return true;
+        }
+
         if (TryGetConcreteBorrowOrigins(source, bindings, out origins))
         {
             return true;
@@ -1838,7 +2344,8 @@ internal sealed partial class SemanticCompiler
         foreach (var origin in origins)
         {
             var root = SplitBorrowPlace(origin)[0];
-            if (returnOuterBindings.ContainsKey(root))
+            if (returnOuterBindings.TryGetValue(root, out var outerType)
+                && !(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType)))
             {
                 continue;
             }
@@ -1878,6 +2385,20 @@ internal sealed partial class SemanticCompiler
         {
             if (_activeBorrowedTextOrigins.TryGetValue(name.Name, out origins!))
             {
+                if (origins.Count == 0
+                    && bindings.TryGetValue(name.Name, out var bindingType)
+                    && (TypeContains(bindingType, BoundType.SourceText)
+                        || _types.ContainsOwnedStorage(bindingType)))
+                {
+                    // A known-empty loan does not erase an owned storage place.
+                    // Borrowed views of that owner still depend on its lifetime;
+                    // an actual nonempty upstream loan remains authoritative.
+                    origins = new HashSet<string>(
+                        [CanonicalBorrowOriginName(name.Name)],
+                        StringComparer.Ordinal);
+                    isOwnedPlace = true;
+                    return true;
+                }
                 isOwnedPlace = false;
                 return true;
             }
@@ -1894,6 +2415,15 @@ internal sealed partial class SemanticCompiler
         if (expression is FieldAccessExpression field
             && TryGetConcreteBorrowOrigins(field.Source, bindings, out var fieldOrigins, out isOwnedPlace))
         {
+            // An aggregate's Text loans do not describe its separately owned
+            // field storage. Borrow that exact place, retaining borrowed Text
+            // and reference fields on their existing upstream-loan path.
+            if (TryGetOwnedFieldBorrowPlace(field, bindings, out var ownedField))
+            {
+                origins = new HashSet<string>([ownedField], StringComparer.Ordinal);
+                isOwnedPlace = true;
+                return true;
+            }
             origins = isOwnedPlace
                 ? AppendBorrowProjection(fieldOrigins, $".{field.FieldName}")
                 : fieldOrigins;
@@ -1912,6 +2442,48 @@ internal sealed partial class SemanticCompiler
         origins = EmptyBorrowOrigins();
         isOwnedPlace = false;
         return false;
+    }
+
+    private bool TryGetOwnedFieldBorrowPlace(
+        FieldAccessExpression field,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out string place)
+    {
+        if (TryGetOwnedPlaceType(field, out var fieldType)
+            && _types.ContainsOwnedStorage(fieldType)
+            && !TypeCanCarryBorrowedTextOrigin(fieldType)
+            && !TypeContainsReadonlyReference(fieldType)
+            && TryGetBorrowPlace(field, out place))
+        {
+            return true;
+        }
+        place = string.Empty;
+        return false;
+
+        bool TryGetOwnedPlaceType(Expression value, out BoundType type)
+        {
+            if (value is NameExpression name
+                && bindings.TryGetValue(name.Name, out type)
+                && !_types.IsReference(type)
+                && _types.ContainsOwnedStorage(type))
+            {
+                return true;
+            }
+            if (value is FieldAccessExpression selected
+                && TryGetOwnedPlaceType(selected.Source, out var owner)
+                && _types.IsStruct(owner))
+            {
+                var declaration = _types.GetStruct(owner).Fields.FirstOrDefault(candidate =>
+                    StringComparer.Ordinal.Equals(candidate.Name, selected.FieldName));
+                if (declaration is not null && !_types.IsReference(declaration.Type))
+                {
+                    type = declaration.Type;
+                    return true;
+                }
+            }
+            type = default;
+            return false;
+        }
     }
 
     private static IReadOnlySet<string> AppendBorrowProjection(
@@ -1956,14 +2528,16 @@ internal sealed partial class SemanticCompiler
         IReadOnlyList<Statement> statements,
         int statementIndex,
         Expression? result,
-        IReadOnlySet<string>? continuationNames)
+        IReadOnlySet<string>? continuationNames,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
+        CaptureLoopBorrowExpiration(statements, statementIndex, result, continuationNames, bindings);
         foreach (var binding in _activeBorrowedTextOrigins.Keys.ToArray())
         {
             var isLive = continuationNames?.Contains(binding) == true;
             for (var index = statementIndex; index < statements.Count; index++)
             {
-                if (ReferencesTrackedBorrow(statements[index], binding))
+                if (ReferencesTrackedBorrow(statements[index], binding, bindings))
                 {
                     isLive = true;
                     break;
@@ -1972,7 +2546,7 @@ internal sealed partial class SemanticCompiler
 
             if (!isLive
                 && result is not null
-                && ReferencesTrackedBorrow(result, binding))
+                && ReferencesTrackedBorrow(result, binding, bindings))
             {
                 isLive = true;
             }
@@ -1989,23 +2563,31 @@ internal sealed partial class SemanticCompiler
         IReadOnlyList<Statement> statements,
         int statementIndex,
         Expression? result,
-        IReadOnlySet<string>? continuationNames)
+        IReadOnlySet<string>? continuationNames,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
         var live = continuationNames is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(continuationNames, StringComparer.Ordinal);
-        foreach (var binding in _activeBorrowedTextOrigins.Keys)
+        // An untracked formal can acquire a carrier loan inside the next
+        // region. Retain its actual future uses without asserting known-empty
+        // provenance or changing the origin registry.
+        var carriers = _activeBorrowedTextOrigins.Keys.Concat(bindings
+            .Where(pair => TypeCanCarryBorrowedTextOrigin(pair.Value)
+                || TypeContainsReadonlyReference(pair.Value))
+            .Select(static pair => pair.Key)).Distinct(StringComparer.Ordinal);
+        foreach (var binding in carriers)
         {
             for (var index = statementIndex + 1; index < statements.Count; index++)
             {
-                if (ReferencesTrackedBorrow(statements[index], binding))
+                if (ReferencesTrackedBorrow(statements[index], binding, bindings))
                 {
                     live.Add(binding);
                     break;
                 }
             }
 
-            if (result is not null && ReferencesTrackedBorrow(result, binding))
+            if (result is not null && ReferencesTrackedBorrow(result, binding, bindings))
             {
                 live.Add(binding);
             }
@@ -2013,15 +2595,60 @@ internal sealed partial class SemanticCompiler
         return live;
     }
 
-    private bool ReferencesTrackedBorrow(Statement statement, string binding) =>
-        _activeReadonlyReferenceBindings.Contains(binding)
-            ? ReferencesBorrowCarrier(statement, binding)
-            : StoragePlacementAnalyzer.ReferencesName(statement, binding);
+    private bool ReferencesTrackedBorrow(
+        Statement statement,
+        string binding,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (_activeReadonlyReferenceBindings.Contains(binding))
+            return ReferencesBorrowCarrier(statement, binding);
+        var carriers = BorrowedTextLivenessCarriers(binding, bindings);
+        return carriers is null
+            ? StoragePlacementAnalyzer.ReferencesName(statement, binding)
+            : carriers.Any(carrier => ReferencesBorrowCarrier(statement, carrier));
+    }
 
-    private bool ReferencesTrackedBorrow(Expression expression, string binding) =>
-        _activeReadonlyReferenceBindings.Contains(binding)
-            ? ReferencesBorrowCarrier(expression, binding)
-            : StoragePlacementAnalyzer.ReferencesName(expression, binding);
+    private bool ReferencesTrackedBorrow(
+        Expression expression,
+        string binding,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (_activeReadonlyReferenceBindings.Contains(binding))
+            return ReferencesBorrowCarrier(expression, binding);
+        var carriers = BorrowedTextLivenessCarriers(binding, bindings);
+        return carriers is null
+            ? StoragePlacementAnalyzer.ReferencesName(expression, binding)
+            : carriers.Any(carrier => ReferencesBorrowCarrier(expression, carrier));
+    }
+
+    private IReadOnlyList<string>? BorrowedTextLivenessCarriers(
+        string binding,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (!bindings.TryGetValue(binding, out var type) || !_types.IsStruct(type))
+            return null;
+        var path = new HashSet<BoundType>();
+        var carriers = Collect(type, CanonicalBorrowOriginName(binding)).ToArray();
+        // Unknown shape must retain the aggregate loan, never erase it.
+        return carriers.Length > 0 ? carriers : null;
+
+        IEnumerable<string> Collect(BoundType current, string place)
+        {
+            if (!TypeCanCarryBorrowedTextOrigin(current) && !TypeContainsReadonlyReference(current))
+                yield break;
+            // Enum payloads, arrays, references and recursive shapes remain
+            // conservative at their containing place; only structs split fields.
+            if (!_types.IsStruct(current) || !path.Add(current))
+            {
+                yield return place;
+                yield break;
+            }
+            foreach (var field in _types.GetStruct(current).Fields)
+                foreach (var nested in Collect(field.Type, place + "." + field.Name))
+                    yield return nested;
+            path.Remove(current);
+        }
+    }
 
     private static bool ReferencesBorrowCarrier(Statement statement, string carrier) => statement switch
     {
@@ -2036,9 +2663,11 @@ internal sealed partial class SemanticCompiler
                 carrier)
             || ReferencesBorrowCarrier(assignment.Value, carrier),
         BlockFunctionCallStatement block => ReferencesBorrowCarrier(block.Source, carrier)
+            || (block.Arguments ?? []).Any(argument => ReferencesBorrowCarrier(argument, carrier))
             || ReferencesBorrowCarrier(block.Body, carrier),
         BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(
             block => ReferencesBorrowCarrier(block.Source, carrier)
+                || (block.Arguments ?? []).Any(argument => ReferencesBorrowCarrier(argument, carrier))
                 || ReferencesBorrowCarrier(block.Body, carrier)),
         ExpressionStatement expression => ReferencesBorrowCarrier(expression.Expression, carrier),
         ReturnStatement { Value: { } value } => ReferencesBorrowCarrier(value, carrier),
@@ -2059,12 +2688,14 @@ internal sealed partial class SemanticCompiler
     {
         if (expression is FieldAccessExpression field)
         {
-            return (TryGetBorrowPlace(field, out var place) && BorrowPlacesConflict(place, carrier));
+            return (TryGetBorrowPlace(field, out var place) && BorrowPlacesConflict(place, carrier))
+                || ReferencesBorrowProjectionEvaluation(field.Source, carrier);
         }
         if (expression is IndexExpression index)
         {
             return (TryGetBorrowPlace(index, out var place) && BorrowPlacesConflict(place, carrier))
-                || ReferencesBorrowCarrier(index.Index, carrier);
+                || ReferencesBorrowCarrier(index.Index, carrier)
+                || ReferencesBorrowProjectionEvaluation(index.Source, carrier);
         }
         if (expression is NameExpression name)
         {
@@ -2149,6 +2780,19 @@ internal sealed partial class SemanticCompiler
             _ => false
         };
     }
+
+    private static bool ReferencesBorrowProjectionEvaluation(Expression expression, string carrier) =>
+        expression switch
+        {
+            // A known lexical base is already compared as the exact projected
+            // place. Reading an owned sibling field does not consume its loan.
+            NameExpression => false,
+            FieldAccessExpression field => ReferencesBorrowProjectionEvaluation(field.Source, carrier),
+            IndexExpression index => ReferencesBorrowCarrier(index.Index, carrier)
+                || ReferencesBorrowProjectionEvaluation(index.Source, carrier),
+            // Calls, flows and conditional receivers must still be evaluated.
+            _ => ReferencesBorrowCarrier(expression, carrier)
+        };
 
     private BorrowOriginState CaptureBorrowedTextOriginState() => new(
         new Dictionary<string, IReadOnlySet<string>>(
@@ -2272,7 +2916,16 @@ internal sealed partial class SemanticCompiler
     private void RejectBorrowedTextOriginMutation(string name, int line, int column)
     {
         name = CanonicalBorrowOriginName(name);
-        var borrowed = _activeBorrowedTextOrigins
+        CaptureLoopBorrowMutation(name, line, column);
+        CheckBorrowedTextOriginMutation(_activeBorrowedTextOrigins, _activeReadonlyReferenceBindings, name, line, column);
+    }
+
+    private void CheckBorrowedTextOriginMutation(
+        IReadOnlyDictionary<string, IReadOnlySet<string>> origins,
+        IReadOnlySet<string> readonlyBindings,
+        string name, int line, int column)
+    {
+        var borrowed = origins
             .FirstOrDefault(pair => pair.Value.Any(origin => BorrowPlacesConflict(origin, name)));
         if (borrowed.Value is null)
         {
@@ -2281,7 +2934,7 @@ internal sealed partial class SemanticCompiler
 
         var origin = borrowed.Value.First(candidate => BorrowPlacesConflict(candidate, name));
 
-        if (_activeReadonlyReferenceBindings.Contains(borrowed.Key))
+        if (readonlyBindings.Contains(borrowed.Key))
         {
             throw Error(
                 line,
@@ -2374,11 +3027,23 @@ internal sealed partial class SemanticCompiler
     private static string BorrowOriginIndexProjection(Expression index) => index switch
     {
         NumberExpression number when IsIntegerLiteralExpression(number) =>
-            $"[{number.Text.Replace("_", string.Empty, StringComparison.Ordinal)}]",
+            BorrowOriginConstantIndexProjection(number, negative: false),
         NegateExpression { Value: NumberExpression number } when IsIntegerLiteralExpression(index) =>
-            $"[-{number.Text.Replace("_", string.Empty, StringComparison.Ordinal)}]",
+            BorrowOriginConstantIndexProjection(number, negative: true),
         _ => "[*]"
     };
+
+    private static string BorrowOriginConstantIndexProjection(NumberExpression number, bool negative)
+    {
+        var value = BigInteger.Parse(
+            number.Text.Replace("_", string.Empty, StringComparison.Ordinal),
+            CultureInfo.InvariantCulture);
+        if (negative)
+        {
+            value = -value;
+        }
+        return $"[{value.ToString(CultureInfo.InvariantCulture)}]";
+    }
 
     private static IReadOnlySet<string> EmptyBorrowOrigins() =>
         new HashSet<string>(StringComparer.Ordinal);

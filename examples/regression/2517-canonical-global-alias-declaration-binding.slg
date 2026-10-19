@@ -1,0 +1,107 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.parser as parser
+
+verify sources: [Text; ~], label: Text, trusted: Int -> Unit uses Console {
+    sources -> each source {
+        source -> parser.parseEvents => events
+        events[(events -> len) - 1].value == 0 -> if { "$label parse-error" -> println
+            return }
+    }
+    sources -> semanticContext.prepareWithStandardLibrarySources(trusted)
+        -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    committed.types => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    0 => selected!
+    0 => accepted!
+    0 => inaccessible!
+    0 => missing!
+    false => temporary!
+    prepared.calls -> each call {
+        call.functionSymbol >= 0 and call.targetSourceModule >= 0
+            -> if { selected! + 1 => selected! }
+        call.status == 0 -> if { accepted! + 1 => accepted! }
+        call.status == 1 -> if { inaccessible! + 1 => inaccessible! }
+        call.status == 2 -> if { missing! + 1 => missing! }
+        call.origin == 2 -> if { true => temporary! }
+    }
+    sources -> calls.resolveModules => compatibility
+    0 => compatibilitySelected!
+    compatibility -> each call {
+        call.functionSymbol >= 0 and call.targetSourceModule >= 0
+            -> if { compatibilitySelected! + 1 => compatibilitySelected! }
+        call.origin == 2 -> if { true => temporary! }
+    }
+    0 => displays!
+    ir -> each node {
+        (node.kind == 6 or node.kind == 9) and (node.symbol == -101 or node.symbol == -102)
+            -> if { displays! + 1 => displays! }
+    }
+    "$label selected=$(selected!) compatibility=$(compatibilitySelected!) accepted=$(accepted!) private=$(inaccessible!) missing=$(missing!) marker=$(temporary!) display=$(displays!)" -> println
+}
+
+main {
+    [
+    """
+    namespace sys.io
+    public print value: Text -> Unit {}
+    public println value: Text -> Unit {}
+    public readInt prompt: Text -> Int => 7
+    """,
+    """
+    namespace sys.random
+    seed value: Int -> Unit {}
+    below maxExclusive: Int -> Int => 3
+    """,
+    """
+    namespace sys.file
+    openIntWriter path: Text -> Int => 1
+    writeInt writer: Int, value: Int -> Unit {}
+    closeIntWriter writer: Int -> Unit {}
+    openIntReader path: Text -> Int => 1
+    closestInt reader: Int, value: Int -> Int => 2
+    closeIntReader reader: Int -> Unit {}
+    """,
+    """
+    namespace sys.runtime
+    public parallel<T, R> values: [T; ~] -> [R; ~] block item: T -> R = intrinsic
+    public tryParallel<T, R, E> values: [T; ~] -> Result<[R; ~], E> block item: T -> Result<R, E> = intrinsic
+    public limitParallelWorkers value: Int -> Int = intrinsic
+    public parallelWorkers: -> Int = intrinsic
+    public parallelPeakWorkers: -> Int = intrinsic
+    """,
+    """
+    main {
+        1 -> print
+        2 -> println
+        println()
+        "" -> readInt
+        1 -> seedRandom
+        3 -> randomBelow
+        "x" -> openIntWriter
+        1 -> writeInt(2)
+        1 -> closeIntWriter
+        "x" -> openIntReader
+        1 -> closestInt(2)
+        1 -> closeIntReader
+        parallel([1; ~])
+        tryParallel([1; ~])
+        1 -> limitParallelWorkers
+        parallelWorkers()
+        parallelPeakWorkers()
+    }
+    """; ~] -> verify("canonical-all", 4)
+    [
+    """
+    namespace sample
+    public println: -> Int => 9
+    main { println() }
+    """; ~] -> verify("ordinary-println", 0)
+    [
+    """
+    main { 1 -> print }
+    """; ~] -> verify("missing-print", 0)
+}

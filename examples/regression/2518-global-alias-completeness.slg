@@ -1,0 +1,55 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.calls as calls
+
+verify missing: Int, caller: Int -> Unit uses Console {
+    caller == 1 => conflict
+    caller == 2 => qualified
+    [
+    "namespace sys.io\npublic print value: Int -> Int => value\n",
+    "namespace sys.io\npublic println value: Int -> Int => value\n",
+    "namespace sys.io\npublic readInt value: Int -> Int => value\n",
+    "namespace sys.random\npublic seed value: Int -> Int => value\n",
+    "namespace sys.random\npublic below value: Int -> Int => value\n",
+    "namespace sys.file\npublic openIntWriter value: Int -> Int => value\n",
+    "namespace sys.file\npublic writeInt value: Int -> Int => value\n",
+    "namespace sys.file\npublic closeIntWriter value: Int -> Int => value\n",
+    "namespace sys.file\npublic openIntReader value: Int -> Int => value\n",
+    "namespace sys.file\npublic closestInt value: Int -> Int => value\n",
+    "namespace sys.file\npublic closeIntReader value: Int -> Int => value\n",
+    "namespace sys.runtime\npublic parallel value: Int -> Int => value\n",
+    "namespace sys.runtime\npublic tryParallel value: Int -> Int => value\n",
+    "namespace sys.runtime\npublic limitParallelWorkers value: Int -> Int => value\n",
+    "namespace sys.runtime\npublic parallelWorkers value: Int -> Int => value\n",
+    "namespace sys.runtime\npublic parallelPeakWorkers value: Int -> Int => value\n"] => canonical
+    [Text; ~] => sources!
+    0 => index!
+    index! < (canonical -> len) -> while {
+        index! != missing -> if { sources! -> push(canonical[index!]) }
+        index! + 1 => index!
+    }
+    sources! -> len => trusted
+    conflict -> if {
+        sources! -> push("parallelWorkers: -> Int => 1\nmain {}\n")
+    } else {
+        qualified -> if {
+            sources! -> push("parallelWorkers.extra: -> Int => 1\nmain {}\n")
+        } else {
+            sources! -> push("main {}\n")
+        }
+    }
+    sources! -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> calls.firstGlobalFunctionAliasDiagnostic(identities, 0, trusted) => result
+    result.marker -> calls.globalFunctionAliasModule => moduleName
+    result.marker -> calls.canonicalGlobalFunctionAliasName => targetName
+    result.functionSymbol >= 0 and result.targetSourceModule >= 0 => selected
+    "missing=$missing conflict=$conflict qualified=$qualified code=$(result.code) target=$moduleName.$targetName selected=$selected" -> println
+}
+
+main {
+    -1 -> verify(0)
+    0..15 -> each index { index -> verify(0) }
+    -1 -> verify(1)
+    -1 -> verify(2)
+}

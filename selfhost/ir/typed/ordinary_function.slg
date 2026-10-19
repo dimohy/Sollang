@@ -21,20 +21,23 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
-# Ordinary source functions borrow the frozen Typed IR indexes explicitly.
-# This static fragment boundary copies no prepared snapshot or owned table.
-lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
-    [TypedIrNode; ~] => results!
-    request.sourceIndex => sourceIndex
-    prepared.package.sources[sourceIndex] -> len => sourceLength
-    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+struct SourceLowerFacts {
+    names: [resolution.ResolvedName; ~]
+    symbolsByAst: [Int; ~]
+    qualifiedByAst: [Bool; ~]
+    functionPathByAst: [Bool; ~]
+    valueVariantByAst: [Int; ~]
+    localMemberByAst: [Bool; ~]
+}
+
+# One immutable source fact set is borrowed by entry and all function workers.
+prepareSourceLowerFacts prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> SourceLowerFacts {
     prepared.package.ranges[sourceIndex] => sourceRange
     [resolution.ResolvedName; ~] => resolvedNames!
     [Int; ~] => resolvedSymbolByAst!
     [Bool; ~] => resolvedQualifiedByAst!
     [Bool; ~] => qualifiedFunctionPathByAst!
     [Int; ~] => qualifiedValueVariantIndexByAst!
-    [Int; ~] => qualifiedIndexByParentAst!
     0 => resolvedNameIndexSeed!
     resolvedNameIndexSeed! < sourceRange.astCount
         -> while {
@@ -42,7 +45,6 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
             resolvedQualifiedByAst! -> push(false)
             qualifiedFunctionPathByAst! -> push(false)
             qualifiedValueVariantIndexByAst! -> push(-1)
-            qualifiedIndexByParentAst! -> push(-1)
             resolvedNameIndexSeed! + 1 => resolvedNameIndexSeed!
         }
     0 => sourceNameOffset!
@@ -70,8 +72,6 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                     indexedQualifiedParent >= 0 and indexedQualifiedParent < sourceRange.astCount
                         -> if {
                             true => resolvedQualifiedByAst![indexedQualifiedParent]
-                            qualifiedIndexByParentAst![indexedQualifiedParent] < 0
-                                -> if { qualifiedIndexBuild! => qualifiedIndexByParentAst![indexedQualifiedParent] }
                         }
                     prepared.modules[indexedQualified.targetModule].sourceIndex => indexedQualifiedTargetSource
                     prepared.package.ranges[indexedQualifiedTargetSource] => indexedQualifiedTargetRange
@@ -84,6 +84,24 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                 }
             qualifiedIndexBuild! + 1 => qualifiedIndexBuild!
         }
+    SourceLowerFacts {
+        names: resolvedNames!
+        symbolsByAst: resolvedSymbolByAst!
+        qualifiedByAst: resolvedQualifiedByAst!
+        functionPathByAst: qualifiedFunctionPathByAst!
+        valueVariantByAst: qualifiedValueVariantIndexByAst!
+        localMemberByAst: localMemberByParentAst
+    }
+}
+
+# Ordinary source functions borrow the frozen Typed IR indexes explicitly.
+# This static fragment boundary copies no prepared snapshot or owned table.
+lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceFacts: ref SourceLowerFacts -> SourceTypedIr {
+    [TypedIrNode; ~] => results!
+    request.sourceIndex => sourceIndex
+    prepared.package.sources[sourceIndex] -> len => sourceLength
+    prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    prepared.package.ranges[sourceIndex] => sourceRange
     request.symbolIndex => symbolIndex
     prepared.package.symbols[sourceRange.symbolStart + symbolIndex] => function
     function.kind == 7 or function.kind == 31 -> if {
@@ -132,19 +150,18 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
             sourceIndex -> resolvedFunctionResultTypeId(symbolIndex, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => functionResultTypeId!
         }
         prepared -> declaredArrayShapeKind(sourceIndex, declaredResultAst!) => declaredResultShapeKind
-        0 => functionResultReferenceSearch!
-        functionResultReferenceSearch! < (recursiveTypes.references -> len)
-            -> while {
-                recursiveTypes.references[functionResultReferenceSearch!] => functionResultReference
-                functionResultReference.status == 0
-                    and functionResultReference.sourceModule == sourceIndex
-                    and functionResultReference.typeAst == declaredResultAst!
-                    and (declaredResultShapeKind < 0
-                    or frozenRecursiveSemanticTypes[functionResultReference.typeId].kind == declaredResultShapeKind)
+        declaredResultAst! >= 0 and declaredResultAst! < sourceRange.astCount
+            -> if {
+                recursiveTypes.referenceIndexByTypeAst[sourceRange.astStart + declaredResultAst!] => resultReferenceIndex
+                resultReferenceIndex >= 0 and resultReferenceIndex < (recursiveTypes.references -> len)
                     -> if {
-                        functionResultReference.typeId => functionResultTypeId!
+                        recursiveTypes.references[resultReferenceIndex] => resultReference
+                        resultReference.status == 0
+                            and resultReference.sourceModule == sourceIndex
+                            and resultReference.typeAst == declaredResultAst!
+                            and (declaredResultShapeKind < 0 or frozenRecursiveSemanticTypes[resultReference.typeId].kind == declaredResultShapeKind)
+                            -> if { resultReference.typeId => functionResultTypeId! }
                     }
-                functionResultReferenceSearch! + 1 => functionResultReferenceSearch!
             }
         # A declared Unit function may have an empty block and no result expression.
         # Preserve its definition and formal parameter contract without inventing
@@ -183,7 +200,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                     and nativeTryFunctionResultCandidate.origin == 4
                                     and nativeTryFunctionResultCandidate.symbol == 1
                                     and nativeTryFunctionResultCandidate.first == nativeTryFunctionSuccessType
-                                    and nativeTryFunctionResultCandidate.second == 5
+                                    and nativeTryFunctionResultCandidate.second == (frozenRecursiveSemanticTypes -> typeIds.builtinTypeId(5))
                                     -> if {
                                         nativeTryFunctionResultSearch! => functionResultTypeId!
                                     }
@@ -263,7 +280,8 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                             and comActivationResultType.origin == 4
                                             and comActivationResultType.symbol == 1
                                             and comActivationResultType.first == comInterfaceTypeId!
-                                            and comActivationResultType.second == 5 -> if {
+                                            and comActivationResultType.second == (frozenRecursiveSemanticTypes -> typeIds.builtinTypeId(5))
+                                            -> if {
                                                 comActivationResultSearch! => comGeneratedResultTypeId!
                                             }
                                         comActivationResultSearch! + 1 => comActivationResultSearch!
@@ -301,9 +319,9 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                 }
                 parameterSymbol! >= 0 -> if {
                     0 => parameterNameSearch!
-                    parameterNameSearch! < (resolvedNames! -> len)
+                    parameterNameSearch! < (sourceFacts.names -> len)
                         -> while {
-                            resolvedNames![parameterNameSearch!] => parameterName
+                            sourceFacts.names[parameterNameSearch!] => parameterName
                             parameterName.symbol == parameterSymbol! -> if {
                                 parameterName.astNode => parameterReferenceAst!
                                 frozenInferredIndexByAst[sourceRange.astStart + parameterName.astNode] => parameterTypeIndex!
@@ -445,7 +463,8 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                 # through the canonical TypeReference arena shared with semantic
                 # expression typing, so nominal and structural owners have one
                 # identity and one zero-cost ABI path.
-                parameterSymbol! >= 0 and parameterOrigin! < 0 and function.kind == 31 and function.parent >= 0
+                parameterSymbol! >= 0 and function.kind == 31 and function.parent >= 0
+                    and prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!].flags / 262144 % 2 == 0
                     -> if {
                         prepared.package.symbols[sourceRange.symbolStart + function.parent] => receiverImpl
                         prepared.package -> typeIds.implOwnerTypeId(recursiveTypes.references, recursiveTypes.referenceIndexByTypeAst, sourceIndex, receiverImpl.astNode) => receiverOwnerTypeId
@@ -642,9 +661,9 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                         valueGeneric.kind == 32 and valueGeneric.parent == symbolIndex
                             -> if {
                                 0 => valueGenericReferenceSearch!
-                                valueGenericReferenceSearch! < (resolvedNames! -> len)
+                                valueGenericReferenceSearch! < (sourceFacts.names -> len)
                                     -> while {
-                                        resolvedNames![valueGenericReferenceSearch!] => valueGenericReference
+                                        sourceFacts.names[valueGenericReferenceSearch!] => valueGenericReference
                                         valueGenericReference.symbol == valueGenericSearch!
                                             and prepared.package.nodes[sourceRange.astStart + valueGenericReference.astNode].kind == 15
                                             -> if {
@@ -723,20 +742,8 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                 -1 => bindingTypeIndex!
                                 frozenNearestLegacyIndexByAst[sourceRange.astStart + bindingAstIndex] => bindingTypeIndex!
                                 frozenNearestCanonicalTypeByAst[sourceRange.astStart + bindingAstIndex] => bindingCanonicalTypeId!
-                                bindingCanonicalTypeId! < 0 -> if {
-                                    0 => bindingValueTypeSearch!
-                                    bindingValueTypeSearch! < sourceRange.astCount and bindingCanonicalTypeId! < 0
-                                        -> while {
-                                            prepared.package.nodes[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeAst
-                                            bindingValueTypeAst.parent == bindingAstIndex
-                                                and bindingValueTypeAst.start == bindingAst.start
-                                                -> if {
-                                                    frozenRecursiveTypeByAst[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeId
-                                                    bindingValueTypeId >= 0 -> if { bindingValueTypeId => bindingCanonicalTypeId! }
-                                                }
-                                            bindingValueTypeSearch! + 1 => bindingValueTypeSearch!
-                                        }
-                                }
+                                # Every typed direct child already propagates to this nearest-type index.
+                                # An unknown nearest type cannot be resolved by a source-wide child search.
                                 # `source -> yield => accepted` binds the result of
                                 # the caller-supplied block. A flow binding owns the
                                 # yield AST as its value child, while direct role
@@ -753,11 +760,7 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                                 prepared.package.nodes[sourceRange.astStart + bindingYieldSearch!] => bindingYieldCandidate
                                                 bindingYieldCandidate.parent == bindingAstIndex and bindingYieldCandidate.kind == 10
                                                     -> if {
-                                                        source -> flowIntrinsicOpcode(
-                                                        prepared.package.tokens,
-                                                        sourceRange.tokenStart,
-                                                        bindingYieldCandidate
-                                                        ) => bindingYieldOpcode
+                                                        source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, bindingYieldSearch!) => bindingYieldOpcode
                                                         bindingYieldOpcode == -227 -> if { true => bindingUsesBlockResult! }
                                                     }
                                                 bindingYieldSearch! + 1 => bindingYieldSearch!
@@ -804,11 +807,12 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                                                                 -> if { false => previousBindingEqual! }
                                                             previousBindingByte! + 1 => previousBindingByte!
                                                         }
-                                                    previousBindingEqual! -> if {
-                                                        previousBinding.symbol => bindingSymbol!
-                                                        previousBinding.typeId => bindingCanonicalTypeId!
-                                                        0 => previousBindingSearch!
-                                                    }
+                                                    previousBindingEqual! and (previousBinding.symbol -> priorMutableBindingVisible(bindingSymbol!, sourceIndex, prepared))
+                                                        -> if {
+                                                            previousBinding.symbol => bindingSymbol!
+                                                            previousBinding.typeId => bindingCanonicalTypeId!
+                                                            0 => previousBindingSearch!
+                                                        }
                                                 }
                                         }
                                     }
@@ -897,9 +901,9 @@ lowerOrdinaryFunction request: FunctionLowerRequest, prepared: ref semanticConte
                         }
                     bindingNodePosition! + 1 => bindingNodePosition!
                 }
-                results! -> lowerOrdinaryFunctionExpressions(astToIr!, resolvedNames!, resolvedSymbolByAst!, resolvedQualifiedByAst!, qualifiedFunctionPathByAst!, qualifiedValueVariantIndexByAst!, localMemberByParentAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
+                results! -> lowerOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, sourceFacts.symbolsByAst, sourceFacts.qualifiedByAst, sourceFacts.functionPathByAst, sourceFacts.valueVariantByAst, sourceFacts.localMemberByAst, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenRecursiveTypeByAst, sourceIndex, symbolIndex, functionIr, resultRootAst!, returnIr, functionResultTypeId!, functionNodeStart, functionNodeEnd, parameterSymbol!, parameterTypeId!)
 
-                results! -> finalizeOrdinaryFunctionExpressions(astToIr!, resolvedNames!, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
+                results! -> finalizeOrdinaryFunctionExpressions(astToIr!, sourceFacts.names, prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, symbolIndex, functionIr, expressionIrStart, resultRootAst!, returnIr, functionResultOrigin!, functionResultModule!, functionResultSymbol!, functionResultTypeId!)
             }
     }
     results! -> sourceTypedIr

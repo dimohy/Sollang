@@ -1,0 +1,106 @@
+namespace sollang.regression.owner_binding_value_checks
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.owner_type_facts as facts
+import sollang.compiler.semantic.analysis as analysis
+
+copyWords words: ref [UInt64; ~] -> [UInt64; ~] {
+    [UInt64; ~] => result!
+    words -> each word { result! -> push(word) }
+    result!
+}
+
+binding package: ref analysis.PackageAnalysis, owner: ref facts.RestoredOwnerTypeFacts, name: Text -> Int {
+    package.ranges[owner.sourceModule] => range
+    owner.bindings -> each value {
+        package.symbols[range.symbolStart + value.symbol] => symbol
+        symbol.nameToken >= 0 -> if {
+            package.tokens[range.tokenStart + symbol.nameToken] => token
+            package.sources[owner.sourceModule] -> slice(token.span.start, token.span.length) == name
+                -> if { value.typeId -> return }
+        }
+    }
+    -1
+}
+
+public verify: -> Unit uses Console {
+    "import cached.provider as provider\npeer: -> UInt8 => 3\nmain {\n    (true -> if { 1 } else { 2 }) + peer() => first\n    UInt16(4) => second\n    provider.value() => third\n    provider.Entry { value: 5 } => entry\n    (left: entry, right: first) => record\n    record.right -> println\n}\n" => mainSource
+    "namespace cached.provider\npublic struct Entry { public value: Int }\npublic value: -> Int => 1\n" => providerBefore
+    "namespace cached.provider\nhidden: -> Int => 99\npublic struct Entry { public value: Int }\npublic value: -> Int => 2\n" => providerAfter
+    [mainSource, providerBefore; ~] -> context.prepare => before
+    before -> expressions.resolveCallContext => resolved
+    resolved.prepared -> facts.capture(resolved.types, 0) => encoded
+    [providerAfter, mainSource; ~] -> context.prepare => current
+    encoded.words -> facts.restore(current.package, current.semantic) => restored
+    encoded.status == 0 and restored.status == 0 and restored.sourceModule == 1 => roundTrip
+    roundTrip -> println
+    current.package -> binding(restored, "first") => first
+    first >= 0 and restored.semantic.types[first].origin == 1 and restored.semantic.types[first].symbol == 8 => firstNumeric
+    firstNumeric -> println
+    current.package -> binding(restored, "second") => second
+    second >= 0 and restored.semantic.types[second].symbol == 9 => secondNumeric
+    secondNumeric -> println
+    current.package -> binding(restored, "entry") => entry
+    entry >= 0 and restored.semantic.types[entry].module == 0 and restored.semantic.types[entry].symbol > 0 => nominal
+    nominal -> println
+    current.package -> binding(restored, "record") => record
+    record >= 0 and restored.semantic.types[record].kind == 10
+        and (restored.semantic.fields -> len) == (current.semantic.fields -> len) + 2 => product
+    product -> println
+    false => numericValue!
+    restored.values -> each value {
+        current.package.nodes[current.package.ranges[1].astStart + value.astNode] => node
+        node.kind == 42 and restored.semantic.types[value.typeId].origin == 1
+            and restored.semantic.types[value.typeId].symbol == 8
+            -> if { true => numericValue! }
+    }
+    numericValue! -> println
+    "import cached.provider as provider\npeer: -> UInt8 => 3\nmain {\n    (true -> if { 1 } else { 2 }) + peer() => first\n    UInt16(4) => second\n    provider.value() => third\n    provider.Entry { value: 5 } => entry\n    (left: entry, right: first) => record\n    record.right -> println\n}\n# changed\n" => changedSource
+    [providerAfter, changedSource; ~] -> context.prepare => changed
+    encoded.words -> facts.restore(changed.package, changed.semantic) => rejectedOwner
+    rejectedOwner.status == 2 and (rejectedOwner.bindings -> len) == 0 => changedRejected
+    changedRejected -> println
+    [mainSource, mainSource, providerAfter; ~] -> context.prepare => duplicate
+    encoded.words -> facts.restore(duplicate.package, duplicate.semantic) => rejectedDuplicate
+    rejectedDuplicate.status == 3 and (rejectedDuplicate.values -> len) == 0 => ambiguityRejected
+    ambiguityRejected -> println
+
+    7 + Int(encoded.words[3]) + Int(encoded.words[4]) => bindingStart
+    bindingStart + Int(encoded.words[5]) * 2 => valueStart
+    encoded.words -> copyWords => badBinding!
+    18446744073709551615 => badBinding![bindingStart + 1]
+    badBinding! -> facts.restore(current.package, current.semantic) => invalidBinding
+    invalidBinding.status != 0 and (invalidBinding.semantic.types -> len) == 0 => badBindingRejected
+    badBindingRejected -> println
+    encoded.words -> copyWords => repeated!
+    repeated![bindingStart] => repeated![bindingStart + 2]
+    repeated! -> facts.restore(current.package, current.semantic) => duplicateBinding
+    duplicateBinding.status != 0 and (duplicateBinding.bindings -> len) == 0 => duplicateBindingRejected
+    duplicateBindingRejected -> println
+    encoded.words -> copyWords => badValue!
+    18446744073709551615 => badValue![valueStart + 1]
+    badValue! -> facts.restore(current.package, current.semantic) => invalidValue
+    invalidValue.status != 0 and (invalidValue.values -> len) == 0 => badValueRejected
+    badValueRejected -> println
+    encoded.words -> copyWords => outside!
+    UInt64(current.package.ranges[1].astCount) => outside![valueStart]
+    outside! -> facts.restore(current.package, current.semantic) => invalidLocation
+    invalidLocation.status != 0 and (invalidLocation.semantic.fields -> len) == 0 => locationRejected
+    locationRejected -> println
+    [UInt64; ~] => truncated!
+    0..<((encoded.words -> len) - 1) -> each index { truncated! -> push(encoded.words[index]) }
+    UInt64(truncated! -> len) => truncated![2]
+    truncated! -> facts.restore(current.package, current.semantic) => invalidLength
+    invalidLength.status != 0 and (invalidLength.bindings -> len) == 0 => truncationRejected
+    truncationRejected -> println
+    encoded.words -> copyWords => badSource!
+    256 => badSource![7]
+    badSource! -> facts.restore(current.package, current.semantic) => invalidSource
+    invalidSource.status != 0 and (invalidSource.values -> len) == 0 => sourceRejected
+    sourceRejected -> println
+    current.semantic.types -> len => initialTypeCount
+    badValue! -> facts.restore(current.package, current.semantic) => atomic
+    atomic.status != 0 and (atomic.semantic.types -> len) == 0 and (current.semantic.types -> len) == initialTypeCount => noMutation
+    noMutation -> println
+}

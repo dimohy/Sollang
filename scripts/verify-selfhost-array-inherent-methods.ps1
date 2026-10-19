@@ -81,8 +81,36 @@ if ($types.ExitCode -ne 0 -or $types.Stdout -match '(?m)^expression .* status [^
     throw "array-inherent selfhost semantic typing failed: $($types.Stdout) $($types.Stderr)"
 }
 $calls = Capture $candidate (@('typed-ir-calls') + $fixtureSources) 'array-inherent selfhost calls'
-if ($calls.ExitCode -ne 0 -or $calls.Stdout -match '(?m)^resolution .* status [^0]\s*$') {
+if ($calls.ExitCode -ne 0) {
     throw "array-inherent selfhost call resolution failed: $($calls.Stdout) $($calls.Stderr)"
+}
+$callResolutions = @($calls.Stdout -split "`r?`n" | ForEach-Object {
+    if ($_ -match '^resolution (?<source>\d+):\d+ kind \d+ start (?<start>\d+) .* target (?<targetModule>-?\d+):(?<targetSymbol>-?\d+) source (?<targetSource>-?\d+) status (?<status>\d+)$') {
+        [pscustomobject]@{
+            Source=[int]$Matches.source
+            Start=[int]$Matches.start
+            TargetModule=[int]$Matches.targetModule
+            TargetSymbol=[int]$Matches.targetSymbol
+            TargetSource=[int]$Matches.targetSource
+            Status=[int]$Matches.status
+        }
+    }
+})
+$fixtureText = [IO.File]::ReadAllText($fixture)
+$moduleText = [IO.File]::ReadAllText($fixtureModule)
+$firstPlusStart = $fixtureText.IndexOf('bytes -> arrayMethods.firstPlus', [StringComparison]::Ordinal)
+$localFirstPlusStart = $fixtureText.IndexOf('bytes -> arrayMethods.localFirstPlus', [StringComparison]::Ordinal)
+$internalFirstPlusStart = $moduleText.IndexOf('source -> firstPlus', [StringComparison]::Ordinal)
+$firstPlusResolution = @($callResolutions | Where-Object { $_.Source -eq 0 -and $_.Start -eq $firstPlusStart })
+$localFirstPlusResolution = @($callResolutions | Where-Object { $_.Source -eq 0 -and $_.Start -eq $localFirstPlusStart })
+$internalFirstPlusResolution = @($callResolutions | Where-Object { $_.Source -eq 1 -and $_.Start -eq $internalFirstPlusStart })
+if ($firstPlusResolution.Count -ne 1 -or $localFirstPlusResolution.Count -ne 1 -or $internalFirstPlusResolution.Count -ne 1 -or
+    $firstPlusResolution[0].Status -ne 0 -or $localFirstPlusResolution[0].Status -ne 0 -or $internalFirstPlusResolution[0].Status -ne 0 -or
+    $firstPlusResolution[0].TargetSource -ne 1 -or $localFirstPlusResolution[0].TargetSource -ne 1 -or $internalFirstPlusResolution[0].TargetSource -ne 1 -or
+    $firstPlusResolution[0].TargetSymbol -lt 0 -or $localFirstPlusResolution[0].TargetSymbol -lt 0 -or
+    $firstPlusResolution[0].TargetSymbol -ne $internalFirstPlusResolution[0].TargetSymbol -or
+    $firstPlusResolution[0].TargetSymbol -eq $localFirstPlusResolution[0].TargetSymbol) {
+    throw "array-inherent target calls did not resolve exactly: $($calls.Stdout)"
 }
 
 $fixtureLlvm = Join-Path $output 'fixture.ll'

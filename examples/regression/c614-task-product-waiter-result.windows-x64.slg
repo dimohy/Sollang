@@ -1,0 +1,39 @@
+pause: -> async Int {
+    yield
+    1
+}
+
+struct Input {
+    first: Int
+    second: Int
+    third: Int
+}
+
+value input: Input -> async Int {
+    pause() => child
+    child -> await => checkpoint
+    input.third
+}
+
+owned input: Input -> async [Int; ~] {
+    pause() => child
+    child -> await => checkpoint
+    [input.first, input.second, input.third; ~]
+}
+
+main {
+    Input { first: 17, second: 19, third: 23 } -> value => task
+    (task, 1) => holder
+    holder._0 => taken
+    taken -> await => result
+    "result=$result" -> println
+    Input { first: 29, second: 31, third: 37 } -> owned => ownedTask
+    (ownedTask, 2) => ownedHolder
+    (ownedHolder, 3) => nestedHolder
+    [41, 43; ~] => ordinaryValues!
+    result == 23 -> if { ordinaryValues! -> push(47) }
+    (ordinaryValues!, 2) => ordinaryHolder
+    ordinaryHolder._0 -> len => plainCount
+    "plain=$plainCount" -> println
+    "drop-owned" -> println
+}

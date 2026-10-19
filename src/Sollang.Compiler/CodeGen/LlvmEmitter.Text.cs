@@ -8,12 +8,12 @@ internal sealed partial class LlvmEmitter
     {
         var startInBounds = NextTemp("text_slice_start_in_bounds");
         EmitCompare(startInBounds, "ule", "i64", start, text.LengthName);
-        EmitTrapUnless(startInBounds, "text_slice_start_bounds");
+        EmitTrapUnless(startInBounds, "text_slice_start_bounds", "text_slice_start_bounds");
         var remaining = NextTemp("text_slice_remaining");
         EmitAssign(remaining, $"sub i64 {text.LengthName}, {start}");
         var lengthInBounds = NextTemp("text_slice_length_in_bounds");
         EmitCompare(lengthInBounds, "ule", "i64", length, remaining);
-        EmitTrapUnless(lengthInBounds, "text_slice_length_bounds");
+        EmitTrapUnless(lengthInBounds, "text_slice_length_bounds", "text_slice_length_bounds");
         var end = NextTemp("text_slice_end");
         EmitAssign(end, $"add i64 {start}, {length}");
         EmitTextBoundaryCheck(text, start, "text_slice_start");
@@ -43,7 +43,7 @@ internal sealed partial class LlvmEmitter
         EmitCompare(isContinuation, "eq", "i8", prefixBits, "-128");
         var boundary = NextTemp(prefix + "_boundary");
         EmitAssign(boundary, $"xor i1 {isContinuation}, true");
-        EmitTrapUnless(boundary, prefix + "_utf8_boundary");
+        EmitTrapUnless(boundary, prefix + "_utf8_boundary", prefix + "_utf8_boundary");
         EmitBranch(validLabel);
 
         EmitLabel(validLabel);

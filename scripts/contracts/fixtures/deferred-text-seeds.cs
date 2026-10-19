@@ -9,6 +9,11 @@ var kindType = assembly.GetType("Sollang.Compiler.Lexing.TokenKind", true)!;
 var parser = assembly.GetType("Sollang.Compiler.Parsing.StringLiteralParser", true)!;
 var parse = parser.GetMethod("ParseStringSegments", BindingFlags.Public | BindingFlags.Static)!;
 var kind = Enum.Parse(kindType, "String");
+var tokenConstructor = tokenType.GetConstructor(
+    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+    null,
+    [kindType, typeof(string), typeof(int), typeof(int), typeof(bool), typeof(int)],
+    null) ?? throw new InvalidOperationException("Expected Token(kind, text, line, column, isRawString, byteOffset) constructor");
 using var document = JsonDocument.Parse(File.ReadAllText(args[1]));
 var result = new Dictionary<string, bool>();
 foreach (var literal in document.RootElement.EnumerateArray())
@@ -16,8 +21,7 @@ foreach (var literal in document.RootElement.EnumerateArray())
     var lexeme = literal.GetProperty("lexeme").GetString()!;
     var raw = lexeme.StartsWith("\"\"\"", StringComparison.Ordinal);
     var contents = raw ? lexeme[3..^3] : lexeme[1..^1];
-    var token = Activator.CreateInstance(tokenType, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-        null, [kind, contents, 1, 1, raw], null)!;
+    var token = tokenConstructor.Invoke([kind, contents, 1, 1, raw, -1]);
     var segments = (IEnumerable)parse.Invoke(null, [token])!;
     result.Add(literal.GetProperty("id").GetString()!,
         segments.Cast<object>().Any(segment => segment.GetType().Name == "InterpolationSegment"));

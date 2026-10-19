@@ -1,0 +1,32 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sys.file as file
+
+public resourceBranchDiagnosticCount filename: Text -> Int uses File {
+    filename -> file.mapText => mapped
+    mapped -> slice(UIntSize(0), mapped -> len) => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    # Same canonical nominal identity and scalar field as stdlib/std/net/socket.slg.
+    # Only declarations relevant to the unit are loaded into this source probe.
+    """
+    namespace std.net.socket
+    public struct CompletionReactor {
+        token: UInt64
+    }
+
+    """ => resourceSource
+    sources! -> push(resourceSource)
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    0 => count!
+    context.ownershipDiagnostics -> each diagnostic {
+        diagnostic.sourceModule == 0 and diagnostic.code == 33
+            -> if {
+                count! + 1 => count!
+            }
+    }
+    count!
+}

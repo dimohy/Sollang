@@ -1,0 +1,113 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+
+tracePreparedContextBranchIr paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize, nativePreparation: Bool, checkedPreparation: Bool, emitPrepared: Bool -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+    }
+    checkedPreparation -> if {
+        sources! -> syntaxDiagnosticCount => syntaxCount
+        "syntax-diagnostic-count=$(syntaxCount)" -> println
+        sources! -> emitSourceStyleNotes
+    }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    nativePreparation -> if {
+        request -> prepareNative
+    } else {
+        request -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle())
+    } => context
+    context.expressionOperandDiagnostic => diagnostic
+    "diagnostic=$(diagnostic.code),source=$(diagnostic.sourceModule),ast=$(diagnostic.astNode),operand=$(diagnostic.operandAst),firstType=$(diagnostic.firstTypeId),secondType=$(diagnostic.operandTypeId)" -> println
+    context.ranges[sourceIndex] => range
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        context.nodes[range.astStart + astIndex!] => node
+        node.start >= start and node.start <= end
+            and (node.kind == 10 or node.kind == 42 or node.kind == 43)
+            -> if {
+                "ast=$(astIndex!),kind=$(node.kind),parent=$(node.parent),start=$(node.start),length=$(node.length)" -> println
+            }
+        astIndex! + 1 => astIndex!
+    }
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context.ir[irIndex!] => node
+        node.sourceModule == sourceIndex and node.astNode >= 0
+            -> if {
+                context.nodes[range.astStart + node.astNode] => sourceAst
+                sourceAst.start >= start and sourceAst.start <= end
+                    -> if {
+                        "ir=$(irIndex!),kind=$(node.kind),parent=$(node.parent),ast=$(node.astNode),type=$(node.typeId),operand=$(node.operand0),target=$(node.targetModule)/$(node.symbol),start=$(sourceAst.start),opcode=$(node.opcode)" -> println
+                        node.kind == 6 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len)
+                            and node.symbol >= 0 and node.symbol < context.ranges[node.targetModule].symbolCount
+                            -> if {
+                                context.ranges[node.targetModule] => targetRange
+                                context.symbols[targetRange.symbolStart + node.symbol] => declaration
+                                declaration.secondaryTypeNode >= 0 -> if { declaration.secondaryTypeNode } else { declaration.typeNode } => resultAst
+                                "call-declaration=$(node.targetModule)/$(node.symbol),kind=$(declaration.kind),flags=$(declaration.flags),result-ast=$resultAst" -> println
+                                context.typeReferences -> each reference {
+                                    reference.status == 0 and reference.sourceModule == node.targetModule and reference.typeAst == resultAst
+                                        and reference.typeId >= 0 and reference.typeId < (context.types -> len)
+                                        -> if {
+                                            context.types[reference.typeId] => resultType
+                                            "declared-result=$(reference.typeId),kind=$(resultType.kind),origin=$(resultType.origin),symbol=$(resultType.symbol),first=$(resultType.first),second=$(resultType.second)" -> println
+                                        }
+                                }
+                                node.typeId >= 0 and node.typeId < (context.types -> len)
+                                    -> if {
+                                        context.types[node.typeId] => callType
+                                        "call-result=$(node.typeId),kind=$(callType.kind),origin=$(callType.origin),symbol=$(callType.symbol),first=$(callType.first),second=$(callType.second)" -> println
+                                    }
+                            }
+                    }
+            }
+        irIndex! + 8 >= (context.ir -> len) and node.sourceModule != sourceIndex
+            -> if {
+                "tail-ir=$(irIndex!),kind=$(node.kind),parent=$(node.parent),source=$(node.sourceModule),ast=$(node.astNode),operand=$(node.operand0)" -> println
+            }
+        irIndex! + 1 => irIndex!
+    }
+    emitPrepared -> if {
+        context -> diagnostics.blockingDiagnosticCount => semanticCount
+        context -> irInvariantDiagnosticCount => invariantCount
+        "semantic-diagnostic-count=$(semanticCount),ir-invariant-count=$(invariantCount)" -> println
+        context -> emitInterpolationSemanticWarnings
+        context -> emitOrdinaryNumericWarnings(sourceIndex)
+        context -> prepareScheduledCoreEmitterState => state
+        state -> bodyScheduleDiagnosticCount => scheduleCount
+        "scheduled-ir-count=$(context.ir -> len),schedule-diagnostic-count=$(scheduleCount)" -> println
+        "OBSERVED_LLVM_BEGIN" -> println
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedWindowsContext(state)
+    }
+}
+
+public traceContextBranchIr paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> tracePreparedContextBranchIr(sourceIndex, start, end, false, false, false)
+}
+
+public traceNativeContextBranchIr paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> tracePreparedContextBranchIr(sourceIndex, start, end, true, false, false)
+}
+
+public traceCheckedNativeContextBranchIr paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> tracePreparedContextBranchIr(sourceIndex, start, end, true, true, false)
+}
+
+public traceCheckedNativeEmission paths: [Text; ~], sourceIndex: Int, start: UIntSize, end: UIntSize -> Unit uses Console, File {
+    paths -> tracePreparedContextBranchIr(sourceIndex, start, end, true, true, true)
+}

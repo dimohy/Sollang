@@ -1,0 +1,121 @@
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+
+check name: Text, app: Text, expected: Bool -> Unit uses Console {
+    [
+    """
+    namespace sample.model
+    public struct Widget { public value: Int }
+    public struct MouseEvent { public value: Int }
+    struct Hidden { value: Int }
+    """,
+    """
+    namespace sample.other
+    public struct Widget { public value: Int }
+    """,
+    """
+    namespace sample.model
+    public struct Extra { public value: Int }
+    """,
+    app; ~
+    ] => sources
+    sources -> typeIds.resolve => resolved
+    true => recursiveValid!
+    resolved.references -> each reference {
+        reference.sourceModule == 3 and reference.status != 0
+            -> if { false => recursiveValid! }
+    }
+    true => nominalValid!
+    sources -> nominalTypes.resolve => nominal
+    nominal -> each reference {
+        reference.sourceModule == 3 and reference.status != 0
+            -> if { false => nominalValid! }
+    }
+    (recursiveValid! and expected) or (not recursiveValid! and not expected) => recursiveMatches
+    (nominalValid! and expected) or (not nominalValid! and not expected) => nominalMatches
+    recursiveMatches and nominalMatches => matches
+    "$name=$matches" -> println
+    sources -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package.ranges[3] => range
+    0 => termIndex!
+    termIndex! < range.termCount -> while {
+        package.terms[range.termStart + termIndex!] => term
+        term.kind == 1 and term.nameToken >= 0 -> if {
+            package.tokens[range.tokenStart + term.nameToken] => token
+            app -> slice(token.span.start, token.span.length) => spelling
+            spelling == "Widget" or spelling == "MouseEvent" or spelling == "Hidden"
+                -> if {
+                    package -> typeIds.openNominalTypeCandidates(identities, imports, resolvedImports, 3, term.nameToken) => candidates
+                    "$name-candidates=$(candidates -> len)" -> println
+                    candidates -> each candidate {
+                        identities[candidate.targetModule] => identity
+                        package.sources[identity.sourceIndex] -> len => candidateLength
+                        package.sources[identity.sourceIndex] -> slice(UIntSize(0), candidateLength) => candidateSource
+                        package.ranges[identity.sourceIndex] => candidateRange
+                        package.symbols[candidateRange.symbolStart + candidate.targetSymbol] => symbol
+                        package.tokens[candidateRange.tokenStart + symbol.nameToken] => symbolName
+                        candidateSource -> slice(identity.pathStart, identity.pathLength) => moduleName
+                        candidateSource -> slice(symbolName.span.start, symbolName.span.length) => typeName
+                        package.tokens[range.tokenStart + candidate.aliasToken] => alias
+                        app -> slice(alias.span.start, alias.span.length) => aliasName
+                        "$moduleName.$typeName,$aliasName" -> println
+                    }
+                }
+        }
+        termIndex! + 1 => termIndex!
+    }
+}
+
+main {
+    """
+    namespace app.main
+    import sample.model as model
+    read value: Widget -> Int { value.value }
+    main { model.Widget { value: 42 } -> read -> println }
+    """ => app0
+    check("unique-widget", app0, true)
+    """
+    namespace app.main
+    import sample.model as model
+    read value: MouseEvent -> Int { value.value }
+    main { model.MouseEvent { value: 42 } -> read -> println }
+    """ => app1
+    check("unique-mouse-event", app1, true)
+    """
+    namespace app.main
+    import sample.model as model
+    import sample.model as again
+    read value: Widget -> Int { value.value }
+    main { model.Widget { value: 42 } -> read -> println }
+    """ => app2
+    check("duplicate-import", app2, true)
+    """
+    namespace app.main
+    import sample.model as model
+    struct Widget { value: Int }
+    read value: Widget -> Int { value.value }
+    main { Widget { value: 42 } -> read -> println }
+    """ => app3
+    check("local-shadow", app3, true)
+    """
+    namespace app.main
+    import sample.model as model
+    import sample.other as other
+    read value: Widget -> Int { value.value }
+    main {  }
+    """ => app4
+    check("ambiguous-widget", app4, false)
+    """
+    namespace app.main
+    import sample.model as model
+    read value: Hidden -> Int { value.value }
+    main {  }
+    """ => app5
+    check("private-hidden", app5, false)
+}

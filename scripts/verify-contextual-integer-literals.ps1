@@ -38,6 +38,21 @@ function Invoke-SollangCompiler([string[]]$Arguments) {
     [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($lines -join "`n") }
 }
 
+function Invoke-SollangProgram([string[]]$Sources, [string]$Executable) {
+    $llvmRoot = Join-Path $repo '.tools/llvm-22.1.8'
+    if ([IO.Path]::GetExtension($compiler) -ceq '.dll') {
+        return Invoke-SollangCompiler -Arguments (@('run') + $Sources + @('--llvm', $llvmRoot, '-o', $Executable))
+    }
+    $buildOutput = @(& $compiler build @Sources -o $Executable --target windows-x64 `
+        --llvm $llvmRoot --stdlib (Join-Path $repo 'stdlib') --jobs 2 -O1 --keep-temps 2>&1)
+    $buildExitCode = $LASTEXITCODE
+    if ($buildExitCode -ne 0 -or ($buildOutput -join "`n") -match '(?m)^(?:warning S\d+|note N\d+)\b') {
+        return [pscustomobject]@{ ExitCode = if ($buildExitCode -eq 0) { 1 } else { $buildExitCode }; Output = ($buildOutput -join "`n") }
+    }
+    $programOutput = @(& $Executable 2>&1)
+    [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($programOutput -join "`n") }
+}
+
 function Read-Declaration([string]$Path, [string]$Name) {
     $source = Get-Content -LiteralPath (Join-Path $repo $Path) -Raw
     $pattern = '(?ms)^' + [regex]::Escape($Name) + ' [^\r\n]*\{.*?^\}'
@@ -52,12 +67,24 @@ $numericPeerHelper = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'seal
 $peerHelper = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'sealIntegerLiteralPeerContext'
 $nativeHelper = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'sealNativeNumericLiteralContext'
 $binaryPass = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'sealFinalContextualNumericLiterals'
+$materializedPeer = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'materializedReadPeer'
+$controlType = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'sealNumericControlType'
+$integerValue = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'contextualIntegerValue'
+$numericValue = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'contextualNumericIrValue'
+$materializedType = Read-Declaration 'selfhost/semantic/type_ids.slg' 'public materializedReadTypeId'
 $node = Read-Declaration 'selfhost/ir/typed.slg' 'public struct TypedIrNode'
 $rank = Read-Declaration 'selfhost/ir/typed.slg' 'integerTypeRank'
 $type = Read-Declaration 'selfhost/semantic/type_ids.slg' 'public struct SemanticType'
-$rangeHelper = Read-Declaration 'selfhost/llvm/emitter/diagnostics.slg' 'initializerIntegerLiteralFits'
+$canonicalBuiltinSymbol = Read-Declaration 'selfhost/semantic/type_ids.slg' 'public canonicalBuiltinSymbol'
+$rangeHelper = Read-Declaration 'selfhost/llvm/emitter/diagnostics.slg' 'initializerIntegerLiteralStatus'
+$rangeMagnitudeLimit = Read-Declaration 'selfhost/semantic/numeric_literal_range.slg' 'public magnitudeLimit'
+$rangeIntegerLiteralStatus = Read-Declaration 'selfhost/semantic/numeric_literal_range.slg' 'public integerLiteralStatus'
 $characterSpan = Read-Declaration 'selfhost/syntax/source.slg' 'public struct SourceSpan'
 $characterDecoder = Read-Declaration 'selfhost/syntax/source.slg' 'public decodeCharacterLiteral'
+$characterCheckedDecoder = Read-Declaration 'selfhost/syntax/source.slg' 'public decodeCharacterLiteralChecked'
+$characterError = Read-Declaration 'selfhost/syntax/source.slg' 'public enum CharacterLiteralError'
+$characterEscape = Read-Declaration 'selfhost/syntax/source.slg' 'characterEscapeScalar'
+$scalarWidth = Read-Declaration 'selfhost/syntax/unicode_identifier.slg' 'public scalarWidth'
 $constantFind = Read-Declaration 'selfhost/semantic/constant_collection_lowering.slg' 'public find'
 $grammarSource = Get-Content -LiteralPath (Join-Path $repo 'syntax/generated/sollang_grammar.slg') -Raw
 $grammarDeclarations = @('Minus', 'Plus', 'Percent', 'EqualEqual', 'BangEqual', 'LessEqual', 'Greater') | ForEach-Object {
@@ -70,6 +97,7 @@ $minusTokenId = [int]([regex]::Match($grammarDeclarations[0], '=>\s*(\d+)').Grou
 $helperSource = @"
 namespace sollang.compiler.ir.typed
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.context as semanticContext
 import syntax.generated.slg as grammar
 $node
 $rank
@@ -78,11 +106,16 @@ $numericPeerHelper
 $helper
 $peerHelper
 $nativeHelper
+$materializedPeer
+$controlType
+$integerValue
+$numericValue
 $binaryPass
 "@
 $sources = @(
     @{ Name = 'helper.slg'; Text = $helperSource },
-    @{ Name = 'types.slg'; Text = "namespace sollang.compiler.semantic.type_ids`n$type`n" },
+    @{ Name = 'semantic-context.slg'; Text = "namespace sollang.compiler.semantic.context`npublic struct SemanticSnapshot {`n    public marker: Int`n}`n" },
+    @{ Name = 'types.slg'; Text = "namespace sollang.compiler.semantic.type_ids`n$type`n$materializedType`n" },
     @{ Name = 'grammar.slg'; Text = "namespace syntax.generated.slg`n$($grammarDeclarations -join "`n")`n" },
     @{ Name = 'entry.slg'; Text = "import sollang.compiler.ir.typed as probe`nmain { probe.run() }`n" }
 )
@@ -163,10 +196,13 @@ foreach ($source in $sources) {
     $paths += $path
 }
 $paths += Join-Path $repo 'scripts/probes/contextual-integer-literals.slg'
-$helperInvocation = Invoke-SollangCompiler -Arguments (@('run') + $paths + @('--llvm', (Join-Path $repo '.tools/llvm-22.1.8'), '-o', (Join-Path $output 'probe.exe')))
+$helperInvocation = Invoke-SollangProgram -Sources $paths -Executable (Join-Path $output 'probe.exe')
 $actual = $helperInvocation.Output
 if ($helperInvocation.ExitCode -ne 0) { throw "contextual integer helper execution failed: $actual" }
 $expected = @(
+    'carrier-18=3,3,3,3,23'
+    'carrier-33=3,3,3,3,23'
+    'carrier-34=3,3,3,3,23'
     'negative=6,6,7'
     'nonliteral=2,2,2'
     'invalid=2'
@@ -297,6 +333,13 @@ $rangeSources = @(
     @{ Name = 'range-types.slg'; Text = @"
 namespace c394.type_ids
 public struct SemanticType { public kind: Int, public origin: Int, public symbol: Int }
+$canonicalBuiltinSymbol
+"@ },
+    @{ Name = 'range-numeric.slg'; Text = @"
+namespace sollang.compiler.semantic.numeric_literal_range
+import c394.type_ids as typeIds
+$rangeMagnitudeLimit
+$rangeIntegerLiteralStatus
 "@ },
     @{ Name = 'range-analysis.slg'; Text = @"
 namespace c394.analysis
@@ -317,9 +360,14 @@ $constantFind
 "@ },
     @{ Name = 'range-syntax.slg'; Text = @"
 namespace c394.syntax
+import c394.unicode_identifier as unicodeIdentifier
 $characterSpan
+$characterError
+$characterEscape
+$characterCheckedDecoder
 $characterDecoder
 "@ },
+    @{ Name = 'range-unicode.slg'; Text = "namespace c394.unicode_identifier`n$scalarWidth`n" },
     @{ Name = 'range-context.slg'; Text = @"
 namespace c394.context
 import c394.analysis as analysis
@@ -344,6 +392,7 @@ import c394.constant as constantLowering
 import c394.context as emitterContext
 import c394.syntax as syntax
 import c394.typed as typedIr
+import sollang.compiler.semantic.numeric_literal_range as numericLiteralRange
 import syntax.generated.slg as grammar
 $rangeHelper
 "@ },
@@ -369,7 +418,7 @@ foreach ($source in $rangeSources) {
     $rangePaths += $path
 }
 $rangePaths += Join-Path $repo 'scripts/probes/contextual-integer-literals/range-diagnostics.slg'
-$rangeInvocation = Invoke-SollangCompiler -Arguments (@('run') + $rangePaths + @('--llvm', (Join-Path $repo '.tools/llvm-22.1.8'), '-o', (Join-Path $output 'range-probe.exe')))
+$rangeInvocation = Invoke-SollangProgram -Sources $rangePaths -Executable (Join-Path $output 'range-probe.exe')
 $rangeActual = $rangeInvocation.Output
 if ($rangeInvocation.ExitCode -ne 0) { throw "contextual integer lexical range execution failed: $rangeActual" }
 $rangeExpected = @($rangeContract.cases | ForEach-Object { $_.name + '=' + ([bool]$_.fits).ToString().ToLowerInvariant() }) -join "`n"
@@ -394,8 +443,8 @@ $evidence = [ordered]@{
     schemaVersion = 1
     scope = 'production-integer-native-helpers-and-final-binary-pass-execution-and-callsite-presence'
     status = 'passed'
-    completed = 16 + [int][bool]$nativeExpected
-    total = 16 + [int][bool]$nativeExpected
+    completed = 19 + [int][bool]$nativeExpected
+    total = 19 + [int][bool]$nativeExpected
     countUnit = 'exact-output-assertion-groups'
     compilerSha256 = $compilerSha256Start
     expectedCompilerSha256 = if ([string]::IsNullOrWhiteSpace($ExpectedCandidateSha256)) { $null } else { $ExpectedCandidateSha256 }

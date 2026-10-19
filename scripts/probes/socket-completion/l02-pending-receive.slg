@@ -1,0 +1,124 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+
+struct Setup {
+    listener: socket.TcpListener
+    sender: socket.TcpStream
+    receiver: socket.TcpStream
+}
+
+setup: -> Result<Setup, socket.SocketError> uses Network {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen? => listener
+    listener -> localPort? => port
+    net.loopback(port) -> unified -> connect? => sender
+    listener -> accept? => receiver
+    Result<Setup, socket.SocketError>.Ok(Setup {
+        listener: listener
+        sender: sender
+        receiver: receiver
+    })
+}
+
+ready: -> async Bool {
+    yield
+    true
+}
+
+main {
+    setup() -> when {
+        Err(error) { "setup-error=$(error.code)" -> println }
+        Ok(value) {
+            value.listener => listener
+            value.sender => sender
+            value.receiver => receiver
+            socket.CompletionReactorOptions {
+                registrations: 1
+                pendingOperations: 1
+                completionBatch: 1
+            } -> socket.completionReactor -> when {
+                Err(error) {
+                    receiver -> close
+                    sender -> close
+                    listener -> close
+                    "create-error=$(error.code)" -> println
+                }
+                Ok(reactor) {
+                    reactor -> registerStream(receiver, 82) -> when {
+                        Err(failure) {
+                            failure.reactor -> close
+                            failure.connection -> close
+                            sender -> close
+                            listener -> close
+                            "register-error=$(failure.error.code)" -> println
+                        }
+                        Ok(registered) {
+                            [0, 0, 0; ~] -> socket.operationSlot(802, socket.OperationDirection.Receive) => slot
+                            registered -> submit(82, slot) -> when {
+                                Err(failure) {
+                                    failure.slot => failedSlot
+                                    failure.reactor => failedReactor
+                                    failedSlot -> intoBytes => returned
+                                    failedReactor -> close
+                                    sender -> close
+                                    listener -> close
+                                    "submit-error=$(failure.error.code),len=$(returned -> len)" -> println
+                                }
+                                Ok(submission) {
+                                    submission -> when {
+                                        socket.CompletionSubmission.Completed(completion) {
+                                            completion.slot => unexpectedSlot
+                                            completion.reactor => unexpectedReactor
+                                            unexpectedSlot -> intoBytes => returned
+                                            unexpectedReactor -> close
+                                            sender -> close
+                                            listener -> close
+                                            "pending=false,len=$(returned -> len)" -> println
+                                        }
+                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                            pendingReactor -> dequeue(asyncio.Cancellation { requested: false }) => pendingTask
+                                            ready() => readyTask
+                                            readyTask -> await => readyRan
+                                            "ready-task=$readyRan" -> println
+                                            sender -> sendText("de") -> when {
+                                                Err(error) { "send-error=$(error.code)" -> println }
+                                                Ok(_) { }
+                                            }
+                                            pendingTask -> await -> when {
+                                                Err(failure) {
+                                                    failure.reactor -> close
+                                                    sender -> close
+                                                    listener -> close
+                                                    "dequeue-error=$(failure.error.code)" -> println
+                                                }
+                                                Ok(completion) {
+                                                    completion.slot => completedSlot
+                                                    completion.reactor => completedReactor
+                                                    completedSlot -> transferredCount -> when {
+                                                        None { UIntSize(999) }
+                                                        Some(count) { count }
+                                                    } => count
+                                                    completedSlot -> byteAt(0) => first
+                                                    completedSlot -> byteAt(1) => second
+                                                    completedSlot -> intoBytes => bytes
+                                                    "woke=true,$count,$first,$second,len=$(bytes -> len)" -> println
+                                                    completedReactor -> close
+                                                    sender -> close
+                                                    listener -> close
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

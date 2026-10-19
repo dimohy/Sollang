@@ -418,13 +418,28 @@ param(
         "1751-async-product-owned-field-transfer",
         "1752-borrowed-owned-enum-payload",
         "1753-zstd-fse-huffman-weights"
-    )
+    ),
+    [string]$CancellationRequestPath = "",
+    [string]$CancellationRunId = "",
+    [string]$CancellationAcknowledgementPath = "",
+    [string]$PhaseExecutionContract = "",
+    [ValidateSet("", "managed", "selfhost")][string]$CompilerSide = ""
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "native-exact-fixture-receipt.ps1")
 . (Join-Path $PSScriptRoot "native-exact-batch-allocation.ps1")
+. (Join-Path $PSScriptRoot "verification-process.ps1")
+$cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
+if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
+    throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
+    Initialize-VerificationCancellation -RequestPath $CancellationRequestPath `
+        -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
+}
+Assert-VerificationCancellationNotRequested
 
 Assert-NativeExactFixturePlan -Fixture $Fixture
 
@@ -463,9 +478,27 @@ foreach ($fixtureName in $Fixture) {
 if ($closureFailures.Count -gt 0) {
     throw "native exact batch source closure failed before compiler launch:`n$($closureFailures -join "`n")"
 }
+$phaseContext = $null
+$phaseFixtureNames = @()
+if (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract)) {
+    if ($Platform -cne 'windows' -or [string]::IsNullOrWhiteSpace($CompilerSide)) { throw 'PHASE_EXECUTION_REQUIRES_WINDOWS_NATIVE_BUILD_AND_SIDE' }
+    $PhaseExecutionContract = [IO.Path]::GetFullPath($PhaseExecutionContract, [IO.Path]::GetFullPath($RepositoryRoot))
+    $phaseContext = Get-NativeExactPhaseContext $RepositoryRoot $PhaseExecutionContract $CompilerSide $Compiler $PSCommandPath $Fixture
+    $expectedReport = [IO.Path]::GetFullPath($phaseContext.Contract.batchReports.$CompilerSide, [IO.Path]::GetFullPath($RepositoryRoot))
+    if ($expectedReport -cne [IO.Path]::GetFullPath((Join-Path $OutputDirectory "$Label-batch-results.json"))) {
+        throw 'PHASE_EXECUTION_BATCH_REPORT_PATH_MISMATCH'
+    }
+    $phaseFixtureNames = @($phaseContext.Contract.cases | Where-Object { 'compile' -cin @($_.expectedStages.PSObject.Properties.Name) -and (Get-NativeExactPhaseExpectedStage $_ compile $CompilerSide).exitCode -eq 0 } |
+        ForEach-Object { [IO.Path]::GetFileNameWithoutExtension($_.fixture.path) })
+} elseif (-not [string]::IsNullOrWhiteSpace($CompilerSide)) { throw 'PHASE_EXECUTION_CONTRACT_REQUIRED' }
 if ($ValidateInputsOnly) {
     Write-Host "[native exact input preflight] PASS $($Fixture.Count) fixture inputs; compilation and execution remain unverified."
     return
+}
+if ($null -ne $phaseContext) {
+    foreach ($case in $phaseContext.Contract.cases | Where-Object { 'grammarCommand' -cin @($_.PSObject.Properties.Name) }) {
+        $null = Invoke-NativeExactPhaseGrammarCase $phaseContext $case
+    }
 }
 $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
 $llvmPath = (Resolve-Path -LiteralPath $LlvmRoot).Path
@@ -495,7 +528,7 @@ $totalFixtures = $Fixture.Count
 $batchReportPath = Join-Path $outputPath "$Label-batch-results.json"
 $batchCompilerHash = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
 function Write-NativeExactBatchReport {
-    param([ValidateSet('running', 'passed', 'failed')][string]$State)
+    param([ValidateSet('running', 'passed', 'failed', 'cancelled')][string]$State)
     $passedCount = @($results | Where-Object Success).Count
     $report = [ordered]@{
         schemaVersion = 1
@@ -511,6 +544,7 @@ function Write-NativeExactBatchReport {
         total = $totalFixtures
         results = @($results | Select-Object Fixture, Success, Error)
     }
+    if ($null -ne $phaseContext) { $report.phaseFixturePlan = @($Fixture) }
     [IO.File]::WriteAllText($batchReportPath, ($report | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
 }
 Write-NativeExactBatchReport -State running
@@ -518,6 +552,10 @@ $allocation.Items | ForEach-Object -ThrottleLimit $parallelism -Parallel {
     $fixtureName = $_.Fixture
     $jobsPerFixture = $_.CompilerWorkerJobs
     try {
+        $workerPhaseContract = ''; $workerCompilerSide = ''
+        if ($using:phaseFixtureNames -ccontains $fixtureName) {
+            $workerPhaseContract = $using:PhaseExecutionContract; $workerCompilerSide = $using:CompilerSide
+        }
         $transcript = (& $using:verifierPath `
             -Compiler $using:compilerPath `
             -Label $using:Label `
@@ -530,7 +568,12 @@ $allocation.Items | ForEach-Object -ThrottleLimit $parallelism -Parallel {
             -OutputDirectory $using:outputPath `
             -Jobs $jobsPerFixture `
             -TimeoutMilliseconds $using:TimeoutMilliseconds `
-            -CommonInputFingerprint $using:commonInputFingerprint 2>&1 | Out-String)
+            -CommonInputFingerprint $using:commonInputFingerprint `
+            -CancellationRequestPath $using:CancellationRequestPath `
+            -CancellationRunId $using:CancellationRunId `
+            -CancellationAcknowledgementPath $using:CancellationAcknowledgementPath `
+            -PhaseExecutionContract $workerPhaseContract `
+            -CompilerSide $workerCompilerSide 2>&1 | Out-String)
         [pscustomobject]@{
             Fixture = $fixtureName
             Success = $true
@@ -557,6 +600,11 @@ $allocation.Items | ForEach-Object -ThrottleLimit $parallelism -Parallel {
     }
 }
 
+if (Test-VerificationCancellationRequested) {
+    Write-NativeExactBatchReport -State cancelled
+    throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
+}
+
 $failures = [System.Collections.Generic.List[string]]::new()
 foreach ($fixtureName in $Fixture) {
     $result = $results | Where-Object { $_.Fixture -ceq $fixtureName } | Select-Object -First 1
@@ -579,3 +627,8 @@ if ($failures.Count -gt 0) {
 
 Write-NativeExactBatchReport -State passed
 Write-Host "[native exact batch] PASS $Label $Platform $($Fixture.Count) fixtures."
+
+if ($null -ne $phaseContext) {
+    $closed = Complete-NativeExactPhaseExecution $phaseContext
+    if (-not $closed) { Write-Host '[phase execution] INCOMPLETE: compile-only negatives or other contracted outcomes remain pending; outputs retained.' }
+}

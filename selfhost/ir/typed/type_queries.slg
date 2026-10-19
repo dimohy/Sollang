@@ -6,6 +6,35 @@ import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
+# A declaration template cannot replace a literal's committed value type.
+# All collection-context passes share this boundary before changing storage
+# or element identities; generic bodies retain their inferred input facts.
+hasConcreteLiteralContext types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    typeId >= 0 and typeId < (types -> len)
+        -> if {
+            types[typeId] => type
+            type.status == 0 and not type.containsParameter
+        } else { false }
+}
+
+# Value consumers borrow a peer's scalar identity without changing its place.
+# Unresolved peers remain unresolved for the existing semantic diagnostics.
+materializedReadPeer peer: TypedIrNode, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> TypedIrNode {
+    peer => value!
+    types -> typeIds.materializedReadTypeId(peer.typeId) => readTypeId
+    readTypeId >= 0 and readTypeId < (types -> len) and readTypeId < (flags -> len)
+        -> if {
+            types[readTypeId] => readType
+            readTypeId => value!.typeId
+            readType.kind => value!.typeKind
+            readType.origin => value!.typeOrigin
+            readType.module => value!.typeModule
+            readType.symbol => value!.typeSymbol
+            flags[readTypeId] => value!.typeFlags
+        }
+    value!
+}
+
 # Every numeric literal has one leaf and an optional unary-minus carrier.
 # Integer and native Float contexts share this operand0 topology and identity
 # transfer. Source lexemes and signed/range diagnostics remain semantic work.
@@ -79,10 +108,91 @@ sealIntegerLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: Typ
     }
 }
 
+# A reference peer supplies its value-read identity as literal context while
+# retaining the original reference node for borrowing and the call ABI.
+sealNumericReadLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    # Two bare literals keep independent inferred types, matching C#.
+    peer.kind == 3 or (peer.kind == 7 and peer.opcode == grammar.tokenIdMinus()
+        and peer.operand0 >= 0 and peer.operand0 < (nodes -> len)
+        and nodes[peer.operand0].kind == 3) -> if { return }
+    types -> typeIds.materializedReadTypeId(peer.typeId) => readTypeId
+    readTypeId >= 0 and readTypeId < (types -> len) and readTypeId < (flags -> len)
+        -> if {
+            nodes -> sealNumericLiteralContext(index, readTypeId, types[readTypeId], flags[readTypeId])
+        }
+}
+
 # Native calls additionally provide Float contexts, using the same numeric
 # leaf/carrier operation rather than a second interpretation of unary edges.
 sealNativeNumericLiteralContext nodes: mut [TypedIrNode; ~], index: Int, parameter: TypedIrNode -> Unit {
     nodes -> sealNumericLiteralPeerContext(index, parameter)
+}
+
+# Imported metadata signatures use the same literal leaf/carrier rules as
+# native declarations. Their fixed scalar ABI has no ownership type flags.
+public sealLibraryNumericArgument nodes: mut [TypedIrNode; ~], index: Int, typeId: Int, target: typeIds.SemanticType -> Unit {
+    nodes -> sealNumericLiteralContext(index, typeId, target, 0)
+}
+
+# Method targets finalized after initial lowering still supply contextual widths
+# for bare call arguments. Use the call's own operand1 for the first additional
+# argument; a receiver's nextOperand is not the call argument list authority.
+public sealLateResolvedCallNumericArguments nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    [Int; ~] => functionIrBySymbol!
+    [Int; ~] => valueIfByFlow!
+    prepared.package.symbols -> each symbolSlot { functionIrBySymbol! -> push(-1) }
+    nodes -> each nodeSlot { valueIfByFlow! -> push(-1) }
+    0 => functionIndex!
+    functionIndex! < (nodes -> len) -> while {
+        nodes[functionIndex!] => function
+        function.kind == 18 and function.parent >= 0 and function.parent < (nodes -> len)
+            and nodes[function.parent].kind == 9
+            -> if { functionIndex! => valueIfByFlow![function.parent] }
+        function.kind == 0 and function.sourceModule >= 0
+            and function.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[function.sourceModule] => functionRange
+                function.symbol >= 0 and function.symbol < functionRange.symbolCount
+                    -> if { functionIndex! => functionIrBySymbol![functionRange.symbolStart + function.symbol] }
+            }
+        functionIndex! + 1 => functionIndex!
+    }
+    0 => callIndex!
+    callIndex! < (nodes -> len) -> while {
+        nodes[callIndex!] => call
+        call.kind == 6 and call.symbol >= 0 and call.targetModule >= 0
+            and call.targetModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[call.targetModule] => targetRange
+                call.symbol < targetRange.symbolCount -> if {
+                    functionIrBySymbol![targetRange.symbolStart + call.symbol] => targetFunctionIndex
+                    targetFunctionIndex >= 0 -> if {
+                        nodes[targetFunctionIndex] => targetFunction
+                        targetFunction.operand1 >= 0 and targetFunction.operand1 < (nodes -> len)
+                            -> if {
+                                nodes[targetFunction.operand1] => primaryParameter
+                                nodes -> sealIntegerLiteralPeerContext(call.operand0, primaryParameter)
+                                call.operand0 >= 0 and call.operand0 < (nodes -> len)
+                                    -> if {
+                                        nodes -> sealCallContextualIfNumeric(call.operand0, valueIfByFlow![call.operand0], primaryParameter, prepared)
+                                    }
+                            }
+                        call.operand1 => argumentIndex!
+                        targetFunction.nextOperand => parameterIndex!
+                        argumentIndex! >= 0 and argumentIndex! < (nodes -> len)
+                            and parameterIndex! >= 0 and parameterIndex! < (nodes -> len)
+                            -> while {
+                                nodes[parameterIndex!] => parameter
+                                nodes -> sealIntegerLiteralPeerContext(argumentIndex!, parameter)
+                                nodes -> sealCallContextualIfNumeric(argumentIndex!, valueIfByFlow![argumentIndex!], parameter, prepared)
+                                nodes[argumentIndex!].nextOperand => argumentIndex!
+                                parameter.nextOperand => parameterIndex!
+                            }
+                    }
+                }
+            }
+        callIndex! + 1 => callIndex!
+    }
 }
 
 # Classify only the declared outer array shape. The prepared semantic snapshot
@@ -166,7 +276,8 @@ comGeneratedResultTypeId recursiveTypes: ref [typeIds.SemanticType; ~], sourceIn
                         and candidate.origin == 4
                         and candidate.symbol == 1
                         and candidate.first == interfaceTypeId!
-                        and candidate.second == 5 -> if {
+                        and candidate.second == (recursiveTypes -> typeIds.builtinTypeId(5))
+                        -> if {
                             activationResultSearch! => resultTypeId!
                         }
                     activationResultSearch! + 1 => activationResultSearch!

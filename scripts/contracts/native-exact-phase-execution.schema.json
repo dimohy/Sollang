@@ -1,0 +1,477 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reviewed native exact fixture phase execution contract",
+  "description": "Opt-in to existing405 runner. Same immutable contract is captured CPP-first; the planned comparison path may not exist until CPP completes. Selfhost then requires actual compared source authority linked to that CPP receipt. No cleanup before structural phase validation. This schema does not establish reviewed decisions, actual build provenance or operational phase completion.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "phase",
+    "decisionIds",
+    "wholeFixturePlan",
+    "reviewedInventory",
+    "sourceComparisonRecord",
+    "compilerBinaries",
+    "cases",
+    "evidenceDirectory",
+    "batchReports"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "phase": {
+      "enum": [
+        "parsing",
+        "semantic-analysis",
+        "type-commit",
+        "expression-lowering",
+        "control-flow",
+        "ownership",
+        "llvm-generation"
+      ]
+    },
+    "decisionIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "wholeFixturePlan": {
+      "type": "array",
+      "minItems": 405,
+      "maxItems": 405,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "reviewedInventory": {
+      "$ref": "#/$defs/reference"
+    },
+    "sourceComparisonRecord": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "$ref": "#/$defs/reference"
+        }
+      ]
+    },
+    "generationRecord": {
+      "$ref": "#/$defs/reference"
+    },
+    "compilerBinaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "managed",
+        "selfhost"
+      ],
+      "properties": {
+        "managed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "buildRecord",
+            "buildRecordSha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "buildRecord": {
+              "type": "string",
+              "minLength": 1
+            },
+            "buildRecordSha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            }
+          }
+        },
+        "selfhost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "buildRecord",
+            "buildRecordSha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            },
+            "buildRecord": {
+              "type": "string",
+              "minLength": 1
+            },
+            "buildRecordSha256": {
+              "type": "string",
+              "pattern": "^[a-fA-F0-9]{64}$"
+            }
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "fixture",
+          "decisionIds",
+          "expectedStages"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "fixture": {
+            "$ref": "#/$defs/reference"
+          },
+          "decisionIds": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "expectedStages": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "compile"
+                ],
+                "properties": {
+                  "compile": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/exactStage"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "compilerSides"
+                        ],
+                        "properties": {
+                          "compilerSides": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "managed",
+                              "selfhost"
+                            ],
+                            "properties": {
+                              "managed": {
+                                "$ref": "#/$defs/exactStage"
+                              },
+                              "selfhost": {
+                                "$ref": "#/$defs/exactStage"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "run": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "exitCode",
+                      "stdout",
+                      "stderr"
+                    ],
+                    "properties": {
+                      "exitCode": {
+                        "const": 0
+                      },
+                      "stdout": {
+                        "type": "string"
+                      },
+                      "stderr": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "compile": {
+                          "anyOf": [
+                            {
+                              "required": [
+                                "exitCode"
+                              ],
+                              "properties": {
+                                "exitCode": {
+                                  "const": 0
+                                }
+                              }
+                            },
+                            {
+                              "required": [
+                                "compilerSides"
+                              ],
+                              "properties": {
+                                "compilerSides": {
+                                  "properties": {
+                                    "managed": {
+                                      "properties": {
+                                        "exitCode": {
+                                          "const": 0
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "then": {
+                      "required": [
+                        "run"
+                      ]
+                    },
+                    "else": {
+                      "not": {
+                        "required": [
+                          "run"
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "grammar"
+                ],
+                "properties": {
+                  "grammar": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/negativeGrammarStage"
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "compilerSides"
+                        ],
+                        "properties": {
+                          "compilerSides": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "managed",
+                              "selfhost"
+                            ],
+                            "properties": {
+                              "managed": {
+                                "$ref": "#/$defs/negativeGrammarStage"
+                              },
+                              "selfhost": {
+                                "$ref": "#/$defs/negativeGrammarStage"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "grammarCommand": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "lexer",
+              "grammar"
+            ],
+            "properties": {
+              "lexer": {
+                "$ref": "#/$defs/reference"
+              },
+              "grammar": {
+                "$ref": "#/$defs/reference"
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "grammarCommand"
+              ]
+            },
+            "then": {
+              "properties": {
+                "expectedStages": {
+                  "required": [
+                    "grammar"
+                  ]
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "expectedStages": {
+                  "required": [
+                    "compile"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "evidenceDirectory": {
+      "type": "string",
+      "minLength": 1
+    },
+    "batchReports": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "managed",
+        "selfhost"
+      ],
+      "properties": {
+        "managed": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selfhost": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-fA-F0-9]{64}$"
+        }
+      }
+    },
+    "exactStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exitCode",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": "integer"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "stdoutPolicy": {
+          "const": "compiler-build-telemetry-v1"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "stdoutPolicy"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exitCode": {
+                "const": 0
+              },
+              "stdout": {
+                "const": ""
+              },
+              "stderr": {
+                "const": ""
+              }
+            }
+          }
+        }
+      ]
+    },
+    "negativeGrammarStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exitCode",
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "exitCode": {
+          "const": 1
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

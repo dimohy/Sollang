@@ -61,6 +61,14 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
         context.interpolations[invalidCapacity] => invalidCapacityNode
         "; sollang semantic error: capacity requires a growable/bounded array, dictionary or Arena receiver (interpolation $invalidCapacity, token $(invalidCapacityNode.sourceToken))" -> println
     }
+    context -> invalidInterpolationFlowTargetNode => invalidFlowTarget
+    invalidFlowTarget >= 0 and context.semanticInterpolationCallTargets[invalidFlowTarget].status != 3
+        -> if {
+            context.interpolations[invalidFlowTarget] => invalidFlowNode
+            context -> diagnostics.interpolationSourceModule(invalidFlowTarget) => sourceModule
+            context.sources[sourceModule] -> slice(invalidFlowNode.callNameStart, invalidFlowNode.callNameLength) => targetName
+            "; sollang semantic error: unknown value-flow target '$targetName' (source $sourceModule, byte $(invalidFlowNode.callNameStart), length $(invalidFlowNode.callNameLength))" -> println
+        }
     context -> unresolvedGenericAbiNode => unresolvedAbi
     unresolvedAbi >= 0 -> if {
         context.ir[unresolvedAbi] => unresolved
@@ -148,8 +156,10 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
                 invariantCode != 57 -> if {
                     invariantCode == 55 -> if {
                         context -> concreteCallFunctionIndex(irIndex!, functions) => mismatchFunction
-                        context -> arrayCallElementMismatch(irIndex!, mismatchFunction) => mismatchOrdinal
-                        "; sollang compiler error S055: array argument $mismatchOrdinal has an incompatible element type in '$diagnosticExpression'; already-typed arrays cannot be implicitly narrowed or reinterpreted; provide matching element storage or explicitly convert elements (source $sourceModule, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                        context -> arrayCallElementMismatchDetail(irIndex!, mismatchFunction) -> when {
+                            Some(detail) { context -> diagnostics.emitTypedCallArgumentDiagnostic(irIndex!, detail.parameterIndex, detail.argumentIndex, detail.runtimeOrdinal) }
+                            None { "sollang: compiler invariant [TYPED_CALL_ARGUMENT_MISMATCH_MISSING]" -> println }
+                        }
                     } else {
                         invariantCode == 13 -> if {
                             context.ir[node.operand0] => diagnosticArrayElement
@@ -360,7 +370,8 @@ emitIrInvariantDiagnostics context: ref emitterContext.EmitContext -> Unit uses 
                                                                                     "; sollang compiler error S020: enum match subject name has no parameter ABI value or concrete producer at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
                                                                                 } else {
                                                                                     invariantCode == 24 -> if {
-                                                                                        "; sollang compiler error S021: enum match subject is a non-materialized control or declaration node at ir $diagnosticIrIndex (subject $(node.operand0), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
+                                                                                        context.ir[node.operand0] => nonMaterializedSubject
+                                                                                        "; sollang compiler error S021: enum match subject is a non-materialized wrapper, control, or declaration node at ir $diagnosticIrIndex (subject $(node.operand0), kind $(nonMaterializedSubject.kind), parent $(nonMaterializedSubject.parent), operand0 $(nonMaterializedSubject.operand0), next $(nonMaterializedSubject.nextOperand), type $(nonMaterializedSubject.typeId), source $sourceModule, ast $astNode, byte $(diagnosticAst.start), length $(diagnosticAst.length))" -> println
                                                                                     } else {
                                                                                         invariantCode == 25 -> if {
                                                                                             -1 => typedMatchDiagnosticArm!

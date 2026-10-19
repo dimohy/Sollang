@@ -1,0 +1,51 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+
+main {
+    [
+    """
+    main {
+        "value=$(-Float(1))" -> println
+    }
+    """; ~
+    ] -> semanticContext.prepare => conversionPrepared
+    conversionPrepared -> expressionTypeIds.resolveContext => conversionFacts
+    conversionPrepared -> interpolationInference.preIrFlowCallTargets(conversionFacts) => conversionTargets
+    conversionPrepared -> interpolationInference.preIrInvalidDirectDisplayTypeByNode(conversionFacts, conversionTargets, 64) => conversionInvalid
+    -1 => conversionSymbol!
+    0 => conversionIndex!
+    conversionIndex! < (conversionPrepared.interpolations -> len)
+        -> while {
+            conversionPrepared.interpolations[conversionIndex!] => node
+            node.kind == 2 and node.parent < 0 and conversionInvalid[conversionIndex!] >= 0
+                -> if {
+                    conversionFacts.types[conversionInvalid[conversionIndex!]].symbol => conversionSymbol!
+                }
+            conversionIndex! + 1 => conversionIndex!
+        }
+    "conversion=$(conversionSymbol!)" -> println
+
+    [
+    """
+    main {
+        "value=$(-(Float(1) + Float(2)))" -> println
+    }
+    """; ~
+    ] -> semanticContext.prepare => binaryPrepared
+    binaryPrepared -> expressionTypeIds.resolveContext => binaryFacts
+    binaryPrepared -> interpolationInference.preIrFlowCallTargets(binaryFacts) => binaryTargets
+    binaryPrepared -> interpolationInference.preIrInvalidDirectDisplayTypeByNode(binaryFacts, binaryTargets, 64) => binaryInvalid
+    -1 => binarySymbol!
+    0 => binaryIndex!
+    binaryIndex! < (binaryPrepared.interpolations -> len)
+        -> while {
+            binaryPrepared.interpolations[binaryIndex!] => node
+            node.kind == 2 and node.parent < 0 and binaryInvalid[binaryIndex!] >= 0
+                -> if {
+                    binaryFacts.types[binaryInvalid[binaryIndex!]].symbol => binarySymbol!
+                }
+            binaryIndex! + 1 => binaryIndex!
+        }
+    "binary=$(binarySymbol!)" -> println
+}

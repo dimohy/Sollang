@@ -1,0 +1,98 @@
+import std.io.async as asyncio
+import std.net as net
+import std.net.socket as socket
+import std.time as time
+import sys.io as io
+import sys.runtime as runtime
+
+main {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { "listen-error=$(error.code)" -> io.println }
+        Ok(listener) {
+            listener -> localPort -> when {
+                Err(error) {
+                    listener -> close
+                    "port-error=$(error.code)" -> io.println
+                }
+                Ok(port) {
+                    "peer-port=$port" -> io.println
+                    runtime.flushStandardOutput()
+                    listener -> accept -> when {
+                        Err(error) {
+                            listener -> close
+                            "accept-error=$(error.code)" -> io.println
+                        }
+                        Ok(receiver) {
+                            socket.CompletionReactorOptions {
+                                registrations: 1
+                                pendingOperations: 1
+                                completionBatch: 1
+                            } -> socket.completionReactor -> when {
+                                Err(error) {
+                                    receiver -> close
+                                    listener -> close
+                                    "create-error=$(error.code)" -> io.println
+                                }
+                                Ok(reactor) {
+                                    reactor -> registerStream(receiver, 71) -> when {
+                                        Err(failure) {
+                                            failure.reactor -> close
+                                            failure.connection -> close
+                                            listener -> close
+                                            "register-error=$(failure.error.code)" -> io.println
+                                        }
+                                        Ok(registered) {
+                                            [0, 0, 0; ~] -> socket.operationSlot(701, socket.OperationDirection.Receive) => slot
+                                            registered -> submit(71, slot) -> when {
+                                                Err(failure) {
+                                                    failure.slot => failedSlot
+                                                    failure.reactor => failedReactor
+                                                    failedSlot -> intoBytes => returned
+                                                    failedReactor -> close
+                                                    listener -> close
+                                                    "submit-error=$(failure.error.code),len=$(returned -> len)" -> io.println
+                                                }
+                                                Ok(submission) {
+                                                    submission -> when {
+                                                        socket.CompletionSubmission.Completed(completion) {
+                                                            completion.slot => unexpectedSlot
+                                                            completion.reactor => unexpectedReactor
+                                                            unexpectedSlot -> intoBytes => returned
+                                                            unexpectedReactor -> close
+                                                            listener -> close
+                                                            "pending=false,len=$(returned -> len)" -> io.println
+                                                        }
+                                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                                            pendingReactor -> dequeueTerminal(asyncio.Cancellation { requested: false }) => pendingTask
+                                                            time.milliseconds(20) -> when {
+                                                                Err(_) { "delay=false" -> io.println }
+                                                                Ok(delay) { delay -> sleep -> await }
+                                                            }
+                                                            "parked=true" -> io.println
+                                                            runtime.flushStandardOutput()
+                                                            pendingTask -> cancel
+                                                            time.milliseconds(20) -> when {
+                                                                Err(_) { "drain-delay=false" -> io.println }
+                                                                Ok(drainDelay) { drainDelay -> sleep -> await }
+                                                            }
+                                                            "taskCancelled=true" -> io.println
+                                                            listener -> close
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

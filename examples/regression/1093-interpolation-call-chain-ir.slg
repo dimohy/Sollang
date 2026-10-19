@@ -14,6 +14,34 @@ main {
     (nodes[3].operand0 == 7
         and nodes[3].operand1 == 6
         and nodes[7].operand0 == 4
-        and nodes[7].operand1 == 5) => argumentPartition
+        and nodes[7].operand1 == 5
+        and nodes[3].argumentCount == 2 and nodes[7].argumentCount == 2
+        and nodes[4].parent == 7 and nodes[5].parent == 7) => argumentPartition
     "chain=$receiverChain,args=$argumentPartition" -> println
+
+    """
+    "$(value -> first(1) -> second(2) -> third(3))"
+    "$(first(second(value, 1), 2))"
+    "$(first(value, 1, 2, 3))"
+    """ => controlSource
+    controlSource -> interpolation.lower => controls
+    ((controls -> len) == 17
+        and controls[0].operand0 == 6 and controls[0].operand1 == 4
+        and controls[6].operand0 == 5 and controls[6].operand1 == 3
+        and controls[5].operand0 == 1 and controls[5].operand1 == 2
+        and controls[0].argumentCount == 2 and controls[6].argumentCount == 2
+        and controls[5].argumentCount == 2 and controls[5].parent == 6
+        and controls[1].parent == 5 and controls[2].parent == 5) => longChain
+    (controls[7].operand0 == 8 and controls[7].operand1 == 11
+        and controls[8].operand0 == 9 and controls[8].operand1 == 10) => nestedArgument
+    controls[12].argumentCount == 4 => retainedArity
+    "long=$longChain,nested=$nestedArgument,arity=$retainedArity" -> println
+
+    """
+    "$(value -> first(1, 2, 3) -> second(4))"
+    """ => excessiveSource
+    excessiveSource -> interpolation.lower => excessive
+    (excessive[0].argumentCount == 2 and excessive[6].argumentCount == 4
+        and excessive[4].parent == 6) => retainedChainArity
+    "chain-arity=$retainedChainArity" -> println
 }

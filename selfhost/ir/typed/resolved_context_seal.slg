@@ -21,9 +21,69 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+struct ContextualFunctionIndex {
+    firstBySymbol: [Int; ~]
+    lastNativeBySymbol: [Int; ~]
+}
+
+indexContextualFunctions nodes: ref [TypedIrNode; ~], ranges: ref [analysis.SourceAnalysisRange; ~], symbolCount: Int -> ContextualFunctionIndex {
+    [Int; ~] => first!
+    [Int; ~] => lastNative!
+    0 => seed!
+    seed! < symbolCount -> while {
+        first! -> push(-1)
+        lastNative! -> push(-1)
+        seed! + 1 => seed!
+    }
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => node
+        node.kind == 0 and node.sourceModule >= 0
+            and node.sourceModule < (ranges -> len) and node.symbol >= 0
+            -> if {
+                ranges[node.sourceModule] => range
+                range.symbolStart + node.symbol => globalSymbol
+                node.symbol < range.symbolCount and globalSymbol >= 0
+                    and globalSymbol < symbolCount -> if {
+                        first![globalSymbol] < 0 -> if { index! => first![globalSymbol] }
+                        node.flags / 128 % 2 == 1 -> if { index! => lastNative![globalSymbol] }
+                    }
+            }
+        index! + 1 => index!
+    }
+    ContextualFunctionIndex { firstBySymbol: first!, lastNativeBySymbol: lastNative! }
+}
+
+contextualFunction nodes: ref [TypedIrNode; ~], ranges: ref [analysis.SourceAnalysisRange; ~], index: ref ContextualFunctionIndex, sourceModule: Int, symbol: Int, nativeOnly: Bool -> Int {
+    sourceModule >= 0 and sourceModule < (ranges -> len) and symbol >= 0
+        -> if {
+            ranges[sourceModule] => range
+            range.symbolStart + symbol => globalSymbol
+            symbol < range.symbolCount and globalSymbol >= 0
+                and globalSymbol < (index.firstBySymbol -> len)
+                -> if {
+                    nativeOnly -> if { index.lastNativeBySymbol[globalSymbol] -> return }
+                    index.firstBySymbol[globalSymbol] -> return
+                }
+        }
+    # Preserve the original ordered scan for identities outside package ranges.
+    -1 => found!
+    0 => cursor!
+    cursor! < (nodes -> len) and (nativeOnly or found! < 0)
+        -> while {
+            nodes[cursor!] => candidate
+            candidate.kind == 0 and candidate.sourceModule == sourceModule
+                and candidate.symbol == symbol
+                and (not nativeOnly or candidate.flags / 128 % 2 == 1)
+                -> if { cursor! => found! }
+            cursor! + 1 => cursor!
+        }
+    found!
+}
+
 # Seal contextual and control-flow types after normalization.
 sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], runtimeSymbols: ref LateRuntimeSymbols -> [Int; ~] {
-    # A bare integer literal in binary arithmetic or comparison adopts the
+    # A bare numeric literal in binary arithmetic or comparison adopts the
     # exact type of its independently typed peer. Without this final
     # contextualization,
     # `UInt16(value) / 16` keeps the right operand as Int, forcing an i32 LLVM
@@ -49,9 +109,9 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                 and contextualBinary.operand1 < (nodes -> len)
                 -> if {
                     nodes[contextualBinary.operand1] => contextualBinaryRight
-                    nodes -> sealIntegerLiteralPeerContext(contextualBinary.operand0, contextualBinaryRight)
+                    nodes -> sealNumericReadLiteralPeerContext(contextualBinary.operand0, contextualBinaryRight, frozenRecursiveSemanticTypes, recursiveTypeFlags)
                     nodes[contextualBinary.operand0] => contextualBinaryLeft
-                    nodes -> sealIntegerLiteralPeerContext(contextualBinary.operand1, contextualBinaryLeft)
+                    nodes -> sealNumericReadLiteralPeerContext(contextualBinary.operand1, contextualBinaryLeft, frozenRecursiveSemanticTypes, recursiveTypeFlags)
                     nodes[contextualBinary.operand0] => contextualBinaryCanonicalLeft
                     nodes[contextualBinary.operand1] => contextualBinaryCanonicalRight
                     contextualBinaryArithmetic
@@ -243,6 +303,7 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                                         or (enumSubjectTerminalCandidateEnd == enumSubjectTerminalLastEnd!
                                         and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalLastStart!))))) => betterTerminalSubjectLocation
                                     enumSubjectTerminalBelongs!
+                                        and enumSubjectTerminalCandidate.astNode != enumSubjectTerminalFlowAst
                                         and enumSubjectTerminalIsEnum!
                                         and enumSubjectTerminalPatternCompatible!
                                         and enumSubjectTerminalCandidateAst.start < enumSubjectTerminalMatchAst.start
@@ -315,6 +376,21 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                                             nodes[chainedControlSubjectAncestor!].parent => chainedControlSubjectAncestor!
                                         }
                                 }
+                            # A transparent flow shell may be the provisional
+                            # subject itself. It carries the producer as its
+                            # value operand but does not emit an SSA value.
+                            not chainedControlSubjectInside!
+                                and chainedControlConsumer!.operand0 == chainedControlProducer.parent
+                                and chainedControlProducer.parent >= 0
+                                and chainedControlProducer.parent < (nodes -> len)
+                                and nodes[chainedControlProducer.parent].kind == 9
+                                and nodes[chainedControlProducer.parent].opcode == -1
+                                and nodes[chainedControlProducer.parent].operand1 == chainedControlSubjectRepairIndex!
+                                and nodes[chainedControlProducer.parent].nextOperand == chainedControlConsumerIndex
+                                and chainedControlConsumer!.parent == nodes[chainedControlProducer.parent].parent
+                                -> if {
+                                    true => chainedControlSubjectInside!
+                                }
                             chainedControlSubjectInside!
                                 and chainedControlConsumer!.operand0 != chainedControlSubjectRepairIndex!
                                 -> if {
@@ -326,6 +402,33 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
             chainedControlSubjectRepairIndex! + 1 => chainedControlSubjectRepairIndex!
         }
     nodes -> repairReturnedEnumMatchResults(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    0 => wrappedReturnedEnumMatchIndex!
+    wrappedReturnedEnumMatchIndex! < (nodes -> len)
+        -> while {
+            nodes[wrappedReturnedEnumMatchIndex!] => wrappedReturnedEnumMatch!
+            wrappedReturnedEnumMatch!.kind == 27
+                and wrappedReturnedEnumMatch!.parent >= 0
+                and wrappedReturnedEnumMatch!.parent < (nodes -> len)
+                and nodes[wrappedReturnedEnumMatch!.parent].kind == 9
+                and nodes[wrappedReturnedEnumMatch!.parent].parent >= 0
+                and nodes[wrappedReturnedEnumMatch!.parent].parent < (nodes -> len)
+                -> if {
+                    nodes[wrappedReturnedEnumMatch!.parent].parent => wrappedReturnedFunctionBody
+                    nodes[wrappedReturnedFunctionBody].kind == 1
+                        and nodes[wrappedReturnedFunctionBody].operand0 == wrappedReturnedEnumMatchIndex!
+                        and nodes[wrappedReturnedFunctionBody].typeId >= 0
+                        -> if {
+                            nodes[wrappedReturnedFunctionBody].typeId => wrappedReturnedEnumMatch!.typeId
+                            nodes[wrappedReturnedFunctionBody].typeKind => wrappedReturnedEnumMatch!.typeKind
+                            nodes[wrappedReturnedFunctionBody].typeOrigin => wrappedReturnedEnumMatch!.typeOrigin
+                            nodes[wrappedReturnedFunctionBody].typeModule => wrappedReturnedEnumMatch!.typeModule
+                            nodes[wrappedReturnedFunctionBody].typeSymbol => wrappedReturnedEnumMatch!.typeSymbol
+                            nodes[wrappedReturnedFunctionBody].typeFlags => wrappedReturnedEnumMatch!.typeFlags
+                            wrappedReturnedEnumMatch! => nodes[wrappedReturnedEnumMatchIndex!]
+                        }
+                }
+            wrappedReturnedEnumMatchIndex! + 1 => wrappedReturnedEnumMatchIndex!
+        }
     # Once an enum match has a canonical numeric result type, propagate that
     # context into a direct negated-literal arm result. The unary node and its
     # literal can otherwise retain the default Int type even when a preceding
@@ -739,75 +842,20 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
         lateNominalMemberIndex! + 1 => lateNominalMemberIndex!
     }
     nodes -> sealEachRoleTypes(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
-    # Structural-product member identity depends on the base's canonical type.
-    # That type is finalized by the projection above for reads of a binding
-    # whose product has no legacy nominal origin. Resolve the label once more
-    # at this authoritative boundary instead of exposing an untyped member to
-    # LLVM emission.
-    0 => structuralMemberRepairIndex!
-    structuralMemberRepairIndex! < (nodes -> len)
+    nodes -> sealStructuralProductMembers(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    # An explicit builtin integer constructor supplies the type of its
+    # literal argument. Seal the unary-minus carrier as well as its magnitude
+    # before LLVM lowering; otherwise Long(-wideLiteral) truncates through Int.
+    0 => contextualBuiltinIntegerIndex!
+    contextualBuiltinIntegerIndex! < (nodes -> len)
         -> while {
-            nodes[structuralMemberRepairIndex!] => structuralMember!
-            structuralMember!.kind == 13 and structuralMember!.symbol < 0 and structuralMember!.operand0 >= 0
+            nodes[contextualBuiltinIntegerIndex!] => contextualBuiltinInteger
+            (contextualBuiltinInteger -> isBuiltinIntegerConversionCall)
+                and contextualBuiltinInteger.operand0 < (nodes -> len)
                 -> if {
-                    nodes[structuralMember!.operand0] => structuralMemberBase
-                    structuralMemberBase.typeKind == 10 and structuralMemberBase.typeId >= 0
-                        -> if {
-                            prepared.package.ranges[structuralMember!.sourceModule] => structuralMemberRange
-                            prepared.package.nodes[structuralMemberRange.astStart + structuralMember!.astNode] => structuralMemberAst
-                            prepared.package.nodes[structuralMemberRange.astStart + structuralMemberBase.astNode] => structuralMemberBaseAst
-                            structuralMemberBaseAst.start + structuralMemberBaseAst.length => structuralMemberBaseEnd
-                            structuralMemberAst.firstToken => structuralMemberTokenIndex!
-                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount
-                                and prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!].span.start < structuralMemberBaseEnd
-                                -> while {
-                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
-                                }
-                            false => structuralMemberMatched!
-                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount and not structuralMemberMatched!
-                                -> while {
-                                    prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!] => structuralMemberToken
-                                    structuralMemberToken.kind == grammar.tokenIdIdentifier()
-                                        -> if {
-                                            0 => structuralFieldSearch!
-                                            structuralFieldSearch! < (recursiveTypes.fields -> len) and not structuralMemberMatched!
-                                                -> while {
-                                                    recursiveTypes.fields[structuralFieldSearch!] => structuralField
-                                                    structuralField.status == 0
-                                                        and structuralField.ownerType == structuralMemberBase.typeId
-                                                        and structuralField.labelToken >= 0 -> if {
-                                                            prepared.package.ranges[structuralField.sourceModule] => structuralFieldRange
-                                                            prepared.package.tokens[structuralFieldRange.tokenStart + structuralField.labelToken] => structuralFieldToken
-                                                            structuralMemberToken.span.length == structuralFieldToken.span.length => structuralFieldEqual!
-                                                            UIntSize(0) => structuralFieldByte!
-                                                            structuralFieldEqual! and structuralFieldByte! < structuralMemberToken.span.length
-                                                                -> while {
-                                                                    (prepared.package.sources[structuralMember!.sourceModule] -> byte(structuralMemberToken.span.start + structuralFieldByte!)) != (prepared.package.sources[structuralField.sourceModule] -> byte(structuralFieldToken.span.start + structuralFieldByte!))
-                                                                        -> if { false => structuralFieldEqual! }
-                                                                    structuralFieldByte! + 1 => structuralFieldByte!
-                                                                }
-                                                            structuralFieldEqual! -> if {
-                                                                structuralField.ordinal => structuralMember!.symbol
-                                                                structuralField.sourceModule => structuralMember!.targetModule
-                                                                structuralField.fieldType => structuralMember!.typeId
-                                                                frozenRecursiveSemanticTypes[structuralField.fieldType] => structuralMemberType
-                                                                structuralMemberType.kind => structuralMember!.typeKind
-                                                                structuralMemberType.origin => structuralMember!.typeOrigin
-                                                                structuralMemberType.module => structuralMember!.typeModule
-                                                                structuralMemberType.symbol => structuralMember!.typeSymbol
-                                                                recursiveTypeFlags[structuralField.fieldType] => structuralMember!.typeFlags
-                                                                true => structuralMemberMatched!
-                                                            }
-                                                        }
-                                                    structuralFieldSearch! + 1 => structuralFieldSearch!
-                                                }
-                                        }
-                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
-                                }
-                            structuralMemberMatched! -> if { structuralMember! => nodes[structuralMemberRepairIndex!] }
-                        }
+                    nodes -> sealIntegerLiteralPeerContext(contextualBuiltinInteger.operand0, contextualBuiltinInteger)
                 }
-            structuralMemberRepairIndex! + 1 => structuralMemberRepairIndex!
+            contextualBuiltinIntegerIndex! + 1 => contextualBuiltinIntegerIndex!
         }
     # Bare integer, decimal, and negated numeric literals at a native ABI call
     # adopt the exact declared parameter type. This runs at the final IR
@@ -818,6 +866,8 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
     # A resolved ordinary call supplies the authoritative parameter type; copy
     # that canonical identity before LLVM scheduling so even `[]` is a real
     # slice/fixed/growable SSA value rather than an untyped placeholder.
+    # Function identity and native flags stay fixed throughout both passes.
+    indexContextualFunctions(nodes, prepared.package.ranges, Int(prepared.package.symbols -> len)) => contextualFunctions
     0 => contextualCallLiteralIndex!
     contextualCallLiteralIndex! < (nodes -> len)
         -> while {
@@ -827,22 +877,10 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                 and contextualCallLiteral.operand0 >= 0 -> if {
                     contextualCallLiteral.targetModule => contextualCallTargetModule!
                     contextualCallTargetModule! < 0 -> if { contextualCallLiteral.sourceModule => contextualCallTargetModule! }
-                    -1 => contextualCallFunctionIndex!
-                    0 => contextualCallFunctionSearch!
-                    contextualCallFunctionSearch! < (nodes -> len) and contextualCallFunctionIndex! < 0
-                        -> while {
-                            nodes[contextualCallFunctionSearch!] => contextualCallFunctionCandidate
-                            contextualCallFunctionCandidate.kind == 0
-                                and contextualCallFunctionCandidate.sourceModule == contextualCallTargetModule!
-                                and contextualCallFunctionCandidate.symbol == contextualCallLiteral.symbol
-                                -> if {
-                                    contextualCallFunctionSearch! => contextualCallFunctionIndex!
-                                }
-                            contextualCallFunctionSearch! + 1 => contextualCallFunctionSearch!
-                        }
-                    contextualCallFunctionIndex! >= 0 -> if {
+                    contextualFunction(nodes, prepared.package.ranges, contextualFunctions, contextualCallTargetModule!, contextualCallLiteral.symbol, false) => contextualCallFunctionIndex
+                    contextualCallFunctionIndex >= 0 -> if {
                         contextualCallLiteral.operand0 => contextualCallArgumentIndex!
-                        nodes[contextualCallFunctionIndex!].operand1 => contextualCallParameterIndex!
+                        nodes[contextualCallFunctionIndex].operand1 => contextualCallParameterIndex!
                         true => contextualCallPrimaryParameter!
                         contextualCallArgumentIndex! >= 0 and contextualCallArgumentIndex! < (nodes -> len)
                             and contextualCallParameterIndex! >= 0 and contextualCallParameterIndex! < (nodes -> len)
@@ -858,6 +896,7 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                                         contextualCallParameter.typeFlags)
                                     }
                                 contextualCallArgument!.kind == 14
+                                    and (frozenRecursiveSemanticTypes -> hasConcreteLiteralContext(contextualCallParameter.typeId))
                                     and ((contextualCallParameter.typeKind == 2
                                     or contextualCallParameter.typeKind == 3
                                     or contextualCallParameter.typeKind == 4
@@ -908,11 +947,12 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                                             }
                                         }
                                     }
-                                contextualCallArgument!.nextOperand => contextualCallArgumentIndex!
                                 contextualCallPrimaryParameter! -> if {
-                                    nodes[contextualCallFunctionIndex!].nextOperand => contextualCallParameterIndex!
+                                    contextualCallLiteral.operand1 => contextualCallArgumentIndex!
+                                    nodes[contextualCallFunctionIndex].nextOperand => contextualCallParameterIndex!
                                     false => contextualCallPrimaryParameter!
                                 } else {
+                                    contextualCallArgument!.nextOperand => contextualCallArgumentIndex!
                                     contextualCallParameter.nextOperand => contextualCallParameterIndex!
                                 }
                             }
@@ -936,19 +976,9 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                         }
                 }
             contextualNativeTarget! -> if {
-                -1 => contextualNativeFunctionIndex!
-                0 => contextualNativeFunctionSearch!
-                contextualNativeFunctionSearch! < (nodes -> len)
-                    -> while {
-                        nodes[contextualNativeFunctionSearch!] => contextualNativeFunctionCandidate
-                        contextualNativeFunctionCandidate.kind == 0 and contextualNativeFunctionCandidate.sourceModule == contextualNativeCall.targetModule and contextualNativeFunctionCandidate.symbol == contextualNativeCall.symbol and contextualNativeFunctionCandidate.flags / 128 % 2 == 1
-                            -> if {
-                                contextualNativeFunctionSearch! => contextualNativeFunctionIndex!
-                            }
-                        contextualNativeFunctionSearch! + 1 => contextualNativeFunctionSearch!
-                    }
-                contextualNativeFunctionIndex! >= 0 -> if {
-                    nodes[contextualNativeFunctionIndex!] => contextualNativeFunction
+                contextualFunction(nodes, prepared.package.ranges, contextualFunctions, contextualNativeCall.targetModule, contextualNativeCall.symbol, true) => contextualNativeFunctionIndex
+                contextualNativeFunctionIndex >= 0 -> if {
+                    nodes[contextualNativeFunctionIndex] => contextualNativeFunction
                     contextualNativeCall.operand0 < 0 and contextualNativeFunction.operand1 >= 0 and contextualNativeCall.sourceModule >= 0 and contextualNativeCall.astNode >= 0
                         -> if {
                             prepared.package.ranges[contextualNativeCall.sourceModule] => contextualNativeCallRange
@@ -1031,7 +1061,9 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
             or finalWrappedCandidate.kind == 18
             or finalWrappedCandidate.kind == 26
             or finalWrappedCandidate.kind == 27
-            or finalWrappedCandidate.kind == 34) -> if {
+            or finalWrappedCandidate.kind == 34
+            or finalWrappedCandidate.kind == 37
+            or finalWrappedCandidate.kind == 38) -> if {
                 false => finalWrappedExistingIsControl!
                 finalWrappedValueByNode![finalWrappedCandidate.parent] >= 0
                     -> if {
@@ -1040,12 +1072,16 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                             or finalWrappedExisting.kind == 27
                             or finalWrappedExisting.kind == 33
                             or finalWrappedExisting.kind == 34
+                            or finalWrappedExisting.kind == 37
+                            or finalWrappedExisting.kind == 38
                             -> if { true => finalWrappedExistingIsControl! }
                     }
                 finalWrappedCandidate.kind == 18
                     or finalWrappedCandidate.kind == 27
                     or finalWrappedCandidate.kind == 33
                     or finalWrappedCandidate.kind == 34
+                    or finalWrappedCandidate.kind == 37
+                    or finalWrappedCandidate.kind == 38
                     or not finalWrappedExistingIsControl!
                     -> if { finalWrappedSearch! => finalWrappedValueByNode![finalWrappedCandidate.parent] }
             }
@@ -1065,6 +1101,9 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                 finalWrapperConcreteValue.typeModule => finalWrapperType!.typeModule
                 finalWrapperConcreteValue.typeSymbol => finalWrapperType!.typeSymbol
                 finalWrapperConcreteValue.typeFlags => finalWrapperType!.typeFlags
+                finalWrapperType!.operand1 < 0 -> if {
+                    finalWrappedValueByNode![finalWrapperTypeIndex!] => finalWrapperType!.operand1
+                }
                 finalWrapperType! => nodes[finalWrapperTypeIndex!]
             }
         finalWrapperTypeIndex! + 1 => finalWrapperTypeIndex!
@@ -1384,6 +1423,9 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
     # return terminates its path and cannot make a later Continue arm produce
     # that Result. Normalize this join only after every late call and nested
     # region type has settled.
+    # Inspect nested control termination before classifying a terminal as a
+    # continuing value path.
+    nodes -> terminatingControlFlags => lateMatchTerminating
     nodes -> len => lateNonValueMatchIndex!
     lateNonValueMatchIndex! > 0 -> while {
         lateNonValueMatchIndex! - 1 => lateNonValueMatchIndex!
@@ -1406,7 +1448,7 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                         nodes[lateNonValueRegionIndex!].operand1 => lateNonValueTerminalIndex
                         lateNonValueTerminalIndex >= 0
                             and lateNonValueTerminalIndex < (nodes -> len)
-                            and nodes[lateNonValueTerminalIndex].kind != 23
+                            and not lateMatchTerminating[lateNonValueTerminalIndex]
                             -> if {
                                 nodes[lateNonValueTerminalIndex] => lateNonValueTerminal
                                 lateNonValueTerminal.typeId < 0
@@ -1480,12 +1522,41 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                             -> if { -218 => finalFileIntrinsicOpcode! }
                         finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "atomicReplace")
                             -> if { -219 => finalFileIntrinsicOpcode! }
-                        (finalFileIntrinsicOpcode! <= -216 and finalFileIntrinsicOpcode! >= -221)
+                        finalFileIntrinsicSymbol.kind == 7 and finalFileIntrinsicSymbol.parent < 0
+                            -> if {
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "createExclusive")
+                                    -> if { -311 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "removePath")
+                                    -> if { -312 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "openWriter")
+                                    -> if { -313 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "write")
+                                    -> if { -314 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "closeWriter")
+                                    -> if { -315 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "openReader")
+                                    -> if { -316 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "read")
+                                    -> if { -317 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "readAsync")
+                                    -> if { -319 => finalFileIntrinsicOpcode! }
+                                finalFileIntrinsicSource -> sourceMatches(finalFileIntrinsicNameToken.span.start, finalFileIntrinsicNameToken.span.length, "closeReader")
+                                    -> if { -318 => finalFileIntrinsicOpcode! }
+                            }
+                        finalFileIntrinsicOpcode! == -206
+                            or (finalFileIntrinsicOpcode! <= -216 and finalFileIntrinsicOpcode! >= -221)
                             or finalFileIntrinsicOpcode! == -231
                             or finalFileIntrinsicOpcode! == -232
                             or finalFileIntrinsicOpcode! == -234
+                            or finalFileIntrinsicOpcode! == -311
+                            or finalFileIntrinsicOpcode! == -312
+                            or (finalFileIntrinsicOpcode! <= -313 and finalFileIntrinsicOpcode! >= -318)
+                            or (finalFileIntrinsicOpcode! -> isAsyncFileReadOpcode)
                             -> if {
                                 finalFileIntrinsicOpcode! => finalFileIntrinsic!.opcode
+                                finalFileIntrinsicOpcode! -> isAsyncFileReadOpcode
+                                    and (finalFileIntrinsic!.flags / 8) % 2 == 0
+                                    -> if { finalFileIntrinsic!.flags + 8 => finalFileIntrinsic!.flags }
                                 finalFileIntrinsic! => nodes[finalFileIntrinsicIndex!]
                             }
                     }
@@ -1565,15 +1636,20 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
                                 frozenRecursiveSemanticTypes[finalControlBindingValue.typeId].first => finalControlBindingTypeId!
                             }
                         }
-                    finalControlBindingTypeId! >= 0 -> if {
-                        frozenRecursiveSemanticTypes[finalControlBindingTypeId!] => finalControlBindingType
-                        finalControlBindingType.origin => finalControlBinding!.typeOrigin
-                        finalControlBindingType.module => finalControlBinding!.typeModule
-                        finalControlBindingType.symbol => finalControlBinding!.typeSymbol
-                        finalControlBindingTypeId! => finalControlBinding!.typeId
-                        finalControlBindingType.kind => finalControlBinding!.typeKind
-                        recursiveTypeFlags[finalControlBindingTypeId!] => finalControlBinding!.typeFlags
-                    }
+                    # A mutable version keeps the declared slot type even when
+                    # its initializer is a default-Int literal. Late binding
+                    # normalization has already restored that invariant.
+                    finalControlBindingTypeId! >= 0
+                        and (finalControlBinding!.flags != 1 or finalControlBinding!.typeId < 0)
+                        -> if {
+                            frozenRecursiveSemanticTypes[finalControlBindingTypeId!] => finalControlBindingType
+                            finalControlBindingType.origin => finalControlBinding!.typeOrigin
+                            finalControlBindingType.module => finalControlBinding!.typeModule
+                            finalControlBindingType.symbol => finalControlBinding!.typeSymbol
+                            finalControlBindingTypeId! => finalControlBinding!.typeId
+                            finalControlBindingType.kind => finalControlBinding!.typeKind
+                            recursiveTypeFlags[finalControlBindingTypeId!] => finalControlBinding!.typeFlags
+                        }
                     finalControlBinding! => nodes[finalControlBindingIndex!]
                 }
             finalControlBindingIndex! + 1 => finalControlBindingIndex!
@@ -1957,4 +2033,100 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
         finalProducerWrapperIndex! + 1 => finalProducerWrapperIndex!
     }
     finalWrappedValueByNode!
+}
+
+
+sealStructuralProductMembers nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+    # Structural-product member identity depends on the base's canonical type.
+    # That type is finalized by the projection above for reads of a binding
+    # whose product has no legacy nominal origin. Resolve the label once more
+    # at this authoritative boundary instead of exposing an untyped member to
+    # LLVM emission.
+    0 => structuralMemberRepairIndex!
+    structuralMemberRepairIndex! < (nodes -> len)
+        -> while {
+            nodes[structuralMemberRepairIndex!] => structuralMember!
+            structuralMember!.kind == 13 and structuralMember!.operand0 >= 0
+                -> if {
+                    nodes[structuralMember!.operand0] => structuralMemberBase
+                    structuralMemberBase.typeKind == 10 and structuralMemberBase.typeId >= 0
+                        -> if {
+                            prepared.package.ranges[structuralMember!.sourceModule] => structuralMemberRange
+                            prepared.package.nodes[structuralMemberRange.astStart + structuralMember!.astNode] => structuralMemberAst
+                            prepared.package.nodes[structuralMemberRange.astStart + structuralMemberBase.astNode] => structuralMemberBaseAst
+                            structuralMemberBaseAst.start + structuralMemberBaseAst.length => structuralMemberBaseEnd
+                            structuralMemberAst.firstToken => structuralMemberTokenIndex!
+                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount
+                                and prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!].span.start < structuralMemberBaseEnd
+                                -> while {
+                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
+                                }
+                            false => structuralMemberMatched!
+                            structuralMemberTokenIndex! < structuralMemberAst.firstToken + structuralMemberAst.tokenCount and not structuralMemberMatched!
+                                -> while {
+                                    prepared.package.tokens[structuralMemberRange.tokenStart + structuralMemberTokenIndex!] => structuralMemberToken
+                                    structuralMemberToken.kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            0 => structuralFieldSearch!
+                                            structuralFieldSearch! < (recursiveTypes.fields -> len) and not structuralMemberMatched!
+                                                -> while {
+                                                    recursiveTypes.fields[structuralFieldSearch!] => structuralField
+                                                    structuralField.status == 0
+                                                        and structuralField.ownerType == structuralMemberBase.typeId
+                                                        -> if {
+                                                            false => structuralFieldEqual!
+                                                            structuralField.labelToken >= 0 -> if {
+                                                                prepared.package.ranges[structuralField.sourceModule] => structuralFieldRange
+                                                                prepared.package.tokens[structuralFieldRange.tokenStart + structuralField.labelToken] => structuralFieldToken
+                                                                structuralMemberToken.span.length == structuralFieldToken.span.length => structuralFieldEqual!
+                                                                UIntSize(0) => structuralFieldByte!
+                                                                structuralFieldEqual! and structuralFieldByte! < structuralMemberToken.span.length
+                                                                    -> while {
+                                                                        (prepared.package.sources[structuralMember!.sourceModule] -> byte(structuralMemberToken.span.start + structuralFieldByte!)) != (prepared.package.sources[structuralField.sourceModule] -> byte(structuralFieldToken.span.start + structuralFieldByte!))
+                                                                            -> if { false => structuralFieldEqual! }
+                                                                        structuralFieldByte! + 1 => structuralFieldByte!
+                                                                    }
+                                                            } else {
+                                                                structuralMemberToken.span.length >= 2
+                                                                    and (prepared.package.sources[structuralMember!.sourceModule] -> byte(structuralMemberToken.span.start)) == 95
+                                                                    -> if {
+                                                                        0 => structuralOrdinal!
+                                                                        true => structuralOrdinalValid!
+                                                                        UIntSize(1) => structuralOrdinalByte!
+                                                                        structuralOrdinalByte! < structuralMemberToken.span.length
+                                                                            -> while {
+                                                                                prepared.package.sources[structuralMember!.sourceModule] -> byte(structuralMemberToken.span.start + structuralOrdinalByte!) => structuralDigit
+                                                                                structuralDigit < 48 or structuralDigit > 57
+                                                                                    -> if { false => structuralOrdinalValid! } else {
+                                                                                        structuralOrdinal! * 10 + Int(structuralDigit - 48) => structuralOrdinal!
+                                                                                    }
+                                                                                structuralOrdinalByte! + 1 => structuralOrdinalByte!
+                                                                            }
+                                                                        structuralOrdinalValid! and structuralOrdinal! == structuralField.ordinal
+                                                                            -> if { true => structuralFieldEqual! }
+                                                                    }
+                                                            }
+                                                            structuralFieldEqual! -> if {
+                                                                structuralField.ordinal => structuralMember!.symbol
+                                                                structuralField.sourceModule => structuralMember!.targetModule
+                                                                structuralField.fieldType => structuralMember!.typeId
+                                                                frozenRecursiveSemanticTypes[structuralField.fieldType] => structuralMemberType
+                                                                structuralMemberType.kind => structuralMember!.typeKind
+                                                                structuralMemberType.origin => structuralMember!.typeOrigin
+                                                                structuralMemberType.module => structuralMember!.typeModule
+                                                                structuralMemberType.symbol => structuralMember!.typeSymbol
+                                                                recursiveTypeFlags[structuralField.fieldType] => structuralMember!.typeFlags
+                                                                true => structuralMemberMatched!
+                                                            }
+                                                        }
+                                                    structuralFieldSearch! + 1 => structuralFieldSearch!
+                                                }
+                                        }
+                                    structuralMemberTokenIndex! + 1 => structuralMemberTokenIndex!
+                                }
+                            structuralMemberMatched! -> if { structuralMember! => nodes[structuralMemberRepairIndex!] }
+                        }
+                }
+            structuralMemberRepairIndex! + 1 => structuralMemberRepairIndex!
+        }
 }

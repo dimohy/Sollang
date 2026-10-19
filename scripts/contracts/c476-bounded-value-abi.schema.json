@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "caseCount", "positiveCount", "semanticNegativeCount", "baselineFailingCount", "managedCompiler", "selfhostBaseline", "build", "proofScope", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-bounded-value-abi" },
+    "caseCount": { "const": 9 },
+    "positiveCount": { "const": 6 },
+    "semanticNegativeCount": { "const": 2 },
+    "baselineFailingCount": { "const": 1 },
+    "managedCompiler": { "$ref": "#/$defs/managedCompiler" },
+    "selfhostBaseline": { "$ref": "#/$defs/compiler" },
+    "build": { "type": "object", "additionalProperties": false,
+      "required": ["target", "optimization", "keepTemps", "llvmRoot", "stdlibRoot"],
+      "properties": {
+        "target": { "const": "windows-x64" }, "optimization": { "const": "O1" },
+        "keepTemps": { "const": true },
+        "llvmRoot": { "type": "string", "minLength": 1 },
+        "stdlibRoot": { "type": "string", "minLength": 1 }
+      }
+    },
+    "proofScope": { "type": "object", "additionalProperties": false,
+      "required": ["semantic", "llvm", "native", "lifetime", "boundedMoveDrop", "managedCrash"],
+      "properties": {
+        "semantic": { "$ref": "#/$defs/explanation" },
+        "llvm": { "$ref": "#/$defs/explanation" },
+        "native": { "$ref": "#/$defs/explanation" },
+        "lifetime": { "$ref": "#/$defs/explanation" },
+        "boundedMoveDrop": { "$ref": "#/$defs/explanation" },
+        "managedCrash": { "$ref": "#/$defs/explanation" }
+      }
+    },
+    "cases": { "type": "array", "minItems": 9, "maxItems": 9,
+      "prefixItems": [
+        { "$ref": "#/$defs/directPopulated" },
+        { "$ref": "#/$defs/directEmpty" },
+        { "$ref": "#/$defs/returnChain" },
+        { "$ref": "#/$defs/structNested" },
+        { "$ref": "#/$defs/dynamicControl" },
+        { "$ref": "#/$defs/nominalControl" },
+        { "$ref": "#/$defs/localCopy" },
+        { "$ref": "#/$defs/boundedMove" },
+        { "$ref": "#/$defs/readonlyParameter" }
+      ]
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "explanation": { "type": "string", "minLength": 1 },
+    "compiler": { "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "$ref": "#/$defs/explanation" }, "sha256": { "$ref": "#/$defs/sha" } }
+    },
+    "managedCompiler": { "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "dllSha256", "depsSha256", "runtimeConfigSha256"],
+      "properties": {
+        "path": { "$ref": "#/$defs/explanation" },
+        "sha256": { "$ref": "#/$defs/sha" },
+        "dllSha256": { "$ref": "#/$defs/sha" },
+        "depsSha256": { "$ref": "#/$defs/sha" },
+        "runtimeConfigSha256": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "managedBaseline": { "type": "object", "additionalProperties": false,
+      "required": ["buildExit", "nativeExit", "stdoutExact"],
+      "properties": {
+        "buildExit": { "type": "integer" },
+        "nativeExit": { "type": ["integer", "null"] },
+        "stdoutExact": { "type": ["boolean", "null"] },
+        "compilerSha256": { "$ref": "#/$defs/sha" },
+        "runs": { "type": "integer", "minimum": 2 },
+        "logs": { "$ref": "#/$defs/explanation" },
+        "buildStdoutSha256": { "$ref": "#/$defs/sha" },
+        "buildStderrSha256": { "$ref": "#/$defs/sha" },
+        "llvmSha256": { "$ref": "#/$defs/sha" },
+        "exeSha256": { "$ref": "#/$defs/sha" },
+        "runStdoutSha256": { "$ref": "#/$defs/sha" },
+        "runStderrSha256": { "$ref": "#/$defs/sha" },
+        "runExitsSha256": { "$ref": "#/$defs/sha" }
+      }
+    },
+    "target": { "type": "object", "additionalProperties": false,
+      "required": ["semanticErrors", "irErrors", "llvmAsExit", "nativeExit", "assertions"],
+      "properties": {
+        "semanticErrors": { "type": ["integer", "null"], "minimum": 0 },
+        "irErrors": { "type": ["integer", "null"], "minimum": 0 },
+        "llvmAsExit": { "type": ["integer", "null"] },
+        "nativeExit": { "type": ["integer", "null"] },
+        "assertions": { "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": { "$ref": "#/$defs/explanation" } }
+      }
+    },
+    "case": { "type": "object", "additionalProperties": false,
+      "required": ["id", "classification", "axis", "source", "sourceSha256", "expected", "expectedSha256", "managedBaseline", "target"],
+      "properties": {
+        "id": { "$ref": "#/$defs/explanation" },
+        "classification": { "enum": ["positive", "semantic-negative", "baseline-failing"] },
+        "axis": { "$ref": "#/$defs/explanation" },
+        "source": { "$ref": "#/$defs/explanation" },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expected": { "type": ["string", "null"] },
+        "expectedSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "managedBaseline": { "$ref": "#/$defs/managedBaseline" },
+        "target": { "$ref": "#/$defs/target" },
+        "inferredTarget": { "type": "object", "additionalProperties": false,
+          "required": ["stdout", "basis", "verified"],
+          "properties": {
+            "stdout": { "$ref": "#/$defs/explanation" },
+            "basis": { "$ref": "#/$defs/explanation" },
+            "verified": { "const": false }
+          }
+        }
+      }
+    },
+    "positive": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "classification": { "const": "positive" },
+      "expected": { "type": "string", "minLength": 1 }, "expectedSha256": { "$ref": "#/$defs/sha" },
+      "managedBaseline": { "properties": { "buildExit": { "const": 0 }, "nativeExit": { "const": 0 }, "stdoutExact": { "const": true } } },
+      "target": { "properties": { "semanticErrors": { "const": 0 }, "irErrors": { "const": 0 }, "llvmAsExit": { "const": 0 }, "nativeExit": { "const": 0 } } }
+    }, "not": { "required": ["inferredTarget"] } }] },
+    "semanticNegative": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "classification": { "const": "semantic-negative" },
+      "expected": { "type": "string", "minLength": 1 }, "expectedSha256": { "$ref": "#/$defs/sha" },
+      "managedBaseline": { "properties": { "buildExit": { "not": { "const": 0 } }, "nativeExit": { "type": "null" }, "stdoutExact": { "type": "null" } } },
+      "target": { "properties": { "semanticErrors": { "const": 1 }, "irErrors": { "const": 0 }, "llvmAsExit": { "type": "null" }, "nativeExit": { "type": "null" } } }
+    }, "not": { "required": ["inferredTarget"] } }] },
+    "baselineFailing": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "classification": { "const": "baseline-failing" },
+      "expected": { "type": "null" }, "expectedSha256": { "type": "null" },
+      "managedBaseline": { "required": ["compilerSha256", "runs", "logs", "buildStdoutSha256", "buildStderrSha256", "llvmSha256", "exeSha256", "runStdoutSha256", "runStderrSha256", "runExitsSha256"],
+        "properties": { "buildExit": { "const": 0 }, "nativeExit": { "const": -1073740940 }, "stdoutExact": { "type": "null" }, "runs": { "const": 2 } } },
+      "target": { "properties": { "semanticErrors": { "type": "null" }, "irErrors": { "type": "null" }, "llvmAsExit": { "type": "null" }, "nativeExit": { "type": "null" } } }
+    }, "required": ["inferredTarget"] }] },
+    "directPopulated": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "direct-populated" } } }] },
+    "directEmpty": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "direct-empty" } } }] },
+    "returnChain": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "return-chain" } } }] },
+    "structNested": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "struct-nested-return" } } }] },
+    "dynamicControl": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "dynamic-control" } } }] },
+    "nominalControl": { "allOf": [{ "$ref": "#/$defs/positive" }, { "properties": { "id": { "const": "nominal-control" } } }] },
+    "localCopy": { "allOf": [{ "$ref": "#/$defs/semanticNegative" }, { "properties": { "id": { "const": "local-copy-negative" } } }] },
+    "boundedMove": { "allOf": [{ "$ref": "#/$defs/semanticNegative" }, { "properties": { "id": { "const": "bounded-move-negative" } } }] },
+    "readonlyParameter": { "allOf": [{ "$ref": "#/$defs/baselineFailing" }, { "properties": { "id": { "const": "readonly-parameter-baseline" } } }] }
+  }
+}

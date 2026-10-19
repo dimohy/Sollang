@@ -64,8 +64,8 @@ function Observe-Descendants([int]$RootProcessId, [Collections.Generic.HashSet[i
     while ($frontier.Count -gt 0) {
         $parent = $frontier.Dequeue()
         foreach ($row in $rows | Where-Object ParentProcessId -eq $parent) {
-            $pid = [int]$row.ProcessId
-            if ($Observed.Add($pid)) { $frontier.Enqueue($pid) }
+            $childProcessId = [int]$row.ProcessId
+            if ($Observed.Add($childProcessId)) { $frontier.Enqueue($childProcessId) }
         }
     }
 }
@@ -100,15 +100,15 @@ function Run-Tracked(
     $observed = [Collections.Generic.HashSet[int]]::new()
     try {
         if (-not $process.Start()) { throw "C424 process could not start: $Id" }
-        $pid = $process.Id
-        [void]$allRootProcessIds.Add($pid)
+        $rootProcessId = $process.Id
+        [void]$allRootProcessIds.Add($rootProcessId)
         $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderr)
         $watch = [Diagnostics.Stopwatch]::StartNew()
         while (-not $process.WaitForExit(50)) {
-            Observe-Descendants $pid $observed
+            Observe-Descendants $rootProcessId $observed
             if ($watch.ElapsedMilliseconds -ge 120000) {
-                Observe-Descendants $pid $observed
+                Observe-Descendants $rootProcessId $observed
                 foreach ($child in $observed) {
                     [void]$allDescendantProcessIds.Add($child)
                     if (Get-Process -Id $child -ErrorAction SilentlyContinue) { [void]$allOrphanProcessIds.Add($child) }
@@ -116,10 +116,10 @@ function Run-Tracked(
                 throw "C424 $Id exceeded 120000 ms; use the detached supervisor for a live process tree"
             }
         }
-        Observe-Descendants $pid $observed
+        Observe-Descendants $rootProcessId $observed
         $process.WaitForExit()
-        $stdoutCopy.GetAwaiter().GetResult()
-        $stderrCopy.GetAwaiter().GetResult()
+        [void]$stdoutCopy.GetAwaiter().GetResult()
+        [void]$stderrCopy.GetAwaiter().GetResult()
         $deadline = [DateTime]::UtcNow.AddSeconds(2)
         do {
             $live = @($observed | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
@@ -137,7 +137,7 @@ function Run-Tracked(
             expectedExitCode = $ExpectedExitCode
             actualExitCode = $process.ExitCode
             exitMatched = $process.ExitCode -eq $ExpectedExitCode
-            rootProcessId = $pid
+            rootProcessId = $rootProcessId
             rootTerminated = $process.HasExited
             descendantProcessIds = @($observed | Sort-Object)
             orphanProcessIds = $orphans

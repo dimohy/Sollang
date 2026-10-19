@@ -648,7 +648,9 @@ internal static class SemanticStableIdentity
             or TypeApplicationExpression
             or FlowTarget
             or BlockFunctionCallStatement
-            or FieldAccessExpression))
+            or FieldAccessExpression
+            or IfExpression
+            or WhenExpression))
         {
             return;
         }
@@ -685,6 +687,8 @@ internal static class SemanticStableIdentity
             + ">",
         BlockFunctionCallStatement block => "block:" + string.Join('.', block.Target),
         FieldAccessExpression field => "field:" + field.FieldName,
+        IfExpression => "contextual-if",
+        WhenExpression => "contextual-when",
         _ => throw new InvalidOperationException("unsupported stable call-site node")
     };
 
@@ -728,6 +732,20 @@ internal static class SemanticStableIdentity
                 var capacity = ParseNumber();
                 Expect('>');
                 return types.GetOrAddBoundedArray(element, capacity);
+            }
+            if (Take("BinaryHeap<"))
+                return Close(types.GetOrAddBinaryHeap(Parse()));
+            if (Take("Deque<"))
+                return Close(types.GetOrAddDeque(Parse()));
+            if (Take("Set<"))
+                return Close(types.GetOrAddSet(Parse()));
+            if (Take("BitSet<"))
+            {
+                var bitCount = ParseNumber();
+                Expect('>');
+                if (bitCount <= 0 || bitCount > int.MaxValue - 63)
+                    throw Invalid("invalid BitSet size");
+                return types.GetOrAddBitSet(bitCount);
             }
             if (Take("Box<"))
             {

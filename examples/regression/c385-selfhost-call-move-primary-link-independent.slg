@@ -1,0 +1,37 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    """
+    consume marker: Int, values: move [Int; ~] -> Int {
+        (values -> len) + marker
+    }
+
+    main {
+        [1; ~] => values
+        consume(0, values) => count
+        count -> println
+    }
+    """ => source
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
+    prepared -> typedIr.lowerResolvedContext(recursiveTypes) => ir!
+    ir! -> typedIr.movesFrom(prepared, recursiveTypes.types) => before
+    0 => changed!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => call
+        call.kind == 6 and call.symbol >= 0 and call.operand0 >= 0 and call.operand1 >= 0
+            -> if {
+                ir![call.operand0] => primary!
+                -1 => primary!.nextOperand
+                primary! => ir![call.operand0]
+                changed! + 1 => changed!
+            }
+        index! + 1 => index!
+    }
+    ir! -> typedIr.movesFrom(prepared, recursiveTypes.types) => after
+    "primary-link-mutated=$(changed!),moves-before=$(before -> len),moves-after=$(after -> len)" -> println
+}

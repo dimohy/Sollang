@@ -3,10 +3,60 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+
+if (args.Length > 0 && args[0] == "--llvm-assertion-tests")
+{
+    if (args.Length != 3) throw new ArgumentException("Expected LLVM input and new result path.");
+    return LlvmAssertionTests.Run(args[1], args[2]);
+}
 
 // Compiler and native fixture streams use UTF-8 regardless of the host console code page.
 Console.OutputEncoding = new UTF8Encoding(false);
+
+if (args.Length > 0 && args[0] == "--raw-llvm-fixture-tests")
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("--raw-llvm-fixture-tests requires a new result JSON path.");
+        return 2;
+    }
+    return RawLlvmFixtureTests.Run(args[1]);
+}
+
+if (args.Length > 0 && args[0] == "--llvm-execution-target-tests")
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("--llvm-execution-target-tests requires a new result JSON path.");
+        return 2;
+    }
+    return LinkedLlvmExecutionTargetTests.Run(args[1]);
+}
+
+if (args.Length > 0 && args[0] == "--result-publication-tests")
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("--result-publication-tests requires a new result JSON path.");
+        return 2;
+    }
+    return ResultPublicationTests.Run(args[1]);
+}
+
+if (args.Length == 3 && args[0] == "--container-element-alignment")
+    return ContainerElementAlignmentTests.Run(args[1], args[2]);
+
+if (args.Length > 0 && args[0] == "--semantic-type-cache-codec")
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("--semantic-type-cache-codec requires a compiler DLL and a result JSON path.");
+        return 2;
+    }
+    return SemanticTypeCacheCodecTests.Run(args[1], args[2]);
+}
 
 var filters = new List<string>();
 var exactFilters = new List<string>();
@@ -15,9 +65,14 @@ var suite = TestSuite.Full;
 var skipBootstrap = false;
 var updateExpected = false;
 var compareCompilers = false;
+var validateInputsOnly = false;
 var testTarget = TestTarget.WindowsX64;
 var wslDistribution = "Ubuntu";
 string? explicitCompilerPath = null;
+string? selfHostCompilerBuildDirectory = null;
+string? resultOutputDirectory = null;
+string? baselineCandidatePlan = null;
+string[]? comparisonResults = null;
 // LLVM-backed cases spend a meaningful part of their lifetime in child
 // processes, so leaving half of a 24-core workstation idle lengthens the
 // repository feedback loop. Keep the cap bounded for memory predictability,
@@ -68,6 +123,17 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
         case "--compare-compilers":
             compareCompilers = true;
             break;
+        case "--stage-linked-llvm-baselines":
+            if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
+            {
+                Console.Error.WriteLine("--stage-linked-llvm-baselines requires a frozen candidate plan.");
+                return 2;
+            }
+            baselineCandidatePlan = args[argumentIndex];
+            break;
+        case "--validate-inputs-only":
+            validateInputsOnly = true;
+            break;
         case "--compiler":
             if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
             {
@@ -75,6 +141,30 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
                 return 2;
             }
             explicitCompilerPath = args[argumentIndex];
+            break;
+        case "--output-directory":
+            if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
+            {
+                Console.Error.WriteLine("--output-directory requires a new result directory.");
+                return 2;
+            }
+            resultOutputDirectory = args[argumentIndex];
+            break;
+        case "--selfhost-driver-build":
+            if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
+            {
+                Console.Error.WriteLine("--selfhost-driver-build requires an existing canonical compiler build directory.");
+                return 2;
+            }
+            selfHostCompilerBuildDirectory = args[argumentIndex];
+            break;
+        case "--compare-results":
+            if (argumentIndex + 2 >= args.Length)
+            {
+                Console.Error.WriteLine("--compare-results requires managed and native result JSON paths.");
+                return 2;
+            }
+            comparisonResults = [args[++argumentIndex], args[++argumentIndex]];
             break;
         case "--target":
             if (++argumentIndex >= args.Length
@@ -103,9 +193,46 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
             break;
         default:
             Console.Error.WriteLine($"Unknown test option: {args[argumentIndex]}");
-            Console.Error.WriteLine("Usage: dotnet run --project tests/Sollang.ExampleTests -- [--filter <fragment>]... [--exact <name>]... [--affected <path>]... [--suite fast|reference|semantic|selfhost|llvm|full] [--target windows-x64|linux-x64] [--wsl-distribution <name>] [--compiler <path>] [--skip-bootstrap] [--update-expected] [--compare-compilers] [--jobs <count>]");
+            Console.Error.WriteLine("Usage: dotnet run --project tests/Sollang.ExampleTests -- [--filter <fragment>]... [--exact <name>]... [--affected <path>]... [--suite fast|reference|semantic|selfhost|llvm|full] [--target windows-x64|linux-x64] [--wsl-distribution <name>] [--compiler <path>] [--output-directory <new-directory>] [--compare-results <managed.json> <native.json>] [--skip-bootstrap] [--update-expected] [--compare-compilers] [--jobs <count>]");
             return 2;
     }
+}
+
+if (comparisonResults is not null)
+{
+    if (args.Length != 3)
+    {
+        Console.Error.WriteLine("--compare-results is a standalone command.");
+        return 2;
+    }
+    return ExampleTestResults.Compare(comparisonResults[0], comparisonResults[1], Normalize);
+}
+if (resultOutputDirectory is not null && explicitCompilerPath is null && !skipBootstrap)
+{
+    Console.Error.WriteLine("Durable results require an existing explicit compiler or --skip-bootstrap; inputs must be pinned before compiler build cost.");
+    return 2;
+}
+if (resultOutputDirectory is not null && updateExpected)
+{
+    Console.Error.WriteLine("--output-directory freezes input oracles and cannot be combined with --update-expected.");
+    return 2;
+}
+if (baselineCandidatePlan is not null && (!compareCompilers || resultOutputDirectory is null
+    || explicitCompilerPath is null || selfHostCompilerBuildDirectory is null
+    || testTarget != TestTarget.WindowsX64))
+{
+    Console.Error.WriteLine("BASELINE_CANDIDATE_REQUIRES_PINNED_MANAGED_REFERENCE_AND_SELFHOST_WINDOWS_RUN");
+    return 2;
+}
+if (selfHostCompilerBuildDirectory is not null && resultOutputDirectory is null)
+{
+    Console.Error.WriteLine("--selfhost-driver-build requires --output-directory to protect the reused product and record its inputs.");
+    return 2;
+}
+if (validateInputsOnly && resultOutputDirectory is null)
+{
+    Console.Error.WriteLine("--validate-inputs-only requires --output-directory for its non-execution record.");
+    return 2;
 }
 
 if (testTarget == TestTarget.LinuxX64 && updateExpected)
@@ -142,8 +269,53 @@ if (explicitCompilerPath is not null)
         return 2;
     }
 }
+if (compareCompilers && !string.Equals(Path.GetExtension(compilerDll), ".dll", StringComparison.OrdinalIgnoreCase))
+{
+    Console.Error.WriteLine("--compare-compilers requires a managed .dll reference compiler; use a native compiler without --compare-compilers.");
+    return 2;
+}
+SelfHostCompilerProduct? reusedSelfHostCompiler = null;
+if (selfHostCompilerBuildDirectory is not null)
+{
+    try
+    {
+        reusedSelfHostCompiler = SelfHostCompilerProduct.Validate(repoRoot, selfHostCompilerBuildDirectory);
+    }
+    catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
+        or System.Text.Json.JsonException or KeyNotFoundException or ArgumentException)
+    {
+        Console.Error.WriteLine($"Selfhost product preflight failed: {error.Message}");
+        return 2;
+    }
+}
 var expectedDir = Path.Combine(repoRoot, "examples", "regression", "expected");
-var baseArtifactsDir = Path.Combine(repoRoot, "artifacts", "example-tests");
+var regressionDir = Path.GetDirectoryName(expectedDir)!;
+var misplacedExpectations = Directory
+    .EnumerateFiles(regressionDir, "*.stdout.txt")
+    .Order(StringComparer.Ordinal)
+    .ToArray();
+if (misplacedExpectations.Length > 0)
+{
+    Console.Error.WriteLine("Regression stdout expectations must be placed in examples/regression/expected:");
+    foreach (var path in misplacedExpectations)
+    {
+        Console.Error.WriteLine($"  {Path.GetFileName(path)}");
+    }
+    return 1;
+}
+if (resultOutputDirectory is not null)
+{
+    resultOutputDirectory = Path.GetFullPath(resultOutputDirectory, repoRoot);
+    if (Directory.Exists(resultOutputDirectory) || File.Exists(resultOutputDirectory))
+    {
+        Console.Error.WriteLine("Result directory already exists; preserve its prior evidence.");
+        return 2;
+    }
+    Directory.CreateDirectory(resultOutputDirectory);
+}
+var baseArtifactsDir = resultOutputDirectory is null
+    ? Path.Combine(repoRoot, "artifacts", "example-tests")
+    : Path.Combine(resultOutputDirectory, "compiler-artifacts");
 var artifactsDir = testTarget == TestTarget.WindowsX64
     ? baseArtifactsDir
     : Path.Combine(baseArtifactsDir, "linux-x64");
@@ -190,8 +362,7 @@ if (!skipBootstrap && explicitCompilerPath is null)
     Console.WriteLine("[bootstrap 2/2] Generating and verifying the grammar table...");
     Console.Out.Flush();
     var generatedGrammarPath = Path.Combine(artifactsDir, "sollang_grammar.generated.slg");
-    var grammarBuild = Run(
-        "dotnet",
+    var grammarBuild = RunCompiler(
         [compilerDll, "grammar", "build",
             Path.Combine(repoRoot, "syntax", "sollang.lexer"),
             Path.Combine(repoRoot, "syntax", "sollang.grammar"),
@@ -220,8 +391,7 @@ if (!skipBootstrap && explicitCompilerPath is null)
         Console.WriteLine("[cli] Verifying `sollang run <source.slg>`...");
         Console.Out.Flush();
         var cliRunOutput = Path.Combine(artifactsDir, "cli-run-smoke.exe");
-        var cliRun = Run(
-            "dotnet",
+        var cliRun = RunCompiler(
             [
                 compilerDll,
                 "run",
@@ -254,6 +424,9 @@ else if (!File.Exists(compilerDll))
 
 var allExpectedFiles = Directory
     .EnumerateFiles(expectedDir, "*.stdout.txt")
+    // Browser target goldens are consumed by the dedicated browser gate. They
+    // do not name a native regression source and must not enter this catalog.
+    .Where(file => !Path.GetFileName(file).EndsWith(".browser.stdout.txt", StringComparison.Ordinal))
     .Order(StringComparer.Ordinal)
     .ToArray();
 var userExampleDir = Path.Combine(repoRoot, "examples", "user");
@@ -293,6 +466,10 @@ Console.WriteLine(
 var expectedFiles = allExpectedFiles
     .Where(file => MatchesFilters(Path.GetFileName(file)[..^".stdout.txt".Length], filters, exactFilters))
     .Where(file => MatchesSuite(file, suite))
+    .Where(file => testTarget == TestTarget.LinuxX64
+        || !Path.GetFileName(file).EndsWith(".linux-x64.stdout.txt", StringComparison.Ordinal))
+    .Where(file => testTarget == TestTarget.WindowsX64
+        || !Path.GetFileName(file).EndsWith(".windows-x64.stdout.txt", StringComparison.Ordinal))
     .Where(file => testTarget == TestTarget.WindowsX64
         || !File.Exists(Path.Combine(
             expectedDir,
@@ -318,14 +495,100 @@ if (expectedFiles.Length + diagnosticFiles.Length == 0)
     return 2;
 }
 
-var selfHostDriverPath = Path.Combine(baseArtifactsDir, "selfhost-sollangc-driver.exe");
+ExampleTestResults? results = null;
+LinkedLlvmBaselineCandidates? baselineCandidates = null;
+if (baselineCandidatePlan is not null)
+{
+    try
+    {
+        if (diagnosticFiles.Length != 0)
+            throw new InvalidOperationException("BASELINE_CANDIDATE_DIAGNOSTICS_NOT_ALLOWED");
+        baselineCandidates = new LinkedLlvmBaselineCandidates(baselineCandidatePlan, repoRoot,
+            resultOutputDirectory!, expectedDir, expectedFiles, IsReusableSelfHostCompilerTest,
+            source => SelfHostTargetMode(source, testTarget));
+    }
+    catch (Exception error) when (error is IOException or InvalidOperationException or JsonException)
+    {
+        Console.Error.WriteLine(error.Message);
+        return 2;
+    }
+}
+if (reusedSelfHostCompiler is not null && !expectedFiles.Any(IsReusableSelfHostCompilerTest))
+{
+    Console.Error.WriteLine("--selfhost-driver-build was supplied but the selected catalog has no reusable selfhost compiler cases.");
+    return 2;
+}
+if (validateInputsOnly && expectedFiles.Any(IsReusableSelfHostCompilerTest) && reusedSelfHostCompiler is null)
+{
+    Console.Error.WriteLine("Selfhost input preflight requires --selfhost-driver-build; it cannot bootstrap a new product.");
+    return 2;
+}
+if (resultOutputDirectory is not null)
+{
+    try
+    {
+        var inputs = CollectResultInputs(repoRoot, expectedDir, diagnosticDir, expectedFiles, diagnosticFiles, testTarget);
+        results = new ExampleTestResults(resultOutputDirectory, compilerDll, TestTargetName(testTarget),
+            expectedFiles.Select(file => Path.GetFileName(file)[..^".stdout.txt".Length])
+                .Concat(diagnosticFiles.Select(file => "diagnostic/" + Path.GetFileNameWithoutExtension(file))).ToArray(),
+            inputs, CreateCompilerInvocation([compilerDll]).IdentityPaths.Concat(new[]
+            {
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Program.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "ExampleTestResults.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "CompilerDiagnosticAssertions.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "AtomicResultFile.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "ResultPublicationTests.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "SelfHostCompilerProduct.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "LinkedLlvmBaselineCandidates.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "LinkedLlvmExecutionTarget.cs"),
+                Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "LinkedLlvmExecutionTargetTests.cs"),
+                typeof(ExampleTestResults).Assembly.Location, clangPath, llvmAsPath
+            }).Concat(baselineCandidates?.InputPaths ?? [])
+                .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.runtimeconfig.json"))
+                .Concat(Directory.EnumerateFiles(AppContext.BaseDirectory, "*.deps.json"))
+                .Concat(Environment.ProcessPath is { } host ? new[] { host } : [])
+                .Concat(reusedSelfHostCompiler?.InputHashes.Keys.AsEnumerable() ?? []),
+            expectedFiles.Where(IsReusableSelfHostCompilerTest)
+                .Select(file => Path.GetFileName(file)[..^".stdout.txt".Length]),
+            baselineCandidates is null ? "regression" : LinkedLlvmBaselineCandidates.Scope);
+        reusedSelfHostCompiler?.AssertStable();
+    }
+    catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+    {
+        File.WriteAllText(Path.Combine(resultOutputDirectory, "result.json"),
+            System.Text.Json.JsonSerializer.Serialize(new
+            {
+                status = "failed", completed = 0, total = expectedFiles.Length + diagnosticFiles.Length,
+                inputHashes = new Dictionary<string, string>(), cases = Array.Empty<object>(), processes = Array.Empty<object>(),
+                failure = "INPUT_PREFLIGHT: " + error.Message, inputsStable = false, processesStopped = true
+            }), new UTF8Encoding(false));
+        Console.Error.WriteLine($"Result input preflight failed: {error.Message}");
+        return 2;
+    }
+}
+
+if (validateInputsOnly)
+{
+    var valid = results!.CompleteInputPreflight();
+    Console.WriteLine($"Input preflight {(valid ? "PASS" : "FAIL")}; executed 0/{expectedFiles.Length + diagnosticFiles.Length} cases.");
+    return valid ? 0 : 2;
+}
+
+var selfHostDriverPath = reusedSelfHostCompiler?.CompilerPath
+    ?? Path.Combine(baseArtifactsDir, "selfhost-sollangc-driver.exe");
 var selfHostDriverSourcesPath = Path.Combine(
     repoRoot,
     "tests",
     "Sollang.ExampleTests",
     "Fixtures",
     "selfhost-sollangc-driver.sources.txt");
-if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
+if (reusedSelfHostCompiler is not null)
+{
+    reusedSelfHostCompiler.AssertStable();
+    Console.WriteLine("[selfhost bootstrap] REUSE canonical compiler with current build/source proof");
+    Console.Out.Flush();
+}
+if (reusedSelfHostCompiler is null && expectedFiles.Any(IsReusableSelfHostCompilerTest))
 {
     using var bootstrapMutex = new Mutex(
         initiallyOwned: false,
@@ -352,7 +615,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
             SearchOption.AllDirectories))
         .Append(selfHostDriverSourcesPath)
         .Append(Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Program.cs"))
-        .Append(compilerDll)
+        .Concat(CreateCompilerInvocation([compilerDll]).IdentityPaths)
         .ToArray();
     var selfHostDriverFingerprintPath = selfHostDriverPath + ".inputs.sha256";
     var selfHostDriverFingerprint = ComputeInputFingerprint(selfHostDriverInputs);
@@ -381,7 +644,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
                 "--llvm", llvmDir,
                 "-O1"
             ]);
-            var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot, relayOutput: true);
+            var driverBuild = RunCompiler(driverArguments, input: null, repoRoot, relayOutput: true);
             if (driverBuild.ExitCode != 0)
             {
                 Console.Error.WriteLine("FAIL reusable native sollangc bootstrap");
@@ -481,6 +744,7 @@ void ReportStarted(string name)
 {
     lock (progressLock)
     {
+        ExampleTestResults.StartCase(name);
         var current = Interlocked.Increment(ref started);
         Console.WriteLine($"[start {current}/{totalTests}] {name}");
         Console.Out.Flush();
@@ -491,6 +755,7 @@ void ReportCompleted(string name, bool passed, TimeSpan elapsed)
 {
     lock (progressLock)
     {
+        ExampleTestResults.CompleteCase(name, passed, elapsed);
         var current = Interlocked.Increment(ref completed);
         Console.WriteLine($"[{current}/{totalTests}] {(passed ? "PASS" : "FAIL")} {name} ({elapsed.TotalSeconds:F2}s)");
         Console.Out.Flush();
@@ -502,9 +767,11 @@ Parallel.ForEach(
     new ParallelOptions { MaxDegreeOfParallelism = jobs },
     expectedFile =>
 {
+    if (ExampleTestResults.Current?.Cancelled == true) return;
     var stopwatch = Stopwatch.StartNew();
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
     var passed = false;
+    var managedReferenceVerified = false;
     ReportStarted(name);
     using var testMutex = new Mutex(
         initiallyOwned: false,
@@ -529,27 +796,21 @@ Parallel.ForEach(
     var environmentPath = Path.Combine(expectedDir, name + ".env.txt");
     var outputPath = Path.Combine(
         artifactsDir,
-        name + "." + TestTargetName(testTarget) + TestExecutableSuffix(testTarget));
-    var commonLlvmContainsPath = Path.Combine(expectedDir, name + ".llvm.contains.txt");
-    var commonLlvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
-    var commonLlvmRegexCountsPath = Path.Combine(expectedDir, name + ".llvm.regex-counts.txt");
-    var targetLlvmContainsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.contains.txt");
-    var targetLlvmNotContainsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.not-contains.txt");
-    var targetLlvmRegexCountsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.regex-counts.txt");
-    var llvmContainsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmContainsPath)
-        ? targetLlvmContainsPath
-        : commonLlvmContainsPath;
-    var llvmNotContainsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmNotContainsPath)
-        ? targetLlvmNotContainsPath
-        : commonLlvmNotContainsPath;
-    var llvmRegexCountsPath = testTarget == TestTarget.LinuxX64 && File.Exists(targetLlvmRegexCountsPath)
-        ? targetLlvmRegexCountsPath
-        : commonLlvmRegexCountsPath;
+        CompilationArtifactStem(name, TestTargetName(testTarget)) + TestExecutableSuffix(testTarget));
+    var (llvmContainsPath, llvmNotContainsPath, llvmRegexCountsPath) = LlvmAssertions.SelectPaths(
+        expectedDir, name, TestTargetName(testTarget), LlvmAssertions.IsManagedProducer(compilerDll));
     var wasmLlvmContainsPath = Path.Combine(expectedDir, name + ".wasm32.llvm.contains.txt");
     var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
     var selfHostRootPath = Path.Combine(expectedDir, name + ".root.txt");
     var stdoutLlvmValidationPath = Path.Combine(expectedDir, name + ".stdout.llvm.validate.txt");
     var stdoutLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.execute.txt");
+    var windowsLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.windows-x64.execute.txt");
+    var linuxLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.linux-x64.execute.txt");
+    var hasStdoutLlvmExecution = File.Exists(stdoutLlvmExecutionPath)
+        || File.Exists(windowsLlvmExecutionPath) || File.Exists(linuxLlvmExecutionPath);
+    // An execution expectation necessarily requires assembly and linking even
+    // when the separate assembly-only marker was not supplied.
+    var needsStdoutLlvmValidation = File.Exists(stdoutLlvmValidationPath) || hasStdoutLlvmExecution;
     var stdoutLlvmLinkArgumentsPath = Path.Combine(expectedDir, name + ".stdout.llvm.link-args.txt");
     var targetStdoutPath = Path.Combine(
         expectedDir,
@@ -557,9 +818,30 @@ Parallel.ForEach(
     var expectedStdoutPath = File.Exists(targetStdoutPath) ? targetStdoutPath : expectedFile;
     var compileOnlyPath = Path.Combine(expectedDir, name + ".compile-only.txt");
     var compilerStderrContainsPath = Path.Combine(expectedDir, name + ".compiler.stderr.contains.txt");
+    var compilerStderrExactPath = Path.Combine(expectedDir, name + ".compiler.stderr.exact.txt");
+    var hasExactCompilerStderr = File.Exists(compilerStderrExactPath);
+    if (hasExactCompilerStderr && File.Exists(compilerStderrContainsPath))
+    {
+        Console.Error.WriteLine($"FAIL {name}: ambiguous exact and contains compiler diagnostic contracts");
+        Interlocked.Increment(ref failures);
+        return;
+    }
+    if (hasExactCompilerStderr)
+    {
+        var declaredDiagnostic = File.ReadAllText(compilerStderrExactPath, Encoding.UTF8);
+        if (!CompilerDiagnosticAssertions.Verify("", declaredDiagnostic, declaredDiagnostic, out var contractError))
+        {
+            Console.Error.WriteLine($"FAIL {name}: {contractError}");
+            Interlocked.Increment(ref failures);
+            return;
+        }
+    }
     var verifyLlvm = File.Exists(llvmContainsPath)
         || File.Exists(llvmNotContainsPath)
         || File.Exists(llvmRegexCountsPath);
+
+    ExampleTestResults.Oracle(File.Exists(compileOnlyPath) ? "compile-only"
+        : needsStdoutLlvmValidation ? "llvm" : "runtime", expectedStdoutPath, verifyLlvm || needsStdoutLlvmValidation);
 
     if (!File.Exists(sourcePath) && !File.Exists(projectPath))
     {
@@ -576,16 +858,28 @@ Parallel.ForEach(
     {
         var outerSource = File.ReadAllText(sourcePath, Encoding.UTF8);
         selfHostMode = SelfHostTargetMode(outerSource, testTarget);
-        var driverArguments = new List<string>
-        {
-            File.Exists(selfHostRootPath) ? selfHostMode + "-root" : selfHostMode
-        };
+        var driverArguments = new List<string> { selfHostMode };
         if (File.Exists(selfHostRootPath))
         {
             var sourceRoot = File.ReadLines(selfHostRootPath)
                 .First(static line => !string.IsNullOrWhiteSpace(line))
                 .Trim();
+            // A root can supply canonical providers to explicit raw fixture sources.
+            // Root-only fixtures keep their existing discovery/entry-point contract.
+            var hasExplicitSources = outerSource.Contains("\"\"\"", StringComparison.Ordinal);
+            driverArguments[0] += hasExplicitSources ? "-stdlib" : "-root";
             driverArguments.Add(Path.GetFullPath(sourceRoot, repoRoot));
+            if (hasExplicitSources)
+            {
+                var explicitSources = MaterializeSelfHostSources(
+                    name, ExtractRawMultilineStrings(outerSource), artifactsDir);
+                driverArguments.AddRange(explicitSources);
+                selfHostSourcePaths = Directory.EnumerateFiles(
+                        Path.GetFullPath(sourceRoot, repoRoot), "*.slg", SearchOption.AllDirectories)
+                    .Order(StringComparer.Ordinal)
+                    .Concat(explicitSources)
+                    .ToArray();
+            }
         }
         else
         {
@@ -593,9 +887,19 @@ Parallel.ForEach(
                 name,
                 ExtractRawMultilineStrings(outerSource),
                 artifactsDir);
+            // A linked embedded program has the same canonical prelude as the
+            // C# reference build. Raw emission-only probes retain their partial
+            // source contract; they must not silently acquire declarations.
+            if (hasStdoutLlvmExecution
+                && selfHostMode is "windows" or "linux" or "wasm")
+            {
+                driverArguments[0] += "-stdlib";
+                driverArguments.Add(Path.Combine(repoRoot, "stdlib"));
+            }
             driverArguments.AddRange(selfHostSourcePaths);
         }
-        run = Run(selfHostDriverPath, driverArguments, input: null, repoRoot);
+        run = Run(selfHostDriverPath, driverArguments, input: null, repoRoot,
+            role: needsStdoutLlvmValidation ? "emit" : "run");
     }
     else
     {
@@ -615,7 +919,7 @@ Parallel.ForEach(
             string.Equals(Path.GetExtension(projectReference), ".workspace", StringComparison.OrdinalIgnoreCase)
                 ? "--workspace"
                 : "--project",
-            Path.GetFullPath(projectReference, repoRoot)
+            ResolveGeneratedFixturePath(projectReference, repoRoot, baseArtifactsDir)
         ]);
         compilerArguments.AddRange(projectArguments[1..]);
     }
@@ -653,8 +957,7 @@ Parallel.ForEach(
 
     var unexpectedWarningsPath = Path.Combine(artifactsDir, name + ".unexpected-warnings.log");
     File.Delete(unexpectedWarningsPath);
-    var build = Run(
-        "dotnet",
+    var build = RunCompiler(
         compilerArguments,
         input: null,
         repoRoot);
@@ -669,25 +972,25 @@ Parallel.ForEach(
     }
 
     var compilerOutput = build.Stdout + build.Stderr;
-    if (!File.Exists(compilerStderrContainsPath)
-        && Regex.IsMatch(
-            compilerOutput,
-            @"(?:^|\r?\n)(?:warning S|note N)\d{3}\b",
-            RegexOptions.CultureInvariant))
+    if (hasExactCompilerStderr != File.Exists(compilerStderrExactPath))
+        throw new InvalidDataException("Compiler diagnostic contract presence changed during verification.");
+    var exactCompilerStderr = hasExactCompilerStderr ? File.ReadAllText(compilerStderrExactPath, Encoding.UTF8) : null;
+    if ((hasExactCompilerStderr || !File.Exists(compilerStderrContainsPath))
+        && !CompilerDiagnosticAssertions.Verify(build.Stdout, build.Stderr, exactCompilerStderr, out var compilerDiagnosticError))
     {
         File.WriteAllText(
             unexpectedWarningsPath,
             compilerOutput,
             new UTF8Encoding(false));
-        Console.Error.WriteLine($"FAIL {name}: unexpected Sollang compiler warning or note");
+        Console.Error.WriteLine($"FAIL {name}: {compilerDiagnosticError}");
         Console.Error.WriteLine(compilerOutput);
         Interlocked.Increment(ref failures);
         return;
     }
 
     if (verifyLlvm
-        && !VerifyLlvmAssertions(
-            Path.ChangeExtension(outputPath, ".ll"),
+        && !LlvmAssertions.Verify(
+            outputPath + ".ll",
             llvmContainsPath,
             llvmNotContainsPath,
             llvmRegexCountsPath,
@@ -700,7 +1003,7 @@ Parallel.ForEach(
 
     if (File.Exists(wasmLlvmContainsPath))
     {
-        var wasmOutputPath = Path.Combine(artifactsDir, name + ".wasm32.wasm");
+        var wasmOutputPath = Path.Combine(artifactsDir, CompilationArtifactStem(name, "wasm32-browser") + ".wasm");
         var wasmArguments = new List<string>
         {
             compilerDll, "build", sourcePath,
@@ -712,11 +1015,11 @@ Parallel.ForEach(
         };
         var wasmUnexpectedWarningsPath = Path.Combine(artifactsDir, name + ".wasm32.unexpected-warnings.log");
         File.Delete(wasmUnexpectedWarningsPath);
-        var wasmBuild = Run("dotnet", wasmArguments, input: null, repoRoot);
+        var wasmBuild = RunCompiler(wasmArguments, input: null, repoRoot);
         var wasmLlvmError = string.Empty;
         if (wasmBuild.ExitCode != 0
-            || !VerifyLlvmAssertions(
-                Path.ChangeExtension(wasmOutputPath, ".ll"),
+            || !LlvmAssertions.Verify(
+                wasmOutputPath + ".ll",
                 wasmLlvmContainsPath,
                 Path.Combine(expectedDir, name + ".wasm32.llvm.not-contains.txt"),
                 Path.Combine(expectedDir, name + ".wasm32.llvm.regex-counts.txt"),
@@ -730,8 +1033,8 @@ Parallel.ForEach(
             return;
         }
         var wasmCompilerOutput = wasmBuild.Stdout + wasmBuild.Stderr;
-        if (!File.Exists(compilerStderrContainsPath)
-            && Regex.IsMatch(wasmCompilerOutput, @"(?:^|\r?\n)warning S\d{3}\b", RegexOptions.CultureInvariant))
+        if ((hasExactCompilerStderr || !File.Exists(compilerStderrContainsPath))
+            && !CompilerDiagnosticAssertions.Verify(wasmBuild.Stdout, wasmBuild.Stderr, exactCompilerStderr, out _))
         {
             File.WriteAllText(
                 wasmUnexpectedWarningsPath,
@@ -787,7 +1090,7 @@ Parallel.ForEach(
             stdin,
             repoRoot,
             runEnvironment,
-            wslDistribution);
+            wslDistribution, role: needsStdoutLlvmValidation ? "emit" : "run");
     }
     }
     var actual = Normalize(run.Stdout);
@@ -807,48 +1110,14 @@ Parallel.ForEach(
         return;
     }
 
-    if (!StringComparer.Ordinal.Equals(expected, actual) && updateExpected)
-    {
-        if (File.Exists(stdoutLlvmValidationPath))
-        {
-            var updateLlvmPath = Path.Combine(artifactsDir, name + ".update.stdout.ll");
-            var updateBitcodePath = Path.Combine(artifactsDir, name + ".update.stdout.bc");
-            File.WriteAllText(updateLlvmPath, actual, new UTF8Encoding(false));
-            var updateLlvmAs = Run(llvmAsPath, [updateLlvmPath, "-o", updateBitcodePath], input: null, repoRoot);
-            if (updateLlvmAs.ExitCode != 0)
-            {
-                Console.Error.WriteLine($"FAIL {name}: refusing to update expected stdout because LLVM verification failed");
-                Console.Error.WriteLine(updateLlvmAs.Stdout);
-                Console.Error.WriteLine(updateLlvmAs.Stderr);
-                Interlocked.Increment(ref failures);
-                return;
-            }
-        }
-
-        File.WriteAllText(expectedStdoutPath, actual, new UTF8Encoding(false));
-        expected = actual;
-        Console.WriteLine($"UPDATE {name}: expected stdout refreshed");
-        Console.Out.Flush();
-    }
-
-    if (!StringComparer.Ordinal.Equals(expected, actual))
-    {
-        Console.Error.WriteLine($"FAIL {name}: stdout mismatch");
-        Console.Error.WriteLine("EXPECTED:");
-        Console.Error.WriteLine(expected);
-        Console.Error.WriteLine("ACTUAL:");
-        Console.Error.WriteLine(actual);
-        Interlocked.Increment(ref failures);
-        return;
-    }
-
-    if (File.Exists(stdoutLlvmValidationPath)
+    if (needsStdoutLlvmValidation
         || (testTarget == TestTarget.LinuxX64
             && reusableSelfHostTest
             && !selfHostMode.StartsWith("wasm", StringComparison.Ordinal)))
     {
-        var stdoutLlvmPath = Path.Combine(artifactsDir, name + ".stdout.ll");
-        var stdoutBitcodePath = Path.Combine(artifactsDir, name + ".stdout.bc");
+        var stdoutArtifactStem = CompilationArtifactStem(name, TestTargetName(testTarget));
+        var stdoutLlvmPath = Path.Combine(artifactsDir, stdoutArtifactStem + ".stdout.ll");
+        var stdoutBitcodePath = Path.Combine(artifactsDir, stdoutArtifactStem + ".stdout.bc");
         File.WriteAllText(stdoutLlvmPath, actual, new UTF8Encoding(false));
         var llvmAs = Run(llvmAsPath, [stdoutLlvmPath, "-o", stdoutBitcodePath], input: null, repoRoot);
         if (llvmAs.ExitCode != 0)
@@ -860,22 +1129,27 @@ Parallel.ForEach(
             return;
         }
 
-        var targetExecutionPath = Path.Combine(
-            expectedDir,
-            name + ".stdout.llvm." + TestTargetName(testTarget) + ".execute.txt");
-        var executionPath = File.Exists(targetExecutionPath)
-            ? targetExecutionPath
-            : stdoutLlvmExecutionPath;
-        if (File.Exists(executionPath))
+        if (hasStdoutLlvmExecution)
         {
-            var linkedPath = Path.Combine(artifactsDir, name + ".stdout" + TestExecutableSuffix(testTarget));
+            var linkedTarget = LinkedLlvmExecutionTarget.Resolve(actual, reusableSelfHostTest ? selfHostMode : null);
+            var targetExecutionPath = linkedTarget == TestTarget.WindowsX64 ? windowsLlvmExecutionPath : linuxLlvmExecutionPath;
+            var executionPath = File.Exists(targetExecutionPath) ? targetExecutionPath : stdoutLlvmExecutionPath;
+            if (!File.Exists(executionPath))
+                throw new InvalidOperationException("LLVM_EXECUTION_EXPECTATION_MISSING");
+            var linkedPath = Path.Combine(artifactsDir, CompilationArtifactStem(name, TestTargetName(linkedTarget)) + ".stdout" + TestExecutableSuffix(linkedTarget));
             var linkArguments = File.Exists(stdoutLlvmLinkArgumentsPath)
                 ? File.ReadLines(stdoutLlvmLinkArgumentsPath)
                     .Where(static line => !string.IsNullOrWhiteSpace(line))
                     .Select(static line => line.Trim())
                     .ToArray()
                 : [];
-            var link = testTarget == TestTarget.LinuxX64
+            if (linkedTarget == TestTarget.WindowsX64 && reusableSelfHostTest)
+            {
+                // Canonical stdlib emission carries the Windows runtime imports
+                // also supplied by the normal compiler's Windows linker.
+                linkArguments = ["-lws2_32", "-lshell32", "-lbcrypt", .. linkArguments];
+            }
+            var link = linkedTarget == TestTarget.LinuxX64
                 ? LinkLinuxLlvm(clangPath, stdoutLlvmPath, linkedPath, repoRoot, wslDistribution)
                 : Run(
                     clangPath,
@@ -892,7 +1166,7 @@ Parallel.ForEach(
             }
 
             var linkedRun = RunTargetExecutable(
-                testTarget,
+                linkedTarget,
                 linkedPath,
                 [],
                 input: null,
@@ -920,17 +1194,17 @@ Parallel.ForEach(
 
             if (compareCompilers && selfHostSourcePaths is not null)
             {
-                var referencePath = Path.Combine(artifactsDir, name + ".reference" + TestExecutableSuffix(testTarget));
+                var referencePath = Path.Combine(artifactsDir, CompilationArtifactStem(name, TestTargetName(linkedTarget)) + ".reference" + TestExecutableSuffix(linkedTarget));
                 var referenceArguments = new List<string> { compilerDll, "build" };
                 referenceArguments.AddRange(selfHostSourcePaths);
                 referenceArguments.AddRange([
                     "-o", referencePath,
-                    "--target", TestTargetName(testTarget),
+                    "--target", TestTargetName(linkedTarget),
                     "--llvm", llvmDir,
                     "-O0",
                     "--keep-temps"
                 ]);
-                var referenceBuild = Run("dotnet", referenceArguments, input: null, repoRoot);
+                var referenceBuild = RunCompiler(referenceArguments, input: null, repoRoot, role: "reference-compile");
                 if (referenceBuild.ExitCode != 0)
                 {
                     Console.Error.WriteLine($"FAIL {name}: C# reference compiler failed during differential verification");
@@ -941,13 +1215,13 @@ Parallel.ForEach(
                 }
 
                 var referenceRun = RunTargetExecutable(
-                    testTarget,
+                    linkedTarget,
                     referencePath,
                     [],
                     input: null,
                     repoRoot,
                     environment: null,
-                    wslDistribution);
+                    wslDistribution, role: "reference-run");
                 var referenceStdout = Normalize(referenceRun.Stdout);
                 if (referenceRun.ExitCode != linkedRun.ExitCode
                     || !StringComparer.Ordinal.Equals(referenceStdout, actualLinkedStdout))
@@ -960,8 +1234,37 @@ Parallel.ForEach(
                     Interlocked.Increment(ref failures);
                     return;
                 }
+                managedReferenceVerified = true;
             }
         }
+    }
+
+    if (baselineCandidates is not null)
+    {
+        if (!managedReferenceVerified)
+            throw new InvalidOperationException("BASELINE_CANDIDATE_REFERENCE_NOT_VERIFIED");
+        baselineCandidates.Write(name, expectedStdoutPath, actual);
+        passed = true;
+        return;
+    }
+
+    // LLVM structure, linked behavior, and the managed reference must be
+    // observed before an exact snapshot mismatch returns or an explicit
+    // refresh changes its oracle. A stale snapshot never bypasses these checks.
+    if (!StringComparer.Ordinal.Equals(expected, actual) && updateExpected)
+    {
+        File.WriteAllText(expectedStdoutPath, actual, new UTF8Encoding(false));
+        expected = actual;
+        Console.WriteLine($"UPDATE {name}: expected stdout refreshed");
+        Console.Out.Flush();
+    }
+
+    if (!StringComparer.Ordinal.Equals(expected, actual))
+    {
+        Console.Error.WriteLine($"FAIL {name}: stdout mismatch");
+        ReportStdoutMismatch(artifactsDir, name, expected, actual);
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     passed = true;
@@ -978,6 +1281,7 @@ Parallel.ForEach(
 
 Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism = jobs }, sourcePath =>
 {
+    if (ExampleTestResults.Current?.Cancelled == true) return;
     var stopwatch = Stopwatch.StartNew();
     var name = Path.GetFileNameWithoutExtension(sourcePath);
     var displayName = $"diagnostic/{name}";
@@ -1009,6 +1313,7 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
         : name.Contains("-linux-x64-", StringComparison.Ordinal)
             ? "linux-x64"
             : TestTargetName(testTarget);
+    ExampleTestResults.Oracle("compiler-diagnostic", expectedPath, requiredLlvmAssertions: false);
     if (!File.Exists(expectedPath))
     {
         Console.Error.WriteLine($"FAIL diagnostic/{name}: expected diagnostic file not found");
@@ -1043,12 +1348,11 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
         }
     }
     diagnosticArguments.AddRange([
-        "-o", Path.Combine(artifactsDir, "diagnostic-" + name + TestExecutableSuffix(testTarget)),
+        "-o", Path.Combine(artifactsDir, CompilationArtifactStem(displayName, diagnosticTarget) + TestExecutableSuffix(testTarget)),
         "--target", diagnosticTarget,
         "--llvm", llvmDir
     ]);
-    var build = Run(
-        "dotnet",
+    var build = RunCompiler(
         diagnosticArguments,
         input: null,
         repoRoot);
@@ -1076,14 +1380,105 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
     }
 });
 
-if (failures == 0)
+var recordPassed = results?.Finish(failures == 0) ?? failures == 0;
+if (failures == 0 && recordPassed)
 {
-    Console.WriteLine($"All {expectedFiles.Length + diagnosticFiles.Length} example tests passed.");
+    Console.WriteLine(baselineCandidates is null
+        ? $"All {expectedFiles.Length + diagnosticFiles.Length} example tests passed."
+        : $"Staged {expectedFiles.Length} LLVM baseline candidates after runtime/reference checks; regression acceptance remains pending.");
     return 0;
 }
 
 Console.Error.WriteLine($"{failures} example test(s) failed.");
+if (!recordPassed && failures == 0) Console.Error.WriteLine("Result record rejected: cancelled, incomplete, process failure or input drift.");
 return 1;
+
+// Generated project fixtures retain their declared logical paths, with physical
+// files isolated alongside the selected run's other compiler artifacts.
+static string ResolveGeneratedFixturePath(string declaredPath, string repoRoot, string artifactsRoot)
+{
+    var path = Path.GetFullPath(declaredPath, repoRoot);
+    var legacy = Path.Combine(repoRoot, "artifacts", "example-tests") + Path.DirectorySeparatorChar;
+    return path.StartsWith(legacy, StringComparison.OrdinalIgnoreCase)
+        ? Path.Combine(artifactsRoot, Path.GetRelativePath(legacy, path)) : path;
+}
+
+static IEnumerable<string> CollectResultInputs(string repoRoot, string expectedDir, string diagnosticDir,
+    string[] expectedFiles, string[] diagnosticFiles, TestTarget target)
+{
+    var inputs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    void Add(string path)
+    {
+        path = Path.GetFullPath(path, repoRoot);
+        if (Directory.Exists(path))
+        {
+            foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                .Where(file => Path.GetExtension(file) is ".slg" or ".project" or ".workspace" or ".lock" or ".h" or ".hpp"))
+                inputs.Add(file);
+        }
+        else if (File.Exists(path)) inputs.Add(path);
+        else throw new FileNotFoundException("Selected fixture dependency is missing", path);
+    }
+    void Sidecars(string folder, string name)
+    {
+        foreach (var path in Directory.EnumerateFiles(folder, name + ".*"))
+        {
+            Add(path);
+            if (path.EndsWith(".sources.txt", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".root.txt", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".runtime-inputs.txt", StringComparison.OrdinalIgnoreCase))
+                foreach (var reference in File.ReadLines(path).Where(line => !string.IsNullOrWhiteSpace(line))) Add(reference.Trim());
+        }
+    }
+    foreach (var expected in expectedFiles)
+    {
+        var name = Path.GetFileName(expected)[..^".stdout.txt".Length];
+        Sidecars(expectedDir, name);
+        var ordinary = Path.Combine(repoRoot, "examples", "regression", name + ".slg");
+        var targetSource = Path.Combine(repoRoot, "examples", "regression", name + "." + TestTargetName(target) + ".slg");
+        var project = Path.Combine(expectedDir, name + ".project.txt");
+        if (File.Exists(targetSource)) Add(targetSource);
+        else if (File.Exists(ordinary)) Add(ordinary);
+        else if (!File.Exists(project)) throw new FileNotFoundException("Selected source or project declaration is missing", ordinary);
+        if (File.Exists(project))
+        {
+            var reference = File.ReadLines(project).First(line => !string.IsNullOrWhiteSpace(line)).Trim();
+            // These existing setup producers create their inputs after catalog preflight.
+            // Pin their declaration and producer source; do not manufacture a source hash.
+            var generatedReference = name switch
+            {
+                "442-git-dependency" => "artifacts/example-tests/442-git-dependency/app",
+                "443-registry-dependency" => "artifacts/example-tests/443-registry-dependency/app-latest",
+                "444-registry-lock-pin" => "artifacts/example-tests/443-registry-dependency/app-pinned",
+                _ => null
+            };
+            if (generatedReference is null) Add(reference);
+            else if (!string.Equals(Path.GetFullPath(reference, repoRoot), Path.GetFullPath(generatedReference, repoRoot), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Generated fixture declaration differs from its existing setup producer");
+        }
+    }
+    foreach (var diagnostic in diagnosticFiles)
+    {
+        Add(diagnostic);
+        Sidecars(diagnosticDir, Path.GetFileNameWithoutExtension(diagnostic));
+    }
+    // Static project fixtures declare relative roots, dependencies and members.
+    // Protect the existing fixture trees rather than parsing negative manifests
+    // with a second, potentially divergent project/workspace resolver.
+    if (diagnosticFiles.Any(file => Path.GetExtension(file) is ".project" or ".workspace"))
+        Add(Path.Combine(diagnosticDir, "projects"));
+    if (expectedFiles.Any(file => File.Exists(Path.Combine(expectedDir,
+            Path.GetFileName(file)[..^".stdout.txt".Length] + ".project.txt"))))
+        Add(Path.Combine(repoRoot, "examples", "regression", "projects"));
+    Add(Path.Combine(repoRoot, "stdlib"));
+    if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
+    {
+        Add(Path.Combine(repoRoot, "selfhost"));
+        Add(Path.Combine(repoRoot, "syntax"));
+        Add(Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Fixtures", "selfhost-sollangc-driver.sources.txt"));
+    }
+    return inputs.Order(StringComparer.Ordinal).ToArray();
+}
 
 static string TestMutexName(string repoRoot, string scope)
 {
@@ -1241,9 +1636,20 @@ static bool IsExpensiveSelfHostLlvmTest(string path) => Path
 static bool IsReusableSelfHostCompilerTest(string path)
 {
     var name = Path.GetFileName(path);
-    return name.Contains("selfhost-llvm-", StringComparison.Ordinal)
-        && !name.StartsWith("195-selfhost-llvm-target-descriptor", StringComparison.Ordinal)
-        && !name.StartsWith("291-selfhost-llvm-canonical-type-selection", StringComparison.Ordinal);
+    if (name.StartsWith("195-selfhost-llvm-target-descriptor", StringComparison.Ordinal)
+        || name.StartsWith("291-selfhost-llvm-canonical-type-selection", StringComparison.Ordinal))
+        return false;
+    if (name.Contains("selfhost-llvm-", StringComparison.Ordinal)) return true;
+    const string suffix = ".stdout.txt";
+    if (!name.EndsWith(suffix, StringComparison.Ordinal)) return false;
+    var stem = name[..^suffix.Length];
+    var expectedDirectory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+    if (!File.Exists(Path.Combine(expectedDirectory, stem + ".root.txt"))) return false;
+    var sourceDirectory = Directory.GetParent(expectedDirectory)?.FullName;
+    if (sourceDirectory is null) return false;
+    var sourcePath = Path.Combine(sourceDirectory, stem + ".slg");
+    return File.Exists(sourcePath)
+        && RawLlvmFixture.SupportsCanonicalProviderEmission(File.ReadAllText(sourcePath));
 }
 
 static string SelfHostTargetMode(string source, TestTarget testTarget) =>
@@ -1283,7 +1689,7 @@ static string[] MaterializeSelfHostSources(
     IEnumerable<string> sources,
     string artifactsDir)
 {
-    var sourceDirectory = Path.Combine(artifactsDir, "selfhost-inputs", testName);
+    var sourceDirectory = Path.Combine(artifactsDir, "selfhost-inputs", CompilationArtifactStem(testName, "source-input"));
     Directory.CreateDirectory(sourceDirectory);
     return sources.Select((source, index) =>
     {
@@ -1375,6 +1781,11 @@ static string TestTargetName(TestTarget target) => target switch
     _ => throw new ArgumentOutOfRangeException(nameof(target), target, null)
 };
 
+// Full case identity remains in result records; private file names have a bounded stem.
+static string CompilationArtifactStem(string caseId, string target) =>
+    Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(caseId + "\0" + target)))
+        .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
 static string TestExecutableSuffix(TestTarget target) => target switch
 {
     TestTarget.WindowsX64 => ".exe",
@@ -1389,16 +1800,17 @@ static ProcessResult RunTargetExecutable(
     string? input,
     string workingDirectory,
     IReadOnlyDictionary<string, string>? environment,
-    string wslDistribution) => target switch
+    string wslDistribution,
+    string role = "run") => target switch
 {
-    TestTarget.WindowsX64 => Run(executablePath, args, input, workingDirectory, environment),
+    TestTarget.WindowsX64 => Run(executablePath, args, input, workingDirectory, environment, role: role),
     TestTarget.LinuxX64 => RunInWsl(
         executablePath,
         args,
         input,
         workingDirectory,
         environment,
-        wslDistribution),
+        wslDistribution, role),
     _ => throw new ArgumentOutOfRangeException(nameof(target), target, null)
 };
 
@@ -1408,7 +1820,8 @@ static ProcessResult RunInWsl(
     string? input,
     string workingDirectory,
     IReadOnlyDictionary<string, string>? environment,
-    string wslDistribution)
+    string wslDistribution,
+    string role = "run")
 {
     var wslArguments = new List<string>
     {
@@ -1423,7 +1836,7 @@ static ProcessResult RunInWsl(
     }
     wslArguments.Add(ConvertToWslPath(executablePath));
     wslArguments.AddRange(args);
-    return Run("wsl.exe", wslArguments, input, workingDirectory);
+    return Run("wsl.exe", wslArguments, input, workingDirectory, role: role);
 }
 
 static ProcessResult LinkLinuxLlvm(
@@ -1597,8 +2010,7 @@ static void PrepareRegistryDependencyFixture(
     WriteRegistryApp(appUpdate, registryLocation);
     WriteRegistryApp(appBadChecksum, registryLocation);
 
-    var resolve = Run(
-        "dotnet",
+    var resolve = RunCompiler(
         [compilerDll, "resolve", "--project", appLatest],
         input: null,
         repoRoot);
@@ -1615,8 +2027,7 @@ static void PrepareRegistryDependencyFixture(
 
     WriteRegistryLock(appPinned, registryLocation, "1.1.0", checksums["1.1.0"]);
     WriteRegistryLock(appUpdate, registryLocation, "1.1.0", checksums["1.1.0"]);
-    var update = Run(
-        "dotnet",
+    var update = RunCompiler(
         [compilerDll, "resolve", "--project", appUpdate],
         input: null,
         repoRoot);
@@ -1632,8 +2043,7 @@ static void PrepareRegistryDependencyFixture(
         registryLocation,
         "1.1.0",
         "sha256:" + new string('0', 64));
-    var badChecksum = Run(
-        "dotnet",
+    var badChecksum = RunCompiler(
         [compilerDll, "build", "--project", appBadChecksum, "--locked"],
         input: null,
         repoRoot);
@@ -1669,13 +2079,60 @@ static void PrepareRegistryDependencyFixture(
     }
 }
 
+// One command/identity authority for managed DLL and native compiler products.
+static CompilerInvocation CreateCompilerInvocation(IReadOnlyList<string> compilerArguments)
+{
+    if (compilerArguments.Count == 0)
+    {
+        throw new ArgumentException("Compiler argument vector must start with its product path.", nameof(compilerArguments));
+    }
+    var compilerPath = Path.GetFullPath(compilerArguments[0]);
+    var managed = string.Equals(Path.GetExtension(compilerPath), ".dll", StringComparison.OrdinalIgnoreCase);
+    var arguments = managed
+        ? compilerArguments.ToArray()
+        : compilerArguments.Skip(1).ToArray();
+    var identityPaths = new List<string> { compilerPath };
+    if (LlvmAssertions.IsManagedProducer(compilerPath))
+    {
+        if (!managed) identityPaths.Add(Path.ChangeExtension(compilerPath, ".dll"));
+        foreach (var extension in new[] { ".deps.json", ".runtimeconfig.json" })
+        {
+            var sidecar = Path.ChangeExtension(compilerPath, extension);
+            if (File.Exists(sidecar))
+            {
+                identityPaths.Add(sidecar);
+            }
+        }
+    }
+    return new CompilerInvocation(managed ? "dotnet" : compilerPath, arguments, identityPaths);
+}
+
+static ProcessResult RunCompiler(
+    IReadOnlyList<string> compilerArguments,
+    string? input,
+    string workingDirectory,
+    bool relayOutput = false,
+    string role = "compile")
+{
+    var actualArguments = compilerArguments.ToList();
+    if (!string.Equals(Path.GetExtension(actualArguments[0]), ".dll", StringComparison.OrdinalIgnoreCase)
+        && actualArguments.Count > 1 && actualArguments[1] is "build" or "test"
+        && !actualArguments.Contains("--stdlib", StringComparer.Ordinal))
+    {
+        actualArguments.AddRange(["--stdlib", Path.Combine(FindRepositoryRoot(workingDirectory), "stdlib")]);
+    }
+    var invocation = CreateCompilerInvocation(actualArguments);
+    return Run(invocation.FileName, invocation.Arguments, input, workingDirectory, relayOutput: relayOutput, role: role);
+}
+
 static ProcessResult Run(
     string fileName,
     IReadOnlyList<string> args,
     string? input,
     string workingDirectory,
     IReadOnlyDictionary<string, string>? environment = null,
-    bool relayOutput = false)
+    bool relayOutput = false,
+    string role = "process")
 {
     const int ProcessTimeoutMilliseconds = 5 * 60 * 1000;
     using var process = new Process();
@@ -1703,17 +2160,28 @@ static ProcessResult Run(
         }
     }
 
+    ExampleTestResults.ProcessRecord? processRecord = null;
+    ProcessResult? observed = null;
+    var startedProcess = false;
+    Task<string>? stdoutTask = null;
+    Task<string>? stderrTask = null;
+    string? observationError = null;
+    var commandInputs = ExampleTestResults.CommandInputs(fileName, args, workingDirectory);
+    try
+    {
     process.Start();
+    startedProcess = true;
+    processRecord = ExampleTestResults.Started(process, fileName, args, workingDirectory, input, environment, role, commandInputs);
     if (input is not null)
     {
         process.StandardInput.Write(input);
         process.StandardInput.Close();
     }
 
-    var stdoutTask = relayOutput
+    stdoutTask = relayOutput
         ? ReadAndRelayAsync(process.StandardOutput, Console.Out)
         : process.StandardOutput.ReadToEndAsync();
-    var stderrTask = relayOutput
+    stderrTask = relayOutput
         ? ReadAndRelayAsync(process.StandardError, Console.Error)
         : process.StandardError.ReadToEndAsync();
     if (!process.WaitForExit(ProcessTimeoutMilliseconds))
@@ -1721,19 +2189,58 @@ static ProcessResult Run(
         process.Kill(entireProcessTree: true);
         process.WaitForExit();
         Task.WaitAll(stdoutTask, stderrTask);
-        return new ProcessResult(
+        observed = new ProcessResult(
             -1,
             stdoutTask.Result,
             $"process timed out after {ProcessTimeoutMilliseconds / 1000} seconds: {fileName}{Environment.NewLine}{stderrTask.Result}");
+        return observed;
     }
 
     Task.WaitAll(stdoutTask, stderrTask);
-    return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
+    observed = new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
+    return observed;
+    }
+    catch (Exception error)
+    {
+        observationError = error.ToString();
+        throw;
+    }
+    finally
+    {
+        if (startedProcess)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit();
+            }
+            if (processRecord is not null && observed is null)
+            {
+                observed = new ProcessResult(process.ExitCode,
+                    stdoutTask?.GetAwaiter().GetResult() ?? process.StandardOutput.ReadToEnd(),
+                    stderrTask?.GetAwaiter().GetResult() ?? process.StandardError.ReadToEnd());
+            }
+            ExampleTestResults.Ended(processRecord, process, observed, observationError,
+                stdoutTask?.GetAwaiter().GetResult(), stderrTask?.GetAwaiter().GetResult());
+        }
+    }
 }
 
 static async Task<string> ReadAndRelayAsync(StreamReader reader, TextWriter writer)
 {
     var output = new StringBuilder();
+    if (ExampleTestResults.Current is not null)
+    {
+        var buffer = new char[4096];
+        int read;
+        while ((read = await reader.ReadAsync(buffer)) > 0)
+        {
+            output.Append(buffer, 0, read);
+            await writer.WriteAsync(buffer.AsMemory(0, read));
+            await writer.FlushAsync();
+        }
+        return output.ToString();
+    }
     while (await reader.ReadLineAsync() is { } line)
     {
         output.AppendLine(line);
@@ -1743,91 +2250,39 @@ static async Task<string> ReadAndRelayAsync(StreamReader reader, TextWriter writ
     return output.ToString();
 }
 
+static void ReportStdoutMismatch(string artifactsDirectory, string name, string expected, string actual)
+{
+    var expectedPath = Path.Combine(artifactsDirectory, name + ".stdout.expected.txt");
+    var actualPath = Path.Combine(artifactsDirectory, name + ".stdout.actual.txt");
+    File.WriteAllText(expectedPath, expected, new UTF8Encoding(false));
+    File.WriteAllText(actualPath, actual, new UTF8Encoding(false));
+
+    var offset = 0;
+    var line = 1;
+    var column = 1;
+    while (offset < expected.Length && offset < actual.Length && expected[offset] == actual[offset])
+    {
+        if (expected[offset] == '\n') { line++; column = 1; }
+        else column++;
+        offset++;
+    }
+    string Preview(string value)
+    {
+        var start = Math.Max(0, offset - 80);
+        return value.Substring(start, Math.Min(240, value.Length - start))
+            .Replace("\r", "\\r", StringComparison.Ordinal)
+            .Replace("\n", "\\n", StringComparison.Ordinal);
+    }
+    Console.Error.WriteLine($"First difference at line {line}, column {column} (character {offset}).");
+    Console.Error.WriteLine($"EXPECTED ({expected.Length} characters): {expectedPath}");
+    Console.Error.WriteLine(Preview(expected));
+    Console.Error.WriteLine($"ACTUAL ({actual.Length} characters): {actualPath}");
+    Console.Error.WriteLine(Preview(actual));
+}
+
 static string Normalize(string value)
 {
     return value.Replace("\r\n", "\n", StringComparison.Ordinal);
-}
-
-static bool VerifyLlvmAssertions(
-    string llvmPath,
-    string containsPath,
-    string notContainsPath,
-    string regexCountsPath,
-    out string error)
-{
-    if (!File.Exists(llvmPath))
-    {
-        error = $"LLVM file not found: {llvmPath}";
-        return false;
-    }
-
-    var llvm = NormalizeLlvmTypeIdentities(File.ReadAllText(llvmPath, Encoding.UTF8));
-    foreach (var expected in ReadAssertions(containsPath))
-    {
-        var normalizedExpected = NormalizeLlvmTypeIdentities(expected);
-        if (!llvm.Contains(normalizedExpected, StringComparison.Ordinal))
-        {
-            error = $"LLVM does not contain '{expected}'";
-            return false;
-        }
-    }
-
-    foreach (var forbidden in ReadAssertions(notContainsPath))
-    {
-        var normalizedForbidden = NormalizeLlvmTypeIdentities(forbidden);
-        if (llvm.Contains(normalizedForbidden, StringComparison.Ordinal))
-        {
-            error = $"LLVM unexpectedly contains '{forbidden}'";
-            return false;
-        }
-    }
-
-    foreach (var assertion in ReadAssertions(regexCountsPath))
-    {
-        var separator = assertion.IndexOf('\t');
-        if (separator <= 0
-            || !int.TryParse(assertion[..separator], out var expectedCount)
-            || expectedCount < 0)
-        {
-            error = $"invalid LLVM regex-count assertion '{assertion}'; expected '<count><TAB><regex>'";
-            return false;
-        }
-        var pattern = assertion[(separator + 1)..];
-        var actualCount = Regex.Matches(
-            llvm,
-            pattern,
-            RegexOptions.CultureInvariant).Count;
-        if (actualCount != expectedCount)
-        {
-            error = $"LLVM regex '{pattern}' matched {actualCount} time(s), expected {expectedCount}";
-            return false;
-        }
-    }
-
-    error = "";
-    return true;
-}
-
-static string NormalizeLlvmTypeIdentities(string value) =>
-    Regex.Replace(
-        Regex.Replace(
-            Regex.Replace(
-                value,
-                @"%sollang\.(struct|enum)\.\d+",
-                "%sollang.$1.#"),
-            @"@sollang_drop_\d+",
-            "@sollang_drop_#"),
-        @"@sollang_fn_[A-Za-z0-9_]+(?=\(|\s|$)",
-        static match => Regex.Replace(
-            Regex.Replace(match.Value, @"_\d+", "_#"),
-            @"(?<=_t)\d+",
-            "#"));
-
-static IEnumerable<string> ReadAssertions(string path)
-{
-    return File.Exists(path)
-        ? File.ReadLines(path, Encoding.UTF8).Where(line => !string.IsNullOrWhiteSpace(line))
-        : [];
 }
 
 internal sealed class AffectedDependencyGraph
@@ -1982,3 +2437,6 @@ internal enum TestTarget
     WindowsX64,
     LinuxX64
 }
+
+internal sealed record CompilerInvocation(
+    string FileName, IReadOnlyList<string> Arguments, IReadOnlyList<string> IdentityPaths);

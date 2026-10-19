@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Compiler,
-    [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedCompilerSha256
+    [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedCompilerSha256,
+    [ValidateSet('managed', 'native')][string]$CompilerKind = 'managed'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,8 +12,19 @@ $verifier = Join-Path $PSScriptRoot 'verify-c437-current-source.ps1'
 $schema = Join-Path $PSScriptRoot 'contracts/c437-current-source-result.schema.json'
 $tokens = $null
 $parseErrors = $null
-[Management.Automation.Language.Parser]::ParseFile($verifier, [ref]$tokens, [ref]$parseErrors) | Out-Null
+$verifierAst=[Management.Automation.Language.Parser]::ParseFile($verifier, [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -ne 0) { throw "C437 current-source verifier parse failed: $($parseErrors.Message -join '; ')" }
+$auditConversion=$verifierAst.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Convert-C437AuditLlvm'},$true)
+if ($null -eq $auditConversion) { throw 'C437 audit conversion boundary missing' }
+. ([scriptblock]::Create($auditConversion.Extent.Text))
+$invalidEntryRejected=$false
+try {
+    Convert-C437AuditLlvm -LlvmText 'define void @main() { ret void }' -CompilerKind native -CaseId invalid-entry | Out-Null
+} catch {
+    if ($_.Exception.Message -cne 'C437 invalid-entry native entry ABI mismatch') { throw }
+    $invalidEntryRejected=$true
+}
+if (-not $invalidEntryRejected) { throw 'C437 native audit accepted an incompatible entry ABI' }
 
 $text = [IO.File]::ReadAllText($verifier)
 foreach ($required in @(
@@ -28,12 +40,12 @@ foreach ($required in @(
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('sollang-c437-contract-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($temp) | Out-Null
 try {
-    $guardOutput = & pwsh -NoProfile -File $verifier -Compiler $Compiler -ExpectedCompilerSha256 $ExpectedCompilerSha256 -OutputDirectory $temp 2>&1 | Out-String
+    $guardOutput = & pwsh -NoProfile -File $verifier -Compiler $Compiler -CompilerKind $CompilerKind -ExpectedCompilerSha256 $ExpectedCompilerSha256 -OutputDirectory $temp 2>&1 | Out-String
     $guardExit = $LASTEXITCODE
     if ($guardExit -eq 0 -or -not $guardOutput.Contains('requires explicit -SourceFreezeApproved', [StringComparison]::Ordinal)) {
         throw "C437 source-freeze guard failed: exit=$guardExit output=$guardOutput"
     }
-    & pwsh -NoProfile -File $verifier -Compiler $Compiler -ExpectedCompilerSha256 $ExpectedCompilerSha256 -OutputDirectory $temp -ValidateOnly
+    & pwsh -NoProfile -File $verifier -Compiler $Compiler -CompilerKind $CompilerKind -ExpectedCompilerSha256 $ExpectedCompilerSha256 -OutputDirectory $temp -ValidateOnly
     if ($LASTEXITCODE -ne 0) { throw "C437 validate-only failed with exit $LASTEXITCODE" }
     $resultPath = Join-Path $temp 'result.json'
     $json = [IO.File]::ReadAllText($resultPath)

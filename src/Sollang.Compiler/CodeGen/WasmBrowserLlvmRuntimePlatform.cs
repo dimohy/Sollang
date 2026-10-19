@@ -257,6 +257,16 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitFilePrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
+            define internal i32 @sollang_platform_create_exclusive_file(ptr %path, i64 %len) #0 {
+            entry:
+              ret i32 -1
+            }
+
+            define internal i32 @sollang_platform_remove_file(ptr %path, i64 %len) #0 {
+            entry:
+              ret i32 -1
+            }
+
             define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_len, ptr %destination, i64 %destination_len) #0 {
             entry:
               ret i32 0

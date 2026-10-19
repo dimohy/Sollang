@@ -22,24 +22,24 @@ import syntax.generated.slg as grammar
 import sys.file as file
 
 # Lower one source through explicitly borrowed compiler tables.
-lowerFunctionRequest functionRequest: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> SourceTypedIr {
+lowerFunctionRequest functionRequest: FunctionLowerRequest, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceFacts: ref SourceLowerFacts -> SourceTypedIr {
     prepared.package.symbols[prepared.package.ranges[functionRequest.sourceIndex].symbolStart + functionRequest.symbolIndex] => requestedFunction
     requestedFunction.kind == 36 -> if {
         prepared -> lowerComGeneratedFunction(frozenRecursiveSemanticTypes, recursiveTypeFlags, functionRequest)
     } else {
-        functionRequest -> lowerOrdinaryFunction(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst)
+        functionRequest -> lowerOrdinaryFunction(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst, sourceFacts)
     }
 }
-lowerFunctionRequests functionRequests: [FunctionLowerRequest; ~], useParallel: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~] -> [SourceTypedIr; ~] {
+lowerFunctionRequests functionRequests: [FunctionLowerRequest; ~], useParallel: Bool, profileFunctionLimit: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], frozenFunctionResultLegacyIndexByAst: ref [Int; ~], frozenFunctionResultRootAstByAst: ref [Int; ~], frozenFunctionNodeStartsByAst: ref [Int; ~], frozenFunctionNodeCountsByAst: ref [Int; ~], frozenFunctionNodeIndices: ref [Int; ~], frozenInferredIndexByAst: ref [Int; ~], frozenNearestLegacyIndexByAst: ref [Int; ~], frozenNearestCanonicalTypeByAst: ref [Int; ~], frozenRecursiveTypeByAst: ref [Int; ~], sourceFacts: ref SourceLowerFacts -> [SourceTypedIr; ~] {
     useParallel -> if {
-        functionRequests -> parallel functionRequest { functionRequest -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) } => parallelFunctionResults
+        functionRequests -> parallel functionRequest { functionRequest -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst, sourceFacts) } => parallelFunctionResults
         parallelFunctionResults -> return
     }
     [SourceTypedIr; ~] => sequentialFunctionResults!
     0 => requestIndex!
     requestIndex! < (functionRequests -> len) and (profileFunctionLimit < 0 or requestIndex! < profileFunctionLimit)
         -> while {
-            functionRequests[requestIndex!] -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) => functionResult
+            functionRequests[requestIndex!] -> lowerFunctionRequest(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst, sourceFacts) => functionResult
             sequentialFunctionResults! -> push(functionResult)
             requestIndex! + 1 => requestIndex!
         }
@@ -51,23 +51,8 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
     prepared.package.sources[sourceIndex] -> len => sourceLength
     prepared.package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
     prepared.package.ranges[sourceIndex] => sourceRange
-    [resolution.ResolvedName; ~] => resolvedNames!
-    [Int; ~] => entryResolvedSymbolByAst!
-    0 => entryResolvedSymbolSeed!
-    entryResolvedSymbolSeed! < sourceRange.astCount
-        -> while {
-            entryResolvedSymbolByAst! -> push(-1)
-            entryResolvedSymbolSeed! + 1 => entryResolvedSymbolSeed!
-        }
-    0 => sourceNameOffset!
-    sourceNameOffset! < sourceRange.nameCount -> while {
-        prepared.package.names[sourceRange.nameStart + sourceNameOffset!] => sourceResolvedName
-        resolvedNames! -> push(sourceResolvedName)
-        sourceResolvedName.astNode >= 0 and sourceResolvedName.astNode < sourceRange.astCount
-            -> if { sourceResolvedName.symbol => entryResolvedSymbolByAst![sourceResolvedName.astNode] }
-        sourceNameOffset! + 1 => sourceNameOffset!
-    }
-    prepared -> localMemberRoots(resolvedNames!, sourceIndex) => entryLocalMemberByAst
+    prepared -> interpolationTokenMembership(sourceIndex) => interpolatedTokenBySource
+    prepared -> prepareSourceLowerFacts(sourceIndex) => sourceFacts
     [FunctionLowerRequest; ~] => sourceFunctionRequests!
     0 => sourceFunctionSymbolIndex!
     sourceFunctionSymbolIndex! < sourceRange.symbolCount
@@ -77,8 +62,14 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                 -> if { sourceFunctionRequests! -> push(FunctionLowerRequest { sourceIndex: sourceIndex, symbolIndex: sourceFunctionSymbolIndex! }) }
             sourceFunctionSymbolIndex! + 1 => sourceFunctionSymbolIndex!
         }
-    sourceFunctionRequests! -> lowerFunctionRequests(parallelFunctions, profileFunctionLimit, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst) => sourceFunctionResults!
-    results! -> appendAndReleaseFunctionResults(sourceFunctionResults!)
+    sourceFunctionRequests! -> lowerFunctionRequests(parallelFunctions, profileFunctionLimit, prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, frozenFunctionResultLegacyIndexByAst, frozenFunctionResultRootAstByAst, frozenFunctionNodeStartsByAst, frozenFunctionNodeCountsByAst, frozenFunctionNodeIndices, frozenInferredIndexByAst, frozenNearestLegacyIndexByAst, frozenNearestCanonicalTypeByAst, frozenRecursiveTypeByAst, sourceFacts) => sourceFunctionResults!
+    [SourceTypedIr; ~] => awaitedFunctionResults!
+    (sourceFunctionResults! -> len) > 0 -> while {
+        sourceFunctionResults! -> take(0) => functionAwaitResult!
+        functionAwaitResult!.nodes -> repairDiscardedDirectAsyncAwaits(prepared)
+        awaitedFunctionResults! -> push(functionAwaitResult!)
+    }
+    results! -> appendAndReleaseFunctionResults(awaitedFunctionResults!)
     false => explicitEntryPresent!
     false => implicitEntryPresent!
     0 => entryShapeSearch!
@@ -257,11 +248,12 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                                                 -> if { false => entryPreviousBindingEqual! }
                                                                             entryPreviousBindingByte! + 1 => entryPreviousBindingByte!
                                                                         }
-                                                                    entryPreviousBindingEqual! -> if {
-                                                                        entryPreviousBinding.symbol => entryBindingSymbol!
-                                                                        entryPreviousBinding.typeId => entryBindingCanonicalTypeId!
-                                                                        0 => entryPreviousBindingSearch!
-                                                                    }
+                                                                    entryPreviousBindingEqual! and (entryPreviousBinding.symbol -> priorMutableBindingVisible(entryBindingSymbol!, sourceIndex, prepared))
+                                                                        -> if {
+                                                                            entryPreviousBinding.symbol => entryBindingSymbol!
+                                                                            entryPreviousBinding.typeId => entryBindingCanonicalTypeId!
+                                                                            0 => entryPreviousBindingSearch!
+                                                                        }
                                                                 }
                                                         }
                                                 }
@@ -363,6 +355,8 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             -> if { true => entryExpressionBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].parent => entryExpressionAncestor! }
                                     }
                                 }
+                            prepared -> isInterpolationOwnedAst(sourceIndex, entryExpressionAst!, interpolatedTokenBySource)
+                                -> if { false => entryExpressionBelongs! }
                             frozenInferredIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryExpressionTypeIndex
                             frozenRecursiveTypeByAst[sourceRange.astStart + entryExpressionAst!] => recursiveEntryExpressionTypeId!
                             1 => entryExpressionTypeOrigin!
@@ -413,7 +407,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                 and entryExpression.parent >= 0
                                 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 11)
                                 -> if {
-                                    entryResolvedSymbolByAst![entryExpressionAst!] => entryResolvedSymbol
+                                    sourceFacts.symbolsByAst[entryExpressionAst!] => entryResolvedSymbol
                                     entryResolvedSymbol >= 0 and entryResolvedSymbol < sourceRange.symbolCount
                                         -> if {
                                             prepared.package.symbols[sourceRange.symbolStart + entryResolvedSymbol].kind => entryResolvedSymbolKind
@@ -444,9 +438,9 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                             entryExpression.kind == 59 -> if { entryExpressionAst! => entryPatternTypeAst! }
                             entryExpression.kind == 15 -> if {
                                 0 => entryPatternNameResolutionSearch!
-                                entryPatternNameResolutionSearch! < (resolvedNames! -> len)
+                                entryPatternNameResolutionSearch! < (sourceFacts.names -> len)
                                     -> while {
-                                        resolvedNames![entryPatternNameResolutionSearch!] => entryPatternResolvedName
+                                        sourceFacts.names[entryPatternNameResolutionSearch!] => entryPatternResolvedName
                                         entryPatternResolvedName.astNode == entryExpressionAst!
                                             -> if {
                                                 prepared.package.symbols[sourceRange.symbolStart + entryPatternResolvedName.symbol] => entryPatternResolvedSymbol
@@ -505,9 +499,9 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                     generatedEntryPatternCallSearch! + 1 => generatedEntryPatternCallSearch!
                                                 }
                                             0 => localEntryPatternFunctionSearch!
-                                            localEntryPatternFunctionSearch! < (resolvedNames! -> len)
+                                            localEntryPatternFunctionSearch! < (sourceFacts.names -> len)
                                                 -> while {
-                                                    resolvedNames![localEntryPatternFunctionSearch!] => localEntryPatternFunctionName
+                                                    sourceFacts.names[localEntryPatternFunctionSearch!] => localEntryPatternFunctionName
                                                     localEntryPatternFunctionName.astNode => localEntryPatternFunctionAncestor!
                                                     false => localEntryPatternFunctionBelongs!
                                                     localEntryPatternFunctionAncestor! >= 0 and not localEntryPatternFunctionBelongs!
@@ -688,12 +682,13 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                     # final Typed IR passes.
                                     true => knownEntryNumericExpression!
                                     frozenNearestLegacyIndexByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryNumericIndex
-                                    knownEntryNumericIndex >= 0 -> if {
-                                        inferred[knownEntryNumericIndex] => knownEntryNumericCandidate
-                                        knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
-                                        knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
-                                        knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
-                                    }
+                                    knownEntryNumericIndex >= 0 and recursiveEntryExpressionTypeId! < 0
+                                        -> if {
+                                            inferred[knownEntryNumericIndex] => knownEntryNumericCandidate
+                                            knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
+                                            knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
+                                            knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
+                                        }
                                 }
                             entryExpression.kind == 22 -> if {
                                 0 => entryUnaryChildSearch!
@@ -750,9 +745,9 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                             false => knownEntryStreamFlowExpression!
                             entryExpression.kind == 53 => knownEntryIndexAssignment
                             entryExpression.kind == 54 => knownEntryMemberAssignment
-                            entryExpression.kind == 10 or entryExpression.kind == 11
+                            entryExpression.kind -> isFlowIntrinsicAstKind
                                 -> if {
-                                    source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => entryFlowOpcode
+                                    source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, entryExpressionAst!) => entryFlowOpcode
                                     entryFlowOpcode == -255 -> if { true => entryInsertIntrinsicSpelling! }
                                     entryFlowOpcode == -204 -> if { true => knownEntryPushExpression! }
                                     entryFlowOpcode == -213 -> if {
@@ -947,6 +942,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             knownEntryDynTokenSearch! + 1 => knownEntryDynTokenSearch!
                                         }
                                     false => knownEntryDynDispatchPath!
+                                    -1 => knownEntryDynDispatchPathIndex!
                                     -1 => knownEntryDynDispatchTraitToken!
                                     -1 => knownEntryDynDispatchMethodToken!
                                     0 => knownEntryDynDispatchPathSearch!
@@ -955,6 +951,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             prepared.package.nodes[sourceRange.astStart + knownEntryDynDispatchPathSearch!] => knownEntryDynDispatchPath
                                             knownEntryDynDispatchPath.kind == 16 and knownEntryDynDispatchPath.parent == entryExpressionAst!
                                                 -> if {
+                                                    knownEntryDynDispatchPathSearch! => knownEntryDynDispatchPathIndex!
                                                     knownEntryDynDispatchPath.firstToken => knownEntryDynDispatchTokenSearch!
                                                     knownEntryDynDispatchTokenSearch! < knownEntryDynDispatchPath.firstToken + knownEntryDynDispatchPath.tokenCount
                                                         -> while {
@@ -1005,10 +1002,10 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             knownEntryDynDispatchSource.kind == 15 and knownEntryDynDispatchSource.parent == entryExpressionAst!
                                                 -> if {
                                                     0 => knownEntryDynDispatchNameResolutionSearch!
-                                                    knownEntryDynDispatchNameResolutionSearch! < (resolvedNames! -> len)
+                                                    knownEntryDynDispatchNameResolutionSearch! < (sourceFacts.names -> len)
                                                         -> while {
-                                                            resolvedNames![knownEntryDynDispatchNameResolutionSearch!].astNode == knownEntryDynDispatchSourceSearch!
-                                                                -> if { resolvedNames![knownEntryDynDispatchNameResolutionSearch!].symbol => knownEntryDynDispatchSourceSymbol! }
+                                                            sourceFacts.names[knownEntryDynDispatchNameResolutionSearch!].astNode == knownEntryDynDispatchSourceSearch!
+                                                                -> if { sourceFacts.names[knownEntryDynDispatchNameResolutionSearch!].symbol => knownEntryDynDispatchSourceSymbol! }
                                                             knownEntryDynDispatchNameResolutionSearch! + 1 => knownEntryDynDispatchNameResolutionSearch!
                                                         }
                                                 }
@@ -1045,63 +1042,14 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                     knownEntryDynDispatchPath! and not knownEntryDynDispatchSource!
                                         -> if {
                                             true => knownEntryDynDispatchExpression!
-                                            -1 => knownEntryStaticMethodSymbol!
-                                            0 => knownEntryStaticSymbolSearch!
-                                            knownEntryStaticSymbolSearch! < sourceRange.symbolCount
-                                                -> while {
-                                                    prepared.package.symbols[sourceRange.symbolStart + knownEntryStaticSymbolSearch!] => knownEntryStaticMethod
-                                                    knownEntryStaticMethod.kind == 31 and knownEntryStaticMethod.parent >= 0 and knownEntryDynDispatchTraitToken! >= 0 and knownEntryDynDispatchMethodToken! >= 0
-                                                        -> if {
-                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryStaticMethod.nameToken] => knownEntryStaticDeclaredMethod
-                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchMethodToken!] => knownEntryStaticRequestedMethod
-                                                            knownEntryStaticDeclaredMethod.span.length == knownEntryStaticRequestedMethod.span.length => knownEntryStaticMethodEqual!
-                                                            UIntSize(0) => knownEntryStaticMethodByte!
-                                                            knownEntryStaticMethodEqual! and knownEntryStaticMethodByte! < knownEntryStaticDeclaredMethod.span.length
-                                                                -> while {
-                                                                    (source -> byte(knownEntryStaticDeclaredMethod.span.start + knownEntryStaticMethodByte!)) != (source -> byte(knownEntryStaticRequestedMethod.span.start + knownEntryStaticMethodByte!))
-                                                                        -> if { false => knownEntryStaticMethodEqual! }
-                                                                    knownEntryStaticMethodByte! + 1 => knownEntryStaticMethodByte!
-                                                                }
-                                                            prepared.package.symbols[sourceRange.symbolStart + knownEntryStaticMethod.parent] => knownEntryStaticImpl
-                                                            prepared.package.tokens[sourceRange.tokenStart + knownEntryDynDispatchTraitToken!] => knownEntryStaticRequestedTrait
-                                                            false => knownEntryStaticTraitEqual!
-                                                            prepared.package.nodes[sourceRange.astStart + knownEntryStaticImpl.astNode] => knownEntryStaticImplAst
-                                                            knownEntryStaticImplAst.firstToken => knownEntryStaticImplTokenSearch!
-                                                            knownEntryStaticImplTokenSearch! < knownEntryStaticImplAst.firstToken + knownEntryStaticImplAst.tokenCount
-                                                                -> while {
-                                                                    prepared.package.tokens[sourceRange.tokenStart + knownEntryStaticImplTokenSearch!] => knownEntryStaticTraitToken
-                                                                    knownEntryStaticTraitToken.kind == grammar.tokenIdIdentifier()
-                                                                        -> if {
-                                                                            knownEntryStaticTraitToken.span.length == knownEntryStaticRequestedTrait.span.length => knownEntryStaticHeaderEqual!
-                                                                            UIntSize(0) => knownEntryStaticHeaderByte!
-                                                                            knownEntryStaticHeaderEqual! and knownEntryStaticHeaderByte! < knownEntryStaticTraitToken.span.length
-                                                                                -> while {
-                                                                                    (source -> byte(knownEntryStaticTraitToken.span.start + knownEntryStaticHeaderByte!)) != (source -> byte(knownEntryStaticRequestedTrait.span.start + knownEntryStaticHeaderByte!))
-                                                                                        -> if { false => knownEntryStaticHeaderEqual! }
-                                                                                    knownEntryStaticHeaderByte! + 1 => knownEntryStaticHeaderByte!
-                                                                                }
-                                                                            knownEntryStaticHeaderEqual! -> if { true => knownEntryStaticTraitEqual! }
-                                                                        }
-                                                                    knownEntryStaticImplTokenSearch! + 1 => knownEntryStaticImplTokenSearch!
-                                                                }
-                                                            knownEntryStaticMethodEqual! and knownEntryStaticTraitEqual!
-                                                                -> if { knownEntryStaticSymbolSearch! => knownEntryStaticMethodSymbol! }
-                                                        }
-                                                    knownEntryStaticSymbolSearch! + 1 => knownEntryStaticSymbolSearch!
-                                                }
-                                            0 => knownEntryStaticFunctionSearch!
-                                            knownEntryStaticFunctionSearch! < (results! -> len)
-                                                -> while {
-                                                    results![knownEntryStaticFunctionSearch!] => knownEntryStaticFunction
-                                                    knownEntryStaticFunction.kind == 0 and knownEntryStaticFunction.sourceModule == sourceIndex and knownEntryStaticFunction.symbol == knownEntryStaticMethodSymbol!
-                                                        -> if {
-                                                            knownEntryStaticFunction.typeOrigin => entryExpressionTypeOrigin!
-                                                            knownEntryStaticFunction.typeModule => entryExpressionTypeModule!
-                                                            knownEntryStaticFunction.typeSymbol => entryExpressionTypeSymbol!
-                                                            knownEntryStaticFunction.typeId => recursiveEntryExpressionTypeId!
-                                                        }
-                                                    knownEntryStaticFunctionSearch! + 1 => knownEntryStaticFunctionSearch!
-                                                }
+                                            sourceIndex -> traitMethodResultTypeIdAtPath(knownEntryDynDispatchPathIndex!, knownEntryDynDispatchTraitToken!, knownEntryDynDispatchMethodToken!, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => knownEntryStaticResultTypeId
+                                            knownEntryStaticResultTypeId >= 0 -> if {
+                                                frozenRecursiveSemanticTypes[knownEntryStaticResultTypeId] => knownEntryStaticResultType
+                                                knownEntryStaticResultType.origin => entryExpressionTypeOrigin!
+                                                knownEntryStaticResultType.module => entryExpressionTypeModule!
+                                                knownEntryStaticResultType.symbol => entryExpressionTypeSymbol!
+                                                knownEntryStaticResultTypeId => recursiveEntryExpressionTypeId!
+                                            }
                                         }
                                 }
                             knownEntryPushExpression! -> if {
@@ -1330,11 +1278,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                         # the package library catalog supplies their canonical ABI.
                                         -1 => unresolvedEntryFlowOpcode!
                                         entryExpression.kind == 10 -> if {
-                                            source -> flowIntrinsicOpcode(
-                                            prepared.package.tokens,
-                                            sourceRange.tokenStart,
-                                            entryExpression
-                                            ) => unresolvedEntryFlowOpcode!
+                                            source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, entryExpressionAst!) => unresolvedEntryFlowOpcode!
                                         }
                                         entryExpression.kind == 10
                                             and not knownEntryCallExpression!
@@ -1373,7 +1317,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                             prepared.callResultMemberByAst[sourceRange.astStart + entryExpressionAst!]
                                                 and not entryMemberPathIsResolvedCallee!
                                                 -> if { true => knownEntryCallResultMemberExpression! }
-                                            entryLocalMemberByAst[entryExpressionAst!] => knownEntryLocalMemberExpression!
+                                            sourceFacts.localMemberByAst[entryExpressionAst!] => knownEntryLocalMemberExpression!
                                         }
                                         false => knownEntryPartitionItem!
                                         entryExpression.kind == 15 and entryExpressionTypeIndex >= 0
@@ -1386,31 +1330,55 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                     }
                                             }
                                         -1 => entryFlowEmissionOpcode!
-                                        entryExpression.kind == 10 or entryExpression.kind == 11
+                                        entryExpression.kind -> isFlowIntrinsicAstKind
                                             -> if {
-                                                source -> flowIntrinsicOpcode(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => entryFlowEmissionOpcode!
+                                                source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, entryExpressionAst!) => entryFlowEmissionOpcode!
                                             }
+                                        source -> nestedStreamSliceOpcode(
+                                        prepared.package.nodes,
+                                        sourceRange.astStart,
+                                        prepared.package.tokens,
+                                        sourceRange.tokenStart,
+                                        entryExpression
+                                        ) => nestedEntrySliceOpcode
+                                        nestedEntrySliceOpcode != -1
+                                            -> if { nestedEntrySliceOpcode => entryFlowEmissionOpcode! }
                                         # Keep entry-point lowering identical to function
                                         # lowering: an exact receiver method suppresses the
                                         # contextual intrinsic with the same spelling.
                                         knownEntryCallExpression! -> if { -1 => entryFlowEmissionOpcode! }
+                                        entryFlowEmissionOpcode! -> isOwnedContainerTransformOpcode
+                                            -> if {
+                                                prepared -> expressionTypeIds.containerTransformKind(sourceIndex, entryExpressionAst!) => transformKind
+                                                transformKind == 0 -> if { -1 => entryFlowEmissionOpcode! }
+                                            }
                                         entryFlowEmissionOpcode! == -310 and not knownEntryExchangeExpression!
                                             -> if { -1 => entryFlowEmissionOpcode! }
                                         prepared.controlProducerWrapperByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryControlProducerWrapperExpression
-                                        (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression or entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307 or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
-                                            -> if {
-                                                false => entryExpressionIsBoolLiteral!
-                                                entryExpression.kind == 15 and entryExpressionTypeOrigin! == 1 and entryExpressionTypeSymbol! == 23
+                                        # Preserve a syntax-owned record argument even when a
+                                        # missing field prevents structural type inference. The
+                                        # declared dictionary key is checked before nominal sealing.
+                                        false => contextualEntryDictionaryLiteralCandidate!
+                                        entryExpression.kind == 38 and entryExpression.parent >= 0
+                                            and entryAstToIr![entryExpressionAst!] < 0 -> if {
+                                                prepared.package.nodes[sourceRange.astStart + entryExpression.parent] => literalParent
+                                                literalParent.kind == 41 -> if { true => contextualEntryDictionaryLiteralCandidate! }
+                                                literalParent.kind == 11 and literalParent.parent >= 0
                                                     -> if {
-                                                        true => entryExpressionIsBoolLiteral!
-                                                        0 => entryBoolNameSearch!
-                                                        entryBoolNameSearch! < (resolvedNames! -> len)
-                                                            -> while {
-                                                                resolvedNames![entryBoolNameSearch!].astNode == entryExpressionAst!
-                                                                    -> if { false => entryExpressionIsBoolLiteral! }
-                                                                entryBoolNameSearch! + 1 => entryBoolNameSearch!
+                                                        prepared.package.nodes[sourceRange.astStart + literalParent.parent] => literalFlow
+                                                        literalFlow.kind == 10 and entryAstToIr![literalParent.parent] >= 0
+                                                            -> if {
+                                                                results![entryAstToIr![literalParent.parent]] => literalOperation
+                                                                literalOperation.kind == 9
+                                                                    and (literalOperation.opcode == -223 or literalOperation.opcode == -303)
+                                                                    -> if { true => contextualEntryDictionaryLiteralCandidate! }
                                                             }
                                                     }
+                                            }
+                                        not recursiveTypes.contextualRecordLabelByAst[sourceRange.astStart + entryExpressionAst!] and (not resolvedEntryQualifiedLeaf! or knownEntryCallResultMemberExpression! or knownEntryPartitionItem! or entryFlowEmissionOpcode! == -213 or entryFlowEmissionOpcode! == -321 or nestedEntrySliceOpcode != -1 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression) and (contextualEntryNullaryOption! or entryExpressionTypeIndex >= 0 or recursiveEntryExpressionTypeId! >= 0 or contextualEntryDictionaryLiteralCandidate! or knownEntryLocalBindingReference! or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling! or entryFlowEmissionOpcode! == -213 or entryFlowEmissionOpcode! == -321 or nestedEntrySliceOpcode != -1 or knownEntryExchangeExpression! or knownEntryControlProducerWrapperExpression or entryMapExpressionOpcode! == -306 or entryMapExpressionOpcode! == -307 or entryExpression.kind == 22 or knownEntryLocalMemberExpression! or knownEntryIndexedMemberExpression! or knownEntryCallResultMemberExpression! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or entryExpression.kind == 59 or entryExpression.kind == 71 or entryExpression.kind == 73 or entryExpression.kind == 74 or entryExpression.kind == 75 or entryExpression.kind == 76 or entryExpression.kind == 78 or entryExpression.kind == 79 or entryExpression.kind == 80 or entryExpression.kind == 81 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryTakeExpression! or knownEntryPutExpression! or knownEntryCapacityExpression! or knownEntryReserveExpression! or knownEntryBitSetExpression! or knownEntryDequeExpression! or knownEntryHeapExpression! or knownEntrySetExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment or knownEntryMemberAssignment)
+                                            -> if {
+                                                false => entryExpressionIsBoolLiteral!
+                                                entryExpression.kind == 83 -> if { true => entryExpressionIsBoolLiteral! }
                                                 entryExpression.kind == 11 or entryExpression.kind == 48 or (entryExpression.kind == 10 and (unresolvedEntryLibraryInvocation! or unresolvedEntryCallExpression! or entryInsertIntrinsicSpelling!)) => entryExpressionIsCallLike
                                                 false => entryExpressionIsPropertyCall!
                                                 prepared.callIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryPropertyCallIndex
@@ -1419,7 +1387,14 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                     entryPropertyCall.sourceModule == sourceIndex and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0
                                                         -> if { true => entryExpressionIsPropertyCall! }
                                                 }
-                                                resolvedExpressionIrKindForAstKind(entryExpression.kind, entryExpressionIsBoolLiteral!, entryExpressionIsCallLike, contextualEntryNullaryOption!, entryExpressionIsPropertyCall!) => entryExpressionKind!
+                                                false => contextualEntryStructLiteral!
+                                                entryExpression.kind == 38 and recursiveEntryExpressionTypeId! >= 0
+                                                    -> if {
+                                                        frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => contextualEntryType
+                                                        contextualEntryType.kind == 1 and (contextualEntryType.origin == 0 or contextualEntryType.origin == 2)
+                                                            -> if { true => contextualEntryStructLiteral! }
+                                                    }
+                                                resolvedExpressionIrKindForAstKind(entryExpression.kind, entryExpressionIsBoolLiteral!, entryExpressionIsCallLike, contextualEntryNullaryOption!, entryExpressionIsPropertyCall!, contextualEntryStructLiteral!) => entryExpressionKind!
                                                 knownEntryLocalBindingReference! and entryExpression.kind == 16
                                                     -> if { 5 => entryExpressionKind! }
                                                 false => transparentEntryExpression!
@@ -1435,6 +1410,13 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                             }
                                                     }
                                                 entryExpression.kind == 36 -> if {
+                                                    0 => entryConstructorWrapperChildAst!
+                                                    entryConstructorWrapperChildAst! < sourceRange.astCount
+                                                        -> while {
+                                                            prepared -> staticEnumConstructorOwnsWrapper(sourceIndex, entryExpressionAst!, entryConstructorWrapperChildAst!, frozenRecursiveTypeByAst, frozenRecursiveSemanticTypes, recursiveTypes.externalCallResults)
+                                                                -> if { true => transparentEntryExpression! }
+                                                            entryConstructorWrapperChildAst! + 1 => entryConstructorWrapperChildAst!
+                                                        }
                                                     prepared.qualifiedFunctionByParentAst[sourceRange.astStart + entryExpressionAst!] >= 0
                                                         => qualifiedEntryFunctionPath!
                                                     0 => qualifiedEntryFunctionPathSearch!
@@ -1518,12 +1500,18 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                                 entryValuePathSearch! + 1 => entryValuePathSearch!
                                                             }
                                                     }
-                                                    entryExpression.kind == 10 or entryExpression.kind == 11
+                                                    entryExpression.kind -> isFlowIntrinsicAstKind
                                                         -> if {
                                                             knownEntryDynExpression! -> if { -224 => entryExpressionOpcode! }
-                                                            entryExpression.kind == 10 or entryExpression.kind == 11
+                                                            entryExpression.kind -> isFlowIntrinsicAstKind
                                                                 -> if {
-                                                                    entryFlowEmissionOpcode! == -213 or entryFlowEmissionOpcode! == -310
+                                                                    entryFlowEmissionOpcode! == -213
+                                                                        or entryFlowEmissionOpcode! == -321
+                                                                        or entryFlowEmissionOpcode! == -275
+                                                                        or entryFlowEmissionOpcode! == -276
+                                                                        or entryFlowEmissionOpcode! == -310
+                                                                        or (entryFlowEmissionOpcode! -> isRawArenaOpcode)
+                                                                        or (entryFlowEmissionOpcode! -> isOwnedContainerTransformOpcode)
                                                                         -> if { entryFlowEmissionOpcode! => entryExpressionOpcode! }
                                                                 }
                                                             0 => entryIntrinsicChildSearch!
@@ -1537,6 +1525,13 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                                                 and entryExpressionIntrinsicOpcode >= -240
                                                                                 and entryExpressionIntrinsicOpcode == entryFlowEmissionOpcode!
                                                                                 -> if { entryExpressionIntrinsicOpcode => entryExpressionOpcode! }
+                                                                            entryExpressionIntrinsicOpcode == -320
+                                                                                and entryExpressionIntrinsicOpcode == entryFlowEmissionOpcode!
+                                                                                -> if {
+                                                                                    entryExpressionIntrinsicOpcode => entryExpressionOpcode!
+                                                                                    (entryExpressionFlags! / 8) % 2 == 0
+                                                                                        -> if { entryExpressionFlags! + 8 => entryExpressionFlags! }
+                                                                                }
                                                                         }
                                                                     entryIntrinsicChildSearch! + 1 => entryIntrinsicChildSearch!
                                                                 }
@@ -1553,33 +1548,15 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                                             -> if { true => entryAfterDyn! }
                                                                         entryDynTokenSearch! + 1 => entryDynTokenSearch!
                                                                     }
-                                                                -1 => entryDynTraitSymbol!
-                                                                0 => entryDynTraitSearch!
-                                                                entryDynTraitSearch! < sourceRange.symbolCount
-                                                                    -> while {
-                                                                        prepared.package.symbols[sourceRange.symbolStart + entryDynTraitSearch!] => entryDynTraitCandidate
-                                                                        entryDynTraitCandidate.kind == 5 and entryDynTraitToken! >= 0
-                                                                            -> if {
-                                                                                prepared.package.tokens[sourceRange.tokenStart + entryDynTraitCandidate.nameToken] => entryDynDeclared
-                                                                                prepared.package.tokens[sourceRange.tokenStart + entryDynTraitToken!] => entryDynRequested
-                                                                                entryDynDeclared.span.length == entryDynRequested.span.length => entryDynEqual!
-                                                                                UIntSize(0) => entryDynByte!
-                                                                                entryDynEqual! and entryDynByte! < entryDynDeclared.span.length
-                                                                                    -> while {
-                                                                                        (source -> byte(entryDynDeclared.span.start + entryDynByte!)) != (source -> byte(entryDynRequested.span.start + entryDynByte!))
-                                                                                            -> if { false => entryDynEqual! }
-                                                                                        entryDynByte! + 1 => entryDynByte!
-                                                                                    }
-                                                                                entryDynEqual! -> if { entryDynTraitSearch! => entryDynTraitSymbol! }
-                                                                            }
-                                                                        entryDynTraitSearch! + 1 => entryDynTraitSearch!
+                                                                entryDynTraitToken! >= 0 -> if {
+                                                                    prepared.package -> typeIds.resolveDynTrait(prepared.modules, sourceIndex, entryDynTraitToken!, entryExpression.firstToken + entryExpression.tokenCount) => entryDynResolution
+                                                                    entryDynResolution.status == 0 -> if {
+                                                                        9 => entryExpressionKind!
+                                                                        16 => entryExpressionTypeOrigin!
+                                                                        entryDynResolution.targetSource => entryExpressionTypeModule!
+                                                                        entryDynResolution.targetSymbol => entryExpressionTypeSymbol!
+                                                                        frozenRecursiveSemanticTypes -> typeIds.dynTraitTypeId(entryDynResolution.targetSource, entryDynResolution.targetSymbol) => recursiveEntryExpressionTypeId!
                                                                     }
-                                                                entryDynTraitSymbol! >= 0 -> if {
-                                                                    9 => entryExpressionKind!
-                                                                    16 => entryExpressionTypeOrigin!
-                                                                    sourceIndex => entryExpressionTypeModule!
-                                                                    entryDynTraitSymbol! => entryExpressionTypeSymbol!
-                                                                    -1 => recursiveEntryExpressionTypeId!
                                                                 }
                                                             } else {
                                                                 entryExpressionOpcode! == -1 -> if {
@@ -1682,27 +1659,19 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                             entryStreamSliceOpcode != -1
                                                                 -> if { entryStreamSliceOpcode => entryExpressionOpcode! }
                                                         }
-                                                        entryExpression.firstToken => entryRoleTokenIndex!
-                                                        entryRoleTokenIndex! < entryExpression.firstToken + entryExpression.tokenCount
-                                                            -> while {
-                                                                prepared.package.tokens[sourceRange.tokenStart + entryRoleTokenIndex!] => entryRoleToken
-                                                                entryRoleToken.kind == grammar.tokenIdIdentifier()
-                                                                    -> if {
-                                                                        IntrinsicNameRequest { source: source, token: entryRoleToken } -> intrinsicOpcode => entryRoleOpcode
-                                                                        entryRoleOpcode == -207 or entryRoleOpcode == -208 or entryRoleOpcode == -209
-                                                                            -> if { entryRoleOpcode => entryExpressionOpcode! }
-                                                                    }
-                                                                entryRoleTokenIndex! + 1 => entryRoleTokenIndex!
-                                                            }
+                                                        source -> resolvedFlowIntrinsicOpcode(prepared, sourceIndex, entryExpressionAst!) => entryRoleOpcode
+                                                        entryRoleOpcode == -207 or (entryRoleOpcode -> isDirectIterationOpcode) or entryRoleOpcode == -209
+                                                            -> if { entryRoleOpcode => entryExpressionOpcode! }
                                                     }
                                                     entryExpressionKind! == 5 -> if {
                                                         0 => entryNameSearch!
-                                                        entryNameSearch! < (resolvedNames! -> len) -> while {
-                                                            resolvedNames![entryNameSearch!] => entryResolvedName
-                                                            entryResolvedName.astNode == entryExpressionAst!
-                                                                -> if { entryResolvedName.symbol => entryExpressionSymbol! }
-                                                            entryNameSearch! + 1 => entryNameSearch!
-                                                        }
+                                                        entryNameSearch! < (sourceFacts.names -> len)
+                                                            -> while {
+                                                                sourceFacts.names[entryNameSearch!] => entryResolvedName
+                                                                entryResolvedName.astNode == entryExpressionAst!
+                                                                    -> if { entryResolvedName.symbol => entryExpressionSymbol! }
+                                                                entryNameSearch! + 1 => entryNameSearch!
+                                                            }
                                                     }
                                                     entryExpressionKind! == 29 -> if {
                                                         0 => entryPatternBindingSymbolSearch!
@@ -1772,7 +1741,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                             }
                                                             directQualifiedEntryCallIndex >= 0
                                                                 and entryExpressionSymbol! == -1
-                                                                and (entryExpression.kind == 10 or entryExpression.kind == 11)
+                                                                and ((entryExpression.kind -> isFlowIntrinsicAstKind))
                                                                 -> if {
                                                                     prepared.qualified[directQualifiedEntryCallIndex] => directQualifiedEntryCall
                                                                     prepared.modules[directQualifiedEntryCall.targetModule].sourceIndex => directQualifiedEntryCallSource
@@ -1793,26 +1762,27 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                                 }
                                                         }
                                                     -1 => standardEntryFlowVariantToken!
-                                                    entryExpression.kind == 10 and recursiveEntryExpressionTypeId! >= 0
-                                                        and not (entryExpressionKind! == 6
-                                                        and entryExpressionTargetModule! >= 0
-                                                        and entryExpressionSymbol! >= 0)
-                                                        -> if {
-                                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => standardEntryFlowEnumType
-                                                            standardEntryFlowEnumType.kind == 7
-                                                                and standardEntryFlowEnumType.origin == 4
-                                                                and (standardEntryFlowEnumType.symbol == 0 or standardEntryFlowEnumType.symbol == 1)
-                                                                -> if {
-                                                                    source -> standardGenericEnumFlowVariantToken(prepared.package.tokens, sourceRange.tokenStart, entryExpression) => standardEntryFlowVariantToken!
-                                                                }
+                                                    recursiveTypes.enumConstructorIndexByAst[sourceRange.astStart + entryExpressionAst!] => enumEntryConstructorIndex
+                                                    enumEntryConstructorIndex >= 0 -> if {
+                                                        recursiveTypes.enumConstructorArguments[enumEntryConstructorIndex] => enumEntryConstructor
+                                                        26 => entryExpressionKind!
+                                                        enumEntryConstructor.enumTypeId => recursiveEntryExpressionTypeId!
+                                                        frozenRecursiveSemanticTypes[enumEntryConstructor.enumTypeId] => enumEntryConstructorType
+                                                        enumEntryConstructorType.origin => entryExpressionTypeOrigin!
+                                                        enumEntryConstructorType.module => entryExpressionTypeModule!
+                                                        enumEntryConstructorType.symbol => entryExpressionTypeSymbol!
+                                                        enumEntryConstructorType.kind == 7 -> if {
+                                                            17 => entryExpressionTypeOrigin!
+                                                            enumEntryConstructorType.first >= 0 -> if {
+                                                                frozenRecursiveSemanticTypes[enumEntryConstructorType.first].module => entryExpressionTypeModule!
+                                                                frozenRecursiveSemanticTypes[enumEntryConstructorType.first].symbol => entryExpressionTypeSymbol!
+                                                            }
                                                         }
-                                                    standardEntryFlowVariantToken! >= 0 -> if {
-                                                        prepared.package.tokens[sourceRange.tokenStart + standardEntryFlowVariantToken!] => standardEntryFlowVariant
-                                                        frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => standardEntryFlowEnumType
-                                                        sourceIndex -> nominalVariantTagForType(standardEntryFlowEnumType, standardEntryFlowVariant, prepared) => standardEntryFlowVariantTag
-                                                        standardEntryFlowVariantTag >= 0 -> if {
-                                                            26 => entryExpressionKind!
-                                                            standardEntryFlowVariantTag => entryExpressionOpcode!
+                                                        enumEntryConstructor.variantTag => entryExpressionOpcode!
+                                                        enumEntryConstructor.variantToken => standardEntryFlowVariantToken!
+                                                        enumEntryConstructor.variantSymbol >= 0 -> if {
+                                                            enumEntryConstructor.variantSymbol => entryExpressionSymbol!
+                                                            enumEntryConstructor.targetSourceModule => entryExpressionTargetModule!
                                                         }
                                                     }
                                                     -1 => entryExpressionTypeKind!
@@ -1829,7 +1799,8 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                                                         -> if {
                                                             frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!].length => entryExpressionOpcode!
                                                         }
-                                                    entryExpressionOpcode! == -224 -> if { 1 => entryExpressionTypeFlags! }
+                                                    entryExpressionOpcode! == -224 and recursiveEntryExpressionTypeId! < 0
+                                                        -> if { 1 => entryExpressionTypeFlags! }
                                                     entryExpression.payloadToken => entryExpressionPayloadToken!
                                                     standardEntryFlowVariantToken! >= 0 -> if { standardEntryFlowVariantToken! => entryExpressionPayloadToken! }
                                                     contextualEntryNullaryOption! -> if {
@@ -1861,7 +1832,7 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
                             }
                             entryExpressionAst! + 1 => entryExpressionAst!
                         }
-                        results! -> finalizeSourceEntry(entryAstToIr!, resolvedNames!, prepared, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, entryAstIndex!, entryIr, entryExpressionStart, entryHasResolvedCall!, entryResultTypeIndex!)
+                        results! -> finalizeSourceEntry(entryAstToIr!, sourceFacts.names, prepared, inferred, frozenRecursiveSemanticTypes, recursiveTypeFlags, sourceIndex, entryAstIndex!, entryIr, entryExpressionStart, entryHasResolvedCall!, entryResultTypeIndex!)
                     }
             }
         entryAstIndex! + 1 => entryAstIndex!

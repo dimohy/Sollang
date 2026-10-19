@@ -1,5 +1,6 @@
 namespace sollang.compiler.semantic.expression_types
 
+import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
@@ -364,14 +365,14 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                             typedArrayBuiltinSearch! + 1 => typedArrayBuiltinSearch!
                                         }
                                     typedArrayBuiltinSymbol! >= 0 -> if {
-                                        inferred! -> push(ExpressionType { sourceModule: sourceIndex, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: typedArrayBuiltinSymbol!, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                                        inferred! -> push(ExpressionType { sourceModule: sourceIndex, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: (typedArrayBuiltinSymbol! -> typeIds.canonicalBuiltinSymbol), keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
                                     }
                                 }
                             }
                         }
                     }
             }
-            node.kind == 10 -> if {
+            node.kind == 10 or node.kind == 77 -> if {
                 -1 => flowMethodToken!
                 0 => flowChildSearch!
                 flowChildSearch! < sourceRange.astCount -> while {
@@ -396,23 +397,17 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                         }
                     TextMatchRequest { source: source, start: flowName.span.start, length: flowName.span.length, expected: "yield" } -> textMatches
                         -> if {
-                            node.parent => yieldOwnerAst!
+                            prepared -> semanticContext.lexicalYieldScope(sourceIndex, astIndex!) => yieldScope
                             -1 => yieldFunctionAst!
-                            yieldOwnerAst! >= 0 and yieldFunctionAst! < 0
-                                -> while {
-                                    prepared.package.nodes[sourceRange.astStart + yieldOwnerAst!] => yieldOwner
-                                    yieldOwner.kind == 7 -> if {
-                                        yieldOwnerAst! => yieldFunctionAst!
-                                    } else {
-                                        yieldOwner.parent => yieldOwnerAst!
-                                    }
-                                }
+                            yieldScope.valid -> if { yieldScope.functionAst => yieldFunctionAst! }
                             -1 => yieldFunctionSymbol!
                             0 => yieldFunctionSearch!
                             yieldFunctionSearch! < sourceRange.symbolCount and yieldFunctionSymbol! < 0
                                 -> while {
                                     prepared.package.symbols[sourceRange.symbolStart + yieldFunctionSearch!] => yieldFunctionCandidate
-                                    yieldFunctionCandidate.kind == 7 and yieldFunctionCandidate.astNode == yieldFunctionAst!
+                                    (yieldFunctionCandidate.kind == 7
+                                        or yieldFunctionCandidate.kind == 31)
+                                        and yieldFunctionCandidate.astNode == yieldFunctionAst!
                                         -> if { yieldFunctionSearch! => yieldFunctionSymbol! }
                                     yieldFunctionSearch! + 1 => yieldFunctionSearch!
                                 }
@@ -483,29 +478,10 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                         }
                 }
             }
+            node.kind == 83 -> if {
+                inferred! -> push(ExpressionType { sourceModule: sourceIndex, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 23, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+            }
             node.kind == 15 -> if {
-                prepared.package.tokens[sourceRange.tokenStart + node.payloadToken] => nameToken
-                false => booleanLiteral!
-                nameToken.span.length == 4 -> if {
-                    source -> byte(nameToken.span.start) => boolByte0
-                    source -> byte(nameToken.span.start + 1) => boolByte1
-                    source -> byte(nameToken.span.start + 2) => boolByte2
-                    source -> byte(nameToken.span.start + 3) => boolByte3
-                    boolByte0 == 116 and boolByte1 == 114 and boolByte2 == 117 and boolByte3 == 101
-                        -> if { true => booleanLiteral! }
-                }
-                nameToken.span.length == 5 -> if {
-                    source -> byte(nameToken.span.start) => falseByte0
-                    source -> byte(nameToken.span.start + 1) => falseByte1
-                    source -> byte(nameToken.span.start + 2) => falseByte2
-                    source -> byte(nameToken.span.start + 3) => falseByte3
-                    source -> byte(nameToken.span.start + 4) => falseByte4
-                    falseByte0 == 102 and falseByte1 == 97 and falseByte2 == 108 and falseByte3 == 115 and falseByte4 == 101
-                        -> if { true => booleanLiteral! }
-                }
-                booleanLiteral! -> if {
-                    inferred! -> push(ExpressionType { sourceModule: sourceIndex, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 23, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
-                }
                 -1 => resolvedNameIndex!
                 0 => nameSearch!
                 nameSearch! < (resolvedNames! -> len) -> while {
@@ -513,7 +489,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                         -> if { nameSearch! => resolvedNameIndex! }
                     nameSearch! + 1 => nameSearch!
                 }
-                not booleanLiteral! and resolvedNameIndex! >= 0
+                resolvedNameIndex! >= 0
                     -> if {
                         prepared.package.symbols[sourceRange.symbolStart + resolvedNames![resolvedNameIndex!].symbol] => valueSymbol
                         false => blockValueInferred!
@@ -709,7 +685,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                     siblingModuleIndex! < (prepared.modules -> len)
                         -> while {
                             prepared.modules[siblingModuleIndex!] => siblingIdentity
-                            siblingIdentity.sourceIndex != sourceIndex and siblingIdentity.pathHash == currentModuleIdentity.pathHash
+                            siblingIdentity.sourceIndex != sourceIndex and modules.sameLogicalAnalyzedSource(prepared.package.sources, prepared.modules, siblingIdentity.sourceIndex, currentModuleIdentity.sourceIndex, prepared.package.tokens, prepared.package.ranges)
                                 -> if {
                                     siblingIdentity.sourceIndex => siblingSourceModule
                                     prepared.package.ranges[siblingSourceModule] => siblingRange
@@ -1223,11 +1199,15 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                 roleValueTypeSearch! + 1 => roleValueTypeSearch!
                             }
                             false => intrinsicEachRole!
+                            false => intrinsicRepeatRole!
                             prepared.package.nodes[sourceRange.astStart + roleValueSymbol.astNode] => intrinsicRoleAst
                             intrinsicRoleAst.payloadToken >= 0 -> if {
                                 prepared.package.tokens[sourceRange.tokenStart + intrinsicRoleAst.payloadToken] => intrinsicRoleName
                                 TextMatchRequest { source: source, start: intrinsicRoleName.span.start, length: intrinsicRoleName.span.length, expected: "each" } -> textMatches
                                     -> if { true => intrinsicEachRole! }
+                                TextMatchRequest { source: source, start: intrinsicRoleName.span.start, length: intrinsicRoleName.span.length, expected: "repeat" } -> textMatches
+                                    -> if { true => intrinsicEachRole!
+                                        true => intrinsicRepeatRole! }
                             }
                             intrinsicEachRole! -> if {
                                 -1 => intrinsicRoleSourceTypeIndex!
@@ -1266,7 +1246,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                     }
                                 intrinsicRoleSourceTypeIndex! >= 0 -> if {
                                     inferred![intrinsicRoleSourceTypeIndex!] => intrinsicRoleSourceType
-                                    intrinsicRoleSourceType.origin >= 12 and intrinsicRoleSourceType.origin <= 14
+                                    not intrinsicRepeatRole! and intrinsicRoleSourceType.origin >= 12 and intrinsicRoleSourceType.origin <= 14
                                         -> if {
                                             1 => intrinsicRoleElementOrigin!
                                             intrinsicRoleSourceType.targetModule != -1 -> if {
@@ -1305,10 +1285,11 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                                 true => changed!
                                             }
                                         }
-                                    intrinsicRoleSourceType.origin == 1 and (intrinsicRoleSourceType.targetSymbol == 25 or intrinsicRoleSourceType.targetSymbol == 1)
+                                    intrinsicRepeatRole! or (intrinsicRoleSourceType.origin == 1 and (intrinsicRoleSourceType.targetSymbol == 25 or intrinsicRoleSourceType.targetSymbol == 1))
                                         -> if {
                                             2 => intrinsicBuiltinRoleSymbol!
-                                            intrinsicRoleSourceType.targetSymbol == 1 -> if { 14 => intrinsicBuiltinRoleSymbol! }
+                                            not intrinsicRepeatRole! and intrinsicRoleSourceType.targetSymbol == 1
+                                                -> if { 14 => intrinsicBuiltinRoleSymbol! }
                                             roleValueTypeIndex! >= 0 -> if {
                                                 inferred![roleValueTypeIndex!] => intrinsicRangeRoleValueType!
                                                 intrinsicRangeRoleValueType!.origin != 1 or intrinsicRangeRoleValueType!.targetModule != -1 or intrinsicRangeRoleValueType!.targetSymbol != intrinsicBuiltinRoleSymbol!
@@ -2062,7 +2043,8 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                 firstChild! >= 0 and secondChild! >= 0 -> if {
                                     inferred![firstChild!] => left
                                     inferred![secondChild!] => right
-                                    left.origin == right.origin and left.targetModule == right.targetModule and left.targetSymbol == right.targetSymbol
+                                    operator.operatorKind -> semanticTypes.comparisonOperandFailure(left.origin, left.targetSymbol, right.origin, right.targetSymbol) => comparisonFailure
+                                    comparisonFailure == 0
                                         -> if {
                                             true => canInfer!
                                             23 => resultSymbol!
@@ -2088,20 +2070,25 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                             true => canInfer!
                                             23 => resultSymbol!
                                         }
-                                    operator.operatorKind == grammar.tokenIdMinus() and operand.origin == 1 and operand.targetSymbol == 2
+                                    operator.operatorKind == grammar.tokenIdMinus() and operand.origin == 1
+                                        and (operand.targetSymbol -> typeIds.isSignedNumericBuiltinSymbol)
                                         -> if {
                                             true => canInfer!
-                                            2 => resultSymbol!
+                                            operand.targetSymbol -> typeIds.canonicalBuiltinSymbol => resultSymbol!
                                         }
                                 }
                             }
                             operator.kind == 23 -> if {
                                 firstChild! >= 0 -> if {
                                     inferred![firstChild!] => operand
-                                    true => canInfer!
-                                    16 => resultOrigin!
-                                    operand.targetModule => resultModule!
-                                    operand.targetSymbol => resultSymbol!
+                                    operand.origin != 1
+                                        or (operand.targetSymbol -> typeIds.isBoxableBuiltinSymbol)
+                                        -> if {
+                                            true => canInfer!
+                                            16 => resultOrigin!
+                                            operand.targetModule => resultModule!
+                                            operand.targetSymbol => resultSymbol!
+                                        }
                                 }
                             }
                             operator.kind == 24 or operator.kind == 25 -> if {
@@ -2580,6 +2567,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
     analysis.PackageAnalysis {
         sources: sources!
         entrySourceModule: -1
+        interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+        interpolations: [interpolation.InterpolationNode; ~]
         ranges: ranges!
         nodes: nodes!
         tokens: tokens!
@@ -2589,20 +2578,30 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
         typeUses: typeUses
         constantLiterals: [constantLowering.Literal; ~]
         constantFailures: [constantLowering.Failure; ~]
-    } => contextPackage
+    } -> analysis.completePackageInterpolations => contextPackage
+    contextPackage -> typeIds.resolveAnalyzedSeeded(contextSemantic) => completedSemantic
     contextPackage -> semanticContext.indexQualifiedFunctionsByParentAst(moduleIdentities!, qualifiedResults!) => qualifiedFunctionByParentAst
     contextPackage -> semanticContext.indexCallsByAst(moduleCalls!) => callIndexByAst
     contextPackage -> semanticContext.indexCallResultMembersByAst(moduleCalls!) => callResultMemberByAst
     contextPackage -> semanticContext.indexControlProducerWrappersByAst => controlProducerWrapperByAst
     contextPackage -> semanticContext.indexDirectFlowTargetPathsByAst => directFlowTargetPathByAst
+    contextPackage -> semanticContext.indexAwaitSourcesByAst => awaitSourceByAst
+    contextPackage -> semanticContext.indexDeclaredMoveArgumentsByAst(moduleCalls!) => declaredMoveArgumentByAst
+    contextPackage -> semanticContext.indexDeclaredMoveReadsByAst(declaredMoveArgumentByAst) => declaredMoveReadByAst
+    [moduleResolve.ResolvedImport; ~] => emptyResolvedImports
+    contextPackage -> semanticContext.lowerAnalyzedInterpolations(moduleIdentities!, emptyResolvedImports) => analyzedInterpolations
     semanticContext.SemanticSnapshot {
-        semantic: contextSemantic
+        standardLibrarySourceStart: 0
+        standardLibrarySourceCount: 0
+        semantic: completedSemantic
         package: contextPackage
+        interpolationRanges: analyzedInterpolations.ranges
+        interpolations: analyzedInterpolations.nodes
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
         imports: [modules.ImportEdge; ~]
-        resolvedImports: [moduleResolve.ResolvedImport; ~]
+        resolvedImports: emptyResolvedImports
         qualified: qualifiedResults!
         qualifiedFunctionByParentAst: qualifiedFunctionByParentAst
         calls: moduleCalls!
@@ -2610,6 +2609,9 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
         callResultMemberByAst: callResultMemberByAst
         controlProducerWrapperByAst: controlProducerWrapperByAst
         directFlowTargetPathByAst: directFlowTargetPathByAst
+        awaitSourceByAst: awaitSourceByAst
+        declaredMoveArgumentByAst: declaredMoveArgumentByAst
+        declaredMoveReadByAst: declaredMoveReadByAst
     } => prepared
     prepared -> semanticContext.freeze => snapshot
     snapshot -> inferContext => inferred

@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot)
+    [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
+    [switch]$SelfTest
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,6 +9,7 @@ Set-StrictMode -Version Latest
 
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 $contractPath = Join-Path $root "scripts\contracts\expression-lowering-parity.json"
+$astIdentityPath = Join-Path $root 'scripts/contracts/ast-expression-kinds.json'
 $schemaPath = Join-Path $root "scripts\contracts\expression-lowering-parity.schema.json"
 $nodesPath = Join-Path $root "src\Sollang.Compiler\Syntax\Nodes.cs"
 $managedSemanticPath = Join-Path $root "src\Sollang.Compiler\Semantics\SemanticCompiler.cs"
@@ -26,7 +28,7 @@ $controlRegionsPath = Join-Path $root "selfhost\llvm\text\control_regions.slg"
 $coreCallsPath = Join-Path $root "selfhost\llvm\text\core_calls.slg"
 $entryExpressionsPath = Join-Path $root "selfhost\llvm\text\entry_expressions.slg"
 
-foreach ($path in @($contractPath, $schemaPath, $nodesPath, $managedSemanticPath, $managedEmitterPath, $astPath, $typedPath, $constantLoweringPath, $ordinaryPath, $entryPath, $invariantsPath, $diagnosticsPath, $semanticCallsPath, $semanticEffectsPath, $branchEmitterPath, $controlRegionsPath, $coreCallsPath, $entryExpressionsPath)) {
+foreach ($path in @($contractPath, $astIdentityPath, $schemaPath, $nodesPath, $managedSemanticPath, $managedEmitterPath, $astPath, $typedPath, $constantLoweringPath, $ordinaryPath, $entryPath, $invariantsPath, $diagnosticsPath, $semanticCallsPath, $semanticEffectsPath, $branchEmitterPath, $controlRegionsPath, $coreCallsPath, $entryExpressionsPath)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Expression lowering parity input is missing: $path"
     }
@@ -37,6 +39,21 @@ if (-not (Test-Json -Json $contractText -SchemaFile $schemaPath)) {
     throw "Expression lowering parity contract does not satisfy its schema"
 }
 $contract = $contractText | ConvertFrom-Json
+$astIdentity = Get-Content -LiteralPath $astIdentityPath -Raw | ConvertFrom-Json
+$identityExpressions = @{ 'boolean-literal' = 'BoolExpression'; 'compile-time-each' = 'CompileTimeEachExpression' }
+$identityKinds = @{}
+foreach ($identity in $identityExpressions.Keys) {
+    $rows = @($astIdentity.kinds | Where-Object identity -CEQ $identity)
+    if ($rows.Count -ne 1) { throw "AST expression identity must have one authority: $identity" }
+    $expression = $identityExpressions[$identity]
+    $mapping = @($contract.mappings | Where-Object managedExpression -CEQ $expression)
+    if ($mapping.Count -ne 1 -or @($mapping[0].selfhostAstKinds).Count -ne 1 -or
+        $mapping[0].selfhostAstKinds[0] -ne $rows[0].kind) {
+        throw "Expression mapping disagrees with canonical AST identity: $expression"
+    }
+    $identityKinds[$identity] = [int]$rows[0].kind
+}
+if ($identityKinds['boolean-literal'] -eq $identityKinds['compile-time-each']) { throw 'AST expression identities collide' }
 $nodes = [IO.File]::ReadAllText($nodesPath)
 $managedSemantic = [IO.File]::ReadAllText($managedSemanticPath)
 $managedEmitter = [IO.File]::ReadAllText($managedEmitterPath)
@@ -53,13 +70,13 @@ $branchEmitter = [IO.File]::ReadAllText($branchEmitterPath)
 $controlRegions = [IO.File]::ReadAllText($controlRegionsPath)
 $coreCalls = [IO.File]::ReadAllText($coreCallsPath)
 $entryExpressions = [IO.File]::ReadAllText($entryExpressionsPath)
-if ($ast -notmatch 'typeSyntaxAngleToken!' -or
+if ($ast -notmatch 'typeSyntaxDelimiterToken!' -or
     $ast -notmatch 'typeAnnotationNode\.ruleId == grammar\.ruleIdTypeAnnotation\(\)' -or
     $ast -notmatch 'typeApplicationNode\.ruleId == grammar\.ruleIdTypeApplicationExpression\(\)' -or
     $ast -notmatch 'typeAngleDepth!' -or
     $ast -notmatch 'foundTypeAngles!' -or
     $ast -notmatch 'typeAngleDepth! == 0 -> if \{ typeTokenEnd => typeTokenIndex! \}' -or
-    $ast -notmatch 'typeSyntaxAngleToken!\[operatorTokenIndex!\] == 0' -or
+    $ast -notmatch 'typeSyntaxDelimiterToken!\[operatorTokenIndex!\] == 0' -or
     $ast -notmatch '(?s)operatorPayloadToken! < 0 -> if \{.*?astKind! >= 18.*?astKind! <= 22.*?-1 => astKind!') {
     throw 'Self-host comparison lowering must exclude only the balanced type-argument angles and preserve comparison operators in call arguments'
 }
@@ -115,18 +132,62 @@ if ([string]$contract.contextMaterialization.nestedControlFixture -notin @($cont
     [string]$contract.contextMaterialization.nestedControlFixture -notin @($contract.representativeFixtures)) {
     throw 'The nested control-region range fixture must remain in both focused and representative verification sets'
 }
-$streamBodyEmitter = [string]$contract.nestedStreamScheduling.sharedBodyEmitter
-$regionStreamDelegator = [string]$contract.nestedStreamScheduling.regionDelegator
-$streamOwnershipClassifier = [string]$contract.nestedStreamScheduling.ownershipClassifier
-$mutableSlotPolicyField = [string]$contract.nestedStreamScheduling.mutableSlotPolicyField
-if ([regex]::Matches($entryExpressions, "(?m)^$([regex]::Escape($streamBodyEmitter))\s").Count -ne 1 -or
-    $entryExpressions -notmatch "plan\.$([regex]::Escape($mutableSlotPolicyField))\s*-> if") {
-    throw 'Stream scheduling must have one shared body emitter with explicit mutable-slot policy'
+function Get-SchedulingFunctionText {
+    param([string]$Source, [string]$Name)
+    $pattern = '(?ms)^' + [regex]::Escape($Name) + '\s[^\r\n]*\{.*?(?=^[A-Za-z_]\w*\s[^\r\n]*\s->|\z)'
+    $functionMatches = [regex]::Matches($Source, $pattern)
+    if ($functionMatches.Count -ne 1) { return '' }
+    return $functionMatches[0].Value
 }
-if ([regex]::Matches($controlRegions, "(?m)^$([regex]::Escape($regionStreamDelegator))\s").Count -ne 1 -or
-    $controlRegions -notmatch "(?s)$([regex]::Escape($regionStreamDelegator)).*?$([regex]::Escape($streamBodyEmitter))" -or
-    $controlRegions -notmatch "$([regex]::Escape($mutableSlotPolicyField)):\s*false") {
-    throw 'Nested control-region streams must delegate to the shared body emitter without reallocating function slots'
+
+function Test-StreamSchedulingBoundary {
+    param([string]$EntrySource, [string]$RegionSource, $Scheduling)
+    $body = Get-SchedulingFunctionText $EntrySource $Scheduling.sharedBodyEmitter
+    $order = Get-SchedulingFunctionText $EntrySource $Scheduling.sharedOrderEmitter
+    $region = Get-SchedulingFunctionText $RegionSource $Scheduling.regionDelegator
+    $orderCall = '->\s*' + [regex]::Escape($Scheduling.sharedOrderEmitter) + '\('
+    $bodyCall = '->\s*' + [regex]::Escape($Scheduling.sharedBodyEmitter) + '\('
+    $mutablePolicy = [regex]::Escape($Scheduling.mutableSlotPolicyField)
+    return ($body -ne '' -and $order -ne '' -and $region -ne '' -and
+        $body -match "plan\.$mutablePolicy\s*-> if" -and $body -match $orderCall -and
+        $region -match $orderCall -and $region -notmatch $bodyCall -and
+        $region -match "${mutablePolicy}:\s*false" -and
+        $order -notmatch $bodyCall -and $order -notmatch '->\s*(?:emitRegionState|emitScheduledMutableSlots)\(')
+}
+
+if ($SelfTest) {
+    $entryControl = @'
+emitScheduledStreamBody plan: Plan -> Unit {
+    plan.emitMutableSlots -> if { }
+    plan -> emitScheduledStreamOrder()
+}
+emitScheduledStreamOrder plan: Plan -> Unit {
+    plan -> emitValue()
+}
+'@
+    $regionControl = @'
+emitRegionStreamPipeline plan: Plan -> Unit {
+    emitMutableSlots: false
+    plan -> emitScheduledStreamOrder()
+}
+'@
+    $controls = @(
+        @{ entry = $entryControl; region = $regionControl; expected = $true },
+        @{ entry = $entryControl; region = $regionControl.Replace('-> emitScheduledStreamOrder(', '-> emitScheduledStreamBody('); expected = $false },
+        @{ entry = $entryControl; region = $regionControl.Replace('emitMutableSlots: false', 'emitMutableSlots: true'); expected = $false },
+        @{ entry = $entryControl.Replace('-> emitValue(', '-> emitScheduledStreamBody('); region = $regionControl; expected = $false }
+    )
+    foreach ($control in $controls) {
+        if ((Test-StreamSchedulingBoundary $control.entry $control.region $contract.nestedStreamScheduling) -ne $control.expected) {
+            throw 'Stream scheduling boundary self-test failed'
+        }
+    }
+    Write-Host '[expression lowering parity] scheduling boundary controls PASS 4/4.'
+}
+
+$streamOwnershipClassifier = [string]$contract.nestedStreamScheduling.ownershipClassifier
+if (-not (Test-StreamSchedulingBoundary $entryExpressions $controlRegions $contract.nestedStreamScheduling)) {
+    throw 'Nested streams must share ordered emission without body redispatch or mutable-slot reallocation'
 }
 if ([regex]::Matches($coreCalls, "(?m)^$([regex]::Escape($streamOwnershipClassifier))\s").Count -ne 1 -or
     $coreCalls -notmatch '(?s)regionOwnedStreamPipeline.*?\.callIr == nodeIndex') {
@@ -194,7 +255,8 @@ foreach ($mapping in $contract.mappings) {
     $policy = [string]$mapping.policy
     if ([string]$mapping.policyStatus -eq 'shared') {
         if ($policy -eq 'constant_collection_lowering') {
-            if ($constantLowering -notmatch 'node\.kind == 83') {
+            $eachKind = $identityKinds['compile-time-each']
+            if ($constantLowering -notmatch "\bnode\.kind\s*==\s*$eachKind\b") {
                 throw 'Compile-time each is not consumed by constant collection lowering'
             }
         } elseif ($typed -notmatch "public $([regex]::Escape($policy))\b") {
@@ -387,7 +449,7 @@ if ($invariants -notmatch '(?m)^invalidMappedFlushIr\b' -or
     $diagnostics -notmatch 'compiler error S061') {
     throw 'Mapped flush must retain runtime alias -114 and an exact MutableMappedBytes receiver before LLVM emission'
 }
-if ($semanticCalls -notmatch '(?s)localSymbolIndex!.*?localFunctionSymbol!.*?runtimeFunctionSymbol' -or
+if ($semanticCalls -notmatch '(?s)resolveLexicalFunction\([^\r\n]*\) => localFunctionSymbol!.*?localFunctionSymbol! < 0\s*-> if \{\s*RuntimeNameRequest[^\r\n]* -> runtimeFunctionSymbol' -or
     $semanticCalls -notmatch '(?s)expected: "flush".*?-114' -or
     $semanticEffects -notmatch 'call\.functionSymbol == -114') {
     throw 'Mapped flush authority drifted: lexical functions must win before runtime alias -114, which retains File effect semantics'
@@ -438,4 +500,4 @@ $coveragePercent = [math]::Round(100 * $fixtureCoveredExpressions.Count / $manag
 $sharedPolicyCount = @($contract.mappings | Where-Object policyStatus -eq 'shared').Count
 $sharedPolicyPercent = [math]::Round(100 * $sharedPolicyCount / $managedExpressionTypes.Count, 1)
 $endToEndPercent = [math]::Round(100 * [int]$contract.endToEndImplementedTotal / $managedExpressionTypes.Count, 1)
-Write-Host "[expression lowering parity] PASS declaration mapping inventory $($mappedManagedExpressions.Count)/$($managedExpressionTypes.Count) (100%), end-to-end $($contract.endToEndImplementedTotal)/$($managedExpressionTypes.Count) ($endToEndPercent%), shared policy $sharedPolicyCount/$($managedExpressionTypes.Count) ($sharedPolicyPercent%), and source-linked representative fixture coverage $($fixtureCoveredExpressions.Count)/$($managedExpressionTypes.Count) ($coveragePercent%); S059/S060/S061 pre-LLVM coverage connected."
+Write-Host "[expression lowering parity] PASS static declaration mapping $($mappedManagedExpressions.Count)/$($managedExpressionTypes.Count) (100%), declared implementation $($contract.endToEndImplementedTotal)/$($managedExpressionTypes.Count) ($endToEndPercent%, contract assertion only), shared policy $sharedPolicyCount/$($managedExpressionTypes.Count) ($sharedPolicyPercent%), and source-linked representative fixture inventory $($fixtureCoveredExpressions.Count)/$($managedExpressionTypes.Count) ($coveragePercent%); dynamic AST-to-Typed-IR and exact execution are measured separately by the C385 gate."

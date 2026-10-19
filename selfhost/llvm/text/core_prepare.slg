@@ -8,6 +8,7 @@ import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.runtime as llvmRuntime
 import sollang.compiler.llvm.invariant_rules as invariantRules
 import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.async_runtime as asyncRuntime
 import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
 import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
 import sollang.compiler.llvm.emitter.process_runtime as processRuntime
@@ -42,151 +43,146 @@ sameCanonicalIrType left: typedIr.TypedIrNode, right: typedIr.TypedIrNode -> Boo
         and left.typeSymbol == right.typeSymbol
 }
 
-enumAbiStorageSizeCached cache: ref [Int; ~], typeId: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+enumAbiStorageSizeCached cache: mut [Int; ~], typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     cache[typeId] >= 0 -> if { cache[typeId] -> return }
     context.typeSizes[typeId] => resolved!
-    depth < 64 -> if {
-        context.types[typeId] => current
-        # SourceText is lowered to %sollang.source_text { ptr, i64, ptr, i64 },
-        # even when an imported nominal duplicate retains its token-sized
-        # semantic layout. Enum payloads must use the emitted ABI size.
-        current.kind == 1 and current.origin == 1 and current.symbol == 24 => sourceTextAbi
-        sourceTextAbi -> if { 32 => resolved! }
-        current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)
-            -> if {
-                0 => payloadSize!
-                current.first >= 0 -> if { cache -> enumAbiStorageSizeCached(current.first, depth + 1, context, state) => payloadSize! }
-                current.second >= 0 -> if {
-                    cache -> enumAbiStorageSizeCached(current.second, depth + 1, context, state) => secondSize
-                    secondSize > payloadSize! -> if { secondSize => payloadSize! }
-                }
-                8 + ((payloadSize! + 7) / 8) * 8 => resolved!
+    context.types[typeId] => current
+    # SourceText is lowered to %sollang.source_text { ptr, i64, ptr, i64 },
+    # even when an imported nominal duplicate retains its token-sized
+    # semantic layout. Enum payloads must use the emitted ABI size.
+    current.kind == 1 and current.origin == 1 and current.symbol == 24 => sourceTextAbi
+    sourceTextAbi -> if { 32 => resolved! }
+    current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)
+        -> if {
+            0 => payloadSize!
+            current.first >= 0 -> if { cache -> enumAbiStorageSizeCached(current.first, context, state) => payloadSize! }
+            current.second >= 0 -> if {
+                cache -> enumAbiStorageSizeCached(current.second, context, state) => secondSize
+                secondSize > payloadSize! -> if { secondSize => payloadSize! }
             }
-        current.kind == 4 -> if {
-            # A zero-length fixed payload has no element storage edge. Resolve
-            # it before visiting its element, which may be the owning enum.
-            current.length == 0 -> if {
-                0 => resolved!
+            8 + ((payloadSize! + 7) / 8) * 8 => resolved!
+        }
+    current.kind == 4 -> if {
+        # Enum payloads store the fixed array value as { ptr, i64 }.
+        # Its backing byte count remains separate in context.typeSizes.
+        16 => resolved!
+    }
+    not sourceTextAbi and (current.kind == 1 or current.kind == 10)
+        -> if {
+            false => nominalEnum!
+            typeId => nominalEnumTypeId!
+            current.kind == 1 -> if {
+                typeId -> isNominalEnumType(context, state) => nominalEnum!
+                # Imported references may have a distinct type ID for the
+                # same nominal declaration. Resolve enum identity by the
+                # emitted module/symbol name before treating it as a struct.
+                not nominalEnum! and current.module >= 0 -> if {
+                    0 => nominalEnumCandidateIndex!
+                    nominalEnumCandidateIndex! < (context.types -> len)
+                        and not nominalEnum!
+                        -> while {
+                            context.types[nominalEnumCandidateIndex!] => nominalEnumCandidate
+                            nominalEnumCandidate.status == 0
+                                and nominalEnumCandidate.kind == 1
+                                and nominalEnumCandidate.module == current.module
+                                and nominalEnumCandidate.symbol == current.symbol
+                                and (nominalEnumCandidateIndex! -> isNominalEnumType(context, state))
+                                -> if {
+                                    true => nominalEnum!
+                                    nominalEnumCandidateIndex! => nominalEnumTypeId!
+                                }
+                            nominalEnumCandidateIndex! + 1 => nominalEnumCandidateIndex!
+                        }
+                }
+            }
+            nominalEnum! -> if {
+                nominalEnumTypeId! -> enumPayloadTypes(context, state) => payloads
+                0 => payloadSize!
+                0 => payloadIndex!
+                payloadIndex! < (payloads -> len) -> while {
+                    cache -> enumAbiStorageSizeCached(payloads[payloadIndex!], context, state) => candidateSize
+                    candidateSize > payloadSize! -> if { candidateSize => payloadSize! }
+                    payloadIndex! + 1 => payloadIndex!
+                }
+                context.types[nominalEnumTypeId!] => nominalEnumIdentity
+                0 => nominalEnumConstructorIndex!
+                nominalEnumConstructorIndex! < (context.ir -> len)
+                    -> while {
+                        context.ir[nominalEnumConstructorIndex!] => nominalEnumConstructor
+                        false => nominalEnumConstructorBelongs!
+                        nominalEnumConstructor.typeId == nominalEnumTypeId!
+                            -> if { true => nominalEnumConstructorBelongs! }
+                        not nominalEnumConstructorBelongs!
+                            and nominalEnumConstructor.typeId >= 0
+                            and nominalEnumConstructor.typeId < (context.types -> len)
+                            -> if {
+                                context.types[nominalEnumConstructor.typeId] => nominalEnumConstructorType
+                                nominalEnumConstructorType.kind == 1
+                                    and nominalEnumConstructorType.module == nominalEnumIdentity.module
+                                    and nominalEnumConstructorType.symbol == nominalEnumIdentity.symbol
+                                    -> if { true => nominalEnumConstructorBelongs! }
+                            }
+                        nominalEnumConstructor.kind == 26
+                            and nominalEnumConstructorBelongs!
+                            and nominalEnumConstructor.operand0 >= 0
+                            -> if {
+                                context.ir[nominalEnumConstructor.operand0] -> effectiveTypeId(context, state) => nominalEnumConstructorPayloadType
+                                nominalEnumConstructorPayloadType >= 0
+                                    and nominalEnumConstructorPayloadType < (context.types -> len)
+                                    and not (nominalEnumConstructorPayloadType -> sameNominalTypeIdentity(nominalEnumTypeId!, context))
+                                    -> if {
+                                        cache -> enumAbiStorageSizeCached(nominalEnumConstructorPayloadType, context, state) => nominalEnumConstructorPayloadSize
+                                        nominalEnumConstructorPayloadSize > payloadSize!
+                                            -> if { nominalEnumConstructorPayloadSize => payloadSize! }
+                                    }
+                            }
+                        nominalEnumConstructorIndex! + 1 => nominalEnumConstructorIndex!
+                    }
+                8 + ((payloadSize! + 7) / 8) * 8 => resolved!
             } else {
-                current.first >= 0 -> if {
-                    (cache -> enumAbiStorageSizeCached(current.first, depth + 1, context, state)) * current.length => resolved!
+                0 => aggregateSize!
+                1 => aggregateAlign!
+                false => aggregateHasField!
+                0 => fieldIndex!
+                fieldIndex! < (context.fields -> len) -> while {
+                    context.fields[fieldIndex!] => field
+                    false => fieldBelongs!
+                    field.ownerType == typeId -> if { true => fieldBelongs! }
+                    current.kind == 1 and field.ownerType >= 0 -> if {
+                        context.types[field.ownerType] => owner
+                        owner.kind == 1 and owner.module == current.module and owner.symbol == current.symbol
+                            -> if { true => fieldBelongs! }
+                    }
+                    field.status == 0 and fieldBelongs! and field.fieldType >= 0
+                        -> if {
+                            true => aggregateHasField!
+                            context.typeAligns[field.fieldType] => fieldAlign
+                            fieldAlign > aggregateAlign! -> if { fieldAlign => aggregateAlign! }
+                            ((aggregateSize! + fieldAlign - 1) / fieldAlign) * fieldAlign => aggregateSize!
+                            cache -> enumAbiStorageSizeCached(field.fieldType, context, state) => fieldSize
+                            aggregateSize! + fieldSize => aggregateSize!
+                        }
+                    fieldIndex! + 1 => fieldIndex!
+                }
+                aggregateHasField! -> if {
+                    ((aggregateSize! + aggregateAlign! - 1) / aggregateAlign!) * aggregateAlign! => resolved!
                 }
             }
         }
-        not sourceTextAbi and (current.kind == 1 or current.kind == 10)
-            -> if {
-                false => nominalEnum!
-                typeId => nominalEnumTypeId!
-                current.kind == 1 -> if {
-                    typeId -> isNominalEnumType(context, state) => nominalEnum!
-                    # Imported references may have a distinct type ID for the
-                    # same nominal declaration. Resolve enum identity by the
-                    # emitted module/symbol name before treating it as a struct.
-                    not nominalEnum! and current.module >= 0 -> if {
-                        0 => nominalEnumCandidateIndex!
-                        nominalEnumCandidateIndex! < (context.types -> len)
-                            and not nominalEnum!
-                            -> while {
-                                context.types[nominalEnumCandidateIndex!] => nominalEnumCandidate
-                                nominalEnumCandidate.status == 0
-                                    and nominalEnumCandidate.kind == 1
-                                    and nominalEnumCandidate.module == current.module
-                                    and nominalEnumCandidate.symbol == current.symbol
-                                    and (nominalEnumCandidateIndex! -> isNominalEnumType(context, state))
-                                    -> if {
-                                        true => nominalEnum!
-                                        nominalEnumCandidateIndex! => nominalEnumTypeId!
-                                    }
-                                nominalEnumCandidateIndex! + 1 => nominalEnumCandidateIndex!
-                            }
-                    }
-                }
-                nominalEnum! -> if {
-                    nominalEnumTypeId! -> enumPayloadTypes(context, state) => payloads
-                    0 => payloadSize!
-                    0 => payloadIndex!
-                    payloadIndex! < (payloads -> len) -> while {
-                        cache -> enumAbiStorageSizeCached(payloads[payloadIndex!], depth + 1, context, state) => candidateSize
-                        candidateSize > payloadSize! -> if { candidateSize => payloadSize! }
-                        payloadIndex! + 1 => payloadIndex!
-                    }
-                    context.types[nominalEnumTypeId!] => nominalEnumIdentity
-                    0 => nominalEnumConstructorIndex!
-                    nominalEnumConstructorIndex! < (context.ir -> len)
-                        -> while {
-                            context.ir[nominalEnumConstructorIndex!] => nominalEnumConstructor
-                            false => nominalEnumConstructorBelongs!
-                            nominalEnumConstructor.typeId == nominalEnumTypeId!
-                                -> if { true => nominalEnumConstructorBelongs! }
-                            not nominalEnumConstructorBelongs!
-                                and nominalEnumConstructor.typeId >= 0
-                                and nominalEnumConstructor.typeId < (context.types -> len)
-                                -> if {
-                                    context.types[nominalEnumConstructor.typeId] => nominalEnumConstructorType
-                                    nominalEnumConstructorType.kind == 1
-                                        and nominalEnumConstructorType.module == nominalEnumIdentity.module
-                                        and nominalEnumConstructorType.symbol == nominalEnumIdentity.symbol
-                                        -> if { true => nominalEnumConstructorBelongs! }
-                                }
-                            nominalEnumConstructor.kind == 26
-                                and nominalEnumConstructorBelongs!
-                                and nominalEnumConstructor.operand0 >= 0
-                                -> if {
-                                    context.ir[nominalEnumConstructor.operand0] -> effectiveTypeId(context, state) => nominalEnumConstructorPayloadType
-                                    nominalEnumConstructorPayloadType >= 0
-                                        and nominalEnumConstructorPayloadType < (context.types -> len)
-                                        and not (nominalEnumConstructorPayloadType -> sameNominalTypeIdentity(nominalEnumTypeId!, context))
-                                        -> if {
-                                            cache -> enumAbiStorageSizeCached(nominalEnumConstructorPayloadType, depth + 1, context, state) => nominalEnumConstructorPayloadSize
-                                            nominalEnumConstructorPayloadSize > payloadSize!
-                                                -> if { nominalEnumConstructorPayloadSize => payloadSize! }
-                                        }
-                                }
-                            nominalEnumConstructorIndex! + 1 => nominalEnumConstructorIndex!
-                        }
-                    8 + ((payloadSize! + 7) / 8) * 8 => resolved!
-                } else {
-                    0 => aggregateSize!
-                    1 => aggregateAlign!
-                    false => aggregateHasField!
-                    0 => fieldIndex!
-                    fieldIndex! < (context.fields -> len) -> while {
-                        context.fields[fieldIndex!] => field
-                        false => fieldBelongs!
-                        field.ownerType == typeId -> if { true => fieldBelongs! }
-                        current.kind == 1 and field.ownerType >= 0 -> if {
-                            context.types[field.ownerType] => owner
-                            owner.kind == 1 and owner.module == current.module and owner.symbol == current.symbol
-                                -> if { true => fieldBelongs! }
-                        }
-                        field.status == 0 and fieldBelongs! and field.fieldType >= 0
-                            -> if {
-                                true => aggregateHasField!
-                                context.typeAligns[field.fieldType] => fieldAlign
-                                fieldAlign > aggregateAlign! -> if { fieldAlign => aggregateAlign! }
-                                ((aggregateSize! + fieldAlign - 1) / fieldAlign) * fieldAlign => aggregateSize!
-                                cache -> enumAbiStorageSizeCached(field.fieldType, depth + 1, context, state) => fieldSize
-                                aggregateSize! + fieldSize => aggregateSize!
-                            }
-                        fieldIndex! + 1 => fieldIndex!
-                    }
-                    aggregateHasField! -> if {
-                        ((aggregateSize! + aggregateAlign! - 1) / aggregateAlign!) * aggregateAlign! => resolved!
-                    }
-                }
-            }
-    }
+    # The checked semantic graph is acyclic across inline value edges.
+    # Publish every dependency once, including constructor-derived payloads.
+    resolved! => cache[typeId]
     resolved!
 }
 
-enumAbiStorageSize typeId: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+enumAbiStorageSize typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     [Int; ~] => cache!
     0 => cacheIndex!
     cacheIndex! < (context.types -> len) -> while {
         cache! -> push(-1)
         cacheIndex! + 1 => cacheIndex!
     }
-    cache! -> enumAbiStorageSizeCached(typeId, depth, context, state)
+    cache! -> enumAbiStorageSizeCached(typeId, context, state)
 }
 
 struct CorePreambleFeatures {
@@ -255,6 +251,7 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
                         }
                     }
                     use.kind == 5 and use.operand0 < 0 and use.symbol >= 0 and not useIsParameter!
+                        and (useIndex! -> userBlockCallbackOwner(context)) < 0
                         -> if {
                             -1 => bindingIndex!
                             use.sourceModule >= 0 and use.sourceModule < (context.ranges -> len)
@@ -513,6 +510,9 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
     functionCaptureCacheValues! -> snapshotIntArray => frozenFunctionCaptureValues
     context -> diagnostics.reachableFunctions => reachableFunctions
     reachableFunctions -> snapshotBoolArray => frozenReachableFunctions
+    # Plan only emitted async owners against the final relocated IR. A wholly
+    # synchronous compilation returns empty tables before scanning source ASTs.
+    context.sources -> typedIr.coroutineTablesFromSources(context.ranges, context.nodes, context.tokens, context.ir, frozenReachableFunctions) => coroutine
     [Bool; ~] => enumMatchConsumed!
     0 => enumMatchInitializeIndex!
     enumMatchInitializeIndex! < (context.ir -> len)
@@ -534,6 +534,7 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
         enumMatchIndex! + 1 => enumMatchIndex!
     }
     enumMatchConsumed! -> snapshotBoolArray => frozenEnumMatchConsumed
+    context -> namedBindingPathOwnershipFlags => frozenNamedBindingPathOwned
     -1 => intrinsicRuntimeModule!
     0 => intrinsicRuntimeSearch!
     intrinsicRuntimeSearch! < (context.modules -> len)
@@ -544,6 +545,9 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
             intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
         }
     CoreEmitterState {
+        frozenDeferredTextValues: [Bool; ~]
+        frozenDeferredTextCaptureLeaves: [Bool; ~]
+        coroutine: coroutine
         bodySchedules: [BodySchedulePlan; ~]
         frozenFunctionEnds: frozenFunctionEnds
         frozenFirstIrChildByParent: frozenFirstIrChildByParent
@@ -556,8 +560,11 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
         frozenFunctionCaptureCounts: frozenFunctionCaptureCounts
         frozenFunctionCaptureValues: frozenFunctionCaptureValues
         frozenEnumMatchConsumed: frozenEnumMatchConsumed
+        frozenNamedBindingPathOwned: frozenNamedBindingPathOwned
         intrinsicRuntimeModule: intrinsicRuntimeModule!
     } => state!
+    context -> prepareDeferredTextValues(state!) => state!.frozenDeferredTextValues
+    context -> prepareDeferredTextCaptureLeaves(state!) => state!.frozenDeferredTextCaptureLeaves
     # Resolve payload transfers after the canonical result-query caches exist.
     0 => namedMatchIndex!
     namedMatchIndex! < (context.ir -> len) -> while {
@@ -582,10 +589,35 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
     state!
 }
 
+interpolationLiteralReachable nodeIndex: Int, sourceModule: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    nodeIndex < 0 or nodeIndex >= (context.interpolations -> len)
+        -> if { false -> return }
+    sourceModule < 0 or sourceModule >= (context.ranges -> len)
+        -> if { false -> return }
+    0 => literalIndex!
+    literalIndex! < (context.ir -> len) -> while {
+        context.ir[literalIndex!] => literal
+        literal.kind == 2 and literal.sourceModule == sourceModule
+            and literal.payloadToken >= 0 and literal.payloadToken < context.ranges[sourceModule].tokenCount
+            and literal.payloadToken == context.interpolations[nodeIndex].sourceToken
+            and (literalIndex! -> irNodeReachable(context, state))
+            -> if { true -> return }
+        literalIndex! + 1 => literalIndex!
+    }
+    false
+}
+
 emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console {
     profile -> if { "preamble start" -> runtime.eprintln }
     context -> diagnostics.usesParallelRuntime => usesComputePool
-    context -> diagnostics.usesAsyncRuntime => usesAsyncRuntime
+    context -> usesReachableAsyncRuntime(state) => usesAsyncRuntime
+    context -> usesReachableAsyncDiagnostics(state)
+        -> if {
+            asyncRuntime.emitDiagnosticSessionRuntime()
+            context -> emitAsyncDiagnosticConstants(state)
+        }
+    context -> usesReachableAsyncFileRuntime(state) => usesAsyncFileRuntime
+    context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => usesSocketCompletionRuntime
     [Int; ~] => dropTypeActive!
     0 => dropTypeActiveIndex!
     dropTypeActiveIndex! < (context.types -> len)
@@ -605,6 +637,37 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
             }
         dropTypeSeedIndex! + 1 => dropTypeSeedIndex!
     }
+    # Constructor facts can introduce an owned type absent from ordinary IR.
+    # Copied borrowed payloads participate too: transfer records are not seeds.
+    context.interpolationEnumConstructors -> each constructor {
+        constructor.callNode >= 0 and constructor.argumentNode >= 0
+            and constructor.enumTypeId >= 0 and constructor.expectedTypeId >= 0
+            and constructor.actualTypeId == constructor.expectedTypeId
+            -> if {
+                constructor.callNode -> interpolationLiteralReachable(constructor.sourceModule, context, state)
+                    -> if {
+                        constructor.enumTypeId -> semanticTypeOwns(context, state)
+                            -> if { 1 => dropTypeActive![constructor.enumTypeId] }
+                        constructor.expectedTypeId -> semanticTypeOwns(context, state)
+                            -> if { 1 => dropTypeActive![constructor.expectedTypeId] }
+                    }
+            }
+    }
+    0 => arrayNodeIndex!
+    arrayNodeIndex! < (context.interpolationArrayByNode -> len)
+        and arrayNodeIndex! < (context.interpolations -> len)
+        -> while {
+            context.interpolationArrayByNode[arrayNodeIndex!] => literal
+            context.interpolations[arrayNodeIndex!].kind == 16 and literal.status == 0
+                and literal.typeId >= 0 and literal.typeId < (dropTypeActive! -> len)
+                and (literal.typeId -> semanticTypeOwns(context, state))
+                -> if {
+                    context -> diagnostics.interpolationSourceModule(arrayNodeIndex!) => sourceModule
+                    arrayNodeIndex! -> interpolationLiteralReachable(sourceModule, context, state)
+                        -> if { 1 => dropTypeActive![literal.typeId] }
+                }
+            arrayNodeIndex! + 1 => arrayNodeIndex!
+        }
     true => dropTypeChanged!
     dropTypeChanged! -> while {
         false => dropTypeChanged!
@@ -637,7 +700,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                     }
                             }
                         }
-                    dropClosureType.kind == 1 and (dropClosureType.origin == 0 or dropClosureType.origin == 2)
+                    (dropClosureType.kind == 1 and (dropClosureType.origin == 0 or dropClosureType.origin == 2)) or dropClosureType.kind == 10
                         -> if {
                             0 => dropClosureFieldIndex!
                             dropClosureFieldIndex! < (context.fields -> len)
@@ -688,6 +751,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     usesDirectoryTraversal -> if {
         "%sollang.directory_result = type { ptr, i64, i64, i32 }" -> println
         "%sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }" -> println
+        "%sollang.path_absolute_result = type { ptr, i64, i32 }" -> println
         "%sollang.directory_node = type { ptr, i64, i8, [7 x i8] }" -> println
         """
         @sollang_directory_error_io = private constant [2 x i8] c"io"
@@ -755,10 +819,34 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     }
     usesTaskType! or usesAsyncRuntime -> if { "%sollang.task = type { ptr, ptr }" -> println }
     usesAsyncRuntime -> if {
-        "%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }" -> println
+        "%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32, ptr, ptr }" -> println
+        context -> usesReachableAsyncDiagnostics(state)
+            -> if { asyncRuntime.emitDiagnosticSleepRuntime() }
         "@sollang_task_ready_head = internal global ptr null" -> println
         "@sollang_task_ready_tail = internal global ptr null" -> println
         "@sollang_task_timer_head = internal global ptr null" -> println
+        "@sollang_io_outstanding = internal global i64 0" -> println
+        usesAsyncFileRuntime or usesSocketCompletionRuntime
+            -> if {
+                "@sollang_io_completion_head = internal global ptr null" -> println
+                context.expectedPathStyle == 1 -> if {
+                    "@sollang_io_completion_event = internal global ptr null" -> println
+                } else {
+                    "@sollang_io_completion_event_fd = internal global i32 -1" -> println
+                }
+            }
+        usesAsyncFileRuntime -> if {
+            "@sollang_file_request_head = internal global ptr null" -> println
+            "@sollang_file_worker_started = internal global i1 false" -> println
+            "@sollang_file_worker_stopping = internal global i32 0" -> println
+            context.expectedPathStyle == 1 -> if {
+                "@sollang_file_request_event = internal global ptr null" -> println
+                "@sollang_file_worker_handle = internal global ptr null" -> println
+            } else {
+                "@sollang_file_request_event_fd = internal global i32 -1" -> println
+                "@sollang_file_worker_thread = internal global i64 0" -> println
+            }
+        }
     }
     false => usesStreamType!
     false => usesEventStreamType!
@@ -1000,7 +1088,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         profile -> if { "preamble enum $(enumTypeIndex!) payload $enumPayloadType" -> runtime.eprintln }
                         enumAbiSizeCache![enumPayloadType] => enumPayloadResolvedSize!
                         enumPayloadResolvedSize! < 0 -> if {
-                            enumAbiSizeCache! -> enumAbiStorageSizeCached(enumPayloadType, 0, context, state) => enumPayloadResolvedSize!
+                            enumAbiSizeCache! -> enumAbiStorageSizeCached(enumPayloadType, context, state) => enumPayloadResolvedSize!
                             enumPayloadResolvedSize! => enumAbiSizeCache![enumPayloadType]
                         }
                         context.types[enumPayloadType] => enumPayloadSemanticType
@@ -1026,7 +1114,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                                 ((enumPayloadStructSize! + context.typeAligns[enumPayloadField.fieldType] - 1) / context.typeAligns[enumPayloadField.fieldType]) * context.typeAligns[enumPayloadField.fieldType] => enumPayloadStructSize!
                                                 enumAbiSizeCache![enumPayloadField.fieldType] => enumPayloadFieldSize!
                                                 enumPayloadFieldSize! < 0 -> if {
-                                                    enumAbiSizeCache! -> enumAbiStorageSizeCached(enumPayloadField.fieldType, 1, context, state) => enumPayloadFieldSize!
+                                                    enumAbiSizeCache! -> enumAbiStorageSizeCached(enumPayloadField.fieldType, context, state) => enumPayloadFieldSize!
                                                     enumPayloadFieldSize! => enumAbiSizeCache![enumPayloadField.fieldType]
                                                 }
                                                 enumPayloadStructSize! + enumPayloadFieldSize! => enumPayloadStructSize!
@@ -1065,7 +1153,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                 -> if {
                                     enumAbiSizeCache![enumConstructorPayloadType] => enumConstructorPayloadSize!
                                     enumConstructorPayloadSize! < 0 -> if {
-                                        enumAbiSizeCache! -> enumAbiStorageSizeCached(enumConstructorPayloadType, 0, context, state) => enumConstructorPayloadSize!
+                                        enumAbiSizeCache! -> enumAbiStorageSizeCached(enumConstructorPayloadType, context, state) => enumConstructorPayloadSize!
                                         enumConstructorPayloadSize! => enumAbiSizeCache![enumConstructorPayloadType]
                                     }
                                     enumConstructorPayloadSize! > enumPayloadSize!
@@ -1095,7 +1183,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         canonicalField.status == 0 and canonicalField.ownerType == structTypeIndex!
                             -> if {
                                 not firstField! -> if { ", " -> print }
-                                canonicalField.fieldType -> writeSemanticTypeId(context, state)
+                                canonicalField.fieldType -> writeAggregateFieldTypeId(context, state)
                                 false => firstField!
                             }
                         canonicalFieldIndex! + 1 => canonicalFieldIndex!
@@ -1108,7 +1196,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
     0 => productTypeIndex!
     productTypeIndex! < (context.types -> len) -> while {
         context.types[productTypeIndex!] => productType
-        productType.status == 0 and productType.kind == 10
+        productType.status == 0 and productType.kind == 10 and not productType.containsParameter
             -> if {
                 "%sollang.product.t$(productTypeIndex!) = type { " -> print
                 true => firstProductField!
@@ -1119,7 +1207,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         productField.status == 0 and productField.ownerType == productTypeIndex!
                             -> if {
                                 not firstProductField! -> if { ", " -> print }
-                                productField.fieldType -> writeSemanticTypeId(context, state)
+                                productField.fieldType -> writeAggregateFieldTypeId(context, state)
                                 false => firstProductField!
                             }
                         productFieldIndex! + 1 => productFieldIndex!
@@ -1461,6 +1549,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
 
 hasDeferredScheduleOwner nodeIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext -> Bool {
     (nodeIndex -> parallelCallbackOwner(context)) >= 0
+        or (nodeIndex -> userBlockCallbackOwner(context)) >= 0
         -> if { true -> return }
     nodeIndex => ancestor!
     ancestor! > functionIndex -> while {
@@ -1519,4 +1608,16 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
             "; sollang compiler error S056: required stream terminal or callback was not scheduled exactly once (function $(schedule.functionIndex), terminal $(schedule.failureTerminal), ir $(schedule.failureNode)); this is a compiler-integrity defect" -> println
         }
     }
+}
+
+# Keep prepared-emitter failures ahead of target headers and LLVM output.
+preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context -> deferredTextCaptureDiagnosticCount(state) => captureCount
+    captureCount > 0 -> if { captureCount -> return }
+    state -> bodyScheduleDiagnosticCount => scheduleCount
+    scheduleCount > 0 -> if {
+        state -> emitBodyScheduleDiagnostics
+        scheduleCount -> return
+    }
+    context -> consumedEnumSubjectReadDiagnostics(state)
 }

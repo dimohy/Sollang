@@ -241,7 +241,7 @@ internal sealed partial class LlvmEmitter
     {
         var entriesOffset = EmitDictionaryEntriesOffset(capacity, "dict_entries_offset");
         var entriesBytes = NextTemp("dict_entries_bytes");
-        EmitBinary(entriesBytes, "mul", "i64", capacity, "16");
+        EmitBinary(entriesBytes, "mul", "i64", capacity, IntDictionaryLayout.EntryStride.ToString(CultureInfo.InvariantCulture));
         var totalBytes = NextTemp("dict_bytes");
         EmitBinary(totalBytes, "add", "i64", entriesOffset, entriesBytes);
         var pointer = EmitHeapAllocate(totalBytes);
@@ -251,7 +251,7 @@ internal sealed partial class LlvmEmitter
         return pointer;
     }
 
-    private string InitializeStackDictionary(string pointer, int capacity)
+    private string InitializeStackDictionary(string pointer, long capacity)
     {
         EmitZeroByteBuffer(
             pointer,
@@ -370,6 +370,11 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeInt LoadDictionaryValue(RuntimeIntDictionary dictionary, string index)
     {
+        return LoadInt(EmitDictionaryValueSlot(dictionary, index), "dict_value");
+    }
+
+    private string EmitDictionaryValueSlot(RuntimeIntDictionary dictionary, string index)
+    {
         var entriesOffset = EmitDictionaryEntriesOffset(dictionary.CapacityName, "dict_entries_offset");
         var entriesPointer = NextTemp("dict_entries");
         EmitAssign(entriesPointer, $"getelementptr i8, ptr {dictionary.PointerName}, i64 {entriesOffset}");
@@ -379,7 +384,7 @@ internal sealed partial class LlvmEmitter
         EmitBinary(valueOffset, "add", "i64", entryOffset, "1");
         var slot = NextTemp("dict_value_slot");
         EmitAssign(slot, $"getelementptr i32, ptr {entriesPointer}, i64 {valueOffset}");
-        return LoadInt(slot, "dict_value");
+        return slot;
     }
 
 }

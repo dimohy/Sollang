@@ -9,6 +9,192 @@ hasCanonicalValueType node: ref TypedIrNode -> Bool {
     node.typeId >= 0 and not (node.typeOrigin == 1 and node.typeSymbol == 0)
 }
 
+# A mutable binding can reuse a prior slot only when that declaration's
+# lexical owner is visible from the new binding's scope. Equal spelling in
+# nested and sibling control regions is a distinct owner. Symbol parents do
+# not retain those regions; use the same AST scopes as semantic binding owners.
+priorMutableBindingVisible previousSymbol: Int, currentSymbol: Int, sourceIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    prepared.package.ranges[sourceIndex] => range
+    previousSymbol < 0 or previousSymbol >= range.symbolCount or currentSymbol < 0 or currentSymbol >= range.symbolCount
+        -> if { false -> return }
+    prepared.package.symbols[range.symbolStart + previousSymbol].astNode => previousAst
+    prepared.package.symbols[range.symbolStart + currentSymbol].astNode => currentAst
+    prepared.package.nodes[range.astStart + previousAst].start >= prepared.package.nodes[range.astStart + currentAst].start
+        -> if { false -> return }
+    prepared.package -> semanticContext.declarationScope(sourceIndex, previousAst) => previousScope
+    prepared.package -> semanticContext.declarationAncestor(sourceIndex, previousScope, currentAst)
+}
+
+# A source flow can wrap the match subject in transparent typed IR shells.
+# The enum match consumes the materialized value, exactly as the managed
+# emitter consumes the expression that represents its subject.
+materializedMatchSubject subjectIndex: Int, nodes: ref [TypedIrNode; ~] -> Int {
+    subjectIndex => valueIndex!
+    0 => depth!
+    valueIndex! >= 0 and valueIndex! < (nodes -> len) and depth! < (nodes -> len)
+        -> while {
+            nodes[valueIndex!] => value
+            value.kind == 9 and value.opcode == -1 and value.operand1 < 0
+                and value.operand0 >= 0 and value.operand0 < (nodes -> len)
+                and nodes[value.operand0].parent == valueIndex!
+                -> if {
+                    value.operand0 => valueIndex!
+                    depth! + 1 => depth!
+                } else { valueIndex! -> return }
+        }
+    valueIndex!
+}
+
+# Source-finalization runs before every transparent flow operand is linked.
+# Canonicalize enum match operands after the complete Typed IR is sealed.
+sealMaterializedMatchSubjects nodes: mut [TypedIrNode; ~] -> Unit {
+    0 => matchIndex!
+    matchIndex! < (nodes -> len) -> while {
+        nodes[matchIndex!] => match!
+        match!.kind == 27 and match!.operand0 >= 0 -> if {
+            match!.operand0 -> materializedMatchSubject(nodes) => match!.operand0
+            match! => nodes[matchIndex!]
+        }
+        matchIndex! + 1 => matchIndex!
+    }
+}
+
+# A returned subject `when` may keep provisional Unit metadata until calls in
+# its arms and the function result have been sealed. Publish the declared
+# return type on the actual control value before LLVM decides whether to
+# allocate and fill its result slot.
+sealReturnedSubjectWhenTypes nodes: mut [TypedIrNode; ~] -> Unit {
+    0 => functionIndex!
+    functionIndex! < (nodes -> len) -> while {
+        nodes[functionIndex!] => function
+        function.kind == 0 and function.typeId >= 0
+            and function.operand0 >= 0 and function.operand0 < (nodes -> len)
+            and nodes[function.operand0].kind == 1 -> if {
+                nodes[function.operand0] => returnNode
+                returnNode.operand0 >= 0 and returnNode.operand0 < (nodes -> len)
+                    -> if {
+                        nodes[returnNode.operand0] => result!
+                        result!.kind == 34
+                            and (result!.typeId < 0 or (result!.typeOrigin == 1 and result!.typeSymbol == 0))
+                            -> if {
+                                function.typeId => result!.typeId
+                                function.typeKind => result!.typeKind
+                                function.typeOrigin => result!.typeOrigin
+                                function.typeModule => result!.typeModule
+                                function.typeSymbol => result!.typeSymbol
+                                function.typeFlags => result!.typeFlags
+                                result! => nodes[returnNode.operand0]
+                            }
+                    }
+            }
+        functionIndex! + 1 => functionIndex!
+    }
+}
+
+# A nested source flow is lowered as an inner transparent stage after the
+# ordinary function pass. Recover its declared generic payload from the outer
+# constructor, then materialize both enum variants before LLVM scheduling.
+sealNestedStandardEnumConstructors nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeFlags: ref [Int; ~] -> Unit {
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    0 => stageIndex!
+    stageIndex! < (nodes -> len) -> while {
+        nodes[stageIndex!] => stage!
+        stage!.kind == 9 and stage!.opcode == -1 and stage!.parent >= 0
+            and stage!.parent < (nodes -> len) and stage!.sourceModule >= 0
+            and stage!.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                nodes[stage!.parent] => outer
+                outer.kind == 26 and outer.typeId >= 0 and outer.typeId < (types -> len)
+                    and outer.opcode == 0 and outer.operand0 == stageIndex!
+                    -> if {
+                        types[outer.typeId] => outerType
+                        outerType.kind == 7 and outerType.origin == 4
+                            and (outerType.symbol == 0 or outerType.symbol == 1)
+                            and outerType.first >= 0 and outerType.first < (types -> len)
+                            -> if {
+                                prepared.package.ranges[stage!.sourceModule] => range
+                                prepared.package.nodes[range.astStart + stage!.astNode] => stageAst
+                                prepared.package.sources[stage!.sourceModule] -> len => sourceLength
+                                prepared.package.sources[stage!.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+                                source -> standardGenericEnumFlowVariantToken(prepared.package.tokens, range.tokenStart, stageAst) => variantTokenIndex
+                                variantTokenIndex >= 0 -> if {
+                                    prepared.package.tokens[range.tokenStart + variantTokenIndex] => variantToken
+                                    types[outerType.first] => stageType
+                                    stage!.sourceModule -> nominalVariantTagForType(stageType, variantToken, prepared) => stageTag
+                                    stageTag >= 0 and stageType.kind == 7 and stageType.origin == 4
+                                        and stageType.symbol == 0 and stageType.first >= 0 and stageType.first < (types -> len)
+                                        -> if {
+                                            26 => stage!.kind
+                                            outerType.first => stage!.typeId
+                                            stageType.kind => stage!.typeKind
+                                            stageType.origin => stage!.typeOrigin
+                                            stageType.module => stage!.typeModule
+                                            stageType.symbol => stage!.typeSymbol
+                                            typeFlags[outerType.first] => stage!.typeFlags
+                                            stageTag => stage!.opcode
+                                            -1 => stage!.symbol
+                                            -1 => stage!.targetModule
+                                            -1 => stagePayload!
+                                            flowSources[range.astStart + stage!.astNode] => sourceGlobal
+                                            0 => childIndex!
+                                            childIndex! < (nodes -> len) -> while {
+                                                nodes[childIndex!] => child
+                                                child.parent == stageIndex! and child.sourceModule == stage!.sourceModule
+                                                    and child.astNode >= 0 and child.astNode < range.astCount
+                                                    and sourceGlobal >= 0
+                                                    -> if {
+                                                        prepared.package.nodes[range.astStart + child.astNode] => childAst
+                                                        prepared.package.nodes[sourceGlobal] => sourceAst
+                                                        childAst.start == sourceAst.start and childAst.length == sourceAst.length
+                                                            -> if { childIndex! => stagePayload! }
+                                                    }
+                                                childIndex! + 1 => childIndex!
+                                            }
+                                            stagePayload! >= 0 -> if {
+                                                stagePayload! => stage!.operand0
+                                                nodes[stagePayload!] => payload!
+                                                payload!.targetModule >= 0 and payload!.targetModule < (prepared.package.ranges -> len)
+                                                    -> if {
+                                                        prepared.package.ranges[payload!.targetModule] => payloadRange
+                                                        payload!.symbol >= 0 and payload!.symbol < payloadRange.symbolCount
+                                                            -> if {
+                                                                prepared.package.symbols[payloadRange.symbolStart + payload!.symbol] => variantSymbol
+                                                                variantSymbol.kind == 27 and variantSymbol.parent >= 0
+                                                                    -> if {
+                                                                        types[stageType.first] => payloadEnumType
+                                                                        prepared.package.tokens[payloadRange.tokenStart + variantSymbol.nameToken] => payloadVariantToken
+                                                                        payload!.targetModule -> nominalVariantTagForType(payloadEnumType, payloadVariantToken, prepared) => payloadTag
+                                                                        payloadTag >= 0 -> if {
+                                                                            26 => payload!.kind
+                                                                            stageType.first => payload!.typeId
+                                                                            payloadEnumType.kind => payload!.typeKind
+                                                                            payloadEnumType.origin => payload!.typeOrigin
+                                                                            payloadEnumType.module => payload!.typeModule
+                                                                            payloadEnumType.symbol => payload!.typeSymbol
+                                                                            typeFlags[stageType.first] => payload!.typeFlags
+                                                                            payloadTag => payload!.opcode
+                                                                            0 => argumentIndex!
+                                                                            argumentIndex! < (nodes -> len) -> while {
+                                                                                nodes[argumentIndex!].parent == stagePayload! and nodes[argumentIndex!].kind == 12
+                                                                                    -> if { argumentIndex! => payload!.operand0 }
+                                                                                argumentIndex! + 1 => argumentIndex!
+                                                                            }
+                                                                            payload! => nodes[stagePayload!]
+                                                                        }
+                                                                    }
+                                                            }
+                                                    }
+                                            }
+                                            stagePayload! >= 0 -> if { stage! => nodes[stageIndex!] }
+                                        }
+                                }
+                            }
+                    }
+            }
+        stageIndex! + 1 => stageIndex!
+    }
+}
+
 # A later assignment can temporarily point a mutable binding at an unresolved
 # Result payload. Refreshing that edge must never erase an earlier canonical
 # owner type with unknown or provisional Unit metadata.
@@ -44,16 +230,18 @@ resolvedFunctionResultTypeId sourceIndex: Int, functionSymbol: Int, prepared: re
         function.typeNode => resultAst!
         function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultAst! }
         prepared -> declaredArrayShapeKind(sourceIndex, resultAst!) => resultShapeKind
-        0 => resultReferenceSearch!
-        resultReferenceSearch! < (recursiveTypes.references -> len)
-            -> while {
-                recursiveTypes.references[resultReferenceSearch!] => resultReference
-                resultReference.status == 0
-                    and resultReference.sourceModule == sourceIndex
-                    and resultReference.typeAst == resultAst!
-                    and (resultShapeKind < 0 or types[resultReference.typeId].kind == resultShapeKind)
-                    -> if { resultReference.typeId => resultTypeId! }
-                resultReferenceSearch! + 1 => resultReferenceSearch!
+        resultAst! >= 0 and resultAst! < functionRange.astCount
+            -> if {
+                recursiveTypes.referenceIndexByTypeAst[functionRange.astStart + resultAst!] => resultReferenceIndex
+                resultReferenceIndex >= 0 and resultReferenceIndex < (recursiveTypes.references -> len)
+                    -> if {
+                        recursiveTypes.references[resultReferenceIndex] => resultReference
+                        resultReference.status == 0
+                            and resultReference.sourceModule == sourceIndex
+                            and resultReference.typeAst == resultAst!
+                            and (resultShapeKind < 0 or types[resultReference.typeId].kind == resultShapeKind)
+                            -> if { resultReference.typeId => resultTypeId! }
+                    }
             }
         function.flags / 32768 % 2 == 1 and resultTypeId! >= 0
             -> if {
@@ -65,7 +253,7 @@ resolvedFunctionResultTypeId sourceIndex: Int, functionSymbol: Int, prepared: re
                         and nativeTryResultCandidate.origin == 4
                         and nativeTryResultCandidate.symbol == 1
                         and nativeTryResultCandidate.first == nativeTrySuccessType
-                        and nativeTryResultCandidate.second == 5
+                        and nativeTryResultCandidate.second == (types -> typeIds.builtinTypeId(5))
                         -> if { nativeTryResultSearch! => resultTypeId! }
                     nativeTryResultSearch! + 1 => nativeTryResultSearch!
                 }
@@ -222,7 +410,8 @@ sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
             and (binding!.typeId < 0
             or (binding!.typeOrigin == 1 and binding!.typeSymbol == 0)
             or (binding!.flags != 1
-            and nodes[binding!.operand0].kind == 15
+            and (nodes[binding!.operand0].kind == 5
+            or nodes[binding!.operand0].kind == 15)
             and binding!.typeId != nodes[binding!.operand0].typeId))
             -> if {
                 nodes[binding!.operand0] => value

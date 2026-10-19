@@ -437,6 +437,32 @@ internal sealed partial class LlvmEmitter
               ret i32 0
             }
 
+            define internal i32 @sollang_file_path_has_no_nul(ptr %data, i64 %len) #0 {
+            entry:
+              br label %check
+
+            check:
+              %i = phi i64 [ 0, %entry ], [ %next, %advance ]
+              %done = icmp eq i64 %i, %len
+              br i1 %done, label %valid, label %read
+
+            read:
+              %src = getelementptr i8, ptr %data, i64 %i
+              %ch = load i8, ptr %src, align 1
+              %is_nul = icmp eq i8 %ch, 0
+              br i1 %is_nul, label %invalid, label %advance
+
+            advance:
+              %next = add i64 %i, 1
+              br label %check
+
+            valid:
+              ret i32 1
+
+            invalid:
+              ret i32 0
+            }
+
             define internal i32 @sollang_seed_random(i64 %seed) #0 {
             entry:
               store i64 %seed, ptr @sollang_random_state, align 8

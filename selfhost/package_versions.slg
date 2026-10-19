@@ -1,5 +1,8 @@
 namespace sollang.compiler.package_versions
 
+import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+
 public struct SemanticVersion {
     public status: Int
     public major: Int
@@ -221,15 +224,16 @@ public compare leftSource: Text, left: SemanticVersion, rightSource: Text, right
     result!
 }
 
-acceptTerm term: Text, candidateSource: Text, candidate: SemanticVersion -> RequirementResult {
+struct RequirementTerm {
+    operation: Int
+    versionStart: UIntSize
+    version: SemanticVersion
+}
+
+parseRequirementTerm term: Text -> RequirementTerm {
     term -> len => length
     UIntSize(0) => versionStart!
     0 => operation!
-    length == 1 and (term -> byte(UIntSize(0))) == 42
-        -> if {
-            1 => operation!
-            length => versionStart!
-        }
     operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 94
         -> if {
             2 => operation!
@@ -266,31 +270,106 @@ acceptTerm term: Text, candidateSource: Text, candidate: SemanticVersion -> Requ
                 }
         }
     operation! == 0 -> if { 4 => operation! }
-    0 => status!
-    true => accepted!
-    operation! != 1 -> if {
-        term -> slice(versionStart!, length - versionStart!) => versionText
-        versionText -> parse => expected
-        expected.status != 0 -> if {
-            1 => status!
-            false => accepted!
-        } else {
-            candidateSource -> compare(candidate, versionText, expected) => ordering
-            operation! == 2 -> if {
-                ordering >= 0 and ((expected.major > 0 and candidate.major == expected.major) or (expected.major == 0 and expected.minor > 0 and candidate.major == 0 and candidate.minor == expected.minor) or (expected.major == 0 and expected.minor == 0 and candidate.major == 0 and candidate.minor == 0 and candidate.patch == expected.patch)) => accepted!
-            }
-            operation! == 3 -> if { candidate.major == expected.major and candidate.minor == expected.minor and ordering >= 0 => accepted! }
-            operation! == 4 -> if { ordering == 0 => accepted! }
-            operation! == 5 -> if { ordering > 0 => accepted! }
-            operation! == 6 -> if { ordering >= 0 => accepted! }
-            operation! == 7 -> if { ordering < 0 => accepted! }
-            operation! == 8 -> if { ordering <= 0 => accepted! }
-        }
-    }
-    RequirementResult { status: status!, accepted: accepted! }
+    term -> slice(versionStart!, length - versionStart!) -> parse => version
+    RequirementTerm { operation: operation!, versionStart: versionStart!, version: version }
 }
 
-public accepts requirement: Text, candidateSource: Text -> RequirementResult {
+acceptTerm term: Text, candidateSource: Text, candidate: SemanticVersion -> RequirementResult {
+    term -> parseRequirementTerm => parsed
+    parsed.version => expected
+    expected.status != 0 -> if {
+        RequirementResult { status: 1, accepted: false } -> return
+    }
+    term -> slice(parsed.versionStart, (term -> len) - parsed.versionStart) => versionText
+    true => accepted!
+    candidateSource -> compare(candidate, versionText, expected) => ordering
+    parsed.operation == 2 -> if {
+        ordering >= 0 and ((expected.major > 0 and candidate.major == expected.major) or (expected.major == 0 and expected.minor > 0 and candidate.major == 0 and candidate.minor == expected.minor) or (expected.major == 0 and expected.minor == 0 and candidate.major == 0 and candidate.minor == 0 and candidate.patch == expected.patch)) => accepted!
+    }
+    parsed.operation == 3 -> if { candidate.major == expected.major and candidate.minor == expected.minor and ordering >= 0 => accepted! }
+    parsed.operation == 4 -> if { ordering == 0 => accepted! }
+    parsed.operation == 5 -> if { ordering > 0 => accepted! }
+    parsed.operation == 6 -> if { ordering >= 0 => accepted! }
+    parsed.operation == 7 -> if { ordering < 0 => accepted! }
+    parsed.operation == 8 -> if { ordering <= 0 => accepted! }
+    RequirementResult { status: 0, accepted: accepted! }
+}
+
+public struct RequirementSyntax {
+    public status: Int
+    public invalidStart: UIntSize
+    public invalidLength: UIntSize
+}
+
+requirementBlankWidth source: Text, index: UIntSize -> UIntSize {
+    source -> unicodeIdentifier.scalarWidth(index) => width
+    source -> slice(index, width) => scalar
+    syntax.RawStringLayout { raw: false, multiline: false, contentStart: 0, contentEnd: width, indentationStart: 0, indentationLength: 0, issue: 0 } => layout
+    scalar -> syntax.rawStringLine(layout, 0) => line
+    line.start == line.end and line.next == width
+        -> if { width -> return }
+    0
+}
+
+public trimRequirement source: Text -> Text {
+    source -> len => length
+    UIntSize(0) => cursor!
+    UIntSize(0) => start!
+    UIntSize(0) => end!
+    false => contentSeen!
+    cursor! < length -> while {
+        source -> requirementBlankWidth(cursor!) => blankWidth
+        blankWidth == 0 -> if {
+            not contentSeen! -> if { cursor! => start! }
+            true => contentSeen!
+            source -> unicodeIdentifier.scalarWidth(cursor!) => width
+            cursor! + width => cursor!
+            cursor! => end!
+        } else { cursor! + blankWidth => cursor! }
+    }
+    source -> slice(start!, end! - start!)
+}
+
+# Parse every term before candidate testing, like VersionRequirement.Parse.
+public validateRequirement source: Text -> RequirementSyntax {
+    source -> trimRequirement => requirement
+    requirement -> len => length
+    length == 0 -> if {
+        RequirementSyntax { status: 1, invalidStart: 0, invalidLength: 0 } -> return
+    }
+    length == 1 and (requirement -> byte(0)) == 42
+        -> if {
+            RequirementSyntax { status: 0, invalidStart: 0, invalidLength: 0 } -> return
+        }
+    UIntSize(0) => index!
+    index! < length -> while {
+        index! < length and (requirement -> byte(index!)) == 32
+            -> while { index! + 1 => index! }
+        index! < length -> if {
+            index! => start
+            index! < length and (requirement -> byte(index!)) != 32
+                -> while { index! + 1 => index! }
+            requirement -> slice(start, index! - start) => term
+            term -> parseRequirementTerm => parsed
+            parsed.version.status != 0 -> if {
+                RequirementSyntax { status: 2, invalidStart: start + parsed.versionStart, invalidLength: index! - start - parsed.versionStart } -> return
+            }
+        }
+    }
+    RequirementSyntax { status: 0, invalidStart: 0, invalidLength: 0 }
+}
+
+public accepts rawRequirement: Text, candidateSource: Text -> RequirementResult {
+    rawRequirement -> validateRequirement => syntaxResult
+    syntaxResult.status != 0 -> if {
+        RequirementResult { status: 2, accepted: false } -> return
+    }
+    rawRequirement -> trimRequirement => requirement
+    (requirement -> len) == 1 and (requirement -> byte(0)) == 42
+        -> if {
+            candidateSource -> parse => candidate
+            RequirementResult { status: candidate.status, accepted: candidate.status == 0 } -> return
+        }
     candidateSource -> parse => candidate
     candidate.status => status!
     status! == 0 => accepted!

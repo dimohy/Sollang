@@ -70,6 +70,7 @@ internal sealed partial class LlvmEmitter
 
         if (function.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintError
             or BoundFunctionKind.RuntimePrintErrorLine)
         {
             if (function.Kind == BoundFunctionKind.RuntimePrintLine
@@ -84,7 +85,8 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{path} expects exactly one argument");
             }
 
-            var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+            var standardError = function.Kind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine;
             _mainOk = EmitPrintArgument(expression.Arguments[0], _mainOk, standardError);
             if (function.Kind is BoundFunctionKind.RuntimePrintLine
                 or BoundFunctionKind.RuntimePrintErrorLine)
@@ -302,6 +304,16 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeOpenFile(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind is BoundFunctionKind.RuntimeCreateExclusiveFile
+            or BoundFunctionKind.RuntimeRemoveFile)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Text path");
+            }
+            return EmitRuntimeFilePathStatus(function, EmitExpression(expression.Arguments[0]));
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeReadDirectory)
         {
             if (expression.Arguments.Count != 1)
@@ -320,13 +332,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeCreateDirectory(function, EmitExpression(expression.Arguments[0]));
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimePathQuery)
+        if (function.Kind is BoundFunctionKind.RuntimePathQuery or BoundFunctionKind.RuntimePathAbsolute)
         {
             if (expression.Arguments.Count != 1)
             {
                 throw new SollangException($"{path} expects exactly one Path argument");
             }
-            return EmitRuntimePathQuery(function, EmitExpression(expression.Arguments[0]));
+            return function.Kind == BoundFunctionKind.RuntimePathAbsolute
+                ? EmitRuntimePathAbsolute(function, EmitExpression(expression.Arguments[0]))
+                : EmitRuntimePathQuery(function, EmitExpression(expression.Arguments[0]));
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeSyncFile
@@ -543,6 +557,8 @@ internal sealed partial class LlvmEmitter
             .ToArray();
         var value = EmitFunctionCall(function, argument, additionalArguments);
         RemoveOwnedParameterArgumentsIfNeeded(function, expression.Arguments, additionalArgumentOffset);
+        if (methodReceiverName is not null && FunctionConsumesOwnedHeapInput(function))
+            RemoveLocal(methodReceiverName);
         foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())
             DropOwnedRuntimeValue(temporary);
         return value;
@@ -563,7 +579,8 @@ internal sealed partial class LlvmEmitter
         {
             BoundFunctionKind.RuntimePrint => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: false),
             BoundFunctionKind.RuntimePrintLine => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: true),
-            BoundFunctionKind.RuntimePrintErrorLine => EmitRuntimePrintErrorLineCall(expression.Arguments[0]),
+            BoundFunctionKind.RuntimePrintError => EmitRuntimePrintErrorCall(expression.Arguments[0], appendNewLine: false),
+            BoundFunctionKind.RuntimePrintErrorLine => EmitRuntimePrintErrorCall(expression.Arguments[0], appendNewLine: true),
             BoundFunctionKind.RuntimeReadInt => EmitReadIntPromptExpression(expression.Arguments[0]),
             BoundFunctionKind.RuntimeSeedRandom
                 or BoundFunctionKind.RuntimeOpenIntWriter
@@ -694,6 +711,13 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitFunctionArgumentExpression(Expression expression, BoundType expectedType)
     {
+        _expressionContinuations.Push((_currentFunction, expression));
+        try { return EmitFunctionArgumentExpressionCore(expression, expectedType); }
+        finally { _expressionContinuations.Pop(); }
+    }
+
+    private RuntimeValue EmitFunctionArgumentExpressionCore(Expression expression, BoundType expectedType)
+    {
         if (_program.Types.IsReference(expectedType))
         {
             return CreateReadonlyReferenceArgument(
@@ -741,6 +765,15 @@ internal sealed partial class LlvmEmitter
                 ? EmitDynamicIntArrayLiteral(contextualDynamicLiteral, elements.Cast<RuntimeInt>().ToArray())
                 : EmitDynamicInlineArrayLiteral(expectedType, elements);
         }
+        if (expression is ArrayLiteralExpression boundedArray
+            && _program.Types.IsBoundedArray(expectedType))
+        {
+            var elementType = _program.Types.GetBoundedArray(expectedType).ElementType;
+            var elements = boundedArray.Elements
+                .Select(element => EmitFunctionArgumentExpression(element, elementType))
+                .ToArray();
+            return EmitBoundedInlineArrayLiteral(expectedType, elements);
+        }
         if (expression is ArrayLiteralExpression fixedArray
             && (expectedType == BoundType.StaticIntArray
                 || expectedType == BoundType.StaticTextArray
@@ -764,6 +797,18 @@ internal sealed partial class LlvmEmitter
                 return EmitStaticTextArrayLiteral(fixedArray, elements.Cast<RuntimeText>().ToArray());
             }
             return EmitStaticInlineArrayLiteral(expectedType, elements);
+        }
+        if (expression is ArrayRepeatExpression contextualRepeat
+            && (expectedType == BoundType.DynamicIntArray
+                || _program.Types.IsDynamicArray(expectedType)
+                || _program.Types.IsBoundedArray(expectedType)))
+        {
+            var elementType = expectedType == BoundType.DynamicIntArray
+                ? BoundType.Int
+                : _program.Types.IsBoundedArray(expectedType)
+                    ? _program.Types.GetBoundedArray(expectedType).ElementType
+                    : _program.Types.GetDynamicArray(expectedType).ElementType;
+            return EmitArrayRepeat(contextualRepeat, elementType, expectedType);
         }
         if (expression is ArrayRepeatExpression repeat
             && _program.Types.IsStaticArray(expectedType))
@@ -802,12 +847,8 @@ internal sealed partial class LlvmEmitter
         if (IsFloatType(expectedType)
             && TryGetNumericLiteralText(expression, out var floatingLiteral))
         {
-            if (!floatingLiteral.Contains('.', StringComparison.Ordinal)
-                && !floatingLiteral.Contains('e', StringComparison.OrdinalIgnoreCase))
-            {
-                floatingLiteral += ".0";
-            }
-            return new RuntimeFloat(expectedType, floatingLiteral);
+            return new RuntimeFloat(expectedType,
+                FormatLlvmFloatingLiteral(floatingLiteral, expectedType, expression.Line, expression.Column));
         }
 
         var value = EmitExpression(expression);
@@ -875,6 +916,26 @@ internal sealed partial class LlvmEmitter
             && TryGetIntegerLiteralText(expression.Arguments[0], out var integerLiteral))
         {
             value = new RuntimeInt(targetType, integerLiteral);
+            return true;
+        }
+        if (IsFloatType(targetType)
+            && TryGetIntegerLiteralText(expression.Arguments[0], out var floatingIntegerLiteral))
+        {
+            if (!double.TryParse(floatingIntegerLiteral, NumberStyles.Float, CultureInfo.InvariantCulture,
+                    out var literalValue)
+                || !double.IsFinite(literalValue))
+            {
+                throw new SollangException("numeric conversion floating-point literal is out of range");
+            }
+            var constant = literalValue.ToString("0.0################E+00", CultureInfo.InvariantCulture);
+            if (targetType == BoundType.Float64)
+            {
+                value = new RuntimeFloat(targetType, constant);
+                return true;
+            }
+            var truncated = NextTemp("numeric_convert");
+            EmitAssign(truncated, $"fptrunc double {constant} to float");
+            value = new RuntimeFloat(targetType, truncated);
             return true;
         }
         var source = EmitExpression(expression.Arguments[0]);
@@ -1227,6 +1288,7 @@ internal sealed partial class LlvmEmitter
 
         if (function.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintError
             or BoundFunctionKind.RuntimePrintErrorLine)
         {
             if (argument is null)
@@ -1235,7 +1297,8 @@ internal sealed partial class LlvmEmitter
             }
 
             EnsureRuntimeType(argument, BoundType.Text, function.Name);
-            var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+            var standardError = function.Kind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine;
             _mainOk = EmitWriteValue(argument, _mainOk, standardError);
             if (function.Kind is BoundFunctionKind.RuntimePrintLine
                 or BoundFunctionKind.RuntimePrintErrorLine)
@@ -1516,13 +1579,25 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeCreateDirectory(function, argument);
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimePathQuery)
+        if (function.Kind is BoundFunctionKind.RuntimePathQuery or BoundFunctionKind.RuntimePathAbsolute)
         {
             if (argument is null)
             {
                 throw new SollangException($"{function.Name} expects exactly one Path value");
             }
-            return EmitRuntimePathQuery(function, argument);
+            return function.Kind == BoundFunctionKind.RuntimePathAbsolute
+                ? EmitRuntimePathAbsolute(function, argument)
+                : EmitRuntimePathQuery(function, argument);
+        }
+
+        if (function.Kind is BoundFunctionKind.RuntimeCreateExclusiveFile
+            or BoundFunctionKind.RuntimeRemoveFile)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Text path");
+            }
+            return EmitRuntimeFilePathStatus(function, argument);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeSyncFile
@@ -1630,6 +1705,7 @@ internal sealed partial class LlvmEmitter
         return function.ReturnType switch
         {
             BoundType.Arguments => EmitStructFunctionCall(function, argument, additionalArguments),
+            BoundType.MappedBytes or BoundType.MutableMappedBytes => EmitStructFunctionCall(function, argument, additionalArguments),
             BoundType.Unit => EmitUnitFunctionCall(function, argument, additionalArguments),
             BoundType.Text => EmitTextFunctionCall(function, argument, additionalArguments),
             BoundType.Int => EmitIntFunctionCall(function, argument, additionalArguments),
@@ -1649,6 +1725,7 @@ internal sealed partial class LlvmEmitter
             _ when _program.Types.IsStruct(function.ReturnType)
                 || _program.Types.IsEnum(function.ReturnType)
                 || _program.Types.IsBox(function.ReturnType)
+                || _program.Types.IsDynTrait(function.ReturnType)
                 => EmitStructFunctionCall(function, argument, additionalArguments),
             _ when _program.Types.IsStream(function.ReturnType)
                 || _program.Types.IsEventStream(function.ReturnType)
@@ -1685,10 +1762,13 @@ internal sealed partial class LlvmEmitter
         return RuntimeUnit.Instance;
     }
 
-    private RuntimeUnit EmitRuntimePrintErrorLineCall(Expression argument)
+    private RuntimeUnit EmitRuntimePrintErrorCall(Expression argument, bool appendNewLine)
     {
         _mainOk = EmitPrintArgument(argument, _mainOk, standardError: true);
-        _mainOk = EmitStandardErrorNewLine(_mainOk);
+        if (appendNewLine)
+        {
+            _mainOk = EmitStandardErrorNewLine(_mainOk);
+        }
         return RuntimeUnit.Instance;
     }
 
@@ -1840,10 +1920,10 @@ internal sealed partial class LlvmEmitter
                     materialized.ValueName,
                     pointer,
                     RuntimeAlignment(capture.Value));
-                if (!_mutableLocals.Contains(capture.Key))
-                {
-                    _readonlyCaptureBorrowPointers.Add(capture.Key, pointer);
-                }
+                // A call-site descriptor may be initialized only in a
+                // short-circuit arm. It cannot be reused by later captures or
+                // explicit borrows outside that arm. Only entry-bound capture
+                // pointers in BindFunctionCaptures dominate every such use.
                 arguments.Add($"ptr {pointer}");
                 continue;
             }
@@ -1873,7 +1953,7 @@ internal sealed partial class LlvmEmitter
         {
             var parameter = parameters[index];
             var value = additionalArguments[index];
-            if (value is RuntimeFormattedText && parameter.Type == BoundType.Text)
+            if (value is RuntimeFormattedText or RuntimeTextChoice && parameter.Type == BoundType.Text)
             {
                 value = EmitTransientText(value);
             }
@@ -1932,7 +2012,7 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"function '{function.Name}' expects exactly one argument");
         }
 
-        if (argument is RuntimeFormattedText && function.InputType == BoundType.Text)
+        if (argument is RuntimeFormattedText or RuntimeTextChoice && function.InputType == BoundType.Text)
         {
             argument = EmitTransientText(argument);
         }
@@ -2050,6 +2130,8 @@ internal sealed partial class LlvmEmitter
             RuntimeStruct structure when function.InputType == structure.Type => $"{LlvmStructType(structure.Type)} {structure.ValueName}",
             RuntimeEnum enumeration when function.InputType == enumeration.Type => $"{LlvmEnumType(enumeration.Type)} {enumeration.ValueName}",
             RuntimeBox box when function.InputType == box.Type => $"ptr {box.PointerName}",
+            RuntimeDynTrait dyn when function.InputType == dyn.Type =>
+                $"%sollang.dyn {BuildDynTraitAggregate(dyn)}",
             RuntimeProducerStream stream when function.InputType == stream.Type =>
                 BuildProducerStreamArgument(stream),
             _ => throw new SollangException($"function '{function.Name}' expects {function.InputType} but received {argument.Type}")
@@ -2164,6 +2246,10 @@ internal sealed partial class LlvmEmitter
 
         var value = ResolveLocal(name.Name);
         EnsureRuntimeType(value, expectedType, path);
+        if (value is RuntimeBitSet bitSet && _program.Types.IsBitSet(expectedType))
+        {
+            return new RuntimeMutableStructReference(expectedType, bitSet.PointerName);
+        }
         if (value is RuntimeStaticInlineArray && _program.Types.IsStaticArray(expectedType))
         {
             return value;
@@ -2198,7 +2284,7 @@ internal sealed partial class LlvmEmitter
         BoundType expectedType,
         string path)
     {
-        if (_program.Types.IsStruct(expectedType))
+        if (_program.Types.IsStruct(expectedType) || _program.Types.IsBitSet(expectedType))
         {
             return new RuntimeMutableStructReference(expectedType, place.PointerName);
         }
@@ -2442,6 +2528,11 @@ internal sealed partial class LlvmEmitter
     {
         if (argument is RuntimeMutableStructReference structReference)
         {
+            if (_program.Types.IsBitSet(type))
+            {
+                BindMutableBitSetFunctionParameter(name, type, structReference.PointerAddress);
+                return;
+            }
             if (_program.Types.IsStaticArray(type))
             {
                 throw new SollangException(
@@ -2789,6 +2880,7 @@ internal sealed partial class LlvmEmitter
     {
         if (function.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintError
             or BoundFunctionKind.RuntimePrintErrorLine)
         {
             kind = function.Kind;
@@ -2798,6 +2890,7 @@ internal sealed partial class LlvmEmitter
         if (TryGetRuntimeWrapperKind(function, out kind)
             && kind is BoundFunctionKind.RuntimePrint
                 or BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintError
                 or BoundFunctionKind.RuntimePrintErrorLine)
         {
             return true;
@@ -2822,6 +2915,7 @@ internal sealed partial class LlvmEmitter
 
         if (target.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintError
             or BoundFunctionKind.RuntimePrintErrorLine
             or BoundFunctionKind.RuntimeReadInt
             or BoundFunctionKind.RuntimeSeedRandom
@@ -3037,7 +3131,11 @@ internal sealed partial class LlvmEmitter
             // receiver lookup. Preserve that specialization so control-flow
             // facts such as early returns select the same standalone function
             // later used by emission.
-            if (_program.ResolvedGenericCalls.TryGetValue(callSite, out var generic))
+            if (callSite is BoundFunction declaredFunction)
+            {
+                target = declaredFunction;
+            }
+            else if (_program.ResolvedGenericCalls.TryGetValue(callSite, out var generic))
             {
                 target = generic;
             }
@@ -3072,7 +3170,8 @@ internal sealed partial class LlvmEmitter
 
             if (target.Kind is BoundFunctionKind.RuntimeReadDirectory
                 or BoundFunctionKind.RuntimeCreateDirectory
-                or BoundFunctionKind.RuntimePathQuery)
+                or BoundFunctionKind.RuntimePathQuery
+                or BoundFunctionKind.RuntimePathAbsolute)
             {
                 _usesDirectoryTraversal = true;
             }
@@ -3284,6 +3383,8 @@ internal sealed partial class LlvmEmitter
         IndexExpression index => [index.Source, index.Index],
         StructLiteralExpression structure => structure.Fields.Select(field => field.Value),
         ProductExpression product => product.Elements.Select(element => element.Value),
+        PartitionExpression partition => new[] { partition.Source }
+            .Concat(partition.Arms.Select(arm => arm.Condition).OfType<Expression>()),
         TryExpression attempt => [attempt.Value],
         BoxExpression box => [box.Value],
         MapExpression map => new[] { map.Path, map.Offset, map.Length, map.FileSize }.OfType<Expression>(),

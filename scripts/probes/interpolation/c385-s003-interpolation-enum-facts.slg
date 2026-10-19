@@ -1,0 +1,221 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
+
+inspectSources sources: move [Text; ~], label: Text -> Unit uses Console {
+    sources -> semanticContext.prepare -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => facts
+    0 => count!
+    -1 => expectedKind!
+    -1 => actualKind!
+    -1 => tag!
+    false => ownerMatches!
+    facts.enumConstructorArguments -> each argument {
+        prepared.package.ranges[argument.sourceModule] => range
+        -1 => owner!
+        0 => nameIndex!
+        nameIndex! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + nameIndex!] => name
+            name.astNode == argument.argumentAst and name.symbol >= 0
+                -> if {
+                    range.symbolStart + name.symbol => symbol
+                    prepared.package.symbols[symbol].kind == 9 -> if { symbol => owner! }
+                }
+            nameIndex! + 1 => nameIndex!
+        }
+        argument.argumentNode >= 0 -> if {
+            prepared.interpolations[argument.argumentNode] => value
+            value.kind == 1 and value.symbol >= 0 -> if {
+                range.symbolStart + value.symbol => symbol
+                prepared.package.symbols[symbol].kind == 9 -> if { symbol => owner! }
+            }
+        }
+        owner! >= 0 -> if {
+            count! + 1 => count!
+            facts.types[argument.expectedTypeId].kind => expectedKind!
+            argument.actualTypeId >= 0 -> if { facts.types[argument.actualTypeId].kind => actualKind! }
+            argument.variantTag => tag!
+            prepared.package.symbols[owner!] => binding
+            prepared.package.tokens[range.tokenStart + binding.nameToken] => nameToken
+            prepared.package.sources[argument.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+            name == "values" and facts.lexicalBindingTypeBySymbol[owner!] == argument.actualTypeId => ownerMatches!
+        }
+    }
+    prepared -> fixedLengthArrays.collect(facts, prepared.interpolations, prepared.interpolationRanges) => warnings
+    ownerMatches! -> if { 1 } else { 0 } => ownerCode
+    "$label=$(count!),$(expectedKind!),$(actualKind!),$(tag!),$ownerCode,$(warnings -> len)" -> println
+}
+
+inspect source: Text, label: Text -> Unit uses Console {
+    [source,; ~] -> inspectSources(label)
+}
+
+main {
+    """
+    struct Item { value: Int }
+    enum Wrapped { Values([Item; ~]) }
+    main {
+        [Item { value: 7 }; ~] => values
+        Wrapped.Values(values) -> when {
+            Values(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("nominal-direct")
+    """
+    struct Item { value: Int }
+    enum Wrapped { Values([Item; ~]) }
+    main {
+        [Item { value: 7 }; ~] => values
+        (Wrapped.Values(values)) -> when {
+            Values(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("nominal-wrapper")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Option<[Item; ~]>.Some(values) -> when {
+            Some(items) { items -> len -> println }
+            None { 0 -> println }
+        }
+    }
+    """ -> inspect("option-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Option<[Item; ~]>.Some -> when {
+            Some(items) { items -> len -> println }
+            None { 0 -> println }
+        }
+    }
+    """ -> inspect("option-flow")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Result<[Item; ~], Text>.Ok(values) -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("result-ok-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Result<[Item; ~], Text>.Ok -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("result-ok-flow")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Result<Text, [Item; ~]>.Err(values) -> when {
+            Ok(text) { text -> println }
+            Err(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("result-err-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Result<Text, [Item; ~]>.Err -> when {
+            Ok(text) { text -> println }
+            Err(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("result-err-flow")
+    """
+    struct Item { value: Int }
+    Some values: move [Item; ~] -> Result<[Item; ~], Text> => Result<[Item; ~], Text>.Ok(values)
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Some -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("ordinary-same-name")
+    """
+    payloadLength wrapped: Option<[Int; ~]> -> Int {
+        wrapped -> when { Some(items) { items -> len } None { 0 } }
+    }
+    main {
+        [1; ~] => values
+        "length=$(Option<[Int; ~]>.Some(values) -> payloadLength)" -> println
+    }
+    """ -> inspect("interpolation-option")
+    """
+    payloadLength wrapped: Result<[Int; ~], Text> -> Int {
+        wrapped -> when { Ok(items) { items -> len } Err(error) { 0 } }
+    }
+    main {
+        [1; ~] => values
+        "length=$(Result<[Int; ~], Text>.Ok(values) -> payloadLength)" -> println
+    }
+    """ -> inspect("interpolation-result-ok")
+    """
+    payloadLength wrapped: Result<Text, [Int; ~]> -> Int {
+        wrapped -> when { Ok(text) { 0 } Err(items) { items -> len } }
+    }
+    main {
+        [1; ~] => values
+        "length=$(Result<Text, [Int; ~]>.Err(values) -> payloadLength)" -> println
+    }
+    """ -> inspect("interpolation-result-err")
+    """
+    payloadLength wrapped: Option<[Int; ~]> -> Int {
+        wrapped -> when { Some(items) { items -> len } None { 0 } }
+    }
+    Some values: move [Int; ~] -> Option<[Int; ~]> => Option<[Int; ~]>.Some(values)
+    main {
+        [1; ~] => values
+        "length=$(Some(values) -> payloadLength)" -> println
+    }
+    """ -> inspect("interpolation-ordinary-same-name")
+    """
+    length values: ref [Int; ~] -> Int => values -> len
+    main {
+        [1; ~] => values
+        "length=$(values -> length)" -> println
+    }
+    """ -> inspect("interpolation-ordinary")
+    [
+    """
+    namespace enum_probe.payload
+    public struct Item { public value: Int }
+    """,
+    """
+    import enum_probe.payload as payload
+    payloadLength wrapped: Option<[payload.Item; ~]> -> Int {
+        wrapped -> when { Some(items) { items -> len } None { 0 } }
+    }
+    main {
+        [payload.Item { value: 7 }; ~] => values
+        "length=$(Option<[payload.Item; ~]>.Some(values) -> payloadLength)" -> println
+    }
+    """; ~
+    ] -> inspectSources("interpolation-imported-nominal")
+    """
+    struct Item { value: Int }
+    enum Wrapped { Values([Item; ~]) }
+
+    payloadLength wrapped: Wrapped -> Int {
+        wrapped -> when {
+            Values(items) { items -> len }
+        }
+    }
+
+    main {
+        [Item { value: 1 }; ~] => values
+        "length=$(Wrapped.Values(values) -> payloadLength)" -> println
+    }
+    """ -> inspect("interpolation-nominal-direct")
+}

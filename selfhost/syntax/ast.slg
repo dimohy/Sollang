@@ -2,6 +2,7 @@ namespace sollang.compiler.ast
 
 import sollang.compiler.cst as cst
 import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
@@ -22,6 +23,17 @@ public struct AstNode {
     public tokenCount: Int
     public start: UIntSize
     public length: UIntSize
+}
+
+# Flag 524288 records an actual expression-statement root, retained from
+# the CST ancestor walk before its transparent syntax nodes are discarded.
+# A binding, call argument, operator operand, or expression body is not a
+# statement root. Final block/function value admission is a semantic decision.
+public bareYieldStatement source: Text, node: AstNode, token: syntax.SyntaxToken -> Bool {
+    (node.kind == 15 and (node.flags / 524288) % 2 == 1
+        and token.kind == grammar.tokenIdIdentifier()
+        and (source -> slice(token.span.start, token.span.length)) == "yield") => isBareYield
+    isBareYield -> return
 }
 
 struct LowerRequest {
@@ -78,7 +90,7 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
             # multi-stage callback pipeline so the preceding call owns an AST
             # node and semantic call result instead of being guessed from its
             # rightmost argument expression.
-            (arrows! -> len) > 1 and stageBodyCount! > 0
+            (arrows! -> len) > 0 and stageBodyCount! > 0
                 -> if {
                     [Int; ~] => stageNodes!
                     0 => stageIndex!
@@ -186,7 +198,10 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
                             # arguments but no callback body.  Model it as a normal
                             # flow expression so ownership validation does not
                             # mistake its owned result for an unbound block result.
-                            not roleBodyReached! -> if { 10 => stage!.kind }
+                            not roleBodyReached! -> if {
+                                10 => stage!.kind
+                                grammar.ruleIdFlowExpression() => stage!.cstRuleId
+                            }
                             # Additional callback inputs (scan and future arities)
                             # are ordinary synthetic parameter AST nodes.
                             1 => additionalRoleIndex!
@@ -210,6 +225,10 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
                                     additionalRoleIndex! + 1 => additionalRoleIndex!
                                 }
                         } else {
+                            # Control and slice targets are ordinary flow stages;
+                            # their braces do not introduce a user callback.
+                            10 => stage!.kind
+                            grammar.ruleIdFlowExpression() => stage!.cstRuleId
                             # take(count) and skip(count) are grammar-level slice
                             # stages and therefore have no Path child. Preserve the
                             # identifier on the synthetic stage so normal imported
@@ -247,6 +266,47 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
                             }
                             reparentSearch! + 1 => reparentSearch!
                         }
+                        # A terminal ordinary flow uses the ordinary binding or
+                        # assignment node, not the callback-result symbol path.
+                        stageNodeIndex == pipelineIndex! and stage!.kind == 10 and pipeline.secondaryToken >= 0
+                            -> if {
+                                expanded! -> len => flowIndex
+                                stage! => flow!
+                                pipelineIndex! => flow!.parent
+                                -1 => flow!.secondaryToken
+                                0 => flow!.flags
+                                expanded! -> push(flow!)
+
+                                pipeline => destination!
+                                9 => destination!.kind
+                                pipeline.secondaryToken => destination!.payloadToken
+                                -1 => destination!.secondaryToken
+                                -1 => destination!.tertiaryToken
+                                pipeline.secondaryToken + 1 => destinationToken!
+                                destinationToken! < tokenEnd and tokens[destinationToken!].kind == grammar.tokenIdBang()
+                                    -> if { destinationToken! + 1 => destinationToken! }
+                                destinationToken! < tokenEnd -> if {
+                                    tokens[destinationToken!].kind == grammar.tokenIdLeftBracket()
+                                        -> if { 53 => destination!.kind }
+                                    tokens[destinationToken!].kind == grammar.tokenIdDot()
+                                        -> if {
+                                            54 => destination!.kind
+                                            destinationToken! + 1 => destination!.secondaryToken
+                                            1 => destination!.flags
+                                        }
+                                }
+                                0 => flowChildIndex!
+                                flowChildIndex! < flowIndex -> while {
+                                    expanded![flowChildIndex!] => flowChild!
+                                    flowChild!.parent == pipelineIndex! and flowChild!.start < tokens[pipeline.secondaryToken].span.start
+                                        -> if {
+                                            flowIndex => flowChild!.parent
+                                            flowChild! => expanded![flowChildIndex!]
+                                        }
+                                    flowChildIndex! + 1 => flowChildIndex!
+                                }
+                                destination! => stage!
+                            }
                         stage! => expanded![stageNodeIndex]
                         stageFixIndex! + 1 => stageFixIndex!
                     }
@@ -281,7 +341,8 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 71 product expression, 72 product element, 73 sequential branch target,
 # 74 parallel branch target, 75 branch arm, 76 tap target, 77 junction target,
 # 78 partition target, 79 partition predicate arm, 80 partition else arm,
-# 81 stream join policy target, 82 postfix result propagation.
+# 81 stream join policy target, 82 postfix result propagation,
+# 83 boolean literal expression, 84 compile-time each expression.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
 # 128 native ABI declaration, 512 COM declaration, 32768 status/out native
 # Result declaration. Struct flag 256 marks an explicit `abi struct`, and 65536
@@ -326,6 +387,7 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdStringExpression() -> if { 13 => kind! }
     rule == grammar.ruleIdCharacterExpression() -> if { 14 => kind! }
     rule == grammar.ruleIdNumberExpression() -> if { 14 => kind! }
+    rule == grammar.ruleIdBoolExpression() -> if { 83 => kind! }
     rule == grammar.ruleIdNameExpression() -> if { 15 => kind! }
     rule == grammar.ruleIdPath() -> if { 16 => kind! }
     rule == grammar.ruleIdFunctionSignature() -> if { 17 => kind! }
@@ -410,20 +472,35 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdPartitionElseArm() -> if { 80 => kind! }
     rule == grammar.ruleIdStreamJoinFlowTarget() -> if { 81 => kind! }
     rule == grammar.ruleIdCompileTimeEachExpression()
-        -> if { 83 => kind! }
+        -> if { 84 => kind! }
     rule == grammar.ruleIdProductType() -> if { 12 => kind! }
     rule == grammar.ruleIdProductTypeField() -> if { 12 => kind! }
     kind! => selected
     selected
 }
 
+previousSignificant tokens: [syntax.SyntaxToken; ~], before: Int, minimum: Int -> Int {
+    before - 1 => index!
+    index! >= minimum
+        and (tokens[index!].kind == grammar.triviaIdWhitespace()
+        or tokens[index!].kind == grammar.triviaIdComment()
+        or tokens[index!].kind == grammar.tokenIdNewLine())
+        -> while { index! - 1 => index! }
+    index!
+}
+
 lowerFrom request: LowerRequest -> [AstNode; ~] {
     request.source => source
+    source -> lexer.lex => tokens
+    parser.ParseRequest { source: source, startRule: request.startRule } -> parser.parsePreparedRuleEvents(tokens) => events
+    source -> lowerPreparedRule(request.startRule, tokens, events)
+}
+
+public lowerPreparedRule source: Text, startRule: Int, tokens: ref [syntax.SyntaxToken; ~], events: ref [parser.ParseEvent; ~] -> [AstNode; ~] {
     cst.BuildRequest {
         source: source
-        startRule: request.startRule
-    } -> cst.buildRule => green
-    source -> lexer.lex => tokens
+        startRule: startRule
+    } -> cst.buildPreparedRule(tokens, events) => green
     [AstNode; ~] => ast!
     [Int; ~] => cstToAst!
     [Int; ~] => postfixFixupParents!
@@ -433,13 +510,13 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     [Int; ~] => postfixOuterParents!
     [Int; ~] => postfixOuterNodes!
     # Comparison grammar envelopes also surround generic type syntax. Mark
-    # angles owned by exact TypeAnnotation spans, plus the outer balanced clause
-    # of a TypeApplicationExpression. Its call arguments share that expression
-    # span but retain their own comparison operators.
-    [Int; ~] => typeSyntaxAngleToken!
+    # angle and array bracket delimiters owned by exact TypeAnnotation spans, plus the outer balanced clause
+    # of a TypeApplicationExpression or FlowGenericArgument. Call arguments can
+    # share the enclosing expression span but retain their own comparisons.
+    [Int; ~] => typeSyntaxDelimiterToken!
     0 => tokenIndex!
     tokenIndex! < (tokens -> len) -> while {
-        typeSyntaxAngleToken! -> push(0)
+        typeSyntaxDelimiterToken! -> push(0)
         tokenIndex! + 1 => tokenIndex!
     }
     0 => typeAnnotationIndex!
@@ -453,7 +530,9 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 typeTokenIndex! < typeTokenEnd -> while {
                     tokens[typeTokenIndex!].kind == grammar.tokenIdLess()
                         or tokens[typeTokenIndex!].kind == grammar.tokenIdGreater()
-                        -> if { 1 => typeSyntaxAngleToken![typeTokenIndex!] }
+                        or tokens[typeTokenIndex!].kind == grammar.tokenIdLeftBracket()
+                        or tokens[typeTokenIndex!].kind == grammar.tokenIdRightBracket()
+                        -> if { 1 => typeSyntaxDelimiterToken![typeTokenIndex!] }
                     typeTokenIndex! + 1 => typeTokenIndex!
                 }
             }
@@ -462,7 +541,9 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     0 => typeApplicationIndex!
     typeApplicationIndex! < (green -> len) -> while {
         green[typeApplicationIndex!] => typeApplicationNode
-        typeApplicationNode.ruleId == grammar.ruleIdTypeApplicationExpression()
+        (typeApplicationNode.ruleId == grammar.ruleIdTypeApplicationExpression()
+            or typeApplicationNode.ruleId == grammar.ruleIdStandardGenericEnumFlowTarget()
+            or typeApplicationNode.ruleId == grammar.ruleIdFlowGenericArgument())
             and typeApplicationNode.firstToken >= 0
             -> if {
                 typeApplicationNode.firstToken => typeTokenIndex!
@@ -474,12 +555,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                         -> if {
                             typeAngleDepth! + 1 => typeAngleDepth!
                             true => foundTypeAngles!
-                            1 => typeSyntaxAngleToken![typeTokenIndex!]
+                            1 => typeSyntaxDelimiterToken![typeTokenIndex!]
                         }
                     foundTypeAngles!
                         and tokens[typeTokenIndex!].kind == grammar.tokenIdGreater()
                         -> if {
-                            1 => typeSyntaxAngleToken![typeTokenIndex!]
+                            1 => typeSyntaxDelimiterToken![typeTokenIndex!]
                             typeAngleDepth! - 1 => typeAngleDepth!
                             typeAngleDepth! == 0 -> if { typeTokenEnd => typeTokenIndex! }
                         }
@@ -495,9 +576,25 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     cstIndex! < greenCount -> while {
         green[cstIndex!] => node
         node.ruleId -> classifyRule => astKind!
+        # Expression arms have the same body ownership as block arms. Keep
+        # the arrow's location and wrap only this alternative, since a block
+        # arm already owns its BlockBody region.
+        node.ruleId == grammar.ruleIdWhenArmBody() and node.tokenCount > 0
+            and tokens[node.firstToken].kind == grammar.tokenIdFatArrow()
+            -> if { 43 => astKind! }
         node.ruleId == grammar.ruleIdTypeName() and node.parent >= 0 and green[node.parent].ruleId == grammar.ruleIdBlockFunctionBody()
             -> if {
                 12 => astKind!
+            }
+        # Value-flow comparison owns only the tokens after its prefix child.
+        # The green tree is preorder; verify that first child's rule and owner.
+        -1 => valueFlowPrefixEnd!
+        node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and cstIndex! + 1 < greenCount
+            -> if {
+                green[cstIndex! + 1] => flowPrefix
+                flowPrefix.parent == cstIndex! and flowPrefix.ruleId == grammar.ruleIdValueFlowExpression()
+                    and flowPrefix.firstToken >= 0
+                    -> if { flowPrefix.firstToken + flowPrefix.tokenCount => valueFlowPrefixEnd! }
             }
         -1 => operatorKind!
         -1 => operatorPayloadToken!
@@ -541,18 +638,20 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     candidateOperator => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual())
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression()
+                and valueFlowPrefixEnd! >= 0 and operatorTokenIndex! >= valueFlowPrefixEnd! and (candidateOperator == grammar.tokenIdEqualEqual() or candidateOperator == grammar.tokenIdBangEqual())
                 -> if {
                     18 => astKind!
                     candidateOperator => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 19 and typeSyntaxAngleToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and astKind! == 19 and typeSyntaxDelimiterToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
                     candidateOperator => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
-            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression() and typeSyntaxAngleToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
+            operatorPayloadToken! < 0 and operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdValueFlowComparisonExpression()
+                and valueFlowPrefixEnd! >= 0 and operatorTokenIndex! >= valueFlowPrefixEnd! and typeSyntaxDelimiterToken![operatorTokenIndex!] == 0 and (candidateOperator == grammar.tokenIdLessEqual() or candidateOperator == grammar.tokenIdGreaterEqual() or candidateOperator == grammar.tokenIdLess() or candidateOperator == grammar.tokenIdGreater())
                 -> if {
                     19 => astKind!
                     candidateOperator => operatorKind!
@@ -623,6 +722,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     operatorTokenIndex! => operatorPayloadToken!
                 }
             operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression() and candidateOperator == grammar.tokenIdLeftBracket() and operatorTokenIndex! > node.firstToken
+                and typeSyntaxDelimiterToken![operatorTokenIndex!] == 0
                 -> if {
                     operatorTokenIndex! => postfixBoundaryToken!
                     operatorTokenIndex! - 1 => postfixPreviousToken!
@@ -701,7 +801,8 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                             -26 => operatorKind!
                             operatorTokenIndex! => operatorPayloadToken!
                         }
-                    astKind! == 22 and not operatorFollowsDot! and longKeywordByte0 == 98 and longKeywordByte1 == 111 and longKeywordByte2 == 120
+                    astKind! == 22 and operatorTokenIndex! == node.firstToken
+                        and not operatorFollowsDot! and longKeywordByte0 == 98 and longKeywordByte1 == 111 and longKeywordByte2 == 120
                         -> if {
                             23 => astKind!
                             -27 => operatorKind!
@@ -787,8 +888,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         cstToAst! -> push(missingNode)
         astKind! >= 0 -> if {
             -1 => astParent!
+            false => expressionStatementAncestor!
             node.parent => parentCst!
             parentCst! >= 0 and astParent! < 0 -> while {
+                green[parentCst!].ruleId == grammar.ruleIdExpressionStatement()
+                    or green[parentCst!].ruleId == grammar.ruleIdControlFlowExpressionStatement()
+                    -> if { true => expressionStatementAncestor! }
                 cstToAst![parentCst!] => mappedParent
                 mappedParent >= 0 -> if {
                     mappedParent => astParent!
@@ -818,6 +923,78 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             operatorPayloadToken! >= 0 -> if {
                 operatorPayloadToken! => payloadToken!
             }
+            astKind! == 47 -> if {
+                -1 => payloadToken!
+                astFirstToken! + astTokenCount! => returnEnd!
+                returnEnd! > astFirstToken! and returnEnd! <= (tokens -> len)
+                    and (tokens[returnEnd! - 1].kind == grammar.triviaIdWhitespace()
+                    or tokens[returnEnd! - 1].kind == grammar.triviaIdComment()
+                    or tokens[returnEnd! - 1].kind == grammar.tokenIdNewLine()
+                    or tokens[returnEnd! - 1].kind == grammar.tokenIdSemicolon())
+                    -> while { returnEnd! - 1 => returnEnd! }
+                returnEnd! > astFirstToken! and returnEnd! <= (tokens -> len)
+                    -> if {
+                        returnEnd! - 1 => keyword
+                        tokens[keyword] => returnKeyword
+                        returnKeyword.kind == grammar.tokenIdIdentifier()
+                            and (source -> slice(returnKeyword.span.start, returnKeyword.span.length)) == "return"
+                            -> if {
+                                keyword == astFirstToken! => validReturn!
+                                keyword - 1 => arrow!
+                                arrow! >= astFirstToken!
+                                    and (tokens[arrow!].kind == grammar.triviaIdWhitespace() or tokens[arrow!].kind == grammar.triviaIdComment())
+                                    -> while { arrow! - 1 => arrow! }
+                                arrow! >= astFirstToken! and tokens[arrow!].kind == grammar.tokenIdArrow()
+                                    -> if { true => validReturn! }
+                                validReturn! -> if { keyword => payloadToken! }
+                            }
+                    }
+            }
+            0 => astFlags!
+            expressionStatementAncestor! or node.ruleId == grammar.ruleIdControlFlowExpressionStatement()
+                -> if { 524288 => astFlags! }
+            # ImplDeclaration spells an array owner's outer brackets inline.
+            # Keep that complete storage type above its element annotation,
+            # exactly as an ordinary nested array TypeAnnotation is retained.
+            node.ruleId == grammar.ruleIdTypeAnnotation() and node.parent >= 0
+                and green[node.parent].ruleId == grammar.ruleIdImplDeclaration()
+                -> if {
+                    astFirstToken! - 1 => ownerPrefix!
+                    ownerPrefix! >= 0 and (tokens[ownerPrefix!].kind == grammar.triviaIdWhitespace()
+                        or tokens[ownerPrefix!].kind == grammar.triviaIdComment())
+                        -> while { ownerPrefix! - 1 => ownerPrefix! }
+                    ownerPrefix! >= 0 and tokens[ownerPrefix!].kind == grammar.tokenIdLeftBracket()
+                        -> if {
+                            1 => ownerDepth!
+                            ownerPrefix! + 1 => ownerEnd!
+                            ownerDepth! > 0 and ownerEnd! < (tokens -> len)
+                                -> while {
+                                    tokens[ownerEnd!].kind == grammar.tokenIdLeftBracket()
+                                        -> if { ownerDepth! + 1 => ownerDepth! }
+                                    tokens[ownerEnd!].kind == grammar.tokenIdRightBracket()
+                                        -> if { ownerDepth! - 1 => ownerDepth! }
+                                    ownerEnd! + 1 => ownerEnd!
+                                }
+                            tokens[ownerPrefix!].span.start => ownerStart
+                            tokens[ownerEnd! - 1].span => ownerLast
+                            ast! -> len => ownerTypeAst
+                            ast! -> push(AstNode {
+                                kind: 12
+                                parent: astParent!
+                                cstRuleId: grammar.ruleIdTypeAnnotation()
+                                operatorKind: -1
+                                payloadToken: payloadToken!
+                                secondaryToken: -1
+                                tertiaryToken: -1
+                                flags: 0
+                                firstToken: ownerPrefix!
+                                tokenCount: ownerEnd! - ownerPrefix!
+                                start: ownerStart
+                                length: ownerLast.start + ownerLast.length - ownerStart
+                            })
+                            ownerTypeAst => astParent!
+                        }
+                }
             AstNode {
                 kind: astKind!
                 parent: astParent!
@@ -826,7 +1003,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 payloadToken: payloadToken!
                 secondaryToken: -1
                 tertiaryToken: -1
-                flags: 0
+                flags: astFlags!
                 firstToken: astFirstToken!
                 tokenCount: astTokenCount!
                 start: astStart!
@@ -1039,6 +1216,29 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     flowAstCount! < (ast! -> len) -> while {
         flowAstCount! + 1 => flowAstCount!
     }
+    # A logical source can contain its own value-flow arrows. Freeze its
+    # direct prefix boundary before any enclosing flow chain is rewritten.
+    [Int; ~] => flowSourceEndByAst!
+    0 => flowSourceSeed!
+    flowSourceSeed! < flowAstCount! -> while {
+        flowSourceEndByAst! -> push(ast![flowSourceSeed!].firstToken)
+        flowSourceSeed! + 1 => flowSourceSeed!
+    }
+    0 => flowSourceChild!
+    flowSourceChild! < flowAstCount! -> while {
+        ast![flowSourceChild!] => sourceChild
+        sourceChild.parent >= 0 and sourceChild.parent < flowAstCount!
+            -> if {
+                ast![sourceChild.parent] => sourceFlow
+                sourceFlow.kind == 10 and sourceChild.firstToken == sourceFlow.firstToken
+                    -> if {
+                        sourceChild.firstToken + sourceChild.tokenCount => sourceEnd
+                        sourceEnd > flowSourceEndByAst![sourceChild.parent]
+                            -> if { sourceEnd => flowSourceEndByAst![sourceChild.parent] }
+                    }
+            }
+        flowSourceChild! + 1 => flowSourceChild!
+    }
     0 => appendedFlowCount!
     0 => flowIndex!
     flowIndex! < flowAstCount! -> while {
@@ -1051,6 +1251,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             flowTokenIndex! < flowTokenEnd -> while {
                 tokens[flowTokenIndex!].kind => flowTokenKind
                 flowGroupDepth! == 0 and flowTokenKind == grammar.tokenIdArrow()
+                    and flowTokenIndex! >= flowSourceEndByAst![flowIndex!]
                     -> if {
                         flowArrows! -> push(flowTokenIndex!)
                     }
@@ -1128,9 +1329,40 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     # known. Path children provide qualified names; direct declarations scan
     # only their header token range.
     ast! -> len => astCount
+    # Dictionary and composite types own their braces inside a signature.
+    # Index those tokens once so header scans stop only at the function body.
+    [Bool; ~] => typeOpeningBraceByToken!
+    tokens -> each token { typeOpeningBraceByToken! -> push(false) }
+    ast! -> each signatureType {
+        signatureType.kind == 12 -> if {
+            signatureType.firstToken => signatureTypeToken!
+            signatureTypeToken! < signatureType.firstToken + signatureType.tokenCount
+                -> while {
+                    tokens[signatureTypeToken!].kind == grammar.tokenIdLeftBrace()
+                        -> if { true => typeOpeningBraceByToken![signatureTypeToken!] }
+                    signatureTypeToken! + 1 => signatureTypeToken!
+                }
+        }
+    }
     0 => declarationIndex!
     declarationIndex! < astCount -> while {
         ast![declarationIndex!] => declaration!
+        declaration!.firstToken => declarationSignatureHeaderEnd!
+        # A signature type retains its declaration punctuation. Role inputs
+        # follow a colon; a callback result follows an arrow, independently of
+        # the number and arena order of preceding role types.
+        declaration!.kind == 12 -> if {
+            declaration!.firstToken - 1 => typePrefixToken!
+            typePrefixToken! >= 0
+                and (tokens[typePrefixToken!].kind == grammar.triviaIdWhitespace()
+                or tokens[typePrefixToken!].kind == grammar.triviaIdComment())
+                -> while { typePrefixToken! - 1 => typePrefixToken! }
+            typePrefixToken! >= 0 -> if {
+                tokens[typePrefixToken!].kind => typePunctuation
+                typePunctuation == grammar.tokenIdColon() or typePunctuation == grammar.tokenIdArrow()
+                    -> if { typePunctuation => declaration!.operatorKind }
+            }
+        }
         declaration!.kind == 60 -> if {
             false => parameterNameFound!
             false => parameterAfterColon!
@@ -1369,9 +1601,15 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                         child.parent == declarationIndex! and child.kind == 16
                             -> if {
                                 child.payloadToken => declaration!.payloadToken
+                                child.firstToken + child.tokenCount => declarationSignatureHeaderEnd!
                                 true => pathPayloadFound!
                             }
                     }
+                    child.parent == declarationIndex! and child.kind == 32
+                        -> if {
+                            child.firstToken + child.tokenCount > declarationSignatureHeaderEnd!
+                                -> if { child.firstToken + child.tokenCount => declarationSignatureHeaderEnd! }
+                        }
                     childIndex! + 1 => childIndex!
                 }
             }
@@ -1466,6 +1704,8 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 }
                 -1 => signatureArrowToken!
                 declaration!.firstToken => signatureToken!
+                declaration!.cstRuleId == grammar.ruleIdFunctionDeclaration()
+                    -> if { declarationSignatureHeaderEnd! => signatureToken! }
                 declaration!.firstToken + declaration!.tokenCount => signatureEnd
                 false => afterColon!
                 true => firstParameterHeader!
@@ -1557,9 +1797,10 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                                                         }
                                                 }
                                             } else {
-                                                signatureToken! != declaration!.payloadToken -> if {
-                                                    signatureToken! => declaration!.secondaryToken
-                                                }
+                                                declaration!.kind != 31 and signatureToken! != declaration!.payloadToken
+                                                    -> if {
+                                                        signatureToken! => declaration!.secondaryToken
+                                                    }
                                             }
                                         }
                                     signatureToken! + 1 => signatureToken!
@@ -1659,6 +1900,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 blockHeaderToken! < blockHeaderEnd and not blockNameFound!
                     -> while {
                         tokens[blockHeaderToken!].kind == grammar.tokenIdLeftBrace()
+                            and not typeOpeningBraceByToken![blockHeaderToken!]
                             -> if {
                                 blockHeaderEnd => blockHeaderToken!
                             } else {
@@ -1837,29 +2079,32 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
         }
         declaration!.kind == 64 -> if {
-            declaration!.firstToken => foldToken!
-            declaration!.firstToken + declaration!.tokenCount => foldEnd
-            -1 => foldCommaToken!
-            foldToken! < foldEnd -> while {
-                tokens[foldToken!].kind == grammar.tokenIdComma()
-                    -> if { foldToken! => foldCommaToken! }
-                foldToken! + 1 => foldToken!
+            # Explicit roles are the final three significant header tokens
+            # before the brace owned by this fold's direct BlockBody.
+            -1 => foldBodyToken!
+            0 => foldChild!
+            foldChild! < astCount -> while {
+                ast![foldChild!] => child
+                child.parent == declarationIndex! and child.kind == 43
+                    -> if { child.firstToken => foldBodyToken! }
+                foldChild! + 1 => foldChild!
             }
-            foldCommaToken! >= 0 -> if {
-                foldCommaToken! - 1 => foldAccumulatorToken!
-                foldAccumulatorToken! >= declaration!.firstToken and (tokens[foldAccumulatorToken!].kind == grammar.triviaIdWhitespace() or tokens[foldAccumulatorToken!].kind == grammar.triviaIdComment())
-                    -> while {
-                        foldAccumulatorToken! - 1 => foldAccumulatorToken!
+            foldBodyToken! >= 0 -> if {
+                previousSignificant(tokens, foldBodyToken!, declaration!.firstToken) => bodyBrace
+                bodyBrace >= declaration!.firstToken and tokens[bodyBrace].kind == grammar.tokenIdLeftBrace()
+                    -> if {
+                        previousSignificant(tokens, bodyBrace, declaration!.firstToken) => item
+                        previousSignificant(tokens, item, declaration!.firstToken) => comma
+                        previousSignificant(tokens, comma, declaration!.firstToken) => accumulator
+                        accumulator >= declaration!.firstToken
+                            and tokens[accumulator].kind == grammar.tokenIdIdentifier()
+                            and tokens[comma].kind == grammar.tokenIdComma()
+                            and tokens[item].kind == grammar.tokenIdIdentifier()
+                            -> if {
+                                accumulator => declaration!.secondaryToken
+                                item => declaration!.tertiaryToken
+                            }
                     }
-                tokens[foldAccumulatorToken!].kind == grammar.tokenIdIdentifier()
-                    -> if { foldAccumulatorToken! => declaration!.secondaryToken }
-                foldCommaToken! + 1 => foldItemToken!
-                foldItemToken! < foldEnd and (tokens[foldItemToken!].kind == grammar.triviaIdWhitespace() or tokens[foldItemToken!].kind == grammar.triviaIdComment())
-                    -> while {
-                        foldItemToken! + 1 => foldItemToken!
-                    }
-                foldItemToken! < foldEnd and tokens[foldItemToken!].kind == grammar.tokenIdIdentifier()
-                    -> if { foldItemToken! => declaration!.tertiaryToken }
             }
         }
         declaration!.kind == 53 -> if {

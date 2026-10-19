@@ -1,0 +1,82 @@
+import sys.process as process
+
+count values: [Int; ~], index: ref Int -> Int {
+    0 => result!
+    result! < values[index] -> while {
+        result! + 1 => result!
+    }
+    result!
+}
+
+countPrimary index: ref Int, values: [Int; ~] -> Int {
+    0 => result!
+    result! < values[index] -> while { result! + 1 => result! }
+    result!
+}
+
+countBytes value: Text, index: ref UIntSize -> Int {
+    0 => result!
+    result! < Int(value -> byte(index)) -> while { result! + 1 => result! }
+    result!
+}
+
+countValue values: [Int; ~], index: Int -> Int {
+    0 => result!
+    result! < values[index] -> while { result! + 1 => result! }
+    result!
+}
+
+fetch values: [Int; ~], index: ref Int -> Int => values[index]
+
+fetchPrimary index: ref Int, values: [Int; ~] -> Int => values[index]
+
+fetchBody values: [Int; ~], index: ref Int -> Int {
+    0 => cursor!
+    0 => result!
+    cursor! < 1 -> while {
+        values[index] => result!
+        cursor! + 1 => cursor!
+    }
+    result!
+}
+
+fetchConditional values: [Int; ~], index: ref Int -> Int {
+    true -> if { values[index] -> return }
+    0
+}
+
+argumentPrimary index: ref UIntSize, arguments: Arguments -> Bool {
+    (arguments[index] -> len) > 0
+}
+
+argumentConditional arguments: Arguments, index: ref UIntSize -> Bool {
+    true -> if { ((arguments[index] -> len) > 0) -> return }
+    false
+}
+
+argumentWhile arguments: Arguments, index: ref UIntSize -> Int {
+    0 => result!
+    result! < 1 and (arguments[index] -> len) > 0
+        -> while {
+            result! + 1 => result!
+        }
+    result!
+}
+
+main {
+    [2; ~] => values
+    0 => index
+    values -> count(index) -> println
+    index -> countPrimary(values) -> println
+    UIntSize(0) => byteIndex
+    "A" -> countBytes(byteIndex) -> println
+    values -> countValue(index) -> println
+    values -> fetch(index) -> println
+    index -> fetchPrimary(values) -> println
+    values -> fetchBody(index) -> println
+    values -> fetchConditional(index) -> println
+    process.arguments() => arguments
+    byteIndex -> argumentPrimary(arguments) -> println
+    arguments -> argumentConditional(byteIndex) -> println
+    arguments -> argumentWhile(byteIndex) -> println
+}

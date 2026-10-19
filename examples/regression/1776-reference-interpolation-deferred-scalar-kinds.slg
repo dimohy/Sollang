@@ -1,0 +1,30 @@
+# Deferred Text construction reads signed scalar and Text references before
+# formatting, both into an Arena and as a transient call argument.
+struct Values {
+    narrow: Int
+    wide: Long
+    caption: Text
+}
+
+narrow values: ref Values -> ref Int { values.narrow }
+wide values: ref Values -> ref Long { values.wide }
+caption values: ref Values -> ref Text { values.caption }
+
+show prefix: Text, text: Text -> Unit uses Console {
+    prefix -> print
+    text -> println
+}
+
+main {
+    Values { narrow: -7, wide: -7, caption: "ok" } => values
+    values -> narrow => borrowedNarrow
+    values -> wide => borrowedWide
+    values -> caption => borrowedCaption
+    Arena(0) => storage!
+
+    "arena:int=$(borrowedNarrow),long=$borrowedWide,text=$(borrowedCaption)"
+        -> materialize(storage!) => materialized
+    materialized -> println
+
+    "call:" -> show("int=$borrowedNarrow,long=$(borrowedWide),text=$borrowedCaption")
+}

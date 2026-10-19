@@ -1,0 +1,13 @@
+struct Product { nodes: [Int; ~], retained: [Int; ~] }
+struct Carrier { nodes: [Int; ~], retained: [Int; ~] }
+
+adapt result: move Result<Product, Product> -> Result<Carrier, Int> => result -> when {
+    Ok(success) { Result<Carrier, Int>.Ok(Carrier { nodes: success.nodes, retained: success.retained }) }
+    Err(failure) { Result<Carrier, Int>.Ok(Carrier { nodes: failure.nodes, retained: failure.retained }) }
+}
+consume result: move Result<Carrier, Int> -> Int => result -> when { Ok(carrier) => carrier.nodes[0] + carrier.retained[0] Err(error) => error }
+
+main {
+    Result<Product, Product>.Ok(Product { nodes: [1; ~], retained: [2; ~] }) -> adapt -> consume -> println
+    Result<Product, Product>.Err(Product { nodes: [3; ~], retained: [4; ~] }) -> adapt -> consume -> println
+}

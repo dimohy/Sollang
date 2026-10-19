@@ -173,7 +173,7 @@ if ($milestones.Count -ne 6 -or @($milestones.id | Sort-Object -Unique).Count -n
     throw "socket completion reactor must track six distinct implementation milestones"
 }
 $implementedMilestones = @($milestones | Where-Object status -In @('implemented', 'verified')).id
-if (@($implementedMilestones) -join ',' -cne 'configuration,slot') {
+if (@($implementedMilestones) -join ',' -cne 'configuration,slot,submission,completion,cancellation') {
     throw "socket completion reactor implemented milestone set is stale"
 }
 foreach ($forbidden in @(

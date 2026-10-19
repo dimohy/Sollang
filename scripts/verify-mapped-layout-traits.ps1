@@ -16,7 +16,7 @@ $layoutSource = [IO.File]::ReadAllText($layoutPath)
 function Select-Declaration([string]$Source, [string]$Name) {
     # Canonical SLG puts each declaration's closing brace in column zero.
     # Select the real body; no algorithm is duplicated in the probe.
-    $matches = [regex]::Matches($Source, '(?ms)^public (?:struct )?' + [regex]::Escape($Name) + '\b.*?^}')
+    $matches = [regex]::Matches($Source, '(?ms)^(?:public )?(?:struct )?' + [regex]::Escape($Name) + '\b.*?^}')
     if ($matches.Count -ne 1) { throw "Expected one production declaration: $Name" }
     return $matches[0].Value.Replace('typeIds.SemanticType', 'SemanticType').Replace('typeIds.NominalField', 'NominalField')
 }
@@ -26,6 +26,9 @@ $declarations = @(
     Select-Declaration $typeSource 'PayloadEdge'
     Select-Declaration $layoutSource 'TypeLayoutRequest'
     Select-Declaration $layoutSource 'TypeLayouts'
+    Select-Declaration $layoutSource 'BoundedDictionaryLayout'
+    Select-Declaration $layoutSource 'canonicalDictionaryFieldAlign'
+    Select-Declaration $layoutSource 'boundedDictionaryLayout'
     Select-Declaration $typeSource 'classifyWithResources'
     Select-Declaration $layoutSource 'layoutsFor'
 )

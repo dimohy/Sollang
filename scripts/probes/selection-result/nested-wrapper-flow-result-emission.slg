@@ -1,0 +1,33 @@
+import sollang.compiler.llvm.text as compiler
+
+main {
+    """
+    extract first: Int, nested: Option<Int> -> Int { first }
+
+    pick flag: Int -> Result<Option<Int>, Text> {
+        flag -> when {
+            == 1 { Result<Option<Int>, Text>.Ok(Option<Int>.None) }
+            else {
+                7 -> Option<Int>.Some -> Result<Option<Int>, Text>.Ok
+            }
+        }
+    }
+
+    main {
+        pick(0) -> when {
+            Ok(option) {
+                option -> when {
+                    Some(value) { "wrapped=$value" -> println }
+                    None { "wrapped=none" -> println }
+                }
+            }
+            Err(error) { "wrapped-error=$error" -> println }
+        }
+        3 -> extract(7 -> Option<Int>.Some) => outer
+        "outer=$outer" -> println
+    }
+    """ => input
+    [input,; ~] => sources
+    sources -> compiler.emitChecked => diagnosticCount
+    diagnosticCount != 0 -> if { "selection-emission-rejected" -> println }
+}

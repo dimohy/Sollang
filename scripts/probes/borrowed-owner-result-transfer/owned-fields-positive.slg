@@ -1,0 +1,40 @@
+enum Failure {
+    Incomplete
+}
+
+struct Source {
+    bytes: [UInt8; ~]
+    label: Text
+    complete: Bool
+}
+
+struct Target {
+    bytes: [UInt8; ~]
+    label: Text
+}
+
+impl Source {
+    finish: move self -> Result<Target, Failure> {
+        self.complete -> unless { Result<Target, Failure>.Err(Failure.Incomplete) -> return }
+        Result<Target, Failure>.Ok(Target {
+            bytes: self.bytes
+            label: self.label
+        })
+    }
+}
+
+convert: -> Result<Target, Failure> {
+    Source {
+        bytes: [97; ~]
+        label: "static"
+        complete: true
+    } => source
+    source -> finish
+}
+
+main {
+    convert() -> when {
+        Err(_) => "error" -> println
+        Ok(target) => "count=$(target.bytes -> len),label=$(target.label)" -> println
+    }
+}

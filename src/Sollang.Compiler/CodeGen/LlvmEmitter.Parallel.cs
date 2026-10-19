@@ -24,6 +24,7 @@ internal sealed partial class LlvmEmitter
                 _currentFunction = function;
                 _currentFunctions = FunctionScope(function);
                 CollectParallelCallbacks(function.BlockBody);
+                if (function.Body is not null) CollectParallelCallbacks(function.Body);
             }
         }
         finally
@@ -47,10 +48,78 @@ internal sealed partial class LlvmEmitter
             }
             if (statement is not BlockFunctionCallStatement block)
             {
+                switch (statement)
+                {
+                    case BindingStatement binding: CollectParallelCallbacks(binding.Value); break;
+                    case ExpressionStatement expression: CollectParallelCallbacks(expression.Expression); break;
+                    case ReturnStatement { Value: { } value }: CollectParallelCallbacks(value); break;
+                    case IndexAssignmentStatement assignment:
+                        CollectParallelCallbacks(assignment.Index);
+                        CollectParallelCallbacks(assignment.Value);
+                        break;
+                    case FieldAssignmentStatement assignment: CollectParallelCallbacks(assignment.Value); break;
+                    case GuardLoopControlStatement guard: CollectParallelCallbacks(guard.Condition); break;
+                }
                 continue;
             }
 
             CollectParallelCallback(block);
+        }
+    }
+
+    private void CollectParallelCallbacks(BlockBody? block)
+    {
+        if (block is null) return;
+        CollectParallelCallbacks(block.Statements);
+        if (block.Value is not null) CollectParallelCallbacks(block.Value);
+    }
+
+    private void CollectParallelCallbacks(Expression expression)
+    {
+        switch (expression)
+        {
+            case IfExpression conditional:
+                CollectParallelCallbacks(conditional.Condition);
+                CollectParallelCallbacks(conditional.Then);
+                CollectParallelCallbacks(conditional.Else);
+                break;
+            case WhenExpression selection:
+                if (selection.Subject is not null) CollectParallelCallbacks(selection.Subject);
+                foreach (var arm in selection.Arms)
+                {
+                    CollectParallelCallbacks(arm.Condition);
+                    CollectParallelCallbacks(arm.Body);
+                }
+                CollectParallelCallbacks(selection.Else);
+                break;
+            case EnumMatchExpression selection:
+                CollectParallelCallbacks(selection.Subject);
+                foreach (var arm in selection.Arms)
+                {
+                    if (arm.Condition is not null) CollectParallelCallbacks(arm.Condition);
+                    CollectParallelCallbacks(arm.Body);
+                }
+                CollectParallelCallbacks(selection.Else);
+                break;
+            case FoldExpression fold:
+                CollectParallelCallbacks(fold.Source);
+                CollectParallelCallbacks(fold.Initial);
+                CollectParallelCallbacks(fold.Body);
+                break;
+            default:
+                IEnumerable<Expression> children = expression switch
+                {
+                    FlowExpression flow => new[] { flow.Source }.Concat(flow.Targets.SelectMany(target => target.Arguments)),
+                    TapExpression tap => new[] { tap.Source }.Concat(tap.Targets.SelectMany(target => target.Arguments)),
+                    BranchExpression branch => new[] { branch.Source }.Concat(branch.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments)),
+                    StreamJoinExpression join => [join.Source],
+                    CallExpression call => call.Arguments,
+                    FieldAccessExpression field => [field.Source],
+                    CompileTimeEachExpression each => new[] { each.Source, each.Selector, each.DictionaryValueSelector }.OfType<Expression>(),
+                    _ => ExpressionChildren(expression)
+                };
+                foreach (var child in children) CollectParallelCallbacks(child);
+                break;
         }
     }
 
@@ -150,12 +219,11 @@ internal sealed partial class LlvmEmitter
             throw new SollangException("parallel callback has no stable call-site identity");
         }
         var callbackName = "sollang_parallel_callback_"
-            + LlvmCodegenUnit.StableIdentity(callSiteIdentity)
-                .ToString(CultureInfo.InvariantCulture);
+            + LlvmCodegenUnit.SymbolIdentity(callSiteIdentity);
         if (_parallelCallbacks.Values.Any(callback => callback.Name == callbackName))
         {
             throw new SollangException(
-                $"parallel callback identity collision for '{callSiteIdentity}'");
+                $"duplicate parallel callback identity for '{callSiteIdentity}'");
         }
         var captures = CapturedBindingsForFunction(target);
         var additionalArguments = additionalArgumentExpressions

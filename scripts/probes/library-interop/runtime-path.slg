@@ -1,0 +1,43 @@
+namespace sollang.compiler.semantic.library_imports
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sollang.compiler.library_paths as libraryPaths
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    arguments[1] => sourcePath
+    sourcePath -> file.mapText => owner
+    owner -> sourceDecoding.utf8Text => source
+    source -> lexer.lex => tokens
+    tokens -> each token {
+        token.span.length >= 2
+            and (source -> byte(token.span.start)) == 34
+            -> if {
+                sourcePath -> libraryPaths.manifestPath(source, token, "windows-x64", path.nativeStyle()) => resolved
+                "manifest = $(resolved.status)" -> println
+                resolved.status == 0 -> if {
+                    resolved.value -> pathText -> interfaces.readSourcePath -> when {
+                        Err(code) { "read error = $code" -> println }
+                        Ok(metadata) {
+                            metadata -> interfaces.parseSourceForTarget("windows-x64") => document
+                            "document = $(document.status)" -> println
+                            document.strings -> file.borrowBytes => strings
+                            strings -> slice(UIntSize(0), strings -> len) => text
+                            "file = $(document.libraryFile.start),$(document.libraryFile.length)" -> println
+                            text -> slice(document.libraryFile.start, document.libraryFile.length) -> println
+                            resolved.value -> runtimeLibraryPath(text, document.libraryFile) -> when {
+                                Err(error) { "runtime error = $error" -> println }
+                                Ok(value) { value -> pathText -> println }
+                            }
+                        }
+                    }
+                }
+            }
+    }
+}

@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)]
-    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ArrayInherent", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "ExpressionBatch", "PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe")]
+    [ValidateSet("Stage2", "Stage3", "Stage2Linux", "Stage3Linux", "BrowserStage2", "Incremental", "ArrayInherent", "C341Focused", "C341FinalSelfhost", "C394FinalCandidate", "C437CurrentSource", "C456Focused", "C457Focused", "ExpressionBatch", "PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "ManagedHost", "Probe")]
     [string]$Verification,
     [ValidateSet("Slg", "Stage2Bridge", "ManagedRecovery")]
     [string]$SeedMode = "Slg",
@@ -12,7 +12,7 @@ param(
     [string]$LogPath = "",
     [string]$CompletionRecordPath = "",
     [string]$CancellationRequestPath = "",
-    [ValidateRange(1, 600)]
+    [ValidateRange(1, 3600)]
     [int]$CancellationTimeoutSeconds = 120,
     [string]$BrowserCandidateCompiler = "",
     [string]$BrowserFocusedFixture = "",
@@ -27,6 +27,32 @@ param(
     [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
     [string]$PortableMemoryIoExpectedCompilerSha256 = "",
     [string]$PortableMemoryIoOutputDirectory = "",
+    [string]$PortableAsyncSocketCompiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$PortableAsyncSocketExpectedCompilerSha256 = "",
+    [string]$PortableAsyncSocketOutputDirectory = "",
+    [string]$SocketCompletionCompiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$SocketCompletionExpectedCompilerSha256 = "",
+    [string]$SocketCompletionOutputDirectory = "",
+    [string]$C437Compiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$C437ExpectedCompilerSha256 = "",
+    [string]$C437OutputDirectory = "",
+    [string]$C456OutputDirectory = "",
+    [string]$C457OutputDirectory = "",
+    [string]$AsyncObservabilityCompiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$AsyncObservabilityExpectedCompilerSha256 = "",
+    [string]$AsyncObservabilityOutputDirectory = "",
+    [string]$ZipDeflateCompiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$ZipDeflateExpectedCompilerSha256 = "",
+    [string]$ZipDeflateOutputDirectory = "",
+    [string]$QuicFocusedCompiler = "",
+    [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
+    [string]$QuicFocusedExpectedCompilerSha256 = "",
+    [string]$QuicFocusedOutputDirectory = "",
     [string]$TypedBlockMutableBorrowCompiler = "",
     [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
     [string]$TypedBlockMutableBorrowExpectedCompilerSha256 = "",
@@ -107,7 +133,7 @@ if (($Verification -eq "ExpressionBatch") -ne (-not [string]::IsNullOrWhiteSpace
 if ($Verification -ne "ExpressionBatch" -and
     ($ExpressionBatchFixture.Count -gt 0 -or $ExpressionBatchManifest -ne "" -or
         $ExpressionBatchManifestSha256 -ne "" -or
-        ($ValidateInputsOnly -and $Verification -notin @("PortableMemoryIo", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "C341FinalSelfhost", "C394FinalCandidate")))) {
+        ($ValidateInputsOnly -and $Verification -notin @("PortableMemoryIo", "PortableAsyncSocketCurrent", "SocketCompletionFocused", "C437CurrentSource", "AsyncObservabilityManagedMatrix", "ZipDeflateMethod8", "Quic1291And1297", "TypedBlockMutableBorrow", "BinaryChecksum", "GzipSelfhost", "AdditionalMoveOwnership", "GenericTypeContexts", "SelfhostDeferredTextStorage", "SelfhostC424NestedWholeOwner", "LinuxOwnershipStorage", "C341FinalSelfhost", "C394FinalCandidate")))) {
     throw "Expression batch selection and input validation require Verification ExpressionBatch"
 }
 $portableMemoryIoInputsPresent = -not [string]::IsNullOrWhiteSpace($PortableMemoryIoCompiler) -or
@@ -121,6 +147,76 @@ if ($Verification -eq "PortableMemoryIo" -and
         [string]::IsNullOrWhiteSpace($PortableMemoryIoExpectedCompilerSha256) -or
         [string]::IsNullOrWhiteSpace($PortableMemoryIoOutputDirectory))) {
     throw "PortableMemoryIo requires compiler, expected SHA-256, and output directory together"
+}
+$asyncObservabilityInputsPresent = -not [string]::IsNullOrWhiteSpace($AsyncObservabilityCompiler) -or
+    -not [string]::IsNullOrWhiteSpace($AsyncObservabilityExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($AsyncObservabilityOutputDirectory)
+if (($Verification -eq "AsyncObservabilityManagedMatrix") -ne $asyncObservabilityInputsPresent) {
+    throw "AsyncObservabilityManagedMatrix compiler, expected SHA-256, and output directory are required only for Verification AsyncObservabilityManagedMatrix"
+}
+if ($Verification -eq "AsyncObservabilityManagedMatrix" -and
+    ([string]::IsNullOrWhiteSpace($AsyncObservabilityCompiler) -or
+        [string]::IsNullOrWhiteSpace($AsyncObservabilityExpectedCompilerSha256) -or
+        [string]::IsNullOrWhiteSpace($AsyncObservabilityOutputDirectory))) {
+    throw "AsyncObservabilityManagedMatrix requires compiler, expected SHA-256, and output directory together"
+}
+$portableAsyncSocketInputsPresent = -not [string]::IsNullOrWhiteSpace($PortableAsyncSocketCompiler) -or
+    -not [string]::IsNullOrWhiteSpace($PortableAsyncSocketExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($PortableAsyncSocketOutputDirectory)
+if (($Verification -eq "PortableAsyncSocketCurrent") -ne $portableAsyncSocketInputsPresent) {
+    throw "PortableAsyncSocketCurrent compiler, expected SHA-256, and output directory are required only for Verification PortableAsyncSocketCurrent"
+}
+$socketCompletionInputsPresent = -not [string]::IsNullOrWhiteSpace($SocketCompletionCompiler) -or
+    -not [string]::IsNullOrWhiteSpace($SocketCompletionExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($SocketCompletionOutputDirectory)
+if (($Verification -eq "SocketCompletionFocused") -ne $socketCompletionInputsPresent) {
+    throw "SocketCompletionFocused compiler, expected SHA-256, and output directory are required only for Verification SocketCompletionFocused"
+}
+if ($Verification -eq "SocketCompletionFocused" -and
+    ([string]::IsNullOrWhiteSpace($SocketCompletionCompiler) -or
+        [string]::IsNullOrWhiteSpace($SocketCompletionExpectedCompilerSha256) -or
+        [string]::IsNullOrWhiteSpace($SocketCompletionOutputDirectory))) {
+    throw "SocketCompletionFocused requires compiler, expected SHA-256, and output directory together"
+}
+$c437InputsPresent = -not [string]::IsNullOrWhiteSpace($C437Compiler) -or
+    -not [string]::IsNullOrWhiteSpace($C437ExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($C437OutputDirectory)
+if (($Verification -eq "C437CurrentSource") -ne $c437InputsPresent) {
+    throw "C437CurrentSource compiler, expected SHA-256, and output directory are required only for Verification C437CurrentSource"
+}
+if ($Verification -eq "C437CurrentSource" -and
+    ([string]::IsNullOrWhiteSpace($C437Compiler) -or [string]::IsNullOrWhiteSpace($C437ExpectedCompilerSha256) -or [string]::IsNullOrWhiteSpace($C437OutputDirectory))) {
+    throw "C437CurrentSource requires compiler, expected SHA-256, and output directory together"
+}
+if ($Verification -eq "PortableAsyncSocketCurrent" -and
+    ([string]::IsNullOrWhiteSpace($PortableAsyncSocketCompiler) -or
+        [string]::IsNullOrWhiteSpace($PortableAsyncSocketExpectedCompilerSha256) -or
+        [string]::IsNullOrWhiteSpace($PortableAsyncSocketOutputDirectory))) {
+    throw "PortableAsyncSocketCurrent requires compiler, expected SHA-256, and output directory together"
+}
+$zipDeflateInputsPresent = -not [string]::IsNullOrWhiteSpace($ZipDeflateCompiler) -or
+    -not [string]::IsNullOrWhiteSpace($ZipDeflateExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($ZipDeflateOutputDirectory)
+if (($Verification -eq "ZipDeflateMethod8") -ne $zipDeflateInputsPresent) {
+    throw "ZipDeflateMethod8 compiler, expected SHA-256, and output directory are required only for Verification ZipDeflateMethod8"
+}
+if ($Verification -eq "ZipDeflateMethod8" -and
+    ([string]::IsNullOrWhiteSpace($ZipDeflateCompiler) -or
+        [string]::IsNullOrWhiteSpace($ZipDeflateExpectedCompilerSha256) -or
+        [string]::IsNullOrWhiteSpace($ZipDeflateOutputDirectory))) {
+    throw "ZipDeflateMethod8 requires compiler, expected SHA-256, and output directory together"
+}
+$quicFocusedInputsPresent = -not [string]::IsNullOrWhiteSpace($QuicFocusedCompiler) -or
+    -not [string]::IsNullOrWhiteSpace($QuicFocusedExpectedCompilerSha256) -or
+    -not [string]::IsNullOrWhiteSpace($QuicFocusedOutputDirectory)
+if (($Verification -eq "Quic1291And1297") -ne $quicFocusedInputsPresent) {
+    throw "QUIC focused compiler, expected SHA-256, and output directory are required only for Verification Quic1291And1297"
+}
+if ($Verification -eq "Quic1291And1297" -and
+    ([string]::IsNullOrWhiteSpace($QuicFocusedCompiler) -or
+        [string]::IsNullOrWhiteSpace($QuicFocusedExpectedCompilerSha256) -or
+        [string]::IsNullOrWhiteSpace($QuicFocusedOutputDirectory))) {
+    throw "Quic1291And1297 requires compiler, expected SHA-256, and output directory together"
 }
 $typedBlockInputsPresent = -not [string]::IsNullOrWhiteSpace($TypedBlockMutableBorrowCompiler) -or
     -not [string]::IsNullOrWhiteSpace($TypedBlockMutableBorrowExpectedCompilerSha256) -or
@@ -310,6 +406,132 @@ if ($Verification -eq "PortableMemoryIo") {
         } | ConvertTo-Json -Compress
         return
     }
+}
+
+if ($Verification -eq "AsyncObservabilityManagedMatrix") {
+    $AsyncObservabilityCompiler = Assert-ArtifactPath -Path $AsyncObservabilityCompiler -Name "AsyncObservabilityCompiler"
+    $AsyncObservabilityOutputDirectory = Assert-ArtifactPath -Path $AsyncObservabilityOutputDirectory -Name "AsyncObservabilityOutputDirectory"
+    if (-not (Test-Path -LiteralPath $AsyncObservabilityCompiler -PathType Leaf)) {
+        throw "AsyncObservability compiler does not exist"
+    }
+    $AsyncObservabilityExpectedCompilerSha256 = $AsyncObservabilityExpectedCompilerSha256.ToUpperInvariant()
+    $asyncObservabilityCompilerSha256 = (Get-FileHash -LiteralPath $AsyncObservabilityCompiler -Algorithm SHA256).Hash
+    if ($asyncObservabilityCompilerSha256 -cne $AsyncObservabilityExpectedCompilerSha256) {
+        throw "AsyncObservability compiler hash mismatch: expected=$AsyncObservabilityExpectedCompilerSha256 actual=$asyncObservabilityCompilerSha256"
+    }
+    if ($ValidateInputsOnly) {
+        [ordered]@{
+            verification = "AsyncObservabilityManagedMatrix"
+            compiler = $AsyncObservabilityCompiler
+            compilerSha256 = $asyncObservabilityCompilerSha256
+            outputDirectory = $AsyncObservabilityOutputDirectory
+            validated = $true
+        } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if ($Verification -eq "ZipDeflateMethod8") {
+    $ZipDeflateCompiler = Assert-ArtifactPath -Path $ZipDeflateCompiler -Name "ZipDeflateCompiler"
+    $ZipDeflateOutputDirectory = Assert-ArtifactPath -Path $ZipDeflateOutputDirectory -Name "ZipDeflateOutputDirectory"
+    if (-not (Test-Path -LiteralPath $ZipDeflateCompiler -PathType Leaf)) {
+        throw "ZipDeflate compiler does not exist"
+    }
+    $ZipDeflateExpectedCompilerSha256 = $ZipDeflateExpectedCompilerSha256.ToUpperInvariant()
+    $zipDeflateCompilerSha256 = (Get-FileHash -LiteralPath $ZipDeflateCompiler -Algorithm SHA256).Hash
+    if ($zipDeflateCompilerSha256 -cne $ZipDeflateExpectedCompilerSha256) {
+        throw "ZipDeflate compiler hash mismatch: expected=$ZipDeflateExpectedCompilerSha256 actual=$zipDeflateCompilerSha256"
+    }
+    if ($ValidateInputsOnly) {
+        [ordered]@{
+            verification = "ZipDeflateMethod8"
+            compiler = $ZipDeflateCompiler
+            compilerSha256 = $zipDeflateCompilerSha256
+            outputDirectory = $ZipDeflateOutputDirectory
+            validated = $true
+        } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if ($Verification -eq "Quic1291And1297") {
+    $QuicFocusedCompiler = Assert-ArtifactPath -Path $QuicFocusedCompiler -Name "QuicFocusedCompiler"
+    $QuicFocusedOutputDirectory = Assert-ArtifactPath -Path $QuicFocusedOutputDirectory -Name "QuicFocusedOutputDirectory"
+    if (-not (Test-Path -LiteralPath $QuicFocusedCompiler -PathType Leaf)) {
+        throw "QUIC focused compiler does not exist"
+    }
+    $QuicFocusedExpectedCompilerSha256 = $QuicFocusedExpectedCompilerSha256.ToUpperInvariant()
+    $quicFocusedCompilerSha256 = (Get-FileHash -LiteralPath $QuicFocusedCompiler -Algorithm SHA256).Hash
+    if ($quicFocusedCompilerSha256 -cne $QuicFocusedExpectedCompilerSha256) {
+        throw "QUIC focused compiler hash mismatch: expected=$QuicFocusedExpectedCompilerSha256 actual=$quicFocusedCompilerSha256"
+    }
+    if ($ValidateInputsOnly) {
+        [ordered]@{
+            verification = "Quic1291And1297"
+            compiler = $QuicFocusedCompiler
+            compilerSha256 = $quicFocusedCompilerSha256
+            outputDirectory = $QuicFocusedOutputDirectory
+            validated = $true
+        } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if ($Verification -eq "PortableAsyncSocketCurrent") {
+    $PortableAsyncSocketCompiler = Assert-ArtifactPath -Path $PortableAsyncSocketCompiler -Name "PortableAsyncSocketCompiler"
+    $PortableAsyncSocketOutputDirectory = Assert-ArtifactPath -Path $PortableAsyncSocketOutputDirectory -Name "PortableAsyncSocketOutputDirectory"
+    if (-not (Test-Path -LiteralPath $PortableAsyncSocketCompiler -PathType Leaf)) { throw "PortableAsyncSocketCurrent compiler does not exist" }
+    $PortableAsyncSocketExpectedCompilerSha256 = $PortableAsyncSocketExpectedCompilerSha256.ToUpperInvariant()
+    $portableAsyncSocketCompilerSha256 = (Get-FileHash -LiteralPath $PortableAsyncSocketCompiler -Algorithm SHA256).Hash
+    if ($portableAsyncSocketCompilerSha256 -cne $PortableAsyncSocketExpectedCompilerSha256) {
+        throw "PortableAsyncSocketCurrent compiler hash mismatch: expected=$PortableAsyncSocketExpectedCompilerSha256 actual=$portableAsyncSocketCompilerSha256"
+    }
+    if ($ValidateInputsOnly) {
+        [ordered]@{ verification = "PortableAsyncSocketCurrent"; compiler = $PortableAsyncSocketCompiler; compilerSha256 = $portableAsyncSocketCompilerSha256; outputDirectory = $PortableAsyncSocketOutputDirectory; validated = $true } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if ($Verification -eq "SocketCompletionFocused") {
+    $SocketCompletionCompiler = Assert-ArtifactPath -Path $SocketCompletionCompiler -Name "SocketCompletionCompiler"
+    $SocketCompletionOutputDirectory = Assert-ArtifactPath -Path $SocketCompletionOutputDirectory -Name "SocketCompletionOutputDirectory"
+    if (-not (Test-Path -LiteralPath $SocketCompletionCompiler -PathType Leaf)) { throw "SocketCompletionFocused compiler does not exist" }
+    $SocketCompletionExpectedCompilerSha256 = $SocketCompletionExpectedCompilerSha256.ToUpperInvariant()
+    $socketCompletionCompilerSha256 = (Get-FileHash -LiteralPath $SocketCompletionCompiler -Algorithm SHA256).Hash
+    if ($socketCompletionCompilerSha256 -cne $SocketCompletionExpectedCompilerSha256) {
+        throw "SocketCompletionFocused compiler hash mismatch: expected=$SocketCompletionExpectedCompilerSha256 actual=$socketCompletionCompilerSha256"
+    }
+    if ($ValidateInputsOnly) {
+        [ordered]@{ verification = "SocketCompletionFocused"; compiler = $SocketCompletionCompiler; compilerSha256 = $socketCompletionCompilerSha256; outputDirectory = $SocketCompletionOutputDirectory; validated = $true } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if ($Verification -eq "C437CurrentSource") {
+    $C437Compiler = Assert-ArtifactPath -Path $C437Compiler -Name "C437Compiler"
+    $C437OutputDirectory = Assert-ArtifactPath -Path $C437OutputDirectory -Name "C437OutputDirectory"
+    if (-not (Test-Path -LiteralPath $C437Compiler -PathType Leaf)) { throw "C437CurrentSource compiler does not exist" }
+    $C437ExpectedCompilerSha256 = $C437ExpectedCompilerSha256.ToUpperInvariant()
+    $c437CompilerSha256 = (Get-FileHash -LiteralPath $C437Compiler -Algorithm SHA256).Hash
+    if ($c437CompilerSha256 -cne $C437ExpectedCompilerSha256) { throw "C437CurrentSource compiler hash mismatch: expected=$C437ExpectedCompilerSha256 actual=$c437CompilerSha256" }
+    if ($ValidateInputsOnly) {
+        & (Join-Path $PSScriptRoot 'verify-c437-current-source.ps1') -Compiler $C437Compiler -ExpectedCompilerSha256 $C437ExpectedCompilerSha256 -OutputDirectory $C437OutputDirectory -ValidateOnly
+        [ordered]@{ verification = "C437CurrentSource"; compiler = $C437Compiler; compilerSha256 = $c437CompilerSha256; outputDirectory = $C437OutputDirectory; validated = $true } | ConvertTo-Json -Compress
+        return
+    }
+}
+
+if (($Verification -eq "C456Focused") -ne (-not [string]::IsNullOrWhiteSpace($C456OutputDirectory))) {
+    throw "C456Focused output directory is required only for Verification C456Focused"
+}
+if ($Verification -eq "C456Focused") {
+    $C456OutputDirectory = Assert-ArtifactPath -Path $C456OutputDirectory -Name "C456OutputDirectory"
+}
+if (($Verification -eq "C457Focused") -ne (-not [string]::IsNullOrWhiteSpace($C457OutputDirectory))) {
+    throw "C457Focused output directory is required only for Verification C457Focused"
+}
+if ($Verification -eq "C457Focused") {
+    $C457OutputDirectory = Assert-ArtifactPath -Path $C457OutputDirectory -Name "C457OutputDirectory"
 }
 
 if ($Verification -eq "TypedBlockMutableBorrow") {
@@ -642,6 +864,10 @@ if ($Verification -eq "LinuxOwnershipStorage") {
 if ([string]::IsNullOrWhiteSpace($RunId)) {
     $RunId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().ToString("N").Substring(0, 8))
 }
+if (-not $Supervisor -and ($Verification -eq 'Stage2' -or $Verification -eq 'Stage3') -and
+    -not $PSBoundParameters.ContainsKey('CancellationTimeoutSeconds')) {
+    $CancellationTimeoutSeconds = 3600
+}
 if ([string]::IsNullOrWhiteSpace($LogPath)) {
     $LogPath = Join-Path $scratchRoot "$($Verification.ToLowerInvariant())-$RunId.log"
 }
@@ -656,11 +882,14 @@ $CancellationAcknowledgementPath = "$CancellationRequestPath.ack.json"
 $LogPath = Assert-ArtifactPath -Path $LogPath -Name "LogPath"
 $CompletionRecordPath = Assert-ArtifactPath -Path $CompletionRecordPath -Name "CompletionRecordPath"
 $CancellationRequestPath = Assert-ArtifactPath -Path $CancellationRequestPath -Name "CancellationRequestPath"
-$distinctPaths = @($LogPath, $CompletionRecordPath, $CancellationRequestPath, $CancellationAcknowledgementPath) |
+$stage3PublicationCommitPath = "$CancellationRequestPath.commit.json"
+$stage3PublicationCompletePath = "$CancellationRequestPath.published.json"
+$distinctPaths = @($LogPath, $CompletionRecordPath, $CancellationRequestPath, $CancellationAcknowledgementPath,
+    $stage3PublicationCommitPath, $stage3PublicationCompletePath) |
     ForEach-Object { $_.ToLowerInvariant() } |
     Select-Object -Unique
-if (@($distinctPaths).Count -ne 4) {
-    throw "LogPath, CompletionRecordPath, CancellationRequestPath, and CancellationAcknowledgementPath must be distinct"
+if (@($distinctPaths).Count -ne 6) {
+    throw "Verification log, result, cancellation, and publication control paths must be distinct"
 }
 
 New-Item -ItemType Directory -Path ([IO.Path]::GetDirectoryName($LogPath)) -Force | Out-Null
@@ -670,7 +899,9 @@ if (-not $Supervisor) {
     if ((Test-Path -LiteralPath $LogPath) -or
         (Test-Path -LiteralPath $CompletionRecordPath) -or
         (Test-Path -LiteralPath $CancellationRequestPath) -or
-        (Test-Path -LiteralPath $CancellationAcknowledgementPath)) {
+        (Test-Path -LiteralPath $CancellationAcknowledgementPath) -or
+        ($Verification -eq 'Stage3' -and ((Test-Path -LiteralPath $stage3PublicationCommitPath) -or
+            (Test-Path -LiteralPath $stage3PublicationCompletePath)))) {
         throw "The selected run paths already exist; choose a new RunId"
     }
 
@@ -728,6 +959,58 @@ if (-not $Supervisor) {
             "-PortableMemoryIoExpectedCompilerSha256", $PortableMemoryIoExpectedCompilerSha256,
             "-PortableMemoryIoOutputDirectory", (ConvertTo-ProcessArgument $PortableMemoryIoOutputDirectory)
         )
+    }
+    if ($AsyncObservabilityCompiler -ne "") {
+        $argumentList += @(
+            "-AsyncObservabilityCompiler", (ConvertTo-ProcessArgument $AsyncObservabilityCompiler),
+            "-AsyncObservabilityExpectedCompilerSha256", $AsyncObservabilityExpectedCompilerSha256,
+            "-AsyncObservabilityOutputDirectory", (ConvertTo-ProcessArgument $AsyncObservabilityOutputDirectory)
+        )
+    }
+    if ($ZipDeflateCompiler -ne "") {
+        $argumentList += @(
+            "-ZipDeflateCompiler", (ConvertTo-ProcessArgument $ZipDeflateCompiler),
+            "-ZipDeflateExpectedCompilerSha256", $ZipDeflateExpectedCompilerSha256,
+            "-ZipDeflateOutputDirectory", (ConvertTo-ProcessArgument $ZipDeflateOutputDirectory)
+        )
+    }
+    if ($QuicFocusedCompiler -ne "") {
+        $argumentList += @(
+            "-QuicFocusedCompiler", (ConvertTo-ProcessArgument $QuicFocusedCompiler),
+            "-QuicFocusedExpectedCompilerSha256", $QuicFocusedExpectedCompilerSha256,
+            "-QuicFocusedOutputDirectory", (ConvertTo-ProcessArgument $QuicFocusedOutputDirectory)
+        )
+        if ($ValidateInputsOnly) { $argumentList += '-ValidateInputsOnly' }
+    }
+    if ($PortableAsyncSocketCompiler -ne "") {
+        $argumentList += @(
+            "-PortableAsyncSocketCompiler", (ConvertTo-ProcessArgument $PortableAsyncSocketCompiler),
+            "-PortableAsyncSocketExpectedCompilerSha256", $PortableAsyncSocketExpectedCompilerSha256,
+            "-PortableAsyncSocketOutputDirectory", (ConvertTo-ProcessArgument $PortableAsyncSocketOutputDirectory)
+        )
+        if ($ValidateInputsOnly) { $argumentList += '-ValidateInputsOnly' }
+    }
+    if ($SocketCompletionCompiler -ne "") {
+        $argumentList += @(
+            "-SocketCompletionCompiler", (ConvertTo-ProcessArgument $SocketCompletionCompiler),
+            "-SocketCompletionExpectedCompilerSha256", $SocketCompletionExpectedCompilerSha256,
+            "-SocketCompletionOutputDirectory", (ConvertTo-ProcessArgument $SocketCompletionOutputDirectory)
+        )
+        if ($ValidateInputsOnly) { $argumentList += '-ValidateInputsOnly' }
+    }
+    if ($C437Compiler -ne "") {
+        $argumentList += @(
+            "-C437Compiler", (ConvertTo-ProcessArgument $C437Compiler),
+            "-C437ExpectedCompilerSha256", $C437ExpectedCompilerSha256,
+            "-C437OutputDirectory", (ConvertTo-ProcessArgument $C437OutputDirectory)
+        )
+        if ($ValidateInputsOnly) { $argumentList += '-ValidateInputsOnly' }
+    }
+    if ($C456OutputDirectory -ne "") {
+        $argumentList += @("-C456OutputDirectory", (ConvertTo-ProcessArgument $C456OutputDirectory))
+    }
+    if ($C457OutputDirectory -ne "") {
+        $argumentList += @("-C457OutputDirectory", (ConvertTo-ProcessArgument $C457OutputDirectory))
     }
     if ($TypedBlockMutableBorrowCompiler -ne "") {
         $argumentList += @(
@@ -861,6 +1144,9 @@ if (-not $Supervisor) {
         selfhostC424NestedWholeOwnerOutputDirectory = $SelfhostC424NestedWholeOwnerOutputDirectory
         linuxOwnershipStorageCompiler = $LinuxOwnershipStorageCompiler
         linuxOwnershipStorageExpectedCompilerSha256 = $LinuxOwnershipStorageExpectedCompilerSha256
+        socketCompletionCompiler = $SocketCompletionCompiler
+        socketCompletionExpectedCompilerSha256 = $SocketCompletionExpectedCompilerSha256
+        socketCompletionOutputDirectory = $SocketCompletionOutputDirectory
         logPath = $LogPath
         completionRecordPath = $CompletionRecordPath
         cancellationRequestPath = $CancellationRequestPath
@@ -876,7 +1162,7 @@ if (-not $Supervisor) {
         cancellationRequestPath = $CancellationRequestPath
         cancellationAcknowledgementPath = $CancellationAcknowledgementPath
         launchRecordPath = $launchRecordPath
-        focusedResultPath = if ($Verification -eq 'C341FinalSelfhost') { Join-Path $C341FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'C394FinalCandidate') { Join-Path $C394FinalOutputDirectory 'result.json' } else { $null }
+        focusedResultPath = if ($Verification -eq 'C341FinalSelfhost') { Join-Path $C341FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'C394FinalCandidate') { Join-Path $C394FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'PortableAsyncSocketCurrent') { Join-Path $PortableAsyncSocketOutputDirectory 'result.json' } elseif ($Verification -eq 'SocketCompletionFocused') { Join-Path $SocketCompletionOutputDirectory 'result.json' } elseif ($Verification -eq 'C437CurrentSource') { Join-Path $C437OutputDirectory 'result.json' } elseif ($Verification -eq 'C456Focused') { Join-Path $C456OutputDirectory 'result.json' } elseif ($Verification -eq 'C457Focused') { Join-Path $C457OutputDirectory 'result.json' } else { $null }
         focusedResultSha256 = $null
     } | ConvertTo-Json -Compress
     return
@@ -887,11 +1173,14 @@ $exitCode = 255
 $failureIds = [Collections.Generic.List[string]]::new()
 $cancelled = $false
 $cancellationRequested = $false
+$cancellationDisposition = 'none'
+$stage3PublicationCommitSha256 = $null
+$stage3PublicationCompleteSha256 = $null
 $cancellationAcknowledgement = $null
 $targetProcessId = $null
 $targetExitCode = $null
 $orphanProcessIds = [Collections.Generic.List[int]]::new()
-$focusedResultPath = if ($Verification -eq 'C341FinalSelfhost') { Join-Path $C341FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'C394FinalCandidate') { Join-Path $C394FinalOutputDirectory 'result.json' } else { $null }
+$focusedResultPath = if ($Verification -eq 'C341FinalSelfhost') { Join-Path $C341FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'C394FinalCandidate') { Join-Path $C394FinalOutputDirectory 'result.json' } elseif ($Verification -eq 'PortableAsyncSocketCurrent') { Join-Path $PortableAsyncSocketOutputDirectory 'result.json' } elseif ($Verification -eq 'SocketCompletionFocused') { Join-Path $SocketCompletionOutputDirectory 'result.json' } elseif ($Verification -eq 'C437CurrentSource') { Join-Path $C437OutputDirectory 'result.json' } elseif ($Verification -eq 'C456Focused') { Join-Path $C456OutputDirectory 'result.json' } elseif ($Verification -eq 'C457Focused') { Join-Path $C457OutputDirectory 'result.json' } else { $null }
 $focusedResultSha256 = $null
 $standardErrorPath = "$LogPath.stderr"
 $observedProcesses = [Collections.Generic.Dictionary[string, object]]::new()
@@ -960,6 +1249,100 @@ function Read-CancellationRequest {
     }
     return $request
 }
+
+function Assert-Stage3PublicationComplete {
+    if (-not (Test-Path -LiteralPath $stage3PublicationCommitPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $stage3PublicationCompletePath -PathType Leaf)) {
+        throw 'Stage3 publication commit or completion record is missing'
+    }
+    $commit = Get-Content -LiteralPath $stage3PublicationCommitPath -Raw | ConvertFrom-Json
+    $published = Get-Content -LiteralPath $stage3PublicationCompletePath -Raw | ConvertFrom-Json
+    if ($commit.schemaVersion -ne 1 -or $published.schemaVersion -ne 1 -or
+        $commit.runId -cne $RunId -or $published.runId -cne $RunId -or
+        [int]$commit.targetProcessId -ne $targetProcessId -or
+        [int]$published.targetProcessId -ne $targetProcessId -or
+        [string]$commit.inputFingerprint -cnotmatch '^[A-F0-9]{64}$' -or
+        $published.inputFingerprint -cne $commit.inputFingerprint -or
+        [string]::IsNullOrWhiteSpace([string]$commit.committedAtUtc) -or
+        [string]::IsNullOrWhiteSpace([string]$published.completedAtUtc)) {
+        throw 'Stage3 publication record identity or input fingerprint differs'
+    }
+    $exampleArtifacts = Join-Path $repositoryRoot 'artifacts\example-tests'
+    $seedArtifacts = Join-Path $repositoryRoot 'artifacts\incremental-selfhost'
+    $expectedFiles = [ordered]@{
+        stage3Llvm = Join-Path $exampleArtifacts 'selfhost-stage3.ll'
+        stage3Bitcode = Join-Path $exampleArtifacts 'selfhost-stage3.bc'
+        stage3Executable = Join-Path $exampleArtifacts 'selfhost-stage3.exe'
+        stage3InputReceipt = Join-Path $exampleArtifacts 'selfhost-stage3.inputs.sha256'
+        stage3OutputReceipt = Join-Path $exampleArtifacts 'selfhost-stage3.outputs.sha256'
+        seedExecutable = Join-Path $seedArtifacts 'selfhost-slg-seed.exe'
+        seedHashReceipt = Join-Path $seedArtifacts 'selfhost-slg-seed.sha256'
+        seedProvenance = Join-Path $seedArtifacts 'selfhost-slg-seed.stage3-seed.json'
+    }
+    $files = @($published.files)
+    if ($files.Count -ne $expectedFiles.Count) { throw 'Stage3 publication file inventory is incomplete' }
+    $observedHashes = @{}
+    $index = 0
+    foreach ($entry in $expectedFiles.GetEnumerator()) {
+        $file = $files[$index]
+        if ($file.role -cne $entry.Key -or
+            [IO.Path]::GetFullPath([string]$file.path) -ine [IO.Path]::GetFullPath([string]$entry.Value) -or
+            [string]$file.sha256 -cnotmatch '^[A-F0-9]{64}$' -or
+            -not (Test-Path -LiteralPath $entry.Value -PathType Leaf)) {
+            throw "Stage3 publication file identity is invalid: $($entry.Key)"
+        }
+        $actualHash = (Get-FileHash -LiteralPath $entry.Value -Algorithm SHA256).Hash
+        if ($actualHash -cne $file.sha256) {
+            throw "Stage3 published file hash differs: $($entry.Key)"
+        }
+        $observedHashes[$entry.Key] = $actualHash
+        $index++
+    }
+    if ((Get-Content -LiteralPath $expectedFiles.stage3InputReceipt -Raw).Trim() -cne $commit.inputFingerprint -or
+        (Get-Content -LiteralPath $expectedFiles.stage3OutputReceipt -Raw).Trim() -cne
+        "llvm $($observedHashes.stage3Llvm)`nbitcode $($observedHashes.stage3Bitcode)`nexecutable $($observedHashes.stage3Executable)" -or
+        (Get-Content -LiteralPath $expectedFiles.seedHashReceipt -Raw).Trim() -cne $observedHashes.seedExecutable -or
+        $observedHashes.seedExecutable -cne $observedHashes.stage3Executable) {
+        throw 'Stage3 publication receipts do not bind the published files'
+    }
+    $provenance = Get-Content -LiteralPath $expectedFiles.seedProvenance -Raw | ConvertFrom-Json
+    if ($provenance.schemaVersion -ne 1 -or $provenance.mode -cne 'verified-selfhost-stage3-seed' -or
+        $provenance.producer -cne 'verify-selfhost-stage3.ps1' -or
+        $provenance.publishedByStage3Gate -ne $true -or
+        $provenance.seedFingerprint -cne $observedHashes.seedExecutable -or
+        $provenance.stage3.executableFingerprint -cne $observedHashes.stage3Executable -or
+        $provenance.stage3.llvmFingerprint -cne $observedHashes.stage3Llvm -or
+        $provenance.stage3.bitcodeFingerprint -cne $observedHashes.stage3Bitcode -or
+        $provenance.stage3.outputReceiptFingerprint -cne $observedHashes.stage3OutputReceipt -or
+        $provenance.stage3.inputFingerprint -cne $commit.inputFingerprint) {
+        throw 'Stage3 seed provenance differs from published files'
+    }
+}
+
+function Get-Stage3LateCancellationOutcome {
+    param([int]$TargetExitCode, [int]$OrphanCount)
+
+    if (-not (Test-Path -LiteralPath $stage3PublicationCommitPath -PathType Leaf) -and
+        -not (Test-Path -LiteralPath $stage3PublicationCompletePath -PathType Leaf)) {
+        return $null
+    }
+    if ($TargetExitCode -ne 0) {
+        return [pscustomobject]@{ Disposition = 'notHonored'; FailureId = 'STAGE3_PUBLICATION_FAILED'; Detail = '' }
+    }
+    if ($OrphanCount -ne 0) {
+        return [pscustomobject]@{ Disposition = 'notHonored'; FailureId = 'ORPHAN_PROCESSES_REMAIN'; Detail = '' }
+    }
+    try {
+        Assert-Stage3PublicationComplete
+    } catch {
+        return [pscustomobject]@{
+            Disposition = 'notHonored'
+            FailureId = 'STAGE3_PUBLICATION_INCOMPLETE'
+            Detail = $_.Exception.Message
+        }
+    }
+    return [pscustomobject]@{ Disposition = 'afterCommit'; FailureId = ''; Detail = '' }
+}
 try {
     $targetScript = switch ($Verification) {
         "Stage2" { Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1" }
@@ -974,6 +1357,14 @@ try {
         "C394FinalCandidate" { Join-Path $PSScriptRoot "verify-c394-final-candidate.ps1" }
         "ExpressionBatch" { Join-Path $PSScriptRoot "verify-expression-lowering-focused-batch.ps1" }
         "PortableMemoryIo" { Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1" }
+        "AsyncObservabilityManagedMatrix" { Join-Path $PSScriptRoot "verify-managed-async-task-observability-matrix.ps1" }
+        "ZipDeflateMethod8" { Join-Path $PSScriptRoot "verify-zip-deflate-method8-focused.ps1" }
+        "Quic1291And1297" { Join-Path $PSScriptRoot "verify-quic-1291-1297-focused.ps1" }
+        "PortableAsyncSocketCurrent" { Join-Path $PSScriptRoot "verify-portable-async-socket-current.ps1" }
+        "SocketCompletionFocused" { Join-Path $PSScriptRoot "verify-socket-completion-focused.ps1" }
+        "C437CurrentSource" { Join-Path $PSScriptRoot "verify-c437-current-source.ps1" }
+        "C456Focused" { Join-Path $PSScriptRoot "verify-c456-returned-enum-match-result.ps1" }
+        "C457Focused" { Join-Path $PSScriptRoot "verify-c457-nullary-enum-reachability.ps1" }
         "TypedBlockMutableBorrow" { Join-Path $PSScriptRoot "verify-typed-block-mutable-borrow-focused.ps1" }
         "BinaryChecksum" { Join-Path $PSScriptRoot "verify-binary-checksum-codecs-focused.ps1" }
         "GzipSelfhost" { Join-Path $PSScriptRoot "verify-gzip-selfhost-focused.ps1" }
@@ -992,11 +1383,23 @@ try {
     $targetArguments = @("-NoProfile", "-File", (ConvertTo-ProcessArgument $targetScript))
     switch ($Verification) {
         "Stage2" {
-            $targetArguments += @("-SeedMode", $SeedMode, "-Stage2BuildJobs", $Jobs.ToString())
+            $targetArguments += @(
+                "-SeedMode", $SeedMode,
+                "-Stage2BuildJobs", $Jobs.ToString(),
+                "-CancellationRequestPath", (ConvertTo-ProcessArgument $CancellationRequestPath),
+                "-CancellationRunId", (ConvertTo-ProcessArgument $RunId),
+                "-CancellationAcknowledgementPath", (ConvertTo-ProcessArgument $CancellationAcknowledgementPath)
+            )
             if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" }
         }
         "Stage3" {
-            $targetArguments += @("-SeedMode", $SeedMode, "-Jobs", $Jobs.ToString())
+            $targetArguments += @(
+                "-SeedMode", $SeedMode,
+                "-Jobs", $Jobs.ToString(),
+                "-CancellationRequestPath", (ConvertTo-ProcessArgument $CancellationRequestPath),
+                "-CancellationRunId", (ConvertTo-ProcessArgument $RunId),
+                "-CancellationAcknowledgementPath", (ConvertTo-ProcessArgument $CancellationAcknowledgementPath)
+            )
             if ($ResumeCandidate) { $targetArguments += "-ResumeCandidate" }
         }
         "Stage2Linux" {
@@ -1072,6 +1475,64 @@ try {
                 "-Compiler", (ConvertTo-ProcessArgument $PortableMemoryIoCompiler),
                 "-ExpectedCompilerSha256", $PortableMemoryIoExpectedCompilerSha256
             )
+        }
+        "AsyncObservabilityManagedMatrix" {
+            $targetArguments += @(
+                "-Compiler", (ConvertTo-ProcessArgument $AsyncObservabilityCompiler),
+                "-ExpectedCompilerSha256", $AsyncObservabilityExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $AsyncObservabilityOutputDirectory)
+            )
+        }
+        "ZipDeflateMethod8" {
+            $targetArguments += @(
+                "-CompilerPath", (ConvertTo-ProcessArgument $ZipDeflateCompiler),
+                "-ExpectedCompilerSha256", $ZipDeflateExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $ZipDeflateOutputDirectory)
+            )
+        }
+        "Quic1291And1297" {
+            $targetArguments += @(
+                "-CompilerPath", (ConvertTo-ProcessArgument $QuicFocusedCompiler),
+                "-ExpectedCompilerSha256", $QuicFocusedExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $QuicFocusedOutputDirectory),
+                "-Jobs", $Jobs.ToString()
+            )
+        }
+        "PortableAsyncSocketCurrent" {
+            $targetArguments += @(
+                "-CompilerPath", (ConvertTo-ProcessArgument $PortableAsyncSocketCompiler),
+                "-ExpectedCompilerSha256", $PortableAsyncSocketExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $PortableAsyncSocketOutputDirectory),
+                "-CancellationRequestPath", (ConvertTo-ProcessArgument $CancellationRequestPath),
+                "-CancellationRunId", (ConvertTo-ProcessArgument $RunId),
+                "-CancellationAcknowledgementPath", (ConvertTo-ProcessArgument $CancellationAcknowledgementPath)
+            )
+        }
+        "SocketCompletionFocused" {
+            $targetArguments += @(
+                "-RepositoryRoot", (ConvertTo-ProcessArgument $repositoryRoot),
+                "-Compiler", (ConvertTo-ProcessArgument $SocketCompletionCompiler),
+                "-ExpectedCompilerSha256", $SocketCompletionExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $SocketCompletionOutputDirectory)
+            )
+        }
+        "C437CurrentSource" {
+            $targetArguments += @(
+                "-Compiler", (ConvertTo-ProcessArgument $C437Compiler),
+                "-ExpectedCompilerSha256", $C437ExpectedCompilerSha256,
+                "-OutputDirectory", (ConvertTo-ProcessArgument $C437OutputDirectory),
+                "-SourceFreezeApproved"
+            )
+        }
+        "C456Focused" {
+            $targetArguments += @(
+                "-OutputDirectory", (ConvertTo-ProcessArgument $C456OutputDirectory),
+                "-Jobs", $Jobs.ToString())
+        }
+        "C457Focused" {
+            $targetArguments += @(
+                "-OutputDirectory", (ConvertTo-ProcessArgument $C457OutputDirectory),
+                "-Jobs", $Jobs.ToString())
         }
         "TypedBlockMutableBorrow" {
             $targetArguments += @(
@@ -1176,12 +1637,18 @@ try {
     while ($true) {
         $request = Read-CancellationRequest
         if ($null -eq $request) {
-            if ($targetProcess.WaitForExit(100)) { break }
+            if ($targetProcess.WaitForExit(100)) {
+                $request = Read-CancellationRequest
+                if ($null -eq $request) { break }
+            }
+        }
+        if ($null -eq $request) {
             Update-ObservedProcessTree | Out-Null
             continue
         }
 
         $cancellationRequested = $true
+        $cancellationDisposition = 'notHonored'
         $cancellationDeadline = [DateTimeOffset]::UtcNow.AddSeconds($CancellationTimeoutSeconds)
         while (-not $targetProcess.WaitForExit(100)) {
             Update-ObservedProcessTree | Out-Null
@@ -1205,6 +1672,24 @@ try {
             } catch { $cancellationAcknowledgement = $null }
         }
         Complete-ObservedProcessAudit
+        $stage3LateOutcome = if ($Verification -eq 'Stage3') {
+            Get-Stage3LateCancellationOutcome -TargetExitCode $targetExitCode -OrphanCount $orphanProcessIds.Count
+        } else { $null }
+        if ($null -ne $stage3LateOutcome) {
+            if ($stage3LateOutcome.FailureId -ne '') {
+                $exitCode = 1
+                $failureIds.Add($stage3LateOutcome.FailureId)
+                if ($stage3LateOutcome.Detail -ne '') {
+                    Write-Host "[stage3 late cancellation] $($stage3LateOutcome.Detail)"
+                }
+                break
+            }
+            $exitCode = 0
+            $cancellationDisposition = $stage3LateOutcome.Disposition
+            $stage3PublicationCommitSha256 = (Get-FileHash -LiteralPath $stage3PublicationCommitPath -Algorithm SHA256).Hash
+            $stage3PublicationCompleteSha256 = (Get-FileHash -LiteralPath $stage3PublicationCompletePath -Algorithm SHA256).Hash
+            break
+        }
         if ($null -eq $cancellationAcknowledgement) {
             $exitCode = 1
             $failureIds.Add('CANCELLATION_ACKNOWLEDGEMENT_MISSING')
@@ -1222,6 +1707,7 @@ try {
         }
         $cancelled = $true
         $exitCode = 130
+        $cancellationDisposition = 'honored'
         $failureIds.Add("CANCELLATION_REQUESTED")
         break
     }
@@ -1334,8 +1820,11 @@ try {
                     $deferredResult = Get-Content -LiteralPath $deferredResultPath -Raw | ConvertFrom-Json
                     if ($deferredResult.status -cne 'passed' -or $deferredResult.completed -ne 31 -or $deferredResult.total -ne 31 -or
                         $deferredResult.stage2Stage3Executed -ne $false -or
-                        $deferredResult.candidateGate.status -cne 'passed' -or $deferredResult.candidateGate.completed -ne 17 -or
-                        $deferredResult.candidateGate.total -ne 17) {
+                        $deferredResult.candidateGate.scope -cne 'checked-windows-sixteen-negatives-and-native1725-581' -or
+                        $deferredResult.candidateGate.status -cne 'passed' -or $deferredResult.candidateGate.completed -ne 18 -or
+                        $deferredResult.candidateGate.total -ne 18 -or
+                        @($deferredResult.candidateGate.cases | Where-Object { $_.id -ceq '1725' -and $_.passed -eq $true }).Count -ne 1 -or
+                        @($deferredResult.candidateGate.cases | Where-Object { $_.id -ceq '581' -and $_.passed -eq $true }).Count -ne 1) {
                         $exitCode = 1
                         $failureIds.Add('SELFHOST_DEFERRED_TEXT_STORAGE_RESULT_INVALID')
                     }
@@ -1457,7 +1946,7 @@ finally {
             if ($line -notmatch '(?i)(?<![a-z0-9-])(?:fail(?:ed|ure)?|error|exception|throw|fatal)(?![a-z0-9-])') {
                 continue
             }
-            foreach ($match in [regex]::Matches($line, '(?i)\b(?:[ES]\d+|(?:CS|MSB|NETSDK)\d+|\d{1,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|MANAGED_HOST_BUILD_FAILED|SUPERVISOR_EXECUTION_FAILURE)\b')) {
+            foreach ($match in [regex]::Matches($line, '(?i)\b(?:[ES]\d+|(?:CS|MSB|NETSDK)\d+|\d{1,4}-[a-z0-9][a-z0-9-]*|AS-[A-Z]+-\d+(?:-[A-Z0-9-]+)?|MANAGED_HOST_BUILD_FAILED|STAGE3_PUBLICATION_INPUT_DRIFT|SUPERVISOR_EXECUTION_FAILURE)\b')) {
                 if (-not $failureIds.Contains($match.Value)) {
                     $failureIds.Add($match.Value)
                 }
@@ -1489,6 +1978,11 @@ finally {
         logPath = $LogPath
         standardErrorPath = $standardErrorPath
         cancellationRequestPath = $CancellationRequestPath
+        cancellationDisposition = $cancellationDisposition
+        stage3PublicationCommitSha256 = $stage3PublicationCommitSha256
+        stage3PublicationCompleteSha256 = $stage3PublicationCompleteSha256
+        publicationMayBePartial = $Verification -eq 'Stage3' -and $exitCode -ne 0 -and
+            (Test-Path -LiteralPath $stage3PublicationCommitPath -PathType Leaf)
         cancellationAcknowledgementPath = $CancellationAcknowledgementPath
         cancellationAcknowledgement = $cancellationAcknowledgement
         additionalMoveOwnershipCompiler = if ($Verification -eq 'AdditionalMoveOwnership') { $AdditionalMoveOwnershipCompiler } else { $null }

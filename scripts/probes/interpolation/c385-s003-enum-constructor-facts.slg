@@ -1,0 +1,136 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
+
+inspect source: Text, label: Text -> Unit uses Console {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => facts
+    0 => count!
+    -1 => expectedKind!
+    -1 => actualKind!
+    -1 => tag!
+    false => ownerMatches!
+    facts.enumConstructorArguments -> each argument {
+        prepared.package.ranges[argument.sourceModule] => range
+        -1 => owner!
+        0 => nameIndex!
+        nameIndex! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + nameIndex!] => name
+            name.astNode == argument.argumentAst and name.symbol >= 0
+                -> if {
+                    range.symbolStart + name.symbol => symbol
+                    prepared.package.symbols[symbol].kind == 9 -> if { symbol => owner! }
+                }
+            nameIndex! + 1 => nameIndex!
+        }
+        owner! >= 0 -> if {
+            count! + 1 => count!
+            facts.types[argument.expectedTypeId].kind => expectedKind!
+            argument.actualTypeId >= 0 -> if { facts.types[argument.actualTypeId].kind => actualKind! }
+            argument.variantTag => tag!
+            prepared.package.symbols[owner!] => binding
+            prepared.package.tokens[range.tokenStart + binding.nameToken] => nameToken
+            prepared.package.sources[argument.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+            name == "values" and facts.lexicalBindingTypeBySymbol[owner!] == argument.actualTypeId => ownerMatches!
+        }
+    }
+    prepared -> fixedLengthArrays.collect(facts, prepared.interpolations, prepared.interpolationRanges) => warnings
+    ownerMatches! -> if { 1 } else { 0 } => ownerCode
+    "$label=$(count!),$(expectedKind!),$(actualKind!),$(tag!),$ownerCode,$(warnings -> len)" -> println
+}
+
+main {
+    """
+    struct Item { value: Int }
+    enum Wrapped { Values([Item; ~]) }
+    main {
+        [Item { value: 7 }; ~] => values
+        Wrapped.Values(values) -> when {
+            Values(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("nominal-direct")
+    """
+    struct Item { value: Int }
+    enum Wrapped { Values([Item; ~]) }
+    main {
+        [Item { value: 7 }; ~] => values
+        (Wrapped.Values(values)) -> when {
+            Values(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("nominal-wrapper")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Option<[Item; ~]>.Some(values) -> when {
+            Some(items) { items -> len -> println }
+            None { 0 -> println }
+        }
+    }
+    """ -> inspect("option-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Option<[Item; ~]>.Some -> when {
+            Some(items) { items -> len -> println }
+            None { 0 -> println }
+        }
+    }
+    """ -> inspect("option-flow")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Result<[Item; ~], Text>.Ok(values) -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("result-ok-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Result<[Item; ~], Text>.Ok -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("result-ok-flow")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        Result<Text, [Item; ~]>.Err(values) -> when {
+            Ok(text) { text -> println }
+            Err(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("result-err-direct")
+    """
+    struct Item { value: Int }
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Result<Text, [Item; ~]>.Err -> when {
+            Ok(text) { text -> println }
+            Err(items) { items -> len -> println }
+        }
+    }
+    """ -> inspect("result-err-flow")
+    """
+    struct Item { value: Int }
+    Some values: move [Item; ~] -> Result<[Item; ~], Text> => Result<[Item; ~], Text>.Ok(values)
+    main {
+        [Item { value: 7 }; ~] => values
+        values -> Some -> when {
+            Ok(items) { items -> len -> println }
+            Err(error) { error -> println }
+        }
+    }
+    """ -> inspect("ordinary-same-name")
+}

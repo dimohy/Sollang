@@ -1,0 +1,39 @@
+struct Inner {
+    values: [UInt8; 8]
+}
+
+struct Outer {
+    first: Inner
+    second: Inner
+}
+
+incrementFirst values: mut [UInt8; 8] -> Unit {
+    values[0] + 1 => values[0]
+}
+
+impl Inner {
+    public increment: mut self -> Unit {
+        self.values -> incrementFirst
+    }
+
+    public finish: move self -> UInt8 {
+        self.values[0]
+    }
+}
+
+impl Outer {
+    public finish: move self -> Int {
+        self.first -> finish => first
+        self.second => second!
+        second! -> increment
+        Int(first) + Int(second! -> finish)
+    }
+}
+
+main {
+    Outer {
+        first: Inner { values: [7; 8] }
+        second: Inner { values: [9; 8] }
+    } -> finish => total
+    "total=$total" -> println
+}

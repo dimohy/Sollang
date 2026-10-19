@@ -1,0 +1,44 @@
+import sollang.compiler.llvm.text as llvmText
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """
+    struct OwnedSymbol {
+        name: Text
+        payload: [Int; ~]
+    }
+    
+    payloadLength values: [Int; ~] -> Int {
+        values -> len => length
+        Int(length)
+    }
+    
+    increment value: Int -> Int {
+        value + 1
+    }
+    
+    main {
+        {Int: OwnedSymbol;
+            1: OwnedSymbol { name: "lexer", payload: [10, 20; ~] }
+        } => symbols
+        symbols[1].payload -> payloadLength => count
+        (symbols[1].payload)[0] -> increment => first
+        symbols[1].name -> len => nameLength
+        "projected borrow=$count,$first,$nameLength" -> println
+    }
+    """ => input
+    input -> llvmText.ownedIndexPlaceControl("") => semanticOwner
+    input -> llvmText.ownedIndexLateDiagnosticCount => lateCount
+    "pre=$semanticOwner" -> println
+    "late=$lateCount" -> println
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> semanticContext.prepare => initial
+    initial -> expressionTypeIds.resolveCallContext => resolved
+    true => argumentsValid!
+    resolved.types.callArguments -> each argument {
+        argument.status != 0 -> if { false => argumentsValid! }
+    }
+    "arguments=$(argumentsValid!)" -> println
+}

@@ -1,0 +1,32 @@
+import sollang.compiler.llvm.text as compiler
+
+main {
+    """
+    enum Framing { None, UntilClose }
+    struct Plan { public framing: Framing }
+    plan value: Framing -> Result<Plan, Int> => Result<Plan, Int>.Ok(Plan { framing: value })
+    inspect value: Framing -> Result<Int, Int> {
+        value -> plan -> when {
+            Err(error) { Result<Int, Int>.Err(error) -> return }
+            Ok(value) { value }
+        } => plan
+        plan.framing -> when {
+            UntilClose { 2 }
+            else { 3 }
+        } => result
+        Result<Int, Int>.Ok(result)
+    }
+    main {
+        Framing.UntilClose -> inspect -> when {
+            Err(error) { error }
+            Ok(value) { value }
+        } -> println
+        Framing.None -> inspect -> when {
+            Err(error) { error }
+            Ok(value) { value }
+        } -> println
+    }
+    """ => input
+    [input,; ~] => sources
+    sources -> compiler.emit
+}

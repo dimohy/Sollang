@@ -1,0 +1,24 @@
+# Verifies self-host LLVM mutation, membership, count, and length for inline BitSet.
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+    """
+    mark flags: mut BitSet<130> -> Unit { flags -> set(64) }
+    forward flags: mut BitSet<130> -> Unit { flags -> mark }
+    markAt index: Int, flags: mut BitSet<130> -> Unit { flags -> set(index) }
+    struct Holder { flags: BitSet<130> }
+    main {
+        BitSet<130>() => flags!
+        flags! -> forward
+        markAt(129, flags!)
+        flags! -> count -> println
+        flags! -> contains(129) -> println
+        Holder { flags: BitSet<130>() } => holder!
+        holder!.flags -> mark
+        holder!.flags -> contains(64) -> println
+    }
+    """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

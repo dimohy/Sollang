@@ -1,0 +1,45 @@
+import sys.directory as directory
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 and arguments[1] == "--child"
+        -> if {
+            "unicode child" -> println
+        } else {
+            arguments[1] => parent
+            arguments[2] => statusPath
+            arguments[3] => stdioPath
+            parent -> path.fromText(path.Style.Windows) -> directory.create => created
+
+            process.command(arguments[0]) => statusCommand!
+            statusCommand! -> arg("--child")
+            statusCommand! -> statusToFile(statusPath) -> when {
+                Result<process.ExitStatus, Text>.Ok(status) {
+                    statusPath -> file.mapText => statusOutput
+                    (status -> exitCode) == 0 and (statusOutput -> slice(0, statusOutput -> len)) == "unicode child\n"
+                }
+                Result<process.ExitStatus, Text>.Err(error) {
+                    false
+                }
+            } => statusResult
+
+            process.command(arguments[0]) => stdioCommand!
+            stdioCommand! -> arg("--child")
+            stdioCommand! -> stdout(process.Output.File(stdioPath))
+            stdioCommand! -> status -> when {
+                Result<process.ExitStatus, Text>.Ok(status) {
+                    stdioPath -> file.mapText => stdioOutput
+                    (status -> exitCode) == 0 and (stdioOutput -> slice(0, stdioOutput -> len)) == "unicode child\n"
+                }
+                Result<process.ExitStatus, Text>.Err(error) {
+                    false
+                }
+            } => stdioResult
+
+            created and statusResult and stdioResult
+                -> if { "unicode parent ok" } else { "unicode parent failed" } -> println
+        }
+}

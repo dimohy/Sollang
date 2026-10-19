@@ -52,17 +52,8 @@ internal sealed class IncrementalCodegenCache
             .GroupBy(static source => source.ModuleName, StringComparer.Ordinal)
             .Select(static group => CreateModuleIdentity(group.Key, group.ToArray()))
             .OrderBy(static module => LlvmCodegenUnit.StableIdentity(module.Identity))
+            .ThenBy(static module => module.Identity, StringComparer.Ordinal)
             .ToArray();
-        for (var index = 1; index < modules.Length; index++)
-        {
-            if (LlvmCodegenUnit.StableIdentity(modules[index - 1].Identity)
-                == LlvmCodegenUnit.StableIdentity(modules[index].Identity))
-            {
-                throw new InvalidDataException(
-                    $"module identity collision between '{modules[index - 1].Identity}' "
-                    + $"and '{modules[index].Identity}'");
-            }
-        }
 
         var modulesByName = modules.ToDictionary(static module => module.Identity, StringComparer.Ordinal);
         var ambientStandardLibrary = HashFields(modules
@@ -115,6 +106,7 @@ internal sealed class IncrementalCodegenCache
         var wholeImplementationHash = HashFields([
             "whole-implementation",
             .. moduleKeys.OrderBy(static pair => LlvmCodegenUnit.StableIdentity(pair.Key))
+                .ThenBy(static pair => pair.Key, StringComparer.Ordinal)
                 .SelectMany(static pair => new[]
                 {
                     pair.Key,
@@ -262,6 +254,7 @@ internal sealed class IncrementalCodegenCache
             0
         };
         ulong previousModuleHash = 0;
+        var previousModuleIdentity = "";
         var sawModule = false;
         for (var index = 0; index < output.Units.Count; index++)
         {
@@ -272,11 +265,13 @@ internal sealed class IncrementalCodegenCache
                 : 0;
             if (unit.Kind == LlvmCodegenUnitKind.Module)
             {
-                if (sawModule && moduleHash <= previousModuleHash)
+                if (sawModule && LlvmCodegenUnit.CompareIdentities(
+                        previousModuleHash, previousModuleIdentity, moduleHash, unit.Identity) >= 0)
                 {
                     throw new InvalidDataException("codegen module order is not canonical");
                 }
                 previousModuleHash = moduleHash;
+                previousModuleIdentity = unit.Identity;
                 sawModule = true;
             }
             else if (identityBytes.Length != 0
@@ -368,6 +363,7 @@ internal sealed class IncrementalCodegenCache
         var suffixCount = 0;
         var previousKind = -1;
         ulong previousModuleHash = 0;
+        var previousModuleIdentity = "";
         for (var unitIndex = 0; unitIndex < unitCount; unitIndex++)
         {
             EnsureReadable(wordIndex, RecordHeaderWords, words.Length);
@@ -417,11 +413,14 @@ internal sealed class IncrementalCodegenCache
                     break;
                 case LlvmCodegenUnitKind.Module:
                     if (LlvmCodegenUnit.StableIdentity(identityBytes) != moduleHash
-                        || previousKind == (int)LlvmCodegenUnitKind.Module && moduleHash <= previousModuleHash)
+                        || previousKind == (int)LlvmCodegenUnitKind.Module
+                        && LlvmCodegenUnit.CompareIdentities(
+                            previousModuleHash, previousModuleIdentity, moduleHash, identity) >= 0)
                     {
                         throw new InvalidDataException("artifact module identity or order is invalid");
                     }
                     previousModuleHash = moduleHash;
+                    previousModuleIdentity = identity;
                     break;
                 case LlvmCodegenUnitKind.SharedSuffix:
                     suffixCount++;

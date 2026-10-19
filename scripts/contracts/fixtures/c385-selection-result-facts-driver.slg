@@ -1,0 +1,40 @@
+import sollang.compiler.ir.typed as checks
+
+main {
+    """
+    enum SourceError { Overflow, DivisionByZero }
+    enum TargetError { Overflow, DivisionByZero }
+    struct Report { public kind: TargetError }
+    main {
+        SourceError.Overflow -> when {
+            Overflow => TargetError.Overflow
+            DivisionByZero => TargetError.DivisionByZero
+        } => kind
+        Report { kind: kind } => report
+    }
+    """ -> checks.selectionResultFacts => expressionArms
+    "expression-arms=$expressionArms" -> println
+
+    """
+    enum SourceError { Overflow, DivisionByZero }
+    enum TargetError { Overflow, DivisionByZero }
+    struct Report { public kind: TargetError }
+    main {
+        SourceError.Overflow -> when {
+            Overflow { TargetError.Overflow }
+            DivisionByZero { TargetError.DivisionByZero }
+        } => kind
+        Report { kind: kind } => report
+    }
+    """ -> checks.selectionResultFacts => blockArms
+    "block-arms=$blockArms" -> println
+
+    """
+    struct Box { public data: [Int; ~] }
+    accept value: Int -> Unit uses Console { "$value" -> println }
+    main {
+        Box { data: [1, 2; ~] }.data -> len -> accept
+    }
+    """ -> checks.projectedLengthOpcode => projectedLength
+    "projected-length=$projectedLength" -> println
+}

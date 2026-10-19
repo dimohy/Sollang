@@ -1,0 +1,40 @@
+import sys.file as file
+
+writeSucceeded result: Result<Unit, Text> -> Bool => result -> when {
+    Ok(_) => true
+    Err(_) => false
+}
+
+writeBorrowed writer: ref file.FileWriter -> Bool uses File {
+    writer -> writeAt<UInt16>(513, 0) -> writeSucceeded
+}
+
+valueOrZero result: Result<Option<UInt16>, Text> -> Int => result -> when {
+    Ok(value) => value -> when {
+        Some(number) => Int(number)
+        None => 0
+    }
+    Err(_) => 0
+}
+
+main {
+    "artifacts/example-tests/2562-readonly-file-writer.bin" => path
+    file.openWrite(path) -> when {
+        Ok(writer) {
+            writer -> writeBorrowed -> println
+            writer -> writeAt<UInt16>(1027, 2) -> writeSucceeded -> println
+        }
+        Err(_) {
+            false -> println
+            false -> println
+        }
+    }
+    file.openRead(path) -> when {
+        Ok(reader) {
+            reader -> readAt<UInt16>(0) -> valueOrZero => first
+            reader -> readAt<UInt16>(2) -> valueOrZero => second
+            first + second -> println
+        }
+        Err(_) { 0 -> println }
+    }
+}

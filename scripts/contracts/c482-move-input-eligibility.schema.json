@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "caseCount", "negativeCount", "positiveCount", "build", "historicalObservation", "cases"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c482-move-input-eligibility" },
+    "caseCount": { "const": 3 },
+    "negativeCount": { "const": 1 },
+    "positiveCount": { "const": 2 },
+    "build": { "type": "object", "additionalProperties": false,
+      "required": ["target", "optimization", "keepTemps", "llvmRoot", "stdlibRoot"],
+      "properties": {
+        "target": { "const": "windows-x64" },
+        "optimization": { "const": "O1" },
+        "keepTemps": { "const": true },
+        "llvmRoot": { "type": "string", "minLength": 1 },
+        "stdlibRoot": { "const": "stdlib" }
+      }
+    },
+    "historicalObservation": { "type": "object", "additionalProperties": false,
+      "required": ["managedCompilerSha256", "selfhostCandidate23Sha256", "scope"],
+      "properties": {
+        "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+        "selfhostCandidate23Sha256": { "$ref": "#/$defs/sha" },
+        "scope": { "type": "string", "minLength": 1 }
+      }
+    },
+    "cases": { "type": "array", "minItems": 3, "maxItems": 3,
+      "prefixItems": [
+        { "$ref": "#/$defs/negative" },
+        { "$ref": "#/$defs/arena" },
+        { "$ref": "#/$defs/fixed" }
+      ]
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "case": { "type": "object", "additionalProperties": false,
+      "required": ["id", "classification", "source", "sourceSha256", "expectedDiagnostic", "expectedStdout", "observedCandidate23Semantic", "observedCandidate23Ir", "observedManagedBuildExit"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "classification": { "enum": ["semantic-negative", "positive"] },
+        "source": { "type": "string", "minLength": 1 },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expectedDiagnostic": { "type": ["string", "null"] },
+        "expectedStdout": { "type": ["string", "null"] },
+        "observedCandidate23Semantic": { "type": "integer", "minimum": 0 },
+        "observedCandidate23Ir": { "const": 0 },
+        "observedManagedBuildExit": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "negative": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "id": { "const": "additional-bounded-negative" },
+      "classification": { "const": "semantic-negative" },
+      "expectedDiagnostic": { "const": "move input expects an owned container or user value type" },
+      "expectedStdout": { "type": "null" },
+      "observedCandidate23Semantic": { "const": 0 },
+      "observedManagedBuildExit": { "const": 1 }
+    } }] },
+    "arena": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "id": { "const": "arena-control" },
+      "classification": { "const": "positive" },
+      "expectedDiagnostic": { "type": "null" },
+      "expectedStdout": { "const": "4\n" },
+      "observedCandidate23Semantic": { "const": 1 },
+      "observedManagedBuildExit": { "const": 0 }
+    } }] },
+    "fixed": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": {
+      "id": { "const": "fixed-control" },
+      "classification": { "const": "positive" },
+      "expectedDiagnostic": { "type": "null" },
+      "expectedStdout": { "const": "13\n" },
+      "observedCandidate23Semantic": { "const": 1 },
+      "observedManagedBuildExit": { "const": 0 }
+    } }] }
+  }
+}

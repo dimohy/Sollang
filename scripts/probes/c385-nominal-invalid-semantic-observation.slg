@@ -1,0 +1,27 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    ["""enum Signal {
+    Ready(Int)
+    Skip
+}
+check signal: Signal -> Bool {
+    signal -> when {
+        Ready(number) { number and true }
+        Skip { false }
+    }
+}
+main {
+    Signal.Ready(1) -> check => result
+}
+"""; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    [typedIr.TypedIrNode; ~] => ir
+    prepared.package -> semanticDiagnostics.unresolvedMutableLocalReads => mutableNames
+    prepared.package -> semanticDiagnostics.firstExpressionOperandDiagnostic(prepared, resolved, ir, mutableNames, 64) => diagnostic
+    "failure=$(diagnostic.code),$(diagnostic.sourceModule),$(diagnostic.astNode),$(diagnostic.operandAst),$(diagnostic.locationOffset)" -> println
+}

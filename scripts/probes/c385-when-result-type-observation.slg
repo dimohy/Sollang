@@ -1,0 +1,32 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    ["""enum Mode {
+    Persistent
+    Close
+}
+main {
+    Mode.Persistent -> when {
+        Persistent { true }
+        Close { false }
+    } => flag
+    flag and true -> if { "valid" } else { "invalid" } -> println
+}
+"""; ~] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    0 => index!
+    index! < (prepared.package.nodes -> len) -> while {
+        prepared.package.nodes[index!] => node
+        "ast=$(index!),$(node.kind),$(node.parent),$(node.start),$(node.length)" -> println
+        index! + 1 => index!
+    }
+    0 => typeIndex!
+    typeIndex! < (resolved.expressions -> len) -> while {
+        resolved.expressions[typeIndex!] => expression
+        resolved.types[expression.typeId] => kind
+        "type=$(expression.astNode),$(expression.typeId),$(kind.kind),$(kind.origin),$(kind.symbol)" -> println
+        typeIndex! + 1 => typeIndex!
+    }
+}

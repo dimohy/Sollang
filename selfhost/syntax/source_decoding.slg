@@ -1,0 +1,31 @@
+namespace sollang.compiler.syntax.source_decoding
+
+import sys.file as file
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+
+# Reject the first malformed scalar across the entire source before tokenization.
+# The byte offset is relative to the borrowed source view, after any BOM removal.
+public firstInvalidUtf8Offset source: Text -> Option<UIntSize> {
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        source -> unicodeIdentifier.scalarWidth(index!) => width
+        width == 0 -> if { index! -> Option<UIntSize>.Some -> return }
+        index! + width => index!
+    }
+    Option<UIntSize>.None
+}
+
+# A UTF-8 BOM belongs to the file encoding, not to the Sollang source text.
+# Return a borrowed view so the mapped or stdin SourceText remains the owner.
+public utf8Text source: file.SourceText -> Text {
+    source -> len => length
+    length >= 3
+        and (source -> byte(UIntSize(0))) == 239
+        and (source -> byte(UIntSize(1))) == 187
+        and (source -> byte(UIntSize(2))) == 191
+        -> if {
+            source -> slice(UIntSize(3), length - 3)
+        } else {
+            source -> slice(UIntSize(0), length)
+        }
+}

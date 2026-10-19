@@ -1,0 +1,83 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.llvm.target as llvmTarget
+import sys.path as path
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.process as process
+
+
+
+dumpPhase label: Text, nodes: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], userSourceStart: Int -> Unit uses Console {
+    "phase=$label" -> println
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => node
+        node.sourceModule >= userSourceStart and node.kind == 14 and node.operand0 >= 0
+            -> if {
+                nodes[node.operand0] => element
+                "array=$(index!) ast=$(node.astNode) type=$(node.typeId) first=$(node.operand0) type=$(element.typeId) legacy=$(element.typeKind),$(element.typeOrigin),$(element.typeSymbol)" -> println
+                element.typeId >= 0 -> if {
+                    types[element.typeId] => type
+                    "element kind=$(type.kind) origin=$(type.origin) module=$(type.module) symbol=$(type.symbol) generic=$(type.containsParameter)" -> println
+                }
+            }
+        index! + 1 => index!
+    }
+}
+
+observe: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    0 => userSourceStart!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] == "--" -> if {
+            paths! -> len => userSourceStart!
+        } else {
+            paths! -> push(arguments[index!])
+        }
+        index! + 1 => index!
+    }
+    [file.SourceText; ~] => owners!
+    paths! -> each path {
+        path -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len)
+        -> while {
+            owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+            sources! -> push(source)
+            sourceIndex! + 1 => sourceIndex!
+        }
+    sources! -> semanticContext.prepareParallelWithStandardLibrarySources(userSourceStart!) => initialPrepared
+    initialPrepared -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => recursiveTypes
+    recursiveTypes.expressions -> each expression {
+        expression.sourceModule >= userSourceStart! -> if {
+            prepared.package.ranges[expression.sourceModule] => range
+            prepared.package.nodes[range.astStart + expression.astNode] => ast
+            ast.kind == 14 or ast.kind == 37 -> if {
+                recursiveTypes.types[expression.typeId] => type
+                "semantic ast=$(expression.astNode) kind=$(ast.kind) type=$(expression.typeId) origin=$(type.origin) symbol=$(type.symbol) generic=$(type.containsParameter)" -> println
+            }
+        }
+    }
+    0 => phase!
+    phase! <= 3 -> while {
+        prepared -> typedIr.profileResolvedContext(recursiveTypes, phase!) => ir
+        "profile-phase=$(phase!)" -> println
+        dumpPhase("profile", ir, recursiveTypes.types, userSourceStart!)
+        phase! + 1 => phase!
+    }
+    "observed-phases=4" -> println
+}
+
+main { observe() }

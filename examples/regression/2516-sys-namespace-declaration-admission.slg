@@ -1,0 +1,90 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.parser as parser
+
+verify source: Text, label: Text, trusted: Int, expected: Int -> Unit uses Console {
+    source -> parser.parseEvents => events
+    events[(events -> len) - 1].value == 0 -> if {
+        "$label parse-error" -> println
+        return
+    }
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> semanticContext.prepareWithStandardLibrarySources(trusted)
+        -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    committed.types => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    [diagnostics.UnresolvedMutableNameDiagnostic; ~] => mutableNames
+    prepared.package -> diagnostics.firstExpressionOperandDiagnostic(prepared, resolved, ir, mutableNames, 64) => result
+    "$label code=$(result.code) expected=$expected" -> println
+}
+
+main {
+    """
+    namespace sys.demo
+    helper: -> Int => 7
+    main { 7 -> println }
+    """ -> verify("sys-function", 0, 49)
+    """
+    namespace sys
+    public helper: -> Int => 7
+    main { 7 -> println }
+    """ -> verify("sys-root", 0, 49)
+    """
+    sys.demo.helper: -> Int => 7
+    main { 7 -> println }
+    """ -> verify("qualified-sys", 0, 49)
+    """
+    namespace sys.demo
+    struct Item { value: Int }
+    impl Item { get: self -> Int => self.value }
+    main { 7 -> println }
+    """ -> verify("sys-inherent", 0, 49)
+    """
+    namespace system.demo
+    helper: -> Int => 7
+    main { helper() -> println }
+    """ -> verify("lookalike", 0, 0)
+    """
+    namespace sys.demo
+    struct Item { value: Int }
+    trait Value { get: self -> Int }
+    impl Value for Item { get: self -> Int => self.value }
+    main { Item { value: 7 } -> Value.get -> println }
+    """ -> verify("trait-impl", 0, 0)
+    """
+    namespace sys.demo
+    system.helper: -> Int => 7
+    main { system.helper() -> println }
+    """ -> verify("qualified-lookalike-in-sys", 0, 0)
+    """
+    namespace sysdemo
+    helper: -> Int => 7
+    main { helper() -> println }
+    """ -> verify("sys-prefix-lookalike", 0, 0)
+    """
+    namespace sys.demo
+    struct Item { value: Int }
+    trait Value { get: self -> Int }
+    impl Value for Item { get: self -> Int { local: -> Int => 7
+     local() } }
+    main { Item { value: 7 } -> Value.get -> println }
+    """ -> verify("trait-nested-local", 0, 0)
+    """
+    namespace sys.demo
+    helper: -> Int => 7
+    main {}
+    """ -> verify("trusted-library", 1, 0)
+    """
+    namespace sys.demo
+    struct Item { value: Int }
+    main {}
+    """ -> verify("types-only", 0, 0)
+    """
+    print: -> Int => 7
+    main {}
+    """ -> verify("reserved-name", 0, 46)
+}

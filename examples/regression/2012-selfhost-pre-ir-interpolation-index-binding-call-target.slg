@@ -1,0 +1,52 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+
+main {
+    [
+    """
+    import sample.interpolation_method_precedence as sample
+
+    main {
+        UInt64(7) -> sample.make => token
+        [token] => tokens
+        0 => index
+        "value=$(tokens[index] -> value)" -> println
+    }
+    """,
+    """
+    namespace sample.interpolation_method_precedence
+
+    public struct Token { raw: UInt64 }
+    public make value: UInt64 -> Token => Token { raw: value }
+    public value token: Token -> UInt64 => 99
+
+    impl Token {
+        public value: self -> UInt64 => self.raw
+    }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved
+    0 => unresolvedFlowCallCount!
+    0 => indexedReceiverCount!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => call
+            call.kind == 10 and call.operand0 >= 0 -> if {
+                unresolvedFlowCallCount! + 1 => unresolvedFlowCallCount!
+                prepared.interpolations[call.operand0] => receiver
+                receiver.kind == 7 -> if { indexedReceiverCount! + 1 => indexedReceiverCount! }
+            }
+            nodeIndex! + 1 => nodeIndex!
+        }
+    prepared -> interpolationInference.preIrFlowCallTargets(resolved) => semanticTargets
+    0 => semanticTargetCount!
+    semanticTargets -> each target {
+        target.status == 0 -> if { semanticTargetCount! + 1 => semanticTargetCount! }
+    }
+    semanticTargetCount! -> println
+    unresolvedFlowCallCount! -> println
+    indexedReceiverCount! -> println
+}

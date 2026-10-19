@@ -1,14 +1,23 @@
 namespace sollang.compiler.cli_workspace
 
 import sollang.compiler.project
+import sollang.compiler.cli_project as cliProject
+import sys.directory.kind as kinds
+import sollang.compiler.manifest_diagnostics as manifestDiagnostics
 import sollang.compiler.workspace
 import sys.file as file
 import sys.path as path
+import sollang.compiler.manifest_entry as manifestEntry
+import sollang.compiler.path_identity as pathIdentity
+import sys.text as text
 
 public struct WorkspaceInput {
     public status: Int
+    public diagnostic: Text
     public projectOption: Text
     public sourceDirectory: Text
+    public memberManifests: [path.Path; ~]
+    public memberOrder: [Int; ~]
 }
 
 textEndsWith value: Text, suffix: Text -> Bool {
@@ -55,79 +64,282 @@ directoryOf value: Text -> Text {
     "."
 }
 
-workspacePath option: Text, storage: mut Arena -> Text {
-    option -> textEndsWith(".workspace") -> if {
-        option -> return
-    }
-    "$option/sollang.workspace" -> materialize(storage)
-}
+
 
 memberText source: file.SourceText, member: workspace.WorkspaceMember -> Text {
     source -> slice(member.start, member.length)
 }
 
-memberMatches source: file.SourceText, member: workspace.WorkspaceMember, directory: Text, requestedPackage: Text -> Bool uses File {
-    source -> memberText(member) => relative
-    Arena(0) => projectPathStorage!
-    "$directory/$relative/sollang.project" -> materialize(projectPathStorage!) => projectPath
-    projectPath -> path.fromText(path.nativeStyle()) => projectFile
-    projectFile -> file.mapPath => projectSource
-    projectSource -> len => projectSourceLength
-    projectSource -> slice(UIntSize(0), projectSourceLength) => projectSourceView
-    projectSourceView -> project.parse => parsed
-    parsed.status == 0 => matches!
-    matches! -> if {
-        projectSource -> slice(parsed.name.start, parsed.name.length) => name
-        name -> textEquals(requestedPackage) => matches!
+struct MemberPathInput {
+    status: Int
+    diagnostic: Text
+    manifestPath: path.Path
+}
+
+memberPathFailure status: Int, message: Text, style: path.Style -> MemberPathInput {
+    MemberPathInput { status: status, diagnostic: message, manifestPath: path.fromText("", style) }
+}
+
+memberPathRooted value: Text, style: path.Style -> Bool {
+    (value -> len) == 0 -> if { false -> return }
+    value -> byte(0) => first
+    style -> when {
+        Posix => first == 47
+        Windows {
+            first == 47 or first == 92 -> if { true -> return }
+            ((value -> len) >= 2 and (value -> byte(1)) == 58
+                and ((first >= 65 and first <= 90) or (first >= 97 and first <= 122)))
+        }
+    }
+}
+
+# Keep the lexical path. Query metadata only selects directory versus file input.
+resolveMemberPath relative: Text, directory: Text, workspaceManifest: Text, style: path.Style, storage: mut Arena -> MemberPathInput uses File {
+    relative -> memberPathRooted(style) -> if {
+        "workspace member path must be relative in $workspaceManifest: $relative" -> materialize(storage) => message
+        112 -> memberPathFailure(message, style) -> return
+    }
+    relative -> path.fromText(style) -> normalizeConfined -> when {
+        Err(error) {
+            error -> textEquals("path escapes root") -> if {
+                "workspace member escapes the workspace directory: $relative" -> materialize(storage) => message
+                113 -> memberPathFailure(message, style) -> return
+            }
+            error -> materialize(storage) => message
+            114 -> memberPathFailure(message, style) -> return
+        }
+        Ok(normalized) {
+            normalized -> pathText => relativePath
+            directory -> path.fromText(style) -> join(relativePath) -> when {
+                Err(error) {
+                    error -> materialize(storage) => message
+                    114 -> memberPathFailure(message, style) -> return
+                }
+                Ok(joined) {
+                    joined -> normalizeConfined -> when {
+                        Err(error) {
+                            error -> materialize(storage) => message
+                            114 -> memberPathFailure(message, style) -> return
+                        }
+                        Ok(fullPath) {
+                            false => directoryInput!
+                            fullPath -> query -> when {
+                                Ok(info) { (info.kind -> kinds.code) == 1 => directoryInput! }
+                                Err(_) { false => directoryInput! }
+                            }
+                            directoryInput! -> if {
+                                fullPath -> join("sollang.project") -> when {
+                                    Err(error) {
+                                        error -> materialize(storage) => message
+                                        114 -> memberPathFailure(message, style) -> return
+                                    }
+                                    Ok(manifestPath) {
+                                        MemberPathInput { status: 0, diagnostic: "", manifestPath: manifestPath } -> return
+                                    }
+                                }
+                            }
+                            MemberPathInput { status: 0, diagnostic: "", manifestPath: fullPath } -> return
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+memberNameMatches bytes: ref [UInt8; ~], name: project.TextSpan, requested: Text -> Bool {
+    name.length == (requested -> len) => matches!
+    UIntSize(0) => index!
+    matches! and index! < name.length -> while {
+        bytes[Int(name.start + index!)] != (requested -> byte(index!))
+            -> if { false => matches! }
+        index! + 1 => index!
     }
     matches!
 }
 
-emptyInput status: Int -> WorkspaceInput {
-    WorkspaceInput { status: status, projectOption: "", sourceDirectory: "" }
+emptyInput status: Int, diagnostic: Text -> WorkspaceInput {
+    [path.Path; ~] => members
+    [Int; ~] => order
+    WorkspaceInput { status: status, diagnostic: diagnostic, projectOption: "", sourceDirectory: "", memberManifests: members, memberOrder: order }
+}
+
+memberOrder bytes: ref [UInt8; ~], names: [project.TextSpan; ~] -> [Int; ~] {
+    [Int; ~] => order!
+    0 => index!
+    index! < (names -> len) -> while {
+        order! -> push(index!)
+        index! + 1 => index!
+    }
+    bytes -> file.borrowBytes => source
+    1 => sortIndex!
+    sortIndex! < (order! -> len) -> while {
+        order![sortIndex!] => selected
+        source -> slice(names[selected].start, names[selected].length) => selectedName
+        sortIndex! => position!
+        true => shifting!
+        shifting! and position! > 0 -> while {
+            order![position! - 1] => previous
+            source -> slice(names[previous].start, names[previous].length) => previousName
+            (selectedName -> text.compareOrdinal(previousName)) >= 0
+                -> if { false => shifting! } else {
+                    previous => order![position!]
+                    position! - 1 => position!
+                }
+        }
+        selected => order![position!]
+        sortIndex! + 1 => sortIndex!
+    }
+    order!
+}
+
+appendMemberText output: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+memberSelectionDiagnostic bytes: ref [UInt8; ~], names: [project.TextSpan; ~], order: [Int; ~], requestedPackage: Text, selectionRequired: Bool, storage: mut Arena -> Text {
+    [UInt8; ~] => output!
+    selectionRequired -> if {
+        output! -> appendMemberText("workspace has multiple packages; select one with --package: ")
+    } else {
+        output! -> appendMemberText("workspace has no package '")
+        output! -> appendMemberText(requestedPackage)
+        output! -> appendMemberText("'; available packages: ")
+    }
+    0 => index!
+    index! < (order -> len) -> while {
+        index! > 0 -> if {
+            output! -> push(44)
+            output! -> push(32)
+        }
+        names[order[index!]] => name
+        UIntSize(0) => byteIndex!
+        byteIndex! < name.length -> while {
+            output! -> push(bytes[Int(name.start + byteIndex!)])
+            byteIndex! + 1 => byteIndex!
+        }
+        index! + 1 => index!
+    }
+    output! -> file.borrowBytes => source
+    source -> slice(0, source -> len) -> materialize(storage)
 }
 
 # Status: 0 valid, 1 invalid workspace, 2 requested package missing,
 # 3 package selection required.
 public load option: Text, requestedPackage: Text, manifestStorage: mut Arena, projectStorage: mut Arena -> WorkspaceInput uses File {
-    option -> workspacePath(manifestStorage) => manifest
-    manifest -> directoryOf => directory
-    manifest -> path.fromText(path.nativeStyle()) => manifestFile
-    manifestFile -> file.mapPath => source
-    source -> len => sourceLength
-    source -> slice(UIntSize(0), sourceLength) => sourceView
-    sourceView -> workspace.parse => parsed
-    parsed.status != 0 -> if {
-        parsed.status + 100 => parseStatus
-        parseStatus -> emptyInput => failure
-        failure -> return
-    }
+    option -> manifestEntry.resolve("sollang.workspace", path.nativeStyle()) -> when {
+        Err(error) {
+            "workspace manifest path invalid: $error" -> materialize(projectStorage) => message
+            129 -> emptyInput(message)
+        }
+        Ok(manifestFile) {
+            manifestFile -> pathText -> materialize(manifestStorage) => manifest
+            manifest -> directoryOf => directory
+            manifestFile -> manifestEntry.fileExists -> unless {
+                "workspace manifest not found: $manifest" -> materialize(projectStorage) => message
+                129 -> emptyInput(message) -> return
+            }
+            manifestFile -> file.mapPath => source
+            source -> len => sourceLength
+            source -> slice(UIntSize(0), sourceLength) => sourceView
+            sourceView -> workspace.parse => parsed
+            parsed.status != 0 -> if {
+                parsed.status + 100 => parseStatus
+                sourceView -> manifestDiagnostics.format(manifest, parsed.diagnostic, projectStorage) => message
+                parseStatus -> emptyInput(message) => failure
+                failure -> return
+            }
 
-    -1 => selectedIndex!
-    (requestedPackage -> len) > 0 -> if {
-        0 => index!
-        index! < (parsed.members -> len) -> while {
-            source -> memberMatches(parsed.members[index!], directory, requestedPackage)
-                -> if {
-                    index! => selectedIndex!
+            (parsed.members -> len) == 0 -> if {
+                manifestDiagnostics.withoutToken(7, 2, 0) => emptyMembers
+                sourceView -> manifestDiagnostics.format(manifest, emptyMembers, projectStorage) => message
+                111 -> emptyInput(message) -> return
+            }
+
+            path.nativeStyle() => style
+            [path.Path; ~] => memberPaths!
+            [UInt8; ~] => memberNameBytes!
+            [project.TextSpan; ~] => memberNames!
+            0 => memberIndex!
+            memberIndex! < (parsed.members -> len) -> while {
+                source -> memberText(parsed.members[memberIndex!]) => relative
+                relative -> resolveMemberPath(directory, manifest, style, projectStorage) => resolvedMember
+                resolvedMember.status != 0 -> if {
+                    resolvedMember.status -> emptyInput(resolvedMember.diagnostic) -> return
                 }
-            index! + 1 => index!
-        }
-        selectedIndex! < 0 -> if {
-            2 -> emptyInput => failure
-            failure -> return
-        }
-    } else {
-        (parsed.members -> len) == 1 -> if {
-            0 => selectedIndex!
-        } else {
-            3 -> emptyInput => failure
-            failure -> return
+                resolvedMember.manifestPath -> pathText => memberManifest
+                resolvedMember.manifestPath -> cliProject.manifestFileExists
+                    -> unless {
+                        "project manifest not found: $memberManifest" -> materialize(projectStorage) => message
+                        129 -> emptyInput(message) -> return
+                    }
+                resolvedMember.manifestPath -> file.mapPath => memberSource
+                memberSource -> slice(0, memberSource -> len) => memberView
+                memberView -> project.parse => memberParsed
+                memberSource -> cliProject.validateParsedInput(memberParsed, memberManifest, projectStorage) => checkedMember
+                checkedMember.status != 0 -> if {
+                    checkedMember.status -> emptyInput(checkedMember.diagnostic) -> return
+                }
+                memberView -> slice(checkedMember.name.start, checkedMember.name.length) => memberName
+                0 => previousIndex!
+                previousIndex! < (memberPaths! -> len) -> while {
+                    memberPaths![previousIndex!] -> pathText => previousManifest
+                    previousManifest -> pathIdentity.equalsOrdinalIgnoreCase(memberManifest)
+                        -> if {
+                            "workspace declares project '$memberManifest' more than once: $manifest" -> materialize(projectStorage) => message
+                            130 -> emptyInput(message) -> return
+                        }
+                    previousIndex! + 1 => previousIndex!
+                }
+                0 => previousIndex!
+                previousIndex! < (memberNames! -> len) -> while {
+                    memberNameBytes! -> memberNameMatches(memberNames![previousIndex!], memberName)
+                        -> if {
+                            memberPaths![previousIndex!] -> pathText => previousManifest
+                            "workspace package name '$memberName' is declared by both '$previousManifest' and '$memberManifest'" -> materialize(projectStorage) => message
+                            131 -> emptyInput(message) -> return
+                        }
+                    previousIndex! + 1 => previousIndex!
+                }
+                UIntSize(memberNameBytes! -> len) => nameStart
+                UIntSize(0) => nameByte!
+                nameByte! < checkedMember.name.length -> while {
+                    memberView -> byte(checkedMember.name.start + nameByte!) => currentByte
+                    memberNameBytes! -> push(currentByte)
+                    nameByte! + 1 => nameByte!
+                }
+                memberNames! -> push(project.TextSpan { start: nameStart, length: checkedMember.name.length })
+                memberPaths! -> push(resolvedMember.manifestPath)
+                memberIndex! + 1 => memberIndex!
+            }
+
+            memberNameBytes! -> memberOrder(memberNames!) => orderedMembers
+            -1 => selectedIndex!
+            (requestedPackage -> len) > 0 -> if {
+                0 => index!
+                index! < (orderedMembers -> len) -> while {
+                    orderedMembers[index!] => memberIndex
+                    memberNameBytes! -> memberNameMatches(memberNames![memberIndex], requestedPackage)
+                        -> if { memberIndex => selectedIndex! }
+                    index! + 1 => index!
+                }
+                selectedIndex! < 0 -> if {
+                    memberNameBytes! -> memberSelectionDiagnostic(memberNames!, orderedMembers, requestedPackage, false, projectStorage) => message
+                    2 -> emptyInput(message) -> return
+                }
+            } else {
+                (memberPaths! -> len) == 1 -> if { orderedMembers[0] => selectedIndex! } else {
+                    memberNameBytes! -> memberSelectionDiagnostic(memberNames!, orderedMembers, "", true, projectStorage) => message
+                    3 -> emptyInput(message) -> return
+                }
+            }
+            memberPaths![selectedIndex!] -> pathText -> materialize(projectStorage) => projectOption
+            WorkspaceInput { status: 0, diagnostic: "", projectOption: projectOption, sourceDirectory: directory, memberManifests: memberPaths!, memberOrder: orderedMembers } => result
+            result
         }
     }
-
-    source -> memberText(parsed.members[selectedIndex!]) => relative
-    "$directory/$relative" -> materialize(projectStorage) => projectOption
-    WorkspaceInput { status: 0, projectOption: projectOption, sourceDirectory: directory } => result
-    result
 }

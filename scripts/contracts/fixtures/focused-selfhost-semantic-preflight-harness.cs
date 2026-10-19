@@ -1,0 +1,49 @@
+using System.Reflection;
+using System.Runtime.ExceptionServices;
+using System.Text.Json;
+
+// Temporary adapter to the existing production frontend. Remove when the
+// managed compiler exposes a canonical semantic-only check command.
+internal static class SemanticPreflight
+{
+    private static object? Invoke(MethodInfo method, object? owner, object?[] args)
+    {
+        try { return method.Invoke(owner, args); }
+        catch (TargetInvocationException error) when (error.InnerException is { } inner)
+        {
+            ExceptionDispatchInfo.Capture(inner).Throw();
+            throw;
+        }
+    }
+
+    public static int Main(string[] args)
+    {
+        try
+        {
+            if (args.Length < 2) throw new ArgumentException("compiler DLL and source paths required");
+            var assembly = Assembly.LoadFrom(Path.GetFullPath(args[0]));
+            var app = assembly.GetType("Sollang.Compiler.Cli.CompilerApp", true)!;
+            var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
+            var loaded = Invoke(app.GetMethod("LoadProgram", BindingFlags.Static | BindingFlags.NonPublic)!,
+                null, [args[1..].Select(Path.GetFullPath).ToArray(), null, target])!;
+            var program = loaded.GetType().GetProperty("Program")!.GetValue(loaded)!;
+            var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
+            var semantic = Activator.CreateInstance(semanticType,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, [program, 64], null)!;
+            var bound = Invoke(semanticType.GetMethod("Compile", BindingFlags.Instance | BindingFlags.Public)!,
+                semantic, [null])!;
+            var warnings = (System.Collections.IEnumerable)bound.GetType().GetProperty("Warnings")!.GetValue(bound)!;
+            var messages = warnings.Cast<object>().Select(warning => warning.ToString()).ToArray();
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", sourceCount = args.Length - 1,
+                pointerBitWidth = 64, warnings = messages, codegenInvoked = false }));
+            return 0;
+        }
+        catch (Exception error)
+        {
+            while (error is TargetInvocationException { InnerException: { } inner }) error = inner;
+            Console.Error.WriteLine("sollang: " + error.Message);
+            Console.WriteLine(JsonSerializer.Serialize(new { status = "failed", codegenInvoked = false }));
+            return 1;
+        }
+    }
+}

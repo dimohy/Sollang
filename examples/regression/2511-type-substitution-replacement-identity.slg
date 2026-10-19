@@ -1,0 +1,90 @@
+import sollang.compiler.semantic.type_terms as typeTerms
+
+term canonical: Int, kind: Int, first: Int, name: Int -> typeTerms.TypeTerm {
+    typeTerms.TypeTerm {
+        astNode: canonical
+        canonical: canonical
+        kind: kind
+        nameToken: -1
+        nameId: name
+        firstArgument: first
+        secondArgument: -1
+        lengthToken: -1
+        lengthId: -1
+    }
+}
+
+tree: -> [typeTerms.TypeTerm; ~] => [
+term(0, 1, -1, 0),
+term(1, 3, 0, -1),
+term(2, 1, -1, 2); ~
+]
+
+report result: move typeTerms.SubstitutionResult -> Unit uses Console {
+    -1 => kind!
+    0 => depth!
+    -1 => name!
+    result.status == 0 -> if {
+        result.terms[result.root].kind => kind!
+        result.root => node!
+        node! >= 0 -> while {
+            result.terms[node!] => current
+            current.nameId => name!
+            current.firstArgument >= 0 -> if { depth! + 1 => depth! }
+            current.firstArgument => node!
+        }
+    }
+    "$(result.status)/$(kind!)/$(depth!)/$(name!)" -> println
+}
+
+check root: Int, replacement: Int -> Unit uses Console {
+    typeTerms.SubstitutionRequest {
+        terms: tree()
+        root: root
+        parameter: 0
+        replacement: replacement
+    } -> typeTerms.substitute -> report
+}
+
+main {
+    check(0, 0)
+    check(0, 1)
+    check(1, 0)
+    check(1, 1)
+    check(1, 2)
+    check(2, 1)
+    check(-1, 2)
+
+    typeTerms.SubstitutionRequest {
+        terms: [term(0, 3, 0, -1), term(1, 1, -1, 1); ~]
+        root: 0
+        parameter: 1
+        replacement: 1
+    } -> typeTerms.substitute -> report
+    typeTerms.SubstitutionRequest {
+        terms: [term(0, 3, 7, -1), term(1, 1, -1, 1); ~]
+        root: 0
+        parameter: 1
+        replacement: 1
+    } -> typeTerms.substitute -> report
+    typeTerms.SubstitutionRequest {
+        terms: [term(-1, 1, -1, 0), term(1, 1, -1, 1); ~]
+        root: 0
+        parameter: 1
+        replacement: 1
+    } -> typeTerms.substitute -> report
+    typeTerms.SubstitutionRequest {
+        terms: [term(0, 1, -1, 0), term(1, 3, 0, -1), term(0, 1, -1, 0); ~]
+        root: 2
+        parameter: 0
+        replacement: 1
+    } -> typeTerms.substitute -> report
+    term(0, 1, -1, 0) => invalid!
+    7 => invalid!.secondArgument
+    typeTerms.SubstitutionRequest {
+        terms: [invalid!, term(1, 1, -1, 1); ~]
+        root: 0
+        parameter: 1
+        replacement: 1
+    } -> typeTerms.substitute -> report
+}

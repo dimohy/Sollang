@@ -15,7 +15,12 @@ param(
     [AllowEmptyString()][string]$CommonInputFingerprint = "",
     [ValidateSet("", "windows", "linux")][string]$CompilerHost = "",
     [ValidateSet("native-build", "raw-llvm")][string]$CompilationMode = "native-build",
-    [string[]]$AdditionalSource = @()
+    [string[]]$AdditionalSource = @(),
+    [string]$CancellationRequestPath = "",
+    [string]$CancellationRunId = "",
+    [string]$CancellationAcknowledgementPath = "",
+    [string]$PhaseExecutionContract = "",
+    [ValidateSet("", "managed", "selfhost")][string]$CompilerSide = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,9 +28,26 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "verification-process.ps1")
 . (Join-Path $PSScriptRoot "native-exact-fixture-receipt.ps1")
 . (Join-Path $PSScriptRoot "native-exact-source-closure.ps1")
+$cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
+if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
+    throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
+    Initialize-VerificationCancellation -RequestPath $CancellationRequestPath `
+        -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
+}
+Assert-VerificationCancellationNotRequested
 
 $repoRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
+$compilerIsManagedDll = [System.IO.Path]::GetExtension($compilerPath).Equals('.dll', [System.StringComparison]::OrdinalIgnoreCase)
+$windowsCompilerPath = $compilerPath
+[string[]]$windowsCompilerArgumentPrefix = @()
+if ($compilerIsManagedDll) {
+    $dotnetCommand = Get-Command dotnet -CommandType Application -ErrorAction Stop | Select-Object -First 1
+    $windowsCompilerPath = $dotnetCommand.Source
+    $windowsCompilerArgumentPrefix = @($compilerPath)
+}
 $llvmHome = (Resolve-Path -LiteralPath $LlvmRoot).Path
 $stdlibPath = (Resolve-Path -LiteralPath $StdlibRoot).Path
 $outputRoot = [System.IO.Path]::GetFullPath($OutputDirectory)
@@ -72,6 +94,15 @@ $sourcePaths += $additionalSourcePaths
 Assert-NativeExactCompilerSourceClosure -RepositoryRoot $repoRoot -Fixture $Fixture -SourcePath $sourcePaths
 
 $fixtureContractPaths = [System.Collections.Generic.List[string]]::new()
+$compilerStderrExactPath = Join-Path $expectedRoot "$Fixture.compiler.stderr.exact.txt"
+$hasExactCompilerStderr = Test-Path -LiteralPath $compilerStderrExactPath -PathType Leaf
+if ($hasExactCompilerStderr) {
+    if (Test-Path -LiteralPath (Join-Path $expectedRoot "$Fixture.compiler.stderr.contains.txt")) {
+        throw 'EXACT_COMPILER_DIAGNOSTIC_CONTRACT_AMBIGUOUS'
+    }
+    $fixtureContractPaths.Add((Resolve-Path -LiteralPath $compilerStderrExactPath).Path)
+    Assert-NativeExactCompilerDiagnostics -Stdout '' -Stderr ([IO.File]::ReadAllText($compilerStderrExactPath)) -ExpectedExactPath $compilerStderrExactPath
+}
 $hasArgumentsContract = Test-Path -LiteralPath $argumentsPath -PathType Leaf
 [string[]]$runArguments = @()
 if ($hasArgumentsContract) {
@@ -84,17 +115,30 @@ if (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf) {
 if ($ExpectedStdoutLength -eq 0) {
     $fixtureContractPaths.Add((Resolve-Path -LiteralPath $expectedPath).Path)
 }
-foreach ($suffix in @(
-    "selfhost.llvm.not-contains.txt",
-    "llvm.not-contains.txt",
-    "selfhost.llvm.regex-counts.txt",
-    "selfhost.llvm.ordered-regex.txt")) {
-    $contractPath = Join-Path $expectedRoot "$Fixture.$suffix"
-    if (Test-Path -LiteralPath $contractPath -PathType Leaf) {
-        $fixtureContractPaths.Add((Resolve-Path -LiteralPath $contractPath).Path)
-    }
+$llvmContracts = Get-NativeExactLlvmContracts -ExpectedRoot $expectedRoot -Fixture $Fixture `
+    -CompilerIsManagedDll $compilerIsManagedDll -CompilerSide $CompilerSide `
+    -PhaseContractProvided (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract))
+foreach ($contractPath in $llvmContracts.InputPaths) {
+    $fixtureContractPaths.Add((Resolve-Path -LiteralPath $contractPath).Path)
 }
 $fixtureInputPaths = @($sourcePaths) + @($fixtureContractPaths)
+$phaseContext = $null; $phaseCase = $null; $phasePrefix = ''
+if (-not [string]::IsNullOrWhiteSpace($PhaseExecutionContract)) {
+    if ($Platform -cne 'windows' -or $CompilationMode -cne 'native-build' -or [string]::IsNullOrWhiteSpace($CompilerSide) -or $AdditionalSource.Count -gt 0) {
+        throw 'PHASE_EXECUTION_REQUIRES_WINDOWS_NATIVE_BUILD_AND_SIDE'
+    }
+    $phaseContext = Get-NativeExactPhaseContext $repoRoot $PhaseExecutionContract $CompilerSide $compilerPath $PSCommandPath
+    [void](Assert-NativeExactPhaseOutputPath $repoRoot $outputRoot)
+    $phaseCases = @($phaseContext.Contract.cases | Where-Object { $_.fixture.path -ceq [IO.Path]::GetRelativePath($repoRoot, $sourcePath).Replace('\', '/') })
+    if ($phaseCases.Count -gt 1) { throw 'PHASE_EXECUTION_DUPLICATE_FIXTURE' }
+    if ($phaseCases.Count -eq 1) {
+        $phaseCase = $phaseCases[0]
+        if ((Get-NativeExactPhaseExpectedStage $phaseCase compile $CompilerSide).exitCode -ne 0) { throw 'PHASE_EXECUTION_NEGATIVE_REQUIRES_NEGATIVE_RUNNER' }
+        $phasePrefix = Get-NativeExactPhaseOutcomePrefix $phaseContext $phaseCase
+        if (Test-Path -LiteralPath "$phasePrefix.compile.json") { throw 'PHASE_EXECUTION_CACHED_OUTCOME_FORBIDDEN' }
+    }
+} elseif (-not [string]::IsNullOrWhiteSpace($CompilerSide)) { throw 'PHASE_EXECUTION_CONTRACT_REQUIRED' }
+
 
 [System.IO.Directory]::CreateDirectory($outputRoot) | Out-Null
 
@@ -115,8 +159,28 @@ $objectPath = $executablePath + ".o"
 $emissionErrorPath = $executablePath + ".emit.err"
 $inputReceiptPath = $executablePath + ".inputs.sha256"
 $outputReceiptPath = $executablePath + ".outputs.sha256"
+if ($null -ne $phaseCase) {
+    foreach ($existing in @($executablePath, $llvmPath, $bitcodePath, $objectPath, $inputReceiptPath, $outputReceiptPath)) {
+        if (Test-Path -LiteralPath $existing) { throw 'PHASE_EXECUTION_EXISTING_PRODUCTS_PROTECTED' }
+    }
+}
+$phaseBuildRecord = ''; $phaseRunRecord = ''
+$phaseBuildInputs = $null
+if ($null -ne $phaseCase) {
+    $phaseBuildRecord = "$artifactBase.compile.execution.json"
+    $phaseRunRecord = "$artifactBase.run.execution.json"
+    $phaseBuildInputs = Get-NativeExactPhaseCommandInputs $phaseContext ($fixtureInputPaths + @($llvmAsPath, $clangPath) + @(Get-ChildItem -LiteralPath $stdlibPath -Recurse -File -Filter '*.slg' | ForEach-Object FullName))
+} elseif ($hasExactCompilerStderr) {
+    $diagnosticRunId = [guid]::NewGuid().ToString('N')
+    $phaseBuildRecord = "$artifactBase.$diagnosticRunId.compile.execution.json"
+    $phaseRunRecord = "$artifactBase.$diagnosticRunId.run.execution.json"
+}
+
 
 function Get-CurrentWindowsExactInputFingerprint {
+    if ((Test-Path -LiteralPath $compilerStderrExactPath -PathType Leaf) -ne $hasExactCompilerStderr) {
+        throw 'EXACT_COMPILER_DIAGNOSTIC_CONTRACT_PRESENCE_CHANGED'
+    }
     if ((Test-Path -LiteralPath $argumentsPath -PathType Leaf) -ne $hasArgumentsContract) {
         throw "$Label exact $Fixture argument contract presence changed during verification"
     }
@@ -180,40 +244,49 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
     $arguments = @("build") + $sourcePaths + @(
         "-o", $executablePath,
         "--target", "windows-x64",
-        "--llvm", $llvmHome,
-        "--stdlib", $stdlibPath,
-        "--jobs", $jobText,
-        "-O1", "--keep-temps")
+        "--llvm", $llvmHome)
+    if (-not $compilerIsManagedDll) {
+        $arguments += @("--stdlib", $stdlibPath)
+    }
+    if (-not $compilerIsManagedDll) {
+        $arguments += @("--jobs", $jobText)
+    }
+    $arguments += @("-O1", "--keep-temps")
     $build = Invoke-VerificationProcessCapture `
-        -FilePath $compilerPath `
-        -ArgumentList $arguments `
+        -FilePath $windowsCompilerPath `
+        -ArgumentList ($windowsCompilerArgumentPrefix + $arguments) `
         -Description "$Label exact $Fixture build" `
+        -ExecutionRecordPath $phaseBuildRecord `
         -TimeoutMilliseconds $TimeoutMilliseconds
 } elseif (-not $reuseVerifiedArtifacts -and $CompilationMode -eq "raw-llvm") {
     $arguments = @("linux", "--jobs", $jobText) + $sourcePaths
     Invoke-VerificationProcessToFile `
-        -FilePath $compilerPath `
-        -ArgumentList $arguments `
+        -FilePath $windowsCompilerPath `
+        -ArgumentList ($windowsCompilerArgumentPrefix + $arguments) `
         -Description "$Label exact $Fixture Linux LLVM emission from Windows" `
         -OutputPath $llvmPath `
         -ErrorPath $emissionErrorPath `
         -TimeoutMilliseconds $TimeoutMilliseconds
     $emissionDiagnostics = [System.IO.File]::ReadAllText($emissionErrorPath)
-    if ($emissionDiagnostics -match '(?m)^(?:warning S\d+|note N\d+)\b') {
-        throw "$Label exact $Fixture emitted a compiler warning or note.`n$emissionDiagnostics"
-    }
     $build = [pscustomobject]@{ ExitCode = 0; Stdout = ""; Stderr = $emissionDiagnostics }
 } elseif (-not $reuseVerifiedArtifacts) {
-    $arguments = @(
-        "-d", $Distribution, "--", (Convert-ToExactFixtureWslPath $compilerPath),
-        "build")
+    $wslCompilerArguments = if ($compilerIsManagedDll) {
+        @('dotnet', (Convert-ToExactFixtureWslPath $compilerPath))
+    } else {
+        @((Convert-ToExactFixtureWslPath $compilerPath))
+    }
+    $arguments = @("-d", $Distribution, "--") + $wslCompilerArguments + @("build")
     $arguments += $sourcePaths | ForEach-Object { Convert-ToExactFixtureWslPath $_ }
     $arguments += @(
         "-o", (Convert-ToExactFixtureWslPath $executablePath),
-        "--target", "linux-x64",
-        "--stdlib", (Convert-ToExactFixtureWslPath $stdlibPath),
-        "--jobs", $jobText,
-        "-O1", "--keep-temps")
+        "--target", "linux-x64")
+    if (-not $compilerIsManagedDll) {
+        $arguments += @("--stdlib", (Convert-ToExactFixtureWslPath $stdlibPath))
+    }
+    if (-not $compilerIsManagedDll) {
+        $arguments += @("--jobs", $jobText)
+    }
+    $arguments += @("-O1", "--keep-temps")
     $build = Invoke-VerificationProcessCapture `
         -FilePath "wsl.exe" `
         -ArgumentList $arguments `
@@ -226,9 +299,8 @@ if (-not $reuseVerifiedArtifacts) {
     if ($build.ExitCode -ne 0) {
         throw "$Label exact $Fixture build failed with exit code $($build.ExitCode).`n$buildDiagnostics"
     }
-    if ($buildDiagnostics -match '(?m)^(?:warning S\d+|note N\d+)\b') {
-        throw "$Label exact $Fixture build emitted a compiler warning or note.`n$buildDiagnostics"
-    }
+    $diagnosticContract = if ($hasExactCompilerStderr) { $compilerStderrExactPath } else { '' }
+    Assert-NativeExactCompilerDiagnostics -Stdout $build.Stdout -Stderr $build.Stderr -ExpectedExactPath $diagnosticContract
     if (-not (Test-Path -LiteralPath $llvmPath -PathType Leaf) -or
         (Get-Item -LiteralPath $llvmPath).Length -eq 0) {
         throw "$Label exact $Fixture build did not retain LLVM"
@@ -271,51 +343,19 @@ if (-not $reuseVerifiedArtifacts) {
         }
     }
 
-    foreach ($suffix in @("selfhost.llvm.not-contains.txt", "llvm.not-contains.txt")) {
-        $contractPath = Join-Path $expectedRoot "$Fixture.$suffix"
-        if (Test-Path -LiteralPath $contractPath) {
-            foreach ($forbidden in ([System.IO.File]::ReadAllLines($contractPath) |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-                if ([System.IO.File]::ReadAllText($llvmPath).Contains($forbidden.Trim(), [System.StringComparison]::Ordinal)) {
-                    throw "$Label exact $Fixture LLVM retained forbidden text '$($forbidden.Trim())'"
-                }
-            }
-        }
-    }
-
-    $llvmText = [System.IO.File]::ReadAllText($llvmPath)
-    $regexCountsPath = Join-Path $expectedRoot "$Fixture.selfhost.llvm.regex-counts.txt"
-    if (Test-Path -LiteralPath $regexCountsPath) {
-        foreach ($contract in ([System.IO.File]::ReadAllLines($regexCountsPath) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            $fields = $contract.Split("`t", 2)
-            if ($fields.Length -ne 2) { throw "invalid exact regex-count contract '$contract'" }
-            $actualCount = ([regex]::Matches($llvmText, $fields[1])).Count
-            if ($actualCount -ne [int]$fields[0]) {
-                throw "$Label exact $Fixture LLVM regex '$($fields[1])' matched $actualCount times instead of $($fields[0])"
-            }
-        }
-    }
-
-    $orderedRegexPath = Join-Path $expectedRoot "$Fixture.selfhost.llvm.ordered-regex.txt"
-    if (Test-Path -LiteralPath $orderedRegexPath) {
-        $cursor = 0
-        foreach ($pattern in ([System.IO.File]::ReadAllLines($orderedRegexPath) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
-            $match = ([regex]::new($pattern)).Match($llvmText, $cursor)
-            if (-not $match.Success) {
-                throw "$Label exact $Fixture LLVM did not match ordered regex '$pattern' after byte $cursor"
-            }
-            $cursor = $match.Index + $match.Length
-        }
-    }
+    Assert-NativeExactLlvmContracts -LlvmPath $llvmPath -Contracts $llvmContracts
 }
 
+if ($null -ne $phaseCase) {
+    [void](Write-NativeExactPhaseOutcome -Context $phaseContext -Case $phaseCase -Stage compile -ProcessRecordPath $phaseBuildRecord -OutputPath $phasePrefix -BinaryPath $executablePath -InputHashesStart $phaseBuildInputs)
+    $phaseRunInputs = Get-NativeExactPhaseCommandInputs $phaseContext (@($phaseBuildInputs.Keys) + @($executablePath))
+}
 $run = if ($Platform -eq "windows") {
     Invoke-VerificationProcessCapture `
         -FilePath $executablePath `
         -ArgumentList $runArguments `
         -Description "$Label exact $Fixture execution" `
+        -ExecutionRecordPath $phaseRunRecord `
         -TimeoutMilliseconds $TimeoutMilliseconds
 } else {
     Invoke-VerificationProcessCapture `
@@ -336,6 +376,9 @@ if ($ExpectedStdoutLength -gt 0) {
     }
 }
 
+if ($null -ne $phaseCase) {
+    [void](Write-NativeExactPhaseOutcome -Context $phaseContext -Case $phaseCase -Stage run -ProcessRecordPath $phaseRunRecord -OutputPath $phasePrefix -BinaryPath $executablePath -InputHashesStart $phaseRunInputs)
+}
 if ($Platform -eq "windows") {
     $freshInputFingerprint = Get-CurrentWindowsExactInputFingerprint
     if ($freshInputFingerprint -cne $inputFingerprint) {

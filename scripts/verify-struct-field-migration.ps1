@@ -154,6 +154,12 @@ $expectedPrivateFields = [ordered]@{
     'examples/regression/1392-selfhost-opaque-struct-ast.slg' = 1
     'examples/regression/1393-selfhost-opaque-struct-diagnostics.slg' = 1
     'examples/regression/diagnostics/opaque-struct-modifier-rejected.slg' = 1
+    # Interpolation diagnostics intentionally use a public nominal receiver
+    # with representation available only inside its defining module.
+    'examples/regression/diagnostics/1904-direct-each-role-interpolation-nominal.slg' = 1
+    'examples/regression/diagnostics/1908-interpolation-negate-nominal.slg' = 1
+    'examples/regression/diagnostics/sample/interpolation_method_precedence.slg' = 1
+    'examples/regression/diagnostics/sample/private_interpolation_method.slg' = 1
     # The qualified-call fixture deliberately exposes its embedded Path only
     # through fromText, normalizeConfined, and byteCount.
     'examples/regression/656-selfhost-qualified-move-when-ir.slg' = 2

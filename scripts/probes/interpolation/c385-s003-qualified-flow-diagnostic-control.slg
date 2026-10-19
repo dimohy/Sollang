@@ -1,0 +1,34 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.diagnostics as diagnostics
+
+main {
+    [
+    """
+    import regression.flow_diagnostic_control as helper
+    main {
+        helper.bump(1) -> println
+        2 -> helper.bump -> println
+    }
+    """,
+    """
+    namespace regression.flow_diagnostic_control
+    public bump value: Int -> Int => value + 1
+    """; ~
+    ] -> semanticContext.prepare -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    prepared -> diagnostics.unsupportedNominalEnumFlowPaths => paths
+    0 => unsupported!
+    paths -> each path { path >= 0 -> if { unsupported! + 1 => unsupported! } }
+    0 => qualifiedCalls!
+    prepared.calls -> each call {
+        call.sourceModule == 0 and call.status == 0 and call.targetSourceModule == 1
+            and call.functionSymbol >= 0
+            -> if {
+                prepared.package.ranges[1] => range
+                prepared.package.symbols[range.symbolStart + call.functionSymbol].kind == 7
+                    -> if { qualifiedCalls! + 1 => qualifiedCalls! }
+            }
+    }
+    "qualified-function-calls=$(qualifiedCalls!),unsupported=$(unsupported!)" -> println
+}

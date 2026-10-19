@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "gate", "state", "total", "completed", "preflightPassed",
+    "managedCompilerSha256", "selfhostCompilerSha256", "inputFingerprintStart",
+    "inputFingerprintEnd", "inputsStable", "managedSemanticPreLlPassed",
+    "selfhostSemanticPreLlPassed", "semanticPairPassed", "strictParityPassed",
+    "cases", "failureId", "failure"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-dictionary-negatives" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 10 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "preflightPassed": { "const": 10 },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "managedSemanticPreLlPassed": { "$ref": "#/$defs/count" },
+    "selfhostSemanticPreLlPassed": { "$ref": "#/$defs/count" },
+    "semanticPairPassed": { "$ref": "#/$defs/count" },
+    "strictParityPassed": { "$ref": "#/$defs/count" },
+    "cases": { "type": "array", "maxItems": 10, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "running" } } },
+      "then": { "properties": {
+        "inputFingerprintEnd": { "type": "null" },
+        "inputsStable": { "const": false },
+        "failureId": { "type": "null" },
+        "failure": { "type": "null" }
+      } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "passed" } } },
+      "then": { "properties": {
+        "completed": { "const": 10 },
+        "inputFingerprintEnd": { "$ref": "#/$defs/sha" },
+        "inputsStable": { "const": true },
+        "managedSemanticPreLlPassed": { "const": 10 },
+        "selfhostSemanticPreLlPassed": { "const": 10 },
+        "semanticPairPassed": { "const": 10 },
+        "strictParityPassed": { "const": 10 },
+        "cases": { "minItems": 10 },
+        "failureId": { "type": "null" },
+        "failure": { "type": "null" }
+      } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "failed" } } },
+      "then": { "properties": {
+        "failureId": { "type": "string", "minLength": 1 },
+        "failure": { "type": "string", "minLength": 1 }
+      } }
+    }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+    "path": { "type": "string", "minLength": 1 },
+    "count": { "type": "integer", "minimum": 0, "maximum": 10 },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "nonzeroExit", "diagnosticInStderr", "noLoweringProduct", "noEmittedProducts", "generatedProducts"],
+      "properties": {
+        "state": { "enum": ["not-run", "passed", "failed"] },
+        "nonzeroExit": { "type": ["boolean", "null"] },
+        "diagnosticInStderr": { "type": ["boolean", "null"] },
+        "noLoweringProduct": { "type": ["boolean", "null"] },
+        "noEmittedProducts": { "type": ["boolean", "null"] },
+        "generatedProducts": { "type": "array", "items": { "$ref": "#/$defs/path" } }
+      }
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "source", "expected", "resultPath", "managed", "selfhost", "semanticPairPassed", "strictParityPassed", "runnerState", "runnerFailureId", "runnerFailure"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^generic-dictionary-put(-if-absent)?-(wrong-key|wrong-value|no-arguments|one-argument|three-arguments)$" },
+        "source": { "$ref": "#/$defs/path" },
+        "expected": { "$ref": "#/$defs/path" },
+        "resultPath": { "oneOf": [{ "$ref": "#/$defs/path" }, { "type": "null" }] },
+        "managed": { "$ref": "#/$defs/evidence" },
+        "selfhost": { "$ref": "#/$defs/evidence" },
+        "semanticPairPassed": { "type": "boolean" },
+        "strictParityPassed": { "type": "boolean" },
+        "runnerState": { "enum": ["no-result", "running", "passed", "failed"] },
+        "runnerFailureId": { "type": ["string", "null"] },
+        "runnerFailure": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

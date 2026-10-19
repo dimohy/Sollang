@@ -1,0 +1,50 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+
+public traceHttpSubject paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+    }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context
+    0 => sourceIndex!
+    sourceIndex! < (paths -> len) -> while {
+        sourceIndex! == 67 -> if {
+            context.ranges[sourceIndex!] => range
+            0 => astIndex!
+            astIndex! < range.astCount -> while {
+                context.nodes[range.astStart + astIndex!] => node
+                node.start >= 10100 and node.start <= 10300 -> if {
+                    "ast=$(astIndex!),kind=$(node.kind),parent=$(node.parent),start=$(node.start),length=$(node.length)" -> println
+                }
+                astIndex! + 1 => astIndex!
+            }
+            0 => irIndex!
+            irIndex! < (context.ir -> len) -> while {
+                context.ir[irIndex!] => node
+                node.sourceModule == sourceIndex! and node.astNode >= 0
+                    -> if {
+                        context.nodes[range.astStart + node.astNode] => nodeAst
+                        nodeAst.start >= 10050 and nodeAst.start <= 10300
+                            -> if {
+                                "ir=$(irIndex!),kind=$(node.kind),parent=$(node.parent),ast=$(node.astNode),type=$(node.typeId)/$(node.typeKind)/$(node.typeOrigin)/$(node.typeModule)/$(node.typeSymbol),operand=$(node.operand0),target=$(node.targetModule)/$(node.symbol),start=$(nodeAst.start),length=$(nodeAst.length)" -> println
+                            }
+                    }
+                irIndex! + 1 => irIndex!
+            }
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+}

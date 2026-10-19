@@ -1,0 +1,16 @@
+namespace sollang.compiler.semantic.diagnostics
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+
+public ownedIndexDecisionBeforeTypedIr input: Text -> Int {
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> semanticContext.prepare => initial
+    initial -> expressionTypeIds.resolveCallContext => resolved
+    typeIds.enumPayloadEdges(resolved.types.types, resolved.types.references, resolved.prepared.package.ranges, resolved.prepared.package.symbols, resolved.types.referenceIndexByTypeAst) => payloads
+    resolved.prepared -> semanticContext.ownedResourceSeeds(resolved.types.types) => resources
+    typeIds.ownedStorageByType(resolved.types.types, resolved.types.fields, payloads, resources) => storage
+    resolved.prepared -> firstOwnedIndexReadDiagnostic(resolved.types, storage) => diagnostic
+    diagnostic.sourceModule
+}

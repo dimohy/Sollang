@@ -1,0 +1,162 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+
+writeDictionaryLiteralItem itemIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[itemIndex] => item
+    item.kind == 3 -> if {
+        item -> writeIntegerLiteral(context, state)
+    } else {
+        item.kind == 4 -> if {
+            item -> sourceToken(context, state) => token
+            (context.sources[item.sourceModule] -> byte(token.span.start)) == 116
+                -> if { "1" -> print } else { "0" -> print }
+        } else {
+            itemIndex -> writeFunctionValueName(ownerIndex, context, state)
+        }
+    }
+}
+
+# Establish the same open-addressed bucket placement used by literal insertion
+# and lookup. Values use the selected slot emitted for their preceding key.
+emitDictionaryLiteralSlot request: DictionaryLiteralSlotRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.dictionaryIndex => dictionaryIndex
+    request.entryPosition => position
+    context.ir[request.keyIndex] => key
+    "  br label %v$(dictionaryIndex)_literal$(position)_entry" -> println
+    "v$(dictionaryIndex)_literal$(position)_entry:" -> println
+    "  %v$(dictionaryIndex)_literal$(position)_key = freeze " -> print
+    key.typeKind == 8 -> if { "ptr" -> print } else {
+        request.keyTypeId >= 0 -> if {
+            request.keyTypeId -> writeSemanticTypeId(context, state)
+        } else { key.typeSymbol -> llvmType(context, state) -> print }
+    }
+    " " -> print
+    request.keyIndex -> writeDictionaryLiteralItem(request.ownerIndex, context, state)
+    "" -> println
+    request.hashWidth > 0 and request.hashWidth <= 64
+        -> if {
+            "  %v$(dictionaryIndex)_literal$(position)_hash_key = " -> print
+            request.hashWidth == 64 -> if { "add i64 0, " -> print } else {
+                key -> integerNodeSigned(context, state)
+                    -> if { "sext " -> print } else { "zext " -> print }
+                "i$(request.hashWidth) " -> print
+            }
+            "%v$(dictionaryIndex)_literal$(position)_key" -> print
+            request.hashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+            "  %v$(dictionaryIndex)_literal$(position)_hash_high = lshr i64 %v$(dictionaryIndex)_literal$(position)_hash_key, 32" -> println
+            "  %v$(dictionaryIndex)_literal$(position)_hash_fold = xor i64 %v$(dictionaryIndex)_literal$(position)_hash_key, %v$(dictionaryIndex)_literal$(position)_hash_high" -> println
+            "  %v$(dictionaryIndex)_literal$(position)_hash = mul i64 %v$(dictionaryIndex)_literal$(position)_hash_fold, -7046029254386353131" -> println
+        } else {
+            key -> isTextType -> if {
+                "  %v$(dictionaryIndex)_literal$(position)_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %v$(dictionaryIndex)_literal$(position)_key)" -> println
+            } else {
+                request.hashMethod >= 0 -> if {
+                    context.types[request.keyTypeId] => nominalKey
+                    "  %v$(dictionaryIndex)_literal$(position)_hash_value = call i32 @sollang_m$(nominalKey.module)_s$(request.hashMethod)(" -> print
+                    request.keyTypeId -> writeSemanticTypeId(context, state)
+                    " %v$(dictionaryIndex)_literal$(position)_key)" -> println
+                    "  %v$(dictionaryIndex)_literal$(position)_hash_key = sext i32 %v$(dictionaryIndex)_literal$(position)_hash_value to i64" -> println
+                    "  %v$(dictionaryIndex)_literal$(position)_hash_high = lshr i64 %v$(dictionaryIndex)_literal$(position)_hash_key, 32" -> println
+                    "  %v$(dictionaryIndex)_literal$(position)_hash_fold = xor i64 %v$(dictionaryIndex)_literal$(position)_hash_key, %v$(dictionaryIndex)_literal$(position)_hash_high" -> println
+                    "  %v$(dictionaryIndex)_literal$(position)_hash = mul i64 %v$(dictionaryIndex)_literal$(position)_hash_fold, -7046029254386353131" -> println
+                } else {
+                    # Preserve the existing literal/lookup marker-one hash contract.
+                    "  %v$(dictionaryIndex)_literal$(position)_hash = add i64 0, 0" -> println
+                }
+            }
+        }
+    "  %v$(dictionaryIndex)_literal$(position)_h2_shifted = lshr i64 %v$(dictionaryIndex)_literal$(position)_hash, 57" -> println
+    "  %v$(dictionaryIndex)_literal$(position)_h2_raw = and i64 %v$(dictionaryIndex)_literal$(position)_h2_shifted, 127" -> println
+    "  %v$(dictionaryIndex)_literal$(position)_h2_zero = icmp eq i64 %v$(dictionaryIndex)_literal$(position)_h2_raw, 0" -> println
+    "  %v$(dictionaryIndex)_literal$(position)_h2_value = select i1 %v$(dictionaryIndex)_literal$(position)_h2_zero, i64 1, i64 %v$(dictionaryIndex)_literal$(position)_h2_raw" -> println
+    "  %v$(dictionaryIndex)_literal$(position)_h2 = trunc i64 %v$(dictionaryIndex)_literal$(position)_h2_value to i8" -> println
+    Arena(0) => literalProbePrefixStorage!
+    "v$(dictionaryIndex)_literal$(position)_find" -> materialize(literalProbePrefixStorage!) => literalProbePrefix
+    Arena(0) => literalProbeControlsStorage!
+    "%v$(dictionaryIndex)_controls" -> materialize(literalProbeControlsStorage!) => literalProbeControls
+    Arena(0) => literalProbeKeysStorage!
+    "%v$(dictionaryIndex)_keys" -> materialize(literalProbeKeysStorage!) => literalProbeKeys
+    Arena(0) => literalProbeCapacityStorage!
+    "$(request.capacity)" -> materialize(literalProbeCapacityStorage!) => literalProbeCapacity
+    Arena(0) => literalProbeQueryStorage!
+    "%v$(dictionaryIndex)_literal$(position)_key" -> materialize(literalProbeQueryStorage!) => literalProbeQuery
+    Arena(0) => literalProbeHashStorage!
+    "%v$(dictionaryIndex)_literal$(position)_hash" -> materialize(literalProbeHashStorage!) => literalProbeHash
+    Arena(0) => literalProbeH2Storage!
+    "%v$(dictionaryIndex)_literal$(position)_h2" -> materialize(literalProbeH2Storage!) => literalProbeH2
+    DictionaryProbe {
+        prefix: literalProbePrefix
+        controls: literalProbeControls
+        keys: literalProbeKeys
+        capacity: literalProbeCapacity
+        query: literalProbeQuery
+        hash: literalProbeHash
+        h2: literalProbeH2
+        keyTypeId: request.keyTypeId
+        keySymbol: key.typeSymbol
+        valueTypeId: request.valueTypeId
+        valueSymbol: request.valueSymbol
+        entryLayout: request.entryLayout
+        existingOnly: false
+        bounded: false
+    } => literalProbe
+    literalProbe -> emitDictionaryFindSlot(context, state)
+    "  %v$(dictionaryIndex)_literal$(position)_slot = add i64 %v$(dictionaryIndex)_literal$(position)_find_slot, 0" -> println
+}
+
+# Mutation and owner-returning transforms share allocation/update kernels.
+# The transform result owns the descriptor; no source slot is fabricated.
+emitOwnedContainerTransform request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[request.whileIndex] => operation
+    operation.opcode == -322 -> if {
+        request -> emitArrayPush(context, state)
+        return
+    }
+    context.ir[operation.operand0] => receiver
+    receiver.typeKind == 5 -> if {
+        request -> emitDictionaryPut(context, state)
+        return
+    }
+    request -> emitOwnedArrayUpdate(context, state)
+}
+
+emitOwnedArrayUpdate request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    request.whileIndex => updateIndex
+    context.ir[updateIndex] => operation
+    context.ir[operation.operand0] => receiver
+    operation.operand1 -> aggregateValueIndex(context, state) => indexIr
+    context.ir[indexIr] => indexValue
+    context.ir[operation.operand1].nextOperand -> aggregateValueIndex(context, state) => valueIr
+    "  %updated$(updateIndex)_data = extractvalue %sollang.array.i32 " -> print
+    operation.operand0 -> writeFunctionValueName(request.ownerIndex, context, state)
+    ", 0" -> println
+    "  %updated$(updateIndex)_length = extractvalue %sollang.array.i32 " -> print
+    operation.operand0 -> writeFunctionValueName(request.ownerIndex, context, state)
+    ", 1" -> println
+    indexValue -> integerNodeWidth(context, state) => indexWidth
+    "  %updated$(updateIndex)_index = " -> print
+    indexWidth == 64 -> if { "add i64 0, " -> print } else { "sext i$(indexWidth) " -> print }
+    WhileValueRequest { whileIndex: updateIndex, ownerIndex: request.ownerIndex, nodeIndex: indexIr } -> writeWhileValue(context, state)
+    indexWidth == 64 -> unless { " to i64" -> print }
+    "" -> println
+    "  %updated$(updateIndex)_valid = icmp ult i64 %updated$(updateIndex)_index, %updated$(updateIndex)_length" -> println
+    "  br i1 %updated$(updateIndex)_valid, label %updated$(updateIndex)_store, label %updated$(updateIndex)_invalid" -> println
+    "updated$(updateIndex)_invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "updated$(updateIndex)_store:" -> println
+    "  %updated$(updateIndex)_slot = getelementptr " -> print
+    receiver -> writeArrayElementType(context, state)
+    ", ptr %updated$(updateIndex)_data, i64 %updated$(updateIndex)_index" -> println
+    "  store " -> print
+    receiver -> writeArrayElementType(context, state)
+    " " -> print
+    WhileValueRequest { whileIndex: updateIndex, ownerIndex: request.ownerIndex, nodeIndex: valueIr } -> writeWhileValue(context, state)
+    receiver -> arrayElementAlign(context, state) => valueAlignment
+    ", ptr %updated$(updateIndex)_slot, align $valueAlignment" -> println
+    # The buffer and metadata are unchanged; the result is the sole SSA owner.
+    "  %v$(updateIndex) = insertvalue %sollang.array.i32 " -> print
+    operation.operand0 -> writeFunctionValueName(request.ownerIndex, context, state)
+    ", ptr %updated$(updateIndex)_data, 0" -> println
+}

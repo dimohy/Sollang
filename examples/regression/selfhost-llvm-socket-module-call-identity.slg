@@ -1,0 +1,50 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+    """
+    namespace sample
+
+    import std.net.socket as socket
+    import std.net as net
+
+    struct Endpoint {
+        socket: socket.UdpSocket
+        port: UInt16
+    }
+
+    struct QuicError {
+        code: Int
+    }
+
+    # Deliberately collides with the socket instance method name. Receiver
+    # type dispatch must win over this unqualified same-module function.
+    localPort endpoint: ref Endpoint -> UInt16 => endpoint.port
+
+    bindEndpoint: -> Result<Endpoint, QuicError> uses Network {
+        socket.DatagramBindOptions {
+            endpoint: net.Endpoint.V4(net.Ipv4Endpoint { address: net.Ipv4Address { a: 127, b: 0, c: 0, d: 1 }, port: 0 })
+            reuseAddress: true
+        } -> bind -> when {
+            Ok(bound) {
+                bound -> localPort -> when {
+                    Ok(port) {
+                        Result<Endpoint, QuicError>.Ok(Endpoint { socket: bound, port: port }) -> return
+                    }
+                    Err(portError) { Result<Endpoint, QuicError>.Err(QuicError { code: 1 }) -> return }
+                }
+            }
+            Err(bindError) { Result<Endpoint, QuicError>.Err(QuicError { code: 2 }) -> return }
+        }
+    }
+
+    main {
+        bindEndpoint() -> when {
+            Ok(endpoint) { (endpoint.port > 0) -> println }
+            Err(error) { "socket error $(error.code)" -> println }
+        }
+    }
+    """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

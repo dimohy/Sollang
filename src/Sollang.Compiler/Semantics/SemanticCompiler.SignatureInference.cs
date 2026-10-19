@@ -34,7 +34,10 @@ internal sealed partial class SemanticCompiler
 
         var topLevel = BuildTopLevelSignatureIndex(states);
 
-        for (var pass = 0; pass < 32; pass++)
+        // Each state can acquire its input and return type only once; a later
+        // conflicting type throws. Continue to the fixed point regardless of
+        // declaration order or the length of a private dependency chain.
+        while (true)
         {
             var changed = false;
             foreach (var state in states)
@@ -45,7 +48,7 @@ internal sealed partial class SemanticCompiler
                 changed |= AnalyzeSignatureBody(state, locals, topLevel);
             }
 
-            var mainEnvironment = new Dictionary<string, string>(StringComparer.Ordinal);
+            var mainEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal);
             changed |= AnalyzeStatements(
                 program.Statements,
                 mainEnvironment,
@@ -127,10 +130,10 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, InferredSignatureState> locals,
         IReadOnlyDictionary<string, InferredSignatureState> topLevel)
     {
-        var environment = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (state.Declaration.InputName is { } inputName && state.InputType is { } inputType)
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (state.Declaration.InputName is { } inputName)
         {
-            environment[inputName] = inputType;
+            environment[inputName] = state.InputType;
         }
         foreach (var parameter in state.Declaration.AdditionalParameters ?? [])
         {
@@ -150,7 +153,9 @@ internal sealed partial class SemanticCompiler
             var bodyType = AnalyzeExpression(body, environment, state, locals, topLevel, ref changed);
             AddKnownType(returnedTypes, bodyType);
         }
-        else if (state.Declaration.ReturnType == InferredFunctionType.Name)
+        else if (state.Declaration.ReturnType == InferredFunctionType.Name
+            && FunctionControlFlowFacts.MayReachContinuation(new BlockBody(
+                state.Declaration.BlockBody, null, state.Declaration.Line, state.Declaration.Column)))
         {
             AddKnownType(returnedTypes, "Unit");
         }
@@ -164,7 +169,7 @@ internal sealed partial class SemanticCompiler
 
     private bool AnalyzeStatements(
         IReadOnlyList<Statement> statements,
-        Dictionary<string, string> environment,
+        Dictionary<string, string?> environment,
         InferredSignatureState? caller,
         IReadOnlyDictionary<string, InferredSignatureState> locals,
         IReadOnlyDictionary<string, InferredSignatureState> topLevel,
@@ -201,7 +206,7 @@ internal sealed partial class SemanticCompiler
                     break;
                 case BlockFunctionCallStatement blockCall:
                     AnalyzeExpression(blockCall.Source, environment, caller, locals, topLevel, ref changed);
-                    var blockEnvironment = new Dictionary<string, string>(environment, StringComparer.Ordinal);
+                    var blockEnvironment = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
                     changed |= AnalyzeStatements(
                         blockCall.Body, blockEnvironment, caller, locals, topLevel, returnedTypes);
                     break;
@@ -209,7 +214,7 @@ internal sealed partial class SemanticCompiler
                     foreach (var call in pipeline.Calls)
                     {
                         AnalyzeExpression(call.Source, environment, caller, locals, topLevel, ref changed);
-                        var pipelineBlockEnvironment = new Dictionary<string, string>(environment, StringComparer.Ordinal);
+                        var pipelineBlockEnvironment = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
                         changed |= AnalyzeStatements(
                             call.Body, pipelineBlockEnvironment, caller, locals, topLevel, returnedTypes);
                     }
@@ -221,7 +226,7 @@ internal sealed partial class SemanticCompiler
 
     private string? AnalyzeExpression(
         Expression expression,
-        Dictionary<string, string> environment,
+        Dictionary<string, string?> environment,
         InferredSignatureState? caller,
         IReadOnlyDictionary<string, InferredSignatureState> locals,
         IReadOnlyDictionary<string, InferredSignatureState> topLevel,
@@ -272,6 +277,25 @@ internal sealed partial class SemanticCompiler
                 return AnalyzeBinary(divide.Left, divide.Right, environment, caller, locals, topLevel, ref changed);
             case ModuloExpression modulo:
                 return AnalyzeBinary(modulo.Left, modulo.Right, environment, caller, locals, topLevel, ref changed);
+            case FieldAccessExpression field:
+                var fieldOwnerName = AnalyzeExpression(field.Source, environment, caller, locals, topLevel, ref changed);
+                if (fieldOwnerName is null)
+                {
+                    return null;
+                }
+                if (fieldOwnerName.StartsWith("ref ", StringComparison.Ordinal))
+                {
+                    fieldOwnerName = fieldOwnerName[4..].Trim();
+                }
+                var fieldModule = caller?.Declaration.ModuleName ?? string.Join('.', _program.NamespacePath);
+                if (!_types.TryResolveInModule(fieldOwnerName, fieldModule, out var fieldOwner)
+                    || !_types.IsStruct(fieldOwner))
+                {
+                    return null;
+                }
+                var storedField = _types.GetStruct(fieldOwner).Fields
+                    .FirstOrDefault(candidate => candidate.Name == field.FieldName);
+                return storedField is null ? null : FormatType(storedField.Type);
             case StructLiteralExpression structure:
                 foreach (var field in structure.Fields)
                 {
@@ -397,7 +421,7 @@ internal sealed partial class SemanticCompiler
             case PartitionExpression partition:
                 var partitionInputType = AnalyzeExpression(partition.Source, environment, caller, locals, topLevel, ref changed);
                 var partitionElementType = StreamElementTypeOf(partitionInputType);
-                var partitionEnvironment = new Dictionary<string, string>(environment, StringComparer.Ordinal);
+                var partitionEnvironment = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
                 AddBindingType(partitionEnvironment, partition.ItemName, partitionElementType);
                 foreach (var arm in partition.Arms)
                 {
@@ -418,7 +442,47 @@ internal sealed partial class SemanticCompiler
                 var elseType = conditional.Else is null
                     ? "Unit"
                     : AnalyzeBlock(conditional.Else, environment, caller, locals, topLevel, ref changed);
+                if (!FunctionControlFlowFacts.MayReachContinuation(conditional.Then))
+                {
+                    return elseType;
+                }
+                if (conditional.Else is not null
+                    && !FunctionControlFlowFacts.MayReachContinuation(conditional.Else))
+                {
+                    return thenType;
+                }
                 return thenType == elseType ? thenType : null;
+            case WhenExpression selection:
+                if (selection.Subject is { } subject)
+                {
+                    AnalyzeExpression(subject, environment, caller, locals, topLevel, ref changed);
+                }
+                return AnalyzeChoiceArms(selection.Arms, selection.Else, null, null,
+                    environment, caller, locals, topLevel, ref changed);
+            case EnumMatchExpression selection:
+                var subjectTypeName = AnalyzeExpression(
+                    selection.Subject, environment, caller, locals, topLevel, ref changed);
+                if (subjectTypeName?.StartsWith("ref ", StringComparison.Ordinal) == true)
+                {
+                    subjectTypeName = subjectTypeName[4..].Trim();
+                }
+                var subjectModule = caller?.Declaration.ModuleName ?? string.Join('.', _program.NamespacePath);
+                BoundEnumDefinition? enumDefinition = null;
+                if (subjectTypeName is not null
+                    && _types.TryResolveInModule(subjectTypeName, subjectModule, out var enumType)
+                    && _types.IsEnum(enumType))
+                {
+                    enumDefinition = _types.GetEnum(enumType);
+                }
+                return AnalyzeChoiceArms(selection.Arms, selection.Else, enumDefinition, subjectTypeName,
+                    environment, caller, locals, topLevel, ref changed);
+            case SubjectCompareExpression compare:
+                AnalyzeExpression(compare.Right, environment, caller, locals, topLevel, ref changed);
+                return "Bool";
+            case SubjectRangeExpression range:
+                AnalyzeExpression(range.Start, environment, caller, locals, topLevel, ref changed);
+                AnalyzeExpression(range.End, environment, caller, locals, topLevel, ref changed);
+                return "Bool";
             case RangeExpression range:
                 AnalyzeExpression(range.Start, environment, caller, locals, topLevel, ref changed);
                 AnalyzeExpression(range.End, environment, caller, locals, topLevel, ref changed);
@@ -428,10 +492,98 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private string? AnalyzeChoiceArms(
+        IReadOnlyList<WhenArm> arms,
+        BlockBody? elseBody,
+        BoundEnumDefinition? enumDefinition,
+        string? enumSubjectTypeName,
+        Dictionary<string, string?> environment,
+        InferredSignatureState? caller,
+        IReadOnlyDictionary<string, InferredSignatureState> locals,
+        IReadOnlyDictionary<string, InferredSignatureState> topLevel,
+        ref bool changed)
+    {
+        string? commonType = null;
+        var consistent = true;
+        foreach (var arm in arms)
+        {
+            var armEnvironment = new Dictionary<string, string?>(environment, StringComparer.Ordinal);
+            if (arm.Condition is EnumPatternExpression pattern)
+            {
+                if (pattern.BindingName is { } bindingName)
+                {
+                    var payload = enumDefinition?.Variants
+                        .FirstOrDefault(variant => variant.Name == pattern.VariantName)?.PayloadType;
+                    AddBindingType(armEnvironment, bindingName,
+                        payload is { } payloadType
+                            ? FormatType(payloadType)
+                            : SignatureBuiltinEnumPayload(enumSubjectTypeName, pattern.VariantName));
+                }
+            }
+            else
+            {
+                AnalyzeExpression(arm.Condition, environment, caller, locals, topLevel, ref changed);
+            }
+
+            var armType = AnalyzeBlock(arm.Body, armEnvironment, caller, locals, topLevel, ref changed);
+            if (FunctionControlFlowFacts.MayReachContinuation(arm.Body))
+            {
+                MergeChoiceArmType(armType, ref commonType, ref consistent);
+            }
+        }
+        if (elseBody is not null)
+        {
+            var elseType = AnalyzeBlock(elseBody, environment, caller, locals, topLevel, ref changed);
+            if (FunctionControlFlowFacts.MayReachContinuation(elseBody))
+            {
+                MergeChoiceArmType(elseType, ref commonType, ref consistent);
+            }
+        }
+        return consistent ? commonType : null;
+    }
+
+    private static string? SignatureBuiltinEnumPayload(string? subjectTypeName, string variantName)
+    {
+        // Closed builtin inputs have a complete source contract before their
+        // enum shape is interned by declaration binding. Read that contract
+        // without allocating type IDs or changing the arena's ordering.
+        if (subjectTypeName?.StartsWith("Option<", StringComparison.Ordinal) == true
+            && subjectTypeName.EndsWith('>') && variantName == "Some")
+        {
+            return subjectTypeName[7..^1].Trim();
+        }
+        if (subjectTypeName?.StartsWith("Result<", StringComparison.Ordinal) == true
+            && subjectTypeName.EndsWith('>'))
+        {
+            var arguments = SplitTopLevelTypeFields(subjectTypeName[7..^1]);
+            if (arguments.Count == 2)
+            {
+                return variantName switch { "Ok" => arguments[0], "Err" => arguments[1], _ => null };
+            }
+        }
+        return null;
+    }
+
+    private static void MergeChoiceArmType(string? type, ref string? commonType, ref bool consistent)
+    {
+        if (type is null)
+        {
+            consistent = false;
+        }
+        else if (commonType is null)
+        {
+            commonType = type;
+        }
+        else if (commonType != type)
+        {
+            consistent = false;
+        }
+    }
+
     private string? AnalyzeBinary(
         Expression left,
         Expression right,
-        Dictionary<string, string> environment,
+        Dictionary<string, string?> environment,
         InferredSignatureState? caller,
         IReadOnlyDictionary<string, InferredSignatureState> locals,
         IReadOnlyDictionary<string, InferredSignatureState> topLevel,
@@ -444,17 +596,26 @@ internal sealed partial class SemanticCompiler
 
     private string? AnalyzeBlock(
         BlockBody block,
-        Dictionary<string, string> outerEnvironment,
+        Dictionary<string, string?> outerEnvironment,
         InferredSignatureState? caller,
         IReadOnlyDictionary<string, InferredSignatureState> locals,
         IReadOnlyDictionary<string, InferredSignatureState> topLevel,
         ref bool changed)
     {
-        var environment = new Dictionary<string, string>(outerEnvironment, StringComparer.Ordinal);
-        changed |= AnalyzeStatements(block.Statements, environment, caller, locals, topLevel, returnedTypes: null);
-        return block.Value is null
+        var environment = new Dictionary<string, string?>(outerEnvironment, StringComparer.Ordinal);
+        var returnedTypes = new List<string>();
+        changed |= AnalyzeStatements(block.Statements, environment, caller, locals, topLevel, returnedTypes);
+        var valueType = block.Value is null
             ? "Unit"
             : AnalyzeExpression(block.Value, environment, caller, locals, topLevel, ref changed);
+        if (caller is not null)
+        {
+            foreach (var returnType in returnedTypes)
+            {
+                changed |= caller.MergeReturn(returnType, this);
+            }
+        }
+        return FunctionControlFlowFacts.MayReachContinuation(block) ? valueType : null;
     }
 
     private string? AnalyzeCall(
@@ -469,10 +630,18 @@ internal sealed partial class SemanticCompiler
         var localName = path.Count == 1 ? path[0] : name;
         var callerModule = caller?.Declaration.ModuleName ?? string.Join('.', _program.NamespacePath);
         if (!locals.TryGetValue(localName, out var target)
-            && !topLevel.TryGetValue(name, out target)
-            && !topLevel.TryGetValue(ModuleInferenceKey(callerModule, name), out target))
+            && !topLevel.TryGetValue(ModuleInferenceKey(callerModule, name), out target)
+            && !topLevel.TryGetValue(name, out target))
         {
             return BuiltinReturnType(name, argumentTypes);
+        }
+
+        // A leaf-name fallback must not turn an unrelated module's name into
+        // a consumer of a private declaration. The ordinary binder owns the
+        // eventual unresolved-name diagnostic for an inaccessible target.
+        if (!target.Declaration.IsPublic && target.Declaration.ModuleName != callerModule)
+        {
+            return null;
         }
 
         target.Callers.Add(caller?.Declaration.Name ?? "<main>");
@@ -566,12 +735,10 @@ internal sealed partial class SemanticCompiler
         return (isEvent ? "EventStream<" : "Stream<") + element + ">";
     }
 
-    private static void AddBindingType(Dictionary<string, string> environment, string name, string? type)
+    private static void AddBindingType(Dictionary<string, string?> environment, string name, string? type)
     {
-        if (type is not null)
-        {
-            environment[name] = type;
-        }
+        // An unknown lexical value still shadows a same-named function.
+        environment[name] = type;
     }
 
     private static void AddKnownType(List<string>? types, string? type)
@@ -602,7 +769,7 @@ internal sealed partial class SemanticCompiler
     }
 
     private SollangException SignatureInferenceError(InferredSignatureState state, string message) =>
-        Error(state.Declaration.Line, state.Declaration.Column,
+        ErrorAtModule(state.Declaration.Line, state.Declaration.Column, state.Declaration.ModuleName,
             $"function '{state.Declaration.Name}' {message}");
 
     private sealed class InferredSignatureState(

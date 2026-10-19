@@ -25,13 +25,48 @@ internal sealed partial class LlvmEmitter
             ?? throw new SollangException($"payload-free variant '{definition.Name}.{variant.Name}' uses member syntax without parentheses");
         var payload = EmitFunctionArgumentExpression(expression.Arguments[0], payloadType);
         EnsureRuntimeType(payload, payloadType, $"{definition.Name}.{variant.Name}");
+        var copiesBorrowedPayload = CopiesBorrowedFixedEnumPayload(expression.Arguments[0], payloadType);
+        if (copiesBorrowedPayload)
+        {
+            payload = CopyFixedStorageValue(payload);
+        }
         value = EmitEnumValue(type, variant, payload);
-        if (_program.Types.ContainsOwnedStorage(payloadType))
+        if (_program.Types.ContainsOwnedStorage(payloadType) && !copiesBorrowedPayload)
         {
             RemoveOwnedLiteralSources(expression.Arguments[0], payloadType);
         }
         return true;
     }
+
+    private bool CopiesBorrowedFixedEnumPayload(Expression expression, BoundType payloadType)
+    {
+        if (!_program.Types.RequiresFixedStorageCopy(payloadType))
+            return false;
+        var owner = expression is NameExpression name ? name.Name
+            : TryGetOwnedFieldProjection(expression, out var fieldOwner, out _) ? fieldOwner : null;
+        if (owner is null || !IsBorrowedOwnedPlace(expression))
+            return false;
+
+        // Owned match payloads also use borrowed local views, but their exact
+        // cleanup obligation permits a transfer. A genuinely borrowed subject
+        // has no such obligation and must retain its original backing.
+        return !HasOwnedMatchPayloadCleanup(owner);
+    }
+
+    private bool HasOwnedMatchPayloadCleanup(string ownerName) =>
+        _borrowedOwnedTransferFlags.TryGetValue(ownerName, out var retainedFlag)
+        && _terminatingOwnedCleanupObligations.Any(obligation =>
+            obligation.BindingName == ownerName && obligation.RetainedFlag == retainedFlag);
+
+    private bool IsBorrowedOwnedPlace(Expression expression) => expression switch
+    {
+        NameExpression name => _borrowedOwnedLocals.Contains(name.Name)
+            || _locals.GetValueOrDefault(name.Name) is RuntimeReference,
+        FieldAccessExpression field => IsBorrowedOwnedPlace(field.Source),
+        IndexExpression index => IsBorrowedOwnedPlace(index.Source),
+        TapExpression tap => IsBorrowedOwnedPlace(tap.Source),
+        _ => false
+    };
 
     private bool TryEmitPayloadlessEnumVariant(FieldAccessExpression expression, out RuntimeValue value)
     {
@@ -104,6 +139,7 @@ internal sealed partial class LlvmEmitter
                 && definition.Variants.First(candidate => candidate.Name == pattern.VariantName).PayloadType is { } payloadType
                 && _program.Types.ContainsOwnedStorage(payloadType)
                 && TransfersOwnerName(arm.Body, bindingName, payloadType));
+        var transfersAnyPayload = armTransfers.Values.Any(static transfers => transfers);
         var subjectOwnerName = expression.Subject switch
         {
             NameExpression name => name.Name,
@@ -127,9 +163,10 @@ internal sealed partial class LlvmEmitter
         BoundStructField? projectedSubjectField = null;
         if (ownsStorage
             && bindsAnyOwnedPayload
-            && armTransfers.Values.Any(static transfers => transfers)
+            && transfersAnyPayload
             && expression.Subject is NameExpression subjectName
-            && !_borrowedOwnedLocals.Contains(subjectName.Name))
+            && (!IsBorrowedOwnedPlace(expression.Subject)
+                || HasOwnedMatchPayloadCleanup(subjectName.Name)))
         {
             foreach (var alias in _locals
                 .Where(local => local.Value == subject)
@@ -144,13 +181,15 @@ internal sealed partial class LlvmEmitter
         }
         else if (ownsStorage
             && bindsAnyOwnedPayload
+            && transfersAnyPayload
             && expression.Subject is FieldAccessExpression
             {
                 Source: NameExpression ownerName,
                 FieldName: var fieldName
             }
             && !_mutableLocals.Contains(ownerName.Name)
-            && !_borrowedOwnedLocals.Contains(ownerName.Name)
+            && (!IsBorrowedOwnedPlace(expression.Subject)
+                || HasOwnedMatchPayloadCleanup(ownerName.Name))
             && _locals.TryGetValue(ownerName.Name, out var ownerValue)
             && ownerValue is RuntimeStruct ownerStruct
             && _program.Types.IsStruct(ownerStruct.Type)
@@ -164,6 +203,11 @@ internal sealed partial class LlvmEmitter
         }
 
         var entryScope = CaptureLocals();
+        // Suspension reloads also update enclosing cleanup and hidden scopes.
+        // Each sibling arm must start with the pre-match bindings, then join
+        // only the scopes belonging to its live continuation.
+        var continuationScopes = CaptureAsyncContinuationBranchScopes(includeLoopSnapshots: true);
+        var continuationEdges = new List<(LocalScope[] Scopes, string Label)>();
         var endLabel = NextLabel("enum_when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
         var scopeResults = new List<(LocalScope Scope, string Label)>();
@@ -172,6 +216,7 @@ internal sealed partial class LlvmEmitter
         var nextConditionLabel = _currentBlockLabel;
         foreach (var arm in expression.Arms)
         {
+            RestoreAsyncContinuationScopes(continuationScopes);
             RestoreLocals(entryScope);
             _currentBlockLabel = nextConditionLabel;
             var pattern = (EnumPatternExpression)arm.Condition;
@@ -222,19 +267,10 @@ internal sealed partial class LlvmEmitter
             {
                 if (payloadTransferFlag is not null)
                 {
-                    if (armTransfers[arm])
-                    {
-                        DropOwnedStructFieldsExcept(
-                            removedProjectedOwner,
-                            projectedSubjectField!.Name);
-                    }
-                    else
-                    {
-                        DropOwnedProjectedSubjectIfRetained(
-                            payloadTransferFlag,
-                            removedProjectedOwner,
-                            projectedSubjectField!.Name);
-                    }
+                    DropOwnedProjectedSubjectIfRetained(
+                        payloadTransferFlag,
+                        removedProjectedOwner,
+                        projectedSubjectField!.Name);
                 }
                 else if (armTransfers[arm])
                 {
@@ -250,14 +286,27 @@ internal sealed partial class LlvmEmitter
                 && (anonymousSubject || removedNamedSubject)
                 && payloadTransferFlag is not null)
             {
-                if (!armTransfers[arm])
+                // A consumed payload has no remaining cleanup obligation.
+                // Its old stack flag may not exist on an async resume path.
+                if (pattern.BindingName is not null
+                    && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var exitingPayload)
+                    && exitingPayload is RuntimeStruct retainedStruct
+                    && armResult.ExitScope.MovedOwnedStructFields.TryGetValue(
+                        pattern.BindingName,
+                        out var movedPayloadFields)
+                    && movedPayloadFields.Count > 0)
                 {
-                    var retainedPayload = pattern.BindingName is not null
-                        && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var exitingPayload)
-                            ? exitingPayload
-                            : _activeAsyncCfg is not null
-                                ? PoisonRuntimeValue(payload!)
-                                : payload!;
+                    DropOwnedStructFieldsExceptTransferredIfRetained(
+                        payloadTransferFlag,
+                        retainedStruct,
+                        movedPayloadFields.Select(static path =>
+                            (IReadOnlyList<string>)path.Split('.')).ToArray());
+                }
+                else if (pattern.BindingName is not null
+                    && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var retainedPayload))
+                {
+                    // The emitted flag distinguishes an actual transfer from a
+                    // fixed-storage result copy; syntax alone cannot do that.
                     DropOwnedRuntimeValueIfRetained(payloadTransferFlag, retainedPayload);
                 }
             }
@@ -272,6 +321,7 @@ internal sealed partial class LlvmEmitter
             }
             if (!armTerminated)
             {
+                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
                 continuingPaths.Add(new EnumContinuingPath(
                     armResult.Value,
                     armResult.ExitScope,
@@ -286,6 +336,7 @@ internal sealed partial class LlvmEmitter
         }
 
         _currentBlockLabel = nextConditionLabel;
+        RestoreAsyncContinuationScopes(continuationScopes);
         RestoreLocals(entryScope);
         if (expression.Else is not null)
         {
@@ -301,6 +352,7 @@ internal sealed partial class LlvmEmitter
             }
             if (!elseTerminated)
             {
+                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
                 continuingPaths.Add(new EnumContinuingPath(
                     elseResult.Value,
                     elseResult.ExitScope,
@@ -332,18 +384,29 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
-        if (_activeAsyncCfg is not null)
+        // Ownership merges may emit flag stores before a later scope needs
+        // another phi. Keep every join phi before those ordinary instructions.
+        var previousJoinPhis = _scopeJoinPhis;
+        _scopeJoinPhis = (_activeFunctions, endLabel, _activeFunctions.CreateInsertionPoint());
+        try
         {
-            MergeAsyncOuterScope(entryScope, scopeResults);
+            if (_activeAsyncCfg is not null)
+            {
+                MergeAsyncOuterScope(entryScope, scopeResults);
+            }
+            else
+            {
+                MergeSynchronousOuterScope(entryScope, scopeResults);
+            }
+            MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entryScope, scopeResults);
+            return valueResults.Count == 0
+                ? RuntimeUnit.Instance
+                : EmitPhiValue("enum_when", valueResults);
         }
-        else
+        finally
         {
-            MergeSynchronousOuterScope(entryScope, scopeResults);
+            _scopeJoinPhis = previousJoinPhis;
         }
-        var result = valueResults.Count == 0
-            ? RuntimeUnit.Instance
-            : EmitPhiValue("enum_when", valueResults);
-        return result;
     }
 
     private void NormalizeEnumOuterOwnerScopes(
@@ -363,6 +426,10 @@ internal sealed partial class LlvmEmitter
         {
             foreach (var (name, _) in outerOwnedLocals)
             {
+                // A live continuation must join its ownership state explicitly.
+                // Tail results may consume the owner and clean up other paths.
+                if (OwnerReadInContinuation(name))
+                    continue;
                 var presentPaths = continuingPaths
                     .Where(path => path.Scope.Locals.ContainsKey(name))
                     .ToArray();
@@ -517,6 +584,26 @@ internal sealed partial class LlvmEmitter
         EmitLabel(dropLabel);
         _currentBlockLabel = dropLabel;
         DropOwnedRuntimeValue(value);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private void DropOwnedStructFieldsExceptTransferredIfRetained(
+        string retainedFlag,
+        RuntimeStruct value,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths)
+    {
+        var retained = NextTemp("enum_payload_retained");
+        EmitLoad(retained, "i1", retainedFlag, 1);
+        var dropLabel = NextLabel("enum_payload_drop");
+        var doneLabel = NextLabel("enum_payload_drop_done");
+        EmitConditionalBranch(retained, dropLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(dropLabel);
+        _currentBlockLabel = dropLabel;
+        DropOwnedStructFieldsExceptTransferred(value, transferredPaths);
         EmitBranch(doneLabel);
         EmitFunctionLine();
         EmitLabel(doneLabel);

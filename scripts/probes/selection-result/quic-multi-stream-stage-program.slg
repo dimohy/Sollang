@@ -1,0 +1,80 @@
+import std.net.quic as quic
+
+# Sends stream 4 before stream 0, then reads in stream-owner order. The
+# connection pump must preserve both identities and every byte by exact ID.
+routeInterleavedStreams: -> Result<Bool, quic.QuicError> uses Network, Random, Clock, Console {
+    "stage=0" -> println
+    quic.generateIdentity()? => identity
+    "stage=1" -> println
+    identity -> certificate? => certificate
+    "stage=2" -> println
+
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    "stage=3" -> println
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    "stage=4" -> println
+    serverEndpoint! -> listen(identity)? => listener!
+    "stage=5" -> println
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpoint! -> connect(serverAddress, certificate)? => clientConnection!
+    "stage=6" -> println
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    "stage=7" -> println
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> openBi(clientEndpoint!)? => clientFirst!
+    "stage=8" -> println
+    clientConnection! -> openBi(clientEndpoint!)? => clientSecond!
+    "stage=9" -> println
+    clientSecond! -> send(clientConnection!, clientEndpoint!, [66])? => sentSecond
+    "stage=10" -> println
+    clientFirst! -> send(clientConnection!, clientEndpoint!, [65])? => sentFirst
+    "stage=11" -> println
+
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverFirst!
+    "stage=12" -> println
+    serverConnection! -> acceptBi(serverEndpoint!)? => serverSecond!
+    "stage=13" -> println
+    serverFirst! -> receive(serverConnection!, serverEndpoint!, 8)? => receivedFirst
+    "stage=14" -> println
+    serverSecond! -> receive(serverConnection!, serverEndpoint!, 8)? => receivedSecond
+    "stage=15" -> println
+
+    serverSecond! -> send(serverConnection!, serverEndpoint!, [98])? => replySentSecond
+    "stage=16" -> println
+    serverFirst! -> send(serverConnection!, serverEndpoint!, [97])? => replySentFirst
+    "stage=17" -> println
+    clientFirst! -> receive(clientConnection!, clientEndpoint!, 8)? => replyFirst
+    "stage=18" -> println
+    clientSecond! -> receive(clientConnection!, clientEndpoint!, 8)? => replySecond
+    "stage=19" -> println
+
+    (clientFirst! -> id) == 0
+        and (clientSecond! -> id) == 4
+        and (serverFirst! -> id) == 0
+        and (serverSecond! -> id) == 4
+        and sentFirst == 1
+        and sentSecond == 1
+        and replySentFirst == 1
+        and replySentSecond == 1
+        and receivedFirst[0] == 65
+        and receivedSecond[0] == 66
+        and replyFirst[0] == 97
+        and replySecond[0] == 98 => routed
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    "stage=20" -> println
+    serverConnection! -> close(serverEndpoint!, 0)?
+    "stage=21" -> println
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(routed)
+}
+
+main {
+    routeInterleavedStreams() -> when {
+        Ok(routed) { "quic-multi-stream=$routed" -> println }
+        Err(error) { "quic-multi-stream-error=$(error.code)" -> println }
+    }
+}

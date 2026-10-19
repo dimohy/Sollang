@@ -2,6 +2,8 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$CandidateCompiler,
+    [string]$ManagedCompiler,
+    [string]$ManagedCompilerSha256,
     [switch]$TypeDelimiters,
     [switch]$ReadonlyTextSlice,
     [switch]$ExecuteFixtures,
@@ -13,9 +15,25 @@ if ($PSBoundParameters.ContainsKey('FixtureId') -and (-not $ExecuteFixtures -or 
     throw 'an explicit FixtureId selection requires ExecuteFixtures and at least one fixture ID'
 }
 $repo = [IO.Path]::GetFullPath($RepositoryRoot)
+$compiler = if ([string]::IsNullOrWhiteSpace($ManagedCompiler)) {
+    Join-Path $repo 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
+} else {
+    [IO.Path]::GetFullPath($ManagedCompiler, $repo)
+}
+if (-not (Test-Path -LiteralPath $compiler -PathType Leaf) -or
+    [IO.Path]::GetExtension($compiler) -cne '.dll') {
+    throw "generic type context Managed compiler DLL is missing: $compiler"
+}
+if (-not [string]::IsNullOrWhiteSpace($ManagedCompiler) -and
+    $ManagedCompilerSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+    throw 'generic type context pinned Managed compiler requires a SHA-256 value'
+}
+if (-not [string]::IsNullOrWhiteSpace($ManagedCompilerSha256) -and
+    (Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash -cne $ManagedCompilerSha256.ToUpperInvariant()) {
+    throw 'generic type context pinned Managed compiler SHA-256 mismatch'
+}
 $output = Join-Path $repo ('artifacts/scratch/generic-type-contexts/' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $output -Force | Out-Null
-$compiler = Join-Path $repo 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 $semanticSourcePath = Join-Path $repo 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs'
 $source = Get-Content -LiteralPath $semanticSourcePath -Raw
 function Read-Methods([string]$Name, [int]$Count) {
@@ -217,7 +235,7 @@ if ($TypeDelimiters) {
     foreach ($layoutCase in $layoutCases) {
         $layoutPath = Join-Path $repo $layoutCase.source
         $layoutExe = Join-Path $output ($layoutCase.id + '.exe')
-        $layoutLl = [IO.Path]::ChangeExtension($layoutExe, '.ll')
+        $layoutLl = $layoutExe + '.ll'
         $layoutLog = Join-Path $output ($layoutCase.id + '.run.log')
         $layoutResult = [ordered]@{
             id = $layoutCase.id
@@ -332,7 +350,7 @@ if ($TypeDelimiters) {
     foreach ($declarationCase in $declarationCases) {
         $declarationPath = Join-Path $repo $declarationCase.source
         $declarationExe = Join-Path $output ($declarationCase.id + '.exe')
-        $declarationLl = [IO.Path]::ChangeExtension($declarationExe, '.ll')
+        $declarationLl = $declarationExe + '.ll'
         $declarationTemporaryLl = Join-Path $output ($declarationCase.id + '.slg-tmp/' + $declarationCase.id + '.ll')
         $declarationLog = Join-Path $output ($declarationCase.id + '.log')
         $declarationResult = [ordered]@{
@@ -427,7 +445,9 @@ if ($TypeDelimiters) {
         $evidence.status = 'failed'
     }
 }
-if ($evidence.inferenceCallsiteCount -ne 2) { throw 'both production generic inference paths must consume the shared borrowed-type rule' }
+# Generic call inference now has one shared recursive consumer. Retain an exact
+# structural check and exercise method/direct paths with the source fixtures.
+if ($evidence.inferenceCallsiteCount -ne 1) { throw 'the shared production generic inference path must consume the borrowed-type rule exactly once' }
 if ($ReadonlyTextSlice) {
     $sliceContractPath = Join-Path $repo 'scripts/contracts/readonly-text-slice.json'
     $sliceContract = Get-Content -LiteralPath $sliceContractPath -Raw | ConvertFrom-Json
@@ -483,8 +503,8 @@ if ($CandidateCompiler) {
             [pscustomobject]@{ id = 'self-recursive-reference'; kind = 'positive'; source = 'scripts/probes/type-delimiters/self-recursive-reference.slg'; expected = '1'; diagnosticKind = ''; candidateDiagnosticPattern = ''; coverage = 'self-recursive-nominal-reference' },
             [pscustomobject]@{ id = 'direct-nested-container'; kind = 'negative'; source = 'scripts/probes/type-delimiters/direct-nested-container-negative.slg'; expected = 'readonly array views require inline scalar or user-value elements'; diagnosticKind = 'semantic error'; candidateDiagnosticStream = 'stdout'; candidateDiagnosticPattern = '^; sollang semantic error: readonly array views require inline scalar or user-value elements$'; coverage = 'direct-nested-container' },
             [pscustomobject]@{ id = 'direct-value-recursion'; kind = 'negative'; source = 'scripts/probes/type-delimiters/direct-value-recursion.slg'; expected = 'recursively contains itself; recursive values require an explicit heap reference type'; diagnosticKind = 'semantic error'; candidateDiagnosticStream = 'stdout'; candidateDiagnosticPattern = '^; sollang compiler error S058: type has a recursive by-value layout \(source 0, byte [0-9]+, length [0-9]+\); use explicit box or heap-backed storage to break the value cycle$'; coverage = 'direct-value-recursion' },
-            [pscustomobject]@{ id = 'duplicate-product-label'; kind = 'negative'; source = 'scripts/probes/type-delimiters/duplicate-product-label.slg'; expected = "duplicate product field label 'item'"; diagnosticKind = 'parse error'; candidateDiagnosticStream = 'stdout'; candidateDiagnosticPattern = "^; sollang syntax error: duplicate product field label 'item' \(source 0, byte [0-9]+, length [0-9]+\)$"; coverage = 'duplicate-product-label' },
-            [pscustomobject]@{ id = 'empty-product-label'; kind = 'negative'; source = 'scripts/probes/type-delimiters/empty-product-label.slg'; expected = 'expected Identifier'; diagnosticKind = 'parse error'; candidateDiagnosticStream = 'stdout'; candidateDiagnosticPattern = '^; sollang syntax error: expected Identifier \(source 0, byte [0-9]+, length [0-9]+\)$'; coverage = 'empty-product-label' }
+            [pscustomobject]@{ id = 'duplicate-product-label'; kind = 'negative'; source = 'scripts/probes/type-delimiters/duplicate-product-label.slg'; expected = "duplicate product field label 'item'"; diagnosticKind = 'parse error'; candidateDiagnosticStream = 'stderr'; candidateDiagnosticPattern = "^sollang: .+\.slg: parse error at [0-9]+:[0-9]+: duplicate product field label 'item'$"; coverage = 'duplicate-product-label' },
+            [pscustomobject]@{ id = 'empty-product-label'; kind = 'negative'; source = 'scripts/probes/type-delimiters/empty-product-label.slg'; expected = 'expected Identifier'; diagnosticKind = 'parse error'; candidateDiagnosticStream = 'stderr'; candidateDiagnosticPattern = '^sollang: .+\.slg: parse error at [0-9]+:[0-9]+: expected Identifier$'; coverage = 'empty-product-label' }
         )
         $candidateC396Ids = @($candidateC396Cases | ForEach-Object id)
         if ($candidateC396Cases.Count -ne 10 -or
@@ -811,7 +831,7 @@ if ($ExecuteFixtures) {
         foreach ($case in $positiveCases) {
             $path = Join-Path $repo $case.source
             $exe = Join-Path $output ($case.id + '.exe')
-            $ll = [IO.Path]::ChangeExtension($exe, '.ll')
+            $ll = $exe + '.ll'
             $caseLog = Join-Path $output ($case.id + '.run.log')
             $caseResult = [ordered]@{ id = $case.id; source = $case.source; sourceSha256 = $inputHashes[$path]; status = 'running'; log = $caseLog }
             $managed.cases += $caseResult
@@ -840,7 +860,7 @@ if ($ExecuteFixtures) {
             if ([string]::IsNullOrWhiteSpace($case.diagnostic)) { throw "managed negative $($case.id) has an empty diagnostic contract" }
             $path = Join-Path $repo $case.source
             $exe = Join-Path $output ($case.id + '.exe')
-            $ll = [IO.Path]::ChangeExtension($exe, '.ll')
+            $ll = $exe + '.ll'
             $temporaryLlvm = Join-Path $output ($case.id + '.slg-tmp/' + $case.id + '.ll')
             $caseLog = Join-Path $output ($case.id + '.build.log')
             $caseResult = [ordered]@{ id = $case.id; source = $case.source; sourceSha256 = $inputHashes[$path]; status = 'running'; log = $caseLog }

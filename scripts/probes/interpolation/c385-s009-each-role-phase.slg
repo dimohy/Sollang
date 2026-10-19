@@ -1,0 +1,29 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.process as process
+
+# Trace the exact each-role assignment across the Typed IR phase boundary.
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argumentIndex!
+    argumentIndex! < (arguments -> len) -> while {
+        paths! -> push(arguments[argumentIndex!])
+        argumentIndex! + 1 => argumentIndex!
+    }
+    paths! -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => types
+    [0, 1, 2, 3] -> each phase {
+        snapshot -> typedIr.profileResolvedContext(types, phase) => ir
+        0 => index!
+        index! < (ir -> len) -> while {
+            ir[index!] => node
+            node.sourceModule == 164 and node.astNode >= 6040 and node.astNode <= 6080
+                -> if {
+                    "$phase $(index!) $(node.kind) $(node.astNode) $(node.symbol) $(node.typeId) $(node.operand0) $(node.operand1) $(node.parent) $(node.flags)" -> println
+                }
+            index! + 1 => index!
+        }
+    }
+}

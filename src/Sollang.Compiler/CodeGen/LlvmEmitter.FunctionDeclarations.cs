@@ -91,6 +91,8 @@ internal sealed partial class LlvmEmitter
             switch (function.ReturnType)
             {
                 case BoundType.Arguments:
+                case BoundType.MappedBytes:
+                case BoundType.MutableMappedBytes:
                     EmitStructFunction(function);
                     break;
                 case BoundType.Unit:
@@ -136,6 +138,7 @@ internal sealed partial class LlvmEmitter
                     if (_program.Types.IsStruct(function.ReturnType)
                         || _program.Types.IsEnum(function.ReturnType)
                         || _program.Types.IsBox(function.ReturnType)
+                        || _program.Types.IsDynTrait(function.ReturnType)
                         || _program.Types.IsStream(function.ReturnType)
                         || _program.Types.IsEventStream(function.ReturnType))
                     {
@@ -230,7 +233,7 @@ internal sealed partial class LlvmEmitter
             }
 
             var slice = function.Body is ArrayLiteralExpression literal
-                && IsReadonlyStaticNumericArrayLiteral(literal)
+                && ArrayLiteralStorageFacts.HasStaticReadonlyBacking(literal)
                 ? EmitReadonlyStaticArrayLiteral(literal, function.ReturnType)
                 : EmitExpression(function.Body);
             EnsureRuntimeType(slice, function.ReturnType, function.Name);
@@ -278,12 +281,6 @@ internal sealed partial class LlvmEmitter
             : new RuntimeInlineSlice(sliceType, elementType, name, length);
     }
 
-    private static bool IsReadonlyStaticNumericArrayLiteral(ArrayLiteralExpression literal)
-    {
-        return literal.Elements.All(static element => element is NumberExpression
-            or NegateExpression { Value: NumberExpression });
-    }
-
     private void EmitReferenceFunction(BoundFunction function)
     {
 
@@ -306,6 +303,7 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"function '{function.Name}' has no body");
             }
             var reference = EmitReferencePlace(function.Body, function.ReturnType);
+            DropOwnedLocals();
             EmitRet("ptr", reference.PointerName);
             EmitFunctionLine("}");
             EmitFunctionLine();
@@ -714,7 +712,7 @@ internal sealed partial class LlvmEmitter
             var name = $"%arg_{index.ToString(CultureInfo.InvariantCulture)}";
             if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
             {
-                parts.Add(_program.Types.IsStruct(parameter.Type)
+                parts.Add((_program.Types.IsStruct(parameter.Type) || _program.Types.IsBitSet(parameter.Type))
                     ? $"ptr {name}"
                     : _program.Types.IsStaticArray(parameter.Type)
                         ? $"%sollang.int_slice {name}"
@@ -740,7 +738,8 @@ internal sealed partial class LlvmEmitter
         }
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
-            if (function.InputType is { } mutableType && _program.Types.IsStruct(mutableType))
+            if (function.InputType is { } mutableType
+                && (_program.Types.IsStruct(mutableType) || _program.Types.IsBitSet(mutableType)))
             {
                 return "ptr %it";
             }
@@ -780,6 +779,7 @@ internal sealed partial class LlvmEmitter
             && (_program.Types.IsStruct(inputType)
                 || _program.Types.IsEnum(inputType)
                 || _program.Types.IsBox(inputType)
+                || _program.Types.IsDynTrait(inputType)
                 || _program.Types.IsStream(inputType)
                 || _program.Types.IsEventStream(inputType)))
         {
@@ -922,7 +922,8 @@ internal sealed partial class LlvmEmitter
         }
         if (function.InputType is { } producerType
             && (_program.Types.IsStream(producerType)
-                || _program.Types.IsEventStream(producerType)))
+                || _program.Types.IsEventStream(producerType)
+                || _program.Types.IsDynTrait(producerType)))
         {
             _locals.Add(
                 function.InputName ?? "it",
@@ -957,7 +958,10 @@ internal sealed partial class LlvmEmitter
             var capacity = NextTemp("param_generic_dict_capacity");
             EmitAssign(capacity, "extractvalue %sollang.int_dictionary %it, 2");
             _locals.Add(function.InputName ?? "it", new RuntimeInlineDictionary(
-                dictionaryType, definition.KeyType, definition.ValueType, pointer, length, capacity));
+                dictionaryType, definition.KeyType, definition.ValueType, pointer, length, capacity,
+                _program.Types.IsBoundedDictionary(dictionaryType)
+                    ? RuntimeContainerStorage.Stack
+                    : RuntimeContainerStorage.Heap));
             return;
         }
         if (function.InputType is { } dynamicArrayType
@@ -1145,6 +1149,14 @@ internal sealed partial class LlvmEmitter
             fixedArrayLength);
     }
 
+    private void BindMutableBitSetFunctionParameter(string name, BoundType type, string pointer)
+    {
+        _locals[name] = new RuntimeBitSet(type, pointer);
+        _mutableLocals.Add(name);
+        _borrowedMutableLocals.Add(name);
+        _borrowedOwnedLocals.Add(name);
+    }
+
     private void BindMutableBorrowFunctionParameter(BoundFunction function)
     {
         BindMutableBorrowFunctionParameter(
@@ -1155,6 +1167,12 @@ internal sealed partial class LlvmEmitter
 
     private void BindMutableBorrowFunctionParameter(string name, BoundType type, string argumentName)
     {
+        if (_program.Types.IsBitSet(type))
+        {
+            BindMutableBitSetFunctionParameter(name, type, argumentName);
+            return;
+        }
+
         // Generic fixed arrays have an aggregate LLVM representation, but their
         // language-level container identity must win over the broad struct test.
         // Otherwise `mut [T; N]` is rebound as RuntimeStruct and indexed writes

@@ -1,0 +1,28 @@
+import std.net.quic as quic
+
+connectAndClose: -> Result<Bool, quic.QuicError> uses Network, Random, Clock {
+    quic.generateIdentity()? => identity
+    identity -> certificate? => certificate
+
+    quic.bind(quic.loopback(0))? => clientEndpoint!
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    serverEndpoint! -> listen(identity)? => listener!
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+
+    clientEndpoint! -> connect(serverAddress, certificate)? => clientConnection!
+    listener! -> accept(serverEndpoint!)? => serverConnection!
+    listener! -> close(serverEndpoint!)
+
+    clientConnection! -> close(clientEndpoint!, 0)?
+    serverConnection! -> close(serverEndpoint!, 0)?
+    clientEndpoint! -> close
+    serverEndpoint! -> close
+    Result<Bool, quic.QuicError>.Ok(true)
+}
+
+main {
+    connectAndClose() -> when {
+        Ok(connected) { "quic-connect=$connected" -> println }
+        Err(error) { "quic-connect-error=$(error.code)" -> println }
+    }
+}

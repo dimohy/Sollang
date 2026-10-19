@@ -1,0 +1,327 @@
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+
+probe0: -> Bool {
+    """
+    struct Owned {
+        value: box Int
+    }
+    
+    main {
+        [Owned { value: box 1 }] => values
+        values[0] => value
+        value.value -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe1: -> Bool {
+    """
+    struct Entry { values: [Int; ~] }
+    main {
+        [Entry { values: [11, 12; ~] }, Entry { values: [21, 22; ~] }; ~] => entries!
+        entries![0] => previous
+        entries![1] => entries![0]
+        previous => entries![1]
+        entries![0].values[0] -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe2: -> Bool {
+    """
+    struct OwnedSymbol {
+        name: Text
+        payload: [Int; ~]
+    }
+    
+    main {
+        {Int: OwnedSymbol;
+            1: OwnedSymbol { name: "lexer", payload: [10; ~] }
+        } => symbols!
+        symbols![1] => escaped!
+        escaped!.name -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe3: -> Bool {
+    """
+    struct Entry { values: [Int; ~] }
+    make: -> Entry {
+        [Entry { values: [41, 42; ~] },; ~] => entries!
+        entries![0]
+    }
+    main {
+        make() => entry
+        entry.values[0] -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe4: -> Bool {
+    """
+    struct Entry { values: [Int; ~] }
+    inspect value: Entry -> Int {
+        value.values[0]
+    }
+    main {
+        [Entry { values: [41, 42; ~] }] => entries
+        entries[0] -> inspect -> println
+        entries[0].values[1] -> println
+        entries -> len -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe5: -> Bool {
+    """
+    struct Entry { values: [Int; ~] }
+    inspect index: Int, value: Entry -> Int {
+        value.values[index]
+    }
+    main {
+        [Entry { values: [41, 42; ~] }] => entries
+        1 -> inspect(entries[0]) -> println
+        entries[0].values[0] -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe6: -> Bool {
+    """
+    struct IndexedInner {
+        data: [Int; ~]
+    }
+    struct IndexedFrame {
+        inner: IndexedInner
+    }
+    struct IndexedOwner {
+        frames: [IndexedFrame; ~]
+    }
+    observeIndexedData data: [Int] -> Int => data -> len
+    main {
+        IndexedOwner { frames: [IndexedFrame { inner: IndexedInner { data: [7, 8,; ~] } },; ~] } => owner
+        owner.frames[0].inner.data -> observeIndexedData => count
+        "$count,$(owner.frames[0].inner.data[0])" -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe7: -> Bool {
+    """
+    struct ScalarFrame {
+        start: Int
+        finish: Int
+        data: [Int; ~]
+    }
+    struct ScalarOwner {
+        frames: [ScalarFrame; ~]
+    }
+    sumScalarFields first: Int, second: Int -> Int => first + second
+    main {
+        ScalarOwner {
+            frames: [ScalarFrame {
+                start: 2
+                finish: 3
+                data: [7,; ~]
+            },; ~]
+        } => owner
+        owner.frames[0].start -> sumScalarFields(owner.frames[0].finish) => total
+        "$total,$(owner.frames[0].data[0])" -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe8: -> Bool {
+    """
+    struct OwnedSymbol {
+        name: Text
+        payload: [Int; ~]
+    }
+    
+    payloadLength values: [Int; ~] -> Int {
+        values -> len => length
+        Int(length)
+    }
+    
+    increment value: Int -> Int {
+        value + 1
+    }
+    
+    main {
+        {Int: OwnedSymbol;
+            1: OwnedSymbol { name: "lexer", payload: [10, 20; ~] }
+        } => symbols
+        symbols[1].payload -> payloadLength => count
+        (symbols[1].payload)[0] -> increment => first
+        symbols[1].name -> len => nameLength
+        "projected borrow=$count,$first,$nameLength" -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe9: -> Bool {
+    """
+    struct Entry { values: [Int; ~] }
+    inspect value: Entry -> Int {
+        value.values[0]
+    }
+    main {
+        [Entry { values: [41, 42; ~] }] => entries
+        "value=$(entries[0] -> inspect)" -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe10: -> Bool {
+    """
+    main {
+        [[0; ~]; ~] => owners!
+        owners![0] => selected
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe11: -> Bool {
+    """
+    main {
+        {1: [0; ~]} => owners!
+        owners![1] => selected
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe12: -> Bool {
+    """
+    select owners: [[Int; ~]; ~] -> [Int; ~] {
+        owners[0]
+    }
+    main {}
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe13: -> Bool {
+    """
+    select owners: {Int: [Int; ~]} -> [Int; ~] {
+        owners[1]
+    }
+    main {}
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe14: -> Bool {
+    """
+    main {
+        [[[0; ~]; ~]; ~] => owners!
+        owners![0][0] => selected
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe15: -> Bool {
+    """
+    struct Entry {
+        values: [Int; ~]
+    }
+    main {
+        [Entry { values: [0; ~] }; ~] => owners!
+        owners![0].values => selected
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == 0
+}
+
+probe16: -> Bool {
+    """
+    struct Entry {
+        values: [Int; ~]
+        count: Int
+    }
+    main {
+        [Entry { values: [0; ~], count: 7 }] => owners
+        owners[0].count -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe17: -> Bool {
+    """
+    main {
+        [[3; ~]; ~] => owners
+        owners[0][0] -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+probe18: -> Bool {
+    """
+    main {
+        [[3; ~]; ~] => owners!
+        owners! -> take(0) => selected!
+        selected![0] + 1 => selected![0]
+        selected![0] -> println
+        owners! -> len -> println
+    }
+    """ => input
+    input -> semanticDiagnostics.ownedIndexDecisionBeforeTypedIr => actualModule
+    actualModule == -1
+}
+
+main {
+    0 => completed!
+    probe0() -> if { completed! + 1 => completed! }
+    probe1() -> if { completed! + 1 => completed! }
+    probe2() -> if { completed! + 1 => completed! }
+    probe3() -> if { completed! + 1 => completed! }
+    probe4() -> if { completed! + 1 => completed! }
+    probe5() -> if { completed! + 1 => completed! }
+    probe6() -> if { completed! + 1 => completed! }
+    probe7() -> if { completed! + 1 => completed! }
+    probe8() -> if { completed! + 1 => completed! }
+    probe9() -> if { completed! + 1 => completed! }
+    probe10() -> if { completed! + 1 => completed! }
+    probe11() -> if { completed! + 1 => completed! }
+    probe12() -> if { completed! + 1 => completed! }
+    probe13() -> if { completed! + 1 => completed! }
+    probe14() -> if { completed! + 1 => completed! }
+    probe15() -> if { completed! + 1 => completed! }
+    probe16() -> if { completed! + 1 => completed! }
+    probe17() -> if { completed! + 1 => completed! }
+    probe18() -> if { completed! + 1 => completed! }
+    "semantic-owner=$(completed!)/19" -> println
+}

@@ -1,0 +1,32 @@
+import sys.directory as directory
+import sys.file as file
+import sys.path as path
+
+main {
+    "artifacts/scratch/windows-wide-검증" => directoryText
+    directoryText -> path.fromText(path.Style.Windows) => directoryPath
+    directoryPath -> directory.create => created
+    "artifacts/scratch/windows-wide-검증/한글-Ω.tmp" => temporary
+    "artifacts/scratch/windows-wide-검증/한글-Ω.bin" => destination
+    temporary -> file.removePath => previousTemporary
+    destination -> file.removePath => previousDestination
+    temporary -> file.createExclusive => claimed
+    temporary -> file.createExclusive => contested
+    file.AtomicReplaceRequest {
+        temporary: temporary
+        destination: destination
+    } -> file.atomicReplace => published
+    destination -> file.openRead -> when {
+        Ok(reader) { true }
+        Err(error) { false }
+    } => opened
+    directoryText -> path.fromText(path.Style.Windows) -> directory.read -> when {
+        Ok(entries) {
+            (entries -> len) == 1 and (entries[0].name -> path.pathText) == "한글-Ω.bin"
+        }
+        Err(error) { false }
+    } => listed
+    destination -> file.removePath => removed
+    created and claimed == 1 and contested == 0 and published and opened and listed and removed == 1
+        -> if { "unicode path ok" } else { "unicode path failed" } -> println
+}

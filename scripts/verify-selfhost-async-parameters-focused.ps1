@@ -84,9 +84,9 @@ try {
 
     foreach ($fragment in @(
         '%async_arg_address = getelementptr i8, ptr %async_context',
-        '%async_arg = load ',
+        '%arg = load ',
         ' %arg, ptr %async_arg_address',
-        '_async_body('
+        'emitFunctionNamed("_async_worker", context, state)'
     )) {
         Require-Text $functions $fragment 'wrapper-store and worker-load authority'
     }
@@ -152,10 +152,20 @@ try {
         throw "selfhost C415 LLVM is missing: $candidateLlvm"
     }
     $llvmText = [IO.File]::ReadAllText($candidateLlvm).Replace("`r`n", "`n")
-    if ($llvmText -notmatch 'define %sollang\.task @sollang_m\d+_s\d+\(i32 %arg, i32 %arg1, i32 %arg2\)' -or
-        $llvmText -notmatch 'call i32 @sollang_m\d+_s\d+_async_body\(i32 %async_arg, i32 %async_arg1, i32 %async_arg2\)' -or
-        $llvmText -match 'call i32 @sollang_m\d+_s\d+_async_body\(\)') {
-        throw 'generated C415 LLVM does not preserve the exact async parameter call shape'
+    $wrapper = [regex]::Match($llvmText, 'define %sollang\.task @(sollang_m\d+_s\d+)\(i32 %arg, i32 %arg1, i32 %arg2\)')
+    if (-not $wrapper.Success) {
+        throw 'generated C415 LLVM is missing the exact three-Int async wrapper'
+    }
+    $workerName = [regex]::Escape($wrapper.Groups[1].Value + '_async_worker')
+    $worker = [regex]::Match($llvmText, ('(?s)define i1 @' + $workerName + '\(ptr %control\) \{.*?\n\}'))
+    if (-not $worker.Success -or
+        $worker.Value -notmatch '%arg = load i32, ptr %async_arg_address, align 4' -or
+        $worker.Value -notmatch '%arg1 = load i32, ptr %async_arg1_address, align 4' -or
+        $worker.Value -notmatch '%arg2 = load i32, ptr %async_arg2_address, align 4' -or
+        $worker.Value -notmatch 'store i32 %async_completed_result, ptr %async_context, align 4' -or
+        $worker.Value -notmatch 'ret i1 true' -or
+        $llvmText -match 'define .*_async_body\(') {
+        throw 'generated C415 LLVM does not preserve the exact async parameter worker and result shape'
     }
     Complete-Check 'generated-llvm-parameter-shape'
 

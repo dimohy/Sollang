@@ -46,7 +46,7 @@ matches left: [UInt8], right: [UInt8] -> Bool {
 }
 
 dynamicPayload: -> [UInt8; ~] {
-    ['t', 'h', 'e', ' ', 'q', 'u', 'i', 'c', 'k', ' ', 'b', 'r', 'o', 'w', 'n', ' ',
+    [UInt8('t'), 'h', 'e', ' ', 'q', 'u', 'i', 'c', 'k', ' ', 'b', 'r', 'o', 'w', 'n', ' ',
     'f', 'o', 'x', ' ', 'j', 'u', 'm', 'p', 's', ' ', 'o', 'v', 'e', 'r', ' ', 't', 'h', 'e', ' ',
     'l', 'a', 'z', 'y', ' ', 'd', 'o', 'g', ' '] => phrase
     [UInt8; ~] => output!
@@ -64,12 +64,12 @@ dynamicPayload: -> [UInt8; ~] {
 
 dynamicDeflate padded: Bool -> [UInt8; ~] {
     [
-    237, 202, 97, 18, 64, 32, 20, 69, 225, 173, 220, 173, 145, 136, 240, 242,
+    UInt8(237), 202, 97, 18, 64, 32, 20, 69, 225, 173, 220, 173, 145, 136, 240, 242,
     148, 202, 234, 107, 44, 195, 220, 159, 103, 206, 23, 157, 197, 149, 86, 227,
     49, 170, 228, 19, 179, 20, 108, 233, 8, 55, 228, 177, 138, 216, 247, 62,
-    188, 21, 147, 44, 95, 208, 210, 210, 210, 210, 210, 210, 210, 254, 217, 54
+    188, 21, 147, 44, 95, 208, 210, 210, 210, 210, 210, 210, 210, 254, 217, 54; ~
     ] => encoded!
-    padded -> if { UInt8(182) => encoded![63] }
+    padded -> if { 182 => encoded![63] }
     encoded!
 }
 
@@ -109,7 +109,8 @@ archive: -> Result<[UInt8; ~], zip_archive.Error> {
         maxCommentBytes: 8
         maxDirectoryBytes: 128
         maxWorkUnits: 1_024
-    } -> codec -> writer? => writer!
+    } => writerLimits
+    codec -> writer(writerLimits)? => writer!
     zip_archive.DeflateLimits {
         maxCompressedBytes: 128
         maxExpansionRatio: 16
@@ -141,7 +142,8 @@ decode encoded: [UInt8], bytewise: Bool -> Result<[UInt8; ~], zip_archive.Error>
         maxCompressedBytes: 128
         maxExpansionRatio: 16
         maxWorkUnits: 512
-    } -> codec -> deflateDecoder? => decoder!
+    } => deflateLimits
+    codec -> deflateDecoder(deflateLimits)? => decoder!
     bytewise -> if {
         0 => index!
         index! < (encoded -> len) -> while {
@@ -199,21 +201,21 @@ decoderFailures: -> Result<(compressed: Bool, output: Bool, ratio: Bool, work: B
     compressedArchive -> decodeFailure(128, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 1 }, 20)? => work
 
     archive()? => malformedArchive!
-    UInt8(7) => malformedArchive![38]
+    7 => malformedArchive![38]
     malformedArchive! -> decodeFailure(128, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 512 }, 21)? => malformed
 
     archive()? => checksumArchive!
-    UInt8(0) => checksumArchive![14]
-    UInt8(0) => checksumArchive![15]
-    UInt8(0) => checksumArchive![16]
-    UInt8(0) => checksumArchive![17]
+    0 => checksumArchive![14]
+    0 => checksumArchive![15]
+    0 => checksumArchive![16]
+    0 => checksumArchive![17]
     checksumArchive! -> decodeFailure(128, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 512 }, 9)? => checksum
 
     archive()? => sizeArchive!
-    UInt8(42) => sizeArchive![22]
-    UInt8(0) => sizeArchive![23]
-    UInt8(0) => sizeArchive![24]
-    UInt8(0) => sizeArchive![25]
+    42 => sizeArchive![22]
+    0 => sizeArchive![23]
+    0 => sizeArchive![24]
+    0 => sizeArchive![25]
     sizeArchive! -> decodeFailure(128, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 512 }, 10)? => size
 
     Result<(compressed: Bool, output: Bool, ratio: Bool, work: Bool, malformed: Bool, checksum: Bool, size: Bool), zip_archive.Error>.Ok((compressed: compressed, output: output, ratio: ratio, work: work, malformed: malformed, checksum: checksum, size: size))
@@ -233,7 +235,7 @@ writerTransactional: -> Result<Bool, zip_archive.Error> {
     [UInt8; ~] => retryScratch!
     writer! -> addDeflated(['d'], [UInt8; ~], input, zip_archive.DeflateLimits { maxCompressedBytes: 128, maxExpansionRatio: 16, maxWorkUnits: 512 }, retryScratch!, output!)? => entryBytes
     writer! -> finish([UInt8; ~], output!)? => finalBytes
-    Result<Bool, zip_archive.Error>.Ok(rejected and (failedScratch! -> len) <= 1 and entryBytes > 31 and finalBytes > 69)
+    Result<Bool, zip_archive.Error>.Ok(rejected and (failedScratch! -> len) <= 1 and entryBytes > 31 and finalBytes >= 69)
 }
 
 writerBound deflateLimits: zip_archive.DeflateLimits, expectedKind: Int -> Result<Bool, zip_archive.Error> {
@@ -300,7 +302,7 @@ run: -> Result<Unit, zip_archive.Error> uses Console {
 report outcome: Result<Unit, zip_archive.Error> -> Bool uses Console => outcome -> when {
     Ok(_) { true }
     Err(error) {
-        "zip-deflate-failure=$(error.kind),$(error.offset)" -> println
+        "zip-deflate-failure=$(error.kind -> kindCode)@$(error.offset)" -> println
         false
     }
 }

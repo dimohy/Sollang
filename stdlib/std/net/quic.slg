@@ -1347,15 +1347,11 @@ copyRangeBytes bytes: [UInt8], start: UIntSize -> [UInt8; ~] {
     copied!
 }
 
-handshakeCandidate bytes: move [UInt8; ~] -> Result<Option<[UInt8; ~]>, QuicError> {
+handshakeCandidate bytes: [UInt8] -> Result<Bool, QuicError> {
     packets.longHeaderKind(bytes) -> when {
-        Err(error) { Result<Option<[UInt8; ~]>, QuicError>.Err(protocolFailure(error)) }
+        Err(error) { Result<Bool, QuicError>.Err(protocolFailure(error)) }
         Ok(kind) {
-            kind == 0 or kind == 2 -> if {
-                Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.Some(bytes))
-            } else {
-                Result<Option<[UInt8; ~]>, QuicError>.Ok(Option<[UInt8; ~]>.None)
-            }
+            Result<Bool, QuicError>.Ok(kind == 0 or kind == 2)
         }
     }
 }
@@ -1378,14 +1374,9 @@ handshakePacket endpoint: mut Endpoint, connectionId: [UInt8] -> Result<[UInt8; 
                                 header.packetEnd < UIntSize(received.bytes -> len)
                                     -> if {
                                         copyRangeBytes(received.bytes, header.packetEnd) => remaining
-                                        remaining -> handshakeCandidate? -> when {
-                                            None { false }
-                                            Some(packet) {
-                                                selected! -> appendBytes(packet)
-                                                true
-                                            }
-                                        } => appended
+                                        remaining -> handshakeCandidate? => appended
                                         appended -> if {
+                                            selected! -> appendBytes(remaining)
                                             true => found!
                                         }
                                     }

@@ -1,0 +1,39 @@
+enum SourceError { Overflow, DivisionByZero }
+enum TargetError { Overflow, DivisionByZero }
+struct Report { public kind: TargetError }
+struct Box { public data: [Int; ~] }
+accept value: Int -> Unit uses Console { "$value" -> println }
+mapError value: SourceError -> TargetError {
+    value -> when {
+        Overflow => TargetError.Overflow
+        DivisionByZero => TargetError.DivisionByZero
+    }
+}
+main {
+    [1, 2] -> len -> accept
+    [1, 2; ~] -> len -> accept
+    Box { data: [1, 2; ~] }.data -> len -> accept
+    "ab" -> len -> println
+    SourceError.Overflow -> when {
+        Overflow => TargetError.Overflow
+        DivisionByZero => TargetError.DivisionByZero
+    } => kind
+    Report { kind: kind } => report
+    report.kind -> when {
+        Overflow => 2
+        DivisionByZero => 3
+    } -> println
+    Report { kind: SourceError.Overflow -> when {
+            Overflow => TargetError.Overflow
+            DivisionByZero => TargetError.DivisionByZero
+    } } => direct
+    direct.kind -> when {
+        Overflow => 2
+        DivisionByZero => 3
+    } -> println
+    Report { kind: SourceError.Overflow -> mapError } => mapped
+    mapped.kind -> when {
+        Overflow => 2
+        DivisionByZero => 3
+    } -> println
+}

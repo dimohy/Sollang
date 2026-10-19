@@ -1,0 +1,26 @@
+import sollang.compiler.semantic.module_cache as cache
+import sollang.compiler.semantic.module_interfaces as interfaces
+
+report accepted: Bool -> Unit uses Console {
+    accepted -> if { "accepted" } else { "rejected" } -> println
+}
+
+main {
+    [UInt64; ~] => truncated!
+    0..<7 -> each length {
+        truncated! -> cache.preflight(1, 0, 0) -> report
+        truncated! -> push(UInt64(length))
+    }
+    [0, 0, 0, 0, 0, 0, 2147483648; ~]
+        -> cache.preflight(1, 0, 0) -> report
+
+    ["namespace cache.sample\npublic answer value: Int -> Int => value + 1"; ~] => sources
+    sources -> interfaces.fingerprint => fingerprints
+    sources -> cache.encode(1) => words
+    words -> cache.preflight(1, fingerprints[0].moduleHash, fingerprints[0].sourceHash) -> report
+    words -> cache.preflight(1, fingerprints[0].moduleHash, fingerprints[0].sourceHash + 1) -> report
+    words -> cache.preflight(2, fingerprints[0].moduleHash, fingerprints[0].sourceHash) -> report
+    sources -> cache.encode(1) => corrupted!
+    corrupted![5] + 1 => corrupted![5]
+    corrupted! -> cache.preflight(1, fingerprints[0].moduleHash, fingerprints[0].sourceHash) -> report
+}

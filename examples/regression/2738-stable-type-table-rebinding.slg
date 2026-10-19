@@ -1,0 +1,77 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+nominal types: ref [typeIds.SemanticType; ~], symbol: Int -> Int {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!].kind == 1 and types[index!].origin == 0 and types[index!].symbol == symbol
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+main {
+    ["namespace cache.types\npublic struct Entry { public value: Int }\npublic entry: -> Entry => Entry { value: 1 }\n"; ~] -> analysis.analyze => before
+    before -> modules.identitiesAnalyzed => beforeModules
+    before -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => keys
+    before -> typeIds.resolveAnalyzed => oldTypes
+    oldTypes.types -> nominal(0) => oldEntry
+    [typeIds.SemanticType; ~] => recipes!
+    oldTypes.types -> each type { recipes! -> push(type) }
+    recipes! -> len => arrayRecipe
+    recipes! -> push(typeIds.SemanticType { kind: 3, origin: -1, module: -1, symbol: -1, first: oldEntry, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
+    recipes! -> push(typeIds.SemanticType { kind: 1, origin: 2, module: 0, symbol: 0, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
+
+    ["namespace cache.types\nhidden: -> Int => 99\npublic struct Entry { public value: Int }\npublic entry: -> Entry => Entry { value: 2 }\n"; ~] -> analysis.analyze => after
+    after -> modules.identitiesAnalyzed => afterModules
+    after -> interfaces.declarationIdentitiesAnalyzed(afterModules) => current
+    after -> typeIds.resolveAnalyzed => fresh
+    fresh.types -> len => freshCount
+    recipes! -> artifacts.rebind(keys, current, fresh.types) => restored
+    before -> interfaces.declarationIdentityAnalyzed(beforeModules, 0, 0) => entryKey
+    current -> interfaces.findDeclarationIdentity(entryKey.words) => target
+    restored.status == 0 and target.status == 0
+        and restored.types[restored.typeIds[oldEntry]].symbol == target.symbol
+        and target.symbol != 0 => declarationMoved
+    declarationMoved -> println
+    fresh.types -> nominal(target.symbol) => freshEntry
+    restored.typeIds[oldEntry] == freshEntry
+        and restored.typeIds[arrayRecipe + 1] == freshEntry => interned
+    interned -> println
+    restored.types[restored.typeIds[arrayRecipe]].first == freshEntry
+        and (restored.types -> len) == freshCount + 1 => nestedPreserved
+    nestedPreserved -> println
+    (fresh.types -> len) == freshCount -> println
+
+    ["namespace absent\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => absent
+    absent -> modules.identitiesAnalyzed => absentModules
+    absent -> interfaces.declarationIdentitiesAnalyzed(absentModules) => missingIndex
+    recipes! -> artifacts.rebind(keys, missingIndex, fresh.types) => missing
+    missing.status == 2 and (missing.types -> len) == 0 and (missing.typeIds -> len) == 0 => missingRejected
+    missingRejected -> println
+
+    ["namespace cache.types\npublic struct Entry { public value: Int }\n","namespace cache.types\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => duplicate
+    duplicate -> modules.identitiesAnalyzed => duplicateModules
+    duplicate -> interfaces.declarationIdentitiesAnalyzed(duplicateModules) => ambiguousIndex
+    recipes! -> artifacts.rebind(keys, ambiguousIndex, fresh.types) => ambiguous
+    ambiguous.status == 3 and (ambiguous.types -> len) == 0 and (ambiguous.typeIds -> len) == 0 => ambiguousRejected
+    ambiguousRejected -> println
+
+    oldTypes.types[0] => invalid!
+    recipes! -> len => invalid!.first
+    recipes! -> push(invalid!)
+    recipes! -> artifacts.rebind(keys, current, fresh.types) => corrupt
+    corrupt.status == 1 and (corrupt.types -> len) == 0 and (corrupt.typeIds -> len) == 0
+        and (fresh.types -> len) == freshCount => rollbackPreserved
+    rollbackPreserved -> println
+    current -> interfaces.findDeclarationIdentityRange(entryKey.words, -1, 1) => badRange
+    badRange.status == 1 -> println
+    [typeIds.SemanticType { kind: 10, origin: -1, module: -1, symbol: -1, first: -1, second: -1, length: 1, lengthHash: 0, containsParameter: false, status: 0 }; ~] => product
+    product -> artifacts.rebind(keys, current, fresh.types) => incompleteProduct
+    incompleteProduct.status == 4 and (incompleteProduct.types -> len) == 0 => layoutRequired
+    layoutRequired -> println
+}

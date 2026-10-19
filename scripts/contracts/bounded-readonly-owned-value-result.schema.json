@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "gate", "state", "compilerExecutablePath", "compilerExecutableSha256",
+    "compilerAssemblyPath", "compilerAssemblySha256", "inputFingerprintStart",
+    "inputFingerprintEnd", "inputsStable", "completed", "total", "cases",
+    "orphanProcessIds", "failureId", "failure"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "gate": { "const": "bounded-readonly-owned-value" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "compilerExecutablePath": { "$ref": "#/$defs/path" },
+    "compilerExecutableSha256": { "$ref": "#/$defs/sha" },
+    "compilerAssemblyPath": { "$ref": "#/$defs/path" },
+    "compilerAssemblySha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "total": { "const": 2 },
+    "cases": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "prefixItems": [
+        { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "id": { "const": "primary" } } }] },
+        { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "id": { "const": "additional" } } }] }
+      ],
+      "items": false
+    },
+    "orphanProcessIds": { "$ref": "#/$defs/orphans" },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "passed" } }, "required": ["state"] },
+      "then": { "properties": {
+        "inputFingerprintEnd": { "$ref": "#/$defs/sha" },
+        "inputsStable": { "const": true }, "completed": { "const": 2 },
+        "cases": { "prefixItems": [
+          { "properties": { "state": { "const": "passed" } } },
+          { "properties": { "state": { "const": "passed" } } }
+        ] },
+        "orphanProcessIds": { "maxItems": 0 },
+        "failureId": { "type": "null" }, "failure": { "type": "null" }
+      } }
+    },
+    {
+      "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+      "then": { "properties": {
+        "failureId": { "type": "string", "minLength": 1 },
+        "failure": { "type": "string", "minLength": 1 }
+      } }
+    }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "path": { "type": "string", "minLength": 1 },
+    "orphans": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "id", "state", "sourcePath", "sourceSha256", "expectedPath", "expectedSha256",
+        "buildExitCode", "closureExitCode", "llvmAsExitCode", "runExitCode",
+        "warningCount", "directCallClosurePassed", "stdoutExact", "executableSha256",
+        "llvmSha256", "bitcodeSha256", "stdoutSha256", "orphanProcessIds", "failureId", "failure"
+      ],
+      "properties": {
+        "id": { "enum": ["primary", "additional"] },
+        "state": { "enum": ["pending", "running", "passed", "failed"] },
+        "sourcePath": { "$ref": "#/$defs/path" },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expectedPath": { "$ref": "#/$defs/path" },
+        "expectedSha256": { "$ref": "#/$defs/sha" },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "closureExitCode": { "type": ["integer", "null"] },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "warningCount": { "type": "integer", "minimum": 0 },
+        "directCallClosurePassed": { "type": "boolean" },
+        "stdoutExact": { "type": "boolean" },
+        "executableSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "llvmSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "bitcodeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stdoutSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "orphanProcessIds": { "$ref": "#/$defs/orphans" },
+        "failureId": { "type": ["string", "null"] },
+        "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "const": "passed" } }, "required": ["state"] },
+          "then": { "properties": {
+            "buildExitCode": { "const": 0 }, "closureExitCode": { "const": 0 },
+            "llvmAsExitCode": { "const": 0 }, "runExitCode": { "const": 0 },
+            "warningCount": { "const": 0 }, "directCallClosurePassed": { "const": true },
+            "stdoutExact": { "const": true }, "executableSha256": { "$ref": "#/$defs/sha" },
+            "llvmSha256": { "$ref": "#/$defs/sha" }, "bitcodeSha256": { "$ref": "#/$defs/sha" },
+            "stdoutSha256": { "$ref": "#/$defs/sha" }, "orphanProcessIds": { "maxItems": 0 },
+            "failureId": { "type": "null" }, "failure": { "type": "null" }
+          } }
+        },
+        {
+          "if": { "properties": { "state": { "const": "failed" } }, "required": ["state"] },
+          "then": { "properties": {
+            "failureId": { "type": "string", "minLength": 1 },
+            "failure": { "type": "string", "minLength": 1 }
+          } }
+        }
+      ]
+    }
+  }
+}

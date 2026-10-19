@@ -1,0 +1,98 @@
+import std.net.quic as quic
+
+# One Endpoint must queue connection A traffic while Listener accepts B, then
+# keep both accepted Connections usable after the Listener is closed.
+routeTwoConnections: -> Result<Bool, quic.QuicError> uses Network, Random, Clock, Console {
+    quic.generateIdentity()? => identity
+    "quic-phase-01" -> println
+    identity -> certificate? => certificateA
+    "quic-phase-02" -> println
+    identity -> certificate? => certificateB
+    "quic-phase-03" -> println
+
+    quic.bind(quic.loopback(0))? => clientEndpointA!
+    "quic-phase-04" -> println
+    quic.bind(quic.loopback(0))? => clientEndpointB!
+    "quic-phase-05" -> println
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    "quic-phase-06" -> println
+    serverEndpoint! -> listen(identity)? => listener!
+    "quic-phase-07" -> println
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+    "quic-phase-08" -> println
+
+    clientEndpointA! -> connect(serverAddress, certificateA)? => clientConnectionA!
+    "quic-phase-09" -> println
+    listener! -> accept(serverEndpoint!)? => serverConnectionA!
+    "quic-phase-10" -> println
+    clientConnectionA! -> openBi(clientEndpointA!)? => clientStreamA!
+    "quic-phase-11" -> println
+    clientStreamA! -> send(clientConnectionA!, clientEndpointA!, [65])? => sentA
+    "quic-phase-12" -> println
+
+    clientEndpointB! -> connect(serverAddress, certificateB)? => clientConnectionB!
+    "quic-phase-13" -> println
+    listener! -> accept(serverEndpoint!)? => serverConnectionB!
+    "quic-phase-14" -> println
+    listener! -> close(serverEndpoint!)
+    "quic-phase-15" -> println
+
+    serverConnectionA! -> acceptBi(serverEndpoint!)? => serverStreamA!
+    "quic-phase-16" -> println
+    serverStreamA! -> receive(serverConnectionA!, serverEndpoint!, 8)? => receivedA
+    "quic-phase-17" -> println
+
+    clientConnectionB! -> openBi(clientEndpointB!)? => clientStreamB!
+    "quic-phase-18" -> println
+    clientStreamB! -> send(clientConnectionB!, clientEndpointB!, [66])? => sentB
+    "quic-phase-19" -> println
+    serverConnectionB! -> acceptBi(serverEndpoint!)? => serverStreamB!
+    "quic-phase-20" -> println
+    serverStreamB! -> receive(serverConnectionB!, serverEndpoint!, 8)? => receivedB
+    "quic-phase-21" -> println
+
+    serverStreamA! -> send(serverConnectionA!, serverEndpoint!, [97])? => replySentA
+    "quic-phase-22" -> println
+    serverStreamB! -> send(serverConnectionB!, serverEndpoint!, [98])? => replySentB
+    "quic-phase-23" -> println
+    clientStreamA! -> receive(clientConnectionA!, clientEndpointA!, 8)? => replyA
+    "quic-phase-24" -> println
+    clientStreamB! -> receive(clientConnectionB!, clientEndpointB!, 8)? => replyB
+    "quic-phase-25" -> println
+
+    sentA == 1
+        and sentB == 1
+        and replySentA == 1
+        and replySentB == 1
+        and (receivedA -> len) == 1
+        and receivedA[0] == 65
+        and (receivedB -> len) == 1
+        and receivedB[0] == 66
+        and (replyA -> len) == 1
+        and replyA[0] == 97
+        and (replyB -> len) == 1
+        and replyB[0] == 98 => routed
+
+    clientConnectionA! -> close(clientEndpointA!, 0)?
+    "quic-phase-26" -> println
+    clientConnectionB! -> close(clientEndpointB!, 0)?
+    "quic-phase-27" -> println
+    serverConnectionA! -> close(serverEndpoint!, 0)?
+    "quic-phase-28" -> println
+    serverConnectionB! -> close(serverEndpoint!, 0)?
+    "quic-phase-29" -> println
+    clientEndpointA! -> close
+    "quic-phase-30" -> println
+    clientEndpointB! -> close
+    "quic-phase-31" -> println
+    serverEndpoint! -> close
+    "quic-phase-32" -> println
+    Result<Bool, quic.QuicError>.Ok(routed)
+}
+
+main {
+    routeTwoConnections() -> when {
+        Ok(routed) { "quic-two-routes=$routed" -> println }
+        Err(error) { "quic-two-routes-error=$(error.code)" -> println }
+    }
+}

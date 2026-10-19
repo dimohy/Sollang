@@ -240,6 +240,22 @@ Write-Host "[linux-stage2 1/6] PASS SLG-first seed $actualStage1Hash."
 
 & (Join-Path $PSScriptRoot "verify-native-exact-fixture.ps1") `
     -Compiler $stage1Path `
+    -Label "linux-stage1-seed-character-literals" `
+    -Fixture "1731-character-literals" `
+    -Platform linux `
+    -Distribution $Distribution `
+    -LlvmRoot $llvmDir `
+    -StdlibRoot $stdlibRoot `
+    -RepositoryRoot $repoRoot `
+    -OutputDirectory (Join-Path $artifactsDir "linux-stage1-seed-character-literals-exact") `
+    -Jobs 1 `
+    -CompilerHost windows `
+    -CompilationMode raw-llvm
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "[linux-stage2 1/6] PASS character-literal seed capability."
+
+& (Join-Path $PSScriptRoot "verify-native-exact-fixture.ps1") `
+    -Compiler $stage1Path `
     -Label "linux-stage1-seed" `
     -Fixture "1217-selfhost-late-indexed-array-type-contract" `
     -Platform linux `

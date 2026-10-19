@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "id": "c476-output-transaction",
+  "status": "requirements-frozen-unverified",
+  "platforms": ["windows-x64", "linux-x64"],
+  "sourceObservations": {
+    "selfhostDriver": {
+      "path": "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg",
+      "sha256": "DE47ABC32BDF022D5B12E1ED3D211B6D6445877D91A4AEC2C72BAE2A0039EE72",
+      "kind": "source-inspected-not-behavior-proven",
+      "facts": [
+        { "lines": "749-794", "fact": "The text-source build redirects emitter stdout directly to output.ll, relays that file after positive emitter failure, and passes the final output path directly to Clang." },
+        { "lines": "807-853", "fact": "The path-source build duplicates the direct output.ll and direct final-link pattern." },
+        { "lines": "771-793", "fact": "The keep-temps flag changes the success message but does not gate creation or retention of output.ll in this path." }
+      ]
+    },
+    "managedCompiler": {
+      "path": "src/Sollang.Compiler/Cli/CompilerApp.cs",
+      "sha256": "DA7A8CE323C660AE7B3852D122189647D60F4C89B5CF8A8022E27976FCD0601E",
+      "kind": "source-inspected-not-behavior-proven",
+      "facts": [
+        { "lines": "377-385", "fact": "Standalone semantic compilation precedes WriteAndLinkStandalone." },
+        { "lines": "394-431", "fact": "LLVM text is written in a work directory and copied to the final .ll only after successful linking when keep-temps is enabled; Clang still receives the final executable path." }
+      ]
+    },
+    "existingFilePublication": {
+      "path": "selfhost/llvm/runtime.slg",
+      "sha256": "EC6F7082687EAFEAC9469256C15963AC3378F2B4C7ADFBDC737BE5EB0C6F0CE6",
+      "kind": "source-inspected-not-behavior-proven",
+      "facts": [
+        { "lines": "2092-2110", "fact": "Windows file.atomicReplace lowers to MoveFileExA with replace-existing and write-through flags." },
+        { "lines": "2241-2261", "fact": "Linux file.atomicReplace lowers to rename; this alone does not provide two-file transactionality or prove crash durability of child-created staging files." }
+      ]
+    }
+  },
+  "requiredDesign": {
+    "staging": "unique-same-directory-per-artifact-owned-cleanup",
+    "failureDiagnostics": "relay-from-live-stage-to-stderr-before-discard",
+    "semanticFailureKeepTemps": "discard-diagnostic-only-stage-even-when-keep-temps",
+    "successfulKeepTemps": "publish-complete-llvm-only-when-enabled",
+    "sameOutputConcurrency": "serialize-or-fail-before-publication",
+    "crossOutputAlias": "lock-both-final-paths-before-publication",
+    "differentOutputConcurrency": "allow-independent-progress",
+    "publishedExecutable": "only-after-emitter-link-and-validation-success"
+  },
+  "scenarios": {
+    "semanticFailureFresh": {
+      "given": { "artifactState": "fresh", "failurePoint": "semantic", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-exact", "no-new-final-artifact", "no-stage-residue"],
+      "technique": "exact-native-fixture", "proofStatus": "not-run"
+    },
+    "emitterFailureFresh": {
+      "given": { "artifactState": "fresh", "failurePoint": "emitter", "keepTemps": false, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "no-new-final-artifact", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    },
+    "linkerFailureFresh": {
+      "given": { "artifactState": "fresh", "failurePoint": "linker", "keepTemps": false, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "no-new-final-artifact", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    },
+    "successKeepTempsOn": {
+      "given": { "artifactState": "fresh", "failurePoint": "none", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-zero", "final-executable-present", "final-llvm-present", "no-stage-residue"],
+      "technique": "exact-native-fixture", "proofStatus": "not-run"
+    },
+    "successKeepTempsOff": {
+      "given": { "artifactState": "fresh", "failurePoint": "none", "keepTemps": false, "parallelism": "single" },
+      "assertions": ["exit-zero", "final-executable-present", "final-llvm-absent", "no-stage-residue"],
+      "technique": "exact-native-fixture", "proofStatus": "not-run"
+    },
+    "existingSentinelSemanticFailure": {
+      "given": { "artifactState": "sentinel-exe-and-llvm", "failurePoint": "semantic", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-exact", "preserve-existing-executable-sha256", "preserve-existing-llvm-sha256", "no-stage-residue"],
+      "technique": "artifact-audit", "proofStatus": "not-run"
+    },
+    "existingSentinelEmitterFailure": {
+      "given": { "artifactState": "sentinel-exe-and-llvm", "failurePoint": "emitter", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "preserve-existing-executable-sha256", "preserve-existing-llvm-sha256", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    },
+    "existingSentinelLinkerFailure": {
+      "given": { "artifactState": "sentinel-exe-and-llvm", "failurePoint": "linker", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "preserve-existing-executable-sha256", "preserve-existing-llvm-sha256", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    },
+    "sameOutputParallel": {
+      "given": { "artifactState": "fresh", "failurePoint": "none", "keepTemps": true, "parallelism": "same-output" },
+      "assertions": ["same-output-serialized-or-one-fails-before-publication", "cross-output-alias-blocked-before-publication", "terminal-no-mixed-generation", "no-stage-residue"],
+      "technique": "parallel-process", "proofStatus": "not-run"
+    },
+    "differentOutputParallel": {
+      "given": { "artifactState": "fresh", "failurePoint": "none", "keepTemps": true, "parallelism": "different-output" },
+      "assertions": ["different-output-both-succeed", "terminal-no-mixed-generation", "no-stage-residue"],
+      "technique": "parallel-process", "proofStatus": "not-run"
+    },
+    "stageCleanup": {
+      "given": { "artifactState": "fresh", "failurePoint": "matrix", "keepTemps": null, "parallelism": "single" },
+      "assertions": ["no-stage-residue", "no-cross-invocation-stage-deletion"],
+      "technique": "artifact-audit", "proofStatus": "not-run"
+    },
+    "publicationFailure": {
+      "given": { "artifactState": "sentinel-exe-and-llvm", "failurePoint": "publication", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "single-file-complete-or-unchanged", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    },
+    "spawnFailure": {
+      "given": { "artifactState": "fresh", "failurePoint": "spawn", "keepTemps": true, "parallelism": "single" },
+      "assertions": ["exit-nonzero", "diagnostic-stderr-actionable", "no-new-final-artifact", "no-stage-residue"],
+      "technique": "fault-injection", "proofStatus": "not-run"
+    }
+  },
+  "atomicityAndDurability": {
+    "singleFilePublication": { "classification": "required-unverified", "claim": "Each final path must expose either its previous complete file or the new complete file, never a partial write." },
+    "executableAndLlPair": { "classification": "limitation-not-claimed", "claim": "Two independent file replacements do not constitute one atomic exe-plus-LLVM transaction; no pair-level all-or-nothing completion is claimed." },
+    "crashDurability": { "classification": "limitation-unverified", "claim": "Child-created staging files and containing directories need explicit synchronization before crash-durable publication can be claimed on Windows or Linux." }
+  }
+}

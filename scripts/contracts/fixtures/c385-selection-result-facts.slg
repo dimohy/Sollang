@@ -1,0 +1,48 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+
+# Verify the canonical selection and normalized flow types against the field
+# contract used by their actual consumer, independently of the subject enum.
+public selectionResultFacts source: Text -> Bool {
+    [source,; ~] => sources
+    sources -> context.prepare => prepared
+    prepared -> expressionTypes.resolveContext => resolved
+    (resolved.fields -> len) == 1 -> unless { false -> return }
+    resolved.fields[0].fieldType => expectedType
+    -1 => selectionAst!
+    0 => astIndex!
+    astIndex! < (prepared.package.nodes -> len) and selectionAst! < 0
+        -> while {
+            prepared.package.nodes[astIndex!].kind == 56
+                -> if { astIndex! => selectionAst! }
+            astIndex! + 1 => astIndex!
+        }
+    selectionAst! < 0 -> if { false -> return }
+    prepared.package.nodes[selectionAst!].parent => flowAst
+    false => selectionMatches!
+    false => flowMatches!
+    resolved.expressions -> each expression {
+        expression.status == 0 and expression.typeId == expectedType
+            -> if {
+                expression.astNode == selectionAst! -> if { true => selectionMatches! }
+                expression.astNode == flowAst -> if { true => flowMatches! }
+            }
+    }
+    selectionMatches! and flowMatches!
+}
+
+# A projected literal must retain its len stage before a downstream call.
+public projectedLengthOpcode source: Text -> Bool {
+    [source,; ~] => sources
+    sources -> context.prepare => prepared
+    0 => lengthStages!
+    prepared.package.nodes -> each node {
+        node.kind == 10 -> if {
+            (source -> flowIntrinsicOpcode(prepared.package.tokens, 0, node)) == -201
+                -> if { lengthStages! + 1 => lengthStages! }
+        }
+    }
+    lengthStages! == 2
+}

@@ -1,0 +1,88 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+productType types: ref [typeIds.SemanticType; ~] -> Int {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!].kind == 10 -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+forceLabelHashes types: mut [typeIds.SemanticType; ~] -> Unit {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => type!
+        type!.kind == 11 -> if {
+            0 => type!.lengthHash
+            type! => types[index!]
+        }
+        index! + 1 => index!
+    }
+}
+
+main {
+    ["namespace cache.products\npair value: (left: Int, rght: Int) -> Int => value.left\n"; ~] -> analysis.analyze => before
+    before -> modules.identitiesAnalyzed => beforeModules
+    before -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => keys
+    before -> typeIds.resolveAnalyzed => old!
+    before -> artifacts.captureTypeDetails(old!) => details
+    details.status == 0 -> println
+    old!.types -> productType => oldProduct
+
+    ["namespace cache.products\nhidden value: (xxxx: Int, yyyy: Int) -> Int => value.xxxx\npair value: (left: Int, rght: Int) -> Int => value.left\n"; ~] -> analysis.analyze => after
+    after -> modules.identitiesAnalyzed => afterModules
+    after -> interfaces.declarationIdentitiesAnalyzed(afterModules) => current
+    after -> typeIds.resolveAnalyzed => fresh!
+    after -> artifacts.captureTypeDetails(fresh!) => freshDetails
+    freshDetails.status == 0 -> println
+    fresh!.types -> len => freshCount
+    old!.types -> artifacts.rebindWithDetails(details, keys, current, fresh!.types, freshDetails) => restored
+    restored.status == 0 and (restored.types -> len) == freshCount => reused
+    reused -> println
+    fresh!.types -> productType => otherProduct
+    restored.typeIds[oldProduct] != otherProduct => labelsPreserved
+    labelsPreserved -> println
+
+    [typeIds.SemanticType; ~] => seedTypes!
+    fresh!.types -> each type {
+        type.kind == 1 and type.origin == 1 -> if { seedTypes! -> push(type) }
+    }
+    typeIds.SemanticTypeSet { types: seedTypes!, references: [typeIds.TypeReference; ~], fields: [typeIds.NominalField; ~] } => seed
+    after -> artifacts.captureTypeDetails(seed) => seedDetails
+    old!.types -> artifacts.rebindWithDetails(details, keys, current, seed.types, seedDetails) => seeded
+    seeded -> artifacts.materializeProductFields(after, seed.fields, seed.types -> len) => fields
+    fields.status == 0 and (fields.fields -> len) == 2 => fieldsRestored
+    fieldsRestored -> println
+    fields.fields[0] => firstField
+    after.ranges[firstField.sourceModule] => fieldRange
+    after.tokens[fieldRange.tokenStart + firstField.labelToken] => fieldToken
+    after.sources[firstField.sourceModule] -> slice(fieldToken.span.start, fieldToken.span.length) => fieldName
+    firstField.ownerType == seeded.typeIds[oldProduct] and firstField.ordinal == 0
+        and seeded.types[firstField.fieldType].symbol == 2 and fieldName == "left" => readableField
+    readableField -> println
+    ["namespace missing\nmain { 0 -> println }\n"; ~] -> analysis.analyze => missingLabels
+    seeded -> artifacts.materializeProductFields(missingLabels, seed.fields, seed.types -> len) => missingFields
+    missingFields.status == 5 and (missingFields.fields -> len) == 0 => missingLabelRejected
+    missingLabelRejected -> println
+
+    old!.types -> forceLabelHashes
+    fresh!.types -> forceLabelHashes
+    old!.types -> artifacts.rebindWithDetails(details, keys, current, fresh!.types, freshDetails) => collision
+    collision.status == 0 and (collision.types -> len) == freshCount
+        and collision.typeIds[oldProduct] != otherProduct => fullLabelsCompared
+    fullLabelsCompared -> println
+
+    [Int; ~] => brokenLengths!
+    details.lengths -> each length { brokenLengths! -> push(length) }
+    1 => brokenLengths![oldProduct]
+    artifacts.TypeDetails { starts: details.starts, lengths: brokenLengths!, words: details.words, status: 0 } => broken
+    old!.types -> artifacts.rebindWithDetails(broken, keys, current, fresh!.types, freshDetails) => invalid
+    invalid.status == 1 and (invalid.types -> len) == 0 and (invalid.typeIds -> len) == 0
+        and (fresh!.types -> len) == freshCount => rollback
+    rollback -> println
+}

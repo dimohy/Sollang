@@ -1,6 +1,7 @@
 namespace sollang.compiler.ir.typed
 
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.resolve as resolution
 import sollang.compiler.semantic.type_ids as typeIds
@@ -13,6 +14,29 @@ struct SourceTypedIr {
 struct FunctionLowerRequest {
     sourceIndex: Int
     symbolIndex: Int
+}
+
+# The same signature identifies retained templates for materialization and
+# deferred body validation. Concrete instances have fully substituted types.
+public functionSignatureContainsParameter nodes: ref [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], functionIndex: Int -> Bool {
+    nodes[functionIndex] => function
+    function.typeId >= 0 and function.typeId < (types -> len)
+        and types[function.typeId].containsParameter
+        -> if { true -> return }
+    function.operand1 => parameter!
+    0 => ordinal!
+    parameter! >= 0 and parameter! < (nodes -> len)
+        and ordinal! < (nodes -> len) -> while {
+            nodes[parameter!].typeId => parameterType
+            parameterType >= 0 and parameterType < (types -> len)
+                and types[parameterType].containsParameter
+                -> if { true -> return }
+            ordinal! == 0 -> if { function.nextOperand => parameter! } else {
+                nodes[parameter!].nextOperand => parameter!
+            }
+            ordinal! + 1 => ordinal!
+        }
+    false
 }
 
 # Binding IR is hoisted before expressions, so IR index order is not lexical
@@ -40,6 +64,8 @@ mutableAssignmentBindingVisible candidateIndex: Int, assignmentIndex: Int, nodes
 
 public struct GenericCallPlan {
     public callNode: Int
+    public interpolationNode: Int
+    public ownerFunction: Int
     public templateNode: Int
     public inputTemplates: [Int; ~]
     public actualInputs: [Int; ~]
@@ -49,6 +75,8 @@ public struct GenericCallPlan {
 
 public struct GenericFunctionInstance {
     public callNode: Int
+    public interpolationNode: Int
+    public ownerFunction: Int
     public templateNode: Int
     public functionNode: Int
     public nodeCount: Int
@@ -57,52 +85,189 @@ public struct GenericFunctionInstance {
 
 public struct GenericBodyBindings {
     public functionsByCall: [Int; ~]
+    public functionsByInterpolation: [Int; ~]
     public templatesByFunction: [Int; ~]
+    public interpolationInstances: [GenericFunctionInstance; ~]
 }
 
-public bindGenericBodies nodes: ref [TypedIrNode; ~], instances: ref [GenericFunctionInstance; ~] -> GenericBodyBindings {
+public bindGenericBodies nodes: ref [TypedIrNode; ~], instances: ref [GenericFunctionInstance; ~], interpolationCount: Int -> GenericBodyBindings {
     [Int; ~] => functions!
     [Int; ~] => templates!
+    [Int; ~] => interpolationFunctions!
+    [GenericFunctionInstance; ~] => interpolationInstances!
     0 => index!
     index! < (nodes -> len) -> while {
         functions! -> push(-1)
         templates! -> push(-1)
         index! + 1 => index!
     }
+    (interpolationFunctions! -> len) < interpolationCount
+        -> while { interpolationFunctions! -> push(-1) }
     instances -> each instance {
         instance.status == 0 -> if {
-            instance.functionNode => functions![instance.callNode]
+            instance.callNode >= 0 -> if { instance.functionNode => functions![instance.callNode] }
+            instance.interpolationNode >= 0 -> if {
+                interpolationInstances! -> push(instance)
+                instance.ownerFunction < 0 -> if { instance.functionNode => interpolationFunctions![instance.interpolationNode] }
+            }
             instance.templateNode => templates![instance.functionNode]
         }
     }
-    GenericBodyBindings { functionsByCall: functions!, templatesByFunction: templates! }
+    GenericBodyBindings { functionsByCall: functions!, functionsByInterpolation: interpolationFunctions!, templatesByFunction: templates!, interpolationInstances: interpolationInstances! }
+}
+
+public genericInterpolationFunction bindings: ref GenericBodyBindings, ownerFunction: Int, interpolationNode: Int -> Int {
+    bindings.interpolationInstances -> each instance {
+        instance.ownerFunction == ownerFunction and instance.interpolationNode == interpolationNode
+            -> if { instance.functionNode -> return }
+    }
+    -1
 }
 
 public publishGenericCallTypes nodes: mut [TypedIrNode; ~], instances: ref [GenericFunctionInstance; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> Unit {
     instances -> each instance {
-        instance.status == 0 -> if {
-            nodes[instance.functionNode] => function
-            nodes[instance.callNode] => call!
-            function.typeId => call!.typeId
-            function.typeKind => call!.typeKind
-            function.typeOrigin => call!.typeOrigin
-            function.typeModule => call!.typeModule
-            function.typeSymbol => call!.typeSymbol
-            function.typeFlags => call!.typeFlags
-            call! => nodes[instance.callNode]
-        }
+        instance.status == 0 and instance.callNode >= 0
+            -> if {
+                nodes[instance.functionNode] => function
+                nodes[instance.callNode] => call!
+                function.typeId => call!.typeId
+                function.typeKind => call!.typeKind
+                function.typeOrigin => call!.typeOrigin
+                function.typeModule => call!.typeModule
+                function.typeSymbol => call!.typeSymbol
+                function.typeFlags => call!.typeFlags
+                call! => nodes[instance.callNode]
+            }
     }
     typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
     prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
     typeIds.classifyWithResources(resolved.types, resolved.fields, payloadEdges, resourceSeeds) => flags
+    nodes -> sealIntrinsicPayloadsAfterGenericCalls(resolved.types, flags)
     nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
     nodes -> sealFinalIndexTypes(resolved.types, flags)
     nodes -> resolveFinalProjectedMethods(prepared, resolved, resolved.types, flags)
     nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
     nodes -> sealFinalIndexTypes(resolved.types, flags)
+    nodes -> sealIntrinsicPayloadsAfterGenericCalls(resolved.types, flags)
+    nodes -> sealStructuralProductMembers(prepared, resolved, resolved.types, flags)
+}
+
+# C# binds a generic call before typing its dependent match arm. Reestablish
+# that same dependency after the self-host closure publishes the concrete call
+# result, using only the exact match subject and intrinsic variant tag.
+sealIntrinsicPayloadsAfterGenericCalls nodes: mut [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    0 => payloadIndex!
+    payloadIndex! < (nodes -> len) -> while {
+        nodes[payloadIndex!] => payload!
+        payload!.kind == 29 and payload!.parent >= 0 and payload!.parent < (nodes -> len)
+            -> if {
+                nodes[payload!.parent] => arm
+                arm.kind == 19 and arm.parent >= 0 and arm.parent < (nodes -> len)
+                    -> if {
+                        nodes[arm.parent] => match
+                        match.kind == 27 and match.operand0 >= 0 and match.operand0 < (nodes -> len)
+                            -> if {
+                                nodes[match.operand0].typeId => subjectTypeId
+                                subjectTypeId >= 0 and subjectTypeId < (types -> len)
+                                    -> if {
+                                        types[subjectTypeId] => subjectType
+                                        -1 => payloadTypeId!
+                                        subjectType.kind == 7 and subjectType.origin == 4
+                                            -> if {
+                                                subjectType.symbol == 0 and arm.opcode == 0
+                                                    -> if { subjectType.first => payloadTypeId! }
+                                                subjectType.symbol == 1
+                                                    -> if {
+                                                        arm.opcode == 0 -> if { subjectType.first => payloadTypeId! }
+                                                        arm.opcode == 1 -> if { subjectType.second => payloadTypeId! }
+                                                    }
+                                            }
+                                        payloadTypeId! >= 0 and payloadTypeId! < (types -> len)
+                                            -> if {
+                                                payload! -> sealNodeTypeIdentity(payloadTypeId!, types, flags)
+                                                payload! => nodes[payloadIndex!]
+                                            }
+                                    }
+                            }
+                    }
+            }
+        payloadIndex! + 1 => payloadIndex!
+    }
+    0 => readIndex!
+    readIndex! < (nodes -> len) -> while {
+        nodes[readIndex!] => read!
+        read!.kind == 5 and read!.operand0 >= 0 and read!.operand0 < (nodes -> len)
+            and nodes[read!.operand0].kind == 29 and nodes[read!.operand0].typeId >= 0
+            -> if {
+                nodes[read!.operand0] => binding
+                binding.typeId => read!.typeId
+                binding.typeKind => read!.typeKind
+                binding.typeOrigin => read!.typeOrigin
+                binding.typeModule => read!.typeModule
+                binding.typeSymbol => read!.typeSymbol
+                binding.typeFlags => read!.typeFlags
+                read! => nodes[readIndex!]
+            }
+        readIndex! + 1 => readIndex!
+    }
 }
 
 # Register instances before visiting their bodies so recursive calls reuse them.
+# Preserve structural field labels under the generic result substitution.
+materializeGenericProductFields nodes: ref [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~], fields: mut [typeIds.NominalField; ~], plans: ref [GenericCallPlan; ~], selected: ref [Bool; ~] -> Unit {
+    0 => planIndex!
+    plans -> each plan {
+        selected[planIndex!] and plan.status == 0 and plan.templateNode >= 0
+            -> if {
+                [nodes[plan.templateNode].typeId,; ~] => pending!
+                [Int; ~] => visited!
+                (pending! -> len) > 0 -> while {
+                    pending! -> take(Int(pending! -> len) - 1) => template
+                    false => seen!
+                    visited! -> each known { known == template -> if { true => seen! } }
+                    not seen! and template >= 0 and template < (types -> len)
+                        -> if {
+                            visited! -> push(template)
+                            types[template] => sourceType
+                            sourceType.kind == 10 and sourceType.containsParameter
+                                -> if {
+                                    types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, template) => owner
+                                    owner.status == 0 and owner.root != template
+                                        -> if {
+                                            fields -> len => fieldCount
+                                            0 => fieldIndex!
+                                            fieldIndex! < fieldCount -> while {
+                                                fields[fieldIndex!] => field
+                                                field.ownerType == template -> if {
+                                                    false => exists!
+                                                    fields -> each existing {
+                                                        existing.ownerType == owner.root and existing.ordinal == field.ordinal
+                                                            -> if { true => exists! }
+                                                    }
+                                                    not exists! -> if {
+                                                        types -> typeIds.specializeManyInto(plan.inputTemplates, plan.actualInputs, field.fieldType) => value
+                                                        value.status == 0 -> if {
+                                                            field => concrete!
+                                                            owner.root => concrete!.ownerType
+                                                            value.root => concrete!.fieldType
+                                                            types[value.root].status => concrete!.status
+                                                            fields -> push(concrete!)
+                                                        }
+                                                    }
+                                                }
+                                                fieldIndex! + 1 => fieldIndex!
+                                            }
+                                        }
+                                }
+                            sourceType.first >= 0 -> if { pending! -> push(sourceType.first) }
+                            sourceType.second >= 0 -> if { pending! -> push(sourceType.second) }
+                        }
+                }
+            }
+        planIndex! + 1 => planIndex!
+    }
+}
+
 public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericFunctionInstance; ~] {
     {UInt64: Int; 16~} => heads!
     [Int; ~] => next!
@@ -119,11 +284,13 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
     progress! -> while {
         false => progress!
         (processed! -> len) < (nodes -> len) -> while { processed! -> push(false) }
-        nodes -> planGenericCalls(prepared, resolved.types) => plans
+        nodes -> functionTemplatesBySymbol(prepared) => functionsBySymbol
+        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, functionsBySymbol) => plans!
+        nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functionsBySymbol)
         # A helper's result parameter belongs to its caller after substitution,
         # even while that caller is still a generic template.
-        plans -> each plan {
-            plan.status == 0 and plan.resultType >= 0
+        plans! -> each plan {
+            plan.callNode >= 0 and plan.status == 0 and plan.resultType >= 0
                 and (not resolved.types[plan.resultType].containsParameter
                 or plan.resultType != nodes[plan.templateNode].typeId)
                 -> if {
@@ -139,11 +306,18 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         }
         [Int; ~] => planSlots!
         [Bool; ~] => selected!
-        plans -> each plan {
+        plans! -> each plan {
             -1 => slot!
             false => materialize!
-            plan.callNode => callIndex
-            not processed![callIndex] and plan.status == 0
+            false => alreadyProcessed!
+            plan.callNode >= 0 -> if { processed![plan.callNode] => alreadyProcessed! } else {
+                instances! -> each instance {
+                    instance.status == 0 and instance.interpolationNode == plan.interpolationNode
+                        and instance.ownerFunction == plan.ownerFunction
+                        -> if { true => alreadyProcessed! }
+                }
+            }
+            not alreadyProcessed! and plan.status == 0
                 -> if {
                     true => concrete!
                     plan.actualInputs -> each actual {
@@ -188,15 +362,16 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                             counts! -> push(0)
                             true => materialize!
                         }
-                        true => processed![callIndex]
+                        plan.callNode >= 0 -> if { true => processed![plan.callNode] }
                     }
                 }
             planSlots! -> push(slot!)
             selected! -> push(materialize!)
         }
+        nodes -> materializeGenericProductFields(resolved.types, resolved.fields, plans!, selected!)
         typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => payloadEdges
         prepared -> semanticContext.ownedResourceSeeds(resolved.types) => resourceSeeds
-        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans, selected!) => batch
+        nodes -> materializeSelectedGenericBodies(resolved.types, resolved.fields, payloadEdges, resourceSeeds, plans!, selected!) => batch
         0 => instanceIndex!
         instanceIndex! < (batch -> len) -> while {
             batch[instanceIndex!] => instance
@@ -222,7 +397,13 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
             }
             bindingIndex! + 1 => bindingIndex!
         }
-        progress! -> if { nodes -> publishGenericCallTypes(instances!, prepared, resolved) }
+        progress! -> if {
+            # A concrete clone supplies numeric peers that the immutable template
+            # could not decide. Seal its value contexts before publishing types.
+            resolved.types -> typeIds.classifyWithResources(resolved.fields, payloadEdges, resourceSeeds) => numericFlags
+            nodes -> sealFinalContextualNumericLiterals(prepared, resolved.types, numericFlags)
+            nodes -> publishGenericCallTypes(instances!, prepared, resolved)
+        }
     }
     instances!
 }
@@ -266,8 +447,17 @@ materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeId
         }
         status! == 0 -> if {
             plan.templateNode + 1 => end!
-            end! < originalCount and nodes[end!].kind != 0 and nodes[end!].kind != 11
-                -> while { end! + 1 => end! }
+            true => bodyOpen!
+            end! < originalCount and bodyOpen! and nodes[end!].kind != 0 and nodes[end!].kind != 11
+                -> while {
+                    # Function extent follows lexical ownership. A previously
+                    # inlined declaration no longer supplies a kind0 delimiter.
+                    nodes[end!].parent => bodyOwner!
+                    bodyOwner! >= 0 and bodyOwner! != plan.templateNode
+                        -> while { nodes[bodyOwner!].parent => bodyOwner! }
+                    bodyOwner! == plan.templateNode
+                        -> if { end! + 1 => end! } else { false => bodyOpen! }
+                }
             nodes -> len => destination
             plan.templateNode => sourceIndex!
             sourceIndex! < end! and status! == 0 -> while {
@@ -308,6 +498,8 @@ materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeId
         }
         instances! -> push(GenericFunctionInstance {
             callNode: plan.callNode
+            interpolationNode: plan.interpolationNode
+            ownerFunction: plan.ownerFunction
             templateNode: plan.templateNode
             functionNode: instanceStart!
             nodeCount: instanceCount!
@@ -330,7 +522,7 @@ materializeSelectedGenericBodies nodes: mut [TypedIrNode; ~], types: mut [typeId
 
 # Resolve calls only after concrete receiver/callee and operand linking. Keep
 # each call's substitution separate from the immutable function template.
-public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~] -> [GenericCallPlan; ~] {
+functionTemplatesBySymbol nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
     [Int; ~] => functions!
     0 => symbolIndex!
     symbolIndex! < (prepared.package.symbols -> len)
@@ -354,6 +546,177 @@ public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticConte
             }
         functionIndex! + 1 => functionIndex!
     }
+    functions!
+}
+
+public isDiagnosticTrackFunction function: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    function => declaration!
+    function.sourceModule => declaration!.targetModule
+    (declaration! -> resolvedDeclaredRuntimeOpcode(prepared)) == -325
+}
+
+# A runtime Task owns its control/context independently of the async result.
+# Diagnostic track's generic argument is that owner, not its result payload.
+canonicalTaskArgumentType argument: TypedIrNode, nodes: ref [TypedIrNode; ~], types: mut [typeIds.SemanticType; ~] -> Int {
+    not (argument -> isAsyncTaskValue(nodes)) -> if { argument.typeId -> return }
+    argument.typeId < 0 or argument.typeId >= (types -> len)
+        -> if { argument.typeId -> return }
+    types[argument.typeId] => payload
+    payload.kind == 7 and payload.origin == 4 and payload.symbol == 2
+        -> if { argument.typeId -> return }
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => candidate
+        candidate.kind == 7 and candidate.origin == 4 and candidate.symbol == 2
+            and candidate.first == argument.typeId -> if { typeIndex! -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    types -> len => taskTypeId
+    types -> push(typeIds.SemanticType {
+        kind: 7
+        origin: 4
+        module: -1
+        symbol: 2
+        first: argument.typeId
+        second: -1
+        length: 0
+        lengthHash: 0
+        containsParameter: payload.containsParameter
+        status: payload.status
+    })
+    taskTypeId
+}
+
+struct MaterializedTaskProduct {
+    sourceType: Int
+    productType: Int
+}
+
+# Runtime async calls retain their payload type for worker emission. A stored
+# structural field owns the materialized Task instead. Intern a separate shape
+# so an ordinary product with the same payload types keeps its original ABI.
+public sealMaterializedTaskProducts nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> Bool {
+    [MaterializedTaskProduct; ~] => shapes!
+    true => progress!
+    progress! -> while {
+        false => progress!
+        [Int; ~] => changed!
+        0 => productIndex!
+        productIndex! < (nodes -> len) -> while {
+            nodes[productIndex!] => product!
+            (product!.kind == 12 or product!.kind == 35) and product!.typeKind == 10
+                and product!.typeId >= 0 and product!.operand0 >= 0
+                -> if {
+                    [Int; ~] => fieldTypes!
+                    false => materialized!
+                    product!.operand0 => fieldIndex!
+                    fieldIndex! >= 0 and fieldIndex! < (nodes -> len)
+                        -> while {
+                            nodes[fieldIndex!] => field
+                            -1 => fieldType!
+                            not (field -> typedNodeIsAwaitSource(prepared))
+                                and (field -> isAsyncTaskValue(nodes)) -> if {
+                                    field -> canonicalTaskArgumentType(nodes, resolved.types) => fieldType!
+                                }
+                            shapes! -> each shape {
+                                field.typeId == shape.productType -> if { field.typeId => fieldType! }
+                            }
+                            fieldType! >= 0 -> if { true => materialized! }
+                            fieldTypes! -> push(fieldType!)
+                            field.nextOperand => fieldIndex!
+                        }
+                    materialized! -> if {
+                        [Int; ~] => fieldIndices!
+                        0 => ordinalInit!
+                        ordinalInit! < (fieldTypes! -> len) -> while {
+                            fieldIndices! -> push(-1)
+                            ordinalInit! + 1 => ordinalInit!
+                        }
+                        0 => sourceFieldIndex!
+                        sourceFieldIndex! < (resolved.fields -> len) -> while {
+                            resolved.fields[sourceFieldIndex!] => sourceField
+                            sourceField.ownerType == product!.typeId and sourceField.status == 0
+                                and sourceField.ordinal >= 0 and sourceField.ordinal < Int(fieldTypes! -> len)
+                                -> if {
+                                    sourceFieldIndex! => fieldIndices![sourceField.ordinal]
+                                }
+                            sourceFieldIndex! + 1 => sourceFieldIndex!
+                        }
+                        true => ready!
+                        false => differs!
+                        0 => fieldOrdinal!
+                        fieldOrdinal! < (fieldTypes! -> len) -> while {
+                            fieldIndices![fieldOrdinal!] < 0 -> if { false => ready! } else {
+                                resolved.fields[fieldIndices![fieldOrdinal!]].fieldType => oldFieldType
+                                fieldTypes![fieldOrdinal!] < 0 -> if { oldFieldType => fieldTypes![fieldOrdinal!] }
+                                fieldTypes![fieldOrdinal!] != oldFieldType -> if { true => differs! }
+                            }
+                            fieldOrdinal! + 1 => fieldOrdinal!
+                        }
+                        ready! and differs! -> if {
+                            product!.typeId => sourceType!
+                            shapes! -> each shape {
+                                shape.productType == product!.typeId -> if { shape.sourceType => sourceType! }
+                            }
+                            -1 => productType!
+                            shapes! -> each shape {
+                                shape.sourceType == sourceType! -> if {
+                                    0 => matches!
+                                    resolved.fields -> each candidate {
+                                        candidate.ownerType == shape.productType and candidate.status == 0
+                                            and candidate.ordinal >= 0 and candidate.ordinal < Int(fieldTypes! -> len)
+                                            and candidate.fieldType == fieldTypes![candidate.ordinal]
+                                            -> if { matches! + 1 => matches! }
+                                    }
+                                    matches! == Int(fieldTypes! -> len) -> if { shape.productType => productType! }
+                                }
+                            }
+                            productType! < 0 -> if {
+                                resolved.types -> len => productType!
+                                resolved.types[product!.typeId] => productTypeValue
+                                resolved.types -> push(productTypeValue)
+                                0 => copyOrdinal!
+                                copyOrdinal! < (fieldTypes! -> len) -> while {
+                                    resolved.fields[fieldIndices![copyOrdinal!]] => copied!
+                                    productType! => copied!.ownerType
+                                    fieldTypes![copyOrdinal!] => copied!.fieldType
+                                    resolved.fields -> push(copied!)
+                                    copyOrdinal! + 1 => copyOrdinal!
+                                }
+                                shapes! -> push(MaterializedTaskProduct { sourceType: sourceType!, productType: productType! })
+                            }
+                            productType! => product!.typeId
+                            product! => nodes[productIndex!]
+                            changed! -> push(productIndex!)
+                            true => progress!
+                        }
+                    }
+                }
+            productIndex! + 1 => productIndex!
+        }
+        progress! -> if {
+            typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => edges
+            prepared -> semanticContext.ownedResourceSeeds(resolved.types) => seeds
+            typeIds.classifyWithResources(resolved.types, resolved.fields, edges, seeds) => flags
+            changed! -> each index {
+                nodes[index] => product!
+                product! -> sealNodeTypeIdentity(product!.typeId, resolved.types, flags)
+                product! => nodes[index]
+            }
+            nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
+            nodes -> sealStructuralProductMembers(prepared, resolved, resolved.types, flags)
+            nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
+        }
+    }
+    (shapes! -> len) > 0
+}
+
+public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~] -> [GenericCallPlan; ~] {
+    nodes -> functionTemplatesBySymbol(prepared) => functions
+    nodes -> planGenericCallsWithTemplates(prepared, types, functions)
+}
+
+planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
     [GenericCallPlan; ~] => plans!
     0 => callIndex!
     callIndex! < (nodes -> len) -> while {
@@ -364,68 +727,243 @@ public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticConte
             and call.symbol >= 0 -> if {
                 prepared.package.ranges[call.targetModule] => range
                 call.symbol < range.symbolCount -> if {
-                    functions![range.symbolStart + call.symbol] => target!
+                    functions[range.symbolStart + call.symbol] => target!
                 }
             }
         target! >= 0 -> if {
             nodes[target!] => function
-            false => generic!
-            function.typeId >= 0 and function.typeId < (types -> len)
-                -> if { types[function.typeId].containsParameter => generic! }
-            function.operand1 => parameterIndex!
-            0 => parameterOrdinal!
-            parameterIndex! >= 0 and parameterIndex! < (nodes -> len)
-                and parameterOrdinal! < (nodes -> len) -> while {
-                    nodes[parameterIndex!] => parameter
-                    parameter.typeId >= 0 and parameter.typeId < (types -> len)
-                        -> if {
-                            types[parameter.typeId].containsParameter
-                                -> if { true => generic! }
+            nodes -> functionSignatureContainsParameter(types, target!)
+                -> if {
+                    [Int; ~] => templates!
+                    [Int; ~] => actuals!
+                    function.operand1 => templateIndex!
+                    0 => templateOrdinal!
+                    templateIndex! >= 0 and templateIndex! < (nodes -> len)
+                        and templateOrdinal! < (nodes -> len) -> while {
+                            nodes[templateIndex!] => parameter
+                            templates! -> push(parameter.typeId)
+                            templateOrdinal! == 0 -> if {
+                                function.nextOperand => templateIndex!
+                            } else { parameter.nextOperand => templateIndex! }
+                            templateOrdinal! + 1 => templateOrdinal!
                         }
-                    parameterOrdinal! == 0 -> if {
-                        function.nextOperand => parameterIndex!
-                    } else { parameter.nextOperand => parameterIndex! }
-                    parameterOrdinal! + 1 => parameterOrdinal!
+                    false => taskArgumentIdentityChanged!
+                    call.operand0 => argumentIndex!
+                    0 => argumentOrdinal!
+                    argumentIndex! >= 0 and argumentIndex! < (nodes -> len)
+                        and argumentOrdinal! < (templates! -> len) -> while {
+                            nodes[argumentIndex!] => argument
+                            argument.typeId => actualTypeId!
+                            (call -> resolvedDeclaredRuntimeOpcode(prepared)) == -325
+                                -> if { argument -> canonicalTaskArgumentType(nodes, types) => actualTypeId! }
+                            actualTypeId! != argument.typeId -> if { true => taskArgumentIdentityChanged! }
+                            actuals! -> push(actualTypeId!)
+                            argumentOrdinal! == 0 -> if {
+                                call.operand1 => argumentIndex!
+                            } else { argument.nextOperand => argumentIndex! }
+                            argumentOrdinal! + 1 => argumentOrdinal!
+                        }
+                    # Callback result inference commits the call's canonical result
+                    # before body materialization. Reuse it as a type constraint so
+                    # a result-only parameter is specialized in the whole body.
+                    not taskArgumentIdentityChanged!
+                        and function.typeId >= 0 and function.typeId < (types -> len)
+                        and types[function.typeId].containsParameter
+                        and call.typeId >= 0 and call.typeId < (types -> len)
+                        and not types[call.typeId].containsParameter
+                        -> if {
+                            templates! -> push(function.typeId)
+                            actuals! -> push(call.typeId)
+                        }
+                    types -> typeIds.specializeManyInto(templates!, actuals!, function.typeId) => specialized
+                    plans! -> push(GenericCallPlan {
+                        callNode: callIndex!
+                        interpolationNode: -1
+                        ownerFunction: -1
+                        templateNode: target!
+                        inputTemplates: templates!
+                        actualInputs: actuals!
+                        resultType: specialized.root
+                        status: specialized.status
+                    })
                 }
-            generic! -> if {
-                [Int; ~] => templates!
-                [Int; ~] => actuals!
-                function.operand1 => templateIndex!
-                0 => templateOrdinal!
-                templateIndex! >= 0 and templateIndex! < (nodes -> len)
-                    and templateOrdinal! < (nodes -> len) -> while {
-                        nodes[templateIndex!] => parameter
-                        templates! -> push(parameter.typeId)
-                        templateOrdinal! == 0 -> if {
-                            function.nextOperand => templateIndex!
-                        } else { parameter.nextOperand => templateIndex! }
-                        templateOrdinal! + 1 => templateOrdinal!
-                    }
-                call.operand0 => argumentIndex!
-                0 => argumentOrdinal!
-                argumentIndex! >= 0 and argumentIndex! < (nodes -> len)
-                    and argumentOrdinal! < (templates! -> len) -> while {
-                        nodes[argumentIndex!] => argument
-                        actuals! -> push(argument.typeId)
-                        argumentOrdinal! == 0 -> if {
-                            call.operand1 => argumentIndex!
-                        } else { argument.nextOperand => argumentIndex! }
-                        argumentOrdinal! + 1 => argumentOrdinal!
-                    }
-                types -> typeIds.specializeManyInto(templates!, actuals!, function.typeId) => specialized
-                plans! -> push(GenericCallPlan {
-                    callNode: callIndex!
-                    templateNode: target!
-                    inputTemplates: templates!
-                    actualInputs: actuals!
-                    resultType: specialized.root
-                    status: specialized.status
-                })
-            }
         }
         callIndex! + 1 => callIndex!
     }
     plans!
+}
+
+# Synthetic interpolation calls share the ordinary generic body materializer.
+# Their source identity remains separate from an emitted Typed IR call index.
+# A generic interpolation call belongs to a concrete caller body, not only to
+# its shared source node. Preserve that identity when specializing its inputs.
+appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, plans: mut [GenericCallPlan; ~], sourceModule: Int, interpolationNode: Int, target: Int, templates: ref [Int; ~], actuals: ref [Int; ~] -> Unit {
+    false => needsContext!
+    actuals -> each actual {
+        actual >= 0 and resolved.types[actual].containsParameter
+            -> if { true => needsContext! }
+    }
+    not needsContext! -> if { return }
+    prepared.interpolations[interpolationNode] => call
+    call.ownerSymbol => ownerSymbol!
+    ownerSymbol! < 0 and call.operand0 >= 0
+        -> if { prepared.interpolations[call.operand0].ownerSymbol => ownerSymbol! }
+    prepared.package.ranges[sourceModule] => range
+    ownerSymbol! < 0 or ownerSymbol! >= range.symbolCount
+        -> if { return }
+    prepared.package.symbols[range.symbolStart + ownerSymbol!].astNode => ownerAst!
+    ownerAst! >= 0 -> while {
+        prepared.package.nodes[range.astStart + ownerAst!] => owner
+        owner.kind == 7 or owner.kind == 31 -> if { break }
+        owner.parent => ownerAst!
+    }
+    ownerAst! < 0 -> if { return }
+    -1 => templateOwner!
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len) and templateOwner! < 0
+        -> while {
+            nodes[nodeIndex!] => node
+            node.kind == 0 and node.sourceModule == sourceModule and node.astNode == ownerAst!
+                -> if { nodeIndex! => templateOwner! }
+            nodeIndex! + 1 => nodeIndex!
+        }
+    templateOwner! < 0 -> if { return }
+    [Int; ~] => ownerTemplates!
+    nodes -> appendGenericInputTypes(templateOwner!, ownerTemplates!)
+    0 => ownerIndex!
+    ownerIndex! < (nodes -> len) -> while {
+        nodes[ownerIndex!] => owner
+        ownerIndex! != templateOwner! and owner.kind == 0
+            and owner.sourceModule == sourceModule and owner.astNode == ownerAst!
+            -> if {
+                [Int; ~] => ownerActuals!
+                nodes -> appendGenericInputTypes(ownerIndex!, ownerActuals!)
+                (ownerTemplates! -> len) == (ownerActuals! -> len) => concrete!
+                ownerActuals! -> each actual {
+                    actual < 0 -> if { false => concrete! } else {
+                        resolved.types[actual].containsParameter -> if { false => concrete! }
+                    }
+                }
+                concrete! -> if {
+                    [Int; ~] => specializedActuals!
+                    actuals -> each actual {
+                        resolved.types -> typeIds.specializeManyInto(ownerTemplates!, ownerActuals!, actual) => specialized
+                        specialized.status != 0 or specialized.root < 0
+                            -> if { false => concrete! }
+                        specializedActuals! -> push(specialized.root)
+                    }
+                    not concrete! -> if {
+                        ownerIndex! + 1 => ownerIndex!
+                        continue
+                    }
+                    [Int; ~] => inputTemplates!
+                    templates -> each template { inputTemplates! -> push(template) }
+                    resolved.types -> typeIds.specializeManyInto(inputTemplates!, specializedActuals!, nodes[target].typeId) => result
+                    plans -> push(GenericCallPlan {
+                        callNode: -1
+                        interpolationNode: interpolationNode
+                        ownerFunction: ownerIndex!
+                        templateNode: target
+                        inputTemplates: inputTemplates!
+                        actualInputs: specializedActuals!
+                        resultType: result.root
+                        status: result.status
+                    })
+                }
+            }
+        ownerIndex! + 1 => ownerIndex!
+    }
+}
+
+appendGenericInputTypes nodes: ref [TypedIrNode; ~], functionIndex: Int, destination: mut [Int; ~] -> Unit {
+    nodes[functionIndex] => function
+    function.operand1 => parameterIndex!
+    0 => ordinal!
+    parameterIndex! >= 0 -> while {
+        nodes[parameterIndex!] => parameter
+        destination -> push(parameter.typeId)
+        ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
+        ordinal! + 1 => ordinal!
+    }
+}
+
+appendInterpolationGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, plans: mut [GenericCallPlan; ~], functions: ref [Int; ~] -> Unit {
+    prepared.interpolationRanges -> each sourceRange {
+        0 => offset!
+        offset! < sourceRange.nodeCount -> while {
+            sourceRange.nodeStart + offset! => callIndex
+            prepared.interpolations[callIndex] => call
+            resolved.interpolationMethodByNode[callIndex] => method
+            method.status >= 0 -> if {
+                expressionTypeIds.InterpolationFunctionTarget { sourceModule: method.sourceModule, symbol: method.symbol }
+            } else {
+                prepared -> expressionTypeIds.interpolationFunctionTarget(sourceRange.sourceModule, callIndex)
+            } => declaration
+            (call.kind == 8 or call.kind == 10
+                or (call.kind == 6 and resolved.interpolationMethodByNode[callIndex].status == 0))
+                and declaration.sourceModule >= 0 and declaration.symbol >= 0
+                and method.status <= 0
+                -> if {
+                    -1 => target!
+                    prepared.package.ranges[declaration.sourceModule] => range
+                    declaration.symbol < range.symbolCount
+                        -> if {
+                            functions[range.symbolStart + declaration.symbol] => target!
+                        }
+                    target! >= 0 -> if {
+                        nodes[target!] => function
+                        nodes -> functionSignatureContainsParameter(resolved.types, target!)
+                            -> if {
+                                [Int; ~] => templates!
+                                [Int; ~] => actuals!
+                                function.operand1 => parameterIndex!
+                                0 => ordinal!
+                                parameterIndex! >= 0 -> while {
+                                    nodes[parameterIndex!] => parameter
+                                    templates! -> push(parameter.typeId)
+                                    ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
+                                    ordinal! + 1 => ordinal!
+                                }
+                                sourceRange.nodeStart => argumentIndex!
+                                argumentIndex! < sourceRange.nodeStart + sourceRange.nodeCount
+                                    -> while {
+                                        prepared.interpolations[argumentIndex!].parent == callIndex
+                                            -> if {
+                                                prepared -> expressionTypeIds.preIrInterpolationReceiverTypeId(resolved.types, resolved.references, resolved.referenceIndexByTypeAst, resolved.interpolationLexicalTypeByNode, resolved.interpolationMemberTypeByNode, resolved.interpolationIndexedTypeByNode, resolved.interpolationContextualStructTypeByNode, resolved.interpolationCallTypeByNode, sourceRange.sourceModule, argumentIndex!) => actual!
+                                                actual! < 0 and prepared.interpolations[argumentIndex!].kind == 1
+                                                    -> if {
+                                                        prepared.interpolations[argumentIndex!].symbol => inputSymbol
+                                                        0 => inputIndex!
+                                                        inputIndex! < (nodes -> len) and actual! < 0 -> while {
+                                                            nodes[inputIndex!] => input
+                                                            input.kind == 10 and input.sourceModule == sourceRange.sourceModule
+                                                                and input.symbol == inputSymbol and input.typeId >= 0
+                                                                -> if { input.typeId => actual! }
+                                                            inputIndex! + 1 => inputIndex!
+                                                        }
+                                                    }
+                                                actuals! -> push(actual!)
+                                            }
+                                        argumentIndex! + 1 => argumentIndex!
+                                    }
+                                nodes -> appendContextualInterpolationGenericPlans(prepared, resolved, plans, sourceRange.sourceModule, callIndex, target!, templates!, actuals!)
+                                resolved.types -> typeIds.specializeManyInto(templates!, actuals!, function.typeId) => specialized
+                                plans -> push(GenericCallPlan {
+                                    callNode: -1
+                                    interpolationNode: callIndex
+                                    ownerFunction: -1
+                                    templateNode: target!
+                                    inputTemplates: templates!
+                                    actualInputs: actuals!
+                                    resultType: specialized.root
+                                    status: specialized.status
+                                })
+                            }
+                    }
+                }
+            offset! + 1 => offset!
+        }
+    }
 }
 
 # A runtime member chain rooted in a local value remains local through every
@@ -542,7 +1080,7 @@ sealEachRoleTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.Sem
     0 => roleIndex!
     roleIndex! < (nodes -> len) -> while {
         nodes[roleIndex!] => role
-        role.kind == 6 and role.opcode == -208
+        role.kind == 6 and (role.opcode -> isDirectIterationOpcode)
             and role.operand0 >= 0 and role.astNode >= 0
             -> if {
                 nodes[role.operand0].typeId => collectionType!
@@ -558,6 +1096,7 @@ sealEachRoleTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.Sem
                     collection.kind == 1 and collection.origin == 1
                         and collection.symbol == 25
                         -> if { 2 => element! }
+                    role.opcode == repeatOpcode() -> if { 2 => element! }
                     prepared.package.ranges[role.sourceModule] => roleRange
                     roleRange.astStart + role.astNode => globalRoleAst
                     element! => elementByRoleAst![globalRoleAst]
@@ -808,13 +1347,14 @@ public terminalValueReturnsFromArm terminalIndex: Int, armIndex: Int, nodes: ref
 # and emission disagree. Explicit-return arms do not contribute a value.
 sealEnumMatchTypesFromTerminalArms results: mut [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
     0 -> builtinTypeId(types) => unitTypeId
+    results -> terminatingControlFlags => terminating
     0 => matchIndex!
     matchIndex! < (results -> len) -> while {
         results[matchIndex!] => match!
         (match!.kind == 27 or match!.kind == 34)
             and match!.operand1 >= 0
             -> if {
-                match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags)
+                match! -> normalizeMatchResultTypeFromCompleteArms(matchIndex!, unitTypeId, results, types, flags, terminating)
                 match! => results[matchIndex!]
                 match!.typeOrigin == 1 and match!.typeSymbol == 0
                     and match!.parent >= 0 and match!.parent < (results -> len)
@@ -875,9 +1415,11 @@ repairReturnedEnumMatchResults results: mut [TypedIrNode; ~], prepared: ref sema
                                 and returnedEnumExistingResultIndex < (results -> len)
                                 -> if {
                                     results[returnedEnumExistingResultIndex] => returnedEnumExistingResult
+                                    # The linked body result owns the value. A provisional
+                                    # region type must not replace it with a same-typed
+                                    # pattern binding or another operand from the arm.
                                     returnedEnumExistingResult.parent == returnedEnumRegionIndex!
                                         and returnedEnumExistingResult.kind != 23
-                                        and returnedEnumExistingResult.typeId == returnedEnumReturn!.typeId
                                         -> if {
                                             returnedEnumExistingResultIndex => returnedEnumArmResult!
                                             3 => returnedEnumArmResultRank!
@@ -948,12 +1490,10 @@ repairReturnedEnumMatchResults results: mut [TypedIrNode; ~], prepared: ref sema
                             returnedEnumArmResult! >= 0 -> if {
                                 results[returnedEnumRegionIndex!] => returnedEnumRegion!
                                 returnedEnumArmResult! => returnedEnumRegion!.operand1
-                                returnedEnumReturn!.typeId => returnedEnumRegion!.typeId
-                                returnedEnumResultType.kind => returnedEnumRegion!.typeKind
-                                returnedEnumResultType.origin => returnedEnumRegion!.typeOrigin
-                                returnedEnumResultType.module => returnedEnumRegion!.typeModule
-                                returnedEnumResultType.symbol => returnedEnumRegion!.typeSymbol
-                                flags[returnedEnumReturn!.typeId] => returnedEnumRegion!.typeFlags
+                                results[returnedEnumArmResult!].typeId => returnedEnumActualTypeId
+                                returnedEnumActualTypeId >= 0 -> if {
+                                    returnedEnumRegion! -> sealNodeTypeIdentity(returnedEnumActualTypeId, types, flags)
+                                }
                                 returnedEnumRegion! => results[returnedEnumRegionIndex!]
                             }
                             returnedEnumArm.nextOperand => returnedEnumArmIndex!
@@ -977,6 +1517,20 @@ repairReturnedEnumMatchResults results: mut [TypedIrNode; ~], prepared: ref sema
 # operand to a later completed non-Unit control; compatible destination types
 # and proximity are not producer evidence.
 repairAssignmentsToCompletedSubjectControls results: mut [TypedIrNode; ~] -> Unit {
+    # Control nodes remain unchanged by assignment repair. Retain the last
+    # eligible forward control for each exact input once, preserving the old
+    # trailing search's order without scanning the whole IR per assignment.
+    [Int; ~] => completedControlByInput!
+    results -> each node { completedControlByInput! -> push(-1) }
+    0 => controlIndex!
+    controlIndex! < (results -> len) -> while {
+        results[controlIndex!] => control
+        (control.kind == 27 or control.kind == 34)
+            and control.operand0 >= 0 and control.operand0 < controlIndex!
+            and not (control.typeOrigin == 1 and control.typeSymbol == 0)
+            -> if { controlIndex! => completedControlByInput![control.operand0] }
+        controlIndex! + 1 => controlIndex!
+    }
     0 => assignmentIndex!
     assignmentIndex! < (results -> len) -> while {
         results[assignmentIndex!] => assignment!
@@ -984,18 +1538,9 @@ repairAssignmentsToCompletedSubjectControls results: mut [TypedIrNode; ~] -> Uni
             and assignment!.operand0 >= 0
             and assignment!.operand0 < (results -> len)
             -> if {
-                assignment!.operand0 + 1 => candidateIndex!
-                -1 => controlIndex!
-                candidateIndex! < (results -> len) -> while {
-                    results[candidateIndex!] => candidate
-                    (candidate.kind == 27 or candidate.kind == 34)
-                        and candidate.operand0 == assignment!.operand0
-                        and not (candidate.typeOrigin == 1 and candidate.typeSymbol == 0)
-                        -> if { candidateIndex! => controlIndex! }
-                    candidateIndex! + 1 => candidateIndex!
-                }
-                controlIndex! >= 0 -> if {
-                    controlIndex! => assignment!.operand0
+                completedControlByInput![assignment!.operand0] => completedControl
+                completedControl >= 0 -> if {
+                    completedControl => assignment!.operand0
                     assignment! => results[assignmentIndex!]
                 }
             }
@@ -1071,23 +1616,25 @@ repairEnumMatchSubjectsFromControlBindings results: mut [TypedIrNode; ~], types:
         read.kind == 5 and read.operand0 >= 0 and read.operand0 < (results -> len)
             -> if {
                 results[read.operand0] => subjectBinding
-                subjectBinding.kind == 29 -> if {
-                    true => directControlSubject!
-                } else {
-                    subjectBinding.kind == 17
-                        and subjectBinding.flags != 1
-                        and subjectBinding.operand0 >= 0
-                        and subjectBinding.operand0 < (results -> len)
-                        and (results[subjectBinding.operand0].kind == 18
-                        or results[subjectBinding.operand0].kind == 27
-                        or results[subjectBinding.operand0].kind == 33
-                        or results[subjectBinding.operand0].kind == 34)
-                        -> if { true => directControlSubject! }
-                }
+                subjectBinding.kind == 10 or subjectBinding.kind == 29
+                    -> if {
+                        true => directControlSubject!
+                    } else {
+                        subjectBinding.kind == 17
+                            and subjectBinding.flags != 1
+                            and subjectBinding.operand0 >= 0
+                            and subjectBinding.operand0 < (results -> len)
+                            and (results[subjectBinding.operand0].kind == 18
+                            or results[subjectBinding.operand0].kind == 27
+                            or results[subjectBinding.operand0].kind == 33
+                            or results[subjectBinding.operand0].kind == 34)
+                            -> if { true => directControlSubject! }
+                    }
             }
-        directControlSubject! and read.typeId >= 0 and read.typeId < (types -> len)
+        types -> typeIds.materializedReadTypeId(read.typeId) => readValueTypeId
+        directControlSubject! and readValueTypeId >= 0 and readValueTypeId < (types -> len)
             -> if {
-                types[read.typeId] => readType
+                types[readValueTypeId] => readType
                 readType.kind == 1
                     or (readType.kind == 7
                     and readType.origin == 4
@@ -1143,11 +1690,12 @@ enumPayloadArmIndex payloadIndex: Int, nodes: ref [TypedIrNode; ~] -> Int {
 
 intrinsicResultTypeId candidateTypeId: Int, types: ref [typeIds.SemanticType; ~] -> Int {
     -1 => resultTypeId!
-    candidateTypeId >= 0 and candidateTypeId < (types -> len)
+    types -> typeIds.materializedReadTypeId(candidateTypeId) => readTypeId
+    readTypeId >= 0 and readTypeId < (types -> len)
         -> if {
-            types[candidateTypeId] => candidate
+            types[readTypeId] => candidate
             candidate.kind == 7 and candidate.origin == 4 and candidate.symbol == 1
-                -> if { candidateTypeId => resultTypeId! }
+                -> if { readTypeId => resultTypeId! }
         }
     resultTypeId!
 }
@@ -1159,7 +1707,7 @@ resultPropagationResultTypeId propagation: TypedIrNode, producer: TypedIrNode, t
     resultTypeId!
 }
 
-normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode, matchIndex: Int, unitTypeId: Int, nodes: ref [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode, matchIndex: Int, unitTypeId: Int, nodes: ref [TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~], terminating: ref [Bool; ~] -> Unit {
     (match.kind == 27 or match.kind == 34) and match.operand1 >= 0
         and match.operand1 < (nodes -> len) -> if {
             -1 => selectedTerminal!
@@ -1180,7 +1728,7 @@ normalizeMatchResultTypeFromCompleteArms match: mut TypedIrNode, matchIndex: Int
                             false => allContinuingArmsAgree!
                         } else {
                             nodes[terminalIndex] => terminal
-                            terminal.kind != 23
+                            not terminating[terminalIndex]
                                 and not (terminalIndex -> terminalValueReturnsFromArm(armIndex!, nodes))
                                 -> if {
                                     terminal.typeId >= 0
@@ -1300,39 +1848,34 @@ sealCompletedIfAndRegionTypes nodes: mut [TypedIrNode; ~] -> Unit {
     nodes -> len => controlIndex!
     controlIndex! > 0 -> while {
         controlIndex! - 1 => controlIndex!
-        nodes[controlIndex!] => control!
-        control!.kind == 19
-            and control!.operand1 >= 0
-            and control!.operand1 < (nodes -> len)
+        nodes[controlIndex!] => control
+        control.kind == 19
+            and control.operand1 >= 0
+            and control.operand1 < (nodes -> len)
             -> if {
-                nodes[control!.operand1] => regionValue
+                nodes[control.operand1] => regionValue
                 not (regionValue.typeOrigin == 1 and regionValue.typeSymbol == 0)
+                    or regionValue.typeId >= 0
                     -> if {
-                        regionValue.typeId => control!.typeId
-                        regionValue.typeKind => control!.typeKind
-                        regionValue.typeOrigin => control!.typeOrigin
-                        regionValue.typeModule => control!.typeModule
-                        regionValue.typeSymbol => control!.typeSymbol
-                        regionValue.typeFlags => control!.typeFlags
-                        control! => nodes[controlIndex!]
+                        nodes -> sealControlTypeFromValue(controlIndex!, regionValue)
                     }
             }
-        control!.kind == 18
-            and control!.operand1 >= 0
-            and control!.operand1 < (nodes -> len)
-            and control!.nextOperand >= 0
-            and control!.nextOperand < (nodes -> len)
+        control.kind == 18
+            and control.operand1 >= 0
+            and control.operand1 < (nodes -> len)
+            and control.nextOperand >= 0
+            and control.nextOperand < (nodes -> len)
             -> if {
-                nodes[control!.operand1] => thenRegion
-                nodes[control!.nextOperand] => elseRegion
-                terminating[control!.operand1] => thenTerminates
-                terminating[control!.nextOperand] => elseTerminates
+                nodes[control.operand1] => thenRegion
+                nodes[control.nextOperand] => elseRegion
+                terminating[control.operand1] => thenTerminates
+                terminating[control.nextOperand] => elseTerminates
                 false => branchTypesMatch!
                 -1 => valueRegionIndex!
                 thenTerminates and not elseTerminates
-                    -> if { control!.nextOperand => valueRegionIndex! }
+                    -> if { control.nextOperand => valueRegionIndex! }
                 elseTerminates and not thenTerminates
-                    -> if { control!.operand1 => valueRegionIndex! }
+                    -> if { control.operand1 => valueRegionIndex! }
                 not thenTerminates and not elseTerminates -> if {
                     thenRegion.typeId >= 0 and thenRegion.typeId == elseRegion.typeId
                         -> if { true => branchTypesMatch! }
@@ -1343,20 +1886,15 @@ sealCompletedIfAndRegionTypes nodes: mut [TypedIrNode; ~] -> Unit {
                         and thenRegion.typeModule == elseRegion.typeModule
                         and thenRegion.typeSymbol == elseRegion.typeSymbol
                         -> if { true => branchTypesMatch! }
-                    branchTypesMatch! -> if { control!.operand1 => valueRegionIndex! }
+                    branchTypesMatch! -> if { control.operand1 => valueRegionIndex! }
                 }
                 valueRegionIndex! >= 0
-                    and not (nodes[valueRegionIndex!].typeOrigin == 1
+                    and (not (nodes[valueRegionIndex!].typeOrigin == 1
                     and nodes[valueRegionIndex!].typeSymbol == 0)
+                    or nodes[valueRegionIndex!].typeId >= 0)
                     -> if {
                         nodes[valueRegionIndex!] => valueRegion
-                        valueRegion.typeId => control!.typeId
-                        valueRegion.typeKind => control!.typeKind
-                        valueRegion.typeOrigin => control!.typeOrigin
-                        valueRegion.typeModule => control!.typeModule
-                        valueRegion.typeSymbol => control!.typeSymbol
-                        valueRegion.typeFlags => control!.typeFlags
-                        control! => nodes[controlIndex!]
+                        nodes -> sealControlTypeFromValue(controlIndex!, valueRegion)
                     }
             }
     }
@@ -1509,6 +2047,8 @@ sealPathRuntimeOpcodes results: mut [TypedIrNode; ~], prepared: ref semanticCont
             and pathCall!.symbol >= 0
             -> if {
                 false => canonicalPathModule!
+                false => canonicalFileModule!
+                false => canonicalMapPathIntrinsic!
                 0 => pathModuleSearch!
                 pathModuleSearch! < (prepared.modules -> len)
                     -> while {
@@ -1516,8 +2056,32 @@ sealPathRuntimeOpcodes results: mut [TypedIrNode; ~], prepared: ref semanticCont
                         pathModuleIdentity.sourceIndex == pathCall!.targetModule
                             and pathModuleIdentity.pathHash == 7794543808165292697
                             -> if { true => canonicalPathModule! }
+                        pathModuleIdentity.sourceIndex == pathCall!.targetModule
+                            and pathModuleIdentity.pathHash == 1560534979202565016
+                            -> if { true => canonicalFileModule! }
                         pathModuleSearch! + 1 => pathModuleSearch!
                     }
+                canonicalFileModule! and pathCall!.targetModule < (prepared.package.ranges -> len)
+                    -> if {
+                        prepared.package.ranges[pathCall!.targetModule] => fileSourceRange
+                        pathCall!.symbol < fileSourceRange.symbolCount
+                            -> if {
+                                prepared.package.symbols[fileSourceRange.symbolStart + pathCall!.symbol] => fileSymbol
+                                fileSymbol.kind == 7 and fileSymbol.parent < 0 and fileSymbol.flags / 128 % 2 == 1
+                                    -> if {
+                                        prepared.package.sources[pathCall!.targetModule] -> len => fileSourceLength
+                                        prepared.package.sources[pathCall!.targetModule] -> slice(UIntSize(0), fileSourceLength) => fileSource
+                                        prepared.package.tokens[fileSourceRange.tokenStart + fileSymbol.nameToken] => fileNameToken
+                                        fileSource -> sourceMatches(fileNameToken.span.start, fileNameToken.span.length, "mapPath")
+                                            -> if {
+                                                true => canonicalMapPathIntrinsic!
+                                                -214 => pathCall!.opcode
+                                            }
+                                    }
+                            }
+                    }
+                not canonicalMapPathIntrinsic! and pathCall!.opcode == -214
+                    -> if { -1 => pathCall!.opcode }
                 canonicalPathModule! -> if {
                     false => canonicalPathIntrinsic!
                     prepared.package.ranges[pathCall!.targetModule] => pathSourceRange
@@ -1529,18 +2093,25 @@ sealPathRuntimeOpcodes results: mut [TypedIrNode; ~], prepared: ref semanticCont
                             prepared.package.sources[pathCall!.targetModule] -> len => pathSourceLength
                             prepared.package.sources[pathCall!.targetModule] -> slice(UIntSize(0), pathSourceLength) => pathSource
                             prepared.package.tokens[pathSourceRange.tokenStart + pathSymbol.nameToken] => pathNameToken
+                            pathSource -> sourceMatches(pathNameToken.span.start, pathNameToken.span.length, "absolute")
+                                -> if { pathAbsoluteOpcode() => pathCall!.opcode }
                             pathSource -> sourceMatches(pathNameToken.span.start, pathNameToken.span.length, "queryRaw")
                                 -> if { -215 => pathCall!.opcode }
                             pathSource -> sourceMatches(pathNameToken.span.start, pathNameToken.span.length, "pathText")
                                 -> if { -230 => pathCall!.opcode }
                         }
-                    not canonicalPathIntrinsic! and (pathCall!.opcode == -215 or pathCall!.opcode == -230)
+                    not canonicalPathIntrinsic! and (pathCall!.opcode == -215 or pathCall!.opcode == -230 or pathCall!.opcode == pathAbsoluteOpcode())
                         -> if { -1 => pathCall!.opcode }
                 } else {
-                    pathCall!.opcode == -215 or pathCall!.opcode == -230
+                    pathCall!.opcode == -215 or pathCall!.opcode == -230 or pathCall!.opcode == pathAbsoluteOpcode()
                         -> if { -1 => pathCall!.opcode }
                 }
                 pathCall! => results[pathCallIndex!]
+                prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, pathCall!.targetModule, pathCall!.symbol)
+                    -> if {
+                        pathNativeStyleOpcode() => pathCall!.opcode
+                        pathCall! => results[pathCallIndex!]
+                    }
             }
         pathCallIndex! + 1 => pathCallIndex!
     }
@@ -1570,16 +2141,10 @@ sealLateGrowablePushCollisions results: mut [TypedIrNode; ~], prepared: ref sema
                     types[growablePushReceiverTypeId!].first => growablePushReceiverTypeId!
                 }
                 types[growablePushReceiverTypeId!].kind == 3 -> if {
-                    prepared.package.ranges[growablePush!.sourceModule] => growablePushRange
-                    prepared.package.nodes[growablePushRange.astStart + growablePush!.astNode]
-                        => growablePushAst
                     prepared.package.sources[growablePush!.sourceModule] -> len => growablePushSourceLength
                     prepared.package.sources[growablePush!.sourceModule]
                         -> slice(UIntSize(0), growablePushSourceLength) => growablePushSource
-                    growablePushSource -> flowIntrinsicOpcode(
-                    prepared.package.tokens,
-                    growablePushRange.tokenStart,
-                    growablePushAst) => growablePushOpcode
+                    growablePushSource -> resolvedFlowIntrinsicOpcode(prepared, growablePush!.sourceModule, growablePush!.astNode) => growablePushOpcode
                     growablePushOpcode == -204
                         -> if {
                             9 => growablePush!.kind
@@ -1602,6 +2167,14 @@ resolvedCallRuntimeParameterCount call: ref TypedIrNode, prepared: ref semanticC
         and call.symbol < prepared.package.ranges[call.targetModule].symbolCount
         -> if {
             prepared.package.ranges[call.targetModule] => targetRange
+            prepared.package.symbols[targetRange.symbolStart + call.symbol] => declaration
+            # Generated COM members carry their input contract in metadata,
+            # without source parameter symbols.
+            declaration.kind == 36 -> if {
+                declaration.flags / 8192 % 2 == 1 or declaration.flags / 131072 % 2 == 1
+                    -> if { 1 -> return }
+                0 -> return
+            }
             0 => parameterOffset!
             parameterOffset! < targetRange.symbolCount -> while {
                 prepared.package.symbols[targetRange.symbolStart + parameterOffset!] => parameter
@@ -1698,6 +2271,9 @@ resolvedCallNeedsExactReceiver callIndex: Int, nodes: ref [TypedIrNode; ~], prep
 normalizeUnaryResolvedFlowCallOperands nodeIndex: Int, results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
     results[nodeIndex] => call!
     call!.kind == 6
+    # Role operations keep source and callback in separate slots even
+    # when their canonical declaration has one ordinary parameter.
+        and call!.opcode != -207 and not (call!.opcode -> isDirectIterationOpcode) and call!.opcode != -209
         and call!.operand1 >= 0
         and (call! -> resolvedCallRuntimeParameterCount(prepared)) == 1
         -> if {
@@ -1718,6 +2294,54 @@ normalizeNullaryResolvedCallOperands nodeIndex: Int, results: mut [TypedIrNode; 
             -1 => call!.operand1
             call! => results[nodeIndex]
         }
+}
+
+# The concrete function's runtime parameter chain is the final call ABI.
+# Synthetic declaration symbols can include contextual names that are not
+# runtime parameters; a late flow repair must not attach one to a nullary call.
+normalizeConcreteNullaryCallPlans results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    [Int; ~] => functionsBySymbol!
+    0 => symbolIndex!
+    symbolIndex! < (prepared.package.symbols -> len)
+        -> while {
+            functionsBySymbol! -> push(-1)
+            symbolIndex! + 1 => symbolIndex!
+        }
+    0 => functionIndex!
+    functionIndex! < (results -> len) -> while {
+        results[functionIndex!] => function
+        function.kind == 0
+            and function.sourceModule >= 0
+            and function.sourceModule < (prepared.package.ranges -> len)
+            and function.symbol >= 0
+            and function.symbol < prepared.package.ranges[function.sourceModule].symbolCount
+            -> if {
+                prepared.package.ranges[function.sourceModule].symbolStart + function.symbol => globalSymbol
+                functionIndex! => functionsBySymbol![globalSymbol]
+            }
+        functionIndex! + 1 => functionIndex!
+    }
+    0 => callIndex!
+    callIndex! < (results -> len) -> while {
+        results[callIndex!] => call!
+        call!.kind == 6
+            and call!.operand0 >= 0
+            and call!.targetModule >= 0
+            and call!.targetModule < (prepared.package.ranges -> len)
+            and call!.symbol >= 0
+            and call!.symbol < prepared.package.ranges[call!.targetModule].symbolCount
+            -> if {
+                prepared.package.ranges[call!.targetModule].symbolStart + call!.symbol => targetGlobalSymbol
+                functionsBySymbol![targetGlobalSymbol] => targetFunctionIndex
+                targetFunctionIndex >= 0 and results[targetFunctionIndex].operand1 < 0
+                    -> if {
+                        -1 => call!.operand0
+                        -1 => call!.operand1
+                        call! => results[callIndex!]
+                    }
+            }
+        callIndex! + 1 => callIndex!
+    }
 }
 
 # A late transparent wrapper around an immutable binding must preserve its
@@ -1882,17 +2506,17 @@ repairNestedEnumPayloadSubjects results: mut [TypedIrNode; ~] -> Unit {
     0 => payloadIndex!
     payloadIndex! < (results -> len) -> while {
         results[payloadIndex!] => payloadCandidate
-        payloadCandidate.kind == 29
-            and payloadCandidate.parent >= 0
-            and payloadCandidate.parent < (results -> len)
-            -> if {
-                payloadByArm![payloadCandidate.parent] == -1
+        payloadCandidate.kind == 29 -> if {
+            payloadIndex! -> enumPayloadArmIndex(results) => payloadArmIndex
+            payloadArmIndex >= 0 -> if {
+                payloadByArm![payloadArmIndex] == -1
                     -> if {
-                        payloadIndex! => payloadByArm![payloadCandidate.parent]
+                        payloadIndex! => payloadByArm![payloadArmIndex]
                     } else {
-                        -2 => payloadByArm![payloadCandidate.parent]
+                        -2 => payloadByArm![payloadArmIndex]
                     }
             }
+        }
         payloadIndex! + 1 => payloadIndex!
     }
     0 => matchIndex!
@@ -2204,7 +2828,7 @@ repairNamedFlowReceiverCallPlans results: mut [TypedIrNode; ~], prepared: ref se
                     }
             }
         receiverCandidate.kind == 6
-            and (receiverCandidate.opcode == -207 or receiverCandidate.opcode == -208 or receiverCandidate.opcode == -209)
+            and (receiverCandidate.opcode == -207 or (receiverCandidate.opcode -> isDirectIterationOpcode) or receiverCandidate.opcode == -209)
             and receiverCandidate.sourceModule >= 0
             and receiverCandidate.sourceModule < (prepared.package.ranges -> len)
             and receiverCandidate.astNode >= 0
@@ -2575,6 +3199,33 @@ repairNamedFlowReceiverCallPlans results: mut [TypedIrNode; ~], prepared: ref se
 # semantic element types, so equality with the provisional binding type is not
 # evidence. This is an IR edge invariant, never a spelling or proximity guess.
 repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
+    # Calls stay unchanged in this pass. Keep each parent's candidates in
+    # original slot order so the existing selection decisions are preserved.
+    [Int; ~] => callHeads!
+    [Int; ~] => callTails!
+    [Int; ~] => callNext!
+    0 => index!
+    index! < (results -> len) -> while {
+        callHeads! -> push(-1)
+        callTails! -> push(-1)
+        callNext! -> push(-1)
+        index! + 1 => index!
+    }
+    0 => candidateIndex!
+    candidateIndex! < (results -> len) -> while {
+        results[candidateIndex!] => candidate
+        candidate.kind == 6
+            and candidate.parent >= 0
+            and candidate.parent < (results -> len)
+            and candidate.typeId >= 0
+            -> if {
+                callTails![candidate.parent] => previous
+                previous >= 0
+                    -> if { candidateIndex! => callNext![previous] } else { candidateIndex! => callHeads![candidate.parent] }
+                candidateIndex! => callTails![candidate.parent]
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
     0 => bindingIndex!
     bindingIndex! < (results -> len) -> while {
         results[bindingIndex!] => binding!
@@ -2584,8 +3235,8 @@ repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
             and binding!.operand0 < (results -> len)
             -> if {
                 -1 => exactCallIndex!
-                0 => callIndex!
-                callIndex! < (results -> len) -> while {
+                callHeads![bindingIndex!] => callIndex!
+                callIndex! >= 0 -> while {
                     results[callIndex!] => call
                     call.kind == 6
                         and call.parent == bindingIndex!
@@ -2595,7 +3246,7 @@ repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
                             exactCallIndex! < 0
                                 -> if { callIndex! => exactCallIndex! } else { -2 => exactCallIndex! }
                         }
-                    callIndex! + 1 => callIndex!
+                    callNext![callIndex!] => callIndex!
                 }
                 exactCallIndex! >= 0 -> if {
                     results[exactCallIndex!].typeId => binding!.typeId
@@ -2608,89 +3259,358 @@ repairDirectFlowCallBindings results: mut [TypedIrNode; ~] -> Unit {
 }
 
 # A direct async call can itself be the source of a following `await` flow.
-# Named Task flows already retain a kind-5 value node between the producer call
-# and the result binding. Preserve the same pre-LLVM topology for the direct
-# form so scheduling emits the Task first and await owns exactly one join and
-# release. Match the direct source child and contextual await target in the
-# canonical AST; no function or fixture spelling participates in the repair.
-repairDirectAsyncAwaitBindings results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
-    results -> len => originalNodeCount
-    0 => bindingIndex!
-    bindingIndex! < originalNodeCount -> while {
-        results[bindingIndex!] => binding!
-        binding!.kind == 17
-            and binding!.operand0 >= 0
-            and binding!.operand0 < originalNodeCount
+# Match its source child and the contextual await target in the canonical AST.
+directAwaitCallSource call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    call.kind == 13 and call.typeKind == 7 and call.typeOrigin == 4 and call.typeSymbol == 2
+        and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+        -> if {
+            prepared.package.ranges[call.sourceModule] => projectedAwaitRange
+            call.astNode >= 0 and call.astNode < projectedAwaitRange.astCount
+                -> if { prepared.awaitSourceByAst[projectedAwaitRange.astStart + call.astNode] -> return }
+        }
+    (call.kind != 6 and call.kind != 9)
+        or (call.flags / 8) % 2 != 1
+        or call.sourceModule < 0
+        or call.sourceModule >= (prepared.package.ranges -> len)
+        -> if { false -> return }
+    prepared.package.ranges[call.sourceModule] => sourceRange
+    call.astNode < 0 or call.astNode >= sourceRange.astCount
+        -> if { false -> return }
+    prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
+    callAst.kind != 10 or callAst.parent < 0 or callAst.parent >= sourceRange.astCount
+        -> if { false -> return }
+    prepared.package.nodes[sourceRange.astStart + callAst.parent] => awaitFlowAst
+    awaitFlowAst.kind != 10
+        or callAst.firstToken != awaitFlowAst.firstToken
+        or callAst.start != awaitFlowAst.start
+        -> if { false -> return }
+    0 => awaitTargetSearch!
+    awaitTargetSearch! < sourceRange.astCount -> while {
+        prepared.package.nodes[sourceRange.astStart + awaitTargetSearch!] => awaitTarget
+        awaitTarget.kind == 16
+            and awaitTarget.parent == callAst.parent
+            and awaitTarget.payloadToken >= 0
+            and awaitTarget.payloadToken < sourceRange.tokenCount
             -> if {
-                binding!.operand0 => callIndex
+                prepared.package.tokens[sourceRange.tokenStart + awaitTarget.payloadToken] => awaitToken
+                prepared.package.sources[call.sourceModule] -> len => awaitSourceLength
+                prepared.package.sources[call.sourceModule] -> slice(UIntSize(0), awaitSourceLength) => awaitSourceText
+                awaitSourceText -> sourceMatches(awaitToken.span.start, awaitToken.span.length, "await")
+                    -> if { true -> return }
+            }
+        awaitTargetSearch! + 1 => awaitTargetSearch!
+    }
+    false
+}
+
+ensureDirectAwaitValue results: mut [TypedIrNode; ~], callIndex: Int, parentIndex: Int -> Int {
+    results[callIndex] => call
+    0 => awaitSearch!
+    awaitSearch! < (results -> len) -> while {
+        results[awaitSearch!] => existingAwait
+        existingAwait.kind == 5
+            and existingAwait.operand0 == callIndex
+            and existingAwait.sourceModule == call.sourceModule
+            and existingAwait.astNode == call.astNode
+            -> if { awaitSearch! -> return }
+        awaitSearch! + 1 => awaitSearch!
+    }
+    results -> len => awaitValueIndex
+    results -> push(TypedIrNode {
+        kind: 5
+        parent: parentIndex
+        sourceModule: call.sourceModule
+        astNode: call.astNode
+        symbol: -1
+        targetModule: -1
+        typeOrigin: call.typeOrigin
+        typeModule: call.typeModule
+        typeSymbol: call.typeSymbol
+        typeId: call.typeId
+        typeKind: call.typeKind
+        typeFlags: call.typeFlags
+        payloadToken: -1
+        opcode: -1
+        operand0: callIndex
+        operand1: -1
+        nextOperand: -1
+        flags: 0
+    })
+    awaitValueIndex
+}
+
+# A discarded Unit result still carries an await effect. Repair it while the
+# function's IR indices are local, before functions are joined into one array.
+public repairDiscardedDirectAsyncAwaits results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    results -> len => originalNodeCount
+    0 => callIndex!
+    callIndex! < originalNodeCount -> while {
+        results[callIndex!] => call
+        call -> directAwaitCallSource(prepared) -> if {
+            false => consumed!
+            0 => consumerIndex!
+            consumerIndex! < originalNodeCount and not consumed!
+                -> while {
+                    results[consumerIndex!] => consumer
+                    consumer.operand0 == callIndex!
+                        and (consumer.kind == 5 or consumer.kind == 6 or consumer.kind == 9 or consumer.kind == 17 or consumer.kind == 27)
+                        -> if { true => consumed! }
+                    consumerIndex! + 1 => consumerIndex!
+                }
+            not consumed! -> if {
+                results -> ensureDirectAwaitValue(callIndex!, call.parent) => discardedAwait
+            }
+        }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+# Named Task flows already retain a kind-5 value node. Share one await node
+# across all consumers so the task is joined and released exactly once.
+public repairDirectAsyncAwaitConsumers results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    results -> len => originalNodeCount
+    0 => consumerIndex!
+    consumerIndex! < originalNodeCount -> while {
+        results[consumerIndex!] => consumer!
+        (consumer!.kind == 17 or consumer!.kind == 6 or consumer!.kind == 9 or consumer!.kind == 27)
+            and consumer!.operand0 >= 0
+            and consumer!.operand0 < originalNodeCount
+            -> if {
+                consumer!.operand0 => callIndex
                 results[callIndex] => call
-                (call.kind == 6 or call.kind == 9)
-                    and (call.flags / 8) % 2 == 1
-                    and call.sourceModule >= 0
-                    and call.sourceModule < (prepared.package.ranges -> len)
+                call -> directAwaitCallSource(prepared) -> if {
+                    results -> ensureDirectAwaitValue(callIndex, consumerIndex!) => consumer!.operand0
+                    consumer! => results[consumerIndex!]
+                }
+            }
+        consumerIndex! + 1 => consumerIndex!
+    }
+}
+
+# Late await repair can append a value after the function arena has been joined.
+typedNodeIsAwaitSource node: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len) and node.astNode >= 0
+        -> if {
+            prepared.package.ranges[node.sourceModule] => range
+            node.astNode < range.astCount
+                -> if { prepared.awaitSourceByAst[range.astStart + node.astNode] -> return }
+        }
+    false
+}
+
+public sealCanonicalTaskAwaitTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> Unit {
+    typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => edges
+    prepared -> semanticContext.ownedResourceSeeds(resolved.types) => seeds
+    typeIds.classifyWithResources(resolved.types, resolved.fields, edges, seeds) => flags
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => awaited!
+        awaited!.kind == 5 and awaited!.operand0 >= 0
+            and awaited!.sourceModule >= 0 and awaited!.astNode >= 0
+            -> if {
+                prepared.package.ranges[awaited!.sourceModule] => range
+                prepared.awaitSourceByAst[range.astStart + awaited!.astNode]
                     -> if {
-                        prepared.package.ranges[call.sourceModule] => sourceRange
-                        call.astNode >= 0 and call.astNode < sourceRange.astCount
+                        nodes[awaited!.operand0].typeId => taskType
+                        taskType >= 0 and taskType < (resolved.types -> len)
                             -> if {
-                                prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
-                                callAst.kind == 10
-                                    and callAst.parent >= 0
-                                    and callAst.parent < sourceRange.astCount
+                                resolved.types[taskType] => task
+                                task.kind == 7 and task.origin == 4 and task.symbol == 2 and task.first >= 0
                                     -> if {
-                                        prepared.package.nodes[sourceRange.astStart + callAst.parent] => awaitFlowAst
-                                        false => directAwaitFlow!
-                                        awaitFlowAst.kind == 10
-                                            and callAst.firstToken == awaitFlowAst.firstToken
-                                            and callAst.start == awaitFlowAst.start
-                                            -> if {
-                                                0 => awaitTargetSearch!
-                                                awaitTargetSearch! < sourceRange.astCount and not directAwaitFlow!
-                                                    -> while {
-                                                        prepared.package.nodes[sourceRange.astStart + awaitTargetSearch!] => awaitTarget
-                                                        awaitTarget.kind == 16
-                                                            and awaitTarget.parent == callAst.parent
-                                                            and awaitTarget.payloadToken >= 0
-                                                            and awaitTarget.payloadToken < sourceRange.tokenCount
-                                                            -> if {
-                                                                prepared.package.tokens[sourceRange.tokenStart + awaitTarget.payloadToken] => awaitToken
-                                                                prepared.package.sources[call.sourceModule] -> len => awaitSourceLength
-                                                                prepared.package.sources[call.sourceModule] -> slice(UIntSize(0), awaitSourceLength) => awaitSourceText
-                                                                awaitSourceText -> sourceMatches(awaitToken.span.start, awaitToken.span.length, "await")
-                                                                    -> if { true => directAwaitFlow! }
-                                                            }
-                                                        awaitTargetSearch! + 1 => awaitTargetSearch!
-                                                    }
-                                            }
-                                        directAwaitFlow! -> if {
-                                            results -> len => awaitValueIndex
-                                            results -> push(TypedIrNode {
-                                                kind: 5
-                                                parent: bindingIndex!
-                                                sourceModule: call.sourceModule
-                                                astNode: call.astNode
-                                                symbol: -1
-                                                targetModule: -1
-                                                typeOrigin: call.typeOrigin
-                                                typeModule: call.typeModule
-                                                typeSymbol: call.typeSymbol
-                                                typeId: call.typeId
-                                                typeKind: call.typeKind
-                                                typeFlags: call.typeFlags
-                                                payloadToken: -1
-                                                opcode: -1
-                                                operand0: callIndex
-                                                operand1: -1
-                                                nextOperand: -1
-                                                flags: 0
-                                            })
-                                            awaitValueIndex => binding!.operand0
-                                            binding! => results[bindingIndex!]
-                                        }
+                                        awaited! -> sealNodeTypeIdentity(task.first, resolved.types, flags)
+                                        awaited! => nodes[index!]
                                     }
                             }
                     }
             }
-        bindingIndex! + 1 => bindingIndex!
+        index! + 1 => index!
+    }
+    nodes -> sealLateTypes(prepared, resolved, resolved.types, flags)
+}
+
+# Late await repair can append a value after the function arena has been joined.
+# Restore the contiguous function contract before publishing emitter indexes.
+# Synthesized await values and inline user-block scope members move together.
+# All four IR edges share one permutation before consumer indexes are frozen.
+public sealDirectAwaitFunctionOrder nodes: mut [TypedIrNode; ~] -> [Int; ~] {
+    nodes -> len => count
+    false => hasUserBlockScopes!
+    nodes -> each scopeCandidate {
+        scopeCandidate.kind == 19 and scopeCandidate.opcode == -227
+            -> if { true => hasUserBlockScopes! }
+    }
+    [Int; ~] => owners!
+    [Int; ~] => first!
+    [Int; ~] => last!
+    [Int; ~] => next!
+    [Bool; ~] => moved!
+    -1 => owner!
+    0 => index!
+    index! < count -> while {
+        nodes[index!].kind == 0 or nodes[index!].kind == 11
+            -> if { index! => owner! }
+        owners! -> push(owner!)
+        first! -> push(-1)
+        last! -> push(-1)
+        next! -> push(-1)
+        moved! -> push(false)
+        index! + 1 => index!
+    }
+    0 => moveCount!
+    0 => candidateIndex!
+    candidateIndex! < count -> while {
+        nodes[candidateIndex!] => candidate
+        -1 => scopeOwner!
+        hasUserBlockScopes! -> if {
+            candidateIndex! => ancestor!
+            false => insideScope!
+            ancestor! >= 0 and scopeOwner! < 0 -> while {
+                nodes[ancestor!] => ancestor
+                ancestor.kind == 19 and ancestor.opcode == -227
+                    -> if { true => insideScope! }
+                ancestor.kind == 0 or ancestor.kind == 11 -> if {
+                    insideScope! -> if { ancestor! => scopeOwner! }
+                    -1 => ancestor!
+                } else { ancestor.parent => ancestor! }
+            }
+        }
+        candidate.kind == 5 and candidate.symbol == -1
+            and candidate.parent >= 0 and candidate.parent < count
+            and candidate.operand0 >= 0 and candidate.operand0 < count
+            and ((nodes[candidate.operand0].flags / 8) % 2 == 1
+            or (nodes[candidate.operand0].typeKind == 7
+            and nodes[candidate.operand0].typeOrigin == 4
+            and nodes[candidate.operand0].typeSymbol == 2))
+            -> if {
+                owners![candidate.parent] => destination!
+                # A late projected await is the effect of this exact member
+                # expression. Keep it before the next source statement,
+                # rather than appending it at the end of its function.
+                nodes[candidate.operand0] => producer
+                producer.kind == 13 and producer.astNode == candidate.astNode
+                    and producer.sourceModule == candidate.sourceModule
+                    -> if { candidate.operand0 => destination! }
+                destination! >= 0 and destination! != owners![candidateIndex!]
+                    -> if {
+                        last![destination!] >= 0 -> if {
+                            candidateIndex! => next![last![destination!]]
+                        } else { candidateIndex! => first![destination!] }
+                        candidateIndex! => last![destination!]
+                        true => moved![candidateIndex!]
+                        moveCount! + 1 => moveCount!
+                    }
+            }
+        scopeOwner! >= 0 and scopeOwner! != owners![candidateIndex!]
+            and not moved![candidateIndex!] -> if {
+                last![scopeOwner!] >= 0 -> if {
+                    candidateIndex! => next![last![scopeOwner!]]
+                } else { candidateIndex! => first![scopeOwner!] }
+                candidateIndex! => last![scopeOwner!]
+                true => moved![candidateIndex!]
+                moveCount! + 1 => moveCount!
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    [Int; ~] => relocation!
+    moveCount! == 0 -> if { relocation! -> return }
+    [Int; ~] => order!
+    -1 => currentOwner!
+    0 => oldIndex!
+    oldIndex! < count -> while {
+        nodes[oldIndex!].kind == 0 or nodes[oldIndex!].kind == 11
+            -> if {
+                currentOwner! >= 0 -> if {
+                    first![currentOwner!] => pending!
+                    pending! >= 0 -> while {
+                        order! -> push(pending!)
+                        next![pending!] => pending!
+                    }
+                }
+                oldIndex! => currentOwner!
+            }
+        not moved![oldIndex!] -> if {
+            order! -> push(oldIndex!)
+            nodes[oldIndex!].kind == 13 -> if {
+                first![oldIndex!] => pending!
+                pending! >= 0 -> while {
+                    order! -> push(pending!)
+                    next![pending!] => pending!
+                }
+            }
+        }
+        relocation! -> push(-1)
+        oldIndex! + 1 => oldIndex!
+    }
+    currentOwner! >= 0 -> if {
+        first![currentOwner!] => pending!
+        pending! >= 0 -> while {
+            order! -> push(pending!)
+            next![pending!] => pending!
+        }
+    }
+    0 => newIndex!
+    newIndex! < count -> while {
+        newIndex! => relocation![order![newIndex!]]
+        newIndex! + 1 => newIndex!
+    }
+    [TypedIrNode; ~] => ordered!
+    0 => copyIndex!
+    copyIndex! < count -> while {
+        nodes[order![copyIndex!]] => node!
+        node!.parent -> relocateAwaitEdge(relocation!) => node!.parent
+        node!.operand0 -> relocateAwaitEdge(relocation!) => node!.operand0
+        node!.operand1 -> relocateAwaitEdge(relocation!) => node!.operand1
+        node!.nextOperand -> relocateAwaitEdge(relocation!) => node!.nextOperand
+        ordered! -> push(node!)
+        copyIndex! + 1 => copyIndex!
+    }
+    0 => publishIndex!
+    publishIndex! < count -> while {
+        ordered![publishIndex!] => nodes[publishIndex!]
+        publishIndex! + 1 => publishIndex!
+    }
+    relocation!
+}
+
+relocateAwaitEdge edge: Int, relocation: ref [Int; ~] -> Int {
+    edge >= 0 and edge < (relocation -> len)
+        -> if { relocation[edge] } else { edge }
+}
+
+public relocateAwaitGenericPlans plans: move [GenericCallPlan; ~], relocation: ref [Int; ~] -> [GenericCallPlan; ~] {
+    (relocation -> len) == 0 -> if { plans -> return }
+    plans => pendingPlans!
+    [GenericCallPlan; ~] => reversed!
+    (pendingPlans! -> len) > 0 -> while {
+        pendingPlans! -> take((pendingPlans! -> len) - 1) => plan!
+        plan!.callNode -> relocateAwaitEdge(relocation) => plan!.callNode
+        plan!.templateNode -> relocateAwaitEdge(relocation) => plan!.templateNode
+        reversed! -> push(plan!)
+    }
+    [GenericCallPlan; ~] => ordered!
+    (reversed! -> len) > 0 -> while {
+        reversed! -> take((reversed! -> len) - 1) => plan
+        ordered! -> push(plan)
+    }
+    ordered!
+}
+
+public relocateAwaitGenericInstances relocation: ref [Int; ~], nodes: ref [TypedIrNode; ~], instances: mut [GenericFunctionInstance; ~] -> Unit {
+    (relocation -> len) == 0 -> if { return }
+    0 => instanceIndex!
+    instanceIndex! < (instances -> len) -> while {
+        instances[instanceIndex!] => instance!
+        instance!.callNode -> relocateAwaitEdge(relocation) => instance!.callNode
+        instance!.templateNode -> relocateAwaitEdge(relocation) => instance!.templateNode
+        instance!.functionNode -> relocateAwaitEdge(relocation) => instance!.functionNode
+        instance!.functionNode >= 0 -> if {
+            instance!.functionNode + 1 => end!
+            end! < (nodes -> len) and nodes[end!].kind != 0 and nodes[end!].kind != 11
+                -> while { end! + 1 => end! }
+            end! - instance!.functionNode => instance!.nodeCount
+        }
+        instance! => instances[instanceIndex!]
+        instanceIndex! + 1 => instanceIndex!
     }
 }
 
@@ -2824,6 +3744,9 @@ sealLateNominalMemberTypes results: mut [TypedIrNode; ~], prepared: ref semantic
                                                 -> if { false => fieldMatches! }
                                             byteIndex! + 1 => byteIndex!
                                         }
+                                } else {
+                                    prepared.package.tokens[memberRange.tokenStart + memberNameToken!] => memberName
+                                    prepared.package.sources[member!.sourceModule] -> slice(memberName.span.start, memberName.span.length) -> typeIds.structuralFieldNameMatches(0, memberName.span.length, field.ordinal) => fieldMatches!
                                 }
                             }
                         field.status == 0 and field.ownerType == ownerType! and fieldMatches!
@@ -2857,6 +3780,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
     bindingIndex! < (results -> len) -> while {
         results[bindingIndex!] => binding!
         binding!.kind == 17
+            and (binding!.flags != 1 or binding!.typeId < 0)
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
@@ -2887,6 +3811,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
             and reference!.operand0 < (results -> len)
             and results[reference!.operand0].kind == 17
             and results[reference!.operand0].typeId >= 0
+            and not (reference! -> typedNodeIsAwaitSource(prepared))
             -> if {
                 results[reference!.operand0] => binding
                 reference!.typeId != binding.typeId
@@ -2923,13 +3848,18 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
                 and arithmetic!.operand1 >= 0
                 and arithmetic!.operand1 < (results -> len)
                 -> if {
-                    results[arithmetic!.operand0] => left
-                    results[arithmetic!.operand1] => right
+                    materializedReadPeer(results[arithmetic!.operand0], frozenRecursiveSemanticTypes, recursiveTypeFlags) => left
+                    materializedReadPeer(results[arithmetic!.operand1], frozenRecursiveSemanticTypes, recursiveTypeFlags) => right
                     left.typeSymbol -> integerTypeRank => leftRank
                     right.typeSymbol -> integerTypeRank => rightRank
+                    left.typeOrigin == 1 and left.typeSymbol >= 19 and left.typeSymbol <= 22 => leftIsFloat
+                    right.typeOrigin == 1 and right.typeSymbol >= 19 and right.typeSymbol <= 22 => rightIsFloat
                     left => canonical!
-                    rightRank > leftRank -> if { right => canonical! }
-                    (leftRank > 0 or rightRank > 0) and arithmetic!.typeId != canonical!.typeId
+                    (rightIsFloat and not leftIsFloat)
+                        or (not leftIsFloat and not rightIsFloat and rightRank > leftRank)
+                        -> if { right => canonical! }
+                    (leftIsFloat or rightIsFloat or leftRank > 0 or rightRank > 0)
+                        and arithmetic!.typeId != canonical!.typeId
                         -> if {
                             canonical!.typeId => arithmetic!.typeId
                             canonical!.typeKind => arithmetic!.typeKind
@@ -2948,6 +3878,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
     arithmeticBindingIndex! < (results -> len) -> while {
         results[arithmeticBindingIndex!] => binding!
         binding!.kind == 17
+            and (binding!.flags != 1 or binding!.typeId < 0)
             and binding!.operand0 >= 0
             and binding!.operand0 < (results -> len)
             and results[binding!.operand0].typeId >= 0
@@ -2971,6 +3902,7 @@ sealLateTypes results: mut [TypedIrNode; ~], prepared: ref semanticContext.Seman
             and reference!.operand0 < (results -> len)
             and results[reference!.operand0].kind == 17
             and results[reference!.operand0].typeId >= 0
+            and not (reference! -> typedNodeIsAwaitSource(prepared))
             -> if {
                 results[reference!.operand0] => binding
                 binding.typeId => reference!.typeId
@@ -3083,6 +4015,46 @@ traitIdentityAtPath sourceIndex: Int, pathIndex: Int, nameToken: Int, prepared: 
             }
         }
     }
+    result!
+}
+
+# Read a qualified static-trait call result from the trait contract itself.
+# A generic receiver does not identify a concrete impl yet, and two imported
+# modules may declare the same unqualified trait and method names.  Resolving
+# through the call path keeps aliases and module identity authoritative while
+# avoiding source-order dependence on whichever impl function was lowered.
+traitMethodResultTypeIdAtPath sourceIndex: Int, pathIndex: Int, traitNameToken: Int, methodNameToken: Int, prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~] -> Int {
+    sourceIndex -> traitIdentityAtPath(pathIndex, traitNameToken, prepared) => traitIdentity
+    prepared.package.ranges[sourceIndex] => callRange
+    prepared.package.tokens[callRange.tokenStart + methodNameToken] => requestedMethod
+    prepared.package.sources[sourceIndex] -> slice(requestedMethod.span.start, requestedMethod.span.length) => requestedMethodName
+    -1 => result!
+    0 => moduleSearch!
+    moduleSearch! < (prepared.package.ranges -> len) and result! < 0
+        -> while {
+            prepared.package.ranges[moduleSearch!] => range
+            traitIdentity >= range.symbolStart and traitIdentity < range.symbolStart + range.symbolCount
+                -> if {
+                    traitIdentity - range.symbolStart => traitSymbol
+                    prepared.package.sources[moduleSearch!] -> len => sourceLength
+                    prepared.package.sources[moduleSearch!] -> slice(UIntSize(0), sourceLength) => source
+                    0 => symbolSearch!
+                    symbolSearch! < range.symbolCount and result! < 0
+                        -> while {
+                            prepared.package.symbols[range.symbolStart + symbolSearch!] => candidate
+                            candidate.kind == 29 and candidate.parent == traitSymbol and candidate.nameToken >= 0
+                                -> if {
+                                    prepared.package.tokens[range.tokenStart + candidate.nameToken] => candidateName
+                                    source -> sourceMatches(candidateName.span.start, candidateName.span.length, requestedMethodName)
+                                        -> if {
+                                            moduleSearch! -> functionResultTypeId(symbolSearch!, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => result!
+                                        }
+                                }
+                            symbolSearch! + 1 => symbolSearch!
+                        }
+                }
+            moduleSearch! + 1 => moduleSearch!
+        }
     result!
 }
 
@@ -3417,6 +4389,95 @@ resolveFinalProjectedMethods nodes: mut [TypedIrNode; ~], prepared: ref semantic
         }
 }
 sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+    # This pass changes subjects and payload types, not candidate ownership or
+    # source AST links. Index those stable relations; read types and predicates
+    # from the live nodes below. Slot zero represents the root owner (-1).
+    [Int; ~] => projectedOwnerHeads!
+    [Int; ~] => projectedCandidateSlots!
+    [Int; ~] => projectedCandidateNext!
+    0 => projectedOwnerSeed!
+    projectedOwnerSeed! <= (nodes -> len) -> while {
+        projectedOwnerHeads! -> push(-1)
+        projectedOwnerSeed! + 1 => projectedOwnerSeed!
+    }
+    0 => projectedCandidateSeed!
+    projectedCandidateSeed! < (nodes -> len) -> while {
+        nodes[projectedCandidateSeed!] => indexedCandidate
+        indexedCandidate.kind == 5 or indexedCandidate.kind == 6 or indexedCandidate.kind == 13
+            -> if {
+                indexedCandidate.parent >= -1 and indexedCandidate.parent < (nodes -> len)
+                    -> if {
+                        projectedCandidateSlots! -> len => directEntry
+                        projectedCandidateSlots! -> push(projectedCandidateSeed!)
+                        projectedCandidateNext! -> push(projectedOwnerHeads![indexedCandidate.parent + 1])
+                        directEntry => projectedOwnerHeads![indexedCandidate.parent + 1]
+                    }
+                -2 => projectedOuterOwner!
+                indexedCandidate.parent >= 0 and indexedCandidate.parent < (nodes -> len)
+                    -> if {
+                        nodes[indexedCandidate.parent] => indexedWrapper
+                        indexedWrapper.kind == 9 and indexedWrapper.opcode == -1
+                            -> if { indexedWrapper.parent => projectedOuterOwner! }
+                        indexedWrapper.kind == 17
+                            and indexedWrapper.operand0 == projectedCandidateSeed!
+                            and indexedWrapper.nextOperand >= 0
+                            and indexedWrapper.nextOperand < (nodes -> len)
+                            -> if {
+                                nodes[indexedWrapper.nextOperand] => indexedRead
+                                indexedRead.kind == 5 and indexedRead.parent == indexedWrapper.parent
+                                    -> if { indexedWrapper.parent => projectedOuterOwner! }
+                            }
+                    }
+                projectedOuterOwner! >= -1 and projectedOuterOwner! < (nodes -> len)
+                    and projectedOuterOwner! != indexedCandidate.parent
+                    -> if {
+                        projectedCandidateSlots! -> len => outerEntry
+                        projectedCandidateSlots! -> push(projectedCandidateSeed!)
+                        projectedCandidateNext! -> push(projectedOwnerHeads![projectedOuterOwner! + 1])
+                        outerEntry => projectedOwnerHeads![projectedOuterOwner! + 1]
+                    }
+            }
+        projectedCandidateSeed! + 1 => projectedCandidateSeed!
+    }
+    # The first pattern token belongs to the match AST, not to its IR slot.
+    [Int; ~] => projectedPatternTokens!
+    0 => projectedPatternSeed!
+    projectedPatternSeed! < (prepared.package.nodes -> len)
+        -> while {
+            projectedPatternTokens! -> push(-1)
+            projectedPatternSeed! + 1 => projectedPatternSeed!
+        }
+    0 => projectedSourceIndex!
+    projectedSourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            prepared.package.ranges[projectedSourceIndex!] => indexedPatternRange
+            0 => projectedPatternIndex!
+            projectedPatternIndex! < indexedPatternRange.astCount
+                -> while {
+                    prepared.package.nodes[indexedPatternRange.astStart + projectedPatternIndex!] => indexedPattern
+                    indexedPattern.kind == 59 and indexedPattern.payloadToken >= 0
+                        -> if {
+                            indexedPattern.parent => indexedPatternOwner!
+                            indexedPatternOwner! >= 0
+                                and prepared.package.nodes[indexedPatternRange.astStart + indexedPatternOwner!].kind == 70
+                                -> if {
+                                    prepared.package.nodes[indexedPatternRange.astStart + indexedPatternOwner!].parent => indexedPatternOwner!
+                                }
+                            indexedPatternOwner! >= 0
+                                and prepared.package.nodes[indexedPatternRange.astStart + indexedPatternOwner!].kind == 58
+                                -> if {
+                                    prepared.package.nodes[indexedPatternRange.astStart + indexedPatternOwner!].parent => indexedPatternMatch
+                                    indexedPatternMatch >= 0
+                                        and projectedPatternTokens![indexedPatternRange.astStart + indexedPatternMatch] < 0
+                                        -> if {
+                                            indexedPattern.payloadToken => projectedPatternTokens![indexedPatternRange.astStart + indexedPatternMatch]
+                                        }
+                                }
+                        }
+                    projectedPatternIndex! + 1 => projectedPatternIndex!
+                }
+            projectedSourceIndex! + 1 => projectedSourceIndex!
+        }
     0 => finalProjectedMatchIndex!
     finalProjectedMatchIndex! < (nodes -> len)
         -> while {
@@ -3429,45 +4490,66 @@ sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared
                     prepared.package.nodes[finalProjectedRange.astStart + finalProjectedMatch!.astNode] => finalProjectedMatchAst
                     finalProjectedMatchAst.parent => finalProjectedFlowAstIndex
                     prepared.package.nodes[finalProjectedRange.astStart + finalProjectedFlowAstIndex] => finalProjectedFlowAst
-                    -1 => finalProjectedPatternToken!
-                    0 => finalProjectedPatternSearch!
-                    finalProjectedPatternSearch! < finalProjectedRange.astCount
-                        -> while {
-                            prepared.package.nodes[finalProjectedRange.astStart + finalProjectedPatternSearch!] => finalProjectedPatternCandidate
-                            finalProjectedPatternCandidate.parent => finalProjectedPatternOwner!
-                            finalProjectedPatternOwner! >= 0
-                                and prepared.package.nodes[finalProjectedRange.astStart + finalProjectedPatternOwner!].kind == 70
-                                -> if {
-                                    prepared.package.nodes[finalProjectedRange.astStart + finalProjectedPatternOwner!].parent => finalProjectedPatternOwner!
-                                }
-                            finalProjectedPatternToken! < 0
-                                and finalProjectedPatternCandidate.kind == 59
-                                and finalProjectedPatternCandidate.payloadToken >= 0
-                                and finalProjectedPatternOwner! >= 0
-                                and prepared.package.nodes[finalProjectedRange.astStart + finalProjectedPatternOwner!].kind == 58
-                                and prepared.package.nodes[finalProjectedRange.astStart + finalProjectedPatternOwner!].parent == finalProjectedMatch!.astNode
-                                -> if {
-                                    finalProjectedPatternCandidate.payloadToken => finalProjectedPatternToken!
-                                }
-                            finalProjectedPatternSearch! + 1 => finalProjectedPatternSearch!
-                        }
+                    projectedPatternTokens![finalProjectedRange.astStart + finalProjectedMatch!.astNode] => finalProjectedPatternToken
                     -1 => finalProjectedSubject!
                     UIntSize(0) => finalProjectedSubjectStart!
                     UIntSize(0) => finalProjectedSubjectEnd!
-                    0 => finalProjectedCandidateIndex!
-                    finalProjectedCandidateIndex! < (nodes -> len)
+                    projectedOwnerHeads![finalProjectedMatch!.parent + 1] => finalProjectedCandidateEntry!
+                    finalProjectedCandidateEntry! >= 0
                         -> while {
-                            nodes[finalProjectedCandidateIndex!] => finalProjectedCandidate
-                            finalProjectedCandidate.kind == 6
+                            projectedCandidateSlots![finalProjectedCandidateEntry!] => finalProjectedCandidateIndex
+                            nodes[finalProjectedCandidateIndex] => finalProjectedCandidate
+                            false => finalProjectedCandidateUsesBoundSubject!
+                            finalProjectedCandidate.parent == finalProjectedMatch!.parent
+                                => finalProjectedCandidateSharesOwner!
+                            not finalProjectedCandidateSharesOwner!
+                                and finalProjectedCandidate.parent >= 0
+                                and finalProjectedCandidate.parent < (nodes -> len)
+                                -> if {
+                                    nodes[finalProjectedCandidate.parent] => finalProjectedCandidateWrapper
+                                    finalProjectedCandidateWrapper.kind == 9
+                                        and finalProjectedCandidateWrapper.opcode == -1
+                                        and finalProjectedCandidateWrapper.parent == finalProjectedMatch!.parent
+                                        and finalProjectedCandidateWrapper.nextOperand == finalProjectedMatchIndex!
+                                        -> if { true => finalProjectedCandidateSharesOwner! }
+                                }
+                            not finalProjectedCandidateSharesOwner!
+                                and finalProjectedCandidate.parent >= 0
+                                and finalProjectedCandidate.parent < (nodes -> len)
+                                -> if {
+                                    nodes[finalProjectedCandidate.parent] => finalProjectedCandidateBinding
+                                    finalProjectedCandidateBinding.kind == 17
+                                        and finalProjectedCandidateBinding.parent == finalProjectedMatch!.parent
+                                        and finalProjectedCandidateBinding.operand0 == finalProjectedCandidateIndex
+                                        and finalProjectedCandidateBinding.nextOperand >= 0
+                                        and finalProjectedCandidateBinding.nextOperand < (nodes -> len)
+                                        -> if {
+                                            nodes[finalProjectedCandidateBinding.nextOperand] => finalProjectedCandidateRead
+                                            finalProjectedCandidateRead.kind == 5
+                                                and finalProjectedCandidateRead.parent == finalProjectedMatch!.parent
+                                                and finalProjectedCandidateRead.operand0 == finalProjectedCandidate.parent
+                                                and finalProjectedCandidateRead.nextOperand == finalProjectedMatchIndex!
+                                                -> if {
+                                                    true => finalProjectedCandidateSharesOwner!
+                                                    true => finalProjectedCandidateUsesBoundSubject!
+                                                }
+                                        }
+                                }
+                            # Late nominal field recovery can establish the enum
+                            # subject after the earlier subject pass. Keep the
+                            # complete projection under the same owner, pattern
+                            # and source-span contract as resolved call producers.
+                            (finalProjectedCandidate.kind == 5 or finalProjectedCandidate.kind == 6 or finalProjectedCandidate.kind == 13)
                                 and finalProjectedCandidate.sourceModule == finalProjectedMatch!.sourceModule
-                                and finalProjectedCandidate.parent == finalProjectedMatch!.parent
+                                and finalProjectedCandidateSharesOwner!
                                 and finalProjectedCandidate.astNode >= 0
                                 and finalProjectedCandidate.typeId >= 0
                                 and finalProjectedCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
                                 -> if {
                                     prepared.package.nodes[finalProjectedRange.astStart + finalProjectedCandidate.astNode] => finalProjectedCandidateAst
                                     finalProjectedCandidateAst.start + finalProjectedCandidateAst.length => finalProjectedCandidateEnd
-                                    frozenRecursiveSemanticTypes[finalProjectedCandidate.typeId] => finalProjectedCandidateType
+                                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(finalProjectedCandidate.typeId) => finalProjectedCandidateValueTypeId
+                                    frozenRecursiveSemanticTypes[finalProjectedCandidateValueTypeId] => finalProjectedCandidateType
                                     false => finalProjectedCandidateEnum!
                                     finalProjectedCandidateType.kind == 7
                                         and finalProjectedCandidateType.origin == 4
@@ -3475,13 +4557,15 @@ sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared
                                         -> if { true => finalProjectedCandidateEnum! }
                                     finalProjectedCandidateType.kind == 1 -> if { true => finalProjectedCandidateEnum! }
                                     false => finalProjectedPatternCompatible!
-                                    finalProjectedCandidateEnum! and finalProjectedPatternToken! >= 0
+                                    finalProjectedCandidateEnum! and finalProjectedPatternToken >= 0
                                         -> if {
-                                            prepared.package.tokens[finalProjectedRange.tokenStart + finalProjectedPatternToken!] => finalProjectedPattern
+                                            prepared.package.tokens[finalProjectedRange.tokenStart + finalProjectedPatternToken] => finalProjectedPattern
                                             finalProjectedMatch!.sourceModule -> nominalVariantTagForType(finalProjectedCandidateType, finalProjectedPattern, prepared) => finalProjectedPatternTag
                                             finalProjectedPatternTag >= 0 -> if { true => finalProjectedPatternCompatible! }
                                         }
                                     false => finalProjectedCandidateBelongs!
+                                    finalProjectedCandidateUsesBoundSubject!
+                                        -> if { true => finalProjectedCandidateBelongs! }
                                     finalProjectedCandidate.nextOperand == finalProjectedMatchIndex!
                                         -> if { true => finalProjectedCandidateBelongs! }
                                     finalProjectedCandidate.astNode == finalProjectedFlowAstIndex
@@ -3497,7 +4581,8 @@ sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared
                                                 -> if { true => finalProjectedCandidateBelongs! }
                                         }
                                     finalProjectedPatternCompatible!
-                                        and finalProjectedCandidateAst.start >= finalProjectedFlowAst.start
+                                        and (finalProjectedCandidateAst.start >= finalProjectedFlowAst.start
+                                        or finalProjectedCandidateUsesBoundSubject!)
                                         and finalProjectedCandidateBelongs!
                                         and finalProjectedCandidateEnd <= finalProjectedMatchAst.start
                                         -> if {
@@ -3505,14 +4590,17 @@ sealFinalProjectedMatchSubjectsAndPayloads nodes: mut [TypedIrNode; ~], prepared
                                                 or finalProjectedCandidateEnd > finalProjectedSubjectEnd!
                                                 or (finalProjectedCandidateEnd == finalProjectedSubjectEnd!
                                                 and finalProjectedCandidateAst.start < finalProjectedSubjectStart!)
+                                                or (finalProjectedCandidateEnd == finalProjectedSubjectEnd!
+                                                and finalProjectedCandidateAst.start == finalProjectedSubjectStart!
+                                                and finalProjectedCandidateIndex < finalProjectedSubject!)
                                                 -> if {
-                                                    finalProjectedCandidateIndex! => finalProjectedSubject!
+                                                    finalProjectedCandidateIndex => finalProjectedSubject!
                                                     finalProjectedCandidateAst.start => finalProjectedSubjectStart!
                                                     finalProjectedCandidateEnd => finalProjectedSubjectEnd!
                                                 }
                                         }
                                 }
-                            finalProjectedCandidateIndex! + 1 => finalProjectedCandidateIndex!
+                            projectedCandidateNext![finalProjectedCandidateEntry!] => finalProjectedCandidateEntry!
                         }
                     # Replace missing or non-materialized provisional subjects
                     # with the resolved synthesized producer. A later exact
@@ -3624,7 +4712,16 @@ sealFinalEnumArmTagsAndPayloads nodes: mut [TypedIrNode; ~], prepared: ref seman
                                     payloadTypeId >= 0 and payloadTypeId < (frozenRecursiveSemanticTypes -> len)
                                         -> if {
                                             frozenRecursiveSemanticTypes[payloadTypeId] => payloadType
-                                            nodes[finalEnumMatch.operand0] => payload!
+                                            finalEnumMatch.operand0 => finalEnumPayloadIndex!
+                                            finalEnumPayloadIndex! >= 0
+                                                and nodes[finalEnumPayloadIndex!].kind == 9
+                                                and nodes[finalEnumPayloadIndex!].opcode == -1
+                                                and nodes[finalEnumPayloadIndex!].operand0 >= 0
+                                                and nodes[finalEnumPayloadIndex!].operand0 != finalEnumPayloadIndex!
+                                                -> while {
+                                                    nodes[finalEnumPayloadIndex!].operand0 => finalEnumPayloadIndex!
+                                                }
+                                            nodes[finalEnumPayloadIndex!] => payload!
                                             # Bare integer payloads inherit the declared destination.
                                             # The shared lexical initializer validator checks bounds
                                             # before emission; variables keep their inferred identity.
@@ -3636,7 +4733,7 @@ sealFinalEnumArmTagsAndPayloads nodes: mut [TypedIrNode; ~], prepared: ref seman
                                                 and nodes[payload!.operand0].kind == 3))
                                                 -> if {
                                                     payload! -> sealNodeTypeIdentity(payloadTypeId, frozenRecursiveSemanticTypes, recursiveTypeFlags)
-                                                    payload! => nodes[finalEnumMatch.operand0]
+                                                    payload! => nodes[finalEnumPayloadIndex!]
                                                 }
                                             # [] is a zero-length fixed literal. Do not turn it
                                             # into nonzero, bounded, or growable storage.
@@ -3644,7 +4741,7 @@ sealFinalEnumArmTagsAndPayloads nodes: mut [TypedIrNode; ~], prepared: ref seman
                                                 and payloadType.kind == 4 and payloadType.length == 0
                                                 -> if {
                                                     payload! -> sealNodeTypeIdentity(payloadTypeId, frozenRecursiveSemanticTypes, recursiveTypeFlags)
-                                                    payload! => nodes[finalEnumMatch.operand0]
+                                                    payload! => nodes[finalEnumPayloadIndex!]
                                                 }
                                         }
                                 }
@@ -3754,8 +4851,8 @@ public materializeContextualArrayOwners nodes: mut [TypedIrNode; ~], prepared: r
                                 nodes[argumentIndex!] => argument
                                 nodes[parameterIndex!] => parameter
                                 resolved.types -> typeIds.materializedReadTypeId(parameter.typeId) => parameterType
-                                argument.kind == 14 and parameterType >= 0
-                                    and parameterType < (resolved.types -> len)
+                                argument.kind == 14
+                                    and (resolved.types -> hasConcreteLiteralContext(parameterType))
                                     and resolved.types[parameterType].kind == 2
                                     -> if {
                                         true => sliceArguments![argumentIndex!]
@@ -3860,4 +4957,481 @@ public materializeContextualArrayOwners nodes: mut [TypedIrNode; ~], prepared: r
             changed! => nodes[changedIndex]
         }
     }
+}
+
+# Publish a copied producer as a lexical invocation scope, not a new function.
+# The caller owns explicit return and loop transfers. Producer locals and each
+# yield retain distinct scopes for their normal and transferred cleanup edges.
+public materializeUserBlockScopes nodes: mut [TypedIrNode; ~], instances: ref [GenericFunctionInstance; ~] -> [GenericFunctionInstance; ~] {
+    [GenericFunctionInstance; ~] => scoped!
+    instances -> each sourceInstance {
+        sourceInstance => instance!
+        instance!.status == 0 -> if {
+            instance!.callNode => callIndex
+            instance!.functionNode => producerIndex
+            nodes[callIndex] => invocation!
+            nodes[producerIndex] => producer!
+            producer!.operand0 => returnIndex
+            nodes[returnIndex] => returned!
+            producer!.operand1 => parameterIndex!
+            invocation!.operand0 => argumentIndex!
+            [Int; ~] => arguments!
+            [Int; ~] => parameterBindings!
+            0 => ordinal!
+            parameterIndex! >= 0 and argumentIndex! >= 0 -> while {
+                nodes[parameterIndex!] => parameter!
+                parameter!.nextOperand => nextParameter!
+                nodes[argumentIndex!].nextOperand => nextArgument!
+                ordinal! == 0 -> if {
+                    producer!.nextOperand => nextParameter!
+                    invocation!.operand1 => nextArgument!
+                }
+                17 => parameter!.kind
+                -227 => parameter!.opcode
+                parameterBindings! -> push(parameterIndex!)
+                arguments! -> push(argumentIndex!)
+                callIndex => parameter!.parent
+                argumentIndex! => parameter!.operand0
+                -1 => parameter!.operand1
+                -1 => parameter!.nextOperand
+                parameter! => nodes[parameterIndex!]
+                nextParameter! => parameterIndex!
+                nextArgument! => argumentIndex!
+                ordinal! + 1 => ordinal!
+            }
+            nodes -> len => provenanceIndex
+            invocation! => provenance!
+            19 => provenance!.kind
+            callIndex => provenance!.parent
+            -2 => provenance!.symbol
+            -227 => provenance!.opcode
+            -1 => provenance!.operand0
+            -1 => provenance!.operand1
+            -1 => provenance!.nextOperand
+            0 => provenance!.flags
+            nodes -> push(provenance!)
+            0 => originalIndex!
+            originalIndex! < producerIndex -> while {
+                nodes[originalIndex!] => original!
+                original!.parent == callIndex -> if {
+                    false => argument!
+                    arguments! -> each valueIndex {
+                        originalIndex! == valueIndex -> if { true => argument! }
+                    }
+                    not argument! -> if {
+                        provenanceIndex => original!.parent
+                        original! => nodes[originalIndex!]
+                    }
+                }
+                originalIndex! + 1 => originalIndex!
+            }
+            19 => invocation!.kind
+            -227 => invocation!.opcode
+            -1 => invocation!.operand0
+            returned!.operand0 => invocation!.operand1
+            invocation! => nodes[callIndex]
+            # The copied declaration and implicit-return carrier preserve
+            # source identity, but are not independent runtime statements.
+            19 => producer!.kind
+            -2 => producer!.symbol
+            -227 => producer!.opcode
+            callIndex => producer!.parent
+            -1 => producer!.operand0
+            -1 => producer!.operand1
+            -1 => producer!.operand1
+            -1 => producer!.nextOperand
+            0 => producer!.flags
+            producer! => nodes[producerIndex]
+            9 => returned!.kind
+            -1 => returned!.opcode
+            0 => returned!.flags
+            returned! => nodes[returnIndex]
+            producerIndex + instance!.nodeCount => end
+            producerIndex + 1 => index!
+            index! < end -> while {
+                nodes[index!] => node!
+                # Copied producer parameter reads formerly used the callee ABI.
+                # The invocation now binds those declarations to caller values.
+                node!.kind == 5 and node!.operand0 < 0 and node!.symbol >= 0
+                    -> if {
+                        parameterBindings! -> each bindingIndex {
+                            nodes[bindingIndex] => binding
+                            node!.sourceModule == binding.sourceModule
+                                and node!.symbol == binding.symbol
+                                -> if { bindingIndex => node!.operand0 }
+                        }
+                    }
+                # The copied producer body remains an owned lexical region.
+                # Publish it to the same live-region traversal as invocation
+                # and yield scopes; an ordinary kind19 body is excluded there.
+                node!.kind == 19 and node!.opcode == -1 and node!.parent == returnIndex
+                    -> if {
+                        -227 => node!.opcode
+                        -3 => node!.symbol
+                        -1 => node!.operand0
+                    }
+                node!.parent == returnIndex -> if { callIndex => node!.parent }
+                node!.opcode == -227 and (node!.kind == 9 or node!.kind == 5)
+                    -> if {
+                        node!.operand1 => result!
+                        node!.kind == 5 and node!.operand0 >= 0 -> if {
+                            nodes[node!.operand0].operand0 => result!
+                        }
+                        19 => node!.kind
+                        -1 => node!.symbol
+                        -1 => node!.operand0
+                        result! => node!.operand1
+                    }
+                node! => nodes[index!]
+                index! + 1 => index!
+            }
+            # The copied root is no longer an independently emitted callee.
+            # Keep the instance's provenance while closing its ABI binding.
+            3 => instance!.status
+        }
+        scoped! -> push(instance!)
+    }
+    # Callback loop authority is lexical. A yield jumps past producer loops
+    # to its invocation; a loop declared inside the callback still wins first.
+    0 => transferIndex!
+    transferIndex! < (nodes -> len) -> while {
+        nodes[transferIndex!] => transfer!
+        transfer!.kind == 21 or transfer!.kind == 22 -> if {
+            transfer!.parent => ancestor!
+            -1 => loop!
+            ancestor! >= 0 and loop! < 0 -> while {
+                nodes[ancestor!] => owner
+                owner.kind == 20 or (owner.kind == 6 and (owner.opcode -> isDirectIterationOpcode))
+                    -> if { ancestor! => loop! } else {
+                        owner.kind == 19 and owner.opcode == -227 and owner.symbol == -1
+                            -> if {
+                                owner.parent => invocation!
+                                invocation! >= 0 and not (nodes[invocation!].kind == 19 and nodes[invocation!].opcode == -227 and nodes[invocation!].symbol >= 0)
+                                    -> while { nodes[invocation!].parent => invocation! }
+                                invocation! >= 0 -> if {
+                                    nodes[invocation!].parent => ancestor!
+                                } else { -1 => ancestor! }
+                            } else { owner.parent => ancestor! }
+                    }
+            }
+            loop! => transfer!.operand0
+            transfer! => nodes[transferIndex!]
+        }
+        transferIndex! + 1 => transferIndex!
+    }
+    scoped!
+}
+
+# A private body materialization step shares the existing relocatable body
+# copier. Backend publication and captured lexical control remain separate.
+public materializeUserBlockCallbacks nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet, genericInstances: ref [GenericFunctionInstance; ~] -> [GenericFunctionInstance; ~] {
+    nodes -> functionTemplatesBySymbol(prepared) => templates
+    [GenericFunctionInstance; ~] => instances!
+    0 => callIndex!
+    callIndex! < (nodes -> len) -> while {
+        nodes -> len => callbackSourceCount
+        nodes[callIndex!] => call
+        true => activeCall!
+        call.parent => callAncestor!
+        callAncestor! >= 0 and activeCall! -> while {
+            nodes[callAncestor!] => owner
+            owner.kind == 19 and owner.opcode == -227 and owner.symbol == -2
+                -> if { false => activeCall! }
+            owner.kind == 0 and owner.targetModule >= 0
+                and owner.targetModule < (prepared.package.ranges -> len) and owner.symbol >= 0
+                -> if {
+                    prepared.package.ranges[owner.targetModule] => ownerRange
+                    prepared.package.symbols[ownerRange.symbolStart + owner.symbol].blockTypeNode >= 0
+                        -> if { false => activeCall! }
+                }
+            owner.parent => callAncestor!
+        }
+        activeCall! and call.kind == 6 and call.targetModule >= 0
+            and call.targetModule < (prepared.package.ranges -> len) and call.symbol >= 0
+            and call.sourceModule >= 0 and call.astNode >= 0
+            -> if {
+                prepared.package.ranges[call.targetModule] => targetRange
+                prepared.package.symbols[targetRange.symbolStart + call.symbol] => declaration
+                declaration.blockTypeNode >= 0 and declaration.flags / 64 % 2 == 0
+                    -> if {
+                        templates[targetRange.symbolStart + call.symbol] => templateIndex!
+                        genericInstances -> each genericInstance {
+                            genericInstance.callNode == callIndex! and genericInstance.status == 0
+                                -> if { genericInstance.functionNode => templateIndex! }
+                        }
+                        templateIndex! >= 0 -> if {
+                            prepared.package.ranges[call.sourceModule] => sourceRange
+                            prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
+                            callAst.payloadToken + 1 => tokenIndex!
+                            0 => parenDepth!
+                            -1 => bodyToken!
+                            tokenIndex! < callAst.firstToken + callAst.tokenCount and bodyToken! < 0
+                                -> while {
+                                    prepared.package.tokens[sourceRange.tokenStart + tokenIndex!].kind => tokenKind
+                                    tokenKind == grammar.tokenIdLeftParen() -> if { parenDepth! + 1 => parenDepth! }
+                                    tokenKind == grammar.tokenIdRightParen() -> if { parenDepth! - 1 => parenDepth! }
+                                    parenDepth! == 0 and tokenKind == grammar.tokenIdLeftBrace()
+                                        -> if { tokenIndex! => bodyToken! }
+                                    tokenIndex! + 1 => tokenIndex!
+                                }
+                            bodyToken! >= 0 -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + bodyToken!].span.start => bodyStart
+                                [Int; ~] => callbackNodes!
+                                -1 => callbackTail!
+                                UIntSize(0) => callbackTailStart!
+                                0 => callbackIndex!
+                                callbackIndex! < callbackSourceCount -> while {
+                                    nodes[callbackIndex!] => candidate
+                                    candidate.sourceModule == call.sourceModule and candidate.astNode >= 0
+                                        -> if {
+                                            prepared.package.nodes[sourceRange.astStart + candidate.astNode] => candidateAst
+                                            candidateAst.start > bodyStart -> if {
+                                                candidate.parent => ancestor!
+                                                false => belongs!
+                                                ancestor! >= 0 and not belongs! -> while {
+                                                    ancestor! == callIndex! -> if { true => belongs! } else { nodes[ancestor!].parent => ancestor! }
+                                                }
+                                                belongs! -> if {
+                                                    callbackNodes! -> push(callbackIndex!)
+                                                    candidate.parent == callIndex! and candidate.kind != 17
+                                                        and (callbackTail! < 0 or candidateAst.start >= callbackTailStart!)
+                                                        -> if {
+                                                            callbackIndex! => callbackTail!
+                                                            candidateAst.start => callbackTailStart!
+                                                        }
+                                                }
+                                            }
+                                        }
+                                    callbackIndex! + 1 => callbackIndex!
+                                }
+                                declaration.blockResultTypeNode < 0 => callbackReturnsUnit!
+                                declaration.blockResultTypeNode >= 0
+                                    and declaration.blockResultTypeNode < targetRange.astCount
+                                    -> if {
+                                        resolved.referenceIndexByTypeAst[targetRange.astStart + declaration.blockResultTypeNode] => resultReference
+                                        resultReference >= 0 and resultReference < (resolved.references -> len)
+                                            -> if {
+                                                resolved.references[resultReference] => reference
+                                                reference.status == 0 and reference.typeId >= 0
+                                                    and reference.typeId < (resolved.types -> len)
+                                                    -> if {
+                                                        resolved.types[reference.typeId] => callbackType
+                                                        callbackType.kind == 1 and callbackType.origin == 1 and callbackType.symbol == 0
+                                                            => callbackReturnsUnit!
+                                                    }
+                                            }
+                                    }
+                                callbackTail! >= 0 or callbackReturnsUnit!
+                                    -> if {
+                                        [Int; ~] => emptyTemplates
+                                        [Int; ~] => emptyActuals
+                                        [GenericCallPlan; ~] => plans!
+                                        plans! -> push(GenericCallPlan { callNode: callIndex!, interpolationNode: -1, ownerFunction: -1, templateNode: templateIndex!, inputTemplates: emptyTemplates, actualInputs: emptyActuals, resultType: nodes[templateIndex!].typeId, status: 0 })
+                                        nodes -> materializeGenericBodies(resolved.types, resolved.fields, plans!) => copied
+                                        copied[0] => instance!
+                                        instance!.status == 0 -> if {
+                                            instance!.functionNode => destination
+                                            destination + instance!.nodeCount => copiedEnd
+                                            destination => yieldIndex!
+                                            yieldIndex! < copiedEnd -> while {
+                                                nodes[yieldIndex!] => yielded!
+                                                yielded!.kind == 9 and yielded!.opcode == -227 and yielded!.operand0 >= 0
+                                                    -> if {
+                                                        [Int; ~] => roleBindings!
+                                                        0 => roleMapIndex!
+                                                        roleMapIndex! < sourceRange.symbolCount -> while {
+                                                            roleBindings! -> push(-1)
+                                                            roleMapIndex! + 1 => roleMapIndex!
+                                                        }
+                                                        0 => callerRoleIndex!
+                                                        callerRoleIndex! < sourceRange.symbolCount -> while {
+                                                            prepared.package.symbols[sourceRange.symbolStart + callerRoleIndex!] => callerRole
+                                                            callerRole.kind == 35 and callerRole.parent >= 0
+                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].kind == 48
+                                                                and prepared.package.symbols[sourceRange.symbolStart + callerRole.parent].astNode == call.astNode
+                                                                -> if {
+                                                                    0 => roleOrdinal!
+                                                                    0 => earlierRoleIndex!
+                                                                    earlierRoleIndex! < sourceRange.symbolCount -> while {
+                                                                        prepared.package.symbols[sourceRange.symbolStart + earlierRoleIndex!] => earlierRole
+                                                                        earlierRole.kind == 35 and earlierRole.parent == callerRole.parent
+                                                                            and earlierRole.nameToken < callerRole.nameToken
+                                                                            -> if { roleOrdinal! + 1 => roleOrdinal! }
+                                                                        earlierRoleIndex! + 1 => earlierRoleIndex!
+                                                                    }
+                                                                    yielded!.operand0 => yieldedInput!
+                                                                    0 => inputOrdinal!
+                                                                    yieldedInput! >= 0 and inputOrdinal! < roleOrdinal!
+                                                                        -> while {
+                                                                            nodes[yieldedInput!].nextOperand => yieldedInput!
+                                                                            inputOrdinal! + 1 => inputOrdinal!
+                                                                        }
+                                                                    yieldedInput! >= 0 -> if {
+                                                                        nodes[yieldedInput!] => inputBinding!
+                                                                        17 => inputBinding!.kind
+                                                                        yieldIndex! => inputBinding!.parent
+                                                                        callerRoleIndex! => inputBinding!.symbol
+                                                                        call.sourceModule => inputBinding!.sourceModule
+                                                                        callerRole.astNode => inputBinding!.astNode
+                                                                        -227 => inputBinding!.opcode
+                                                                        yieldedInput! => inputBinding!.operand0
+                                                                        -1 => inputBinding!.operand1
+                                                                        -1 => inputBinding!.nextOperand
+                                                                        0 => inputBinding!.flags
+                                                                        (nodes -> len) => roleBindings![callerRoleIndex!]
+                                                                        nodes -> push(inputBinding!)
+                                                                    }
+                                                                }
+                                                            callerRoleIndex! + 1 => callerRoleIndex!
+                                                        }
+                                                        nodes -> len => callbackDestination
+                                                        [Int; ~] => callbackMap!
+                                                        0 => mapIndex!
+                                                        mapIndex! < callbackSourceCount -> while {
+                                                            callbackMap! -> push(-1)
+                                                            mapIndex! + 1 => mapIndex!
+                                                        }
+                                                        0 => callbackOrdinal!
+                                                        callbackNodes! -> each index {
+                                                            callbackDestination + callbackOrdinal! => callbackMap![index]
+                                                            callbackOrdinal! + 1 => callbackOrdinal!
+                                                        }
+                                                        callbackNodes! -> each index {
+                                                            nodes[index] => callback!
+                                                            callback!.parent == callIndex! -> if { yieldIndex! => callback!.parent } else {
+                                                                callback!.parent >= 0 and callbackMap![callback!.parent] >= 0
+                                                                    -> if { callbackMap![callback!.parent] => callback!.parent }
+                                                            }
+                                                            callback!.operand0 >= 0 and callbackMap![callback!.operand0] >= 0
+                                                                -> if { callbackMap![callback!.operand0] => callback!.operand0 }
+                                                            callback!.operand1 >= 0 and callbackMap![callback!.operand1] >= 0
+                                                                -> if { callbackMap![callback!.operand1] => callback!.operand1 }
+                                                            callback!.nextOperand >= 0 and callbackMap![callback!.nextOperand] >= 0
+                                                                -> if { callbackMap![callback!.nextOperand] => callback!.nextOperand }
+                                                            callback!.kind == 5 and callback!.symbol >= 0
+                                                                -> if {
+                                                                    callback!.symbol < (roleBindings! -> len)
+                                                                        and roleBindings![callback!.symbol] >= 0
+                                                                        -> if {
+                                                                            roleBindings![callback!.symbol] => callback!.operand0
+                                                                            # This late alias is already specialized. Preserve
+                                                                            # its exact type on every remapped direct read,
+                                                                            # just as the ordinary late value-alias seal does.
+                                                                            nodes[callback!.operand0] => roleBinding
+                                                                            roleBinding.typeId => callback!.typeId
+                                                                            roleBinding.typeKind => callback!.typeKind
+                                                                            roleBinding.typeOrigin => callback!.typeOrigin
+                                                                            roleBinding.typeModule => callback!.typeModule
+                                                                            roleBinding.typeSymbol => callback!.typeSymbol
+                                                                            roleBinding.typeFlags => callback!.typeFlags
+                                                                        }
+                                                                }
+                                                            nodes -> push(callback!)
+                                                        }
+                                                        declaration.blockResultTypeNode < 0 => unitResult!
+                                                        yielded!.typeId >= 0 -> if {
+                                                            resolved.types[yielded!.typeId] => resultType
+                                                            resultType.kind == 1 and resultType.origin == 1 and resultType.symbol == 0
+                                                                -> if { true => unitResult! }
+                                                        }
+                                                        unitResult! -> if {
+                                                            # Retain the yield marker as runtime order authority.
+                                                            -1 => yielded!.operand0
+                                                            -1 => yielded!.operand1
+                                                            yielded! => nodes[yieldIndex!]
+                                                        } else {
+                                                            # The callback owns its value until this yield completes.
+                                                            # Publish the direct result edge without a sibling binding.
+                                                            -1 => yielded!.operand0
+                                                            callbackMap![callbackTail!] => yielded!.operand1
+                                                            yielded! => nodes[yieldIndex!]
+                                                        }
+                                                    }
+                                                yieldIndex! + 1 => yieldIndex!
+                                            }
+                                            nodes[destination].operand0 => returnIndex
+                                            nodes[returnIndex] => returned!
+                                            returned!.kind == 1 and returned!.operand0 >= 0
+                                                -> if {
+                                                    returned!.operand0 => bodyIndex
+                                                    nodes[bodyIndex] => region
+                                                    region.kind == 19 and region.parent == returnIndex and region.operand1 >= 0
+                                                        -> if {
+                                                            region.operand1 => returned!.operand0
+                                                            returned! => nodes[returnIndex]
+                                                            destination => bodyChildIndex!
+                                                            bodyChildIndex! < (nodes -> len) -> while {
+                                                                nodes[bodyChildIndex!] => child!
+                                                                child!.parent == bodyIndex -> if {
+                                                                    returnIndex => child!.parent
+                                                                    child! => nodes[bodyChildIndex!]
+                                                                }
+                                                                bodyChildIndex! + 1 => bodyChildIndex!
+                                                            }
+                                                        }
+                                                }
+                                            # Callback children are not runtime arguments. Keep all
+                                            # genuine argument roots, then close their sibling chain.
+                                            nodes[callIndex!] => publishedCall!
+                                            callbackNodes! -> each callbackIndex {
+                                                publishedCall!.operand1 == callbackIndex -> if { -1 => publishedCall!.operand1 }
+                                            }
+                                            publishedCall! => nodes[callIndex!]
+                                            publishedCall!.operand0 => argumentIndex!
+                                            argumentIndex! >= 0 -> while {
+                                                nodes[argumentIndex!] => argument!
+                                                callbackNodes! -> each callbackIndex {
+                                                    argument!.nextOperand == callbackIndex -> if { -1 => argument!.nextOperand }
+                                                }
+                                                argument! => nodes[argumentIndex!]
+                                                argument!.nextOperand => argumentIndex!
+                                            }
+                                            (nodes -> len) - destination => instance!.nodeCount
+                                            # Close this invocation before visiting copied nested calls.
+                                            # Its original callback becomes deferred provenance.
+                                            [GenericFunctionInstance; ~] => pendingScope!
+                                            pendingScope! -> push(instance!)
+                                            nodes -> materializeUserBlockScopes(pendingScope!) => scopedInvocation
+                                            instances! -> push(scopedInvocation[0])
+                                        }
+                                    }
+                            }
+                        }
+                    }
+            }
+        callIndex! + 1 => callIndex!
+    }
+    instances!
+}
+
+# Readonly user-block inputs retain their source representation. Ordinary
+# stored names and mutable owners keep their own runtime value identity.
+public userBlockLiteralInput sourceIndex: Int, nodes: ref [TypedIrNode; ~] -> Int {
+    sourceIndex < 0 or sourceIndex >= (nodes -> len)
+        -> if { sourceIndex -> return }
+    sourceIndex => resolved!
+    0 => depth!
+    true => following!
+    following! and depth! < (nodes -> len) -> while {
+        false => following!
+        nodes[resolved!] => value
+        value.kind == 5 and value.operand0 >= 0 -> if {
+            nodes[value.operand0] => binding
+            binding.kind == 17 and binding.opcode == -227
+                and binding.flags == 0 and binding.operand0 >= 0
+                -> if {
+                    binding.operand0 => resolved!
+                    true => following!
+                }
+        }
+        value.kind == 19 and value.opcode == -227 and value.symbol != -2
+            and value.operand1 >= 0 and value.operand1 < (nodes -> len)
+            -> if {
+                value.operand1 => resolved!
+                true => following!
+            }
+        depth! + 1 => depth!
+    }
+    nodes[resolved!].kind == 2
+        -> if { resolved! } else { sourceIndex }
 }

@@ -462,19 +462,20 @@ jsonMemberText source: ref file.SourceText, object: json.Value, name: Text, stor
     member.found -> if { source -> decodeJsonText(member.value, storage) } else { "" }
 }
 
-appendJsonArrayStrings source: ref file.SourceText, array: json.Value, output: mut [Text; ~], storage: mut Arena -> Unit uses File {
+appendJsonArrayStrings source: ref file.SourceText, array: json.Value, output: mut [OptionRef; ~], pool: mut [UInt8; ~] -> Unit uses File {
     source -> json.firstArrayValue(array) => cursor!
     cursor!.found -> while {
         cursor!.value.kind == 3 -> if {
-            source -> decodeJsonText(cursor!.value, storage) => value
+            source -> json.decodeString(cursor!.value) => bytes
+            pool -> storeOptionBytes(bytes) => value
             output -> push(value)
         }
         source -> json.nextArrayValue(array, cursor!.next) => cursor!
     }
 }
 
-selectedCompilationArguments options: Options, storage: mut Arena, status: mut binding.Status -> [Text; ~] uses File {
-    [Text; ~] => result!
+selectedCompilationArguments options: Options, pool: mut [UInt8; ~], storage: mut Arena, status: mut binding.Status -> [OptionRef; ~] uses File {
+    [OptionRef; ~] => result!
     (options.compilationDatabase -> len) == 0 -> if { result! -> return }
     options.target -> targetStyle => style
     options.compilationDatabase -> canonicalExisting(options.target, storage) => databasePath!
@@ -512,12 +513,13 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
     source -> json.firstArrayValue(root) => cursor!
     cursor!.found -> while {
         cursor!.value.kind == 5 -> if {
-            source -> jsonMemberText(cursor!.value, "directory", storage) => entryDirectory
-            source -> jsonMemberText(cursor!.value, "file", storage) => entryFile
-            entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) => combined!
-            entryFile -> path.fromText(style) -> isAbsolute
-                -> if { entryFile -> absolutePath(options.target, storage) => combined! }
-            combined! -> binding.textEqualsPath(requested!, options.target == 0)
+            source -> jsonMemberText(cursor!.value, "directory", storage) -> path.fromText(style) => entryDirectoryPath
+            source -> jsonMemberText(cursor!.value, "file", storage) -> path.fromText(style) => entryFilePath
+            entryDirectoryPath -> pathText => entryDirectory
+            entryFilePath -> pathText => entryFile
+            entryFilePath -> isAbsolute
+                -> if { entryFile -> absolutePath(options.target, storage) } else { entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) } => combined
+            combined -> binding.textEqualsPath(requested!, options.target == 0)
                 -> if {
                     entryCount! => selected!
                 }
@@ -535,8 +537,10 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
     source -> json.firstArrayValue(root) => cursor!
     cursor!.found -> while {
         currentIndex! == selected! -> if {
-            source -> jsonMemberText(cursor!.value, "directory", storage) => entryDirectory
-            source -> jsonMemberText(cursor!.value, "file", storage) => entryFile
+            source -> jsonMemberText(cursor!.value, "directory", storage) -> path.fromText(style) => entryDirectoryPath
+            source -> jsonMemberText(cursor!.value, "file", storage) -> path.fromText(style) => entryFilePath
+            entryDirectoryPath -> pathText => entryDirectory
+            entryFilePath -> pathText => entryFile
             source -> json.findMember(cursor!.value, "arguments") => argumentsMember
             not argumentsMember.found or argumentsMember.value.kind != 4
                 -> if {
@@ -544,26 +548,27 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
                     "the selected compile_commands.json entry uses 'command'; regenerate it with the lossless 'arguments' array" -> materialize(storage) => status.message
                 } else {
                     "-working-directory=$entryDirectory" -> materialize(storage) => workingDirectory
-                    result! -> push(workingDirectory)
-                    [Text; ~] => rawArguments!
-                    source -> appendJsonArrayStrings(argumentsMember.value, rawArguments!, storage)
+                    pool -> storeOptionText(workingDirectory) => workingDirectoryRef
+                    result! -> push(workingDirectoryRef)
+                    [OptionRef; ~] => rawArguments!
+                    source -> appendJsonArrayStrings(argumentsMember.value, rawArguments!, pool)
                     1 => argumentIndex!
                     argumentIndex! < (rawArguments! -> len) -> while {
-                        rawArguments![argumentIndex!] => argument
+                        rawArguments![argumentIndex!] => argumentRef
+                        pool -> optionText(argumentRef) => argument
                         (argument -> binding.textEquals("-c")) or (argument -> binding.textEquals("/c"))
                             -> unless {
                                 (argument -> binding.textEquals("-o")) or (argument -> binding.textEquals("/Fo"))
                                     -> if {
                                         argumentIndex! + 1 => argumentIndex!
                                     } else {
-                                        entryDirectory -> absoluteJoinedPath(argument, options.target, storage) => argumentPath!
+                                        Arena(0) => argumentPathStorage!
                                         argument -> path.fromText(style) -> isAbsolute
-                                            -> if { argument -> absolutePath(options.target, storage) => argumentPath! }
-                                        entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) => sourcePath!
-                                        entryFile -> path.fromText(style) -> isAbsolute
-                                            -> if { entryFile -> absolutePath(options.target, storage) => sourcePath! }
-                                        argumentPath! -> binding.textEqualsPath(sourcePath!, options.target == 0)
-                                            -> unless { result! -> push(argument) }
+                                            -> if { argument -> absolutePath(options.target, argumentPathStorage!) } else { entryDirectory -> absoluteJoinedPath(argument, options.target, argumentPathStorage!) } => argumentPath
+                                        entryFilePath -> isAbsolute
+                                            -> if { entryFile -> absolutePath(options.target, storage) } else { entryDirectory -> absoluteJoinedPath(entryFile, options.target, storage) } => sourcePath
+                                        argumentPath -> binding.textEqualsPath(sourcePath, options.target == 0)
+                                            -> unless { result! -> push(argumentRef) }
                                     }
                             }
                         argumentIndex! + 1 => argumentIndex!
@@ -576,38 +581,55 @@ selectedCompilationArguments options: Options, storage: mut Arena, status: mut b
     result!
 }
 
-hasPrefix arguments: ref [Text; ~], prefix: Text -> Bool {
+hasPrefix arguments: ref [OptionRef; ~], pool: ref [UInt8; ~], prefix: Text -> Bool uses File {
     false => found!
     0 => index!
     not found! and index! < (arguments -> len) -> while {
-        arguments[index!] -> binding.textStartsWith(prefix)
+        pool -> optionText(arguments[index!]) -> binding.textStartsWith(prefix)
             -> if { true => found! }
         index! + 1 => index!
     }
     found!
 }
 
-hasExact arguments: ref [Text; ~], expected: Text -> Bool {
+hasExact arguments: ref [OptionRef; ~], pool: ref [UInt8; ~], expected: Text -> Bool uses File {
     false => found!
     0 => index!
     not found! and index! < (arguments -> len) -> while {
-        arguments[index!] -> binding.textEquals(expected)
+        pool -> optionText(arguments[index!]) -> binding.textEquals(expected)
             -> if { true => found! }
         index! + 1 => index!
     }
     found!
 }
 
-compilationArguments options: Options, storage: mut Arena, status: mut binding.Status -> [Text; ~] uses File {
-    options -> selectedCompilationArguments(storage, status) => result!
-    options.clangArguments -> each argument { result! -> push(argument) }
-    not (result! -> hasPrefix("-std=")) -> if { result! -> push("-std=c++20") }
-    not (result! -> hasExact("-x")) -> if {
-        result! -> push("-x")
-        result! -> push("c++")
+compilationArguments options: Options, pool: mut [UInt8; ~], storage: mut Arena, status: mut binding.Status -> [Text; ~] uses File {
+    options -> selectedCompilationArguments(pool, storage, status) => references!
+    options.clangArguments -> each argument {
+        pool -> storeOptionText(argument) => argumentRef
+        references! -> push(argumentRef)
     }
-    not (result! -> hasPrefix("--target=")) -> if {
-        options.target == 0 -> if { result! -> push("--target=x86_64-pc-windows-msvc") } else { result! -> push("--target=x86_64-unknown-linux-gnu") }
+    not (references! -> hasPrefix(pool, "-std="))
+        -> if {
+            pool -> storeOptionText("-std=c++20") => argumentRef
+            references! -> push(argumentRef)
+        }
+    not (references! -> hasExact(pool, "-x")) -> if {
+        pool -> storeOptionText("-x") => languageFlag
+        references! -> push(languageFlag)
+        pool -> storeOptionText("c++") => language
+        references! -> push(language)
+    }
+    not (references! -> hasPrefix(pool, "--target="))
+        -> if {
+            options.target == 0 -> if { "--target=x86_64-pc-windows-msvc" } else { "--target=x86_64-unknown-linux-gnu" } => target
+            pool -> storeOptionText(target) => argumentRef
+            references! -> push(argumentRef)
+        }
+    [Text; ~] => result!
+    references! -> each argumentRef {
+        pool -> optionText(argumentRef) => argument
+        result! -> push(argument)
     }
     result!
 }
@@ -1304,7 +1326,8 @@ public run: -> Int uses Console, File, Process, Environment {
     }
     options!.llvm -> toolchain.llvmHome => options!.llvm
     binding.Status { code: 0, message: "" } => argumentStatus!
-    options! -> compilationArguments(storage!, argumentStatus!) => clangArguments
+    [UInt8; ~] => argumentPool!
+    options! -> compilationArguments(argumentPool!, storage!, argumentStatus!) => clangArguments
     argumentStatus!.code != 0 -> if {
         "sollang: $(argumentStatus!.message)" -> runtime.eprintln
         1 -> return

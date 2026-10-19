@@ -1,0 +1,52 @@
+namespace probe.text_slice_owners
+
+import sys.process as process
+
+struct Cutter {
+    text: Text
+}
+
+trait Slicer {
+    clip: self, start: UIntSize -> UIntSize
+}
+
+impl Slicer for Cutter {
+    clip: self, start: UIntSize -> UIntSize {
+        self.text -> slice(start, 2) -> len
+    }
+}
+
+impl UInt64 {
+    clip: self, start: UIntSize -> UIntSize {
+        "abcd" -> slice(start, 2) -> len
+    }
+}
+
+impl [UInt8; 3] {
+    clip: self, start: UIntSize -> UIntSize {
+        "abcd" -> slice(start, 2) -> len
+    }
+}
+
+main {
+    process.arguments() => arguments
+    arguments[1] => mode
+    UIntSize(0) => start!
+    mode == "trait-fail" or mode == "builtin-fail" or mode == "array-fail"
+        -> if {
+            99 => start!
+        }
+    mode == "trait-fail" or mode == "trait-ok" -> if {
+        Cutter { text: "abcd" } -> Slicer.clip(start!) => result
+        result -> println
+    } else {
+        mode == "builtin-fail" or mode == "builtin-ok" -> if {
+            UInt64(1) -> clip(start!) => result
+            result -> println
+        } else {
+            [UInt8(1), 2, 3] => bytes
+            bytes -> clip(start!) => result
+            result -> println
+        }
+    }
+}

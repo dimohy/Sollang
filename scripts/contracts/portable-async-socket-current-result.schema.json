@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "completed",
+    "total",
+    "compilerSha256",
+    "inputStable",
+    "inputDrift",
+    "failureIds",
+    "cases",
+    "inputHashes"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed"] },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 3 },
+    "total": { "const": 3 },
+    "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "inputStable": { "type": "boolean" },
+    "inputDrift": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z0-9_-]+$" } },
+    "cases": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "source", "expected", "compileExitCode", "compileStdout", "compileStderr", "warningCount", "noteCount", "llvmAsExitCode", "directCallClosureExitCode", "nativeExitCode", "stdout", "passed", "llvmSha256", "executableSha256"],
+        "properties": {
+          "id": { "enum": ["direct-owner-return", "pending-await-owner-return", "cooperative-cancellation-owner-return"] },
+          "source": { "type": "string", "pattern": "^scripts/probes/portable-memory-io/.+\\.slg$" },
+          "expected": { "type": "string", "minLength": 1 },
+          "compileExitCode": { "type": "integer" },
+          "compileStdout": { "type": "string" },
+          "compileStderr": { "type": "string" },
+          "warningCount": { "type": "integer", "minimum": 0 },
+          "noteCount": { "type": "integer", "minimum": 0 },
+          "llvmAsExitCode": { "type": ["integer", "null"] },
+          "directCallClosureExitCode": { "type": ["integer", "null"] },
+          "nativeExitCode": { "type": ["integer", "null"] },
+          "stdout": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "llvmSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" },
+          "executableSha256": { "type": ["string", "null"], "pattern": "^[A-F0-9]{64}$" }
+        }
+      }
+    },
+    "inputHashes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "pattern": "^[A-F0-9]{64}$" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
+      "then": {
+        "properties": {
+          "completed": { "const": 3 },
+          "inputStable": { "const": true },
+          "inputDrift": { "maxItems": 0 },
+          "failureIds": { "maxItems": 0 },
+          "cases": { "items": { "properties": { "passed": { "const": true } }, "required": ["passed"] } }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,212 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.ir.typed as typedIr
+
+conflictCount sources: [Text; ~] -> Int uses Console {
+    sources -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => typed
+    prepared -> ownershipCheck.analyzeLoweredContext(typed) => errors
+    0 => conflicts!
+    0 => index!
+    index! < (errors -> len) -> while {
+        errors[index!].code == 21 -> if {
+            conflicts! + 1 => conflicts!
+        }
+        index! + 1 => index!
+    }
+    conflicts!
+}
+
+main {
+    """
+    namespace sys.file
+
+    public struct SourceText {
+        public token: UInt64
+    }
+
+    borrowText text: Text -> SourceText = intrinsic
+    """ => fileSource
+
+    [
+    """
+    import sys.file as file
+
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "lexer" -> file.borrowText => source!
+        source! -> prefix => view
+        when {
+            true {
+                source! -> consume
+            }
+            else {
+                "view=$(view)" -> println
+            }
+        }
+    }
+    """,
+    fileSource; ~
+    ] -> conflictCount => exclusiveConflicts
+
+    [
+    """
+    import sys.file as file
+
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "parser" -> file.borrowText => source!
+        source! -> prefix => view
+        true -> if {
+            source! -> consume
+        } else {
+            "kept" -> println
+        }
+        "view=$(view)" -> println
+    }
+    """,
+    fileSource; ~
+    ] -> conflictCount => joinConflicts
+
+    [
+    """
+    import sys.file as file
+
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "semantic" -> file.borrowText => source!
+        source! -> prefix => view
+        true => active!
+        active! -> while {
+            "view=$(view)" -> println
+            source! -> consume
+            false => active!
+        }
+    }
+    """,
+    fileSource; ~
+    ] -> conflictCount => backEdgeConflicts
+
+    "cfg borrow conflicts=$exclusiveConflicts,$joinConflicts,$backEdgeConflicts" -> println
+    [
+    """
+    import sys.file as file
+    
+    struct ViewCount {
+        view: Text
+        count: Int
+    }
+    
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+    
+    consume source: move file.SourceText -> Unit {
+    }
+    
+    main {
+        "lexer" -> file.borrowText => source
+        source -> prefix => view
+        ViewCount { view: view, count: 7 } => state
+        source -> consume
+        state.count -> println
+    }
+    """, fileSource; ~
+    ] -> conflictCount -> println
+    [
+    """
+    import sys.file as file
+    
+    struct ViewCount {
+        view: Text
+        count: Int
+    }
+    
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+    
+    consume source: move file.SourceText -> Unit {
+    }
+    
+    main {
+        "lexer" -> file.borrowText => source
+        source -> prefix => view
+        ViewCount { view: view, count: 7 } => state
+        source -> consume
+        "count=$(state.count)" -> println
+    }
+    """, fileSource; ~
+    ] -> conflictCount -> println
+    [
+    """
+    import sys.file as file
+    
+    struct TextPair {
+        first: Text
+        second: Text
+    }
+    
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+    
+    consume source: move file.SourceText -> Unit {
+    }
+    
+    main {
+        "lexer" -> file.borrowText => source
+        source -> prefix => view
+        TextPair { first: view, second: "static" } => views
+        source -> consume
+        views.second -> println
+    }
+    """, fileSource; ~
+    ] -> conflictCount -> println
+    [
+    """
+    import sys.file as file
+    
+    struct TextPair {
+        first: Text
+        second: Text
+    }
+    
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+    
+    consume source: move file.SourceText -> Unit {
+    }
+    
+    main {
+        "lexer" -> file.borrowText => source
+        source -> prefix => view
+        TextPair { first: view, second: "static" } => views
+        source -> consume
+        "second=$(views.second)" -> println
+    }
+    """, fileSource; ~
+    ] -> conflictCount -> println
+}

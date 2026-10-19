@@ -1,0 +1,26 @@
+# Selected deferred captures retain integer signedness and readonly Bool values.
+# Explicit materialization consumes the selected alternative in its Arena owner.
+struct State {
+    ready: Bool
+}
+
+ready state: ref State -> ref Bool { state.ready }
+
+echo value: Text -> Unit uses Console { value -> println }
+
+main {
+    UInt64(18446744073709551615) => maximum
+    Long(-9223372036854775807) - 1 => minimum
+    State { ready: true } => state
+    state -> ready => borrowed
+    "plain" => plain
+    Arena(0) => storage!
+
+    true -> if { "wide=$maximum" } else { plain } -> println
+    false -> if { plain } else { "minimum=$minimum" } -> echo
+    true -> if { "borrow=$borrowed" } else { plain } -> println
+    false -> if { plain } else { "materialized=$borrowed" }
+        -> materialize(storage!) => materialized
+    materialized -> println
+    false -> if { "wide=$maximum" } else { plain } -> println
+}

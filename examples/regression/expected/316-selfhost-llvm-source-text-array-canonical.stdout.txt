@@ -1,6 +1,8 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
 declare dllimport i32 @CloseHandle(ptr)
 %sollang.source_text = type { ptr, i64, ptr, i64 }
 %sollang.array.i32 = type { ptr, i64, i64 }
@@ -12,6 +14,37 @@ define i32 @main() {
 entry:
   ret i32 0
 }
+define internal i32 @sollang_windows_utf8_path(ptr %data, i64 %length, ptr %wide, i32 %capacity) {
+entry:
+  %positive = icmp ugt i64 %length, 0
+  %fits_i32 = icmp ule i64 %length, 2147483647
+  %length_valid = and i1 %positive, %fits_i32
+  br i1 %length_valid, label %check, label %failure
+check:
+  %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %done = icmp eq i64 %index, %length
+  br i1 %done, label %convert, label %inspect
+inspect:
+  %byte_ptr = getelementptr i8, ptr %data, i64 %index
+  %byte = load i8, ptr %byte_ptr, align 1
+  %nul = icmp eq i8 %byte, 0
+  br i1 %nul, label %failure, label %advance
+advance:
+  %next = add i64 %index, 1
+  br label %check
+convert:
+  %length32 = trunc i64 %length to i32
+  %room = sub i32 %capacity, 1
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length32, ptr %wide, i32 %room)
+  %converted_ok = icmp sgt i32 %converted, 0
+  br i1 %converted_ok, label %terminate, label %failure
+terminate:
+  %zero = getelementptr i16, ptr %wide, i32 %converted
+  store i16 0, ptr %zero, align 2
+  ret i32 1
+failure:
+  ret i32 0
+}
 declare dllimport i32 @GetFileSizeEx(ptr, ptr)
 declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
 declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
@@ -20,26 +53,13 @@ define %sollang.source_text @sollang_runtime_map_text(%sollang.text %path) {
 entry:
   %path_data = extractvalue %sollang.text %path, 0
   %path_length = extractvalue %sollang.text %path, 1
-  %buffer_length = add i64 %path_length, 1
-  %buffer = call ptr @malloc(i64 %buffer_length)
-  %allocated = icmp ne ptr %buffer, null
-  br i1 %allocated, label %copy, label %failure
-copy:
-  %index = phi i64 [ 0, %entry ], [ %next, %copy_body ]
-  %copy_done = icmp eq i64 %index, %path_length
-  br i1 %copy_done, label %terminate, label %copy_body
-copy_body:
-  %source = getelementptr i8, ptr %path_data, i64 %index
-  %byte = load i8, ptr %source, align 1
-  %destination = getelementptr i8, ptr %buffer, i64 %index
-  store i8 %byte, ptr %destination, align 1
-  %next = add i64 %index, 1
-  br label %copy
-terminate:
-  %terminator = getelementptr i8, ptr %buffer, i64 %path_length
-  store i8 0, ptr %terminator, align 1
-  %file = call ptr @CreateFileA(ptr %buffer, i32 -2147483648, i32 1, ptr null, i32 3, i32 128, ptr null)
-  call void @free(ptr %buffer)
+  %buffer = alloca [260 x i16], align 2
+  %buffer_ptr = getelementptr inbounds [260 x i16], ptr %buffer, i64 0, i64 0
+  %path_ok = call i32 @sollang_windows_utf8_path(ptr %path_data, i64 %path_length, ptr %buffer_ptr, i32 260)
+  %valid = icmp ne i32 %path_ok, 0
+  br i1 %valid, label %open, label %failure
+open:
+  %file = call ptr @CreateFileW(ptr %buffer_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 128, ptr null)
   %file_value = ptrtoint ptr %file to i64
   %opened = icmp ne i64 %file_value, -1
   br i1 %opened, label %size, label %failure

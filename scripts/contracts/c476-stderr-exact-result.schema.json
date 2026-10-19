@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "sourceSha256", "expectedStderrSha256", "managedCompilerSha256", "managedDllSha256", "selfhostCompilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "processObservationScope", "orphanProcessIds", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-stderr-exact" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 2 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 2 },
+    "sourceSha256": { "$ref": "#/$defs/sha" },
+    "expectedStderrSha256": { "$ref": "#/$defs/sha" },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "managedDllSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "processObservationScope": { "const": "root-handle-wait-and-1s-CIM-descendant-samples-with-creation-time;short-lived-reparented-descendants-not-proven" },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "cases": { "type": "array", "maxItems": 2, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 2 }, "passed": { "const": 2 }, "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "inputsStable": { "const": true }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" }, "cases": { "minItems": 2, "maxItems": 2, "prefixItems": [
+      { "allOf": [{ "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "managed" } } }] },
+      { "allOf": [{ "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "selfhost" } } }] }
+    ] } } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } },
+    { "if": { "properties": { "orphanProcessIds": { "minItems": 1 } } }, "then": { "properties": { "state": { "const": "failed" }, "failureId": { "const": "C476_STDERR_PROCESS_ORPHANED" } } } },
+    { "if": { "properties": { "failureId": { "const": "C476_STDERR_PROCESS_ORPHANED" } } }, "then": { "properties": { "orphanProcessIds": { "minItems": 1 } } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compiler", "state", "caseDirectory", "buildExitCode", "closureExitCode", "llvmAsExitCode", "runExitCode", "exeSha256", "llvmSha256", "bitcodeSha256", "stderrSha256", "failure"],
+      "properties": {
+        "compiler": { "enum": ["managed", "selfhost"] },
+        "state": { "enum": ["running", "passed", "failed"] },
+        "caseDirectory": { "type": "string", "minLength": 1 },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "closureExitCode": { "type": ["integer", "null"] },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "exeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "llvmSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "bitcodeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stderrSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "failure": { "type": ["string", "null"] }
+      }
+    },
+    "passedCase": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "state": { "const": "passed" }, "buildExitCode": { "const": 0 }, "closureExitCode": { "const": 0 }, "llvmAsExitCode": { "const": 0 }, "runExitCode": { "const": 0 }, "exeSha256": { "$ref": "#/$defs/sha" }, "llvmSha256": { "$ref": "#/$defs/sha" }, "bitcodeSha256": { "$ref": "#/$defs/sha" }, "stderrSha256": { "$ref": "#/$defs/sha" }, "failure": { "type": "null" } } }] }
+  }
+}

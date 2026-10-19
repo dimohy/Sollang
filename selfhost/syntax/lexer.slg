@@ -1,6 +1,8 @@
 namespace sollang.compiler.lexer
 
 import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import sollang.compiler.syntax.source_decoding as sourceDecoding
 import syntax.generated.slg as grammar
 import sys.file as file
 
@@ -8,67 +10,30 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
     isDigit value: UInt8 -> Bool {
         value >= 48 and value <= 57
     }
-    isIdentifierStart value: UInt8 -> Bool {
-        (value >= 65 and value <= 90) or (value >= 97 and value <= 122) or value == 95 or value >= 128
-    }
-    isIdentifierContinue value: UInt8 -> Bool {
-        value -> isIdentifierStart => start
-        value -> isDigit => digit
-        start or digit
-    }
     isHorizontalWhitespace value: UInt8 -> Bool {
-        value == 32 or value == 9 or value == 13
+        value == 32 or value == 9
     }
-    tripleKind first: UInt8, second: UInt8, third: UInt8 -> Int {
-        -1 => kind!
-        first == 46 and second == 46 and third == 60
-            -> if {
-                grammar.tokenIdRangeUntil() => kind!
-            }
-        kind! => result
-        result
-    }
-    pairKind value: UInt16 -> Int {
-        -1 => kind!
-        value == 11822 -> if { grammar.tokenIdRange() => kind! }
-        value == 11582 -> if { grammar.tokenIdArrow() => kind! }
-        value == 15678 -> if { grammar.tokenIdFatArrow() => kind! }
-        value == 15677 -> if { grammar.tokenIdEqualEqual() => kind! }
-        value == 8509 -> if { grammar.tokenIdBangEqual() => kind! }
-        value == 15421 -> if { grammar.tokenIdLessEqual() => kind! }
-        value == 15933 -> if { grammar.tokenIdGreaterEqual() => kind! }
-        kind! => result
-        result
-    }
-    singleKind value: UInt8 -> Int {
-        -1 => kind!
-        value == 123 -> if { grammar.tokenIdLeftBrace() => kind! }
-        value == 125 -> if { grammar.tokenIdRightBrace() => kind! }
-        value == 91 -> if { grammar.tokenIdLeftBracket() => kind! }
-        value == 93 -> if { grammar.tokenIdRightBracket() => kind! }
-        value == 40 -> if { grammar.tokenIdLeftParen() => kind! }
-        value == 41 -> if { grammar.tokenIdRightParen() => kind! }
-        value == 126 -> if { grammar.tokenIdTilde() => kind! }
-        value == 46 -> if { grammar.tokenIdDot() => kind! }
-        value == 44 -> if { grammar.tokenIdComma() => kind! }
-        value == 59 -> if { grammar.tokenIdSemicolon() => kind! }
-        value == 43 -> if { grammar.tokenIdPlus() => kind! }
-        value == 45 -> if { grammar.tokenIdMinus() => kind! }
-        value == 42 -> if { grammar.tokenIdStar() => kind! }
-        value == 47 -> if { grammar.tokenIdSlash() => kind! }
-        value == 37 -> if { grammar.tokenIdPercent() => kind! }
-        value == 63 -> if { grammar.tokenIdQuestion() => kind! }
-        value == 58 -> if { grammar.tokenIdColon() => kind! }
-        value == 33 -> if { grammar.tokenIdBang() => kind! }
-        value == 60 -> if { grammar.tokenIdLess() => kind! }
-        value == 62 -> if { grammar.tokenIdGreater() => kind! }
-        value == 61 -> if { grammar.tokenIdEqual() => kind! }
-        kind! => result
-        result
+    source -> sourceDecoding.firstInvalidUtf8Offset -> when {
+        Some(offset) {
+            [syntax.SyntaxToken; ~] => rejected!
+            rejected! -> push(syntax.SyntaxToken {
+                kind: grammar.tokenIdInvalid()
+                span: syntax.SourceSpan { fileId: 0, start: offset, length: 1 }
+            })
+            rejected! -> push(syntax.SyntaxToken {
+                kind: grammar.tokenIdEnd()
+                span: syntax.SourceSpan { fileId: 0, start: source -> len, length: 0 }
+            })
+            rejected! -> return
+        }
+        None {}
     }
     [syntax.SyntaxToken; ~] => tokens!
     UIntSize(0) => position!
     source -> len => sourceLength
+    grammar.lexerLiteralTexts() => literalTexts
+    grammar.lexerLiteralIndexes() => literalIndexes
+    grammar.lexerRuleTokens() => ruleTokens
 
     position! < sourceLength -> while {
         source -> byte(position!) => current
@@ -88,7 +53,7 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
             current == 35 -> if {
                 position! => commentStart
                 position! + 1 => position!
-                position! < sourceLength and (source -> byte(position!)) != 10
+                position! < sourceLength and (source -> byte(position!)) != 10 and (source -> byte(position!)) != 13
                     -> while {
                         position! + 1 => position!
                     }
@@ -98,21 +63,26 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                 } => commentToken
                 tokens! -> push(commentToken)
             } else {
-                current == 10 -> if {
+                current == 10 or current == 13 -> if {
+                    UIntSize(1) => newlineWidth!
+                    current == 13 and position! + 1 < sourceLength and (source -> byte(position! + 1)) == 10
+                        -> if { 2 => newlineWidth! }
                     syntax.SyntaxToken {
                         kind: grammar.tokenIdNewLine()
-                        span: syntax.SourceSpan { fileId: 0, start: position!, length: 1 }
+                        span: syntax.SourceSpan { fileId: 0, start: position!, length: newlineWidth! }
                     } => newlineToken
                     tokens! -> push(newlineToken)
-                    position! + 1 => position!
+                    position! + newlineWidth! => position!
                 } else {
-                    current -> isIdentifierStart -> if {
+                    source -> unicodeIdentifier.startWidth(position!) => identifierWidth
+                    identifierWidth > 0 -> if {
                         position! => identifierStart
-                        position! + 1 => position!
-                        position! < sourceLength and ((source -> byte(position!)) -> isIdentifierContinue)
-                            -> while {
-                                position! + 1 => position!
-                            }
+                        position! + identifierWidth => position!
+                        source -> unicodeIdentifier.continueWidth(position!) => nextIdentifierWidth!
+                        nextIdentifierWidth! > 0 -> while {
+                            position! + nextIdentifierWidth! => position!
+                            source -> unicodeIdentifier.continueWidth(position!) => nextIdentifierWidth!
+                        }
                         syntax.SyntaxToken {
                             kind: grammar.tokenIdIdentifier()
                             span: syntax.SourceSpan { fileId: 0, start: identifierStart, length: position! - identifierStart }
@@ -219,13 +189,16 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                                     } else {
                                         position! + 1 => position!
                                         position! < sourceLength and (source -> byte(position!)) != 34
+                                            and (source -> byte(position!)) != 10
+                                            and (source -> byte(position!)) != 13
                                             -> while {
                                                 position! + 1 => position!
                                             }
-                                        position! < sourceLength -> if {
-                                            position! + 1 => position!
-                                            true => stringClosed!
-                                        }
+                                        position! < sourceLength and (source -> byte(position!)) == 34
+                                            -> if {
+                                                position! + 1 => position!
+                                                true => stringClosed!
+                                            }
                                     }
                                     syntax.SyntaxToken {
                                         kind: stringClosed! -> if { grammar.tokenIdString() } else { grammar.tokenIdInvalid() }
@@ -234,26 +207,35 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                                     tokens! -> push(stringToken)
                                 } else {
                                     Int(-1) => kind!
-                                    UIntSize(1) => width!
-                                    position! + 2 < sourceLength -> if {
-                                        source -> byte(position! + 1) => following
-                                        source -> byte(position! + 2) => third
-                                        current -> tripleKind(following, third) => triple
-                                        triple >= 0 -> if {
-                                            triple => kind!
-                                            3 => width!
+                                    UIntSize(0) => width!
+                                    0 => ruleIndex!
+                                    ruleIndex! < (literalIndexes -> len) -> while {
+                                        literalIndexes[ruleIndex!] => literalIndex
+                                        literalIndex >= 0 -> if {
+                                            literalTexts[literalIndex] => spelling
+                                            spelling -> len => spellingLength
+                                            spellingLength > width! and position! + spellingLength <= sourceLength
+                                                -> if {
+                                                    true => matches!
+                                                    UIntSize(0) => characterIndex!
+                                                    characterIndex! < spellingLength and matches!
+                                                        -> while {
+                                                            (source -> byte(position! + characterIndex!)) != (spelling -> byte(characterIndex!))
+                                                                -> if { false => matches! }
+                                                            characterIndex! + 1 => characterIndex!
+                                                        }
+                                                    matches! -> if {
+                                                        ruleTokens[ruleIndex!] => kind!
+                                                        spellingLength => width!
+                                                    }
+                                                }
                                         }
-                                    }
-                                    kind! < 0 and position! + 1 < sourceLength -> if {
-                                        source -> byte(position! + 1) => following
-                                        UInt16(current) * 256 + UInt16(following) -> pairKind => pair
-                                        pair >= 0 -> if {
-                                            pair => kind!
-                                            2 => width!
-                                        }
+                                        ruleIndex! + 1 => ruleIndex!
                                     }
                                     kind! < 0 -> if {
-                                        current -> singleKind => kind!
+                                        1 => width!
+                                        source -> unicodeIdentifier.scalarWidth(position!) => invalidWidth
+                                        invalidWidth > 0 -> if { invalidWidth => width! }
                                     }
                                     kind! >= 0 -> if {
                                         syntax.SyntaxToken {

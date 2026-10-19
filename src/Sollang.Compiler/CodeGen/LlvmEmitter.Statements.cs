@@ -62,16 +62,87 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
     }
 
-    private void EmitStatements(IReadOnlyList<Statement> statements)
+    private sealed record StatementContinuation(
+        BoundFunction? Function,
+        IReadOnlyList<Statement> Statements,
+        int Start,
+        Expression? Result)
     {
-        foreach (var statement in statements)
+        public Dictionary<string, bool> OwnerReads { get; } = new(StringComparer.Ordinal);
+    }
+
+    private readonly Stack<StatementContinuation> _statementContinuations = [];
+
+    private void EmitStatements(IReadOnlyList<Statement> statements, Expression? result = null)
+    {
+        if (result is null && ReferenceEquals(statements, _currentFunction?.BlockBody))
+            result = _currentFunction?.Body;
+        for (var index = 0; index < statements.Count && !_currentBlockTerminated; index++)
         {
-            if (_currentBlockTerminated)
-            {
-                break;
-            }
-            EmitStatement(statement);
+            _statementContinuations.Push(new StatementContinuation(
+                _currentFunction, statements, index + 1, result));
+            try { EmitStatement(statements[index]); }
+            finally { _statementContinuations.Pop(); }
         }
+    }
+
+    private bool OwnerReadInContinuation(string name)
+    {
+        Expression? child = null;
+        foreach (var (function, parent) in _expressionContinuations)
+        {
+            if (!ReferenceEquals(function, _currentFunction))
+            {
+                child = null;
+                continue;
+            }
+            if (child is not null && !ReferenceEquals(child, parent))
+            {
+                var children = parent switch
+                {
+                    FlowExpression flow => new[] { flow.Source }.Concat(
+                        flow.Targets.SelectMany(static target => target.Arguments)),
+                    CallExpression call => call.Arguments,
+                    _ => ExpressionChildren(parent)
+                };
+                var reachedChild = false;
+                foreach (var expression in children)
+                {
+                    if (reachedChild && StoragePlacementAnalyzer.ReferencesName(expression, name))
+                        return true;
+                    reachedChild |= ReferenceEquals(expression, child);
+                }
+            }
+            child = parent;
+        }
+        foreach (var continuation in _statementContinuations)
+        {
+            if (!ReferenceEquals(continuation.Function, _currentFunction))
+                continue;
+            if (!continuation.OwnerReads.TryGetValue(name, out var read))
+            {
+                var shadowed = false;
+                for (var index = continuation.Start; index < continuation.Statements.Count; index++)
+                {
+                    var statement = continuation.Statements[index];
+                    if (StoragePlacementAnalyzer.ReferencesName(statement, name))
+                    {
+                        read = true;
+                        break;
+                    }
+                    if (statement is BindingStatement binding && binding.Name == name)
+                    {
+                        shadowed = true;
+                        break;
+                    }
+                }
+                read |= !shadowed && continuation.Result is not null
+                    && StoragePlacementAnalyzer.ReferencesName(continuation.Result, name);
+                continuation.OwnerReads[name] = read;
+            }
+            if (read) return true;
+        }
+        return false;
     }
 
     private void EmitStatement(Statement statement)
@@ -226,7 +297,7 @@ internal sealed partial class LlvmEmitter
                 {
                     throw new SollangException("'stop' requires an active stream pipeline");
                 }
-                EmitStore("i1", "true", _currentStreamCancellationSlot, 1);
+                EmitStore("i1", "true", ResolveAsyncStreamCancellationSlot(_currentStreamCancellationSlot), 1);
                 break;
             case ReturnStatement returnStatement:
                 EmitReturnStatement(returnStatement);
@@ -249,11 +320,15 @@ internal sealed partial class LlvmEmitter
         }
 
         MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
-        DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
+        var callbackDroppedBindings = new List<(LocalScope Scope, string Name)>();
+        DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null,
+            droppedBindings: callbackDroppedBindings);
+        DropAbandonedCallbackProducerScopes(loop, callbackDroppedBindings);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
             : loop.ContinueEdges;
         edges?.Add((CaptureLocals(), _currentBlockLabel));
+        loop.CaptureContinuationEdge?.Invoke(statement.Kind, _currentBlockLabel);
         EmitBranch(statement.Kind == LoopControlKind.Break ? loop.BreakLabel : loop.ContinueLabel);
     }
 
@@ -269,23 +344,28 @@ internal sealed partial class LlvmEmitter
             }
 
             DropOwnedLocals();
-            EmitInstruction("ret void");
+            EmitRet("void", string.Empty);
             return;
         }
 
         if (_program.Types.IsReference(function.ReturnType))
         {
             var reference = EmitReferencePlace(statement.Value, function.ReturnType);
+            DropOwnedLocals();
             EmitRet("ptr", reference.PointerName);
             return;
         }
 
-        var value = EmitFunctionArgumentExpression(statement.Value, function.ReturnType);
+        var value = _program.Types.IsSlice(function.ReturnType)
+            && statement.Value is ArrayLiteralExpression literal
+            && ArrayLiteralStorageFacts.HasStaticReadonlyBacking(literal)
+                ? EmitReadonlyStaticArrayLiteral(literal, function.ReturnType)
+                : EmitFunctionArgumentExpression(statement.Value, function.ReturnType);
         if (function.ReturnType == BoundType.Unit)
         {
             EnsureRuntimeType(value, BoundType.Unit, function.Name);
             DropOwnedLocals();
-            EmitInstruction("ret void");
+            EmitRet("void", string.Empty);
             return;
         }
 
@@ -315,11 +395,15 @@ internal sealed partial class LlvmEmitter
         EmitLabel(exitLabel);
         _currentBlockLabel = exitLabel;
         MergeOwnedStructFieldMoves(loop.OuterScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
-        DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
+        var callbackDroppedBindings = new List<(LocalScope Scope, string Name)>();
+        DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null,
+            droppedBindings: callbackDroppedBindings);
+        DropAbandonedCallbackProducerScopes(loop, callbackDroppedBindings);
         var edges = statement.Kind == LoopControlKind.Break
             ? loop.BreakEdges
             : loop.ContinueEdges;
-        edges?.Add((CaptureLocals(), exitLabel));
+        edges?.Add((CaptureLocals(), _currentBlockLabel));
+        loop.CaptureContinuationEdge?.Invoke(statement.Kind, _currentBlockLabel);
         EmitBranch(statement.Kind == LoopControlKind.Break ? loop.BreakLabel : loop.ContinueLabel);
 
         EmitLabel(nextLabel);
@@ -332,17 +416,23 @@ internal sealed partial class LlvmEmitter
         string continueLabel,
         string breakLabel,
         List<(LocalScope Scope, string Label)>? continueEdges = null,
-        List<(LocalScope Scope, string Label)>? breakEdges = null)
+        List<(LocalScope Scope, string Label)>? breakEdges = null,
+        Action? emitBody = null,
+        Action<LoopControlKind, string>? captureContinuationEdge = null)
     {
         _loopContexts.Push(new LoopContext(
             continueLabel,
             breakLabel,
             outerScope,
             continueEdges,
-            breakEdges));
+            breakEdges,
+            captureContinuationEdge));
         try
         {
-            EmitStatements(statements);
+            if (emitBody is null)
+                EmitStatements(statements);
+            else
+                emitBody();
             if (!_currentBlockTerminated)
             {
                 MergeOwnedStructFieldMoves(outerScope, [(CaptureLocals(), _currentBlockLabel)], requireEntryMask: true);
@@ -351,7 +441,7 @@ internal sealed partial class LlvmEmitter
             if (!_currentBlockTerminated && _currentStreamCancellationSlot is { } cancellationSlot)
             {
                 var cancelled = NextTemp("stream_cancelled");
-                EmitLoad(cancelled, "i1", cancellationSlot, 1);
+                EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
                 var cancelLabel = NextLabel("stream_cancel");
                 var keepRunningLabel = NextLabel("stream_continue");
                 EmitConditionalBranch(cancelled, cancelLabel, keepRunningLabel);
@@ -359,6 +449,7 @@ internal sealed partial class LlvmEmitter
                 EmitLabel(cancelLabel);
                 _currentBlockLabel = cancelLabel;
                 breakEdges?.Add((CaptureLocals(), cancelLabel));
+                captureContinuationEdge?.Invoke(LoopControlKind.Break, cancelLabel);
                 EmitBranch(breakLabel);
 
                 EmitLabel(keepRunningLabel);
@@ -634,9 +725,12 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("stream_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
 
-        var callSite = new RuntimeStreamCallSite(CaptureLocals(), _currentFunctions, _currentFunction);
+        var callSite = new RuntimeStreamCallSite(
+            CaptureLocals(), _currentFunctions, _currentFunction, _asyncScopeSnapshots.ToArray(),
+            CaptureCallbackLoopAuthority());
         var lastCall = pipeline.Calls[^1];
         RuntimeStreamSink sink;
         if (string.Join('.', lastCall.Target) == "each")
@@ -649,7 +743,9 @@ internal sealed partial class LlvmEmitter
                 _currentFunctions,
                 _currentFunction,
                 BoundType.Unit,
-                OwnsItem: true));
+                OwnsItem: true,
+                CallerAsyncScopes: callSite.AsyncScopes,
+                LoopAuthority: callSite.LoopAuthority));
         }
         else
         {
@@ -696,6 +792,7 @@ internal sealed partial class LlvmEmitter
         }
         finally
         {
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
             _currentStreamCancellationSlot = previousCancellationSlot;
         }
     }
@@ -717,9 +814,18 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("stream_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
 
         var sink = BuildRuntimeStreamSink(pipeline.Calls, cancellationSlot);
+
+        if (HasAsyncStreamSuspension(sink))
+        {
+            EmitAsyncProducerLoop([source], sink, cancellationSlot);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
 
         var elementType = LlvmType(source.ElementType);
         var elementAddress = NextTemp("stream_element_address");
@@ -756,12 +862,13 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(continueLabel);
         var cancelled = NextTemp("stream_cancelled");
-        EmitLoad(cancelled, "i1", cancellationSlot, 1);
+        EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
         EmitConditionalBranch(cancelled, doneLabel, nextLabel);
         EmitFunctionLine();
         EmitLabel(doneLabel);
         _currentBlockLabel = doneLabel;
         DropOwnedRuntimeValue(source);
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -769,7 +876,9 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<BlockFunctionCallStatement> calls,
         string cancellationSlot)
     {
-        var callSite = new RuntimeStreamCallSite(CaptureLocals(), _currentFunctions, _currentFunction);
+        var callSite = new RuntimeStreamCallSite(
+            CaptureLocals(), _currentFunctions, _currentFunction, _asyncScopeSnapshots.ToArray(),
+            CaptureCallbackLoopAuthority());
         var lastCall = calls[^1];
         RuntimeStreamSink sink;
         if (string.Join('.', lastCall.Target) == "each")
@@ -782,7 +891,9 @@ internal sealed partial class LlvmEmitter
                 _currentFunctions,
                 _currentFunction,
                 BoundType.Unit,
-                OwnsItem: true));
+                OwnsItem: true,
+                CallerAsyncScopes: callSite.AsyncScopes,
+                LoopAuthority: callSite.LoopAuthority));
         }
         else
         {
@@ -819,7 +930,7 @@ internal sealed partial class LlvmEmitter
                 sink = new RuntimeStreamStage(call, function, sink, callSite, arguments);
             }
         }
-        return sink;
+        return HasAsyncStreamSuspension(sink) ? BindAsyncStreamArguments(sink) : sink;
     }
 
     private void EmitPartitionPipeline(BoundPartitionPipeline pipeline)
@@ -839,10 +950,106 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("partition_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
         var sinks = pipeline.Routes
             .Select(route => BuildRuntimeStreamSink(route.Consumer.Calls, cancellationSlot))
             .ToArray();
+
+        if (sinks.Any(HasAsyncStreamSuspension))
+        {
+            EmitAsyncProducerLoop([source], sinks[0], cancellationSlot, item =>
+            {
+                var outer = CaptureLocals();
+                var continuationScopes = CaptureAsyncContinuationBranchScopes(includeLoopSnapshots: true);
+                var continuationEdges = new List<(LocalScope[] Scopes, string Label)>();
+                var protectedBinding = KeepLocalsInScope(outer, [pipeline.ItemName]);
+                protectedBinding.TerminatingOwnedCleanupObligations.RemoveAll(
+                    obligation => obligation.BindingName is null);
+                ForgetAsyncSpillCarrier(pipeline.ItemName);
+                _terminatingOwnedCleanupObligations.RemoveAll(
+                    obligation => obligation.BindingName == pipeline.ItemName);
+                _locals.Add(pipeline.ItemName, item);
+                var continueLabel = NextLabel("async_partition_continue");
+                var incoming = new List<(LocalScope Scope, string Label)>();
+                LocalScope CaptureExit()
+                {
+                    var exit = CaptureLocals();
+                    RestoreAsyncShadowedBinding(exit, protectedBinding, pipeline.ItemName);
+                    return exit;
+                }
+                void EmitRoute(int index)
+                {
+                    _asyncHiddenScopes.Push(new AsyncHiddenScope(protectedBinding, []));
+                    try
+                    {
+                        EmitStreamValue(ResolveLocal(pipeline.ItemName), sinks[index]);
+                    }
+                    finally
+                    {
+                        _asyncHiddenScopes.Pop();
+                    }
+                }
+                {
+                    for (var index = 0; index < pipeline.Routes.Count; index++)
+                    {
+                        var route = pipeline.Routes[index];
+                        if (route.Condition is null)
+                        {
+                            EmitRoute(index);
+                            if (!_currentBlockTerminated)
+                            {
+                                incoming.Add((CaptureExit(), _currentBlockLabel));
+                                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+                                EmitBranch(continueLabel);
+                            }
+                            break;
+                        }
+                        var selected = NextLabel("async_partition_selected");
+                        var next = NextLabel("async_partition_test");
+                        var condition = EmitExpression(route.Condition) as RuntimeBool
+                            ?? throw new SollangException("partition predicate did not produce Bool");
+                        var rejectedScope = CaptureLocals();
+                        var rejectedContinuationScopes = continuationScopes
+                            .Select(scope => new AsyncContinuationBranchScope(
+                                scope.Scope, SnapshotAsyncContinuationScope(scope.Scope)))
+                            .ToArray();
+                        var rejectedBinding = KeepLocalsInScope(protectedBinding, [pipeline.ItemName]);
+                        rejectedBinding.TerminatingOwnedCleanupObligations.RemoveAll(
+                            obligation => obligation.BindingName is null);
+                        EmitConditionalBranch(condition.ValueName, selected, next);
+                        EmitLabel(selected);
+                        _currentBlockLabel = selected;
+                        EmitRoute(index);
+                        if (!_currentBlockTerminated)
+                        {
+                            incoming.Add((CaptureExit(), _currentBlockLabel));
+                            continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+                            EmitBranch(continueLabel);
+                        }
+                        RestoreLocals(rejectedScope);
+                        RestoreAsyncContinuationScopes(rejectedContinuationScopes);
+                        protectedBinding = rejectedBinding;
+                        EmitLabel(next);
+                        _currentBlockLabel = next;
+                    }
+                    if (!_currentBlockTerminated)
+                    {
+                        incoming.Add((CaptureExit(), _currentBlockLabel));
+                        continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+                        EmitBranch(continueLabel);
+                    }
+                    EmitLabel(continueLabel);
+                    _currentBlockLabel = continueLabel;
+                    MergeAsyncOuterScope(outer, incoming);
+                    MergeAsyncContinuationScopes(continuationScopes, continuationEdges, outer, incoming,
+                        preserveBindingOwnership: true);
+                }
+            }, continuationSinks: sinks);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
 
         var elementType = LlvmType(source.ElementType);
         var elementAddress = NextTemp("partition_element_address");
@@ -911,12 +1118,13 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(continueLabel);
         var cancelled = NextTemp("partition_cancelled");
-        EmitLoad(cancelled, "i1", cancellationSlot, 1);
+        EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
         EmitConditionalBranch(cancelled, doneLabel, nextLabel);
         EmitFunctionLine();
         EmitLabel(doneLabel);
         _currentBlockLabel = doneLabel;
         DropOwnedRuntimeValue(source);
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -976,6 +1184,14 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException("stream join producer ABI type mismatch");
             }
         }
+        if (pipeline.Expression.Source is NameExpression productOwner
+            && _program.Types.IsProduct(product.Type)
+            && _program.Types.ContainsOwnedStorage(product.Type))
+        {
+            // Semantic GetOwnedLiteralSourceNames transfers the named product
+            // as a whole. Its extracted producer fields now own the handles.
+            RemoveLocal(productOwner.Name);
+        }
         return sources;
     }
 
@@ -986,9 +1202,18 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("concat_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
         var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
         var doneLabel = NextLabel("concat_done");
+
+        if (HasAsyncStreamSuspension(sink))
+        {
+            EmitAsyncProducerLoop(sources, sink, cancellationSlot);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
 
         foreach (var source in sources)
         {
@@ -1021,7 +1246,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             EmitLabel(continueLabel);
             var cancelled = NextTemp("concat_cancelled");
-            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
             EmitConditionalBranch(cancelled, doneLabel, nextLabel);
             EmitFunctionLine();
             EmitLabel(sourceDoneLabel);
@@ -1033,6 +1258,7 @@ internal sealed partial class LlvmEmitter
         {
             DropOwnedRuntimeValue(source);
         }
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -1043,8 +1269,16 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("zip_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
         var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        if (HasAsyncStreamSuspension(sink))
+        {
+            EmitAsyncJoinedStream(pipeline, sources, sink, cancellationSlot);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
         var addresses = sources.Select(source =>
         {
             var address = NextTemp("zip_element_address");
@@ -1106,7 +1340,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(continueLabel);
         var cancelled = NextTemp("zip_cancelled");
-        EmitLoad(cancelled, "i1", cancellationSlot, 1);
+        EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
         EmitConditionalBranch(cancelled, doneLabel, nextLabel);
 
         for (var failureIndex = 1; failureIndex < sources.Length; failureIndex++)
@@ -1132,6 +1366,7 @@ internal sealed partial class LlvmEmitter
         {
             DropOwnedRuntimeValue(source);
         }
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -1146,8 +1381,16 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("merge_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
         var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        if (HasAsyncStreamSuspension(sink))
+        {
+            EmitAsyncJoinedStream(pipeline, sources, sink, cancellationSlot);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
         var activeSlots = sources.Select(_ =>
         {
             var slot = NextTemp("merge_active");
@@ -1203,7 +1446,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             EmitLabel(afterLabel);
             var cancelled = NextTemp("merge_cancelled");
-            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
             var nextInputLabel = index == sources.Length - 1
                 ? NextLabel("merge_cycle_check")
                 : NextLabel("merge_next_input");
@@ -1235,6 +1478,7 @@ internal sealed partial class LlvmEmitter
         {
             DropOwnedRuntimeValue(source);
         }
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -1249,8 +1493,16 @@ internal sealed partial class LlvmEmitter
         var cancellationSlot = NextTemp("latest_cancelled");
         EmitAlloca(cancellationSlot, "i1", 1);
         EmitStore("i1", "false", cancellationSlot, 1);
+        RegisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = cancellationSlot;
         var sink = BuildRuntimeStreamSink(pipeline.Consumer.Calls, cancellationSlot);
+        if (HasAsyncStreamSuspension(sink))
+        {
+            EmitAsyncJoinedStream(pipeline, sources, sink, cancellationSlot);
+            UnregisterAsyncStreamCancellationSlot(cancellationSlot);
+            _currentStreamCancellationSlot = previousCancellationSlot;
+            return;
+        }
         var valueSlots = sources.Select(source =>
         {
             var slot = NextTemp("latest_value");
@@ -1283,7 +1535,7 @@ internal sealed partial class LlvmEmitter
         }
         EmitLatestSnapshot(pipeline, sources, valueSlots, sink);
         var cancelledAfterInitial = NextTemp("latest_cancelled");
-        EmitLoad(cancelledAfterInitial, "i1", cancellationSlot, 1);
+        EmitLoad(cancelledAfterInitial, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
         var cycleLabel = NextLabel("latest_cycle");
         EmitConditionalBranch(cancelledAfterInitial, doneLabel, cycleLabel);
         EmitFunctionLine();
@@ -1322,7 +1574,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             EmitLabel(afterLabel);
             var cancelled = NextTemp("latest_cancelled");
-            EmitLoad(cancelled, "i1", cancellationSlot, 1);
+            EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
             var nextInputLabel = index == sources.Length - 1
                 ? NextLabel("latest_cycle_check")
                 : NextLabel("latest_next_input");
@@ -1354,6 +1606,7 @@ internal sealed partial class LlvmEmitter
         {
             DropOwnedRuntimeValue(source);
         }
+        UnregisterAsyncStreamCancellationSlot(cancellationSlot);
         _currentStreamCancellationSlot = previousCancellationSlot;
     }
 
@@ -1450,6 +1703,11 @@ internal sealed partial class LlvmEmitter
         BlockFunctionCallStatement statement,
         RuntimeStruct range)
     {
+        if (HasPlannedCfgSuspension(statement.Body))
+        {
+            EmitAsyncRangeEachBlockFunctionCall(statement, range);
+            return;
+        }
         var llvmType = LlvmStructType(BoundType.Range);
         var start = NextTemp("range_start");
         EmitAssign(start, $"extractvalue {llvmType} {range.ValueName}, 0");
@@ -1513,19 +1771,14 @@ internal sealed partial class LlvmEmitter
             EmitTextEachBlockFunctionCall(statement, text);
             return;
         }
-        var length = source switch
+        var length = ArrayEachLength(source);
+
+        if (HasPlannedCfgSuspension(statement.Body))
         {
-            RuntimeIntSlice slice => slice.LengthName,
-            RuntimeInlineSlice slice => slice.LengthName,
-            RuntimeStaticIntArray array => array.LengthName,
-            RuntimeStaticTextArray array => array.LengthName,
-            RuntimeStaticInlineArray array => array.LengthName,
-            RuntimeDynamicIntArray array => array.LengthName,
-            RuntimeDynamicInlineArray array => array.LengthName,
-            RuntimeMappedBytes mapped => mapped.LengthName,
-            RuntimeArguments arguments => arguments.LengthName,
-            _ => throw new SollangException("each expects a range, Text, or array input")
-        };
+            EmitAsyncIndexedBlockFunctionCall(
+                statement, source, ArrayEachLength, ArrayEachItem);
+            return;
+        }
 
         var bodyLabel = NextLabel("array_each_body");
         var continueLabel = NextLabel("array_each_continue");
@@ -1542,21 +1795,7 @@ internal sealed partial class LlvmEmitter
         var index = NextTemp("array_each_i");
         EmitPhi(index, "i64", ("0", entryLabel), (next, continueLabel));
 
-        RuntimeValue item = source switch
-        {
-            RuntimeIntSlice slice => EmitIntSliceLoad(slice, index),
-            RuntimeInlineSlice slice => EmitInlineSliceLoad(slice, index),
-            RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index),
-            RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index),
-            RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
-            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
-            RuntimeDynamicInlineArray array when _program.Types.IsDeque(array.ArrayType) =>
-                EmitDequeLoadUnchecked(array, index, "deque_each_item"),
-            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
-            RuntimeMappedBytes mapped => EmitMappedLoad(mapped, index),
-            RuntimeArguments => EmitArgumentLoad(index),
-            _ => throw new SollangException("each expects a range, Text, or array input")
-        };
+        var item = ArrayEachItem(source, index);
 
         var outerLocals = CaptureLocals();
         try
@@ -1607,7 +1846,7 @@ internal sealed partial class LlvmEmitter
                 function.InputType.Value,
                 function.Name,
                 function.InputName ?? "it")
-            : EmitExpression(statement.Source));
+            : EmitFlowAdditionalValue(function.InputType.Value, statement.Source));
         EnsureRuntimeType(argument, function.InputType.Value, function.Name);
         var additionalParameters = function.AdditionalParameters ?? [];
         var argumentExpressions = statement.Arguments ?? [];
@@ -1627,8 +1866,10 @@ internal sealed partial class LlvmEmitter
 
         var returnLocals = CaptureLocals();
         var callerLocals = callSite?.Locals ?? returnLocals;
+        var callerAsyncScopes = _asyncScopeSnapshots.ToArray();
         var callerFunctions = callSite?.Functions ?? _currentFunctions;
         var callerFunction = callSite?.Function ?? _currentFunction;
+        var callerLoopAuthority = callSite?.LoopAuthority ?? CaptureCallbackLoopAuthority();
         var previousInvocation = _currentBlockInvocation;
         var previousStreamContinuation = _currentStreamContinuation;
         var previousFunctions = _currentFunctions;
@@ -1663,7 +1904,9 @@ internal sealed partial class LlvmEmitter
             callerFunctions,
             callerFunction,
             function.BlockResultType ?? BoundType.Unit,
-            OwnsItem: false);
+            OwnsItem: false,
+            CallerAsyncScopes: callerAsyncScopes,
+            LoopAuthority: callerLoopAuthority);
         _currentStreamContinuation = function.StreamElementType is null
             ? null
             : continuation ?? throw new SollangException($"stream function '{function.Name}' requires a downstream consumer");
@@ -1672,9 +1915,16 @@ internal sealed partial class LlvmEmitter
         RestoreLocals(blockLocals);
         BindInlineFunctionParameters(function, argument, additionalArguments);
         RuntimeValue result = RuntimeUnit.Instance;
+        var preserveCaller = _activeAsyncCfg is not null;
+        if (preserveCaller)
+        {
+            _asyncHiddenScopes.Push(new AsyncHiddenScope(returnLocals, callerAsyncScopes));
+            _asyncScopeSnapshots.Clear();
+        }
         try
         {
             EmitStatements(function.BlockBody);
+            if (_currentBlockTerminated) return;
             result = function.Body is null
                 ? RuntimeUnit.Instance
                 : EmitExpression(function.Body);
@@ -1706,6 +1956,13 @@ internal sealed partial class LlvmEmitter
         }
         finally
         {
+            if (preserveCaller)
+            {
+                _asyncHiddenScopes.Pop();
+                _asyncScopeSnapshots.Clear();
+                foreach (var scope in callerAsyncScopes.Reverse())
+                    _asyncScopeSnapshots.Push(scope);
+            }
             _currentBlockInvocation = previousInvocation;
             _currentStreamContinuation = previousStreamContinuation;
             _currentFunctions = previousFunctions;
@@ -2475,10 +2732,794 @@ internal sealed partial class LlvmEmitter
 
         var candidates = new List<AsyncCfgCandidate>();
         CollectCfgSuspensions(statements, nested: true, candidates);
-        return candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site));
+        if (candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site)))
+        {
+            return true;
+        }
+        // An inline block producer contains value -> yield, while the async
+        // suspension site belongs to the original caller callback body.
+        if (_currentBlockInvocation is { } invocation)
+        {
+            candidates.Clear();
+            CollectCfgSuspensions(invocation.Body, nested: true, candidates);
+            if (candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site)))
+                return true;
+        }
+        var sink = _currentStreamContinuation;
+        while (sink is not null)
+        {
+            if (sink is RuntimeStreamConsumer consumer)
+            {
+                candidates.Clear();
+                CollectCfgSuspensions(consumer.Invocation.Body, nested: true, candidates);
+                return candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site));
+            }
+            sink = sink switch
+            {
+                RuntimeStreamStage stage => stage.Next,
+                RuntimeUserStreamStage stage => stage.Next,
+                _ => null
+            };
+        }
+        return false;
     }
 
     private void EmitAsyncWhileBlockFunctionCall(BlockFunctionCallStatement statement)
+    {
+        EmitAsyncLoop(
+            statement.Body,
+            () => EmitExpression(statement.Source) as RuntimeBool
+                ?? throw new SollangException("while condition must be Bool"));
+    }
+
+    private void EmitAsyncRangeEachBlockFunctionCall(
+        BlockFunctionCallStatement statement,
+        RuntimeStruct range)
+    {
+        var start = NextTemp("range_start");
+        var end = NextTemp("range_end");
+        var llvmType = LlvmStructType(BoundType.Range);
+        EmitAssign(start, $"extractvalue {llvmType} {range.ValueName}, 0");
+        EmitAssign(end, $"extractvalue {llvmType} {range.ValueName}, 1");
+        EmitAsyncIntEachBlockFunctionCall(statement, new RuntimeInt(start), new RuntimeInt(end));
+    }
+
+    private RuntimeStreamSink BindAsyncStreamArguments(RuntimeStreamSink sink)
+    {
+        IReadOnlyList<string> CaptureArguments(
+            BlockFunctionCallStatement call, RuntimeStreamCallSite callSite,
+            IReadOnlyList<RuntimeValue> arguments)
+        {
+            var names = new string[arguments.Count];
+            for (var index = 0; index < arguments.Count; index++)
+            {
+                var name = NextAsyncBindingName("stream_argument");
+                names[index] = name;
+                callSite.Locals.Locals.Add(name, arguments[index]);
+                callSite.Locals.BorrowedOwnedLocals.Add(name);
+                RetainAsyncIteratorTemporaries((call.Arguments ?? [])[index], arguments[index]);
+            }
+            return names;
+        }
+        return sink switch
+        {
+            RuntimeStreamStage stage => stage with
+            {
+                AdditionalArgumentNames = CaptureArguments(stage.Call, stage.CallSite, stage.AdditionalArguments),
+                Next = BindAsyncStreamArguments(stage.Next)
+            },
+            RuntimeUserStreamStage stage => stage with { Next = BindAsyncStreamArguments(stage.Next) },
+            RuntimeStreamTerminalStage stage => stage with
+            {
+                AdditionalArgumentNames = CaptureArguments(stage.Call, stage.CallSite, stage.AdditionalArguments)
+            },
+            _ => sink
+        };
+    }
+
+    private bool HasAsyncStreamSuspension(RuntimeStreamSink sink)
+    {
+        if (_activeAsyncCfg is null)
+            return false;
+        return sink switch
+        {
+            RuntimeStreamConsumer consumer => HasPlannedCfgSuspension(consumer.Invocation.Body),
+            RuntimeStreamStage stage => HasPlannedCfgSuspension(stage.Function.BlockBody)
+                || HasPlannedCfgSuspension(stage.Call.Body) || HasAsyncStreamSuspension(stage.Next),
+            RuntimeUserStreamStage stage => HasPlannedCfgSuspension(stage.Function.BlockBody)
+                || HasPlannedCfgSuspension(stage.Call.Body) || HasAsyncStreamSuspension(stage.Next),
+            RuntimeStreamTerminalStage stage => HasPlannedCfgSuspension(stage.Function.BlockBody)
+                || HasPlannedCfgSuspension(stage.Call.Body),
+            _ => false
+        };
+    }
+
+    private static IEnumerable<LocalScope> AsyncInvocationContinuationScopes(RuntimeBlockInvocation invocation)
+    {
+        yield return invocation.CallerLocals;
+        foreach (var scope in invocation.CallerAsyncScopes ?? []) yield return scope;
+    }
+
+    private static IEnumerable<LocalScope> AsyncCallSiteContinuationScopes(RuntimeStreamCallSite callSite)
+    {
+        yield return callSite.Locals;
+        foreach (var scope in callSite.AsyncScopes ?? []) yield return scope;
+    }
+
+    private static IEnumerable<LocalScope> AsyncStreamContinuationScopes(RuntimeStreamSink sink)
+    {
+        switch (sink)
+        {
+            case RuntimeStreamConsumer consumer:
+                foreach (var scope in AsyncInvocationContinuationScopes(consumer.Invocation)) yield return scope;
+                break;
+            case RuntimeStreamStage stage:
+                foreach (var scope in AsyncCallSiteContinuationScopes(stage.CallSite)) yield return scope;
+                foreach (var scope in AsyncStreamContinuationScopes(stage.Next)) yield return scope;
+                break;
+            case RuntimeUserStreamStage stage:
+                yield return stage.StateLocals;
+                foreach (var scope in AsyncCallSiteContinuationScopes(stage.CallSite)) yield return scope;
+                foreach (var scope in AsyncStreamContinuationScopes(stage.Next)) yield return scope;
+                break;
+            case RuntimeStreamTerminalStage stage:
+                foreach (var scope in AsyncCallSiteContinuationScopes(stage.CallSite)) yield return scope;
+                break;
+            default:
+                throw new SollangException("unknown runtime stream sink");
+        }
+    }
+
+    private IEnumerable<LocalScope> CurrentAsyncContinuationScopes()
+    {
+        if (_currentBlockInvocation is { } invocation)
+            foreach (var scope in AsyncInvocationContinuationScopes(invocation)) yield return scope;
+        if (_currentStreamContinuation is { } continuation)
+            foreach (var scope in AsyncStreamContinuationScopes(continuation)) yield return scope;
+    }
+
+    private string RegisterAsyncProducerOwner(RuntimeProducerStream source)
+    {
+        var name = NextAsyncBindingName("stream_owner");
+        _locals.Add(name, source);
+        return name;
+    }
+
+    private RuntimeProducerStream ResolveAsyncProducerOwner(string name) =>
+        ResolveLocal(name) as RuntimeProducerStream
+        ?? throw new SollangException("async stream owner lost its canonical producer shape");
+
+    private void DropAsyncProducerOwners(IReadOnlyList<string> names)
+    {
+        foreach (var name in names)
+        {
+            DropOwnedRuntimeValue(ResolveAsyncProducerOwner(name));
+            RemoveLocal(name);
+        }
+    }
+
+    private RuntimeBool EmitAsyncStreamPull(
+        string sourceName, string address, string cancellationSlot)
+    {
+        var cancelled = NextTemp("async_stream_cancelled");
+        EmitLoad(cancelled, "i1", ResolveAsyncStreamCancellationSlot(cancellationSlot), 1);
+        var cancelledLabel = NextLabel("async_stream_cancelled");
+        var pullLabel = NextLabel("async_stream_pull");
+        var joinLabel = NextLabel("async_stream_pull_result");
+        EmitConditionalBranch(cancelled, cancelledLabel, pullLabel);
+        EmitLabel(cancelledLabel);
+        EmitBranch(joinLabel);
+        EmitLabel(pullLabel);
+        var source = ResolveAsyncProducerOwner(sourceName);
+        var available = NextTemp("async_stream_available");
+        EmitIndirectCall(available, "i1", source.NextName,
+            $"ptr {source.ContextName}, ptr {address}");
+        EmitBranch(joinLabel);
+        EmitLabel(joinLabel);
+        _currentBlockLabel = joinLabel;
+        var result = NextTemp("async_stream_pull_result");
+        EmitPhi(result, "i1", ("false", cancelledLabel), (available, pullLabel));
+        return new RuntimeBool(result);
+    }
+
+    private void EmitAsyncProducerLoop(
+        IReadOnlyList<RuntimeProducerStream> sources,
+        RuntimeStreamSink sink,
+        string cancellationSlot,
+        Action<RuntimeValue>? emitItem = null,
+        IReadOnlyList<RuntimeStreamSink>? continuationSinks = null)
+    {
+        var names = sources.Select(RegisterAsyncProducerOwner).ToArray();
+        if (sources.Count == 0 || sources.Any(source => source.ElementType != sources[0].ElementType))
+            throw new SollangException("async concatenation requires homogeneous producer elements");
+        var cursor = RegisterAsyncStreamCursor();
+        var type = sources[0].ElementType;
+        var address = NextTemp("async_stream_element");
+        EmitAlloca(address, LlvmType(type), RuntimeAlignment(type));
+        EmitAsyncLoop([], () => EmitAsyncConcatPull(names, cursor, address, cancellationSlot),
+            emitBody: () =>
+            {
+                var item = LoadAsyncStreamElement(type, address);
+                if (emitItem is null) EmitStreamValue(item, sink);
+                else emitItem(item);
+            }, futureScopes: continuationSinks is null
+                ? AsyncStreamContinuationScopes(sink)
+                : continuationSinks.SelectMany(AsyncStreamContinuationScopes));
+        ForgetAsyncSpillCarrier(cursor);
+        DropAsyncProducerOwners(names);
+    }
+
+    private string RegisterAsyncStreamCursor()
+    {
+        var name = NextAsyncBindingName("stream_cursor");
+        _locals.Add(name, new RuntimeInt(BoundType.Int, "0"));
+        CreateResumedMutableSlot(name, _locals[name]);
+        return name;
+    }
+
+    private RuntimeBool EmitAsyncConcatPull(
+        IReadOnlyList<string> owners, string cursor, string address, string cancellationSlot)
+    {
+        var join = NextLabel("async_concat_ready");
+        var incoming = new List<(string Value, string Label)>();
+        for (var index = 0; index < owners.Count; index++)
+        {
+            var selected = NextLabel("async_concat_selected");
+            var next = NextLabel("async_concat_scan");
+            var position = (RuntimeInt)ResolveLocal(cursor);
+            var matches = NextTemp("async_concat_cursor");
+            EmitCompare(matches, "eq", LlvmType(position.Type), position.ValueName, index.ToString(CultureInfo.InvariantCulture));
+            EmitConditionalBranch(matches, selected, next);
+            EmitLabel(selected);
+            _currentBlockLabel = selected;
+            var available = EmitAsyncStreamPull(owners[index], address, cancellationSlot);
+            var ready = NextLabel("async_concat_value");
+            var exhausted = NextLabel("async_concat_exhausted");
+            EmitConditionalBranch(available.ValueName, ready, exhausted);
+            EmitLabel(ready);
+            _currentBlockLabel = ready;
+            incoming.Add(("true", ready));
+            EmitBranch(join);
+            EmitLabel(exhausted);
+            _currentBlockLabel = exhausted;
+            EmitStore(LlvmType(position.Type), (index + 1).ToString(CultureInfo.InvariantCulture),
+                _mutableScalarSlots[cursor], RuntimeAlignment(position.Type));
+            EmitBranch(next);
+            EmitLabel(next);
+            _currentBlockLabel = next;
+        }
+        incoming.Add(("false", _currentBlockLabel));
+        EmitBranch(join);
+        EmitLabel(join);
+        _currentBlockLabel = join;
+        var result = NextTemp("async_concat_ready");
+        EmitPhi(result, "i1", incoming.ToArray());
+        return new RuntimeBool(result);
+    }
+
+    private void EmitAsyncStreamBranch(RuntimeBool condition, Action selected, Action? rejected = null)
+    {
+        var entry = CaptureLocals();
+        var continuationScopes = CaptureAsyncContinuationBranchScopes();
+        var continuationEdges = new List<(LocalScope[] Scopes, string Label)>();
+        var selectedLabel = NextLabel("async_stream_selected");
+        var rejectedLabel = NextLabel("async_stream_rejected");
+        var join = NextLabel("async_stream_join");
+        var incoming = new List<(LocalScope Scope, string Label)>();
+        EmitConditionalBranch(condition.ValueName, selectedLabel, rejectedLabel);
+        EmitLabel(selectedLabel);
+        _currentBlockLabel = selectedLabel;
+        selected();
+        if (!_currentBlockTerminated)
+        {
+            incoming.Add((CaptureLocals(), _currentBlockLabel));
+            continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+            EmitBranch(join);
+        }
+        RestoreLocals(entry);
+        RestoreAsyncContinuationScopes(continuationScopes);
+        EmitLabel(rejectedLabel);
+        _currentBlockLabel = rejectedLabel;
+        rejected?.Invoke();
+        if (!_currentBlockTerminated)
+        {
+            incoming.Add((CaptureLocals(), _currentBlockLabel));
+            continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+            EmitBranch(join);
+        }
+        EmitLabel(join);
+        _currentBlockLabel = join;
+        MergeAsyncOuterScope(entry, incoming);
+        MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entry, incoming);
+    }
+
+    private string RegisterAsyncStreamActive()
+    {
+        var name = NextAsyncBindingName("stream_active");
+        _locals.Add(name, new RuntimeBool("true"));
+        CreateResumedMutableSlot(name, _locals[name]);
+        return name;
+    }
+
+    private RuntimeBool EmitAsyncStreamAnyActive(IReadOnlyList<string> names)
+    {
+        string? active = null;
+        foreach (var name in names)
+        {
+            var value = (RuntimeBool)ResolveLocal(name);
+            if (active is null)
+                active = value.ValueName;
+            else
+            {
+                var combined = NextTemp("async_stream_any_active");
+                EmitBinary(combined, "or", "i1", active, value.ValueName);
+                active = combined;
+            }
+        }
+        return new RuntimeBool(active ?? "false");
+    }
+
+    private RuntimeValue LoadAsyncStreamElement(BoundType type, string address)
+    {
+        var loaded = NextTemp("async_stream_element_value");
+        EmitLoad(loaded, LlvmType(type), address, RuntimeAlignment(type));
+        return DematerializeAggregateValue(type, loaded);
+    }
+
+    private RuntimeStruct BuildAsyncStreamProduct(
+        BoundType productType, IReadOnlyList<RuntimeValue> values)
+    {
+        var aggregate = "poison";
+        for (var index = 0; index < values.Count; index++)
+        {
+            var field = MaterializeAggregateValue(values[index]);
+            var next = NextTemp("async_stream_product");
+            EmitAssign(next,
+                $"insertvalue {LlvmStructType(productType)} {aggregate}, {field.TypeName} {field.ValueName}, {index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        return new RuntimeStruct(productType, aggregate);
+    }
+
+    private void EmitAsyncJoinedStream(
+        BoundStreamJoinPipeline pipeline,
+        IReadOnlyList<RuntimeProducerStream> sources,
+        RuntimeStreamSink sink,
+        string cancellationSlot)
+    {
+        if (pipeline.Join.Policy is not (StreamJoinPolicy.Zip or StreamJoinPolicy.Merge or StreamJoinPolicy.Latest))
+            throw new InvalidOperationException("async joined stream requires zip, merge, or latest");
+        var owners = sources.Select(RegisterAsyncProducerOwner).ToArray();
+        var addresses = sources.Select(source =>
+        {
+            var address = NextTemp("async_join_element");
+            EmitAlloca(address, LlvmType(source.ElementType), RuntimeAlignment(source.ElementType));
+            return address;
+        }).ToArray();
+        if (pipeline.Join.Policy == StreamJoinPolicy.Zip)
+        {
+            EmitAsyncLoop([], () =>
+            {
+                var failed = NextLabel("async_zip_failed");
+                var completed = NextLabel("async_zip_completed");
+                var join = NextLabel("async_zip_ready");
+                var failures = sources.Select((_, index) =>
+                    index == 0 ? failed : NextLabel("async_zip_partial")).ToArray();
+                for (var index = 0; index < sources.Count; index++)
+                {
+                    var available = EmitAsyncStreamPull(owners[index], addresses[index], cancellationSlot);
+                    var next = index == sources.Count - 1 ? completed : NextLabel("async_zip_pull");
+                    EmitConditionalBranch(available.ValueName, next, failures[index]);
+                    if (index != sources.Count - 1)
+                    {
+                        EmitLabel(next);
+                        _currentBlockLabel = next;
+                    }
+                }
+                EmitLabel(completed);
+                EmitBranch(join);
+                for (var index = 1; index < sources.Count; index++)
+                {
+                    EmitLabel(failures[index]);
+                    _currentBlockLabel = failures[index];
+                    for (var previous = index - 1; previous >= 0; previous--)
+                        DropOwnedRuntimeValue(LoadAsyncStreamElement(sources[previous].ElementType, addresses[previous]));
+                    EmitBranch(failed);
+                }
+                EmitLabel(failed);
+                EmitBranch(join);
+                EmitLabel(join);
+                _currentBlockLabel = join;
+                var ready = NextTemp("async_zip_ready");
+                EmitPhi(ready, "i1", ("true", completed), ("false", failed));
+                return new RuntimeBool(ready);
+            }, emitBody: () => EmitStreamValue(BuildAsyncStreamProduct(pipeline.Join.OutputElementType,
+                sources.Select((source, index) => LoadAsyncStreamElement(source.ElementType, addresses[index])).ToArray()), sink),
+                futureScopes: AsyncStreamContinuationScopes(sink));
+            DropAsyncProducerOwners(owners);
+            return;
+        }
+
+        var activeNames = sources.Select(_ => RegisterAsyncStreamActive()).ToArray();
+        var cacheNames = sources.Select(_ => NextAsyncBindingName("latest_value")).ToArray();
+        var end = NextLabel("async_join_done");
+        if (pipeline.Join.Policy == StreamJoinPolicy.Latest)
+        {
+            // The semantic owner rejects non-Copy elements for latest. Install
+            // each cache only after a successful pull; no poison/uninitialized
+            // cache crosses a suspension or becomes an owned drop responsibility.
+            for (var index = 0; index < sources.Count; index++)
+            {
+                var available = EmitAsyncStreamPull(owners[index], addresses[index], cancellationSlot);
+                var initialized = NextLabel("async_latest_initialized");
+                var empty = NextLabel("async_latest_empty");
+                EmitConditionalBranch(available.ValueName, initialized, empty);
+                EmitLabel(empty);
+                _currentBlockLabel = empty;
+                foreach (var owner in owners)
+                    DropOwnedRuntimeValue(ResolveAsyncProducerOwner(owner));
+                EmitBranch(end);
+                EmitLabel(initialized);
+                _currentBlockLabel = initialized;
+                _locals.Add(cacheNames[index], LoadAsyncStreamElement(sources[index].ElementType, addresses[index]));
+            }
+        }
+        var cursor = RegisterAsyncStreamCursor();
+        var readyName = RegisterAsyncStreamActive();
+        EmitStore("i1", "false", _mutableScalarSlots[readyName], 1);
+        var firstName = pipeline.Join.Policy == StreamJoinPolicy.Latest ? RegisterAsyncStreamActive() : null;
+        EmitAsyncLoop([], () =>
+        {
+            var active = EmitAsyncStreamAnyActive(activeNames);
+            if (firstName is null) return active;
+            var condition = NextTemp("async_latest_first_or_active");
+            EmitBinary(condition, "or", "i1", ((RuntimeBool)ResolveLocal(firstName)).ValueName, active.ValueName);
+            return new RuntimeBool(condition);
+        }, emitBody: () =>
+        {
+            EmitStore("i1", "false", _mutableScalarSlots[readyName], 1);
+            void Poll()
+            {
+                EmitAsyncJoinedStreamPoll(pipeline.Join.Policy, sources, owners, addresses,
+                    activeNames, cacheNames, cursor, readyName, cancellationSlot);
+            }
+            if (firstName is null) Poll();
+            else EmitAsyncStreamBranch((RuntimeBool)ResolveLocal(firstName), () =>
+            {
+                EmitStore("i1", "false", _mutableScalarSlots[firstName], 1);
+                EmitStore("i1", "true", _mutableScalarSlots[readyName], 1);
+            }, Poll);
+            EmitAsyncStreamBranch((RuntimeBool)ResolveLocal(readyName), () =>
+                EmitStreamValue(pipeline.Join.Policy == StreamJoinPolicy.Latest
+                    ? BuildAsyncStreamProduct(pipeline.Join.OutputElementType, cacheNames.Select(ResolveLocal).ToArray())
+                    : LoadAsyncStreamElement(pipeline.Join.OutputElementType, addresses[0]), sink));
+        }, futureScopes: AsyncStreamContinuationScopes(sink));
+        DropAsyncProducerOwners(owners);
+        foreach (var name in activeNames.Concat(cacheNames))
+            ForgetAsyncSpillCarrier(name);
+        ForgetAsyncSpillCarrier(cursor);
+        ForgetAsyncSpillCarrier(readyName);
+        if (firstName is not null) ForgetAsyncSpillCarrier(firstName);
+        EmitBranch(end);
+        EmitLabel(end);
+        _currentBlockLabel = end;
+    }
+
+    private void EmitAsyncJoinedStreamPoll(
+        StreamJoinPolicy policy,
+        IReadOnlyList<RuntimeProducerStream> sources,
+        IReadOnlyList<string> owners,
+        IReadOnlyList<string> addresses,
+        IReadOnlyList<string> activeNames,
+        IReadOnlyList<string> cacheNames,
+        string cursor, string readyName, string cancellationSlot)
+    {
+        var position = (RuntimeInt)ResolveLocal(cursor);
+        for (var index = 0; index < sources.Count; index++)
+        {
+            var selected = index;
+            var matches = NextTemp("async_join_cursor");
+            EmitCompare(matches, "eq", LlvmType(position.Type), position.ValueName, index.ToString(CultureInfo.InvariantCulture));
+            EmitAsyncStreamBranch(new RuntimeBool(matches), () =>
+            {
+                EmitStore(LlvmType(position.Type), ((selected + 1) % sources.Count).ToString(CultureInfo.InvariantCulture),
+                    _mutableScalarSlots[cursor], RuntimeAlignment(position.Type));
+                EmitAsyncStreamBranch((RuntimeBool)ResolveLocal(activeNames[selected]), () =>
+                {
+                    var address = policy == StreamJoinPolicy.Merge ? addresses[0] : addresses[selected];
+                    var available = EmitAsyncStreamPull(owners[selected], address, cancellationSlot);
+                    EmitAsyncStreamBranch(available, () =>
+                    {
+                        if (policy == StreamJoinPolicy.Latest)
+                            _locals[cacheNames[selected]] = LoadAsyncStreamElement(sources[selected].ElementType, address);
+                        EmitStore("i1", "true", _mutableScalarSlots[readyName], 1);
+                    }, () => EmitStore("i1", "false", _mutableScalarSlots[activeNames[selected]], 1));
+                });
+            });
+        }
+    }
+
+    private string NextAsyncBindingName(string role) => ".async." + NextLabel(role);
+
+    private void EmitAsyncIntEachBlockFunctionCall(
+        BlockFunctionCallStatement statement, RuntimeInt start, RuntimeInt end)
+    {
+        var indexName = NextAsyncBindingName("each_index");
+        var endName = NextAsyncBindingName("each_limit");
+        _locals.Add(indexName, start);
+        _locals.Add(endName, end);
+        try
+        {
+            EmitAsyncLoop(
+                statement.Body,
+                () =>
+                {
+                    var current = (RuntimeInt)ResolveLocal(indexName);
+                    var limit = (RuntimeInt)ResolveLocal(endName);
+                    var condition = NextTemp("async_each_condition");
+                    EmitCompare(condition, "sle", "i32", current.ValueName, limit.ValueName);
+                    return new RuntimeBool(condition);
+                },
+                () => _locals[statement.ItemName] = ResolveLocal(indexName),
+                () =>
+                {
+                    var current = (RuntimeInt)ResolveLocal(indexName);
+                    var next = NextTemp("async_each_next");
+                    EmitBinary(next, "add", "i32", current.ValueName, "1");
+                    _locals[indexName] = new RuntimeInt(next);
+                });
+        }
+        finally
+        {
+            RemoveLocal(indexName);
+            RemoveLocal(endName);
+        }
+    }
+
+    private static string ArrayEachLength(RuntimeValue source) => source switch
+    {
+        RuntimeIntSlice slice => slice.LengthName,
+        RuntimeInlineSlice slice => slice.LengthName,
+        RuntimeStaticIntArray array => array.LengthName,
+        RuntimeStaticTextArray array => array.LengthName,
+        RuntimeStaticInlineArray array => array.LengthName,
+        RuntimeDynamicIntArray array => array.LengthName,
+        RuntimeDynamicInlineArray array => array.LengthName,
+        RuntimeMappedBytes mapped => mapped.LengthName,
+        RuntimeArguments arguments => arguments.LengthName,
+        _ => throw new SollangException("each expects a range, Text, or array input")
+    };
+
+    private RuntimeValue ArrayEachItem(RuntimeValue source, string index) => source switch
+    {
+        RuntimeIntSlice slice => EmitIntSliceLoad(slice, index),
+        RuntimeInlineSlice slice => EmitInlineSliceLoad(slice, index),
+        RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index),
+        RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index),
+        RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
+        RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
+        RuntimeDynamicInlineArray array when _program.Types.IsDeque(array.ArrayType) =>
+            EmitDequeLoadUnchecked(array, index, "deque_each_item"),
+        RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
+        RuntimeMappedBytes mapped => EmitMappedLoad(mapped, index),
+        RuntimeArguments => EmitArgumentLoad(index),
+        _ => throw new SollangException("each expects a range, Text, or array input")
+    };
+
+    private RuntimeValue DictionaryEachItem(RuntimeValue source, string slot, bool bindKey)
+    {
+        if (source is RuntimeIntDictionary dictionary)
+            return bindKey ? LoadDictionaryKey(dictionary, slot) : LoadDictionaryValue(dictionary, slot);
+        if (source is not RuntimeInlineDictionary inline)
+            throw new SollangException("dictionary iterator source was not lowered");
+        var definition = _program.Types.GetDictionary(inline.DictionaryType);
+        return bindKey
+            ? LoadInlineDictionaryField(inline, slot, definition.KeyType, 0,
+                definition.KeyAlignment, "dictionary_each_key")
+            : LoadInlineDictionaryField(inline, slot, definition.ValueType,
+                definition.ValueOffset, definition.ValueAlignment, "dictionary_each_value");
+    }
+
+    private void EmitAsyncIndexedBlockFunctionCall(
+        BlockFunctionCallStatement statement,
+        RuntimeValue source,
+        Func<RuntimeValue, string> length,
+        Func<RuntimeValue, string, RuntimeValue> item,
+        Func<RuntimeValue, string, RuntimeBool>? occupied = null,
+        RuntimeValue? ownershipSource = null)
+    {
+        var outer = CaptureLocals();
+        var sourceName = NextAsyncBindingName("each_source");
+        var indexName = NextAsyncBindingName("each_index");
+        RetainAsyncIteratorTemporaries(statement.Source, ownershipSource ?? source);
+        _locals.Add(sourceName, source);
+        _locals.Add(indexName, new RuntimeInt(BoundType.Int64, "0"));
+        // The iterator carrier always borrows its backing. Fresh backing is
+        // retained separately by the canonical readonly-temporary tracker.
+        _borrowedOwnedLocals.Add(sourceName);
+        _asyncScopeSnapshots.Push(outer);
+        try
+        {
+            EmitAsyncLoop(
+                statement.Body,
+                () =>
+                {
+                    var condition = NextTemp("async_each_condition");
+                    EmitCompare(condition, "ult", "i64",
+                        ((RuntimeInt)ResolveLocal(indexName)).ValueName,
+                        length(ResolveLocal(sourceName)));
+                    return new RuntimeBool(condition);
+                },
+                () =>
+                {
+                    var value = item(ResolveLocal(sourceName), ((RuntimeInt)ResolveLocal(indexName)).ValueName);
+                    _locals[statement.ItemName] = value;
+                    if (_program.Types.ContainsOwnedStorage(value.Type))
+                        _borrowedOwnedLocals.Add(statement.ItemName);
+                },
+                () =>
+                {
+                    var next = NextTemp("async_each_next");
+                    EmitBinary(next, "add", "i64", ((RuntimeInt)ResolveLocal(indexName)).ValueName, "1");
+                    _locals[indexName] = new RuntimeInt(BoundType.Int64, next);
+                },
+                occupied is null ? null : () => occupied(
+                    ResolveLocal(sourceName), ((RuntimeInt)ResolveLocal(indexName)).ValueName));
+        }
+        finally
+        {
+            _asyncScopeSnapshots.Pop();
+            DropOwnedLocalsCreatedSince(outer, transferredOwnerName: null);
+            RestoreLocals(outer);
+        }
+    }
+
+    private void EmitAsyncTextEachBlockFunctionCall(BlockFunctionCallStatement statement, RuntimeText text)
+    {
+        var outer = CaptureLocals();
+        var sourceName = NextAsyncBindingName("text_source");
+        var indexName = NextAsyncBindingName("text_index");
+        var widthName = NextAsyncBindingName("text_width");
+        RetainAsyncIteratorTemporaries(statement.Source, text);
+        _locals.Add(sourceName, text);
+        _locals.Add(indexName, new RuntimeInt(BoundType.Int64, "0"));
+        _locals.Add(widthName, new RuntimeInt(BoundType.Int64, "0"));
+        _borrowedOwnedLocals.Add(sourceName);
+        _asyncScopeSnapshots.Push(outer);
+        try
+        {
+            EmitAsyncLoop(
+                statement.Body,
+                () =>
+                {
+                    var source = (RuntimeText)ResolveLocal(sourceName);
+                    var condition = NextTemp("text_each_condition");
+                    EmitCompare(condition, "ult", "i64", ((RuntimeInt)ResolveLocal(indexName)).ValueName, source.LengthName);
+                    return new RuntimeBool(condition);
+                },
+                () =>
+                {
+                    var source = (RuntimeText)ResolveLocal(sourceName);
+                    var packed = NextTemp("utf8_decoded");
+                    EmitCall(packed, "i64", "sollang_utf8_decode",
+                        $"ptr {source.PointerName}, i64 {source.LengthName}, i64 {((RuntimeInt)ResolveLocal(indexName)).ValueName}");
+                    var valid = NextTemp("utf8_valid");
+                    EmitCompare(valid, "ne", "i64", packed, "-1");
+                    var decoded = NextLabel("text_each_decoded");
+                    var invalid = NextLabel("text_each_invalid");
+                    EmitConditionalBranch(valid, decoded, invalid);
+                    EmitLabel(invalid);
+                    _currentBlockLabel = invalid;
+                    EmitTrap();
+                    EmitLabel(decoded);
+                    _currentBlockLabel = decoded;
+                    var codePoint = NextTemp(statement.ItemName);
+                    var width = NextTemp("utf8_width");
+                    EmitAssign(codePoint, $"trunc i64 {packed} to i32");
+                    EmitAssign(width, $"lshr i64 {packed}, 32");
+                    _locals[statement.ItemName] = new RuntimeInt(BoundType.CodePoint, codePoint);
+                    _locals[widthName] = new RuntimeInt(BoundType.Int64, width);
+                },
+                () =>
+                {
+                    var next = NextTemp("text_each_next");
+                    EmitBinary(next, "add", "i64",
+                        ((RuntimeInt)ResolveLocal(indexName)).ValueName,
+                        ((RuntimeInt)ResolveLocal(widthName)).ValueName);
+                    _locals[indexName] = new RuntimeInt(BoundType.Int64, next);
+                });
+        }
+        finally
+        {
+            _asyncScopeSnapshots.Pop();
+            DropOwnedLocalsCreatedSince(outer, transferredOwnerName: null);
+            RestoreLocals(outer);
+        }
+    }
+
+    private void RetainAsyncIteratorTemporaries(Expression expression, RuntimeValue source)
+    {
+        var owners = new List<RuntimeValue>();
+        TrackReadonlyCallTemporary(expression, source, owners);
+        foreach (var owner in owners)
+            _locals.Add(NextAsyncBindingName("iterator_owner"), owner);
+    }
+
+    private sealed record AsyncLoopCarryBinding(LocalScope Scope, string Name);
+
+    private sealed record AsyncLoopCarryGroup(
+        AsyncLoopCarryBinding Binding, List<AsyncLoopCarryBinding> Aliases);
+
+    private static void PublishAsyncLoopCarry(
+        AsyncLoopCarryGroup group, RuntimeValue value,
+        string? scalar = null, string? structure = null,
+        MutableContainerSlot? container = null, string? flag = null)
+    {
+        foreach (var binding in group.Aliases)
+        {
+            var scope = binding.Scope;
+            var oldValue = scope.Locals[binding.Name];
+            scope.Locals[binding.Name] = value;
+            if (scalar is not null) scope.MutableScalarSlots[binding.Name] = scalar;
+            if (structure is not null) scope.MutableStructSlots[binding.Name] = structure;
+            if (container is not null) scope.MutableContainerSlots[binding.Name] = container;
+            if (flag is not null) scope.BorrowedOwnedTransferFlags[binding.Name] = flag;
+            for (var index = 0; index < scope.TerminatingOwnedCleanupObligations.Count; index++)
+            {
+                var obligation = scope.TerminatingOwnedCleanupObligations[index];
+                if (obligation.BindingName == binding.Name && ReferenceEquals(obligation.Value, oldValue))
+                    scope.TerminatingOwnedCleanupObligations[index] = obligation with
+                    {
+                        Value = value,
+                        RetainedFlag = flag ?? obligation.RetainedFlag
+                    };
+            }
+        }
+    }
+
+    private void EmitAsyncLoop(
+        IReadOnlyList<Statement> body,
+        Func<RuntimeBool> emitCondition,
+        Action? bindItem = null,
+        Action? advance = null,
+        Func<RuntimeBool>? emitBodyCondition = null,
+        Action? emitBody = null,
+        IEnumerable<LocalScope>? futureScopes = null)
+    {
+        if (_activeAsyncCfg is null)
+        {
+            EmitAsyncLoopCore(body, emitCondition, bindItem, advance, emitBodyCondition, emitBody);
+            return;
+        }
+        var registeredScopes = _asyncHiddenScopes
+            .SelectMany(hidden => new[] { hidden.Scope }.Concat(hidden.Mirrors))
+            .Concat(_asyncScopeSnapshots)
+            .ToHashSet<LocalScope>(ReferenceEqualityComparer.Instance);
+        var registrations = CurrentAsyncContinuationScopes().Concat(futureScopes ?? [])
+            .Distinct<LocalScope>(ReferenceEqualityComparer.Instance)
+            .Where(scope => !registeredScopes.Contains(scope))
+            .Select(scope => new AsyncHiddenScope(scope, []))
+            .ToArray();
+        foreach (var registration in registrations) _asyncHiddenScopes.Push(registration);
+        try
+        {
+            EmitAsyncLoopCore(body, emitCondition, bindItem, advance, emitBodyCondition, emitBody);
+        }
+        finally
+        {
+            for (var index = registrations.Length - 1; index >= 0; index--)
+                if (!ReferenceEquals(_asyncHiddenScopes.Pop(), registrations[index]))
+                    throw new SollangException("async loop continuation scope registration order changed");
+        }
+    }
+
+    private void EmitAsyncLoopCore(
+        IReadOnlyList<Statement> body,
+        Func<RuntimeBool> emitCondition,
+        Action? bindItem = null,
+        Action? advance = null,
+        Func<RuntimeBool>? emitBodyCondition = null,
+        Action? emitBody = null)
     {
         if (_activeAsyncCfg is not { } lowering)
         {
@@ -2486,36 +3527,72 @@ internal sealed partial class LlvmEmitter
         }
         var entryLabel = _currentBlockLabel;
         var initialScope = CaptureLocals();
+        var continuationScopes = CaptureAsyncContinuationBranchScopes(includeLoopSnapshots: true);
+        var carryScope = SnapshotAsyncContinuationScope(initialScope);
+        var continuationCarryScopes = continuationScopes
+            .Select(item => SnapshotAsyncContinuationScope(item.Entry)).ToArray();
+        var groups = new List<AsyncLoopCarryGroup>();
+        foreach (var scope in new[] { carryScope }.Concat(continuationCarryScopes))
+        {
+            foreach (var name in scope.Locals.Keys)
+            {
+                if (AsyncScopeSharesBinding(scope, name, lowering.ResumeBaseLocals, name)) continue;
+                var binding = new AsyncLoopCarryBinding(scope, name);
+                var group = groups.FirstOrDefault(candidate => AsyncScopeSharesBinding(
+                    candidate.Binding.Scope, candidate.Binding.Name, scope, name));
+                if (group is null) groups.Add(new AsyncLoopCarryGroup(binding, [binding]));
+                else group.Aliases.Add(binding);
+            }
+        }
         var continueEdges = new List<(LocalScope Scope, string Label)>
         {
             (initialScope, entryLabel)
         };
         var breakEdges = new List<(LocalScope Scope, string Label)>();
+        var continuationContinueEdges = new List<(LocalScope[] Scopes, string Label)>
+        {
+            (continuationScopes.Select(item => item.Entry).ToArray(), entryLabel)
+        };
+        var continuationBreakEdges = new List<(LocalScope[] Scopes, string Label)>();
+        void CaptureContinuationEdge(LoopControlKind kind, string label)
+        {
+            var edges = kind == LoopControlKind.Continue
+                ? continuationContinueEdges : continuationBreakEdges;
+            edges.Add((SnapshotAsyncContinuationScopes(continuationScopes), label));
+        }
         var carriedNames = initialScope.Locals.Keys
-            .Where(name => !lowering.ResumeBaseLocals.Locals.ContainsKey(name))
+            .Where(name => !AsyncScopeSharesBinding(initialScope, name, lowering.ResumeBaseLocals, name))
             .ToArray();
         var immutableCarries = new List<(
+            AsyncLoopCarryGroup Group,
             string Name,
             BoundType Type,
             string LlvmType,
             string EntryValue,
             string NextValue)>();
-        var scalarCarries = new List<(string Name, string EntryPointer, string NextPointer)>();
-        var structCarries = new List<(string Name, string EntryPointer, string NextPointer)>();
+        var scalarCarries = new List<(AsyncLoopCarryGroup Group, string Name, string EntryPointer, string NextPointer)>();
+        var structCarries = new List<(AsyncLoopCarryGroup Group, string Name, string EntryPointer, string NextPointer)>();
         var containerCarries = new List<(
+            AsyncLoopCarryGroup Group,
             string Name,
             MutableContainerSlot Entry,
             string NextPointer,
             string NextLength,
             string NextCapacity)>();
+        var flagCarries = new List<(AsyncLoopCarryGroup Group, string Entry, string Next)>();
 
-        foreach (var name in carriedNames)
+        foreach (var group in groups)
         {
-            if (!initialScope.MutableLocals.Contains(name))
+            var scope = group.Binding.Scope;
+            var name = group.Binding.Name;
+            if (scope.BorrowedOwnedTransferFlags.TryGetValue(name, out var flag))
+                flagCarries.Add((group, flag, NextTemp("async_loop_transfer_flag_next")));
+            if (!scope.MutableLocals.Contains(name))
             {
-                var value = initialScope.Locals[name];
+                var value = scope.Locals[name];
                 var materialized = MaterializeAggregateValue(value);
                 immutableCarries.Add((
+                    group,
                     name,
                     value.Type,
                     materialized.TypeName,
@@ -2524,19 +3601,20 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
             var prefix = name.TrimEnd('!');
-            if (initialScope.MutableScalarSlots.TryGetValue(name, out var scalar))
+            if (scope.MutableScalarSlots.TryGetValue(name, out var scalar))
             {
-                scalarCarries.Add((name, scalar, NextTemp($"async_loop_{prefix}_slot_next")));
+                scalarCarries.Add((group, name, scalar, NextTemp($"async_loop_{prefix}_slot_next")));
                 continue;
             }
-            if (initialScope.MutableStructSlots.TryGetValue(name, out var structure))
+            if (scope.MutableStructSlots.TryGetValue(name, out var structure))
             {
-                structCarries.Add((name, structure, NextTemp($"async_loop_{prefix}_struct_next")));
+                structCarries.Add((group, name, structure, NextTemp($"async_loop_{prefix}_struct_next")));
                 continue;
             }
-            if (initialScope.MutableContainerSlots.TryGetValue(name, out var container))
+            if (scope.MutableContainerSlots.TryGetValue(name, out var container))
             {
                 containerCarries.Add((
+                    group,
                     name,
                     container,
                     NextTemp($"async_loop_{prefix}_ptr_next"),
@@ -2559,6 +3637,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(conditionLabel);
         _currentBlockLabel = conditionLabel;
+        var immutableHeaderValues = new List<(AsyncLoopCarryGroup Group, BoundType Type, string Value)>();
         foreach (var carry in immutableCarries)
         {
             var value = NextTemp($"async_loop_{carry.Name}");
@@ -2567,7 +3646,7 @@ internal sealed partial class LlvmEmitter
                 carry.LlvmType,
                 (carry.EntryValue, entryLabel),
                 (carry.NextValue, continueLabel));
-            _locals[carry.Name] = DematerializeAggregateValue(carry.Type, value);
+            immutableHeaderValues.Add((carry.Group, carry.Type, value));
         }
         foreach (var carry in scalarCarries)
         {
@@ -2577,7 +3656,7 @@ internal sealed partial class LlvmEmitter
                 "ptr",
                 (carry.EntryPointer, entryLabel),
                 (carry.NextPointer, continueLabel));
-            _mutableScalarSlots[carry.Name] = pointer;
+            PublishAsyncLoopCarry(carry.Group, carry.Group.Binding.Scope.Locals[carry.Name], scalar: pointer);
         }
         foreach (var carry in structCarries)
         {
@@ -2587,7 +3666,7 @@ internal sealed partial class LlvmEmitter
                 "ptr",
                 (carry.EntryPointer, entryLabel),
                 (carry.NextPointer, continueLabel));
-            _mutableStructSlots[carry.Name] = pointer;
+            PublishAsyncLoopCarry(carry.Group, carry.Group.Binding.Scope.Locals[carry.Name], structure: pointer);
         }
         foreach (var carry in containerCarries)
         {
@@ -2610,32 +3689,65 @@ internal sealed partial class LlvmEmitter
                 "ptr",
                 (carry.Entry.CapacityAddress, entryLabel),
                 (carry.NextCapacity, continueLabel));
-            _mutableContainerSlots[carry.Name] = new MutableContainerSlot(
+            var slot = new MutableContainerSlot(
                 pointer,
                 length,
                 capacity,
                 StackAllocation: null);
+            PublishAsyncLoopCarry(carry.Group, carry.Group.Binding.Scope.Locals[carry.Name], container: slot);
+        }
+        foreach (var carry in flagCarries)
+        {
+            var flag = NextTemp("async_loop_transfer_flag");
+            EmitPhi(flag, "ptr", (carry.Entry, entryLabel), (carry.Next, continueLabel));
+            PublishAsyncLoopCarry(carry.Group,
+                carry.Group.Binding.Scope.Locals[carry.Group.Binding.Name], flag: flag);
         }
 
+        foreach (var (group, type, value) in immutableHeaderValues)
+        {
+            PublishAsyncLoopCarry(group, DematerializeAggregateValue(type, value));
+        }
+        RestoreLocals(carryScope);
+        for (var index = 0; index < continuationScopes.Count; index++)
+            ReplaceAsyncContinuationScope(continuationScopes[index].Scope, continuationCarryScopes[index]);
+        var headerContinuations = continuationScopes.Select(item => new AsyncContinuationBranchScope(
+            item.Scope, SnapshotAsyncContinuationScope(item.Scope))).ToArray();
+
         var headerScope = CaptureLocals();
-        var condition = EmitExpression(statement.Source) as RuntimeBool
-            ?? throw new SollangException("while condition must be Bool");
+        var condition = emitCondition();
+        var conditionExitLabel = _currentBlockLabel;
+        var conditionExitScope = CaptureLocals();
+        var conditionExitContinuations = SnapshotAsyncContinuationScopes(continuationScopes);
         EmitConditionalBranch(condition.ValueName, bodyLabel, endLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
+        if (emitBodyCondition is not null)
+        {
+            var bodyCondition = emitBodyCondition();
+            var selectedLabel = NextLabel("async_loop_selected_body");
+            continueEdges.Add((CaptureLocals(), _currentBlockLabel));
+            CaptureContinuationEdge(LoopControlKind.Continue, _currentBlockLabel);
+            EmitConditionalBranch(bodyCondition.ValueName, selectedLabel, continueLabel);
+            EmitLabel(selectedLabel);
+            _currentBlockLabel = selectedLabel;
+        }
+        bindItem?.Invoke();
         var loopBodyScope = CaptureLocals();
         _asyncScopeSnapshots.Push(loopBodyScope);
         LocalScope bodyExitScope;
         try
         {
             EmitLoopBody(
-                statement.Body,
+                body,
                 loopBodyScope,
                 continueLabel,
                 endLabel,
                 continueEdges,
-                breakEdges);
+                breakEdges,
+                emitBody,
+                CaptureContinuationEdge);
             bodyExitScope = CaptureLocals();
         }
         finally
@@ -2645,38 +3757,35 @@ internal sealed partial class LlvmEmitter
         if (!_currentBlockTerminated)
         {
             var bodyExitLabel = _currentBlockLabel;
-            RestoreLocals(headerScope);
+            var nextScope = SnapshotAsyncContinuationScope(headerScope);
             foreach (var name in carriedNames)
             {
-                if (!bodyExitScope.Locals.TryGetValue(name, out var value))
+                if (!bodyExitScope.Locals.ContainsKey(name))
                 {
                     throw new SollangException(
                         $"loop-carried binding '{name}' is consumed on the back-edge");
                 }
-                _locals[name] = value;
-                if (headerScope.MutableScalarSlots.ContainsKey(name))
-                {
-                    _mutableScalarSlots[name] = bodyExitScope.MutableScalarSlots[name];
-                }
-                if (headerScope.MutableStructSlots.ContainsKey(name))
-                {
-                    _mutableStructSlots[name] = bodyExitScope.MutableStructSlots[name];
-                }
-                if (headerScope.MutableContainerSlots.ContainsKey(name))
-                {
-                    _mutableContainerSlots[name] = bodyExitScope.MutableContainerSlots[name];
-                }
+                RestoreAsyncLoopBinding(nextScope, bodyExitScope, name);
             }
+            RestoreLocals(nextScope);
             continueEdges.Add((CaptureLocals(), bodyExitLabel));
+            CaptureContinuationEdge(LoopControlKind.Continue, bodyExitLabel);
             EmitBranch(continueLabel);
         }
 
         EmitLabel(continueLabel);
         _currentBlockLabel = continueLabel;
-        MergeAsyncOuterScope(headerScope, continueEdges);
+        MergeAsyncLoopScopes(headerScope, continueEdges, headerContinuations, continuationContinueEdges);
+        advance?.Invoke();
+        var mergedScope = CaptureLocals();
+        LocalScope CurrentCarryScope(AsyncLoopCarryGroup group) =>
+            ReferenceEquals(group.Binding.Scope, carryScope)
+                ? mergedScope
+                : continuationScopes[Array.FindIndex(continuationCarryScopes,
+                    scope => ReferenceEquals(scope, group.Binding.Scope))].Scope;
         foreach (var carry in immutableCarries)
         {
-            var current = MaterializeAggregateValue(ResolveLocal(carry.Name));
+            var current = MaterializeAggregateValue(CurrentCarryScope(carry.Group).Locals[carry.Name]);
             EmitAssign(
                 carry.NextValue,
                 $"select i1 true, {carry.LlvmType} {current.ValueName}, {carry.LlvmType} {current.ValueName}");
@@ -2685,37 +3794,39 @@ internal sealed partial class LlvmEmitter
         {
             EmitAssign(
                 carry.NextPointer,
-                $"getelementptr i8, ptr {_mutableScalarSlots[carry.Name]}, i64 0");
+                $"getelementptr i8, ptr {CurrentCarryScope(carry.Group).MutableScalarSlots[carry.Name]}, i64 0");
         }
         foreach (var carry in structCarries)
         {
             EmitAssign(
                 carry.NextPointer,
-                $"getelementptr i8, ptr {_mutableStructSlots[carry.Name]}, i64 0");
+                $"getelementptr i8, ptr {CurrentCarryScope(carry.Group).MutableStructSlots[carry.Name]}, i64 0");
         }
         foreach (var carry in containerCarries)
         {
-            var slot = _mutableContainerSlots[carry.Name];
+            var slot = CurrentCarryScope(carry.Group).MutableContainerSlots[carry.Name];
             EmitAssign(carry.NextPointer, $"getelementptr i8, ptr {slot.PointerAddress}, i64 0");
             EmitAssign(carry.NextLength, $"getelementptr i8, ptr {slot.LengthAddress}, i64 0");
             EmitAssign(carry.NextCapacity, $"getelementptr i8, ptr {slot.CapacityAddress}, i64 0");
         }
+        foreach (var carry in flagCarries)
+            EmitAssign(carry.Next,
+                $"getelementptr i8, ptr {CurrentCarryScope(carry.Group).BorrowedOwnedTransferFlags[carry.Group.Binding.Name]}, i64 0");
         EmitBranch(conditionLabel);
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
-        if (breakEdges.Count == 0)
-        {
-            RestoreLocals(headerScope);
-            return;
-        }
-
         var exitEdges = new List<(LocalScope Scope, string Label)>
         {
-            (headerScope, conditionLabel)
+            (conditionExitScope, conditionExitLabel)
         };
         exitEdges.AddRange(breakEdges);
-        MergeAsyncOuterScope(headerScope, exitEdges);
+        var continuationExitEdges = new List<(LocalScope[] Scopes, string Label)>
+        {
+            (conditionExitContinuations, conditionExitLabel)
+        };
+        continuationExitEdges.AddRange(continuationBreakEdges);
+        MergeAsyncLoopScopes(headerScope, exitEdges, headerContinuations, continuationExitEdges);
     }
 
     private void EmitDictionaryEachBlockFunctionCall(
@@ -2733,6 +3844,33 @@ internal sealed partial class LlvmEmitter
             RuntimeInlineDictionary dictionary => dictionary.CapacityName,
             _ => throw new SollangException($"{(bindKey ? "eachKey" : "eachValue")} expects a dictionary input")
         };
+
+        if (HasPlannedCfgSuspension(statement.Body))
+        {
+            EmitAsyncIndexedBlockFunctionCall(
+                statement, source,
+                value => value switch
+                {
+                    RuntimeIntDictionary dictionary => dictionary.CapacityName,
+                    RuntimeInlineDictionary dictionary => dictionary.CapacityName,
+                    _ => throw new SollangException("dictionary iterator source was not lowered")
+                },
+                (value, slot) => DictionaryEachItem(value, slot, bindKey),
+                (value, slot) =>
+                {
+                    var control = value switch
+                    {
+                        RuntimeIntDictionary dictionary => LoadDictionaryControl(dictionary, slot),
+                        RuntimeInlineDictionary dictionary => LoadInlineDictionaryControl(dictionary, slot),
+                        _ => throw new SollangException("dictionary iterator source was not lowered")
+                    };
+                    var occupied = NextTemp("dictionary_each_occupied");
+                    EmitCompare(occupied, "sgt", "i8", control, "0");
+                    return new RuntimeBool(occupied);
+                },
+                ownershipSource: sourceValue);
+            return;
+        }
 
         var loopLabel = NextLabel("dictionary_each");
         var bodyLabel = NextLabel("dictionary_each_body");
@@ -2762,26 +3900,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
-        RuntimeValue item;
-        if (source is RuntimeIntDictionary intDictionary)
-        {
-            item = bindKey
-                ? LoadDictionaryKey(intDictionary, slot)
-                : LoadDictionaryValue(intDictionary, slot);
-        }
-        else if (source is RuntimeInlineDictionary inlineDictionary)
-        {
-            var definition = _program.Types.GetDictionary(inlineDictionary.DictionaryType);
-            item = bindKey
-                ? LoadInlineDictionaryField(inlineDictionary, slot, definition.KeyType, 0,
-                    definition.KeyAlignment, "dictionary_each_key")
-                : LoadInlineDictionaryField(inlineDictionary, slot, definition.ValueType,
-                    definition.ValueOffset, definition.ValueAlignment, "dictionary_each_value");
-        }
-        else
-        {
-            throw new SollangException("dictionary iterator source was not lowered");
-        }
+        var item = DictionaryEachItem(source, slot, bindKey);
 
         var outerLocals = CaptureLocals();
         try
@@ -2816,6 +3935,11 @@ internal sealed partial class LlvmEmitter
 
     private void EmitTextEachBlockFunctionCall(BlockFunctionCallStatement statement, RuntimeText text)
     {
+        if (HasPlannedCfgSuspension(statement.Body))
+        {
+            EmitAsyncTextEachBlockFunctionCall(statement, text);
+            return;
+        }
         var bodyLabel = NextLabel("text_each_body");
         var continueLabel = NextLabel("text_each_continue");
         var invalidLabel = NextLabel("text_each_invalid");
@@ -2877,6 +4001,11 @@ internal sealed partial class LlvmEmitter
     private void EmitRepeatBlockFunctionCall(BlockFunctionCallStatement statement)
     {
         var count = EmitIntExpression(statement.Source);
+        if (HasPlannedCfgSuspension(statement.Body))
+        {
+            EmitAsyncIntEachBlockFunctionCall(statement, new RuntimeInt("1"), count);
+            return;
+        }
         var bodyLabel = NextLabel("repeat_body");
         var continueLabel = NextLabel("repeat_continue");
         var endLabel = NextLabel("repeat_end");
@@ -2918,4 +4047,3 @@ internal sealed partial class LlvmEmitter
     }
 
 }
-

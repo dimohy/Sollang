@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)][string]$Compiler,
     [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedCompilerSha256,
     [Parameter(Mandatory)][string]$OutputDirectory,
+    [ValidateSet('managed', 'native')][string]$CompilerKind = 'managed',
     [switch]$SourceFreezeApproved,
     [switch]$ValidateOnly
 )
@@ -11,6 +12,21 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $utf8 = [Text.UTF8Encoding]::new($false, $true)
+
+function Convert-C437AuditLlvm {
+    param([Parameter(Mandatory)][string]$LlvmText,
+          [Parameter(Mandatory)][ValidateSet('managed','native')][string]$CompilerKind,
+          [Parameter(Mandatory)][string]$CaseId)
+    $auditText=$LlvmText
+    if ($CompilerKind -ceq 'native') {
+        if ([regex]::Matches($auditText,'(?m)^define i32 @main\(\) \{').Count -ne 1) { throw "C437 $CaseId native entry ABI mismatch" }
+        $auditText=[regex]::Replace($auditText,'(?m)^define i32 @main\(\) \{','define i32 @slg_program_main() {')
+        $auditText=$auditText.Replace('call ptr @malloc(','call ptr @c437_audit_malloc(').Replace('call void @free(','call void @c437_audit_free(').Replace('ptr @free','ptr @c437_audit_free').Replace('call ptr @realloc(','call ptr @c437_audit_realloc(')
+    } else {
+        $auditText=$auditText.Replace('call ptr @sollang_alloc(','call ptr @c437_audit_malloc(').Replace('call void @sollang_free(','call void @c437_audit_free(').Replace('ptr @sollang_free','ptr @c437_audit_free').Replace('call ptr @sollang_realloc(','call ptr @c437_audit_realloc(').Replace('@sollang_start()','@slg_program_main()')
+    }
+    return $auditText
+}
 
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function Hash-Bytes([byte[]]$Bytes) { [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)) }
@@ -45,8 +61,8 @@ function Observe-Descendants([int]$RootProcessId, [Collections.Generic.HashSet[i
     while ($frontier.Count -gt 0) {
         $parent = $frontier.Dequeue()
         foreach ($row in $rows | Where-Object ParentProcessId -eq $parent) {
-            $pid = [int]$row.ProcessId
-            if ($Observed.Add($pid)) { $frontier.Enqueue($pid) }
+            $descendantId = [int]$row.ProcessId
+            if ($Observed.Add($descendantId)) { $frontier.Enqueue($descendantId) }
         }
     }
 }
@@ -84,21 +100,21 @@ function Run-Tracked([string]$File, [string[]]$Arguments, [string]$Description, 
     $observed = [Collections.Generic.HashSet[int]]::new()
     try {
         if (-not $process.Start()) { throw "$Description could not start" }
-        $pid = $process.Id; [void]$rootProcessIds.Add($pid)
+        $trackedProcessId = $process.Id; [void]$rootProcessIds.Add($trackedProcessId)
         $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
         $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderr)
         $watch = [Diagnostics.Stopwatch]::StartNew()
         while (-not $process.WaitForExit(50)) {
-            Observe-Descendants $pid $observed
+            Observe-Descendants $trackedProcessId $observed
             if ($watch.ElapsedMilliseconds -ge 120000) {
-                Observe-Descendants $pid $observed
+                Observe-Descendants $trackedProcessId $observed
                 foreach ($child in $observed) { [void]$descendantProcessIds.Add($child); if (Get-Process -Id $child -ErrorAction SilentlyContinue) { [void]$orphanProcessIds.Add($child) } }
-                [void]$orphanProcessIds.Add($pid)
+                [void]$orphanProcessIds.Add($trackedProcessId)
                 throw "$Description exceeded 120000 ms; detached supervisor must resolve the live process tree"
             }
         }
-        Observe-Descendants $pid $observed
-        $process.WaitForExit(); $stdoutCopy.GetAwaiter().GetResult(); $stderrCopy.GetAwaiter().GetResult()
+        Observe-Descendants $trackedProcessId $observed
+        $process.WaitForExit(); [void]$stdoutCopy.GetAwaiter().GetResult(); [void]$stderrCopy.GetAwaiter().GetResult()
         $deadline = [DateTime]::UtcNow.AddSeconds(2)
         do {
             $live = @($observed | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
@@ -110,7 +126,7 @@ function Run-Tracked([string]$File, [string[]]$Arguments, [string]$Description, 
         foreach ($child in $orphans) { [void]$orphanProcessIds.Add($child) }
         $stdoutBytes = $stdout.ToArray(); $stderrBytes = $stderr.ToArray()
         [pscustomobject][ordered]@{
-            exitCode = $process.ExitCode; rootProcessId = $pid
+            exitCode = $process.ExitCode; rootProcessId = $trackedProcessId
             descendantProcessIds = @($observed | Sort-Object); orphanProcessIds = $orphans
             stdout = Save-Stream $stdoutBytes "$LogPrefix.stdout.bin"
             stderr = Save-Stream $stderrBytes "$LogPrefix.stderr.bin"
@@ -132,6 +148,12 @@ function Empty-Case([object]$Case, [string]$SourcePath) {
 if ($ValidateOnly -and $SourceFreezeApproved) { throw '-ValidateOnly cannot assert -SourceFreezeApproved' }
 if (-not $ValidateOnly -and -not $SourceFreezeApproved) { throw 'C437 current-source execution requires explicit -SourceFreezeApproved after ZIP/QUIC source freeze' }
 $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
+if ($CompilerKind -ceq 'managed' -and [IO.Path]::GetExtension($compilerPath) -ine '.dll') {
+    throw 'C437 managed compiler requires its DLL; the apphost EXE is not a dotnet input.'
+}
+if ($CompilerKind -ceq 'native' -and [IO.Path]::GetExtension($compilerPath) -ine '.exe') {
+    throw 'C437 native Windows compiler requires an executable.'
+}
 $expectedSha = $ExpectedCompilerSha256.ToUpperInvariant()
 $output = [IO.Path]::GetFullPath($OutputDirectory); [IO.Directory]::CreateDirectory($output) | Out-Null
 $contractPath = Join-Path $root 'scripts/contracts/evidence/C2026-09-13-437/focused-contract.json'
@@ -158,7 +180,7 @@ $manifestStart = Snapshot-Stdlib; $inputStart = Snapshot-Inputs $paths $manifest
 if ($inputStart.compiler -cne $expectedSha) { throw "C437 compiler hash mismatch: expected=$expectedSha actual=$($inputStart.compiler)" }
 $record = [ordered]@{
     schemaVersion=2; defectId='C2026-09-13-437'; status=if($ValidateOnly){'validate-only'}else{'failed'}; completed=0; total=14; caseIds=$caseIds
-    compilerPath=$compilerPath; compilerSha256=$inputStart.compiler; expectedCompilerSha256=$expectedSha
+    compilerPath=$compilerPath; compilerKind=$CompilerKind; compilerSha256=$inputStart.compiler; expectedCompilerSha256=$expectedSha
     sourceFreezeApproved=[bool]$SourceFreezeApproved; currentSourceFreezeValidated=$false
     stdlibSourceCountStart=$manifestStart.entries.Count; stdlibSourceCountEnd=$manifestStart.entries.Count
     stdlibManifestStart=$manifestStart.entries; stdlibManifestEnd=$manifestStart.entries
@@ -177,8 +199,14 @@ try {
         for ($index=0; $index -lt 14; $index++) {
             $case=$contract.cases[$index]; $item=$record.cases[$index]; $caseDir=Join-Path $output ([string]$case.id); [IO.Directory]::CreateDirectory($caseDir)|Out-Null
             Copy-Item $ownerDll (Join-Path $caseDir 'c399_owner.dll') -Force
-            $exe=Join-Path $caseDir 'case.exe'; $ll=Join-Path $caseDir 'case.ll'
-            $item.compile=Run-Tracked 'dotnet' @($compilerPath,'build',$paths["source:$($case.id)"],'-o',$exe,'--target','windows-x64','--llvm',$llvmRoot,'-O1','--keep-temps') "C437 $($case.id) compile" (Join-Path $caseDir 'compile')
+            $exe=Join-Path $caseDir 'case.exe'; $ll=$exe+'.ll'
+            $compileArguments=@('build',$paths["source:$($case.id)"],'-o',$exe,'--target','windows-x64','--llvm',$llvmRoot,'-O1','--keep-temps')
+            if ($CompilerKind -ceq 'native') {
+                $compileArguments+=@('--stdlib',(Join-Path $root 'stdlib'))
+                $item.compile=Run-Tracked $compilerPath $compileArguments "C437 $($case.id) compile" (Join-Path $caseDir 'compile')
+            } else {
+                $item.compile=Run-Tracked 'dotnet' (@($compilerPath)+$compileArguments) "C437 $($case.id) compile" (Join-Path $caseDir 'compile')
+            }
             $item.warningCount=[regex]::Matches($item.compile.stdout.text+$item.compile.stderr.text,'(?im)\bwarning\b').Count
             if (-not [bool]$case.requiresLlvm) {
                 if ($item.compile.exitCode -ne [int]$case.expectedExitCode -or $item.compile.stdout.byteCount -ne 0 -or $item.compile.stderr.text -cne [string]$case.expectedStderr -or $item.warningCount -ne 0 -or (Test-Path $ll)) { throw "C437 $($case.id) negative topology mismatch" }
@@ -192,7 +220,7 @@ try {
                 $item.v004=Run-Tracked 'pwsh' @('-NoProfile','-File',$closurePath,'-LlvmPath',$ll) "C437 $($case.id) V004" (Join-Path $caseDir 'v004')
                 if ($item.v004.exitCode -ne 0 -or $item.v004.stderr.byteCount -ne 0) { throw "C437 $($case.id) V004 failed" }
                 $auditLl=Join-Path $caseDir 'case.audit.ll'
-                $auditText=[IO.File]::ReadAllText($ll).Replace('call ptr @sollang_alloc(','call ptr @c437_audit_malloc(').Replace('call void @sollang_free(','call void @c437_audit_free(').Replace('call ptr @sollang_realloc(','call ptr @c437_audit_realloc(').Replace('@sollang_start()','@slg_program_main()')
+                $auditText=Convert-C437AuditLlvm -LlvmText ([IO.File]::ReadAllText($ll)) -CompilerKind $CompilerKind -CaseId $case.id
                 $auditText+="`ndeclare ptr @c437_audit_malloc(i64)`ndeclare void @c437_audit_free(ptr)`ndeclare ptr @c437_audit_realloc(ptr, i64)`n"; [IO.File]::WriteAllText($auditLl,$auditText,$utf8)
                 $auditExe=Join-Path $caseDir 'case.audit.exe'
                 $auditLink=Run-Tracked $clangPath @('-Wno-override-module',$auditLl,$allocationAuditPath,'-O1','-o',$auditExe,'-lws2_32','-lshell32','-lbcrypt') "C437 $($case.id) audit link" (Join-Path $caseDir 'audit-link')

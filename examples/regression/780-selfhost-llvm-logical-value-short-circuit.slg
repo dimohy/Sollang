@@ -13,9 +13,11 @@ main {
             false
         }
 
+        arrayLength values: [Int; ~] -> Int { values -> len }
+
         safeAt index: Int -> Bool {
-            [11; ~] => values!
-            index >= 0 and values![index] == 11
+            [11; ~] => values
+            index >= 0 and index < (values -> arrayLength) and values[index] == 11
         }
 
         identity value: Bool -> Bool => value
@@ -40,19 +42,19 @@ main {
             false or ("run-or" -> probeTrue) => ranOr
 
             # A skipped right operand must not perform an invalid indexed load.
-            [7; ~] => values!
-            -1 => missing!
-            (missing! >= 0 and values![missing!] == 7) => safeMissing
+            [7; ~] => values
+            -1 => missing
+            (missing >= 0 and missing < (values -> arrayLength) and values[missing] == 7) => safeMissing
 
             # Interpolation expressions obey the same evaluation contract.
-            0 => zero!
-            "entry=$((false and (1 / zero! == 0)) -> boolText)" -> println
+            0 => zero
+            "entry=$((false and (1 / zero == 0)) -> boolText)" -> println
             0 -> reportFunction
             Arena(0) => storage!
             0 -> renderMaterialized(storage!) -> println
 
             # A logical value nested in a call argument still short-circuits.
-            (((missing! >= 0 and values![missing!] == 7) -> identity) or true) => nestedCall
+            (((missing >= 0 and missing < (values -> arrayLength) and values[missing] == 7) -> identity) or true) => nestedCall
             nestedCall -> if { "nested-safe" -> println }
 
             # The same value contract applies in regular functions.
@@ -61,19 +63,19 @@ main {
 
             # Region-local scheduling must defer the right operand as well.
             true -> if {
-                [13; ~] => regionValues!
-                -1 => regionMissing!
-                (regionMissing! >= 0 and regionValues![regionMissing!] == 13) => safeRegion
-                0 => regionZero!
-                "region=$((false and (1 / regionZero! == 0)) -> boolText)" -> println
+                [13; ~] => regionValues
+                -1 => regionMissing
+                (regionMissing >= 0 and regionMissing < (regionValues -> arrayLength) and regionValues[regionMissing] == 13) => safeRegion
+                0 => regionZero
+                "region=$((false and (1 / regionZero == 0)) -> boolText)" -> println
                 not safeRegion -> if { "region-safe" -> println }
             }
 
             # Nested logical values keep the same short-circuit contract.
-            (skippedAnd or (skippedOr and ranAnd) or ranOr)
+            skippedAnd or (skippedOr and ranAnd) or ranOr
                 -> if {
-                "ok" -> println
-            }
+                    "ok" -> println
+                }
         }
         """; ~
     ] => sources!

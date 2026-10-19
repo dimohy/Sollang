@@ -381,7 +381,7 @@ internal sealed partial class LlvmEmitter
         var requestedSlot = NextTemp("socket_completion_dequeue_requested_slot");
         EmitAssign(requestedSlot, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
         EmitStore("i32", requested32, requestedSlot, 4);
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             function.InputType,
             function.ReturnType,
@@ -2132,7 +2132,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeText SocketText(RuntimeValue value)
     {
-        value = value is RuntimeFormattedText ? EmitTransientText(value) : value;
+        value = value is RuntimeFormattedText or RuntimeTextChoice ? EmitTransientText(value) : value;
         return value as RuntimeText
             ?? throw new SollangException("socket sendText expects Text");
     }

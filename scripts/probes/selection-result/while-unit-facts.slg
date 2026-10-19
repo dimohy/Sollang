@@ -1,0 +1,35 @@
+namespace sollang.compiler.probes.while_results
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+
+public checkTypes source: Text -> Bool uses Console {
+    [source,; ~] => sources
+    sources -> semanticContext.prepare => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    types.types -> typeIds.builtinTypeId(0) => unitType
+    prepared.package.ranges[0] => range
+    0 => loopCount!
+    0 => typedCount!
+    0 => typedFlowCount!
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        prepared.package.nodes[range.astStart + astIndex!] => node
+        node.kind == 44 -> if {
+            loopCount! + 1 => loopCount!
+            types.expressions -> each expression {
+                expression.sourceModule == 0 and expression.status == 0
+                    and expression.typeId == unitType -> if {
+                        expression.astNode == astIndex! -> if { typedCount! + 1 => typedCount! }
+                        expression.astNode == node.parent -> if { typedFlowCount! + 1 => typedFlowCount! }
+                    }
+            }
+        }
+        astIndex! + 1 => astIndex!
+    }
+    "loops=$(loopCount!),typed=$(typedCount!),flows=$(typedFlowCount!)" -> println
+    loopCount! == 1 and typedCount! == 1 and typedFlowCount! == 1
+}

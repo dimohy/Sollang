@@ -1,0 +1,34 @@
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    """
+    struct Owner { bytes: [UInt8; ~] }
+    consume first: move Owner, scale: Int, second: move Owner -> Int => (first.bytes -> len) + scale + (second.bytes -> len)
+    work value: Int -> async Int { value }
+    main {
+        Owner { bytes: [1; ~] } => owner
+        Owner { bytes: [2; ~] } => second
+        owner -> consume(3, second) => count
+        owner.bytes -> len => invalid
+        7 -> work => task
+        task -> await => first
+        task -> await => again
+    }
+    """ => source
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> semanticContext.prepare => snapshot
+    0 => moves!
+    0 => reads!
+    snapshot.package.names -> each name {
+        snapshot.declaredMoveArgumentByAst[name.astNode]
+            -> if { moves! + 1 => moves! }
+        snapshot.declaredMoveReadByAst[name.astNode]
+            -> if { reads! + 1 => reads! }
+    }
+    0 => awaits!
+    snapshot.awaitSourceByAst -> each awaited {
+        awaited -> if { awaits! + 1 => awaits! }
+    }
+    "move=$(moves!),read=$(reads!),await=$(awaits!)" -> println
+}

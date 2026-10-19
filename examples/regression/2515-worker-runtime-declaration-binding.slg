@@ -1,0 +1,100 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+
+verify sources: [Text; ~], label: Text -> Unit uses Console {
+    sources -> semanticContext.prepare -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    committed.types => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    0 => accepted!
+    0 => missing!
+    0 => inaccessible!
+    false => temporaryMarker!
+    prepared.calls -> each call {
+        call.status == 0 -> if { accepted! + 1 => accepted! }
+        call.status == 2 -> if { missing! + 1 => missing! }
+        call.status == 1 -> if { inaccessible! + 1 => inaccessible! }
+        call.functionSymbol == -115 or call.functionSymbol == -118 or call.functionSymbol == -119
+            -> if { true => temporaryMarker! }
+    }
+    sources -> calls.resolveModules => compatibility
+    0 => compatibilityAccepted!
+    compatibility -> each call {
+        call.status == 0 -> if { compatibilityAccepted! + 1 => compatibilityAccepted! }
+        call.functionSymbol == -115 or call.functionSymbol == -118 or call.functionSymbol == -119
+            -> if { true => temporaryMarker! }
+    }
+    0 => limit!
+    0 => workers!
+    0 => peak!
+    true => integerResults!
+    ir -> each node {
+        node.kind == 6 or node.kind == 9 -> if {
+            node.opcode == -115 -> if { limit! + 1 => limit! }
+            node.opcode == -328 -> if { workers! + 1 => workers! }
+            node.opcode == -329 -> if { peak! + 1 => peak! }
+            node.opcode -> typedIr.isWorkerRuntimeOpcode -> if {
+                node.typeSymbol != 2 -> if { false => integerResults! }
+            }
+        }
+    }
+    "$label accepted=$(accepted!) compatibility=$(compatibilityAccepted!) missing=$(missing!) inaccessible=$(inaccessible!) marker=$(temporaryMarker!) limit=$(limit!) workers=$(workers!) peak=$(peak!) integer=$(integerResults!)" -> println
+}
+
+main {
+    [
+    """
+    namespace sys.runtime
+    public limitParallelWorkers value: Int -> Int = intrinsic
+    public parallelWorkers: -> Int = intrinsic
+    public parallelPeakWorkers: -> Int = intrinsic
+    """,
+    """
+    import sys.runtime as rt
+    main {
+        1 -> limitParallelWorkers => limit
+        parallelWorkers() => workers
+        parallelPeakWorkers() => peak
+        1 -> rt.limitParallelWorkers => qualifiedLimit
+        rt.parallelWorkers() => qualifiedWorkers
+        rt.parallelPeakWorkers() => qualifiedPeak
+    }
+    """; ~] -> verify("canonical")
+    [
+    """
+    namespace sys.runtime
+    public limitParallelWorkers value: Int -> Int => value
+    public parallelWorkers: -> Int => 7
+    public parallelPeakWorkers: -> Int => 8
+    """,
+    """
+    main {
+        1 -> limitParallelWorkers => limit
+        parallelWorkers() => workers
+        parallelPeakWorkers() => peak
+    }
+    """; ~] -> verify("ordinary-declarations")
+    [
+    """
+    main { parallelWorkers() => workers }
+    """; ~] -> verify("missing-declaration")
+    [
+    """
+    namespace sys.runtime
+    parallelWorkers: -> Int = intrinsic
+    """,
+    """
+    main { parallelWorkers() => workers }
+    """; ~] -> verify("private-declaration")
+    [
+    """
+    namespace sample
+    public parallelWorkers: -> Int => 7
+    """,
+    """
+    import sample as sample
+    main { sample.parallelWorkers() => workers }
+    """; ~] -> verify("ordinary-namespace")
+}

@@ -21,6 +21,71 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+sealDynTraitDispatchTargets nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> Unit {
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => call!
+        ((call!.kind == 9 and (call!.opcode == -225 or call!.opcode == -226)) or (call!.kind == 6 and call!.symbol < 0))
+            and call!.operand0 >= 0 and call!.sourceModule >= 0 and call!.astNode >= 0
+            -> if {
+                types -> typeIds.materializedReadTypeId(nodes[call!.operand0].typeId) => receiverType
+                receiverType >= 0 and types[receiverType].kind == 1 and types[receiverType].origin == 16
+                    -> if {
+                        types[receiverType] => dynType
+                        prepared.package.ranges[call!.sourceModule] => range
+                        prepared.directFlowTargetPathByAst[range.astStart + call!.astNode] => pathAst
+                        pathAst >= 0 -> if {
+                            prepared.package.nodes[range.astStart + pathAst] => path
+                            -1 => methodToken!
+                            -1 => lastDot!
+                            path.firstToken => tokenIndex!
+                            tokenIndex! < path.firstToken + path.tokenCount
+                                -> while {
+                                    prepared.package.tokens[range.tokenStart + tokenIndex!].kind => kind
+                                    kind == grammar.tokenIdIdentifier() -> if { tokenIndex! => methodToken! }
+                                    kind == grammar.tokenIdDot() -> if { tokenIndex! => lastDot! }
+                                    tokenIndex! + 1 => tokenIndex!
+                                }
+                            lastDot! < 0 => matchesReceiver!
+                            lastDot! >= 0 -> if {
+                                prepared.package -> typeIds.resolveDynTrait(prepared.modules, call!.sourceModule, path.firstToken, lastDot!) => selectedTrait
+                                selectedTrait.status == 0 and selectedTrait.targetSource == dynType.module and selectedTrait.targetSymbol == dynType.symbol => matchesReceiver!
+                            }
+                            matchesReceiver! and methodToken! >= 0 -> if {
+                                prepared.package.tokens[range.tokenStart + methodToken!] => name
+                                prepared.package.sources[call!.sourceModule] -> slice(name.span.start, name.span.length) => requestedName
+                                prepared.package.ranges[dynType.module] => declarationRange
+                                0 => methodIndex!
+                                methodIndex! < declarationRange.symbolCount -> while {
+                                    prepared.package.symbols[declarationRange.symbolStart + methodIndex!] => method
+                                    method.kind == 29 and method.parent == dynType.symbol
+                                        -> if {
+                                            prepared.package.tokens[declarationRange.tokenStart + method.nameToken] => declaredName
+                                            prepared.package.sources[dynType.module] -> slice(declaredName.span.start, declaredName.span.length) => spelling
+                                            spelling == requestedName -> if {
+                                                9 => call!.kind
+                                                -225 => call!.opcode
+                                                methodIndex! => call!.symbol
+                                                dynType.module => call!.targetModule
+                                                types -> typeIds.builtinTypeId(2) => call!.typeId
+                                                1 => call!.typeKind
+                                                1 => call!.typeOrigin
+                                                -1 => call!.typeModule
+                                                2 => call!.typeSymbol
+                                                0 => call!.typeFlags
+                                            }
+                                        }
+                                    methodIndex! + 1 => methodIndex!
+                                }
+                            }
+                        }
+                    }
+            }
+        call! => nodes[index!]
+        index! + 1 => index!
+    }
+}
+
 # Parent ownership is authoritative only after the late control and wrapper
 # repairs have converged. Build one linear child index at that point so a
 # binary inside a match arm keeps its exact literal/subexpression roots rather
@@ -314,7 +379,7 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
                             }
                     }
                 functionBody!.operand0 => returnAncestor!
-                -1 => outermostReturnControl!
+                -1 => outermostReturnValue!
                 true => returnAncestorOpen!
                 returnAncestor! >= 0
                     and returnAncestor! < (nodes -> len)
@@ -330,20 +395,21 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
                             and returnAncestorNode.typeModule == function.typeModule
                             and returnAncestorNode.typeSymbol == function.typeSymbol
                             -> if { true => returnAncestorTypeMatches! }
-                        (returnAncestorNode.kind == 18
+                        (returnAncestorNode.kind == 8
+                            or returnAncestorNode.kind == 18
                             or returnAncestorNode.kind == 27
                             or returnAncestorNode.kind == 33
                             or returnAncestorNode.kind == 34)
                             and returnAncestorTypeMatches!
-                            -> if { returnAncestor! => outermostReturnControl! }
+                            -> if { returnAncestor! => outermostReturnValue! }
                         returnAncestor! == function.operand0 -> if {
                             false => returnAncestorOpen!
                         } else {
                             returnAncestorNode.parent => returnAncestor!
                         }
                     }
-                outermostReturnControl! >= 0 -> if {
-                    outermostReturnControl! => functionBody!.operand0
+                outermostReturnValue! >= 0 -> if {
+                    outermostReturnValue! => functionBody!.operand0
                 }
                 # Publish a corrected top-level result even when it is a plain
                 # expression and no enclosing control replaces it.
@@ -353,12 +419,378 @@ sealFinalFunctionReturnAncestors nodes: mut [TypedIrNode; ~], prepared: ref sema
     }
 }
 
+# A source-final subject `when` can begin with default-Int arm literals even
+# though its enclosing function declares a wider integer result. Select that
+# direct complete control from source shape before returned-arm sealing, then
+# let the existing returned-match pass contextualize every arm literal and
+# region to the declared function type.
+seedReturnedNumericSubjectWhenFromCompleteLiteralArms nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    0 => functionIndex!
+    functionIndex! < (nodes -> len) -> while {
+        nodes[functionIndex!] => function
+        function.kind == 0
+            and function.typeOrigin == 1
+            and ((function.typeSymbol >= 2 and function.typeSymbol <= 14)
+            or (function.typeSymbol >= 19 and function.typeSymbol <= 23))
+            and function.operand0 >= 0
+            and function.operand0 < (nodes -> len)
+            and nodes[function.operand0].kind == 1
+            -> if {
+                functionIndex! + 1 => functionEnd!
+                functionEnd! < (nodes -> len)
+                    and nodes[functionEnd!].kind != 0
+                    and nodes[functionEnd!].kind != 11
+                    -> while { functionEnd! + 1 => functionEnd! }
+                -1 => finalDirectResult!
+                UIntSize(0) => finalDirectStart!
+                UIntSize(0) => finalDirectEnd!
+                functionIndex! + 1 => directIndex!
+                directIndex! < functionEnd! -> while {
+                    nodes[directIndex!] => direct
+                    direct.parent == function.operand0
+                        and direct.kind != 17
+                        and direct.kind != 19
+                        and direct.sourceModule >= 0
+                        and direct.sourceModule < (prepared.package.ranges -> len)
+                        and direct.astNode >= 0
+                        -> if {
+                            prepared.package.ranges[direct.sourceModule] => directRange
+                            prepared.package.nodes[directRange.astStart + direct.astNode] => directAst
+                            directAst.start + directAst.length => directEnd
+                            finalDirectResult! < 0
+                                or directEnd > finalDirectEnd!
+                                or (directEnd == finalDirectEnd! and directAst.start < finalDirectStart!)
+                                -> if {
+                                    directIndex! => finalDirectResult!
+                                    directAst.start => finalDirectStart!
+                                    directEnd => finalDirectEnd!
+                                }
+                        }
+                    directIndex! + 1 => directIndex!
+                }
+                finalDirectResult! >= 0
+                    and nodes[finalDirectResult!].kind == 3
+                    and nodes[finalDirectResult!].typeOrigin == 1
+                    and ((nodes[finalDirectResult!].typeSymbol >= 2
+                    and nodes[finalDirectResult!].typeSymbol <= 14)
+                    or (nodes[finalDirectResult!].typeSymbol >= 19
+                    and nodes[finalDirectResult!].typeSymbol <= 23))
+                    -> if {
+                        nodes[finalDirectResult!] => finalLiteral!
+                        function.typeId => finalLiteral!.typeId
+                        function.typeKind => finalLiteral!.typeKind
+                        function.typeOrigin => finalLiteral!.typeOrigin
+                        function.typeModule => finalLiteral!.typeModule
+                        function.typeSymbol => finalLiteral!.typeSymbol
+                        function.typeFlags => finalLiteral!.typeFlags
+                        finalLiteral! => nodes[finalDirectResult!]
+                        nodes[function.operand0] => literalFunctionBody!
+                        finalDirectResult! => literalFunctionBody!.operand0
+                        literalFunctionBody! => nodes[function.operand0]
+                    }
+                -1 => selectedWhen!
+                UIntSize(0) => selectedWhenEnd!
+                functionIndex! + 1 => candidateIndex!
+                candidateIndex! < functionEnd! -> while {
+                    nodes[candidateIndex!] => candidate
+                    candidate.kind == 34
+                        and candidate.parent == function.operand0
+                    # The defect leaves this exact subject as the published
+                    # function result. A later source expression already
+                    # owns the body result and must never be displaced.
+                        and candidate.operand0 == nodes[function.operand0].operand0
+                        and candidate.operand1 >= 0
+                        and candidate.sourceModule >= 0
+                        and candidate.sourceModule < (prepared.package.ranges -> len)
+                        and candidate.astNode >= 0
+                        -> if {
+                            true => completeLiteralArms!
+                            false => hasArm!
+                            false => hasElse!
+                            candidate.operand1 => armIndex!
+                            armIndex! >= 0
+                                and armIndex! < functionEnd!
+                                and nodes[armIndex!].parent == candidateIndex!
+                                -> while {
+                                    true => hasArm!
+                                    nodes[armIndex!] => arm
+                                    armIndex! => armRegion!
+                                    arm.operand1 >= 0
+                                        and arm.operand1 < functionEnd!
+                                        and nodes[arm.operand1].kind == 19
+                                        -> if { arm.operand1 => armRegion! } else { true => hasElse! }
+                                    nodes[armRegion!].operand1 => terminalIndex
+                                    terminalIndex < 0
+                                        or terminalIndex >= functionEnd!
+                                        or nodes[terminalIndex].kind != 3
+                                        or nodes[terminalIndex].typeOrigin != 1
+                                        or not (((nodes[terminalIndex].typeSymbol >= 2
+                                        and nodes[terminalIndex].typeSymbol <= 14)
+                                        or (nodes[terminalIndex].typeSymbol >= 19
+                                        and nodes[terminalIndex].typeSymbol <= 23)))
+                                        -> if { false => completeLiteralArms! }
+                                    arm.nextOperand => armIndex!
+                                }
+                            hasArm! and hasElse! and completeLiteralArms!
+                                -> if {
+                                    prepared.package.ranges[candidate.sourceModule] => candidateRange
+                                    prepared.package.nodes[candidateRange.astStart + candidate.astNode] => candidateAst
+                                    candidateAst.start + candidateAst.length => candidateEnd
+                                    true => sourceFinalControl!
+                                    functionIndex! + 1 => siblingIndex!
+                                    siblingIndex! < functionEnd! -> while {
+                                        nodes[siblingIndex!] => sibling
+                                        siblingIndex! != candidateIndex!
+                                            and sibling.parent == function.operand0
+                                            and sibling.sourceModule == candidate.sourceModule
+                                            and sibling.astNode >= 0
+                                            -> if {
+                                                prepared.package.nodes[candidateRange.astStart + sibling.astNode] => siblingAst
+                                                siblingAst.start > candidateEnd
+                                                    -> if { false => sourceFinalControl! }
+                                            }
+                                        siblingIndex! + 1 => siblingIndex!
+                                    }
+                                    sourceFinalControl!
+                                        and (selectedWhen! < 0 or candidateEnd > selectedWhenEnd!)
+                                        -> if {
+                                            candidateIndex! => selectedWhen!
+                                            candidateEnd => selectedWhenEnd!
+                                        }
+                                }
+                        }
+                    candidateIndex! + 1 => candidateIndex!
+                }
+                selectedWhen! >= 0 -> if {
+                    nodes[selectedWhen!] => selected!
+                    function.typeId => selected!.typeId
+                    function.typeKind => selected!.typeKind
+                    function.typeOrigin => selected!.typeOrigin
+                    function.typeModule => selected!.typeModule
+                    function.typeSymbol => selected!.typeSymbol
+                    function.typeFlags => selected!.typeFlags
+                    selected! => nodes[selectedWhen!]
+                    nodes[function.operand0] => functionBody!
+                    selectedWhen! => functionBody!.operand0
+                    functionBody! => nodes[function.operand0]
+                }
+            }
+        functionIndex! + 1 => functionIndex!
+    }
+}
+
+# Only a source integer literal proven to fit the peer's builtin width may be
+# contextually retagged. This deliberately treats platform widths as 32-bit
+# and values above Long.max as unproven, preserving a blocking mismatch rather
+# than accepting a narrowing conversion without a bounds diagnostic.
+comparisonContextualLiteralFits literal: TypedIrNode, peer: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    literal.kind == 3 and literal.typeKind == 1 and literal.typeOrigin == 1
+        and (literal.typeSymbol -> integerTypeRank) > 0
+        and literal.sourceModule >= 0 and literal.sourceModule < (prepared.package.ranges -> len)
+        -> unless { false -> return }
+    prepared.package.ranges[literal.sourceModule] => sourceRange
+    literal.astNode >= 0 and literal.astNode < sourceRange.astCount
+        -> unless { false -> return }
+    prepared.package.nodes[sourceRange.astStart + literal.astNode] => literalAst
+    literalAst.kind == 14 and literalAst.length > 0
+        -> unless { false -> return }
+    prepared.package.sources[literal.sourceModule] -> len => literalSourceLength
+    prepared.package.sources[literal.sourceModule] -> slice(UIntSize(0), literalSourceLength) => source
+    source -> len => sourceLength
+    literalAst.start < sourceLength
+        and literalAst.start + literalAst.length <= sourceLength
+        -> unless { false -> return }
+    Long(9_223_372_036_854_775_807) => maximum!
+    peer.typeSymbol -> when {
+        == 2 { 2_147_483_647 => maximum! }
+        == 5 { 2_147_483_647 => maximum! }
+        == 3 { 127 => maximum! }
+        == 4 { 32_767 => maximum! }
+        == 8 { 255 => maximum! }
+        == 9 { 65_535 => maximum! }
+        == 10 { 4_294_967_295 => maximum! }
+        == 13 { 4_294_967_295 => maximum! }
+        == 12 { 2_147_483_647 => maximum! }
+        == 14 { 1_114_111 => maximum! }
+        else { }
+    }
+    Long(0) => value!
+    false => sawDigit!
+    false => previousUnderscore!
+    literalAst.start => cursor!
+    literalAst.start + literalAst.length => end
+    cursor! < end -> while {
+        source -> byte(cursor!) => digit
+        digit == 95 -> if {
+            not sawDigit! or previousUnderscore! -> if { false -> return }
+            true => previousUnderscore!
+        } else {
+            digit >= 48 and digit <= 57 -> unless { false -> return }
+            Long(digit - 48) => decimalDigit
+            value! > (maximum! - decimalDigit) / 10 -> if { false -> return }
+            value! * 10 + decimalDigit => value!
+            true => sawDigit!
+            false => previousUnderscore!
+        }
+        cursor! + 1 => cursor!
+    }
+    sawDigit! and not previousUnderscore!
+        and not (peer.typeSymbol == 14 and value! >= 55_296 and value! <= 57_343)
+}
+
+sealControlTypeFromValue nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    nodes[index] => control!
+    peer.typeId => control!.typeId
+    peer.typeKind => control!.typeKind
+    peer.typeOrigin => control!.typeOrigin
+    peer.typeModule => control!.typeModule
+    peer.typeSymbol => control!.typeSymbol
+    peer.typeFlags => control!.typeFlags
+    control! => nodes[index]
+    # Binary value edges may point directly at the selection while source
+    # diagnostics read its enclosing flow. Publish one committed result type.
+    (control!.kind == 18 or control!.kind == 33 or control!.kind == 34)
+        and control!.parent >= 0 and control!.parent < (nodes -> len)
+        -> if {
+            nodes[control!.parent] => flow!
+            flow!.kind == 9 and flow!.operand1 == index -> if {
+                peer.typeId => flow!.typeId
+                peer.typeKind => flow!.typeKind
+                peer.typeOrigin => flow!.typeOrigin
+                peer.typeModule => flow!.typeModule
+                peer.typeSymbol => flow!.typeSymbol
+                peer.typeFlags => flow!.typeFlags
+                flow! => nodes[control!.parent]
+            }
+        }
+}
+
+# A value-if passed to a numeric parameter receives that parameter's type when
+# both continuing branches are representable integer literals. Check both
+# branches before mutating the IR, as InferContextualValue does in C#.
+public sealCallContextualIfNumeric nodes: mut [TypedIrNode; ~], argumentIndex: Int, ifIndex: Int, peer: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    argumentIndex >= 0 and argumentIndex < (nodes -> len)
+        and ifIndex >= 0 and ifIndex < (nodes -> len)
+        and peer.typeId >= 0 and peer.typeKind == 1 and peer.typeOrigin == 1
+        and (peer.typeSymbol -> integerTypeRank) > 0
+        -> unless { return }
+    nodes[argumentIndex] => argument
+    nodes[ifIndex] => control
+    argument.kind == 9 and control.kind == 18 and control.parent == argumentIndex
+        and argument.sourceModule >= 0
+        and argument.sourceModule < (prepared.package.ranges -> len)
+        -> unless { return }
+    prepared.package.ranges[argument.sourceModule] => range
+    argument.astNode >= 0 and argument.astNode < range.astCount
+        and prepared.package.nodes[range.astStart + argument.astNode].cstRuleId == grammar.ruleIdFlowExpression()
+        -> unless { return }
+    control.operand1 >= 0 and control.operand1 < (nodes -> len)
+        and control.nextOperand >= 0 and control.nextOperand < (nodes -> len)
+        -> unless { return }
+    nodes[control.operand1] => thenRegion
+    nodes[control.nextOperand] => elseRegion
+    thenRegion.kind == 19 and thenRegion.parent == ifIndex
+        and elseRegion.kind == 19 and elseRegion.parent == ifIndex
+        and thenRegion.operand1 >= 0 and thenRegion.operand1 < (nodes -> len)
+        and elseRegion.operand1 >= 0 and elseRegion.operand1 < (nodes -> len)
+        -> unless { return }
+    nodes[thenRegion.operand1] => thenValue
+    nodes[elseRegion.operand1] => elseValue
+    (thenValue -> comparisonContextualLiteralFits(peer, prepared))
+        and (elseValue -> comparisonContextualLiteralFits(peer, prepared))
+        -> unless { return }
+    nodes -> sealIntegerLiteralPeerContext(thenRegion.operand1, peer)
+    nodes -> sealIntegerLiteralPeerContext(elseRegion.operand1, peer)
+    nodes -> sealControlTypeFromValue(control.operand1, peer)
+    nodes -> sealControlTypeFromValue(control.nextOperand, peer)
+    nodes -> sealControlTypeFromValue(ifIndex, peer)
+    nodes -> sealControlTypeFromValue(argumentIndex, peer)
+}
+
+
+# Numeric context follows value edges only. Validate the whole result tree
+# before changing a type; conditions and earlier region statements are not values.
+contextualIntegerValue nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode, controls: ref [Int; ~], types: ref [typeIds.SemanticType; ~], apply: Bool -> Bool {
+    index >= 0 and index < (nodes -> len) -> unless { false -> return }
+    nodes[index] => value
+    value.kind == 3 -> if {
+        value.typeKind == 1 and value.typeOrigin == 1 and integerTypeRank(value.typeSymbol) > 0
+            -> unless { false -> return }
+        apply -> if { nodes -> sealIntegerLiteralPeerContext(index, peer) }
+        true -> return
+    }
+    value.kind == 7 and value.opcode == grammar.tokenIdMinus()
+        and value.operand0 >= 0 and value.operand0 < (nodes -> len)
+        and nodes[value.operand0].kind == 3 -> if {
+            nodes -> contextualIntegerValue(value.operand0, peer, controls, types, apply) => literal
+            literal and apply -> if { nodes -> sealIntegerLiteralPeerContext(index, peer) }
+            literal -> return
+        }
+    value.kind == 9 and controls[index] >= 0 -> if {
+        nodes -> contextualIntegerValue(controls[index], peer, controls, types, apply) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 19 -> if {
+        nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 18 -> if {
+        (nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply))
+            and (nodes -> contextualIntegerValue(value.nextOperand, peer, controls, types, apply)) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 33 or value.kind == 34 -> if {
+        value.kind == 33 -> if { value.operand0 } else { value.operand1 } => arm!
+        false => found!
+        arm! >= 0 and arm! < (nodes -> len) -> while {
+            nodes[arm!].kind == 19 and nodes[arm!].parent == index
+                -> unless { false -> return }
+            nodes -> contextualIntegerValue(arm!, peer, controls, types, apply)
+                -> unless { false -> return }
+            true => found!
+            nodes[arm!].nextOperand => arm!
+        }
+        found! and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        found! -> return
+    }
+    value.kind == 8 and value.opcode >= grammar.tokenIdPlus() and value.opcode <= grammar.tokenIdPercent()
+        -> if {
+            (nodes -> contextualIntegerValue(value.operand0, peer, controls, types, apply))
+                and (nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply)) => result
+            result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+            result -> return
+        }
+    (types -> typeIds.materializedReadTypeId(value.typeId)) == peer.typeId
+}
+
+contextualNumericIrValue nodes: ref [TypedIrNode; ~], index: Int, controls: ref [Int; ~] -> Bool {
+    nodes[index] => value
+    value.kind == 3 or value.kind == 18 or value.kind == 33 or value.kind == 34
+        or (value.kind == 9 and controls[index] >= 0)
+        or (value.kind == 7 and value.opcode == grammar.tokenIdMinus()
+        and value.operand0 >= 0 and value.operand0 < (nodes -> len)
+        and nodes[value.operand0].kind == 3)
+}
+
 # Late alias and projected-call sealing can establish an arithmetic operand's
 # exact builtin width after the earlier contextual-literal pass. Close that
 # producer -> consumer edge once at the final boundary: a bare integer literal
 # adopts its concrete peer width, and arithmetic adopts the same width. Boolean
 # comparison results remain untouched.
-sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~] -> Unit {
+sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    [Int; ~] => controls!
+    nodes -> each slot { controls! -> push(-1) }
+    0 => controlIndex!
+    controlIndex! < (nodes -> len) -> while {
+        nodes[controlIndex!] => control
+        (control.kind == 18 or control.kind == 33 or control.kind == 34) and control.parent >= 0
+            and control.parent < (nodes -> len) and nodes[control.parent].kind == 9
+            -> if { controlIndex! => controls![control.parent] }
+        controlIndex! + 1 => controlIndex!
+    }
     true => numericTypesChanged!
     numericTypesChanged! -> while {
         false => numericTypesChanged!
@@ -384,12 +816,23 @@ sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~] -> Unit {
                     nodes[numeric!.operand0].typeId => previousLeftTypeId
                     nodes[numeric!.operand1].typeId => previousRightTypeId
                     numeric!.typeId => previousResultTypeId
-                    nodes[numeric!.operand1] => right
-                    nodes -> sealIntegerLiteralPeerContext(numeric!.operand0, right)
-                    nodes[numeric!.operand0] => left
-                    nodes -> sealIntegerLiteralPeerContext(numeric!.operand1, left)
-                    nodes[numeric!.operand0] => canonicalLeft
-                    nodes[numeric!.operand1] => canonicalRight
+                    nodes -> contextualNumericIrValue(numeric!.operand0, controls!) => leftContextual
+                    nodes -> contextualNumericIrValue(numeric!.operand1, controls!) => rightContextual
+                    (leftContextual and not rightContextual) or (rightContextual and not leftContextual)
+                        -> if {
+                            leftContextual -> if { numeric!.operand0 } else { numeric!.operand1 } => selected
+                            leftContextual -> if { numeric!.operand1 } else { numeric!.operand0 } => anchor
+                            materializedReadPeer(nodes[anchor], types, flags) => peer
+                            peer.typeKind == 1 and peer.typeOrigin == 1 and integerTypeRank(peer.typeSymbol) > 0
+                                -> if {
+                                    nodes -> contextualIntegerValue(selected, peer, controls!, types, false) => compatible
+                                    compatible -> if {
+                                        nodes -> contextualIntegerValue(selected, peer, controls!, types, true) => committed
+                                    }
+                                }
+                        }
+                    materializedReadPeer(nodes[numeric!.operand0], types, flags) => canonicalLeft
+                    materializedReadPeer(nodes[numeric!.operand1], types, flags) => canonicalRight
                     numericArithmetic
                         and canonicalLeft.typeId >= 0
                         and canonicalLeft.typeId == canonicalRight.typeId
@@ -415,27 +858,66 @@ sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~] -> Unit {
     }
 }
 
+# A block ending in a binding has effects but no value. Its storage type must
+# not become a region result or a borrowed Text escape query.
+sealStatementOnlyBlockRegions nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    types -> typeIds.builtinTypeId(0) => unitTypeId
+    unitTypeId < 0 -> if { return }
+    [Int; ~] => lastChildByAst!
+    prepared.package.nodes -> each node { lastChildByAst! -> push(-1) }
+    prepared.package.ranges -> each range {
+        0 => childAst!
+        childAst! < range.astCount -> while {
+            prepared.package.nodes[range.astStart + childAst!] => child
+            child.parent >= 0 and child.parent < range.astCount
+                and prepared.package.nodes[range.astStart + child.parent].kind == 43
+                -> if {
+                    range.astStart + child.parent => parentGlobal
+                    lastChildByAst![parentGlobal] => previous
+                    previous < 0 or child.start >= prepared.package.nodes[range.astStart + previous].start
+                        -> if { childAst! => lastChildByAst![parentGlobal] }
+                }
+            childAst! + 1 => childAst!
+        }
+    }
+    0 => regionIndex!
+    regionIndex! < (nodes -> len) -> while {
+        nodes[regionIndex!] => region!
+        region!.kind == 19 and region!.sourceModule >= 0
+            and region!.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                prepared.package.ranges[region!.sourceModule] => range
+                region!.astNode >= 0 and region!.astNode < range.astCount
+                    and prepared.package.nodes[range.astStart + region!.astNode].kind == 43
+                    -> if {
+                        lastChildByAst![range.astStart + region!.astNode] => tail
+                        tail < 0 or (prepared.package.nodes[range.astStart + tail].kind == 9 or prepared.package.nodes[range.astStart + tail].kind == 61)
+                            -> if {
+                                region! -> sealNodeTypeIdentity(unitTypeId, types, flags)
+                                -1 => region!.operand1
+                                region! => nodes[regionIndex!]
+                            }
+                    }
+            }
+        regionIndex! + 1 => regionIndex!
+    }
+}
+
 # Finalize returned controls, ownership flags, and runtime intrinsic opcodes.
 sealBooleanWhenResultTypes nodes: mut [TypedIrNode; ~] -> Unit {
     0 => booleanWhenIndex!
     booleanWhenIndex! < (nodes -> len) -> while {
-        nodes[booleanWhenIndex!] => booleanWhen!
-        booleanWhen!.kind == 33
-            and booleanWhen!.typeOrigin == 1
-            and booleanWhen!.typeSymbol == 0
-            and booleanWhen!.operand0 >= 0
-            and booleanWhen!.operand0 < (nodes -> len)
+        nodes[booleanWhenIndex!] => booleanWhen
+        booleanWhen.kind == 33
+            and booleanWhen.typeOrigin == 1
+            and booleanWhen.typeSymbol == 0
+            and booleanWhen.operand0 >= 0
+            and booleanWhen.operand0 < (nodes -> len)
             -> if {
-                nodes[booleanWhen!.operand0] => booleanWhenFirstArmType
+                nodes[booleanWhen.operand0] => booleanWhenFirstArmType
                 not (booleanWhenFirstArmType.typeOrigin == 1 and booleanWhenFirstArmType.typeSymbol == 0)
                     -> if {
-                        booleanWhenFirstArmType.typeOrigin => booleanWhen!.typeOrigin
-                        booleanWhenFirstArmType.typeModule => booleanWhen!.typeModule
-                        booleanWhenFirstArmType.typeSymbol => booleanWhen!.typeSymbol
-                        booleanWhenFirstArmType.typeId => booleanWhen!.typeId
-                        booleanWhenFirstArmType.typeKind => booleanWhen!.typeKind
-                        booleanWhenFirstArmType.typeFlags => booleanWhen!.typeFlags
-                        booleanWhen! => nodes[booleanWhenIndex!]
+                        nodes -> sealControlTypeFromValue(booleanWhenIndex!, booleanWhenFirstArmType)
                     }
             }
         booleanWhenIndex! + 1 => booleanWhenIndex!
@@ -443,9 +925,12 @@ sealBooleanWhenResultTypes nodes: mut [TypedIrNode; ~] -> Unit {
 }
 
 finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], runtimeSymbols: ref LateRuntimeSymbols, finalWrappedValueByNode: ref [Int; ~] -> Unit {
+    nodes -> sealStatementOnlyBlockRegions(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
+    nodes -> seedReturnedNumericSubjectWhenFromCompleteLiteralArms(prepared)
     # Final return selection above is the authority for which control value
     # leaves a function. Apply that declared type to a returned enum or numeric
     # subject match and retain the terminal same-type value from each arm pipeline.
+    nodes -> terminatingControlFlags => finalReturnedTerminating
     0 => finalReturnedMatchIndex!
     finalReturnedMatchIndex! < (nodes -> len)
         -> while {
@@ -480,122 +965,89 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                                 and finalReturnedArm.operand1 < (nodes -> len)
                                 and nodes[finalReturnedArm.operand1].kind == 19
                                 -> if { finalReturnedArm.operand1 => finalReturnedRegionIndex! }
-                            -1 => finalReturnedValue!
-                            nodes[finalReturnedRegionIndex!].operand1 => finalReturnedExistingValue!
-                            finalReturnedExistingValue! >= 0
-                                and finalReturnedExistingValue! < (nodes -> len)
-                                and nodes[finalReturnedExistingValue!].kind == 9
-                                and nodes[finalReturnedExistingValue!].opcode == -1
-                                and (nodes[finalReturnedExistingValue!].operand0 >= 0
-                                or finalWrappedValueByNode[finalReturnedExistingValue!] >= 0)
-                                -> while {
-                                    nodes[finalReturnedExistingValue!].operand0 >= 0
-                                        -> if {
-                                            nodes[finalReturnedExistingValue!].operand0 => finalReturnedExistingValue!
-                                        } else {
-                                            finalWrappedValueByNode[finalReturnedExistingValue!] => finalReturnedExistingValue!
-                                        }
-                                }
-                            finalReturnedExistingValue! >= 0
-                                and finalReturnedExistingValue! < (nodes -> len)
+                            not finalReturnedTerminating[finalReturnedRegionIndex!]
                                 -> if {
-                                    finalReturnedExistingValue! => finalNestedControlAncestor!
-                                    -1 => finalNestedControlValue!
-                                    finalNestedControlAncestor! >= 0
-                                        and finalNestedControlAncestor! < (nodes -> len)
-                                        and finalNestedControlAncestor! != finalReturnedRegionIndex!
+                                    -1 => finalReturnedValue!
+                                    finalReturnedArmIndex! -> matchArmTerminalValueIndex(nodes) => finalReturnedExistingValue!
+                                    finalReturnedExistingValue! >= 0
+                                        and finalReturnedExistingValue! < (nodes -> len)
+                                        and nodes[finalReturnedExistingValue!].kind == 9
+                                        and nodes[finalReturnedExistingValue!].opcode == -1
+                                        and (nodes[finalReturnedExistingValue!].operand0 >= 0
+                                        or finalWrappedValueByNode[finalReturnedExistingValue!] >= 0)
                                         -> while {
-                                            nodes[finalNestedControlAncestor!] => finalNestedControlCandidate
-                                            finalNestedControlCandidate.parent == finalReturnedRegionIndex!
-                                                and (finalNestedControlCandidate.kind == 18
-                                                or finalNestedControlCandidate.kind == 27
-                                                or finalNestedControlCandidate.kind == 33
-                                                or finalNestedControlCandidate.kind == 34)
-                                                and finalNestedControlCandidate.typeId == finalReturnedNode.typeId
+                                            nodes[finalReturnedExistingValue!].operand0 >= 0
                                                 -> if {
-                                                    finalNestedControlAncestor! => finalNestedControlValue!
-                                                    finalReturnedRegionIndex! => finalNestedControlAncestor!
+                                                    nodes[finalReturnedExistingValue!].operand0 => finalReturnedExistingValue!
                                                 } else {
-                                                    finalNestedControlCandidate.parent => finalNestedControlAncestor!
+                                                    finalWrappedValueByNode[finalReturnedExistingValue!] => finalReturnedExistingValue!
                                                 }
                                         }
-                                    finalNestedControlValue! >= 0
-                                        -> if { finalNestedControlValue! => finalReturnedExistingValue! }
-                                }
-                            finalReturnedExistingValue! >= 0 and finalReturnedExistingValue! < (nodes -> len)
-                                -> if {
-                                    nodes[finalReturnedExistingValue!] => finalReturnedExistingCandidate
-                                    (finalReturnedExistingCandidate.kind == 3
-                                        and finalReturnedType.kind == 1
-                                        and finalReturnedType.origin == 1
-                                        and finalReturnedType.symbol >= 2
-                                        and finalReturnedType.symbol <= 14) => finalReturnedExistingIsContextualIntegerLiteral
-                                    finalReturnedExistingCandidate.typeId == finalReturnedNode.typeId
-                                        or ((finalReturnedExistingCandidate.typeKind == finalReturnedNode.typeKind or finalReturnedExistingCandidate.typeId < 0)
-                                        and finalReturnedExistingCandidate.typeOrigin == finalReturnedNode.typeOrigin
-                                        and finalReturnedExistingCandidate.typeModule == finalReturnedNode.typeModule
-                                        and finalReturnedExistingCandidate.typeSymbol == finalReturnedNode.typeSymbol)
-                                        or finalReturnedExistingIsContextualIntegerLiteral
+                                    finalReturnedExistingValue! >= 0
+                                        and finalReturnedExistingValue! < (nodes -> len)
                                         -> if {
-                                            finalReturnedExistingValue! => finalReturnedValue!
+                                            finalReturnedExistingValue! => finalNestedControlAncestor!
+                                            -1 => finalNestedControlValue!
+                                            finalNestedControlAncestor! >= 0
+                                                and finalNestedControlAncestor! < (nodes -> len)
+                                                and finalNestedControlAncestor! != finalReturnedRegionIndex!
+                                                -> while {
+                                                    nodes[finalNestedControlAncestor!] => finalNestedControlCandidate
+                                                    finalNestedControlCandidate.parent == finalReturnedRegionIndex!
+                                                        and (finalNestedControlCandidate.kind == 18
+                                                        or finalNestedControlCandidate.kind == 27
+                                                        or finalNestedControlCandidate.kind == 33
+                                                        or finalNestedControlCandidate.kind == 34)
+                                                        and finalNestedControlCandidate.typeId == finalReturnedNode.typeId
+                                                        -> if {
+                                                            finalNestedControlAncestor! => finalNestedControlValue!
+                                                            finalReturnedRegionIndex! => finalNestedControlAncestor!
+                                                        } else {
+                                                            finalNestedControlCandidate.parent => finalNestedControlAncestor!
+                                                        }
+                                                }
+                                            finalNestedControlValue! >= 0
+                                                -> if { finalNestedControlValue! => finalReturnedExistingValue! }
                                         }
-                                }
-                            finalReturnedArm.nextOperand => finalReturnedArmEnd!
-                            finalReturnedArmEnd! < 0 -> if {
-                                finalReturnedMatch.parent + 1 => finalReturnedArmEnd!
-                                finalReturnedArmEnd! < (nodes -> len)
-                                    and nodes[finalReturnedArmEnd!].kind != 0
-                                    and nodes[finalReturnedArmEnd!].kind != 11
-                                    -> while {
-                                        finalReturnedArmEnd! + 1 => finalReturnedArmEnd!
+                                    finalReturnedExistingValue! >= 0 and finalReturnedExistingValue! < (nodes -> len)
+                                        -> if {
+                                            nodes[finalReturnedExistingValue!] => finalReturnedExistingCandidate
+                                            (finalReturnedExistingCandidate.kind == 3
+                                                and finalReturnedType.kind == 1
+                                                and finalReturnedType.origin == 1
+                                                and finalReturnedType.symbol >= 2
+                                                and finalReturnedType.symbol <= 14) => finalReturnedExistingIsContextualIntegerLiteral
+                                            finalReturnedExistingCandidate.typeId == finalReturnedNode.typeId
+                                                or (finalReturnedExistingCandidate.typeId < 0
+                                                and finalReturnedExistingCandidate.typeKind == finalReturnedNode.typeKind
+                                                and finalReturnedExistingCandidate.typeOrigin == finalReturnedNode.typeOrigin
+                                                and finalReturnedExistingCandidate.typeModule == finalReturnedNode.typeModule
+                                                and finalReturnedExistingCandidate.typeSymbol == finalReturnedNode.typeSymbol)
+                                                or finalReturnedExistingIsContextualIntegerLiteral
+                                                -> if {
+                                                    finalReturnedExistingValue! => finalReturnedValue!
+                                                }
+                                        }
+                                    finalReturnedValue! >= 0 -> if {
+                                        nodes[finalReturnedValue!] => finalReturnedCanonicalValue!
+                                        finalReturnedNode.typeId => finalReturnedCanonicalValue!.typeId
+                                        finalReturnedType.kind => finalReturnedCanonicalValue!.typeKind
+                                        finalReturnedType.origin => finalReturnedCanonicalValue!.typeOrigin
+                                        finalReturnedType.module => finalReturnedCanonicalValue!.typeModule
+                                        finalReturnedType.symbol => finalReturnedCanonicalValue!.typeSymbol
+                                        recursiveTypeFlags[finalReturnedNode.typeId] => finalReturnedCanonicalValue!.typeFlags
+                                        finalReturnedCanonicalValue! => nodes[finalReturnedValue!]
+                                        nodes[finalReturnedRegionIndex!] => finalReturnedRegion!
+                                        finalReturnedValue! => finalReturnedRegion!.operand1
+                                        finalReturnedNode.typeId => finalReturnedRegion!.typeId
+                                        finalReturnedType.kind => finalReturnedRegion!.typeKind
+                                        finalReturnedType.origin => finalReturnedRegion!.typeOrigin
+                                        finalReturnedType.module => finalReturnedRegion!.typeModule
+                                        finalReturnedType.symbol => finalReturnedRegion!.typeSymbol
+                                        recursiveTypeFlags[finalReturnedNode.typeId] => finalReturnedRegion!.typeFlags
+                                        finalReturnedRegion! => nodes[finalReturnedRegionIndex!]
                                     }
-                            }
-                            finalReturnedArmIndex! + 1 => finalReturnedCandidateIndex!
-                            finalReturnedCandidateIndex! < finalReturnedArmEnd! and finalReturnedValue! < 0
-                                -> while {
-                                    nodes[finalReturnedCandidateIndex!] => finalReturnedCandidate
-                                    ((finalReturnedCandidate.kind >= 2 and finalReturnedCandidate.kind <= 9)
-                                        or (finalReturnedCandidate.kind >= 12 and finalReturnedCandidate.kind <= 18)
-                                        or finalReturnedCandidate.kind == 26
-                                        or finalReturnedCandidate.kind == 27
-                                        or finalReturnedCandidate.kind == 29
-                                        or (finalReturnedCandidate.kind >= 31 and finalReturnedCandidate.kind <= 43)) => finalReturnedCandidateProducesValue
-                                    (finalReturnedCandidate.kind == 3
-                                        and finalReturnedType.kind == 1
-                                        and finalReturnedType.origin == 1
-                                        and finalReturnedType.symbol >= 2
-                                        and finalReturnedType.symbol <= 14) => finalReturnedCandidateIsContextualIntegerLiteral
-                                    (finalReturnedCandidate.typeId == finalReturnedNode.typeId
-                                        or ((finalReturnedCandidate.typeKind == finalReturnedNode.typeKind or finalReturnedCandidate.typeId < 0)
-                                        and finalReturnedCandidate.typeOrigin == finalReturnedNode.typeOrigin
-                                        and finalReturnedCandidate.typeModule == finalReturnedNode.typeModule
-                                        and finalReturnedCandidate.typeSymbol == finalReturnedNode.typeSymbol)
-                                        or finalReturnedCandidateIsContextualIntegerLiteral) => finalReturnedCandidateMatchesType
-                                    finalReturnedCandidateProducesValue
-                                        and finalReturnedCandidateMatchesType -> if {
-                                            finalReturnedCandidateIndex! => finalReturnedValue!
-                                        }
-                                    finalReturnedCandidateIndex! + 1 => finalReturnedCandidateIndex!
                                 }
-                            finalReturnedValue! >= 0 -> if {
-                                nodes[finalReturnedValue!] => finalReturnedCanonicalValue!
-                                finalReturnedNode.typeId => finalReturnedCanonicalValue!.typeId
-                                finalReturnedType.kind => finalReturnedCanonicalValue!.typeKind
-                                finalReturnedType.origin => finalReturnedCanonicalValue!.typeOrigin
-                                finalReturnedType.module => finalReturnedCanonicalValue!.typeModule
-                                finalReturnedType.symbol => finalReturnedCanonicalValue!.typeSymbol
-                                recursiveTypeFlags[finalReturnedNode.typeId] => finalReturnedCanonicalValue!.typeFlags
-                                finalReturnedCanonicalValue! => nodes[finalReturnedValue!]
-                                nodes[finalReturnedRegionIndex!] => finalReturnedRegion!
-                                finalReturnedValue! => finalReturnedRegion!.operand1
-                                finalReturnedNode.typeId => finalReturnedRegion!.typeId
-                                finalReturnedType.kind => finalReturnedRegion!.typeKind
-                                finalReturnedType.origin => finalReturnedRegion!.typeOrigin
-                                finalReturnedType.module => finalReturnedRegion!.typeModule
-                                finalReturnedType.symbol => finalReturnedRegion!.typeSymbol
-                                recursiveTypeFlags[finalReturnedNode.typeId] => finalReturnedRegion!.typeFlags
-                                finalReturnedRegion! => nodes[finalReturnedRegionIndex!]
-                            }
                             finalReturnedArm.nextOperand => finalReturnedArmIndex!
                         }
                 }
@@ -830,7 +1282,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                         finalOperator!.opcode >= grammar.tokenIdPlus() and finalOperator!.opcode <= grammar.tokenIdPercent()
                             -> if {
                                 -1 => finalNumericOperand!
-                                nodes[finalOperator!.operand0] => finalNumericLeft
+                                materializedReadPeer(nodes[finalOperator!.operand0], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalNumericLeft
                                 finalNumericLeft.typeOrigin == 1
                                     and ((finalNumericLeft.typeSymbol >= 2 and finalNumericLeft.typeSymbol <= 14)
                                     or (finalNumericLeft.typeSymbol >= 19 and finalNumericLeft.typeSymbol <= 22))
@@ -838,7 +1290,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                                         finalOperator!.operand0 => finalNumericOperand!
                                     }
                                 finalNumericOperand! < 0 -> if {
-                                    nodes[finalOperator!.operand1] => finalNumericRight
+                                    materializedReadPeer(nodes[finalOperator!.operand1], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalNumericRight
                                     finalNumericRight.typeOrigin == 1
                                         and ((finalNumericRight.typeSymbol >= 2 and finalNumericRight.typeSymbol <= 14)
                                         or (finalNumericRight.typeSymbol >= 19 and finalNumericRight.typeSymbol <= 22))
@@ -847,7 +1299,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                                         }
                                 }
                                 finalNumericOperand! >= 0 -> if {
-                                    nodes[finalNumericOperand!] => finalNumericType
+                                    materializedReadPeer(nodes[finalNumericOperand!], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalNumericType
                                     finalNumericType.typeOrigin => finalOperator!.typeOrigin
                                     finalNumericType.typeModule => finalOperator!.typeModule
                                     finalNumericType.typeSymbol => finalOperator!.typeSymbol
@@ -886,16 +1338,18 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                         finalArithmeticLeftResolving! and finalArithmeticLeftResolveDepth! < 32
                             -> while {
                                 false => finalArithmeticLeftResolving!
-                                nodes[finalArithmeticLeftResolved!] => finalArithmeticLeftResolveNode
+                                materializedReadPeer(nodes[finalArithmeticLeftResolved!], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalArithmeticLeftResolveNode
                                 finalArithmeticLeftResolveNode.typeSymbol -> integerTypeRank => finalArithmeticLeftResolveRank!
+                                finalArithmeticLeftResolveNode.typeSymbol >= 19 and finalArithmeticLeftResolveNode.typeSymbol <= 22 => finalArithmeticLeftResolveIsFloat!
                                 finalArithmeticLeftResolveNode.typeId >= 0 -> if {
                                     frozenRecursiveSemanticTypes[finalArithmeticLeftResolveNode.typeId] => finalArithmeticLeftResolveType
                                     finalArithmeticLeftResolveType.kind == 1 and finalArithmeticLeftResolveType.origin == 1
                                         -> if {
                                             finalArithmeticLeftResolveType.symbol -> integerTypeRank => finalArithmeticLeftResolveRank!
+                                            finalArithmeticLeftResolveType.symbol >= 19 and finalArithmeticLeftResolveType.symbol <= 22 => finalArithmeticLeftResolveIsFloat!
                                         }
                                 }
-                                finalArithmeticLeftResolveRank! == 0 and finalArithmeticLeftResolveNode.operand0 >= 0
+                                finalArithmeticLeftResolveRank! == 0 and not finalArithmeticLeftResolveIsFloat! and finalArithmeticLeftResolveNode.operand0 >= 0
                                     and (finalArithmeticLeftResolveNode.kind == 5
                                     or finalArithmeticLeftResolveNode.kind == 6
                                     or finalArithmeticLeftResolveNode.kind == 7
@@ -915,16 +1369,18 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                         finalArithmeticRightResolving! and finalArithmeticRightResolveDepth! < 32
                             -> while {
                                 false => finalArithmeticRightResolving!
-                                nodes[finalArithmeticRightResolved!] => finalArithmeticRightResolveNode
+                                materializedReadPeer(nodes[finalArithmeticRightResolved!], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalArithmeticRightResolveNode
                                 finalArithmeticRightResolveNode.typeSymbol -> integerTypeRank => finalArithmeticRightResolveRank!
+                                finalArithmeticRightResolveNode.typeSymbol >= 19 and finalArithmeticRightResolveNode.typeSymbol <= 22 => finalArithmeticRightResolveIsFloat!
                                 finalArithmeticRightResolveNode.typeId >= 0 -> if {
                                     frozenRecursiveSemanticTypes[finalArithmeticRightResolveNode.typeId] => finalArithmeticRightResolveType
                                     finalArithmeticRightResolveType.kind == 1 and finalArithmeticRightResolveType.origin == 1
                                         -> if {
                                             finalArithmeticRightResolveType.symbol -> integerTypeRank => finalArithmeticRightResolveRank!
+                                            finalArithmeticRightResolveType.symbol >= 19 and finalArithmeticRightResolveType.symbol <= 22 => finalArithmeticRightResolveIsFloat!
                                         }
                                 }
-                                finalArithmeticRightResolveRank! == 0 and finalArithmeticRightResolveNode.operand0 >= 0
+                                finalArithmeticRightResolveRank! == 0 and not finalArithmeticRightResolveIsFloat! and finalArithmeticRightResolveNode.operand0 >= 0
                                     and (finalArithmeticRightResolveNode.kind == 5
                                     or finalArithmeticRightResolveNode.kind == 6
                                     or finalArithmeticRightResolveNode.kind == 7
@@ -937,8 +1393,8 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                                     }
                                 finalArithmeticRightResolveDepth! + 1 => finalArithmeticRightResolveDepth!
                             }
-                        nodes[finalArithmeticLeftResolved!] => finalArithmeticLeft
-                        nodes[finalArithmeticRightResolved!] => finalArithmeticRight
+                        materializedReadPeer(nodes[finalArithmeticLeftResolved!], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalArithmeticLeft
+                        materializedReadPeer(nodes[finalArithmeticRightResolved!], frozenRecursiveSemanticTypes, recursiveTypeFlags) => finalArithmeticRight
                         finalArithmeticLeft.typeSymbol => finalArithmeticLeftSymbol!
                         finalArithmeticRight.typeSymbol => finalArithmeticRightSymbol!
                         finalArithmeticLeft.typeId >= 0 -> if {
@@ -961,10 +1417,12 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                         }
                         finalArithmeticLeftSymbol! -> integerTypeRank => finalArithmeticLeftRank
                         finalArithmeticRightSymbol! -> integerTypeRank => finalArithmeticRightRank
+                        finalArithmeticLeftSymbol! >= 19 and finalArithmeticLeftSymbol! <= 22 => finalArithmeticLeftIsFloat
+                        finalArithmeticRightSymbol! >= 19 and finalArithmeticRightSymbol! <= 22 => finalArithmeticRightIsFloat
                         finalArithmeticLeft => finalArithmeticCanonical!
-                        finalArithmeticRightRank > finalArithmeticLeftRank
+                        not finalArithmeticLeftIsFloat and (finalArithmeticRightIsFloat or finalArithmeticRightRank > finalArithmeticLeftRank)
                             -> if { finalArithmeticRight => finalArithmeticCanonical! }
-                        finalArithmeticLeftRank > 0 or finalArithmeticRightRank > 0
+                        finalArithmeticLeftIsFloat or finalArithmeticRightIsFloat or finalArithmeticLeftRank > 0 or finalArithmeticRightRank > 0
                             -> if {
                                 finalArithmeticType!.typeId != finalArithmeticCanonical!.typeId
                                     -> if { true => finalArithmeticTypesChanged! }
@@ -1052,8 +1510,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                             nodes[finalCallArrayArgument!] => finalCallArrayArgumentNode!
                             nodes[finalCallArrayParameter!] => finalCallArrayParameterNode
                             finalCallArrayArgumentNode!.kind == 14
-                                and finalCallArrayParameterNode.typeId >= 0
-                                and finalCallArrayParameterNode.typeId < (frozenRecursiveSemanticTypes -> len)
+                                and (frozenRecursiveSemanticTypes -> hasConcreteLiteralContext(finalCallArrayParameterNode.typeId))
                                 and (finalCallArrayParameterNode.typeKind == 2
                                 or finalCallArrayParameterNode.typeKind == 3
                                 or finalCallArrayParameterNode.typeKind == 4
@@ -1292,6 +1749,7 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
                                 and (finalMaterializeCall.callAst == finalMaterializeConsole!.astNode or finalMaterializeCallSharesFlow!)
                                 and (finalMaterializeCall.functionSymbol == -101
                                 or finalMaterializeCall.functionSymbol == -102
+                                or finalMaterializeCall.functionSymbol == -117
                                 or finalMaterializeCall.functionSymbol == -116)
                                 -> if {
                                     finalMaterializeCall.functionSymbol => finalMaterializeConsole!.symbol
@@ -1805,7 +2263,11 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
     nodes -> repairStructuredParallelCallbackRoots(prepared, recursiveTypes, recursiveTypeFlags)
     nodes -> repairNamedFlowReceiverCallPlans(prepared, recursiveTypes, recursiveTypeFlags)
     nodes -> repairDirectFlowCallBindings
-    nodes -> repairDirectAsyncAwaitBindings(prepared)
+    # Some imported async calls acquire their Task identity only after runtime
+    # normalization. Give a discarded direct await one explicit value consumer
+    # before repairing the edges of consumers that are already present.
+    nodes -> repairDiscardedDirectAsyncAwaits(prepared)
+    nodes -> repairDirectAsyncAwaitConsumers(prepared)
     nodes -> sealPathRuntimeOpcodes(prepared)
     nodes -> sealLateResolvedCallResultTypes(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags)
     nodes -> sealLateValueAliasTypes(prepared)
@@ -1972,9 +2434,40 @@ finalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticConte
     nodes -> sealLateNominalMemberTypes(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!)
     nodes -> sealFinalBinaryOperandTopology(prepared)
     nodes -> sealPostArithmeticSlotTypes(prepared)
-    nodes -> sealFinalContextualNumericLiterals
+    nodes -> sealFinalContextualNumericLiterals(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
     nodes -> sealPostArithmeticSlotTypes(prepared)
+    # The second slot pass can be the first point where a mutable read acquires
+    # its platform-width type. Close the exact immutable-alias edge after that
+    # pass, then settle arithmetic whose peer was that alias.
+    nodes -> sealLateValueAliasTypes(prepared)
+    nodes -> sealFinalContextualNumericLiterals(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
     nodes -> sealEnumMatchTypesFromTerminalArms(frozenRecursiveSemanticTypes, recursiveTypeFlags)
     nodes -> sealCompletedIfAndRegionTypes
     nodes -> sealControlBindingAliasTypes
+    nodes -> normalizeConcreteNullaryCallPlans(prepared)
+    nodes -> sealBoundYieldResultTypes
+}
+
+# A bound yield produces the caller block's result. Its receiver and
+# additional input operands keep their own types.
+sealBoundYieldResultTypes nodes: mut [TypedIrNode; ~] -> Unit {
+    0 => boundYieldIndex!
+    boundYieldIndex! < (nodes -> len) -> while {
+        nodes[boundYieldIndex!] => boundYield!
+        boundYield!.kind == 9 and boundYield!.opcode == -227
+            and boundYield!.parent >= 0
+            and nodes[boundYield!.parent].kind == 17
+            and nodes[boundYield!.parent].typeId >= 0
+            -> if {
+                nodes[boundYield!.parent] => resultBinding
+                resultBinding.typeOrigin => boundYield!.typeOrigin
+                resultBinding.typeModule => boundYield!.typeModule
+                resultBinding.typeSymbol => boundYield!.typeSymbol
+                resultBinding.typeId => boundYield!.typeId
+                resultBinding.typeKind => boundYield!.typeKind
+                resultBinding.typeFlags => boundYield!.typeFlags
+                boundYield! => nodes[boundYieldIndex!]
+            }
+        boundYieldIndex! + 1 => boundYieldIndex!
+    }
 }

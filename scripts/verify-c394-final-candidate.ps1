@@ -19,6 +19,38 @@ $output = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 
 function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function RepoPath([string]$Path) { (Resolve-Path -LiteralPath (Join-Path $root $Path)).Path }
+function Invoke-C394NegativeDiagnostic([string]$Source, [string]$ExpectedPath, [string]$OutputExe, [bool]$RequireSuffix) {
+    $bundle = [ordered]@{ completed = 0; total = 1; exitCode = $null; llvmProduced = $null }
+    $compilerFile = if ([IO.Path]::GetExtension($candidate) -ceq '.dll') { 'dotnet' } else { $candidate }
+    $compilerArguments = if ($compilerFile -ceq 'dotnet') { @($candidate) } else { @() }
+    $compilerArguments += @('build', $Source, '-o', $OutputExe, '--target', 'windows-x64', '--llvm', (RepoPath '.tools/llvm-22.1.8'), '-O1', '--keep-temps')
+    if ($compilerFile -cne 'dotnet') { $compilerArguments += @('--stdlib', (RepoPath 'stdlib')) }
+    $diagnostic = Invoke-VerificationProcessCapture -FilePath $compilerFile -ArgumentList $compilerArguments `
+        -WorkingDirectory $root -Description 'C394 whole-selfhost source diagnostic' -TimeoutMilliseconds 120000
+    $bundle.exitCode = $diagnostic.ExitCode
+    $diagnosticText = ($diagnostic.Stdout + $diagnostic.Stderr).Replace("`r`n", "`n")
+    $diagnosticLines = @($diagnosticText -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $expectedDiagnostic = [IO.File]::ReadAllText($ExpectedPath).TrimEnd([char[]]@("`r", "`n"))
+    $diagnosticLl = [IO.Path]::ChangeExtension($OutputExe, '.ll')
+    $nativeDiagnosticLl = "$OutputExe.ll"
+    $bundle.llvmProduced = Test-Path -LiteralPath $OutputExe
+    foreach ($llPath in (@($diagnosticLl, $nativeDiagnosticLl) | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $llPath)) { continue }
+        # Native semantic errors may write a one-line diagnostic stub with an .ll suffix.
+        # Any other content is emitted LLVM and fails this negative gate.
+        $llText = [IO.File]::ReadAllText($llPath).TrimEnd([char[]]@("`r", "`n"))
+        if ($diagnosticLines.Count -ne 1 -or $llText -cne $diagnosticLines[0]) { $bundle.llvmProduced = $true }
+    }
+    $matched = $diagnosticLines.Count -eq 1 -and $(if ($RequireSuffix) {
+        $diagnosticLines[0].EndsWith($expectedDiagnostic, [StringComparison]::Ordinal)
+    } else { $diagnosticLines[0].Contains($expectedDiagnostic, [StringComparison]::Ordinal) })
+    if ($diagnostic.ExitCode -eq 0 -or -not $matched -or
+        $diagnosticText -match '(?im)\b(?:warning|note)\b' -or $bundle.llvmProduced) {
+        throw "C394 whole-selfhost diagnostic invariant failed: $diagnosticText"
+    }
+    $bundle.completed = 1
+    return $bundle
+}
 
 $contractPath = RepoPath 'scripts/contracts/c394-final-candidate.json'
 $schemaPath = RepoPath 'scripts/contracts/c394-final-candidate-result.schema.json'
@@ -39,6 +71,8 @@ $inputs = [ordered]@{
     lexicalContract = RepoPath $contract.lexicalContract.path
     diagnosticSource = RepoPath $contract.diagnosticFixture.source
     diagnosticExpected = RepoPath $contract.diagnosticFixture.expected
+    nonliteralDiagnosticSource = RepoPath $contract.nonliteralDiagnosticFixture.source
+    nonliteralDiagnosticExpected = RepoPath $contract.nonliteralDiagnosticFixture.expected
 }
 foreach ($fixture in $contract.expressionFixtures) {
     $inputs["source:$($fixture.id)"] = RepoPath "examples/regression/$($fixture.id).slg"
@@ -52,7 +86,9 @@ if ($hashes.compiler -cne $ExpectedCandidateSha256) {
 if ($hashes.nativeContextFixture -cne $contract.nativeContextFixture.sha256 -or
     $hashes.lexicalContract -cne $contract.lexicalContract.sha256 -or
     $hashes.diagnosticSource -cne $contract.diagnosticFixture.sourceSha256 -or
-    $hashes.diagnosticExpected -cne $contract.diagnosticFixture.expectedSha256) {
+    $hashes.diagnosticExpected -cne $contract.diagnosticFixture.expectedSha256 -or
+    $hashes.nonliteralDiagnosticSource -cne $contract.nonliteralDiagnosticFixture.sourceSha256 -or
+    $hashes.nonliteralDiagnosticExpected -cne $contract.nonliteralDiagnosticFixture.expectedSha256) {
     throw 'C394 frozen contract input hash mismatch'
 }
 foreach ($fixture in $contract.expressionFixtures) {
@@ -79,6 +115,7 @@ $contextBundle = [ordered]@{ completed = 0; total = 17; result = $null }
 $lexicalBundle = [ordered]@{ completed = 0; total = 62 }
 $expressionBundle = [ordered]@{ completed = 0; total = 2; result = $null }
 $diagnosticBundle = [ordered]@{ completed = 0; total = 1; exitCode = $null; llvmProduced = $null }
+$nonliteralDiagnosticBundle = [ordered]@{ completed = 0; total = 1; exitCode = $null; llvmProduced = $null }
 $failureIds = [System.Collections.Generic.List[string]]::new()
 $failureMessage = $null
 $phase = 'CONTEXTUAL'
@@ -114,24 +151,11 @@ try {
     $expressionBundle.result = $expressionResultPath
 
     $phase = 'DIAGNOSTIC'
-    $diagnosticExe = Join-Path $output 'diagnostic.exe'
-    $compilerFile = if ([IO.Path]::GetExtension($candidate) -ceq '.dll') { 'dotnet' } else { $candidate }
-    $compilerArguments = if ($compilerFile -ceq 'dotnet') { @($candidate) } else { @() }
-    $compilerArguments += @('build', $inputs.diagnosticSource, '-o', $diagnosticExe, '--target', 'windows-x64', '--llvm', (RepoPath '.tools/llvm-22.1.8'), '-O1', '--keep-temps')
-    $diagnostic = Invoke-VerificationProcessCapture -FilePath $compilerFile -ArgumentList $compilerArguments `
-        -WorkingDirectory $root -Description 'C394 whole-selfhost source diagnostic' -TimeoutMilliseconds 120000
-    $diagnosticBundle.exitCode = $diagnostic.ExitCode
-    $diagnosticText = ($diagnostic.Stdout + $diagnostic.Stderr).Replace("`r`n", "`n")
-    $diagnosticLines = @($diagnosticText -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $expectedDiagnostic = [IO.File]::ReadAllText($inputs.diagnosticExpected).TrimEnd([char[]]@("`r", "`n"))
-    $diagnosticLl = [IO.Path]::ChangeExtension($diagnosticExe, '.ll')
-    $diagnosticBundle.llvmProduced = (Test-Path -LiteralPath $diagnosticLl) -or (Test-Path -LiteralPath $diagnosticExe)
-    if ($diagnostic.ExitCode -eq 0 -or $diagnosticLines.Count -ne 1 -or
-        -not $diagnosticLines[0].EndsWith($expectedDiagnostic, [StringComparison]::Ordinal) -or
-        $diagnosticText -match '(?im)\b(?:warning|note)\b' -or $diagnosticBundle.llvmProduced) {
-        throw "C394 whole-selfhost diagnostic invariant failed: $diagnosticText"
-    }
-    $diagnosticBundle.completed = 1
+    $diagnosticBundle = Invoke-C394NegativeDiagnostic $inputs.diagnosticSource $inputs.diagnosticExpected `
+        (Join-Path $output 'diagnostic.exe') $true
+    $phase = 'NONLITERAL_DIAGNOSTIC'
+    $nonliteralDiagnosticBundle = Invoke-C394NegativeDiagnostic $inputs.nonliteralDiagnosticSource $inputs.nonliteralDiagnosticExpected `
+        (Join-Path $output 'nonliteral-diagnostic.exe') $false
 } catch {
     [void]$failureIds.Add("C394_$($phase)_FAILED")
     $failureMessage = $_.Exception.Message
@@ -168,6 +192,7 @@ $record = [ordered]@{
     lexicalPredicates = $lexicalBundle
     expressionFixtures = $expressionBundle
     wholeSelfhostDiagnostic = $diagnosticBundle
+    nonliteralDiagnostic = $nonliteralDiagnosticBundle
     failureIds = $failureIds
     failure = if ($failureIds.Count -eq 0) { $null } else { $failureMessage }
 }
@@ -177,4 +202,4 @@ if (-not ((Get-Content -LiteralPath $resultPath -Raw) | Test-Json -SchemaFile $s
     throw "C394 result schema failure: $resultPath"
 }
 if ($record.status -ne 'passed') { throw "C394 failed: $($failureIds -join ', '); result=$resultPath" }
-Write-Host "[C394 final candidate] PASS contextual 17/17; lexical 62/62; expression 2/2; diagnostic 1/1; result=$resultPath"
+Write-Host "[C394 final candidate] PASS contextual 17/17; lexical 62/62; expression 2/2; diagnostics 2/2; result=$resultPath"

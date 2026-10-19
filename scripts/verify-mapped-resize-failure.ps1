@@ -19,7 +19,8 @@ $runtimeSources = [ordered]@{
 }
 $declarations = @'
 %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
-declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
 declare dllimport i32 @CloseHandle(ptr)
 declare dllimport i32 @GetFileSizeEx(ptr, ptr)
 declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
@@ -56,16 +57,13 @@ foreach ($authority in $runtimeSources.Keys) {
     }
     # Self-host declares Windows first and Linux second; identify the OS by
     # actual calls, rather than silently accepting a different runtime block.
-    $windowsFunctions = @($functions | Where-Object { $_.Value.Contains('@CreateFileA(') })
+    $windowsFunctions = @($functions | Where-Object { $_.Value.Contains('@CreateFileW(') })
     if ($windowsFunctions.Count -ne 1) { throw "Expected one Windows map function for $authority" }
     $body = $windowsFunctions[0].Value.Replace(' #0 {', ' {')
     $body = $body.Replace('@SetFilePointerEx(', '@sollang_probe_seek(').Replace('@SetEndOfFile(', '@sollang_probe_end(')
-    if ($authority -eq 'managed') {
-        $helperSource = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.RuntimeHelpers.cs')).Replace("`r`n", "`n")
-        $copyFunctions = [regex]::Matches($helperSource, '(?ms)^\s*define internal i32 @sollang_copy_text_to_c_path\([^\n]+\) #0 \{.*?^\s*\}')
-        if ($copyFunctions.Count -ne 1) { throw 'Expected one managed C path copy runtime function.' }
-        $body += "`n" + $copyFunctions[0].Value.Replace(' #0 {', ' {')
-    }
+    $widePathFunctions = [regex]::Matches($source, '(?ms)^\s*define internal i32 @sollang_windows_utf8_path\([^\n]+\) (?:#0 )?\{.*?^\s*\}')
+    if ($widePathFunctions.Count -ne 1) { throw "Expected one Windows UTF-8 path conversion function for $authority" }
+    $body += "`n" + $widePathFunctions[0].Value.Replace(' #0 {', ' {')
     $result = Invoke-RuntimeLlvmProbe -Probe $probe -Authority $authority -Llvm "$declarations`n$body`n$wrapper" -Arguments @($Expectation) -ExpectedOutput "mapped resize ${Expectation}: 3/3"
     $results += [ordered]@{
         authority = $authority

@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "schemaVersion", "featureAuthority", "expressionSubmatrix", "families"],
+  "properties": {
+    "$schema": { "const": "compiler-parity-audit.schema.json" },
+    "schemaVersion": { "const": 1 },
+    "featureAuthority": { "const": "scripts/contracts/ai-slg-best-practices.json" },
+    "expressionSubmatrix": { "const": "scripts/contracts/expression-lowering-parity.json" },
+    "families": {
+      "type": "array",
+      "minItems": 30,
+      "maxItems": 30,
+      "items": { "$ref": "#/$defs/family" }
+    }
+  },
+  "$defs": {
+    "family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "managedOwner", "selfhostOwner", "positiveFixture", "negativeFixture", "contexts", "targets", "evidence", "submatrix"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "managedOwner": { "$ref": "#/$defs/owner" },
+        "selfhostOwner": { "$ref": "#/$defs/owner" },
+        "positiveFixture": { "$ref": "#/$defs/fixture" },
+        "negativeFixture": { "$ref": "#/$defs/fixture" },
+        "contexts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["entry", "ordinary", "nested"],
+          "properties": {
+            "entry": { "$ref": "#/$defs/state" },
+            "ordinary": { "$ref": "#/$defs/state" },
+            "nested": { "$ref": "#/$defs/state" }
+          }
+        },
+        "targets": {
+          "type": "object", "additionalProperties": false,
+          "required": ["windows", "linux", "browser"],
+          "properties": {
+            "windows": { "$ref": "#/$defs/target" },
+            "linux": { "$ref": "#/$defs/target" },
+            "browser": { "$ref": "#/$defs/target" }
+          }
+        },
+        "evidence": { "$ref": "#/$defs/evidence" },
+        "submatrix": { "type": ["string", "null"], "enum": [null, "scripts/contracts/expression-lowering-parity.json"] }
+      }
+    },
+    "state": { "type": "string", "enum": ["unverified", "pass", "fail", "not-applicable"] },
+    "target": { "type": "string", "enum": ["unassessed", "applicable", "not-applicable"] },
+    "owner": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "path"],
+      "properties": {
+        "state": { "type": "string", "enum": ["unverified", "confirmed"] },
+        "path": { "type": ["string", "null"], "pattern": "^(src/Sollang\\.Compiler|selfhost)/.+\\.(cs|slg)$" }
+      }
+    },
+    "fixture": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "source", "expected"],
+      "properties": {
+        "state": { "type": "string", "enum": ["unverified", "candidate", "pass", "fail"] },
+        "source": { "type": ["string", "null"], "pattern": "^(?:examples/(?:user|regression)/.+|scripts/probes/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+)\\.slg$" },
+        "expected": { "type": ["string", "null"], "pattern": "^(?:examples/regression/(?:diagnostics|expected)/.+|scripts/probes/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+)\\.(?:stdout|(?:compiler\\.)?stderr(?:\\.contains)?)\\.txt$" }
+      }
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["level", "runId", "sourceFingerprint", "artifacts"],
+      "properties": {
+        "level": { "type": "string", "enum": ["none", "static", "managed-exact", "differential-exact", "native-exact", "stage-fixed-point"] },
+        "runId": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]+$" },
+        "sourceFingerprint": { "type": ["string", "null"], "pattern": "^[a-fA-F0-9]{64}$" },
+        "managedCompilerSha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "selfhostCompilerSha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "promotionProof": {
+          "type": "object", "additionalProperties": false,
+          "required": ["managedPositiveBatch", "selfhostPositiveBatch", "negativeResult"],
+          "properties": {
+            "managedPositiveBatch": { "$ref": "#/$defs/positiveBatchPin" },
+            "selfhostPositiveBatch": { "$ref": "#/$defs/positiveBatchPin" },
+            "negativeResult": { "$ref": "#/$defs/pinnedResult" }
+          }
+        },
+        "artifacts": {
+          "type": "array", "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^artifacts/.+" }
+        }
+      }
+    },
+    "pinnedResult": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^artifacts/scratch/.+\\.json$" },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" }
+      }
+    },
+    "positiveBatchPin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "compilerPath", "jobs"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^artifacts/scratch/.+\\.json$" },
+        "sha256": { "type": "string", "pattern": "^[a-fA-F0-9]{64}$" },
+        "compilerPath": { "type": "string", "pattern": "^(?:src/Sollang\\.Compiler/.+\\.dll|artifacts/scratch/.+\\.exe)$" },
+        "jobs": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    }
+  }
+}

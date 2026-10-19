@@ -1,0 +1,117 @@
+import std.net as net
+import std.net.socket as socket
+
+main {
+    socket.ListenOptions {
+        endpoint: net.loopback(0) -> unified
+        backlog: 1
+        reuseAddress: true
+    } -> listen -> when {
+        Err(error) { "listen-error=$(error.code)" -> println }
+        Ok(listener) {
+            listener -> localPort -> when {
+                Err(error) {
+                    listener -> close
+                    "port-error=$(error.code)" -> println
+                }
+                Ok(port) {
+                    net.loopback(port) -> unified -> connect -> when {
+                        Err(error) {
+                            listener -> close
+                            "connect-error=$(error.code)" -> println
+                        }
+                        Ok(sender) {
+                            listener -> accept -> when {
+                                Err(error) {
+                                    sender -> close
+                                    listener -> close
+                                    "accept-error=$(error.code)" -> println
+                                }
+                                Ok(receiver) {
+                                    socket.CompletionReactorOptions {
+                                        registrations: 1
+                                        pendingOperations: 1
+                                        completionBatch: 1
+                                    } -> socket.completionReactor -> when {
+                                        Err(error) {
+                                            receiver -> close
+                                            sender -> close
+                                            listener -> close
+                                            "create-error=$(error.code)" -> println
+                                        }
+                                        Ok(reactor) {
+                                            reactor -> registerStream(receiver, 81) -> when {
+                                                Err(failure) {
+                                                    failure.reactor => failedReactor
+                                                    failure.connection => returnedReceiver
+                                                    failedReactor -> close
+                                                    returnedReceiver -> close
+                                                    sender -> close
+                                                    listener -> close
+                                                    "register-error=$(failure.error.code)" -> println
+                                                }
+                                                Ok(registered) {
+                                                    sender -> sendText("abc") -> when {
+                                                        Err(error) {
+                                                            registered -> close
+                                                            sender -> close
+                                                            listener -> close
+                                                            "send-error=$(error.code)" -> println
+                                                        }
+                                                        Ok(_) {
+                                                            [0, 0, 0; ~] -> socket.operationSlot(801, socket.OperationDirection.Receive) => slot
+                                                            registered -> submit(81, slot) -> when {
+                                                                Err(failure) {
+                                                                    failure.reactor => failedReactor
+                                                                    failure.slot => returnedSlot
+                                                                    returnedSlot -> intoBytes => returned
+                                                                    failedReactor -> close
+                                                                    sender -> close
+                                                                    listener -> close
+                                                                    "submit-error=$(failure.error.code),len=$(returned -> len)" -> println
+                                                                }
+                                                                Ok(submission) {
+                                                                    submission -> when {
+                                                                        socket.CompletionSubmission.Pending(pendingReactor) {
+                                                                            pendingReactor -> close
+                                                                            sender -> close
+                                                                            listener -> close
+                                                                            "completed=false" -> println
+                                                                        }
+                                                                        socket.CompletionSubmission.Completed(completion) {
+                                                                            completion.reactor => completedReactor
+                                                                            completion.slot => completedSlot
+                                                                            completedSlot -> transferredCount -> when {
+                                                                                None { UIntSize(999) }
+                                                                                Some(count) { count }
+                                                                            } => count
+                                                                            completedSlot -> operationState -> when {
+                                                                                Completed { true }
+                                                                                else { false }
+                                                                            } => completed
+                                                                            completedSlot -> byteAt(0) => first
+                                                                            completedSlot -> byteAt(2) => last
+                                                                            completedSlot -> intoBytes => returned
+                                                                            "completed=$completed,count=$count,first=$first,last=$last,len=$(returned -> len)" -> println
+                                                                            completedReactor -> close
+                                                                            sender -> close
+                                                                            listener -> close
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

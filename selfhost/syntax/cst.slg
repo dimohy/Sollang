@@ -2,6 +2,7 @@ namespace sollang.compiler.cst
 
 import sollang.compiler.lexer as lexer
 import sollang.compiler.parser as parser
+import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
@@ -27,7 +28,12 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
     parser.ParseRequest {
         source: source
         startRule: request.startRule
-    } -> parser.parseRuleEvents => events
+    } -> parser.parsePreparedRuleEvents(tokens) => events
+    request -> buildPreparedRule(tokens, events)
+}
+
+public buildPreparedRule request: BuildRequest, tokens: ref [syntax.SyntaxToken; ~], events: ref [parser.ParseEvent; ~] -> [GreenNode; ~] {
+    request.source => source
     [GreenNode; ~] => nodes!
     [Int; ~] => nodeStack!
     0 => stackDepth!
@@ -122,6 +128,10 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
                                 affectedNode! >= 0 -> while {
                                     affectedNode! => currentAffectedNode
                                     nodes![affectedNode!] => affected!
+                                    affected!.firstToken < 0 and errorTokenCount > 0
+                                        -> if {
+                                            event.tokenIndex => affected!.firstToken
+                                        }
                                     affected!.tokenCount + errorTokenCount => affected!.tokenCount
                                     errorStart! + errorLength! - affected!.start => affected!.length
                                     affected!.parent => affectedNode!

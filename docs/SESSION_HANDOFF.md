@@ -1,6 +1,643 @@
 # Sollang session handoff
 
-Updated: 2026-09-13 21:47 (Asia/Seoul)
+## CURRENT USER STOP CHECKPOINT — 2026-10-08
+
+Explicit user request: save a restart record for another session and stop. Observed UTC 2026-10-08T02:26:56.583061+00:00 (KST UTC+09:00). This checkpoint supersedes the historical 2026-10-05 checkpoint preserved below. The goal is paused, NOT completed. Do not start another build/test or resume until the user explicitly resumes. No subagents were used. Preserve the dirty worktree; no reset, revert, commit or push was performed for this pause.
+
+### Stop outcome and authoritative receipts
+
+Base `B = artifacts/scratch/resume-20261006-owner-continuation22`.
+
+- `B/native102-original-focused312/result.json`: public native acceptance interrupted by the user's pause, completed **0/10**; inputsStable=true, processesStopped=true. Raw result remains **failed**, `ValueError: PROCESS_DESCENDANT_OUTLIVED_PARENT`, from shutdown supervision. Do not rewrite that raw failure as success or infer a compiler defect from cancellation. This run is user-cancelled, not an additional timeout.
+- `B/native102-original-focused312/user-pause-audit314.json`: root PID46544 and owned child PID52212 independently rechecked; activeOwnedProcesses=[] at 2026-10-08T02:25:36.5543534Z. An initial PowerShell ID-array expression was invalid; this audit was corrected using a computed array and Get-Process. The supervisor also confirms process shutdown.
+- Native102 private array acceptance has not started (**0/1**). Current native combined acceptance is **0/11 (0.00%)**, not a passing gate. Failed/cancelled output is protected.
+- Durable pause snapshot: `B/user-stop-final-state315.json`. Execution ledger: `scripts/contracts/active-goal-progress.json`, `currentResume` subsection. Read actual result files before interpreting historical fields. Some older fields describe earlier source epochs.
+
+### Actual progress at pause
+
+| Goal axis | Completed/total | Percentage | Current evidence/limit |
+|---|---:|---:|---|
+| Compiler stabilization | 371/528 | 70.27% | compiler-defects.json: 156 candidate-fixed, one open C385; candidates are not closed |
+| Current C#-compiled SLG focused cases | 11/11 | 100.00% | B/move-function-index-managed307/result.json; not native acceptance |
+| Current Native102 focused acceptance | 0/11 | 0.00% | public312 interrupted0/10 + private array not started0/1 |
+| Entire compiler source comparison | 0/7 | 0.00% | structural-parity-detail.json phaseClosure; partial reviews are not phase closure |
+| Entire compiler execution comparison | 0/2708 | 0.00% | frozen whole catalog not completed at current source epoch |
+| Stage2/Stage3 | 0/2 | 0.00% | Native102 is C#-compiled Stage1, not Stage2 |
+| Frozen stdlib/runtime | 6/22 | 27.27% | 16 remain; full stdlib parse admission is not backlog closure |
+| Performance | unknown | unknown | sampled candidates; no comparable verified speed improvement |
+| Storage | unknown | unknown | exact cleanup receipts exist; total denominator not verified |
+| Overall | unknown | unknown | performance/storage denominators absent; overlapping focused units cannot be summed |
+
+Other independently scoped evidence: historical focused94/94, original related41/41, focused8/8 and required runtime3/3 remain reuse candidates only when their complete pinned input/dependency identity is unchanged. Do not blindly repeat these passed scopes. Current semantic3014/4; moving-parameter control30513/13 (C# compiles the actual old/new SLG kernel); array source controls13/13 inside307; full stdlib source3081/1 with144 sources,2076 active declarations,23 inactive,zero diagnostics. Qualified1067 current managed307 passes but native is unfinished:1/2 (50.00%). Context paired gate0/1 (0.00%); current source epoch needs fresh context proof. Native101 borrowed lookup14/14 at298 is historical because shared helper changed afterward; it is not Native102 proof.
+
+### Current producers and canonical source changes
+
+Managed producer31: `artifacts/scratch/resume-20261008-csharp-stream-flow-build31/bin/Sollang.Compiler/release/Sollang.Compiler.exe`; launcher SHA256 `23C686710378D0EEC91A1747D923D9F5FEDF6A98EEF7EE38D4C9E8F67F961443`. Adjacent DLL SHA256 `FB24A0E4CC019CD6597352C83BC48717FDD257B02CF97E58838218D0E16CF6FA`. Do not mix EXE and DLL identity.
+
+Current Native102: `artifacts/scratch/resume-20261008-canonical-cli-candidate102/compiler-build01/compiler.exe`; SHA256 `169340F20CC675B0363A73E2ACBA0A5517E3911B4A88E147F650D02CA166E417`. Build receipt `B/native102-shared-function-index-build311/result.json` passed under the original180s build budget, stable inputs and stopped processes. This is C# compiling SLG compiler source once (Stage1). Native acceptance remains pending. Protect this product and its pending consumer dependencies.
+
+Canonical changes this continuation are in `selfhost/semantic/ownership_check.slg` and `selfhost/ir/typed.slg`:
+
+1. BorrowedText selected-function lookup now keeps private generic selection plus ascending function declaration candidates. Generic priority, duplicate same-function allowance, ambiguity/missing decisions and dynamically growing inferred contracts remain unchanged. Public generic-map API remains unchanged. Source comparison278 followed existing C# focused behavior2774/4 before SLG change; actual old/new selection kernel283/297 and Native10129814/14 passed.
+2. Shared `typedIr.functionDeclarationIrs` collects kind0 functions in IR order once. `movesFrom` iterates those candidates instead of every IR node for each declared call; all existing module/symbol/parameter/flag/argument predicates, repeated matches and order remain. Ownership lookup reuses the shared helper. Existing C# behavior277 was confirmed first; actual C#/SLG comparison299 preceded the change. Current semantic3014/4, exact old/new moving-parameter kernel30513/13, full-body predicate preservation310, focused30711/11 and full stdlib source3081/1 passed. Native102 must still prove this source epoch.
+
+Keep comparison `B/move-function-index-source-comparison299.json`, `B/move-function-index-static-preservation310.json` and backup sources `typed-before-move-function-index300.slg`, `ownership-before-shared-function-index300.slg`, `ownership-check-before-borrowed-call-index278.slg`. Do not infer parity solely from rule names or passing small fixtures. Earlier canonical wrapper binding-child index, array-layout liveness, recovery oracle and independent1067 expected output remain in place; do not undo them.
+
+### Failures, cost and storage boundaries
+
+Confirmed original-budget timeout history is11 (previous8 + Native100 context271 at1200s + Native100 private array274 at1200s + Native101 public1067 at180s290). Native101 array291 was agent-cancelled for cost, with raw shutdown failure and cancellation audit300. Native102312 is user-cancelled, not a timeout. Historical private array227 used the wrong180s budget: test-budget failure, not a compiler semantic result. Native98 array semantic mismatch and legacy retirement-evidence format rejection remain distinct. Fixture295 format-note failure and304 fixture parse failure were corrected and independently rerun; preserve original failed records.
+
+Earlier native samples identified borrowedTextSelectedCallFunctionIr (275) and typed.movesFrom (296). Native102 original1067 samples313 observed sourceNode and nodeBelongsToOwnershipRegion; a third instruction sample is not attributed. Three IP observations do not prove a sole bottleneck or total speed improvement. Inspect existing313/logs first; do not repeat costly runs merely for deeper logging. Existing production diagnostic series budget is319703/360000ms,40297ms remaining, wholePreparationRepeatAdmitted=false. Original acceptance budgets are separate and must stay unchanged.
+
+Native101 retired via existing lifecycle after all five consumers had terminal evidence (295,298,293,290,291); receipt `B/native101-consumer-retirement309.json`, reclaimed259501597 bytes. Its compiler.exe no longer exists. Keep results/hashes/source fixtures. Native92/99/100 are the explicit reusable products (maximum3); Native98 remains protected due to unresolved legitimate retirement evidence; Native102 is protected pending acceptance. Physical retained products92/98/99/100/102 are therefore not a claim that all storage work is finished. Native100 is Native102's formatter; Native99 is Native100's predecessor dependency. Do not delete an unfinished product or forge a consumer success to satisfy retention. Successful307/308 and focused301/305 output cleanup receipts are already recorded; reuse them rather than repeating cleanup/testing.
+
+### Executable restart order
+
+1. Read current Slogs server instructions. Search Sollang project decisions and user-wide Korean terminology/reporting preferences separately; compactly recall relevant entries. Current explicit **C# first** overrides old conflicting SLG-first memories. Read this checkpoint and `docs/AI_SLG_BEST_PRACTICES.md` before code exploration. No subagents.
+2. Check live Git dirty state, canonical source and full dependency fingerprints, Native102/managed31 hashes, execution results and owned-process audit. Preserve failed/cancelled outputs and pending compiler consumers. Read actual small source/log portions when a structured query cannot identify the cause.
+3. Reuse current managed proofs only if inputs are unchanged. Next native proof must include the current moving-parameter13 cases; Native101's old14 proof is insufficient. Original public195/1067 native acceptance is unfinished, not passed. Private array compiler workload113 plus13 uses the original1200s budget; context suite113/4 also uses1200s, not the earlier mistaken180s. Use existing supervised plans/commands with independent logs/results; verify source manifest, tool identity and expectations before execution. Admit another costly attempt only from concrete source/evidence change or required acceptance justification; never silently relax limits or retry budgets.
+4. Every fix: focused C# compile/run -> actual C#/SLG source/branch/diagnostic comparison -> SLG implementation -> focused paired controls. If313 evidence requires another source unit, close that unit in this order before another self-host acceptance build. Do not claim measured speedup without a comparable same-condition baseline.
+5. Only after all units close, run one final exhaustive C#/SLG source and execution comparison, Stage2/Stage3, then the remaining frozen16 stdlib/runtime items. Partial parsing reviews, focused passes and Stage1 builds do not close the whole goal.
+6. Apply existing `scripts/ArtifactLifecycle.ps1` / artifact-lifecycle contract only after stable successful verification and process shutdown; protect pending dependencies. Preserve result JSON, diagnostics, hashes, fixtures and expected output. Do not modify the AI guide/spec with progress history.
+
+User-facing replies start `(이해도 99%)`, include separate goal axes and overall unknown where necessary, distinguish failures/cancellations/unverified work, and name current stage/next verification. Run the Korean terminology guard and reject accidental Japanese/CJK fragments before sending; preserve literal external diagnostics/code identifiers. Slogs progress-report server validator remains unavailable/unverified; no policy-change or universal-enforcement claim. Goal pause is an explicit user request, not an external blocker.
+
+---
+
+## CURRENT USER STOP CHECKPOINT — 2026-10-05
+
+The user asked to finish the already-running work, record the restart state for another session, and stop. No new exhaustive comparison, Stage2/Stage3, stdlib/runtime run or compiler build was started after this request. This checkpoint supersedes every historical checkpoint below. Do not resume until the user explicitly resumes.
+
+### Authoritative outcome and stop state
+
+Observed 2026-10-05T07:00:28.3000949+09:00 (UTC 2026-10-04T22:00:28.3000949Z). The already-running native original143 related41 finished passed41/41 (100.00%). Original focused8 finished passed8/8 (100.00%), including actual required runtime3/3 (100.00%). Both records confirm inputsStable=true and processesStopped=true; every recorded owned process has shutdownConfirmed=true and no activeProcess remains. Tool sessions29348 and40986 are terminal. The aggregate focused49/49 is composed from these two independent records; the related41 record alone intentionally does not certify original8 or whole49. Current verification failure: none. Earlier failed assertions/diagnostics remain preserved.
+
+Compiler371/501 (74.05%), focused8/8 (100.00%), Stage2/Stage3 0/2 (0.00%), frozen stdlib/runtime6/22 (27.27%) remain the authoritative independent axes. The whole goal is NOT complete. Stop requested by the user; no further execution is authorized until explicit resume. Durable final snapshot: `artifacts/scratch/resume-rootfc1a-slg-scalar-rebind44-design-20261005-01/formal-array-origin56/view-element-epoch04/user-stop-final-state.json`. Performance improvement remains unknown; progress-report formal validation remains unverified.
+
+### Goal preserved, not completed
+
+Complete C385 semantic diagnostic ownership and exact C#/SLG source alignment; C# focused proof -> corresponding source comparison -> SLG implementation -> focused paired controls for each unit; then the final exhaustive compiler comparison, Stage2/Stage3 and frozen stdlib/runtime22. Slow-interval performance evaluation remains part of the goal. Do not redefine completion around the checks here.
+
+Compiler registered-defect closure371/501 (74.05%);125 fixed candidates still await full promotion and five actual open entries remain (C385/C407/C503/C504/C505). These are not130 newly reproduced defects. The denominator grows with discovery and is not a time-completion percentage. Current-goal Stage2/Stage3 remains0/2. Frozen stdlib/runtime remains6/22 (27.27%),16 pending. Progress-report formal validator is unavailable/unverified; no Slogs policy-completion or universal-agent-enforcement claim.
+
+### Resume authority and user preferences
+
+- User forbids subagents. Work as root only unless the user changes this instruction. Old historical subagent authorizations below do not apply.
+- First search Slogs project memory and separately Korean software terminology/reporting preferences, then read applicable recalls and `docs/AI_SLG_BEST_PRACTICES.md`. Current explicit C#-first workflow wins over older contrary memories.
+- Every Korean status starts `(이해도 99%)` and gives independent compiler, current focused gate, Stage2/Stage3, frozen stdlib/runtime counts/percentages, failure classifications, current stage and next verification. No unknown-denominator estimates.
+- Korean text guard: `P:/MyWorks/Slogs/artifacts/skill-audit-korean-software-terminology-1.0.1/scripts/terminology_guard.py`. Lint before sending. Progress-report formal validation remains unverified when its tool is absent.
+- `scripts/contracts/active-goal-progress.json` is the source ledger; `scripts/show-project-progress.ps1 -AsJson` is the projection. Do not serialize its computed `progressOutcome` property back into `focusedGates`: the projection adds that property and a duplicate breaks it.
+- Preserve the existing dirty worktree. No reset, clean, revert, commit, publishing or cleanup of failed/cancelled outputs was authorized.
+
+### Current compiler and source authority
+
+All paths are relative to `P:/MyWorks/Sollang` unless stated otherwise.
+
+Native current product:
+`artifacts/scratch/resume-rootfc1a-slg-scalar-rebind44-design-20261005-01/formal-array-origin56/view-element-epoch04/consumer13/checked-consumer.exe`
+SHA256 `4A86085E8A290896F5257FB4830133619D8C4999C6587DCB0CF5E54DF79233D6`.
+Its LLVM SHA256 is `C06A4E28791147D8485E8F9D1686795BAB32DB8542F0A8E310F6BEB167BBC57B`.
+
+Use that epoch's `execution-plan.json` for the exact ordered136 compiler sources and overrides. Canonical `selfhost/semantic/ownership_check.slg` is NOT automatically the tested source. Current source is the private epoch04 `ownership_check.slg`; source comparison is the adjacent `source-comparison.md`; build4/4 proof is `admission-and-build01/result.json`. Other private driver/typed/function/grammar overrides are pinned in the execution plan. Do not rebuild from an inferred public source manifest.
+
+Current C# actual producer:
+`artifacts/scratch/resume-rootfc1a-csharp-transitive-capture-isolated-build-20261005-21-03/artifacts/bin/Sollang.Compiler/release/Sollang.Compiler.dll`
+SHA256 `6A24996247EB8F022065CBC2642CF23A9083BCBEFCFED6CF9CC7E66D47C4D25F`.
+The launcher EXE hash is different (`23C686710378D0EEC91A1747D923D9F5FEDF6A98EEF7EE38D4C9E8F67F961443`); never associate the DLL hash with the EXE path.
+Actual C# semantic source is source21 eligible-identity epoch03; actual BorrowOrigins source is source20 binding-key epoch02, both pinned by the existing producer proofs. The canonical working-tree C# files are not inferred producer identity.
+
+LLVM toolchain: `.tools/llvm-22.1.8`. Existing formatter is the current20 compiler pinned by the plan. No new tool installation or timeout relaxation.
+
+### What changed and why
+
+All changes below are private candidates pending source promotion and final global verification:
+
+1. Source17 parameter-loan mode separates inferred formal contracts from actual local escape loans. C# original143 related41 passed; Native focused24 passed. Preserve that oracle; do not rerun it without input drift.
+2. Source55 follows the owned Flow wrapper to its If control for all-continuing-arm replacement, preserving one-arm/nested/backedge negatives. This fixed the all-arm scalar false rejection.
+3. Source56 resolves unmapped kind5 formal reads to exactly one kind10 formal in the actual lexical function/source/symbol chain. Root resolution, value origins, retained formals and actual continuation liveness reuse this identity. Raw operand0=-1 was valid for mut formal arrays; root-only resolution was insufficient until the liveness consumer also used it.
+4. Epoch03 moves necessary kind5/source/AST predicates ahead of expensive carrier matching; formal kind/source/symbol bounds precede the exact identity resolver. It preserves the exact resolver and all lifetime/reachability rules. This is a cost candidate, not a certified global speedup.
+5. Epoch04 aligns growable-array store eligibility with actual C# SemanticCompiler12101-12106 and BorrowOrigins460-462: only recursively Text/SourceText-containing element types capture stored Text origins. Native previously collected every growable push, creating false loans on byte/numeric arrays. The actual gzip declaration closure was C#-clean but native11 E21; after this change it is native-clean, while unsafe Text-array tests still reject.
+
+Focused private native proofs: related41/41, prior controls24/24, additional gzip/numeric controls6/6;65 unique processes with six immutable duplicate observations reused. These small declaration closures are diagnostic-only and were not promoted as original143 success.
+
+### Durable current verification references
+
+Base `B = artifacts/scratch/resume-rootfc1a-slg-scalar-rebind44-design-20261005-01`.
+Current epoch `N = B/formal-array-origin56/view-element-epoch04`.
+
+- `N/native-related-and-controls01/result.json`: small-input41+24+6 passes, input-stable and process-shutdown verified.
+- `N/original143-discriminator01/result.json`: original143 exact direct negative passed: exit1, E21 source143 byte1037 length30,42172ms, stable/stopped. This is a discriminator, not original8 or whole49 completion.
+- `B/source-transfer-return15/parameter-loans-epoch04/related41-paired01/result.json`: current6A C# original143 related41/41 actual oracle. Overall record failed on an older native scalar mismatch; the C# substage is valid and input-pinned, not a whole-record success.
+- `N/csharp-original8-semantic02/result.json`: current6A original143 original8 semantic8/8 passed. First four actual observations are reused from01; the negative preflight emits JSON status failed plus canonical stderr, not empty stdout. No codegen/runtime claim for this C# semantic proof.
+- `N/native-original8-build-runtime01/continuation02/result.json`: original native8 builds, LLVM verification and required runtime3. First four actual observations reused from execution01. Source-owned error-stage lifecycle supplement is checked independently of the unchanged exact reference semantic line.
+- `N/native-original143-related41-01/result.json`: required original143 native related41, frozen golds and input order, one run per case,60sec per case, no retries. Do not start a duplicate run.
+- Frozen authoritative49-case integration input/gold plan: `B/integration-validation-preparation03-cli-source-view/integration-plan.json`, SHA256 `B48593B6E0B437636E2188C3439F175E3F5B986335E54C3E7BFCA640271970E6`. Units: scalar9 + field4 + materialize-owner2 + materialize-related3 + helper5 + array18 + original8. Original8 requires three actual runtimes, not frontend-only substitution.
+
+### Execution and failure-record details
+
+Use existing `VerificationExecution`, `VerificationContractLease`, `SlowStepDiagnostics` APIs. Fresh output directories, independent stdout/stderr, structured result, input fingerprints and Windows owned-process shutdown are mandatory. Do not initialize the execution API with an old process list. No fresh runner files were added for this orchestration.
+
+Original8 negative native builds emit the exact C#-style semantic line on stderr and one source-owned lifecycle line. `claimNativeBuildStages` explicitly creates both `.l0.ll` and a ZERO-BYTE `.e0.exe` reservation before emission. On semantic failure the LLVM stage contains only the diagnostic; no target triple/definitions and no published `probe.exe`. An existing zero-byte executable reservation is not backend execution. execution01 initially failed a caller assertion that wrongly required its absence; continuation02 validated the same captured observation against the actual source contract without rerunning the compiler. Preserve both records and failed stages.
+
+Successful original8 binaries/LLVM and current compiler products are protected by pending consumers. Use ArtifactLifecycle only after successful, input-stable verification and verified shutdown with no pending consumer. Failed/time-out/unverified output is never cleanup-as-success. Do not delete current inputs or the reusable product merely because a build passed.
+
+### Performance evidence and limits
+
+- Full199 diagnostic budget: three prior runs, cumulative540079ms, exhausted. A fourth diagnostic run is forbidden; required final exhaustive validation is a separate later gate after all focused/source units are resolved.
+- Previous epoch02 original143 ran to60sec and was killed with all owned processes stopped. Recorded CPU60.953125sec was continuously active; sampling had no gaps/drops. A terminal zero-duration duplicate sample made the latest-interval classifier insufficient-evidence despite preserved earlier CPU samples. Do not treat it as an external idle wait or an identified hotspot.
+- Epoch03 returned in43141ms but with62 false stdlib E21 diagnostics, first gzip source19 byte27156. This was failure, not acceptance.
+- Epoch04 exact same original input returned the intended diagnostic in42172ms. Changed termination behavior and these single observations do not prove overall speedup. Measured global improvement percent remains unknown.
+- Preserve failed products/results. Existing source and small-input proofs come before more full-input diagnostics; keep budgets and expected values unchanged.
+
+### Next work ONLY after the user resumes
+
+Read the current source ledger, final results and this checkpoint; confirm no live owned process before execution. Do not redo completed41/8 checks blindly. Audit their input hashes and source authority first. Full scope still requires canonical source integration of the tested private override chain, remaining compiler units/defect promotion requirements, one final exhaustive C# versus SLG comparison, current-goal Stage2/Stage3 and frozen stdlib/runtime16 remaining acceptance items. Do not mark the goal complete from49 focused checks alone. Keep independent progress axes and performance limitations.
+
+## Historical handoffs (superseded)
+
+Everything below is historical, including old claims of a current checkpoint, old subagent permissions, old counters and deferred performance scope. They do not override this current checkpoint.
+
+
+## 2026-10-01 historical user stop checkpoint
+
+The user explicitly requested saving for another session and stopping. This is
+THE CURRENT checkpoint; all earlier stop checkpoints below are historical.
+Do not continue compiler work until the user resumes. Preserve the dirty tree;
+no reset, clean, revert, commit, or duplicate builds were authorized.
+
+### Goal and workflow
+
+Resume the existing full C385 semantic diagnostic ownership / exact source
+closure goal, then focused source-aligned paired checks, final exhaustive C# vs
+SLG comparison, Stage2/Stage3 and frozen stdlib/runtime acceptance. Do not shrink
+success to the focused cases below. Slogs project memory AND user terminology
+preferences come first, then `docs/AI_SLG_BEST_PRACTICES.md`, SPEC and this
+checkpoint. C# first proof -> corresponding source comparison -> SLG alignment
+-> focused paired controls. Performance evaluation is deferred.
+
+Every Korean status starts `(이해도 99%)` and includes these separate axes:
+compiler stabilization371/498 (74.50%); last completed main focused gate5/6
+(83.33%); Stage2/Stage3 0/2 (0%); frozen stdlib/runtime6/22 (27.27%). Structural
+phase closure remains0/7. Use the terminology guard before sending Korean text:
+`P:\MyWorks\Slogs\artifacts\skill-audit-korean-software-terminology-1.0.1\scripts\terminology_guard.py`.
+The user authorized active subagent use. Actual session concurrency was root+3
+subagents, not five simultaneous agents. Assign disjoint file ownership.
+
+### Stop/process state — verified, no duplicate restart
+
+- All three subagents were interrupted or already completed on the user stop.
+- Root build handle38193 is TERMINAL exit1. It was NOT canceled mid-build.
+- Earlier handle6629 terminated on source format preflight; no output directory
+  existed then. Required formatting was applied to both diagnostics files.
+- The subsequent candidate21 build failed semantic compilation; durable result:
+  `C:\Users\dimohy\AppData\Local\Sollang\c385-preir-call-and-owned-temporary-direct-20261001-21\result.json`.
+- A process inventory after stop found NO candidate21 compiler/build processes.
+  Old handles33410,86679,42723,30762 and numeric47619 are terminal. Agent-owned
+  focused test processes are terminal. Poll or inspect before any restart.
+- Never overwrite candidate21 failed result. Use a NEW directory for the next
+  build (e.g. candidate22) after the source error below is fixed.
+
+### Immediate next action: concrete build error, NOT a runtime failure
+
+Candidate21 result: failed, inputsStable=true, 275 sources (132 compiler+143
+stdlib), O1, build exit1, no LLVM assembly/V004/native binary produced.
+Failure ID: `FOCUSED_SELFHOST_BUILD_EXIT_NONZERO`.
+
+`selfhost/llvm/emitter/diagnostics.slg:3329`:
+`"$targetModuleName.$declarationName" => functionName!`
+
+C# rejects storing deferred interpolation directly: materialize into an Arena
+owner. Do NOT add an unnecessary Arena merely to concatenate a diagnostic name.
+The intended source-level fix is emit the canonical imported module/name as
+immediate print fragments, preserving C# `std.net.loopback` rather than source
+alias `net.loopback`. Keep local primary and additional diagnostic wording and
+locations, generic T conflict text, and negative `-7` literal spelling intact.
+This fix has NOT been performed because the user stopped.
+
+Read `artifacts/scratch/c385-preir-call-numeric-source-comparison-20261001-01.json`
+and run format/check per changed file. Refresh source-boundary proof, then build
+ONCE from current managed seed with native20 formatter/cache in a fresh output.
+
+### Last valid compilers and frozen baseline
+
+- Managed DLL: `src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll`
+  SHA256 `58A41215E03FD2500C02264DD2030B7E9D91F3A5FE4CA99FE29F13F0ADEF8922`.
+  Root fixed borrowed fixed-storage field copy in C# `LlvmEmitter.Structs.cs`;
+  transfer registration unchanged. Build was zero warnings/errors.
+- Last valid native20: `C:\Users\dimohy\AppData\Local\Sollang\c92-fixed-array-region-abi-direct-20261001-20\compiler.exe`
+  SHA256 `4BB0050BE0F6AAB8CF70E5D745EAE24B289E057C24F4CF643C4F1C0189C949A8`.
+- Native19: `C:\Users\dimohy\AppData\Local\Sollang\c92-fixed-struct-runtime-direct-20261001-19\compiler.exe`
+  SHA256 `A1ADCEF8D053EABAD7DB8125F5E7D337D4BDC385139E71C47257E7DCCE55B0B5`.
+- Managed production proof6/6:
+  `artifacts/scratch/c92-managed-retained-after-ref-copy-20261001-01/result.json`.
+  P1206 allocations/releases169877/169877, invalid0. DO NOT lower169877.
+- Native20 production5/6:
+  `artifacts/scratch/c92-additional-move-direct20-20261001-01/result.json`.
+  Functional `quic-multi-stream=true`, allocations169872/releases169870,
+  invalid0/live2. Native18 was169666/169252/live414. These are historical
+  binary observations, NOT proof of current unbuilt sources.
+
+### Completed focused evidence in this continuation
+
+- Native19 structure copy/cleanup paired14/14 (move4,mixed3,region4,consumers3)
+  and enumforwarding3/3 passed. Related controls14/14 also passed.
+- Native20 region scalar fixed-array ABI fix: paired2192 plus region4+move4,
+  9/9 passed. Source comparison:
+  `artifacts/scratch/c92-control-region-fixed-array-field-source-comparison-20261001-01.json`.
+- Current managed numeric ranges10/10, ordinary S0015/5, call argument4/4:
+  `artifacts/scratch/c385-{range,ordinary,argument}-managed-fixed-struct-20261001-01/result.json`.
+- Native19 numeric range paired10/10, inputsStable true:
+  `artifacts/scratch/c385-range-retained-direct19-20261001-01/result.json`.
+- New C385 direct/imported/generic/negative/contextual-if and invalid diagnostics
+  C#8/8 through reproducible runner:
+  `artifacts/scratch/c385-preir-call-numeric-managed-runner-20261001-04/result.json`.
+- Generic literal range C#2/2:
+  `artifacts/scratch/c385-generic-range-managed-runner-20261001-02/result.json`.
+  Contracts `c385-preir-call-numeric-coverage.json` and
+  `c385-preir-generic-call-numeric-range.json`, fixtures2193–2197,2207/probe2208.
+
+### Current source edits awaiting a SUCCESSFUL integrated build
+
+1. C385 semantic call argument contract:
+   `selfhost/semantic/context.slg`, `expression_type_ids.slg` now commit canonical
+   direct/flow/imported/generic identities and expected/actual type facts.
+   `ExpressionTypeIdSet.callArguments` holds `ResolvedCallArgument`: sourceModule,
+   callAst, argumentAst, targetSourceModule, functionSymbol, parameterSymbol,
+   parameterOrdinal, expectedTypeId, actualTypeId, status,
+   suppressNumericWarning,genericParameterSymbol,genericFirstActualTypeId.
+   Status0 resolved,1 unresolved,2 conflicting generic inference. Primary flow
+   warning suppressed (C# behavior), direct primary warns. Generic flow and
+   direct inference order remain distinct. No T/Int fallback. Composite/multiple
+   generic conflict identity is STILL known incomplete status1; do not claim
+   complete generic coverage or whole semantic phase closure.
+2. `selfhost/semantic/diagnostics.slg`: call range/warning/mismatch decisions now
+   consume semantic facts, not TypedIR edges; negative conversion literal can
+   be unary minus; generic numeric range uses specialized expected type.
+3. `llvm/text/context_prepare.slg`: numeric call decisions precede lowerPreparedIr.
+   `llvm/emitter/diagnostics.slg`: semantic symbol rendering, direct/imported
+   canonical names, additional parameter wording and generic conflict text.
+   Immediate build error above remains here.
+4. Source-boundary checker (ONLY structural boundary, not behavior):
+   `scripts/verify-c385-preir-call-diagnostic-ownership.py`; last passed proof
+   `artifacts/scratch/c385-preir-call-diagnostic-source-boundary-20261001-05.json`.
+   `scripts/verify-c385-preir-call-numeric.py` provides pinned managed/paired
+   contract execution, durable running/result state, stdout/stderr and timeout.
+5. Scheduling fix `selfhost/llvm/text/function_scheduling.slg` carries observable
+   producer ordering through ancestor bindings, preserving earlier guard/try
+   barriers. C#6/6 counts0/1/0/1/0/1; native20 propagation and mutable-field guard
+   reproduced allocation1/release0. Source comparison:
+   `artifacts/scratch/c92-fixed-struct-producer-control-source-comparison-20261001-01.json`.
+   Contract `fixed-struct-producer-control-order.json`, fixtures2198–2203.
+6. Empty borrowed call-argument temporary allocation AND cleanup aligned with
+   C#: shared `freshEmptyArrayCallParameter` in `call_arguments.slg`, applied to
+   `function_expressions.slg`,`control_region_expressions.slg`,
+   `entry_expressions.slg`,`container_control.slg` while emission.
+   Fresh [] readonly slice call argument allocates at least element ABI stride,
+   logical length0, then frees after call with dedup and proper while SSA.
+   Unowned null views and typed empty growable/bounded are excluded.
+   C#4/4 cases2204–2206,2209 each allocation/release1; native20 empty3cases
+   reproduced0/0 and nonempty control1/1 passed. While cases2210/2211 C#2/2
+   counts3/1 include final false condition. Source comparison:
+   `artifacts/scratch/c92-empty-array-call-temporary-source-comparison-20261001-01.json`.
+   Contracts `empty-array-call-temporary-ownership.json` and
+   `while-empty-array-call-temporary-ownership.json`.
+7. `verify-fixed-storage-ownership.py` now accepts exact nonnegative integer
+   counts:0 allowed, bool/float/negative rejected; five boundary values checked.
+   Previous positive ownership proofs predate this runner hash change; retain
+   them as historical evidence, do not silently rewrite hashes.
+8. SPEC/guide updated ONLY normative storage/borrowed copy rules, not progress.
+
+### Residual production count difference fully attributed
+
+Two extra64-byte allocations were hoisted before completeServer's false early
+return (native LL25147 create before guard25159; C# guard first and create after
+try success). Seven missing allocations are empty argument temporaries:
+ed25519.sign3; quic.acceptImpl1; initial_engine encodeClientInitial2 and
+encodeServerInitial1. Fixed-copy allocations are797 BOTH compilers, so do not
+invent a struct copy count patch. Diagnostic (observed only) traces:
+`artifacts/scratch/c92-p1206-direct20-allocation-trace-20261001-01/result.json`
+and `artifacts/scratch/c92-p1206-managed-allocation-sites-review-20261001-01/result.json`.
+After scheduler and empty temporary changes, runtime equivalence must still be
+measured; expected169877 is NOT already proven for current sources.
+
+### Resume commands after fixing immediate semantic build error
+
+```powershell
+python scripts/verify-c385-preir-call-diagnostic-ownership.py --output artifacts/scratch/c385-preir-call-diagnostic-source-boundary-20261001-06.json
+& scripts/build-focused-selfhost-compiler.ps1 -SeedCompiler src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.exe -OutputDirectory 'C:\Users\dimohy\AppData\Local\Sollang\c385-preir-call-and-owned-temporary-direct-20261001-22' -Optimization O1 -FormatCompiler 'C:\Users\dimohy\AppData\Local\Sollang\c92-fixed-array-region-abi-direct-20261001-20\compiler.exe' -CacheSeedDirectory 'C:\Users\dimohy\AppData\Local\Sollang\c92-fixed-array-region-abi-direct-20261001-20\.sollang-cache'
+```
+
+After successful build, use UNIQUE output folders and actual resulting binary
+hash for focused paired C3858 +generic range2, original ordinary5/argument4/
+range10 controls, producer-order6, empty-call4 +while2 and related ownership
+controls. The numeric paired runner pins ALL selfhost sources: no SLG source
+edits during it. Root serializes build/cache and ledger promotion. Then run the
+main6 production gate, retaining frozen169877 and functionaltrue/invalid0.
+No exhaustive or Stage builds until every known source unit closes.
+
+### Structural evidence honesty
+
+`artifacts/scratch/structural-evidence-current-20261001-01.json` measured4/9
+current matching source claims (0/5 compiler,4/4fixtures), not old declared5/9.
+All11 historical verifier claims and5 current checks are stale; this is
+fingerprint drift, not proof every semantic behavior is wrong. All7 phase rows
+remain partial; control-flow evidence inventory is empty. The current detail
+validator FORCES partial statuses and is not yet a real phase-promotion gate.
+Need required per-phase decision inventory, current source/compiled proofs and
+fail-closed promotion validator; do not flip labels or count narrow cases as a
+whole-phase proof. Keep final exhaustive comparison0/1 and Stage2/Stage3 0/2
+independent. No policy or memory capture was substituted for source execution.
+
+---
+
+## Historical checkpoints (superseded)
+
+Updated: 2026-09-29 16:15 (Asia/Seoul)
+
+## 2026-09-29 16:15 STOP CHECKPOINT — READ THIS FIRST
+
+The user stopped work to continue at home. Do not resume compiler work in this
+session. The 06:12 checkpoint and older sections below are historical. Preserve
+the dirty worktree, existing results, and separate C# and SLG implementations.
+At the next session, follow the current Slogs LLM Wiki policy and terminology
+preference before local exploration, then read `docs/AI_SLG_BEST_PRACTICES.md`
+and the live progress ledger.
+
+### Measured status at stop
+
+- Compiler stabilization: **371/498 (74.50%)**; 126 candidate-fixed items are
+  not promoted to complete.
+- Current focused gate, C527 missing nominal member diagnostic SLG
+  implementation: **0/1 (0%)**. Its build was canceled before validation.
+- Current-goal Stage2/Stage3: **0/2 (0%)**.
+- Frozen stdlib/runtime: **6/22 (27.27%)**.
+- Structural phase closure: **0/7 (0%)**. The global interpolation proof and
+  exhaustive current-source comparison are stale or pending.
+- The live ledger is `scripts/contracts/active-goal-progress.json`. Do not use
+  historical Stage2/Stage3 totals from an aggregate report for this goal.
+
+### Completed focused work in this continuation
+
+- C527 direct, nested, computed-initializer, and imported nominal struct
+  literal receiver work before this continuation is detailed in the ledger and
+  `artifacts/scratch/c527-struct-literal-expression-controls-20260929-01.json`.
+- The C# parser now passes surrounding namespace and imports into a parsed
+  interpolation fragment. `dotnet build src/Sollang.Compiler/Sollang.Compiler.csproj
+  -c Release --no-restore -v:q` passed with zero warnings and errors. The SLG
+  compiler carries the full nominal type path, resolves import aliases and
+  exact module paths, and omits AST path wrappers from member-access IR.
+- Imported alias positive, field-type error, and local namespace cases passed
+  C# versus SLG **3/3** in
+  `artifacts/scratch/c527-imported-struct-paired-20260929-01.json`. Full module
+  path positive and unknown-type cases plus three retained controls passed
+  **5/5** in `artifacts/scratch/c527-fullpath-paired-20260929-01.json` on the
+  compiler at `C:\Users\dimohy\AppData\Local\Sollang\c527-fully-qualified-compiler-o1-20260929-02\compiler.exe`
+  (SHA-256 `4AF80B4C65A2D17BC8BC6D2B4CEA3FBCD9DDD8F92A584D7EA2D87C894B90C693`).
+  These proofs predate the final missing-member diagnostic edit.
+- Retained fixtures 2112–2116 were added, with 2113 and 2116 as diagnostic
+  fixtures. The root fixture-name check passed **1879/1879**; it does not count
+  diagnostic fixtures. `docs/SPEC.md` and `docs/AI_SLG_BEST_PRACTICES.md`
+  describe alias and complete-path constructor behavior.
+- Source comparisons are
+  `artifacts/scratch/c527-imported-struct-source-comparison-20260929-01.json`,
+  `artifacts/scratch/c527-fully-qualified-source-comparison-20260929-01.json`,
+  and `artifacts/scratch/c527-missing-member-source-comparison-20260929-01.json`.
+
+### Open edit and canceled build
+
+- C# first proved that `$((c527.shapes.Point { x: 5 }).missing)` reports
+  `sollang: semantic error at 1:29: [module '<main>'] struct 'c527.shapes.Point' has no field or readonly computed member 'missing'`.
+  The previous SLG compiler reported position `1:1` and member `.missing`.
+- The current unbuilt source edits in `selfhost/semantic/diagnostics.slg` and
+  `selfhost/llvm/emitter/diagnostics.slg` locate the actual member dot and name
+  within the interpolation fragment. A malformed span has explicit S062 output.
+  No current-source paired validation exists for this edit.
+- The focused O1 build in
+  `C:\Users\dimohy\AppData\Local\Sollang\c527-missing-member-compiler-o1-20260929-01`
+  was interrupted with Ctrl-C at the user's stop request. Its runner exited 1;
+  there is no build result or compiler executable, and the process check found
+  no related child. The cancellation record is
+  `artifacts/scratch/c527-missing-member-build-cancelled-20260929-01.json`.
+  This attempt is **canceled and unverified**; use a new output directory.
+
+### Next-session order
+
+1. Inspect the live worktree, process list, ledger, cancellation record, and
+   current source. Keep the previous 3/3 and 5/5 proofs scoped to their pinned
+   source; do not count the canceled build.
+2. Build the current SLG compiler in a new output directory with
+   `scripts/build-focused-selfhost-compiler.ps1`, using the current Release C#
+   compiler as seed and the pinned full-path O1 compiler above as formatter and
+   cache seed. Keep independent build logs and result files.
+3. Pair the missing-member probe
+   `scripts/probes/interpolation/c527-fully-qualified-struct-missing-member.slg`
+   against its C# first proof at
+   `artifacts/scratch/c527-fullpath-missing-member-managed-20260929-01/result.json`.
+   Require the exact position and member name above. Then rerun only affected
+   alias, complete-path, local, and initializer controls on the new compiler.
+4. If the focused unit passes, add a retained missing-member diagnostic fixture,
+   update the relevant specification/guide text, and advance the ledger.
+   Continue C# first source/behavior comparisons for remaining C527 units.
+   Run the one exhaustive comparison and Stage2/Stage3 only after all units
+   and structural phases close.
+
+## 2026-09-29 STOP CHECKPOINT — READ THIS FIRST
+
+The user explicitly requested a stop and a handoff to another session. Do not resume work in this session. The older checkpoints below are historical. Preserve the dirty worktree and all receipts; do not clean or reuse an output directory.
+
+### Measured status at stop
+
+- Compiler stabilization: **371/498 (74.50%)**. This is the current ledger's stabilized count, not the count of source comparison units.
+- Current focused C613 gate: **4/4 (100%)**. Explicitly enumerated implementation units: **92/93 (98.92%)**; the remaining queued unit and final global closure are not complete.
+- Stage2/Stage3: **0/2 (0%)**.
+- Frozen stdlib/runtime backlog: **6/22 (27.27%)**.
+- Structural phase closure: **0/7 (0%)**; historical source-hash closure: **0/9 (0%)**. The exhaustive current-source comparison has not run.
+- The progress ledger is `scripts/contracts/active-goal-progress.json`; detailed parity is `scripts/contracts/structural-parity-detail.json`. Read these live files before changing counts.
+
+### Proven C613 work
+
+- The focused unit receipt is `artifacts/scratch/c613-result-propagation-semantic-owner-unit-20260929-01.json` (4/4). The managed-first gate was 5/5; v103 positive C#↔SLG controls 2/2; exact negative diagnostics 4/4. Read the receipt and `artifacts/scratch/c613-result-propagation-source-comparison-20260929-01.json` for evidence paths.
+- Pinned v103 compiler: `C:\Users\dimohy\AppData\Local\Sollang\c613-result-propagation-managed-v103-20260929-01\compiler.exe`, SHA-256 `C467A93359E182780C255FEFF189A503BECD2C230E3E834FC5B5718E76BB201F`. Build receipt is in the same directory. The focused verifier is `scripts/verify-c613-result-propagation-semantic-owner.ps1`.
+- C613 semantic ownership is implemented through `selfhost/semantic/interpolation_inference.slg`, `selfhost/llvm/text/context_prepare.slg`, `selfhost/llvm/emitter/context.slg`, `selfhost/llvm/emitter/diagnostics.slg`, `selfhost/llvm/text/foundation.slg`, and `selfhost/ir/interpolation.slg`. Numbered cases 2081–2085 cover positive and negative behavior. Do not reintroduce emitter-owned C613 decisions.
+
+### Open gate and interrupted run
+
+- `scripts/verify-interpolation-semantic-parity.ps1` still fails at line 457 because it expects an obsolete emitter-owned `intrinsicFlowResultBuiltinByNode[globalNodeIndex!]` source expression. Current ownership uses `interpolationFlowTypeByNode`; review and update the verifier from actual C# and SLG source decisions before claiming the global gate.
+- `scripts/verify-structural-parity-detail.py` reaches `verify-context-fixture-source-closure.py --static-only`, which uses an old C583 receipt with 72 context fields. Current `EmitContext` has 89. Four direct fixtures (1000, 1100, 1126, 1290) now each initialize 89 fields; `python scripts/sync-emit-context-fixtures.py` reports zero missing. `scripts/refresh-context-fixture-source-closure.py` exists but has not generated a new proof because paired native fixture proof is incomplete.
+- The first paired fixture 1000 attempt at `C:\Users\dimohy\AppData\Local\Sollang\c613-v103-context-fixture-1000-pair-20260929-02` hit its three-minute timeout; managed passed. The second serial attempt at `...\c613-v103-context-fixture-1000-pair-20260929-03` was interrupted on the user's stop request after about 13 minutes. Its managed artifacts exist, but no `result.json` or selfhost result exists. The runner exited code 1 after Ctrl-C. A process check at 06:12 KST found no related compiler/dotnet/clang/lld process. Treat the second run as **canceled and unverified**, not failed or passed; see `cancellation.json` in that directory. Do not resume that output directory.
+- Historical source-hash claims for nine files do not match current sources. The inventory is `artifacts/scratch/c613-interpolation-source-hash-drift-audit-20260929-01.json`; source-hash closure is 0/9 until fresh current-source proofs are collected.
+
+### Next-session order
+
+1. Read this checkpoint and `docs/AI_SLG_BEST_PRACTICES.md` first. Inspect the live process list, dirty worktree, progress ledger, C613 receipts, and cancellation receipt. Keep completed focused proof separate from open global gates.
+2. Diagnose fixture 1000's long selfhost compile from read-only logs/process evidence and current source before another costly run. If needed, use a new output directory with a supervised timeout and durable result; do not reinterpret canceled artifacts as proof.
+3. Finish fresh paired proof for the 89-field EmitContext fixtures, then generate and verify current context fixture source closure. Repair the stale interpolation verifier to check the actual semantic decision path. Refresh all nine current source-hash proofs, then rerun structural parity detail.
+4. Resolve the one explicitly queued implementation unit and each structural phase using C# implementation and focused C# proof first, C#↔SLG source comparison second, focused paired compile/run third. Only then run one exhaustive comparison, Stage2/Stage3, and frozen stdlib/runtime gates. Report each axis separately with completed/total and percentages.
+
+## 2026-09-26 STOP CHECKPOINT — READ THIS FIRST
+
+The user explicitly stopped this session and requested a handoff to another session. Do not resume compiler work in this session. Preserve all existing changes and result files. The 2026-09-24 checkpoint below is historical; this section is the latest state.
+
+### Measured status at stop
+
+- Compiler stabilization: **497/498 (99.80%)**; umbrella C385 remains open.
+- Current focused C385 unit: **6/7 steps (85.71%)**; focused cases **4/5 (80.00%)**. The remaining step is semantic-phase diagnostic ownership. Identified units are 24/25; that count does not include unenumerated future work.
+- Stage2/Stage3: **0/2 (0%)**.
+- Frozen stdlib/runtime: **6/22 (27.27%)**.
+- Structural C#↔SLG parity: **0/7 (0%)**. The final same-source-revision exhaustive comparison has not run.
+- `scripts/contracts/active-goal-progress.json` is the progress ledger; `artifacts/scratch/compiler-implementation-parity-current-20260926-68.json` is the latest parity snapshot. Keep passing, failing, running, and unverified results separate.
+
+### Worktree and processes
+
+- At the stop check, `git status --short` showed **780 entries**. These preexisting and current changes are intentional work in progress; do not reset, clean, overwrite, or discard them.
+- No active Sollang-related `sollang`, `dotnet`, `clang`, or `lld` process was found at the stop check. Recheck processes and result files before starting work in the next session.
+- The project policy is **implement and verify C# first; compare C# and SLG source structure and logic; then implement and verify SLG in focused units**. Do one exhaustive C#↔SLG comparison only after all focused units finish.
+
+### Evidence and exact limits
+
+- The latest completed SLG candidate before the unfinished semantic edit is `artifacts/scratch/c385-and-logical-diagnostic-managed-seed-v68-20260926-02/compiler.exe`, SHA-256 `DACD1ED4AA7934F3CE5AEC889D200C9113CDEA589A09C320CF30460AB485C332`.
+- The v68 focused pair result `artifacts/scratch/c385-logical-diagnostic-pair-v68-20260926-03/result.json` passed **3/3** C#↔SLG cases. Its positive native fixture 1562 passed **1/1** in `artifacts/scratch/expression-lowering-c385-and-selfhost-v68-20260926-01`; And AST→TypedIR coverage passed **1/1** in `artifacts/scratch/c385-and-expression-coverage-v68-20260926-01/result.json`. These are valid scoped v68 results, **not proof for the source edited after v68**.
+- The C# semantic implementation and focused managed/native check were completed first. The source comparison receipt is `artifacts/scratch/c385-and-expression-source-comparison-20260926-03.json`; it records the remaining semantic-phase ownership difference.
+- `scripts/verify-selfhost-compiler-contracts.ps1` **failed**: exact source closure fixture `1000-selfhost-partition-route-type-invariant` omits `sollang.compiler.syntax.source_decoding` and `sollang.compiler.syntax.unicode_identifier`. See `artifacts/scratch/c385-formal-exact-source-closure-20260926-01.json`. Do not report this static gate as passed.
+
+### Unfinished edit at stop
+
+- `selfhost/semantic/diagnostics.slg` contains a newly added `LogicalOperandDiagnostic` collector and `firstLogicalOperandDiagnostic`. It is **not wired into the compiler execution path** and has not been selfhost-built. Do not count it as an implemented parity fix.
+- The scratch observation source `artifacts/scratch/c385-semantic-logical-inspect-20260926-02.slg` and native executable `...-02.exe` observed `failure=2,0,10,12,-25,56` for the right-invalid flow-result case. This proves only that the semantic type table can identify that operand and source offset 56 (2:23); other cases and integration are unverified.
+- The scratch managed compile emitted **S001** in `selfhost/semantic/diagnostics.slg` near line 347: replace `UIntSize(0)` with `0`. Fix and review this partial source before a strict selfhost build. The current v68 executable predates this edit.
+
+### Next-session order
+
+1. Read this checkpoint and `docs/AI_SLG_BEST_PRACTICES.md`; recheck worktree, live processes, result files, and the progress ledger. Preserve all existing artifacts.
+2. Keep the already verified C# behavior as the reference. Source-review the unfinished SLG semantic collector, fix its S001 warning, and run small semantic observations for both-invalid And/Or and the positive case before compiler integration.
+3. Move the logical-operand diagnostic decision to the semantic phase before Typed IR lowering (`selfhost/llvm/text/context_prepare.slg` and the necessary emit context), then remove redundant emitter-phase decision code in `selfhost/llvm/emitter/diagnostics.slg`. Follow C# structure and first-invalid-operand behavior. Review source before each focused compile.
+4. Build one new candidate in a unique artifact directory and run only the focused C385 pair cases, positive fixture 1562, and AST→TypedIR check. Record exact passing, failing, and unverified counts; then close the exact source-closure fixture failure.
+5. Only after the focused compiler and structural work is complete, perform the one exhaustive C#↔SLG comparison, then Stage2/Stage3 and frozen stdlib/runtime verification according to the goal.
+
+## 2026-09-24 STOP CHECKPOINT — READ THIS FIRST
+
+The user explicitly requested a stop and a durable restart record. Do not
+resume work automatically in this session. All running subagents were
+interrupted. The candidate28 output-transaction process subsequently finished
+with a structured focused result; a targeted process check found no remaining
+candidate28/output-transaction process. Preserve the large dirty worktree and
+all scratch results; do not reset, clean, or rerun an existing output directory.
+The older checkpoints below are historical, not the current status.
+
+### Current measured axes and exact boundary
+
+- Compiler stabilization: **472/477 (98.95%)**, **5 open**. C476 is
+  `candidate-fixed`, not closed; C477 remains open. Verify live counts with
+  `scripts/show-project-progress.ps1` after any later ledger change.
+- Current focused C477 proof under candidate27: **12/12 (100%)** = mutable
+  binding 5/5, canonical rebind 6/6, same-scope regression 1267 1/1. These
+  results do **not** prove candidate28/current source; C477 promotion was
+  deliberately withheld after the Windows path changes.
+- Current-change Stage2/Stage3: **0/2 (0%)**. Frozen stdlib/runtime backlog:
+  **6/22 (27.27%)**. Do not promote either from compiler-focused results.
+- The overall compiler-defect evidence validator is **not green**. A new
+  read-only inventory examined **265/265** candidate/closed entries and found
+  **18 affected defect IDs / 66 contract issues**, stable input fingerprints:
+  `scripts/audit-compiler-defect-evidence.ps1` and
+  `artifacts/scratch/compiler-defect-evidence-audit-20260924-02/result.json`.
+  C424 is the first failure, not the only one; do not rewrite historical
+  baselines to manufacture a pass.
+
+### Verified candidate builds and focused results
+
+- Candidate24 selfhost SHA
+  `D50514A4DA8D34A8019F8F3E5CDA7DE38BDB75224D760ED622D02B6B971A5E13`
+  established C476 strict negatives 10/10, positives 10/10, bounded ABI
+  18/18, bounded parity 8/8, retained native controls 22/22 plus C471 trap
+  1/1. Its C476 candidate evidence is in
+  `scripts/contracts/evidence/C2026-09-24-476/candidate.json`; the old AS-US
+  fingerprint there is a historical signal identity, not the candidate source
+  fingerprint. C476 ledger is `candidate-fixed`. It does not claim the output
+  alias, Stage2/Stage3, or global evidence validator gates.
+- Candidate27 selfhost SHA
+  `8EE65254010B70DBC2E387521A3CCB0213ED4308869222D52D5573047BDB30F0`
+  passed current-source C476 strict 10/10 at
+  `artifacts/scratch/c476-strict-negatives-candidate27-20260924-01/result.json`,
+  C477 5/5 and 6/6 at the corresponding
+  `c477-mutable-binding-candidate27-20260924-01` and
+  `c477-canonical-rebind-candidate27-20260924-01` directories, and 1267
+  1/1 at `c477-same-base-batch27-20260924-01`. Each focused result used stable
+  inputs. The C477 mutable runner's PowerShell one-element-array argument
+  collapse was fixed in `scripts/verify-c477-mutable-binding-parity.ps1`.
+- Candidate28 combines output-parent safety and Windows W-path changes:
+  `artifacts/scratch/c476-output-path-integrated-candidate28-20260924-01/compiler.exe`,
+  SHA `331BB86E1DD8A6BA9DA160DDCE3ABC2AE5F4278ACD9D589A03E51ADB982C0C6F`.
+  Its build result in the same directory reports stable input, warning/note 0,
+  llvm-as 0, V004 0, no cache seed. Managed W build DLL SHA
+  `F370942F6EDD3C42ED0568825F21A57E6A7793E9EE85DD0B4FF9E07C5D7E83E1`
+  was copied to `artifacts/scratch/managed-output-path-w-candidate28-20260924-01`.
+  Candidate28 output-parent gate **3/3** passed; output-alias deterministic
+  cases **5/5** passed with the 8.3 alias **1/1 unverified** because the volume
+  did not create a short name. Output transaction is `focused-passed` **4/13**:
+  4 implemented focused cases passed, 9 contract cases were not run, and
+  supplemental alias was not requested. Results are respectively
+  `artifacts/scratch/c476-output-parent-candidate28-20260924-01/result.json`,
+  `artifacts/scratch/c476-output-alias-candidate28-20260924-01/result.json`, and
+  `artifacts/scratch/c476-output-transaction-candidate28-20260924-01/result.json`.
+  Input start/end fingerprints match. No candidate28 C476 strict or C477 12-case
+  rerun was performed before the stop.
+
+### Active failure and remaining path boundaries
+
+- The old candidate27 demonstrably mispublished `-o é.exe`: it exited 0 and
+  printed `é.exe`, but created only `챕.exe` and `챕.exe.ll` under
+  `artifacts/scratch/c476-output-alias-unicode-candidate27-20260924-01`.
+  The host ACP is 949. The managed and selfhost owned-file/directory emitters
+  were changed from A calls to checked UTF-8-to-UTF-16 W calls; the managed
+  Unicode fixture and existing directory/atomic controls passed local native
+  runs. `docs/SPEC.md` and `docs/AI_SLG_BEST_PRACTICES.md` now describe this
+  bounded file/directory contract, not all Windows path consumers.
+- The **integrated candidate28 Unicode paired gate is failed, not passed**:
+  `artifacts/scratch/windows-wide-integrated28-20260924-01/result.json`
+  records managed 1/1, selfhost not completed, `UNICODE_BUILD_EXIT`, stable
+  inputs. Its selfhost stderr reports LLVM line 2705 `use of undefined value
+  '@sollang_m64_s2'` followed by native linker exit 1. Diagnose the missing
+  direct-call closure in this fixture before attributing it to W path behavior;
+  do not treat the successful managed case as selfhost proof.
+- Independent review found another actual path-identity gap outside the
+  owned-file W migration: Windows `process.runToFile` uses CRT `_open` on raw
+  UTF-8 bytes, configured process redirection uses `CreateFileA`, and the
+  `file.mapText` diagnostic path also uses `CreateFileA`. A Unicode **parent
+  directory** can therefore make stage claim (W) and emitter redirection (A)
+  refer to different paths even if a Unicode basename test eventually passes.
+  Add an isolated Unicode-parent output fixture and repair these process and
+  mapped-text boundaries by one coherent path-encoding contract; do not claim
+  full Windows path coverage from the owned-file fixture alone.
+- Further observed limits, not current PASS claims: managed owned open/replace
+  caps UTF-8 paths at 259 bytes while selfhost uses a 4096-byte buffer;
+  directory enumeration `FindClose` return is unchecked in both emitters;
+  `createExclusive` can leave a file after a successful create but failed
+  close (already described in SPEC). Preserve these as separate contracts.
+
+### Resume order
+
+1. Confirm no active verifier processes, read this checkpoint and the actual
+   candidate28 result files, then inspect the dirty worktree. Read
+   `docs/AI_SLG_BEST_PRACTICES.md` before code. Do not resume an incomplete
+   scratch directory as if it passed.
+2. Root-cause the candidate28 selfhost Unicode fixture's missing
+   `@sollang_m64_s2` definition. Keep the managed 1/1 and selfhost failure
+   distinct. Make the focused Unicode gate pass with stable inputs and exact
+   output/inventory; rerun the old RED comparison only if needed.
+3. Cover Unicode-parent `runToFile` and related Windows process/file-map A
+   paths as separate, explicit scopes. Validate original ASCII controls and
+   Windows managed/selfhost parity. Resolve or explicitly retain the 259/4096
+   and `FindClose` boundaries rather than hiding them in broad success.
+4. Build a fresh integrated current-source compiler with a pinned managed DLL
+   and zero warnings; rerun candidate28's parent/alias/transaction gates and
+   C476 strict 10/10, C477 5/5 + 6/6 + 1267 1/1 under that **same** SHA.
+   Only then consider C477 candidate promotion. Keep 8.3 unverified unless a
+   real short-name fixture can be created.
+5. Work through the 18-ID evidence-contract inventory without overwriting
+   historical failed baselines. Complete the remaining compiler/frozen-runtime
+   gates before supervised Stage2/Stage3 fixed-point verification.
+
+Historical update: 2026-09-13 21:47 (Asia/Seoul)
 
 ## 2026-09-13 STOP CHECKPOINT — READ THIS BEFORE OLDER SECTIONS
 

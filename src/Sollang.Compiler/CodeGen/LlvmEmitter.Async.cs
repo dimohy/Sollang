@@ -169,6 +169,7 @@ internal sealed partial class LlvmEmitter
                     handle);
             }
 
+            EmitInitializeTaskResult(handle, context, function.InputType, function.ReturnType, function);
             var withHandle = NextTemp("task");
             EmitAssign(withHandle, $"insertvalue %sollang.task poison, ptr {handle}, 0");
             var task = NextTemp("task");
@@ -354,12 +355,32 @@ internal sealed partial class LlvmEmitter
             offset = AlignAsyncSize(offset, alignment);
             layouts.Add((spill, offset, alignment));
             offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+            if (spill.HasOwnershipFlag)
+                offset = checked(offset + 1);
         }
         foreach (var layout in layouts.AsEnumerable().Reverse())
         {
             var spill = layout.Spill;
+            if (!spill.DropOnCancel)
+            {
+                continue;
+            }
             var address = NextTemp("cancel_spill_address");
             EmitAssign(address, $"getelementptr i8, ptr {frame}, i64 {layout.Offset}");
+            string? retainedEnd = null;
+            if (spill.HasOwnershipFlag)
+            {
+                var flagOffset = checked(layout.Offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+                var flagAddress = NextTemp("cancel_spill_owned_flag_address");
+                var retained = NextTemp("cancel_spill_owned_flag");
+                EmitAssign(flagAddress, $"getelementptr i8, ptr {frame}, i64 {flagOffset}");
+                EmitLoad(retained, "i1", flagAddress, 1);
+                var retainedBody = NextLabel("cancel_spill_owned");
+                retainedEnd = NextLabel("cancel_spill_owned_end");
+                EmitConditionalBranch(retained, retainedBody, retainedEnd);
+                EmitLabel(retainedBody);
+                _currentBlockLabel = retainedBody;
+            }
             var loaded = NextTemp("cancel_spill_value");
             EmitLoad(loaded, LlvmType(spill.Type), address, layout.Alignment);
             if (_program.Types.IsTask(spill.Type))
@@ -370,7 +391,25 @@ internal sealed partial class LlvmEmitter
             }
             else if (_program.Types.ContainsOwnedStorage(spill.Type))
             {
-                DropOwnedRuntimeValue(DematerializeAggregateValue(spill.Type, loaded));
+                var value = DematerializeAggregateValue(spill.Type, loaded);
+                if (value is RuntimeStruct structure && spill.MovedOwnedFields.Count > 0)
+                {
+                    DropOwnedStructFieldsExceptTransferred(
+                        structure,
+                        spill.MovedOwnedFields
+                            .Select(static path => (IReadOnlyList<string>)path.Split('.'))
+                            .ToArray());
+                }
+                else
+                {
+                    DropOwnedRuntimeValue(value);
+                }
+            }
+            if (retainedEnd is not null)
+            {
+                EmitBranch(retainedEnd);
+                EmitLabel(retainedEnd);
+                _currentBlockLabel = retainedEnd;
             }
         }
         EmitCall(target: null, "void", "sollang_free", $"ptr {frame}");
@@ -392,7 +431,7 @@ internal sealed partial class LlvmEmitter
             : GetMoveConsumingContainerSourceName(function.Body);
         var value = function.Body is null
             ? RuntimeUnit.Instance
-            : EmitExpression(function.Body);
+            : EmitFunctionArgumentExpression(function.Body, function.ReturnType);
         EnsureRuntimeType(value, function.ReturnType, function.Name);
         if (movedBodySourceName is not null)
         {
@@ -516,6 +555,8 @@ internal sealed partial class LlvmEmitter
         {
             _activeAsyncCfg = null;
             _asyncScopeSnapshots.Clear();
+            _asyncHiddenScopes.Clear();
+            _asyncStreamCancellationBindings.Clear();
         }
     }
 
@@ -631,10 +672,11 @@ internal sealed partial class LlvmEmitter
         string? excludedName)
     {
         var spillPlans = new List<AsyncSpillPlan>();
+        var activeScope = CaptureLocals();
         foreach (var (name, value) in _locals)
         {
             if (string.Equals(name, excludedName, StringComparison.Ordinal)
-                || lowering.ResumeBaseLocals.Locals.ContainsKey(name))
+                || AsyncScopeSharesBinding(activeScope, name, lowering.ResumeBaseLocals, name))
             {
                 continue;
             }
@@ -649,10 +691,123 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException(
                     $"mutable binding '{name}' of type {value.Type} cannot cross async suspension");
             }
-            spillPlans.Add(new AsyncSpillPlan(name, value.Type, isMutable));
+            var movedOwnedFields = _movedOwnedStructFields.TryGetValue(name, out var fields)
+                ? fields.Order(StringComparer.Ordinal).ToArray()
+                : [];
+            spillPlans.Add(new AsyncSpillPlan(
+                name, value.Type, isMutable, movedOwnedFields,
+                ScopeBindings: _asyncScopeSnapshots
+                    .Where(scope => AsyncScopeSharesBinding(activeScope, name, scope, name))
+                    .Select(scope => CaptureAsyncScopeBinding(scope, name)).ToArray(),
+                DropOnCancel: _borrowedOwnedTransferFlags.ContainsKey(name)
+                    || (!_borrowedOwnedLocals.Contains(name) && !_borrowedMutableLocals.Contains(name)),
+                HasOwnershipFlag: _borrowedOwnedTransferFlags.ContainsKey(name)));
+        }
+        foreach (var hidden in _asyncHiddenScopes.Concat(
+                     _asyncScopeSnapshots.Select(scope => new AsyncHiddenScope(scope, []))))
+        {
+            foreach (var (name, value) in hidden.Scope.Locals)
+            {
+                if (AsyncScopeSharesBinding(hidden.Scope, name, lowering.ResumeBaseLocals, name))
+                {
+                    continue;
+                }
+                var mutable = hidden.Scope.MutableLocals.Contains(name);
+                if (!IsAsyncSpillType(value.Type)
+                    || (mutable && !IsAsyncMutableSpillType(value.Type)))
+                {
+                    throw new SollangException(
+                        $"binding '{name}' of type {value.Type} cannot cross async suspension");
+                }
+                var bindings = new List<AsyncScopeBinding> { CaptureAsyncScopeBinding(hidden.Scope, name) };
+                bindings.AddRange(hidden.Mirrors
+                    .Where(scope => AsyncScopeSharesBinding(hidden.Scope, name, scope, name))
+                    .Select(scope => CaptureAsyncScopeBinding(scope, name)));
+                var owns = hidden.Scope.BorrowedOwnedTransferFlags.ContainsKey(name)
+                    || (!hidden.Scope.BorrowedOwnedLocals.Contains(name)
+                        && !hidden.Scope.BorrowedMutableLocals.Contains(name));
+                var existing = spillPlans.FindIndex(plan =>
+                    AsyncSpillSharesBinding(plan, hidden.Scope, name, value, mutable));
+                if (existing >= 0)
+                {
+                    var plan = spillPlans[existing];
+                    spillPlans[existing] = plan with
+                    {
+                        ScopeBindings = [.. (plan.ScopeBindings ?? []), .. bindings],
+                        DropOnCancel = plan.DropOnCancel || owns
+                    };
+                    continue;
+                }
+                var fields = hidden.Scope.MovedOwnedStructFields.TryGetValue(name, out var moved)
+                    ? moved.Order(StringComparer.Ordinal).ToArray()
+                    : [];
+                spillPlans.Add(new AsyncSpillPlan(
+                    NextAsyncBindingName("hidden_binding"), value.Type, mutable, fields,
+                    hidden.Scope, name, bindings, owns,
+                    hidden.Scope.BorrowedOwnedTransferFlags.ContainsKey(name)));
+            }
         }
         return spillPlans;
     }
+
+    private bool AsyncSpillSharesBinding(
+        AsyncSpillPlan plan, LocalScope scope, string name, RuntimeValue value, bool mutable)
+    {
+        var source = plan.SourceScope;
+        var sourceName = plan.SourceName ?? plan.Name;
+        var sourceValue = source is null ? _locals[sourceName] : source.Locals[sourceName];
+        if (plan.IsMutable != mutable || sourceValue.Type != value.Type
+            || (!mutable && !ReferenceEquals(sourceValue, value)))
+            return false;
+        var flags = source?.BorrowedOwnedTransferFlags ?? _borrowedOwnedTransferFlags;
+        if (flags.GetValueOrDefault(sourceName) != scope.BorrowedOwnedTransferFlags.GetValueOrDefault(name))
+            return false;
+        if (!mutable)
+            return true;
+        var scalars = source?.MutableScalarSlots ?? _mutableScalarSlots;
+        var structs = source?.MutableStructSlots ?? _mutableStructSlots;
+        var containers = source?.MutableContainerSlots ?? _mutableContainerSlots;
+        return (scalars.ContainsKey(sourceName) || structs.ContainsKey(sourceName)
+                || containers.ContainsKey(sourceName))
+            && scalars.GetValueOrDefault(sourceName) == scope.MutableScalarSlots.GetValueOrDefault(name)
+            && structs.GetValueOrDefault(sourceName) == scope.MutableStructSlots.GetValueOrDefault(name)
+            && containers.GetValueOrDefault(sourceName) == scope.MutableContainerSlots.GetValueOrDefault(name);
+    }
+
+    private static bool AsyncScopeSharesBinding(
+        LocalScope source, string sourceName, LocalScope target, string targetName)
+    {
+        return source.Locals.TryGetValue(sourceName, out var sourceValue)
+            && target.Locals.TryGetValue(targetName, out var targetValue)
+            && sourceValue.Type == targetValue.Type
+            && source.MutableLocals.Contains(sourceName) == target.MutableLocals.Contains(targetName)
+            && (source.MutableLocals.Contains(sourceName)
+                ? source.MutableScalarSlots.ContainsKey(sourceName)
+                    || source.MutableStructSlots.ContainsKey(sourceName)
+                    || source.MutableContainerSlots.ContainsKey(sourceName)
+                : ReferenceEquals(sourceValue, targetValue))
+            && source.MutableScalarSlots.GetValueOrDefault(sourceName) == target.MutableScalarSlots.GetValueOrDefault(targetName)
+            && source.MutableStructSlots.GetValueOrDefault(sourceName) == target.MutableStructSlots.GetValueOrDefault(targetName)
+            && source.MutableContainerSlots.GetValueOrDefault(sourceName) == target.MutableContainerSlots.GetValueOrDefault(targetName)
+            && source.BorrowedOwnedTransferFlags.GetValueOrDefault(sourceName) == target.BorrowedOwnedTransferFlags.GetValueOrDefault(targetName);
+    }
+
+    private static AsyncScopeBinding CaptureAsyncScopeBinding(LocalScope scope, string name) => new(
+        scope, name, scope.Locals[name],
+        scope.MutableScalarSlots.GetValueOrDefault(name),
+        scope.MutableStructSlots.GetValueOrDefault(name),
+        scope.MutableContainerSlots.GetValueOrDefault(name),
+        scope.BorrowedOwnedTransferFlags.GetValueOrDefault(name));
+
+    private static bool AsyncScopeBindingUnchanged(AsyncScopeBinding binding) =>
+        binding.Scope.Locals.TryGetValue(binding.Name, out var value)
+        && value.Type == binding.Value.Type
+        && (binding.ScalarSlot is not null || binding.StructSlot is not null
+            || binding.ContainerSlot is not null || ReferenceEquals(value, binding.Value))
+        && binding.Scope.MutableScalarSlots.GetValueOrDefault(binding.Name) == binding.ScalarSlot
+        && binding.Scope.MutableStructSlots.GetValueOrDefault(binding.Name) == binding.StructSlot
+        && binding.Scope.MutableContainerSlots.GetValueOrDefault(binding.Name) == binding.ContainerSlot
+        && binding.Scope.BorrowedOwnedTransferFlags.GetValueOrDefault(binding.Name) == binding.OwnershipFlag;
 
     private void SuspendAndResumeCfgPoint(
         AsyncCfgLowering lowering,
@@ -660,6 +815,7 @@ internal sealed partial class LlvmEmitter
         IReadOnlyList<AsyncSpillPlan> spillPlans)
     {
         var inputName = lowering.Function.InputName ?? "it";
+        var suspendedScope = CaptureLocals();
         var ownsPrimaryInput = lowering.Function.InputOwnership == BoundFunctionInputOwnership.Move
             && lowering.Function.InputType is { } inputType
             && _program.Types.ContainsOwnedStorage(inputType)
@@ -672,6 +828,7 @@ internal sealed partial class LlvmEmitter
             .Select(static item => item.index)
             .ToArray();
         var movedInputFields = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var inputScopeBindings = new Dictionary<string, AsyncScopeBinding[]>(StringComparer.Ordinal);
         foreach (var name in new[] { inputName }.Concat(
                      ownedAdditionalInputIndexes.Select(index =>
                          (lowering.Function.AdditionalParameters ?? [])[index].Name)))
@@ -679,6 +836,9 @@ internal sealed partial class LlvmEmitter
             if (_movedOwnedStructFields.TryGetValue(name, out var fields))
             {
                 movedInputFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+                inputScopeBindings[name] = _asyncScopeSnapshots
+                    .Where(scope => AsyncScopeSharesBinding(suspendedScope, name, scope, name))
+                    .Select(scope => CaptureAsyncScopeBinding(scope, name)).ToArray();
             }
         }
         point.SetRuntimeShape(spillPlans, ownsPrimaryInput, ownedAdditionalInputIndexes);
@@ -719,15 +879,41 @@ internal sealed partial class LlvmEmitter
         foreach (var (name, fields) in movedInputFields)
         {
             _movedOwnedStructFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
-            foreach (var scope in _asyncScopeSnapshots.Where(scope => scope.Locals.ContainsKey(name)))
+            foreach (var binding in inputScopeBindings[name].Where(AsyncScopeBindingUnchanged))
             {
-                scope.MovedOwnedStructFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+                binding.Scope.MovedOwnedStructFields[binding.Name] = new HashSet<string>(fields, StringComparer.Ordinal);
             }
         }
         EmitLabel(point.ResumeLabel);
         _currentBlockLabel = point.ResumeLabel;
         LoadAsyncSpills(lowering.Function, spills);
+        foreach (var spill in point.Spills.Where(spill => spill.MovedOwnedFields.Count > 0))
+        {
+            var fields = new HashSet<string>(spill.MovedOwnedFields, StringComparer.Ordinal);
+            _movedOwnedStructFields[spill.Name] = fields;
+        }
         RefreshAsyncScopeSnapshots(spills);
+        foreach (var spill in point.Spills)
+        {
+            if (spill.SourceScope is not null)
+                ForgetAsyncSpillCarrier(spill.Name);
+        }
+    }
+
+    private void ForgetAsyncSpillCarrier(string name)
+    {
+        // This is a compiler-only alias, not an ownership transfer. Its
+        // resumed flag/slot now belongs to the exact registered scope.
+        _locals.Remove(name);
+        _mutableLocals.Remove(name);
+        _borrowedMutableLocals.Remove(name);
+        _borrowedOwnedLocals.Remove(name);
+        _movedOwnedStructFields.Remove(name);
+        _mutableContainerSlots.Remove(name);
+        _mutableStructSlots.Remove(name);
+        _mutableScalarSlots.Remove(name);
+        _borrowedOwnedTransferFlags.Remove(name);
+        _readonlyCaptureBorrowPointers.Remove(name);
     }
 
     private void RefreshAsyncScopeSnapshots(IReadOnlyList<RuntimeAsyncSpill> spills)
@@ -735,16 +921,15 @@ internal sealed partial class LlvmEmitter
         foreach (var spill in spills)
         {
             var value = _locals[spill.Name];
-            foreach (var scope in _asyncScopeSnapshots)
+            foreach (var binding in spill.ScopeBindings.Where(AsyncScopeBindingUnchanged))
             {
-                if (!scope.Locals.ContainsKey(spill.Name))
-                {
-                    continue;
-                }
-                scope.Locals[spill.Name] = value;
+                var scope = binding.Scope;
+                scope.Locals[binding.Name] = value;
+                scope.MovedOwnedStructFields[binding.Name] = new HashSet<string>(
+                    spill.MovedOwnedFields, StringComparer.Ordinal);
                 if (_borrowedOwnedTransferFlags.TryGetValue(spill.Name, out var transferFlag))
                 {
-                    scope.BorrowedOwnedTransferFlags[spill.Name] = transferFlag;
+                    scope.BorrowedOwnedTransferFlags[binding.Name] = transferFlag;
                     var resumedObligation = _terminatingOwnedCleanupObligations.FirstOrDefault(obligation =>
                         string.Equals(obligation.BindingName, spill.Name, StringComparison.Ordinal)
                         && ReferenceEquals(obligation.Value, value)
@@ -758,6 +943,18 @@ internal sealed partial class LlvmEmitter
                             scope.TerminatingOwnedCleanupObligations[obligationIndex] = resumedObligation;
                         }
                     }
+                    for (var index = 0; index < scope.TerminatingOwnedCleanupObligations.Count; index++)
+                    {
+                        var obligation = scope.TerminatingOwnedCleanupObligations[index];
+                        if (string.Equals(obligation.BindingName, binding.Name, StringComparison.Ordinal)
+                            && ReferenceEquals(obligation.Value, binding.Value))
+                        {
+                            scope.TerminatingOwnedCleanupObligations[index] = obligation with
+                            {
+                                Value = value, RetainedFlag = transferFlag
+                            };
+                        }
+                    }
                 }
                 if (!spill.IsMutable)
                 {
@@ -765,15 +962,15 @@ internal sealed partial class LlvmEmitter
                 }
                 if (_mutableContainerSlots.TryGetValue(spill.Name, out var container))
                 {
-                    scope.MutableContainerSlots[spill.Name] = container;
+                    scope.MutableContainerSlots[binding.Name] = container;
                 }
                 if (_mutableStructSlots.TryGetValue(spill.Name, out var structure))
                 {
-                    scope.MutableStructSlots[spill.Name] = structure;
+                    scope.MutableStructSlots[binding.Name] = structure;
                 }
                 if (_mutableScalarSlots.TryGetValue(spill.Name, out var scalar))
                 {
-                    scope.MutableScalarSlots[spill.Name] = scalar;
+                    scope.MutableScalarSlots[binding.Name] = scalar;
                 }
             }
         }
@@ -823,31 +1020,47 @@ internal sealed partial class LlvmEmitter
         var offset = 0;
         foreach (var spill in spillPlans)
         {
-            var value = ResolveLocal(spill.Name);
-            EnsureRuntimeType(value, spill.Type, spill.Name);
-            var materialized = MaterializeAggregateValue(value);
-            var alignment = RuntimeAlignment(spill.Type);
-            offset = AlignAsyncSize(offset, alignment);
-            var valueOffset = offset;
-            offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
-            var ownershipFlagPointer = _borrowedOwnedTransferFlags.GetValueOrDefault(spill.Name);
-            int? ownershipFlagOffset = null;
-            if (ownershipFlagPointer is not null)
+            var active = spill.SourceScope is null ? null : CaptureLocals();
+            if (spill.SourceScope is { } sourceScope)
+                RestoreLocals(sourceScope);
+            try
             {
-                ownershipFlagOffset = offset;
-                offset = checked(offset + 1);
+                var sourceName = spill.SourceName ?? spill.Name;
+                var value = ResolveLocal(sourceName);
+                EnsureRuntimeType(value, spill.Type, spill.Name);
+                var materialized = MaterializeAggregateValue(value);
+                var alignment = RuntimeAlignment(spill.Type);
+                offset = AlignAsyncSize(offset, alignment);
+                var valueOffset = offset;
+                offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+                var ownershipFlagPointer = _borrowedOwnedTransferFlags.GetValueOrDefault(sourceName);
+                int? ownershipFlagOffset = null;
+                if (ownershipFlagPointer is not null)
+                {
+                    ownershipFlagOffset = offset;
+                    offset = checked(offset + 1);
+                }
+                spills.Add(new RuntimeAsyncSpill(
+                    spill.Name,
+                    spill.Type,
+                    valueOffset,
+                    alignment,
+                    materialized.TypeName,
+                    materialized.ValueName,
+                    spill.IsMutable,
+                    value,
+                    ownershipFlagPointer,
+                    ownershipFlagOffset,
+                    _borrowedOwnedLocals.Contains(sourceName),
+                    _borrowedMutableLocals.Contains(sourceName),
+                    spill.ScopeBindings ?? [],
+                    spill.MovedOwnedFields));
             }
-            spills.Add(new RuntimeAsyncSpill(
-                spill.Name,
-                spill.Type,
-                valueOffset,
-                alignment,
-                materialized.TypeName,
-                materialized.ValueName,
-                spill.IsMutable,
-                value,
-                ownershipFlagPointer,
-                ownershipFlagOffset));
+            finally
+            {
+                if (active is not null)
+                    RestoreLocals(active);
+            }
         }
 
         return spills;
@@ -910,6 +1123,10 @@ internal sealed partial class LlvmEmitter
                 ? DematerializeTask(task, loaded)
                 : DematerializeAggregateValue(spill.Type, loaded);
             _locals[spill.Name] = value;
+            if (spill.IsBorrowedOwned)
+                _borrowedOwnedLocals.Add(spill.Name);
+            if (spill.IsBorrowedMutable)
+                _borrowedMutableLocals.Add(spill.Name);
             if (spill.OwnershipFlagOffset is { } ownershipFlagOffset)
             {
                 var storedFlagAddress = NextTemp("async_spill_owned_flag_address");
@@ -1072,6 +1289,14 @@ internal sealed partial class LlvmEmitter
                 $"tail await in async function '{function.Name}' did not produce Task<T>");
         EmitRecordCurrentDiagnosticSuspension(function.Body!, 1, child, taskExpression);
         StoreSuspendedChild(function, child);
+        if (taskExpression is NameExpression taskName)
+        {
+            RemoveLocal(taskName.Name);
+        }
+        else if (taskExpression is FieldAccessExpression)
+        {
+            ConsumeOwnedFieldProjection(taskExpression, child.Type);
+        }
         EmitStore("i32", "1", stateSlot, 4);
         EmitRet("i1", "false");
 
@@ -1178,15 +1403,22 @@ internal sealed partial class LlvmEmitter
                         CollectCfgSuspensions(expression.Expression, nested, candidates);
                     }
                     break;
-                case BlockFunctionCallStatement block
-                    when block.Target.Count == 1
-                        && string.Equals(block.Target[0], "while", StringComparison.Ordinal):
+                case BlockFunctionCallStatement block:
+                    CollectCfgSuspensions(block.Source, nested, candidates);
+                    foreach (var argument in block.Arguments ?? [])
+                    {
+                        CollectCfgSuspensions(argument, nested, candidates);
+                    }
                     CollectCfgSuspensions(block.Body, nested: true, candidates);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
                     foreach (var block in pipeline.Calls)
                     {
                         CollectCfgSuspensions(block.Source, nested, candidates);
+                        foreach (var argument in block.Arguments ?? [])
+                        {
+                            CollectCfgSuspensions(argument, nested, candidates);
+                        }
                         CollectCfgSuspensions(block.Body, nested: true, candidates);
                     }
                     break;
@@ -1411,7 +1643,7 @@ internal sealed partial class LlvmEmitter
                 {
                     return false;
                 }
-                spillPlans.Add(new AsyncSpillPlan(binding.Name, type, binding.IsMutable));
+                spillPlans.Add(new AsyncSpillPlan(binding.Name, type, binding.IsMutable, []));
             }
 
             awaitPlans.Add(new AsyncAwaitPoint(
@@ -1473,14 +1705,19 @@ internal sealed partial class LlvmEmitter
     {
         if (IsIntegerType(type)
             || IsFloatType(type)
-            || type is BoundType.Bool or BoundType.Text
+            || type is BoundType.Bool or BoundType.Text or BoundType.Arguments
+                or BoundType.MappedBytes or BoundType.MutableMappedBytes
             || _program.Types.IsBox(type)
             || _program.Types.IsTask(type)
+            || _program.Types.IsStream(type)
+            || _program.Types.IsEventStream(type)
             || type == BoundType.DynamicIntArray
             || type == BoundType.IntDictionary
             || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
-            || _program.Types.IsDictionary(type))
+            || _program.Types.IsDictionary(type)
+            || _program.Types.IsSet(type)
+            || _program.Types.IsDeque(type))
         {
             return true;
         }
@@ -1491,6 +1728,8 @@ internal sealed partial class LlvmEmitter
 
         try
         {
+            if (_program.Types.IsSlice(type))
+                return IsAsyncSpillType(_program.Types.GetSliceElement(type), visiting);
             if (_program.Types.IsStruct(type))
             {
                 return _program.Types.GetStruct(type).Fields.All(field =>
@@ -1520,7 +1759,9 @@ internal sealed partial class LlvmEmitter
             || type == BoundType.IntDictionary
             || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
-            || _program.Types.IsDictionary(type);
+            || _program.Types.IsDictionary(type)
+            || _program.Types.IsSet(type)
+            || _program.Types.IsDeque(type);
     }
 
     private void CreateResumedMutableSlot(string name, RuntimeValue value)
@@ -1571,7 +1812,7 @@ internal sealed partial class LlvmEmitter
         EmitAssign(handle, $"extractvalue %sollang.task {aggregate}, 0");
         var context = NextTemp("task_context");
         EmitAssign(context, $"extractvalue %sollang.task {aggregate}, 1");
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             function.InputType,
             function.ReturnType,
@@ -1590,6 +1831,128 @@ internal sealed partial class LlvmEmitter
         EmitLabel(waitFailedLabel);
         EmitTrap();
         EmitLabel(waitedLabel);
+        if (task.RuntimeFunction is null)
+        {
+            var completionSlot = TaskControlField(task.HandleName, 22, "erased_task_completion_slot");
+            var completion = NextTemp("erased_task_completion");
+            EmitLoad(completion, "ptr", completionSlot, 8);
+            var needsCompletion = NextTemp("erased_task_needs_completion");
+            EmitCompare(needsCompletion, "ne", "ptr", completion, "null");
+            var completeLabel = NextLabel("erased_task_complete");
+            var readyLabel = NextLabel("erased_task_result_ready");
+            EmitConditionalBranch(needsCompletion, completeLabel, readyLabel);
+            EmitLabel(completeLabel);
+            EmitInstruction($"call void {completion}(ptr {task.HandleName})");
+            EmitStore("ptr", "null", completionSlot, 8);
+            EmitBranch(readyLabel);
+            EmitLabel(readyLabel);
+            _currentBlockLabel = readyLabel;
+        }
+        else
+        {
+            EmitRuntimeTaskResultCompletion(task);
+        }
+        string resultAddress;
+        if (task.RuntimeFunction is null)
+        {
+            resultAddress = NextTemp("erased_task_result_address");
+            EmitLoad(resultAddress, "ptr", TaskControlField(task.HandleName, 21, "erased_task_result_slot"), 8);
+        }
+        else
+        {
+            resultAddress = AsyncContextField(
+                task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
+        }
+        var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");
+        EmitLoad(loaded, AsyncStorageLlvmType(task.ResultType), resultAddress, RuntimeAlignment(task.ResultType));
+        var value = DematerializeAsyncResult(task.ResultType, loaded);
+        if (discardResult && _program.Types.ContainsOwnedStorage(task.ResultType))
+        {
+            DropOwnedRuntimeValue(value);
+        }
+        if (_usesAsyncDiagnostics && DiagnosticHeaderForTask(task) is { } diagnosticHeader)
+        {
+            EmitMarkDiagnosticHeaderTerminal(diagnosticHeader, 2);
+            EmitDetachDiagnosticHeader(diagnosticHeader);
+        }
+        var closeSucceeded = NextTemp("task_close_succeeded");
+        EmitCall(closeSucceeded, "i1", "sollang_task_release", $"ptr {task.HandleName}");
+        var closedLabel = NextLabel("task_closed");
+        var closeFailedLabel = NextLabel("task_close_failed");
+        EmitConditionalBranch(closeSucceeded, closedLabel, closeFailedLabel);
+        EmitLabel(closeFailedLabel);
+        EmitTrap();
+        EmitLabel(closedLabel);
+        _currentBlockLabel = closedLabel;
+        return value;
+    }
+
+    // The two-pointer Task value may cross aggregate/function boundaries. Its
+    // control block owns the producer-dependent result address and adapter.
+    private RuntimeTask CreateRuntimeTask(
+        BoundType taskType, BoundType? inputType, BoundType resultType,
+        string handle, string context, BoundFunction? function = null,
+        string? DiagnosticHeaderName = null)
+    {
+        EmitInitializeTaskResult(handle, context, inputType, resultType, function);
+        return new RuntimeTask(taskType, inputType, resultType, handle, context, function, DiagnosticHeaderName);
+    }
+
+    private string TaskControlField(string handle, int field, string prefix)
+    {
+        var address = NextTemp(prefix);
+        EmitAssign(address, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 {field}");
+        return address;
+    }
+
+    private void EmitInitializeTaskResult(
+        string handle, string context, BoundType? inputType, BoundType resultType, BoundFunction? function)
+    {
+        var result = AsyncContextField(context, inputType, resultType, 6, "task_stored_result_address");
+        EmitStore("ptr", result, TaskControlField(handle, 21, "task_stored_result_slot"), 8);
+        var completion = function is not null && HasDeferredTaskResult(function)
+            ? $"@{TaskResultCompletionSymbol(function)}"
+            : "null";
+        EmitStore("ptr", completion, TaskControlField(handle, 22, "task_stored_completion_slot"), 8);
+    }
+
+    private static bool HasDeferredTaskResult(BoundFunction function) => function.Kind is
+        BoundFunctionKind.RuntimeReadScalarAsync
+        or BoundFunctionKind.RuntimeWriteScalarAtAsync
+        or BoundFunctionKind.RuntimeSyncFileAsync
+        or BoundFunctionKind.RuntimeReadBytesAtAsync
+        or BoundFunctionKind.RuntimeWriteBytesAtAsync
+        or BoundFunctionKind.RuntimeOpenFileAsync
+        or BoundFunctionKind.RuntimeOpenWriteFileAsync
+        or BoundFunctionKind.RuntimeSocketCompletionDequeue;
+
+    private static string TaskResultCompletionSymbol(BoundFunction function) =>
+        SymbolForFunction(function)[1..] + "_task_result_complete";
+
+    private void EmitTaskResultCompletionFunctions()
+    {
+        foreach (var function in _reachableFunctions.Where(HasDeferredTaskResult))
+        {
+            _currentFunction = function;
+            _tempId = 0;
+            _labelId = 0;
+            ClearLocalState();
+            EmitFunctionLine($"define internal void @{TaskResultCompletionSymbol(function)}(ptr %control) #0 {{");
+            EmitLabel("entry");
+            _currentBlockLabel = "entry";
+            EmitLoad("%context", "ptr", TaskControlField("%control", 0, "task_completion_context_slot"), 8);
+            EmitRuntimeTaskResultCompletion(new RuntimeTask(
+                _program.Types.GetOrAddTask(function.ReturnType), function.InputType,
+                function.ReturnType, "%control", "%context", function));
+            EmitInstruction("ret void");
+            _currentBlockTerminated = true;
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+    }
+
+    private void EmitRuntimeTaskResultCompletion(RuntimeTask task)
+    {
         if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeReadScalarAsync } fileRead)
         {
             var fileResult = EmitRuntimeReadScalar(fileRead, task.HandleName);
@@ -1670,30 +2033,6 @@ internal sealed partial class LlvmEmitter
                 socketResultAddress,
                 RuntimeAlignment(socketResult.Type));
         }
-        var resultAddress = AsyncContextField(
-            task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
-        var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");
-        EmitLoad(loaded, AsyncStorageLlvmType(task.ResultType), resultAddress, RuntimeAlignment(task.ResultType));
-        var value = DematerializeAsyncResult(task.ResultType, loaded);
-        if (discardResult && _program.Types.ContainsOwnedStorage(task.ResultType))
-        {
-            DropOwnedRuntimeValue(value);
-        }
-        if (_usesAsyncDiagnostics && DiagnosticHeaderForTask(task) is { } diagnosticHeader)
-        {
-            EmitMarkDiagnosticHeaderTerminal(diagnosticHeader, 2);
-            EmitDetachDiagnosticHeader(diagnosticHeader);
-        }
-        var closeSucceeded = NextTemp("task_close_succeeded");
-        EmitCall(closeSucceeded, "i1", "sollang_task_release", $"ptr {task.HandleName}");
-        var closedLabel = NextLabel("task_closed");
-        var closeFailedLabel = NextLabel("task_close_failed");
-        EmitConditionalBranch(closeSucceeded, closedLabel, closeFailedLabel);
-        EmitLabel(closeFailedLabel);
-        EmitTrap();
-        EmitLabel(closedLabel);
-        _currentBlockLabel = closedLabel;
-        return value;
     }
 
     private void EmitCancelTask(RuntimeTask task)
@@ -2073,7 +2412,59 @@ internal sealed partial class LlvmEmitter
 
     private sealed record AsyncCfgCandidate(object Site, bool Nested, bool IsYield);
 
-    private sealed record AsyncSpillPlan(string Name, BoundType Type, bool IsMutable);
+    private sealed record AsyncSpillPlan(
+        string Name,
+        BoundType Type,
+        bool IsMutable,
+        IReadOnlyList<string> MovedOwnedFields,
+        LocalScope? SourceScope = null,
+        string? SourceName = null,
+        IReadOnlyList<AsyncScopeBinding>? ScopeBindings = null,
+        bool DropOnCancel = true,
+        bool HasOwnershipFlag = false);
+
+    private sealed record AsyncScopeBinding(
+        LocalScope Scope, string Name, RuntimeValue Value,
+        string? ScalarSlot, string? StructSlot, MutableContainerSlot? ContainerSlot,
+        string? OwnershipFlag);
+
+    private sealed record AsyncHiddenScope(LocalScope Scope, IReadOnlyList<LocalScope> Mirrors);
+
+    private readonly Stack<AsyncHiddenScope> _asyncHiddenScopes = new();
+
+    private readonly Dictionary<string, string> _asyncStreamCancellationBindings = new(StringComparer.Ordinal);
+
+    private void RegisterAsyncStreamCancellationSlot(string slot)
+    {
+        if (_activeAsyncCfg is null)
+            return;
+        var name = NextAsyncBindingName("stream_cancellation");
+        _asyncStreamCancellationBindings.Add(slot, name);
+        _locals.Add(name, new RuntimeBool("false"));
+        _mutableLocals.Add(name);
+        _mutableScalarSlots.Add(name, slot);
+    }
+
+    private string ResolveAsyncStreamCancellationSlot(string slot)
+    {
+        if (!_asyncStreamCancellationBindings.TryGetValue(slot, out var name))
+            return slot;
+        if (_mutableScalarSlots.TryGetValue(name, out var pointer))
+            return pointer;
+        foreach (var hidden in _asyncHiddenScopes)
+            if (hidden.Scope.MutableScalarSlots.TryGetValue(name, out pointer))
+                return pointer;
+        foreach (var scope in _asyncScopeSnapshots)
+            if (scope.MutableScalarSlots.TryGetValue(name, out pointer))
+                return pointer;
+        throw new SollangException("async stream cancellation binding is not live");
+    }
+
+    private void UnregisterAsyncStreamCancellationSlot(string slot)
+    {
+        if (_asyncStreamCancellationBindings.Remove(slot, out var name))
+            ForgetAsyncSpillCarrier(name);
+    }
 
     private sealed record RuntimeAsyncSpill(
         string Name,
@@ -2085,5 +2476,9 @@ internal sealed partial class LlvmEmitter
         bool IsMutable,
         RuntimeValue Template,
         string? OwnershipFlagPointer,
-        int? OwnershipFlagOffset);
+        int? OwnershipFlagOffset,
+        bool IsBorrowedOwned,
+        bool IsBorrowedMutable,
+        IReadOnlyList<AsyncScopeBinding> ScopeBindings,
+        IReadOnlyList<string> MovedOwnedFields);
 }

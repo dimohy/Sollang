@@ -1,0 +1,54 @@
+import sollang.compiler.llvm.text as llvmText
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    """
+    struct OwnedSymbol {
+        name: Text
+        payload: [Int; ~]
+    }
+    
+    payloadLength values: [Int; ~] -> Int {
+        values -> len => length
+        Int(length)
+    }
+    
+    increment value: Int -> Int {
+        value + 1
+    }
+    
+    main {
+        {Int: OwnedSymbol;
+            1: OwnedSymbol { name: "lexer", payload: [10, 20; ~] }
+        } => symbols
+        symbols[1].payload -> payloadLength => count
+        (symbols[1].payload)[0] -> increment => first
+        symbols[1].name -> len => nameLength
+        "projected borrow=$count,$first,$nameLength" -> println
+    }
+    """ => input
+    input -> llvmText.ownedIndexPlaceControl("") => semanticOwner
+    input -> llvmText.ownedIndexLateDiagnosticCount => lateCount
+    "pre=$semanticOwner" -> println
+    "late=$lateCount" -> println
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> semanticContext.prepare => initial
+    initial -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared.package.ranges[0] => range
+    0 => index!
+    index! < range.astCount -> while {
+        resolved.prepared.package.nodes[range.astStart + index!] => node
+        node.kind == 10 or node.kind == 36 or node.kind == 41
+            -> if {
+                "ast=$(index!),kind=$(node.kind),parent=$(node.parent),start=$(node.start),token=$(node.firstToken)" -> println
+            }
+        index! + 1 => index!
+    }
+    resolved.types.callArguments -> each argument {
+        resolved.prepared.package.ranges[argument.targetSourceModule] => target
+        resolved.prepared.package.symbols[target.symbolStart + argument.parameterSymbol] => parameter
+        "call=$(argument.callAst),arg=$(argument.argumentAst),parameter=$(argument.parameterSymbol),flags=$(parameter.flags),status=$(argument.status)" -> println
+    }
+}

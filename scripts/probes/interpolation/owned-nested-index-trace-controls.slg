@@ -1,0 +1,48 @@
+namespace sollang.compiler.llvm.text
+import sollang.compiler.llvm.target as llvmTarget
+public ownedNestedIndexLinksValid: -> Bool {
+    """
+    struct IndexedInner {
+        data: [Int; ~]
+    }
+    struct IndexedFrame {
+        inner: IndexedInner
+    }
+    struct IndexedOwner {
+        frames: [IndexedFrame; ~]
+    }
+    observeIndexedData data: [Int] -> Int => data -> len
+    main {
+        IndexedOwner { frames: [IndexedFrame { inner: IndexedInner { data: [7, 8,; ~] } },; ~] } => owner
+        owner.frames[0].inner.data -> observeIndexedData => count
+        "$count,$(owner.frames[0].inner.data[0])" -> println
+    }
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareNative => context
+    0 => memberCount!
+    0 => indexCount!
+    0 => index!
+    index! < (context.interpolations -> len) -> while {
+        context.interpolations[index!] => node
+        node.kind == 5 or node.kind == 7 -> if {
+            node.operand0 < 0 or node.operand0 == index!
+                -> if { false -> return }
+            node.kind == 5 -> if {
+                context.interpolationMemberTypeByNode[index!] < 0
+                    -> if { false -> return }
+                memberCount! + 1 => memberCount!
+            } else {
+                node.operand1 < 0 or node.operand1 == node.operand0
+                    or context.unsupportedIndexOwnerTypeByNode[index!] >= 0
+                    -> if { false -> return }
+                indexCount! + 1 => indexCount!
+            }
+        }
+        index! + 1 => index!
+    }
+    memberCount! == 3 and indexCount! == 2
+}

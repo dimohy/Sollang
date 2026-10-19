@@ -16,6 +16,69 @@ public struct QualifiedResolution {
     public status: Int
 }
 
+struct QualifiedFunctionDeclaration {
+    sourceModule: Int
+    moduleIndex: Int
+    symbolIndex: Int
+}
+
+qualifiedFunctionUsesImportAlias package: ref analysis.PackageAnalysis, imports: ref [modules.ImportEdge; ~], sourceIndex: Int, firstToken: Int -> Bool {
+    package.ranges[sourceIndex] => range
+    package.tokens[range.tokenStart + firstToken] => name
+    0 => index!
+    index! < (imports -> len) -> while {
+        imports[index!] => edge
+        edge.sourceModule == sourceIndex -> if {
+            package.tokens[range.tokenStart + edge.aliasToken] => alias
+            name.span.length == alias.span.length => equal!
+            UIntSize(0) => byteIndex!
+            equal! and byteIndex! < name.span.length -> while {
+                (package.sources[sourceIndex] -> byte(name.span.start + byteIndex!)) != (package.sources[sourceIndex] -> byte(alias.span.start + byteIndex!))
+                    -> if { false => equal! }
+                byteIndex! + 1 => byteIndex!
+            }
+            equal! -> if { true -> return }
+        }
+        index! + 1 => index!
+    }
+    false
+}
+
+qualifiedFunctionPathMatches package: ref analysis.PackageAnalysis, sourceIndex: Int, firstToken: Int, lastToken: Int, declaration: QualifiedFunctionDeclaration -> Bool {
+    package.ranges[sourceIndex] => range
+    package.ranges[declaration.sourceModule] => targetRange
+    package.symbols[targetRange.symbolStart + declaration.symbolIndex] => symbol
+    firstToken => left!
+    symbol.nameToken => right!
+    left! <= lastToken -> while {
+        package.tokens[range.tokenStart + left!] => leftToken
+        leftToken.kind == grammar.triviaIdWhitespace() or leftToken.kind == grammar.triviaIdComment()
+            -> if {
+                left! + 1 => left!
+            } else {
+                right! < targetRange.tokenCount and (package.tokens[targetRange.tokenStart + right!].kind == grammar.triviaIdWhitespace()
+                    or package.tokens[targetRange.tokenStart + right!].kind == grammar.triviaIdComment())
+                    -> while { right! + 1 => right! }
+                right! >= targetRange.tokenCount -> if { false -> return }
+                package.tokens[targetRange.tokenStart + right!] => rightToken
+                leftToken.kind != rightToken.kind or leftToken.span.length != rightToken.span.length
+                    -> if { false -> return }
+                UIntSize(0) => byteIndex!
+                byteIndex! < leftToken.span.length -> while {
+                    (package.sources[sourceIndex] -> byte(leftToken.span.start + byteIndex!)) != (package.sources[declaration.sourceModule] -> byte(rightToken.span.start + byteIndex!))
+                        -> if { false -> return }
+                    byteIndex! + 1 => byteIndex!
+                }
+                left! + 1 => left!
+                right! + 1 => right!
+            }
+    }
+    right! < targetRange.tokenCount and (package.tokens[targetRange.tokenStart + right!].kind == grammar.triviaIdWhitespace()
+        or package.tokens[targetRange.tokenStart + right!].kind == grammar.triviaIdComment())
+        -> while { right! + 1 => right! }
+    right! >= targetRange.tokenCount or package.tokens[targetRange.tokenStart + right!].kind != grammar.tokenIdDot()
+}
+
 # Status: 0 public symbol, 2 missing member, 3 non-public member.
 public resolve sources: [Text; ~] -> [QualifiedResolution; ~] {
     sources -> analysis.analyze => package
@@ -25,6 +88,25 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
     package -> modules.identitiesAnalyzed => identities
     package -> modules.importsAnalyzed => imports
     package -> moduleResolve.resolveAnalyzed => resolvedImports
+    # Index the uncommon explicit declaration paths once, rather than scanning
+    # every function for each projection in a large stdlib package.
+    [QualifiedFunctionDeclaration; ~] => qualifiedFunctions!
+    0 => declarationModule!
+    declarationModule! < (identities -> len) -> while {
+        identities[declarationModule!].sourceIndex => declarationSource
+        package.ranges[declarationSource] => declarationRange
+        0 => declarationIndex!
+        declarationIndex! < declarationRange.symbolCount
+            -> while {
+                package.symbols[declarationRange.symbolStart + declarationIndex!] => declaration
+                declaration.parent < 0 and (declaration -> symbols.hasQualifiedFunctionName(package.tokens, declarationRange.tokenStart, declarationRange.tokenCount))
+                    -> if {
+                        qualifiedFunctions! -> push(QualifiedFunctionDeclaration { sourceModule: declarationSource, moduleIndex: declarationModule!, symbolIndex: declarationIndex! })
+                    }
+                declarationIndex! + 1 => declarationIndex!
+            }
+        declarationModule! + 1 => declarationModule!
+    }
     [QualifiedResolution; ~] => results!
     package.sources -> len => sourceCount
     imports -> len => importCount
@@ -93,7 +175,24 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 -> if { currentModuleSearch! => currentModule! }
                             currentModuleSearch! + 1 => currentModuleSearch!
                         }
-                        currentModule! >= 0 and previousIdentifier! >= 0
+                        0 => qualifiedFunctionIndex!
+                        not localVariantResolved! and qualifiedFunctionIndex! < (qualifiedFunctions! -> len)
+                            -> while {
+                                qualifiedFunctions![qualifiedFunctionIndex!] => declaration
+                                (package -> qualifiedFunctionPathMatches(sourceIndex!, firstIdentifier!, lastIdentifier!, declaration))
+                                    and not (package -> qualifiedFunctionUsesImportAlias(imports, sourceIndex!, firstIdentifier!))
+                                    -> if {
+                                        package.ranges[declaration.sourceModule] => declarationRange
+                                        package.symbols[declarationRange.symbolStart + declaration.symbolIndex] => declarationSymbol
+                                        3 => declarationStatus!
+                                        modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, declaration.sourceModule, package.tokens, package.ranges)
+                                            or declarationSymbol.flags / 4 % 2 == 1 -> if { 0 => declarationStatus! }
+                                        results! -> push(QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: declaration.moduleIndex, targetSymbol: declaration.symbolIndex, status: declarationStatus! })
+                                        true => localVariantResolved!
+                                    }
+                                qualifiedFunctionIndex! + 1 => qualifiedFunctionIndex!
+                            }
+                        not localVariantResolved! and currentModule! >= 0 and previousIdentifier! >= 0
                             -> if {
                                 0 => nativeHandleSearch!
                                 nativeHandleSearch! < sourceRange.symbolCount
@@ -101,7 +200,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         package.symbols[sourceRange.symbolStart + nativeHandleSearch!] => nativeHandle
                                         nativeHandle.kind == 3
                                             and nativeHandle.flags / 65536 % 2 == 1
-                                            and nativeHandle.astNode >= 0 -> if {
+                                            and nativeHandle.astNode >= 0 and identifierCount! == 2
+                                            -> if {
                                                 package.nodes[sourceRange.astStart + nativeHandle.astNode] => nativeHandleAst
                                                 nativeHandleAst.parent >= 0 -> if {
                                                     package.nodes[sourceRange.astStart + nativeHandleAst.parent] => nativeHandleLibraryAst
@@ -154,7 +254,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 nativeFunctionSearch! < sourceRange.symbolCount
                                     -> while {
                                         package.symbols[sourceRange.symbolStart + nativeFunctionSearch!] => nativeFunction
-                                        nativeFunction.kind == 7 and nativeFunction.flags / 128 % 2 == 1 and nativeFunction.astNode >= 0
+                                        nativeFunction.kind == 7 and nativeFunction.flags / 128 % 2 == 1 and nativeFunction.astNode >= 0 and identifierCount! == 2
                                             -> if {
                                                 package.nodes[sourceRange.astStart + nativeFunction.astNode] => nativeFunctionAst
                                                 nativeFunctionAst.parent >= 0 -> if {
@@ -373,6 +473,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 siblingModuleIndex! < (identities -> len) -> while {
                                     identities[siblingModuleIndex!] => siblingIdentity
                                     siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentPathHash
+                                        and modules.sameLogicalAnalyzedSource(package.sources, identities, sourceIndex!, siblingIdentity.sourceIndex, package.tokens, package.ranges)
                                         -> if {
                                             siblingIdentity.sourceIndex => siblingSourceIndex
                                             package.sources[siblingSourceIndex] -> len => siblingSourceLength
@@ -382,8 +483,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             siblingSymbolIndex! < siblingRange.symbolCount
                                                 -> while {
                                                     package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingSymbol
-                                                    (siblingSymbol.kind == 3 and siblingSymbol.flags / 65536 % 2 == 1)
-                                                        or (siblingSymbol.kind == 7 and siblingSymbol.flags / 128 % 2 == 1)
+                                                    identifierCount! == 2 and ((siblingSymbol.kind == 3 and siblingSymbol.flags / 65536 % 2 == 1)
+                                                        or (siblingSymbol.kind == 7 and siblingSymbol.flags / 128 % 2 == 1))
                                                         -> if {
                                                             package.nodes[siblingRange.astStart + siblingSymbol.astNode] => siblingDeclaration
                                                             siblingDeclaration.parent >= 0 -> if {
@@ -471,6 +572,16 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         -> if { qualifiedModuleHash! => qualifiedOwnerModuleHash! }
                                     qualifiedModuleToken! + 1 => qualifiedModuleToken!
                                 }
+                            package.tokens[sourceRange.tokenStart + firstIdentifier!] => namespaceFirstToken
+                            package.tokens[sourceRange.tokenStart + previousIdentifier!] => namespaceLastToken
+                            namespaceLastToken.span.start + namespaceLastToken.span.length - namespaceFirstToken.span.start => namespaceLength
+                            modules.ImportEdge { sourceModule: sourceIndex!, targetHash: qualifiedModuleHash!, pathStart: namespaceFirstToken.span.start, pathLength: namespaceLength, aliasToken: -1 } => namespaceRequest
+                            UIntSize(0) => ownerNamespaceLength!
+                            ownerPrefixIdentifier! >= 0 -> if {
+                                package.tokens[sourceRange.tokenStart + ownerPrefixIdentifier!] => ownerNamespaceLastToken
+                                ownerNamespaceLastToken.span.start + ownerNamespaceLastToken.span.length - namespaceFirstToken.span.start => ownerNamespaceLength!
+                            }
+                            modules.ImportEdge { sourceModule: sourceIndex!, targetHash: qualifiedOwnerModuleHash!, pathStart: namespaceFirstToken.span.start, pathLength: ownerNamespaceLength!, aliasToken: -1 } => ownerNamespaceRequest
                             false => qualifiedModuleFound!
                             -1 => qualifiedModuleTarget!
                             -1 => qualifiedModuleSymbol!
@@ -482,7 +593,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             0 => exactQualifiedModuleSearch!
                             exactQualifiedModuleSearch! < (identities -> len)
                                 -> while {
-                                    identities[exactQualifiedModuleSearch!].pathHash == qualifiedModuleHash!
+                                    package -> modules.importTargetsAnalyzedModule(identities, namespaceRequest, exactQualifiedModuleSearch!)
                                         -> if { true => exactQualifiedModule! }
                                     exactQualifiedModuleSearch! + 1 => exactQualifiedModuleSearch!
                                 }
@@ -491,9 +602,9 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 -> while {
                                     identities[qualifiedModuleSearch!] => qualifiedIdentity
                                     not exactQualifiedModule! and ownerPrefixIdentifier! >= 0
-                                        and qualifiedIdentity.pathHash == qualifiedOwnerModuleHash!
+                                        and (package -> modules.importTargetsAnalyzedModule(identities, ownerNamespaceRequest, qualifiedModuleSearch!))
                                         => qualifiedEnumMember
-                                    qualifiedIdentity.pathHash == qualifiedModuleHash! or qualifiedEnumMember
+                                    (package -> modules.importTargetsAnalyzedModule(identities, namespaceRequest, qualifiedModuleSearch!)) or qualifiedEnumMember
                                         -> if {
                                             true => qualifiedModuleFound!
                                             qualifiedIdentity.sourceIndex => qualifiedSourceIndex
@@ -522,6 +633,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                                 }
                                                             qualifiedMemberEqual! -> if {
                                                                 qualifiedModuleSearch! => qualifiedModuleTarget!
+                                                                false => qualifiedMethodResolved!
                                                                 qualifiedEnumMember -> if {
                                                                     qualifiedCandidate.kind == 4 -> if {
                                                                         0 => qualifiedVariantSearch!
@@ -545,8 +657,22 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                                                                 qualifiedVariantSearch! + 1 => qualifiedVariantSearch!
                                                                             }
                                                                     }
+                                                                    qualifiedModuleSymbol! < 0 and (qualifiedCandidate.kind == 3 or qualifiedCandidate.kind == 4)
+                                                                        -> if {
+                                                                            source -> slice(qualifiedMemberName.span.start, qualifiedMemberName.span.length) => ownerName
+                                                                            package.tokens[sourceRange.tokenStart + lastIdentifier!] => memberToken
+                                                                            source -> slice(memberToken.span.start, memberToken.span.length) => memberName
+                                                                            package -> resolveNominalFunction(identities, sourceIndex!, qualifiedModuleSearch!, ownerName, memberName) => method
+                                                                            method.symbol >= 0 -> if {
+                                                                                method.moduleIndex => qualifiedModuleTarget!
+                                                                                method.symbol => qualifiedModuleSymbol!
+                                                                                method.isAccessible => qualifiedModulePublic!
+                                                                                true => qualifiedMethodResolved!
+                                                                            }
+                                                                        }
                                                                 } else { qualifiedSymbolSearch! => qualifiedModuleSymbol! }
-                                                                qualifiedCandidate.flags / 4 % 2 == 1 -> if { true => qualifiedModulePublic! }
+                                                                not qualifiedMethodResolved! and qualifiedCandidate.flags / 4 % 2 == 1
+                                                                    -> if { true => qualifiedModulePublic! }
                                                                 qualifiedModuleSymbol! >= 0 -> if {
                                                                     qualifiedRange.symbolCount => qualifiedSymbolSearch!
                                                                     identities -> len => qualifiedModuleSearch!
@@ -661,12 +787,25 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                         # logical module. If a top-level member lives
                                         # in another source fragment, continue the
                                         # lookup across identities with the same path.
+                                        targetSymbol! < 0 and identifierCount! == 3 -> if {
+                                            package.tokens[sourceRange.tokenStart + secondIdentifier!] => ownerToken
+                                            package.tokens[sourceRange.tokenStart + lastIdentifier!] => memberToken
+                                            source -> slice(ownerToken.span.start, ownerToken.span.length) => ownerName
+                                            source -> slice(memberToken.span.start, memberToken.span.length) => memberName
+                                            package -> resolveNominalFunction(identities, sourceIndex!, targetModule, ownerName, memberName) => method
+                                            method.symbol >= 0 -> if {
+                                                method.moduleIndex => selectedTargetModule!
+                                                method.symbol => targetSymbol!
+                                                method.isAccessible => targetPublic!
+                                            }
+                                        }
                                         targetSymbol! < 0 and identifierCount! < 3 -> if {
                                             identities[targetModule].pathHash => targetPathHash
                                             0 => fragmentModuleIndex!
                                             fragmentModuleIndex! < (identities -> len) -> while {
                                                 identities[fragmentModuleIndex!] => fragmentIdentity
                                                 fragmentIdentity.pathHash == targetPathHash and fragmentModuleIndex! != targetModule
+                                                    and modules.sameLogicalAnalyzedSource(package.sources, identities, identities[targetModule].sourceIndex, fragmentIdentity.sourceIndex, package.tokens, package.ranges)
                                                     -> if {
                                                         fragmentIdentity.sourceIndex => fragmentSourceIndex
                                                         package.sources[fragmentSourceIndex] -> len => fragmentSourceLength
@@ -729,6 +868,104 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
         sourceIndex! + 1 => sourceIndex!
     }
     results!
+}
+
+struct NominalFunctionTarget {
+    moduleIndex: Int
+    symbol: Int
+    isAccessible: Bool
+}
+
+# Import aliases expose the complete logical namespace, including inherent
+# methods whose plain impl header lives in another fragment. The declaration
+# owns the type identity; matching method spelling alone is insufficient.
+resolveNominalFunction package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], requestingSource: Int, targetModule: Int, ownerName: Text, memberName: Text -> NominalFunctionTarget {
+    identities[targetModule] => targetIdentity
+    false => sameNamespace!
+    identities -> each identity {
+        identity.sourceIndex == requestingSource and identity.pathHash == targetIdentity.pathHash
+            -> if {
+                modules.sameLogicalAnalyzedSource(package.sources, identities, requestingSource, targetIdentity.sourceIndex, package.tokens, package.ranges)
+                    -> if { true => sameNamespace! }
+            }
+    }
+    false => ownerFound!
+    false => ownerPublic!
+    identities -> each identity {
+        identity.pathHash == targetIdentity.pathHash
+            -> if {
+                modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, targetIdentity.sourceIndex, package.tokens, package.ranges)
+                    -> if {
+                        package.ranges[identity.sourceIndex] => range
+                        0 => index!
+                        index! < range.symbolCount -> while {
+                            package.symbols[range.symbolStart + index!] => declaration
+                            (declaration.kind == 3 or declaration.kind == 4) and declaration.parent < 0 and declaration.nameToken >= 0
+                                -> if {
+                                    package.tokens[range.tokenStart + declaration.nameToken] => token
+                                    package.sources[identity.sourceIndex] -> slice(token.span.start, token.span.length) => name
+                                    name == ownerName -> if {
+                                        true => ownerFound!
+                                        declaration.flags / 4 % 2 == 1 => ownerPublic!
+                                    }
+                                }
+                            index! + 1 => index!
+                        }
+                    }
+            }
+    }
+    NominalFunctionTarget { moduleIndex: -1, symbol: -1, isAccessible: false } => result!
+    not ownerFound! -> if { result! -> return }
+    0 => moduleIndex!
+    moduleIndex! < (identities -> len) -> while {
+        identities[moduleIndex!] => identity
+        identity.pathHash == targetIdentity.pathHash
+            -> if {
+                modules.sameLogicalAnalyzedSource(package.sources, identities, identity.sourceIndex, targetIdentity.sourceIndex, package.tokens, package.ranges)
+                    -> if {
+                        package.ranges[identity.sourceIndex] => range
+                        0 => index!
+                        index! < range.symbolCount -> while {
+                            package.symbols[range.symbolStart + index!] => method
+                            (method.kind == 7 or method.kind == 31) and method.parent >= 0 and method.nameToken >= 0
+                                -> if {
+                                    package.symbols[range.symbolStart + method.parent] => ownerImpl
+                                    ownerImpl.kind == 6 and ownerImpl.astNode >= 0 and ownerImpl.nameToken >= 0
+                                        -> if {
+                                            package.tokens[range.tokenStart + ownerImpl.nameToken] => ownerToken
+                                            package.tokens[range.tokenStart + method.nameToken] => methodToken
+                                            package.sources[identity.sourceIndex] -> slice(ownerToken.span.start, ownerToken.span.length) => implName
+                                            package.sources[identity.sourceIndex] -> slice(methodToken.span.start, methodToken.span.length) => methodName
+                                            implName == ownerName and methodName == memberName
+                                                -> if {
+                                                    false => simpleHeader!
+                                                    package.nodes[range.astStart + ownerImpl.astNode] => implAst
+                                                    ownerImpl.astNode + 1 => headerIndex!
+                                                    headerIndex! < range.astCount and package.nodes[range.astStart + headerIndex!].start < implAst.start + implAst.length
+                                                        -> while {
+                                                            package.nodes[range.astStart + headerIndex!] => header
+                                                            header.parent == ownerImpl.astNode and header.kind == 16 and header.firstToken == ownerImpl.nameToken and header.tokenCount == 1
+                                                                -> if {
+                                                                    true => simpleHeader!
+                                                                }
+                                                            headerIndex! + 1 => headerIndex!
+                                                        }
+                                                    simpleHeader! -> if {
+                                                        result!.symbol >= 0 -> if {
+                                                            NominalFunctionTarget { moduleIndex: -1, symbol: -1, isAccessible: false } -> return
+                                                        }
+                                                        NominalFunctionTarget { moduleIndex: moduleIndex!, symbol: index!, isAccessible: sameNamespace! or (ownerPublic! and method.flags / 4 % 2 == 1) } => result!
+                                                    }
+                                                }
+                                        }
+                                }
+                            index! + 1 => index!
+                        }
+                    }
+            }
+        moduleIndex! + 1 => moduleIndex!
+    }
+    result!
 }
 
 # The declaration and unqualified impl header live in the same source scope.

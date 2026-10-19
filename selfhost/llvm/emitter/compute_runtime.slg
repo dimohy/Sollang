@@ -1,5 +1,25 @@
 namespace sollang.compiler.llvm.emitter.compute_runtime
 
+emitWorkerQueries: -> Unit uses Console {
+    """
+    define internal i32 @sollang_compute_workers() {
+    entry:
+      %started = call i1 @sollang_compute_start()
+      br i1 %started, label %read, label %failed
+    read:
+      %workers = load i32, ptr @sollang_compute_worker_count, align 4
+      ret i32 %workers
+    failed:
+      ret i32 0
+    }
+    define internal i32 @sollang_compute_peak_workers() {
+    entry:
+      %peak = load atomic i32, ptr @sollang_compute_peak acquire, align 4
+      ret i32 %peak
+    }
+    """ -> println
+}
+
 public emitWindowsComputeRuntime: -> Unit uses Console {
     """
     %sollang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
@@ -272,6 +292,7 @@ public emitWindowsComputeRuntime: -> Unit uses Console {
       ret void
     }
     """ -> println
+    emitWorkerQueries()
 }
 
 public emitLinuxComputeRuntime: -> Unit uses Console {
@@ -571,6 +592,7 @@ public emitLinuxComputeRuntime: -> Unit uses Console {
       ret void
     }
     """ -> println
+    emitWorkerQueries()
 }
 
 public emitMemoryOutputSinkRuntime: -> Unit uses Console {

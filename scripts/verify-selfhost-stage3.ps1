@@ -5,7 +5,10 @@ param(
     [string]$SlgSeedCompiler = "",
     [ValidateRange(1, 64)]
     [int]$Jobs = 8,
-    [switch]$ResumeCandidate
+    [switch]$ResumeCandidate,
+    [string]$CancellationRequestPath = "",
+    [string]$CancellationRunId = "",
+    [string]$CancellationAcknowledgementPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +18,23 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "stage3-seed-provenance.ps1")
 . (Join-Path $PSScriptRoot "input-fingerprint-stability.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+$cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
+if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
+    throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
+}
+if (-not [string]::IsNullOrWhiteSpace($CancellationRequestPath)) {
+    Initialize-VerificationCancellation -RequestPath $CancellationRequestPath `
+        -RunId $CancellationRunId -AcknowledgementPath $CancellationAcknowledgementPath
+}
+$stage3PublicationCommitPath = if ([string]::IsNullOrWhiteSpace($CancellationRequestPath)) { "" } else { "$CancellationRequestPath.commit.json" }
+$stage3PublicationCompletePath = if ([string]::IsNullOrWhiteSpace($CancellationRequestPath)) { "" } else { "$CancellationRequestPath.published.json" }
+foreach ($publicationPath in @($stage3PublicationCommitPath, $stage3PublicationCompletePath)) {
+    if ($publicationPath -ne "" -and (Test-Path -LiteralPath $publicationPath)) {
+        throw "Stage3 publication control path already exists: $publicationPath"
+    }
+}
+trap [OperationCanceledException] { exit 130 }
+Assert-VerificationCancellationNotRequested
 $selfHostVerificationLock = Enter-SelfHostVerificationLock
 try {
 
@@ -84,29 +104,65 @@ function Get-Stage3CandidateInputFingerprint {
             [System.Text.Encoding]::UTF8.GetBytes($text)))
 }
 
+function Write-Stage3PublicationRecord {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][object]$Record)
+
+    $temporaryPath = "$Path.tmp-$PID-$([guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, (($Record | ConvertTo-Json -Depth 6 -Compress) + "`n"),
+            [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Move($temporaryPath, $Path)
+    } finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath
+        }
+    }
+}
+
 Write-Host "[stage3 policy] Verify the reviewed instance-first stdlib surface."
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-stdlib-instance-policy.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-stdlib-evolution-progress.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-runtime-intrinsic-layout.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-stdlib-module-layout.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-profile-schema.ps1")
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-emit-context-constructor-closure.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-compiler-contracts.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-quic-frame-consumers.ps1") -RepositoryRoot $repoRoot -Jobs 3
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-gzip-stream-api-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-zstd-foundation-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-brotli-foundation-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-http-body-framing-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-portable-memory-io-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-http-response-writing-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-http-request-writing-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-http-client-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-http-server-contract.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-compiler-defects.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "show-project-progress.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "format-authoritative-slg.ps1") -Check
 
 Write-Host "[stage3 policy] Fail fast on managed source-style and formatter contracts."
+Assert-VerificationCancellationNotRequested
 & dotnet run `
     --project (Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj") `
     -c Release `
@@ -511,12 +567,23 @@ Write-Host "[stage3 policy] Fail fast on managed source-style and formatter cont
     --exact 377-selfhost-llvm-source-text-worker-transfer `
     --jobs 4
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-managed-owned-call-cleanup.ps1") -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 Write-Host "[stage3 policy] PASS managed fail-fast contracts; native fixed-point proof remains required."
 
 if ($RebuildStage2) {
     Write-Host "[stage3 1/3] Rebuild and verify stage 2."
-    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -Rebuild -Stage2BuildJobs $Jobs -SeedMode $SeedMode -SlgSeedCompiler $SlgSeedCompiler
+    $stage2CancellationAcknowledgementPath = if ([string]::IsNullOrWhiteSpace($CancellationAcknowledgementPath)) {
+        ""
+    } else {
+        "$CancellationAcknowledgementPath.stage2"
+    }
+    Assert-VerificationCancellationNotRequested
+    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -Rebuild -Stage2BuildJobs $Jobs -SeedMode $SeedMode -SlgSeedCompiler $SlgSeedCompiler `
+        -CancellationRequestPath $CancellationRequestPath -CancellationRunId $CancellationRunId `
+        -CancellationAcknowledgementPath $stage2CancellationAcknowledgementPath
+    Assert-VerificationCancellationNotRequested
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
     Write-Host "[stage3 1/3] Verify that the existing stage 2 is current."
@@ -541,6 +608,7 @@ if (-not (Test-Path -LiteralPath $stage2FingerprintPath) -or
     throw "stage 2 input fingerprint differs; rerun with -RebuildStage2"
 }
 Write-Host "[stage3 1/3] PASS current stage 2."
+Assert-VerificationCancellationNotRequested
 
 Write-Host "[stage3 2/3] Generate stage 3 from the stage-2 compiler."
 $stage3LlvmPath = Get-CandidateArtifactPath $publishedStage3LlvmPath
@@ -558,7 +626,9 @@ if ($ResumeCandidate) {
     }
     Write-Host "[stage3 2/3] RESUME receipt-bound Stage3 candidate."
 } else {
+    Assert-VerificationCancellationNotRequested
     Remove-Item -LiteralPath $stage3LlvmPath, $stage3BitcodePath, $stage3Path, $stage3ErrorPath, $stage3CandidateFingerprintPath, $stage3CandidateArtifactReceiptPath -ErrorAction SilentlyContinue
+    Assert-VerificationCancellationNotRequested
     $process = Start-Process `
         -FilePath $stage2Path `
         -ArgumentList (@("windows", "--jobs", $Jobs.ToString([System.Globalization.CultureInfo]::InvariantCulture)) + $sourcePaths) `
@@ -568,8 +638,15 @@ if ($ResumeCandidate) {
         -WindowStyle Hidden
     $stage3TimeoutMilliseconds = 3600000
     $stage3StartedAt = [DateTimeOffset]::Now
+    $nextProgressAt = $stage3StartedAt.AddSeconds(60)
     $expectedStage3Bytes = (Get-Item -LiteralPath $stage2LlvmPath).Length
-    while (-not $process.WaitForExit(60000)) {
+    while (-not $process.WaitForExit(100)) {
+        if (Test-VerificationCancellationRequested) {
+            Wait-VerificationProcess -Process $process -Description "stage-3 LLVM emission" `
+                -TimeoutMilliseconds $stage3TimeoutMilliseconds -TimeoutStartedAt $stage3StartedAt
+            throw [OperationCanceledException]::new('CANCELLATION_REQUESTED')
+        }
+        if ([DateTimeOffset]::Now -lt $nextProgressAt) { continue }
         $process.Refresh()
         $elapsed = [DateTimeOffset]::Now - $stage3StartedAt
         $outputBytes = if (Test-Path -LiteralPath $stage3LlvmPath) { (Get-Item -LiteralPath $stage3LlvmPath).Length } else { 0 }
@@ -593,7 +670,9 @@ if ($ResumeCandidate) {
                 -TimeoutMilliseconds $stage3TimeoutMilliseconds `
                 -TimeoutStartedAt $stage3StartedAt
         }
+        $nextProgressAt = [DateTimeOffset]::Now.AddSeconds(60)
     }
+    Assert-VerificationCancellationNotRequested
     $process.Refresh()
     if ($process.ExitCode -ne 0) {
         $details = if (Test-Path $stage3ErrorPath) { Get-Content $stage3ErrorPath -Raw } else { "" }
@@ -601,14 +680,18 @@ if ($ResumeCandidate) {
     }
     Write-Host "[stage3 2/3] PASS $((Get-Item $stage3LlvmPath).Length) LLVM bytes."
 }
+Assert-VerificationCancellationNotRequested
 
 Write-Host "[stage3 3/3] Verify LLVM structure, then compare the complete compiler fixed point."
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-parallel-callback-llvm.ps1") `
     -LlvmPath $stage3LlvmPath `
     -MinimumCallbackCount 4 `
     -RequireNominalTransfer
 if (-not $ResumeCandidate) {
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-llvm-direct-call-closure.ps1") -LlvmPath $stage3LlvmPath
+    Assert-VerificationCancellationNotRequested
     & $llvmAsPath $stage3LlvmPath -o $stage3BitcodePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
@@ -618,6 +701,7 @@ if ($stage2Hash -ne $stage3Hash) {
     throw "complete compiler fixed point differs: stage2=$stage2Hash stage3=$stage3Hash. Do not promote either artifact. Review the LLVM semantic diff; if it is an expected one-generation self-host source change, run verify-selfhost-stage2.ps1 -Rebuild -SeedMode Stage2Bridge and then rerun Stage3."
 }
 if (-not $ResumeCandidate) {
+    Assert-VerificationCancellationNotRequested
     & $clangPath -Wno-override-module $stage3LlvmPath -O1 -o $stage3Path -lws2_32 -lshell32 -lbcrypt
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Write-Stage2ArtifactReceipt `
@@ -631,25 +715,30 @@ foreach ($exactGeneration in @(
     [ordered]@{ Name = "stage2"; Compiler = $stage2Path },
     [ordered]@{ Name = "stage3"; Compiler = $stage3Path }
 )) {
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-private-field-diagnostics.ps1") `
         -Compiler $exactGeneration.Compiler `
         -Label $exactGeneration.Name `
         -RepositoryRoot $repoRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-trait-ownership-diagnostics.ps1") `
         -Compiler $exactGeneration.Compiler `
         -RepositoryRoot $repoRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-interpolation-capacity-diagnostics.ps1") `
         -Compiler $exactGeneration.Compiler `
         -Label $exactGeneration.Name `
         -RepositoryRoot $repoRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-owned-array-cleanup.ps1") `
         -Compiler $exactGeneration.Compiler `
         -RepositoryRoot $repoRoot `
         -LlvmRoot $llvmRoot
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-arguments-runtime.ps1") `
         -Compiler $exactGeneration.Compiler `
         -RepositoryRoot $repoRoot `
@@ -662,6 +751,7 @@ foreach ($exactGeneration in @(
     $cleanupReport = Join-Path $repoRoot "artifacts/owned-array-cleanup/$cleanupCompilerHash/results.json"
     Copy-Item -LiteralPath $cleanupReport `
         -Destination (Join-Path $artifactsDir "stage3-owned-array-cleanup-$($exactGeneration.Name).json") -Force
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-exact-fixture-batch.ps1") `
         -Compiler $exactGeneration.Compiler `
         -Label $exactGeneration.Name `
@@ -672,29 +762,35 @@ foreach ($exactGeneration in @(
         -Jobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-native-set-intrinsics.ps1") `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-managed-cpu-aes-dispatch.ps1") `
     -Label "stage3-managed" `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-cpu-aes-dispatch.ps1") `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-cpu-aes-dispatch-differential.ps1") `
     -SelfhostCompiler $stage3Path `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-static-readonly-array.ps1") `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
     -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-late-type-sealing.ps1") `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
@@ -704,6 +800,7 @@ foreach ($processGeneration in @(
     [ordered]@{ Name = "stage2"; Compiler = $stage2Path },
     [ordered]@{ Name = "stage3"; Compiler = $stage3Path }
 )) {
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-process-child-lifecycle.ps1") `
         -Compiler $processGeneration.Compiler `
         -Label $processGeneration.Name `
@@ -714,6 +811,7 @@ foreach ($processGeneration in @(
         -Jobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-native-quic-endpoint-ownership.ps1") `
     -Compiler $stage3Path `
     -Label "stage3-candidate" `
@@ -722,21 +820,27 @@ foreach ($processGeneration in @(
     -RepositoryRoot $repoRoot `
     -Jobs $Jobs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-owned-block-result-diagnostics.ps1") `
     -Compiler $stage2Path `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-owned-block-result-diagnostics.ps1") `
     -Compiler $stage3Path `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-owned-container-rebind-diagnostic.ps1") `
     -Compiler $stage2Path `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-owned-container-rebind-diagnostic.ps1") `
     -Compiler $stage3Path `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-semantic-parity-diagnostics.ps1") `
     -Compiler $stage2Path `
     -RepositoryRoot $repoRoot
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-selfhost-semantic-parity-diagnostics.ps1") `
     -Compiler $stage3Path `
     -RepositoryRoot $repoRoot
@@ -744,10 +848,12 @@ foreach ($diagnosticCompiler in @(
     [ordered]@{ Name = "stage2"; Path = $stage2Path },
     [ordered]@{ Name = "stage3"; Path = $stage3Path }
 )) {
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-unresolved-call-diagnostic.ps1") `
         -Compiler $diagnosticCompiler.Path `
         -Label $diagnosticCompiler.Name `
         -RepositoryRoot $repoRoot
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-selfhost-result-propagation-diagnostics.ps1") `
         -Compiler $diagnosticCompiler.Path `
         -Label $diagnosticCompiler.Name `
@@ -764,6 +870,7 @@ foreach ($generation in @(
 )) {
     $prepareOutput = Join-Path $artifactsDir "$($generation.Name)-check-prepare.txt"
     $prepareError = Join-Path $artifactsDir "$($generation.Name)-check-prepare.err"
+    Assert-VerificationCancellationNotRequested
     $prepareProcess = Start-Process `
         -FilePath $generation.Compiler `
         -ArgumentList (@("prepare") + $prepareSources) `
@@ -799,6 +906,7 @@ foreach ($generation in @(
     $socketOutput = Join-Path $artifactsDir "$($generation.Name)-check-socket-endpoint-observation.stdout.txt"
     $socketError = Join-Path $artifactsDir "$($generation.Name)-check-socket-endpoint-observation.stderr.txt"
     Remove-Item -LiteralPath $socketExecutable, $socketLlvm, $socketOutput, $socketError -ErrorAction SilentlyContinue
+    Assert-VerificationCancellationNotRequested
     $socketBuild = Start-Process `
         -FilePath $generation.Compiler `
         -ArgumentList @(
@@ -820,8 +928,10 @@ foreach ($generation in @(
     if (-not (Test-Path $socketLlvm) -or -not (Test-Path $socketExecutable)) {
         throw "$($generation.Name) socket endpoint observation artifacts are incomplete"
     }
+    Assert-VerificationCancellationNotRequested
     & $llvmAsPath $socketLlvm -o ([System.IO.Path]::ChangeExtension($socketExecutable, ".bc"))
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     $socketRun = Invoke-VerificationProcessCapture `
         -FilePath $socketExecutable `
         -Description "$($generation.Name) socket endpoint observation executable"
@@ -845,6 +955,7 @@ foreach ($generation in @(
     $socketNoDelayOutput = Join-Path $artifactsDir "$($generation.Name)-check-socket-no-delay.stdout.txt"
     $socketNoDelayError = Join-Path $artifactsDir "$($generation.Name)-check-socket-no-delay.stderr.txt"
     Remove-Item -LiteralPath $socketNoDelayExecutable, $socketNoDelayLlvm, $socketNoDelayOutput, $socketNoDelayError -ErrorAction SilentlyContinue
+    Assert-VerificationCancellationNotRequested
     $socketNoDelayBuild = Start-Process `
         -FilePath $generation.Compiler `
         -ArgumentList @(
@@ -866,8 +977,10 @@ foreach ($generation in @(
     if (-not (Test-Path $socketNoDelayLlvm) -or -not (Test-Path $socketNoDelayExecutable)) {
         throw "$($generation.Name) socket no-delay artifacts are incomplete"
     }
+    Assert-VerificationCancellationNotRequested
     & $llvmAsPath $socketNoDelayLlvm -o ([System.IO.Path]::ChangeExtension($socketNoDelayExecutable, ".bc"))
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     $socketNoDelayRun = Invoke-VerificationProcessCapture `
         -FilePath $socketNoDelayExecutable `
         -Description "$($generation.Name) socket no-delay executable"
@@ -884,6 +997,7 @@ foreach ($generation in @(
     [ordered]@{ Name = "stage2"; Compiler = $stage2Path },
     [ordered]@{ Name = "stage3"; Compiler = $stage3Path }
 )) {
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-socket-timeouts.ps1") `
         -Compiler $generation.Compiler `
         -Label $generation.Name `
@@ -894,6 +1008,7 @@ foreach ($generation in @(
         -OutputDirectory $artifactsDir `
         -Jobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-mutable-parameter-indexing-batch.ps1") `
         -Compiler $generation.Compiler `
         -Label $generation.Name `
@@ -904,6 +1019,7 @@ foreach ($generation in @(
         -OutputDirectory $artifactsDir `
         -Jobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-interpolation-reference-arguments.ps1") `
         -Compiler $generation.Compiler `
         -Label $generation.Name `
@@ -914,6 +1030,7 @@ foreach ($generation in @(
         -OutputDirectory $artifactsDir `
         -Jobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     & (Join-Path $PSScriptRoot "verify-native-projected-reference-places.ps1") `
         -Compiler $generation.Compiler `
         -Label $generation.Name `
@@ -936,6 +1053,7 @@ foreach ($generation in @(
     $timeOutput = Join-Path $artifactsDir "$($generation.Name)-check-time-arithmetic.stdout.txt"
     $timeError = Join-Path $artifactsDir "$($generation.Name)-check-time-arithmetic.stderr.txt"
     Remove-Item -LiteralPath $timeExecutable, $timeLlvm, $timeOutput, $timeError -ErrorAction SilentlyContinue
+    Assert-VerificationCancellationNotRequested
     $timeBuild = Start-Process `
         -FilePath $generation.Compiler `
         -ArgumentList @(
@@ -957,8 +1075,10 @@ foreach ($generation in @(
     if (-not (Test-Path $timeLlvm) -or -not (Test-Path $timeExecutable)) {
         throw "$($generation.Name) time arithmetic artifacts are incomplete"
     }
+    Assert-VerificationCancellationNotRequested
     & $llvmAsPath $timeLlvm -o ([System.IO.Path]::ChangeExtension($timeExecutable, ".bc"))
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-VerificationCancellationNotRequested
     $timeRun = Invoke-VerificationProcessCapture `
         -FilePath $timeExecutable `
         -Description "$($generation.Name) time arithmetic executable"
@@ -978,6 +1098,7 @@ foreach ($generation in @(
 )) {
     $publicStdlibOutput = Join-Path $artifactsDir "$($generation.Name)-check-public-stdlib.ll"
     $publicStdlibError = Join-Path $artifactsDir "$($generation.Name)-check-public-stdlib.err"
+    Assert-VerificationCancellationNotRequested
     $publicStdlibProcess = Start-Process `
         -FilePath $generation.Compiler `
         -ArgumentList @(
@@ -1005,6 +1126,7 @@ if ($publicStdlibOutputs[0] -ne $publicStdlibOutputs[1]) {
 $resultPropagationExecutable = Join-Path $artifactsDir "stage3-check-result-propagation-control.exe"
 $resultPropagationOutput = Join-Path $artifactsDir "stage3-check-result-propagation-control.stdout.txt"
 $resultPropagationError = Join-Path $artifactsDir "stage3-check-result-propagation-control.stderr.txt"
+Assert-VerificationCancellationNotRequested
 $resultPropagationBuild = Start-Process `
     -FilePath $stage3Path `
     -ArgumentList @(
@@ -1023,8 +1145,10 @@ Wait-VerificationProcess $resultPropagationBuild "stage3 Result propagation cont
 if ($resultPropagationBuild.ExitCode -ne 0) {
     throw "stage-3 Result propagation control build failed.`n$([System.IO.File]::ReadAllText($resultPropagationError))"
 }
+Assert-VerificationCancellationNotRequested
 & $llvmAsPath ($resultPropagationExecutable + ".ll") -o ([System.IO.Path]::ChangeExtension($resultPropagationExecutable, ".bc"))
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 $resultPropagationRun = Invoke-VerificationProcessCapture `
     -FilePath $resultPropagationExecutable `
     -Description "stage3 Result propagation control executable"
@@ -1032,16 +1156,37 @@ $resultPropagationActual = $resultPropagationRun.Stdout.TrimEnd("`r", "`n")
 if ($resultPropagationRun.ExitCode -ne 0 -or $resultPropagationActual -ne "quic-endpoint=ok") {
     throw "stage-3 Result propagation control-order execution failed: expected 'quic-endpoint=ok', actual '$resultPropagationActual'"
 }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-native-source-style.ps1") -Compiler $stage3Path
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-native-cli-format.ps1") -Compiler $stage3Path
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Assert-VerificationCancellationNotRequested
 & (Join-Path $PSScriptRoot "verify-native-binary-codecs.ps1") -Compiler $stage3Path -LlvmHome $llvmRoot
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Assert-InputFingerprintStable `
     -ExpectedFingerprint ([System.IO.File]::ReadAllText($stage3CandidateFingerprintPath)) `
     -CurrentFingerprint (Get-Stage3CandidateInputFingerprint) `
     -Phase "Stage3"
+Assert-VerificationCancellationNotRequested
+$publicationInputFingerprint = Get-Stage3CandidateInputFingerprint
+if ($stage3PublicationCommitPath -ne "") {
+    Write-Stage3PublicationRecord -Path $stage3PublicationCommitPath -Record ([ordered]@{
+        schemaVersion = 1
+        runId = $CancellationRunId
+        targetProcessId = $PID
+        inputFingerprint = $publicationInputFingerprint
+        committedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    })
+    try {
+        Assert-VerificationCancellationNotRequested
+    } catch [OperationCanceledException] {
+        Remove-Item -LiteralPath $stage3PublicationCommitPath
+        throw
+    }
+}
+# Publication is committed. Do not stop between these related file updates.
 Move-Item -LiteralPath $stage3LlvmPath -Destination $publishedStage3LlvmPath -Force
 Move-Item -LiteralPath $stage3BitcodePath -Destination $publishedStage3BitcodePath -Force
 Move-Item -LiteralPath $stage3Path -Destination $publishedStage3Path -Force
@@ -1086,6 +1231,38 @@ $incrementalSeedProvenancePath = Write-VerifiedStage3SeedProvenance `
     -Stage3BitcodePath $stage3BitcodePath `
     -Stage3InputReceiptPath $stage3FingerprintPath `
     -Stage3OutputReceiptPath $stage3ArtifactReceiptPath
+try {
+    Assert-InputFingerprintStable `
+        -ExpectedFingerprint $publicationInputFingerprint `
+        -CurrentFingerprint (Get-Stage3CandidateInputFingerprint) `
+        -Phase "Stage3 publication completion"
+} catch {
+    throw "STAGE3_PUBLICATION_INPUT_DRIFT: error: input changed after the publication commit; published files may be partial and must not be promoted. $($_.Exception.Message)"
+}
+if ($stage3PublicationCompletePath -ne "") {
+    $publicationFiles = @(
+        [ordered]@{ role = 'stage3Llvm'; path = $stage3LlvmPath },
+        [ordered]@{ role = 'stage3Bitcode'; path = $stage3BitcodePath },
+        [ordered]@{ role = 'stage3Executable'; path = $stage3Path },
+        [ordered]@{ role = 'stage3InputReceipt'; path = $stage3FingerprintPath },
+        [ordered]@{ role = 'stage3OutputReceipt'; path = $stage3ArtifactReceiptPath },
+        [ordered]@{ role = 'seedExecutable'; path = $incrementalSeedPath },
+        [ordered]@{ role = 'seedHashReceipt'; path = $incrementalSeedReceiptPath },
+        [ordered]@{ role = 'seedProvenance'; path = $incrementalSeedProvenancePath }
+    )
+    foreach ($publicationFile in $publicationFiles) {
+        $publicationFile.path = [System.IO.Path]::GetFullPath($publicationFile.path)
+        $publicationFile.sha256 = (Get-FileHash -LiteralPath $publicationFile.path -Algorithm SHA256).Hash
+    }
+    Write-Stage3PublicationRecord -Path $stage3PublicationCompletePath -Record ([ordered]@{
+        schemaVersion = 1
+        runId = $CancellationRunId
+        targetProcessId = $PID
+        inputFingerprint = $publicationInputFingerprint
+        completedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        files = $publicationFiles
+    })
+}
 Write-Host "[stage3 3/3] PASS fixed point $stage3Hash, Result propagation control order, source-style notes, native formatting, and binary codecs."
 Write-Host "[stage3 3/3] Published verified SLG feedback seed $incrementalSeedHash with provenance $incrementalSeedProvenancePath."
 }

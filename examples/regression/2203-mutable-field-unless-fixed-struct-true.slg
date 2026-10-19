@@ -1,0 +1,31 @@
+struct Holder {
+    values: [UInt8; 8]
+}
+
+create: -> Holder => Holder { values: [7; 8] }
+
+setSecond values: mut [UInt8; 8] -> Unit {
+    9 => values[1]
+}
+
+consume value: move Holder -> UInt8 {
+    value.values[0]
+}
+
+struct Selector {
+    selected: Bool
+}
+
+guarded selected: mut Selector -> UInt8 {
+    selected.selected -> unless { 0 -> return }
+    create() => owner!
+    owner!.values -> setSecond
+    false => selected.selected
+    owner! -> consume
+}
+
+main {
+    Selector { selected: true } => selected!
+    selected! -> guarded => first
+    "first=$first" -> println
+}

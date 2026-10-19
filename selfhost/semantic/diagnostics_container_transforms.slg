@@ -1,0 +1,78 @@
+namespace sollang.compiler.semantic.diagnostics
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.type_ids as typeIds
+
+# Initializer diagnostics precede a destination collision at the same binding.
+# Codes 3/4: append arity/type; 5/6: updated arity/type; 7/8: nonfinal target.
+firstContainerTransformDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~] -> BindingDeclarationDiagnostic {
+    BindingDeclarationDiagnostic { code: 0, sourceModule: -1, bindingAst: -1, valueAst: -1, nameToken: -1, expectedTypeId: -1, actualTypeId: -1 } => selected!
+    prepared.package -> semanticContext.indexFlowSourcesByAst => receivers
+    resolved.types -> typeIds.builtinTypeId(2) => intType
+    prepared.package.ranges -> each range {
+        0 => flowAst!
+        flowAst! < range.astCount -> while {
+            range.astStart + flowAst! => globalFlow
+            prepared -> expressionTypeIds.containerTransformKind(range.sourceModule, flowAst!) => kind
+            receivers[globalFlow] => receiverGlobal
+            kind > 0 and receiverGlobal >= 0 -> if {
+                resolved.types -> expressionTypeIds.containerTransformResultType(typeByAst[receiverGlobal], kind) => resultType
+                resultType >= 0 and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, flowAst!))
+                    -> if {
+                        prepared.package.nodes[globalFlow] => flow
+                        prepared.directFlowTargetPathByAst[globalFlow] => targetAst
+                        prepared.package.nodes[range.astStart + targetAst] => target
+                        0 => code!
+                        targetAst => diagnosticAst!
+                        target.payloadToken => diagnosticToken!
+                        flow.parent >= 0 -> if {
+                            prepared.package.nodes[range.astStart + flow.parent] => parent
+                            parent.kind == 10 and parent.start == flow.start
+                                -> if { kind + 6 => code! }
+                        }
+                        -1 => targetCall!
+                        0 => childAst!
+                        childAst! < range.astCount -> while {
+                            prepared.package.nodes[range.astStart + childAst!] => child
+                            child.parent == flowAst! and child.kind == 11 and child.start > flow.start
+                                -> if { childAst! => targetCall! }
+                            childAst! + 1 => childAst!
+                        }
+                        0 => argumentCount!
+                        -1 => invalidArgument!
+                        targetCall! >= 0 -> if {
+                            prepared.package.nodes[range.astStart + targetCall!] => call
+                            0 => argumentAst!
+                            argumentAst! < range.astCount -> while {
+                                prepared.package.nodes[range.astStart + argumentAst!] => argument
+                                argument.parent == targetCall! and argument.kind != 12
+                                    and not (argument.kind == 16 and argument.start == call.start)
+                                    -> if {
+                                        argumentCount! + 1 => argumentCount!
+                                        typeByAst[range.astStart + argumentAst!] => argumentType
+                                        argumentType >= 0 and argumentType != intType and invalidArgument! < 0
+                                            -> if { argumentAst! => invalidArgument! }
+                                    }
+                                argumentAst! + 1 => argumentAst!
+                            }
+                        }
+                        code! == 0 and argumentCount! != kind
+                            -> if { kind * 2 + 1 => code! }
+                        code! == 0 and invalidArgument! >= 0 -> if {
+                            kind * 2 + 2 => code!
+                            invalidArgument! => diagnosticAst!
+                            prepared.package.nodes[range.astStart + invalidArgument!].firstToken => diagnosticToken!
+                        }
+                        code! > 0 and (prepared.package -> diagnosticOriginBefore(range.sourceModule, diagnosticAst!, selected!.sourceModule, selected!.valueAst))
+                            -> if {
+                                prepared.package -> diagnosticBindingOrigin(range.sourceModule, flowAst!) => bindingAst
+                                BindingDeclarationDiagnostic { code: code!, sourceModule: range.sourceModule, bindingAst: bindingAst, valueAst: diagnosticAst!, nameToken: diagnosticToken!, expectedTypeId: -1, actualTypeId: -1 } => selected!
+                            }
+                    }
+            }
+            flowAst! + 1 => flowAst!
+        }
+    }
+    selected!
+}

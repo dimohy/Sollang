@@ -1,0 +1,72 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.semantic_cache as semanticCache
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sollang.compiler.llvm.emitter.diagnostics as emitterDiagnostics
+import sollang.compiler.llvm.target as llvmTarget
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+observeCachedAnchor: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    arguments[1] => sourcePath
+    [Text; ~] => anchors!
+    anchors! -> push(sourcePath)
+    sourcePath -> path.fromText(path.nativeStyle()) -> query -> when {
+        Err(error) { "query error = $error" -> println
+            return }
+        Ok(info) {
+            info.canonical => resolvedPath
+            resolvedPath
+        }
+    } => canonical
+    canonical -> pathText => identityPath
+    [Text; ~] => identities!
+    identities! -> push(identityPath)
+    sourcePath -> file.mapText => owner
+    owner -> sourceDecoding.utf8Text => source
+    [Text; ~] => sources!
+    sources! -> push(source)
+    sources! -> analysis.analyzeCheckedTextSources -> when {
+        Err(code) { "parse error = $code" -> println
+            return }
+        Ok(value) { value }
+    } => package
+    package -> semanticContext.prepareAnalyzedWithStandardLibrarySources(0) => prepared
+    llvmTarget.windowsX64() => target
+    PrepareRequest {
+        sources: sources!
+        standardLibrarySourceStart: 0
+        standardLibrarySourceCount: 0
+        pointerBitWidth: target.pointerBitWidth
+        targetArchitecture: target.architecture
+        cpuDispatchPolicy: target.dispatchPolicy
+        requiredCpuFeatures: target.requiredFeatures
+        allowedCpuFeatures: target.allowedFeatures
+        forbiddenCpuFeatures: target.forbiddenFeatures
+        supportsComputePool: true
+        expectedPathStyle: 1
+    } => request
+    generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
+    semanticCache.Request { enabled: true, destination: arguments[2], staged: arguments[3], identity: identity } => cache
+    request -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, identities!, anchors!, "windows-x64", path.nativeStyle(), cache) -> when {
+        Err(code) { "prepare error = $code" -> println }
+        Ok(value) {
+            value.checked -> when {
+                Rejected(_) { "signature rejected" -> println }
+                ImportRejected(_) { "import rejected" -> println }
+                Ready(context) {
+                    context -> emitterDiagnostics.blockingDiagnosticCount => count
+                    count > 0 -> if { context -> emitterDiagnostics.emitBlockingDiagnostics }
+                    "diagnostics = $count" -> println
+                }
+            }
+        }
+    }
+}
+
+main { observeCachedAnchor() }

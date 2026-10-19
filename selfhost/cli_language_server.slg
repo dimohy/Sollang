@@ -3,10 +3,9 @@ namespace sollang.compiler.cli_language_server
 import sollang.compiler.cli_format as formatter
 import sollang.compiler.compiler_version as compilerVersion
 import sollang.compiler.diagnostics as diagnostics
+import sollang.compiler.json as json
 import sys.file as file
-import sys.process as process
 import sys.runtime as runtime
-import syntax.generated.slg as grammar
 
 struct JsonValue {
     kind: Int
@@ -555,76 +554,26 @@ sourcePosition source: file.SourceText, offset: UIntSize -> Position {
     UIntSize(0) => index!
     index! < offset -> while {
         source -> byte(index!) => value
-        value == 10 -> if {
+        value == 10 or value == 13 -> if {
             line! + 1 => line!
             0 => character!
             index! + 1 => index!
+            value == 13 and index! < offset and (source -> byte(index!)) == 10
+                -> if { index! + 1 => index! }
         } else {
-            value == 13 -> if {
-                index! + 1 => index!
-            } else {
-                value -> utf8Width => width
-                width == 4 -> if { character! + 2 => character! } else { character! + 1 => character! }
-                index! + UIntSize(width) => index!
-            }
+            value -> utf8Width => width
+            width == 4 -> if { character! + 2 => character! } else { character! + 1 => character! }
+            index! + UIntSize(width) => index!
         }
     }
     Position { line: line!, character: character! }
 }
 
-appendDiagnosticMessage output: mut [UInt8; ~], source: file.SourceText, diagnostic: diagnostics.SyntaxDiagnostic, position: Position -> Unit {
-    diagnostic.code == 1 -> if {
-        output -> appendText("lex error at ")
-        output -> appendPositiveInt(position.line + 1)
-        output -> appendText(":")
-        output -> appendPositiveInt(position.character + 1)
-        output -> appendText(": unexpected character '")
-        output -> appendBytes(source, diagnostic.span.start, diagnostic.span.length)
-        output -> appendText("'")
-    } else {
-        diagnostic.code == 3 -> if {
-            output -> appendText("lex error at ")
-            output -> appendPositiveInt(position.line + 1)
-            output -> appendText(":")
-            output -> appendPositiveInt(position.character + 1)
-            output -> appendText(": unterminated string literal")
-        } else {
-            diagnostic.code == 4 or diagnostic.code == 5 -> if {
-                output -> appendText("lex error at ")
-                output -> appendPositiveInt(position.line + 1)
-                output -> appendText(":")
-                output -> appendPositiveInt(position.character + 1)
-                diagnostic.code == 4 -> if {
-                    output -> appendText(": invalid character literal")
-                } else {
-                    output -> appendText(": unterminated character literal")
-                }
-            } else {
-                source -> slice(UIntSize(0), source -> len) => sourceView
-                output -> appendText("parse error at ")
-                output -> appendPositiveInt(position.line + 1)
-                output -> appendText(":")
-                output -> appendPositiveInt(position.character + 1)
-                diagnostic.code == 6 -> if {
-                    output -> appendText(": duplicate product field label '")
-                    output -> appendBytes(source, diagnostic.span.start, diagnostic.span.length)
-                    output -> appendText("'")
-                } else {
-                    sourceView -> diagnostics.preferredExpectedCode(diagnostic) => expectedCode
-                    output -> appendText(": expected ")
-                    expectedCode >= 0 -> if {
-                        grammar.tokenNames() => tokenNames
-                        output -> appendText(tokenNames[expectedCode])
-                    } else {
-                        grammar.keywordTexts() => keywordTexts
-                        output -> appendText("'")
-                        output -> appendText(keywordTexts[0 - expectedCode - 1])
-                        output -> appendText("'")
-                    }
-                }
-            }
-        }
-    }
+appendDiagnosticMessage output: mut [UInt8; ~], source: file.SourceText, diagnostic: diagnostics.SyntaxDiagnostic -> Unit {
+    Arena(0) => messageStorage!
+    source -> slice(UIntSize(0), source -> len) => view
+    view -> diagnostics.formatForFile(diagnostic, "", messageStorage!) => message
+    output -> appendText(message)
 }
 
 publishDiagnostics document: ref Document, hasDocument: Bool -> Unit uses Console {
@@ -640,7 +589,7 @@ publishDiagnostics document: ref Document, hasDocument: Bool -> Unit uses Consol
             syntaxDiagnostics[0] => diagnostic
             source -> sourcePosition(diagnostic.span.start) => position
             [UInt8; ~] => message!
-            message! -> appendDiagnosticMessage(source, diagnostic, position)
+            message! -> appendDiagnosticMessage(source, diagnostic)
             body! -> appendText("""{"range":{"start":{"line":""")
             body! -> appendPositiveInt(position.line)
             body! -> appendText(""","character":""")
@@ -684,6 +633,11 @@ writeFormattingResult source: file.SourceText, id: JsonMember, document: ref Doc
             -> while {
                 suffix! + 1 => suffix!
             }
+        originalLength - suffix! => suffixStart
+        suffix! > 0 and suffixStart > 0
+            and (original -> byte(suffixStart - 1)) == 13
+            and (original -> byte(suffixStart)) == 10
+            -> if { suffix! - 1 => suffix! }
         prefix! == originalLength and prefix! == formattedLength
             -> if {
                 source -> writeEmptyArrayResult(id)
@@ -721,8 +675,9 @@ nestedMember source: file.SourceText, object: JsonValue, first: Text, second: Te
 }
 
 dispatchMessage source: file.SourceText, documents: mut [Document; ~], shutdown: Bool -> DispatchResult uses Console {
-    source -> parseValue(0, source -> len) => root
     DispatchResult { status: 1, shutdown: shutdown, exitRequested: false, exitCode: 1 } => result!
+    source -> json.validateDocument(64) -> unless { result! -> return }
+    source -> parseValue(0, source -> len) => root
     root.kind == 5 -> if {
         source -> findMember(root, "method") => methodMember
         methodMember.found -> if {
@@ -918,61 +873,69 @@ compactBuffer buffer: mut [UInt8; ~], start: UIntSize -> UIntSize {
     }
 }
 
-public run: -> Unit uses Console, File, Process {
-    [UInt8; ~] => input!
-    [Document; ~] => documents!
-    UIntSize(0) => consumed!
-    false => shutdown!
-    false => finished!
-    0 => exitCode!
-    finished! -> unless {
-        not finished! -> while {
-            UIntSize(4096) -> file.readStandardInputChunk => chunk
-            chunk -> len => chunkLength
-            chunkLength == 0 -> if {
-                consumed! != UIntSize(input! -> len) -> if {
-                    "sollang: incomplete LSP message" -> runtime.eprintln
-                    1 => exitCode!
-                }
-                true => finished!
+public struct Session {
+    input: [UInt8; ~]
+    documents: [Document; ~]
+    consumed: UIntSize
+    shutdown: Bool
+    public finished: Bool
+    public exitCode: Int
+}
+
+public newSession: -> Session => Session {
+    input: [UInt8; ~]
+    documents: [Document; ~]
+    consumed: 0
+    shutdown: false
+    finished: false
+    exitCode: 0
+}
+
+public accept session: mut Session, chunk: file.SourceText -> Unit uses Console {
+    session.finished -> if { return }
+    chunk -> len => chunkLength
+    chunkLength == 0 -> if {
+        session.consumed != UIntSize(session.input -> len)
+            -> if {
+                "sollang: incomplete LSP message" -> runtime.eprintln
+                1 => session.exitCode
+            }
+        true => session.finished
+    } else {
+        session.input -> appendBytes(chunk, 0, chunkLength)
+        true => framesRemain!
+        framesRemain! -> while {
+            session.input -> nextFrame(session.consumed) => frame
+            frame.kind == 0 -> if {
+                false => framesRemain!
             } else {
-                input! -> appendBytes(chunk, 0, chunkLength)
-                true => framesRemain!
-                framesRemain! -> while {
-                    input! -> nextFrame(consumed!) => frame
-                    frame.kind == 0 -> if {
+                frame.kind == 2 -> if {
+                    "sollang: invalid LSP header" -> runtime.eprintln
+                    1 => session.exitCode
+                    true => session.finished
+                    false => framesRemain!
+                } else {
+                    session.input -> file.borrowBytes => inputSource
+                    inputSource -> slice(frame.payloadStart, frame.payloadLength) => payloadView
+                    payloadView -> file.borrowText => payload
+                    payload -> dispatchMessage(session.documents, session.shutdown) => dispatched
+                    dispatched.shutdown => session.shutdown
+                    dispatched.status != 0 -> if {
+                        "sollang: invalid LSP message" -> runtime.eprintln
+                        1 => session.exitCode
+                        true => session.finished
                         false => framesRemain!
                     } else {
-                        frame.kind == 2 -> if {
-                            "sollang: invalid LSP header" -> runtime.eprintln
-                            1 => exitCode!
-                            true => finished!
+                        frame.next => session.consumed
+                        dispatched.exitRequested -> if {
+                            dispatched.exitCode => session.exitCode
+                            true => session.finished
                             false => framesRemain!
-                        } else {
-                            input! -> file.borrowBytes => inputSource
-                            inputSource -> slice(frame.payloadStart, frame.payloadLength) => payloadView
-                            payloadView -> file.borrowText => payload
-                            payload -> dispatchMessage(documents!, shutdown!) => dispatched
-                            dispatched.shutdown => shutdown!
-                            dispatched.status != 0 -> if {
-                                "sollang: invalid LSP message" -> runtime.eprintln
-                                1 => exitCode!
-                                true => finished!
-                                false => framesRemain!
-                            } else {
-                                frame.next => consumed!
-                                dispatched.exitRequested -> if {
-                                    dispatched.exitCode => exitCode!
-                                    true => finished!
-                                    false => framesRemain!
-                                }
-                            }
                         }
                     }
                 }
-                input! -> compactBuffer(consumed!) => consumed!
             }
         }
+        session.input -> compactBuffer(session.consumed) => session.consumed
     }
-    exitCode! != 0 -> if { process.exit(exitCode!) }
 }

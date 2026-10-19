@@ -163,6 +163,48 @@ astNodeHasDirectChildKind context: ref emitterContext.EmitContext, sourceModule:
     found!
 }
 
+# A name rejected inside its own initializer is intentionally absent from
+# typed IR. A direct call taking that name as its sole argument consequently
+# has no linked argument; its arity mismatch is derived from the semantic
+# error, not a second independent IR failure.
+callHasDiagnosedOwnInitializerArgument context: ref emitterContext.EmitContext, callIndex: Int -> Bool {
+    false => found!
+    context.ir[callIndex] => call
+    call.sourceModule >= 0 and call.sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[call.sourceModule] => sourceRange
+            call.astNode >= 0 and call.astNode < sourceRange.astCount
+                -> if {
+                    0 => astIndex!
+                    astIndex! < sourceRange.astCount and not found!
+                        -> while {
+                            context.nodes[sourceRange.astStart + astIndex!] => candidate
+                            candidate.kind == 15
+                                and candidate.parent == call.astNode
+                                and candidate.payloadToken >= 0
+                                and candidate.payloadToken < sourceRange.tokenCount
+                                -> if {
+                                    context.tokens[sourceRange.tokenStart + candidate.payloadToken] => nameToken
+                                    0 => diagnosticIndex!
+                                    diagnosticIndex! < (context.unresolvedMutableNames -> len) and not found!
+                                        -> while {
+                                            context.unresolvedMutableNames[diagnosticIndex!] => diagnostic
+                                            diagnostic.ownInitializer
+                                                and diagnostic.sourceModule == call.sourceModule
+                                                and diagnostic.span.fileId == nameToken.span.fileId
+                                                and diagnostic.span.start == nameToken.span.start
+                                                and diagnostic.span.length == nameToken.span.length
+                                                -> if { true => found! }
+                                            diagnosticIndex! + 1 => diagnosticIndex!
+                                        }
+                                }
+                            astIndex! + 1 => astIndex!
+                        }
+                }
+        }
+    found!
+}
+
 concreteFunctionsBySymbol context: ref emitterContext.EmitContext -> [Int; ~] {
     [Int; ~] => functions!
     0 => symbolIndex!
@@ -292,8 +334,9 @@ runtimeParameterCount context: ref emitterContext.EmitContext, functionIndex: In
 linkedCallArgumentCount context: ref emitterContext.EmitContext, callIndex: Int, maximum: Int -> Int {
     0 => count!
     context.ir[callIndex].operand0 => argumentIndex!
-    false => targetHasBlockRole!
     context.ir[callIndex] => call
+    call.kind == 6 and (call.opcode == -207 or (call.opcode -> typedIr.isDirectIterationOpcode) or call.opcode == -209)
+        => targetHasBlockRole!
     call.targetModule >= 0
         and call.targetModule < (context.ranges -> len)
         and call.symbol >= 0
@@ -330,7 +373,7 @@ implicitFlowArgumentCount context: ref emitterContext.EmitContext, callIndex: In
             context.ir[ownerIndex!] => owner
             owner.kind == 6
                 and (owner.opcode == -207
-                or owner.opcode == -208
+                or (owner.opcode -> typedIr.isDirectIterationOpcode)
                 or owner.opcode == -209)
                 -> if {
                     invariantRules.implicitFlowArgumentCount(true, ownerChildIndex! == owner.operand0, linkedCount, expectedCount) => count!
@@ -500,7 +543,13 @@ typedControlTerminates controlIndex: Int, context: ref emitterContext.EmitContex
 # codes identify the producer invariant, not an LLVM parser failure.
 # Slice descriptors do not encode element width. Validate semantic element
 # identity before an ABI-compatible header can hide an invalid typed conversion.
-arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int, functionIndex: Int -> Int {
+struct ArrayCallElementMismatchDetail {
+    parameterIndex: Int
+    argumentIndex: Int
+    runtimeOrdinal: Int
+}
+
+arrayCallElementMismatchDetail context: ref emitterContext.EmitContext, callIndex: Int, functionIndex: Int -> Option<ArrayCallElementMismatchDetail> {
     context.ir[functionIndex].operand1 => parameterIndex!
     context.ir[callIndex].operand0 => argumentIndex!
     context -> runtimeParameterCount(functionIndex) => expectedCount
@@ -508,8 +557,7 @@ arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int
     context -> implicitFlowArgumentCount(callIndex, linkedCount, expectedCount) => implicitCount
     0 => parameterOrdinal!
     0 => runtimeOrdinal!
-    0 => mismatch!
-    parameterIndex! >= 0 and argumentIndex! >= 0 and mismatch! == 0
+    parameterIndex! >= 0 and argumentIndex! >= 0
         -> while {
             context.ir[parameterIndex!] => parameter
             false => compileTimeParameter!
@@ -523,21 +571,9 @@ arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int
                 # A worker supplies the implicit role slot. Explicit captures
                 # still align with their own subsequent runtime parameter.
                 runtimeOrdinal! >= implicitCount -> if {
-                    context.types -> typeIds.materializedReadTypeId(parameter.typeId) => expectedType
-                    context.types -> typeIds.materializedReadTypeId(context.ir[argumentIndex!].typeId) => actualType
-                    expectedType >= 0 and actualType >= 0
-                        and expectedType < (context.types -> len)
-                        and actualType < (context.types -> len)
+                    context.types -> typeIds.typedArrayArgumentElementMismatch(context.ir[argumentIndex!].typeId, parameter.typeId)
                         -> if {
-                            context.types[expectedType] => expected
-                            context.types[actualType] => actual
-                            (expected.kind == 2 or expected.kind == 3 or expected.kind == 4 or expected.kind == 12)
-                                and (actual.kind == 2 or actual.kind == 3 or actual.kind == 4 or actual.kind == 12)
-                                and expected.first >= 0 and actual.first >= 0
-                                and not context.types[expected.first].containsParameter
-                                and not context.types[actual.first].containsParameter
-                                and expected.first != actual.first
-                                -> if { runtimeOrdinal! + 1 => mismatch! }
+                            Option<ArrayCallElementMismatchDetail>.Some(ArrayCallElementMismatchDetail { parameterIndex: parameterIndex!, argumentIndex: argumentIndex!, runtimeOrdinal: runtimeOrdinal! }) -> return
                         }
                     context.ir[argumentIndex!].nextOperand => argumentIndex!
                 }
@@ -550,7 +586,12 @@ arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int
             }
             parameterOrdinal! + 1 => parameterOrdinal!
         }
-    mismatch!
+    Option<ArrayCallElementMismatchDetail>.None
+}
+
+arrayCallElementMismatch context: ref emitterContext.EmitContext, callIndex: Int, functionIndex: Int -> Int => context -> arrayCallElementMismatchDetail(callIndex, functionIndex) -> when {
+    Some(detail) { detail.runtimeOrdinal + 1 }
+    None { 0 }
 }
 
 # A parameter-dependent call belongs to the unspecialized template until its
@@ -607,7 +648,7 @@ streamJoinInputContract context: ref emitterContext.EmitContext, join: typedIr.T
         -> if { StreamJoinInputContract { code: 1, fieldOrdinal: -1 } -> return }
     context.types[productType].kind != 10 or context.types[productType].length < 2
         -> if { StreamJoinInputContract { code: 1, fieldOrdinal: -1 } -> return }
-    -1 => firstStreamType!
+    -1 => firstElementType!
     0 => fieldIndex!
     fieldIndex! < (context.fields -> len) -> while {
         context.fields[fieldIndex!] => field
@@ -619,8 +660,9 @@ streamJoinInputContract context: ref emitterContext.EmitContext, join: typedIr.T
                 context.types[fieldType] => streamType
                 streamType.kind != 7 or streamType.origin != 4 or (streamType.symbol != 3 and streamType.symbol != 4)
                     -> if { StreamJoinInputContract { code: 2, fieldOrdinal: field.ordinal } -> return }
-                firstStreamType! < 0 -> if { fieldType => firstStreamType! } else {
-                    (join.opcode == 1 or join.opcode == 2) and fieldType != firstStreamType!
+                context.types -> typeIds.materializedReadTypeId(streamType.first) => elementType
+                firstElementType! < 0 -> if { elementType => firstElementType! } else {
+                    (join.opcode == 1 or join.opcode == 2) and elementType != firstElementType!
                         -> if { StreamJoinInputContract { code: 3, fieldOrdinal: field.ordinal } -> return }
                 }
             }
@@ -628,6 +670,18 @@ streamJoinInputContract context: ref emitterContext.EmitContext, join: typedIr.T
     }
     StreamJoinInputContract { code: 0, fieldOrdinal: -1 }
 }
+# A real await reads exactly T from Task<T>. Ordinary aliases preserve the
+# whole value, so neither a non-await read nor a wrong payload type qualifies.
+canonicalTaskAwaitRead context: ref emitterContext.EmitContext, irIndex: Int, sourceTypeId: Int -> Bool {
+    not (irIndex -> isAwaitSourceNode(context)) -> if { false -> return }
+    sourceTypeId < 0 or sourceTypeId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[sourceTypeId] => task
+    task.kind == 7 and task.origin == 4 and task.symbol == 2
+        and task.first >= 0 and task.first < (context.types -> len)
+        and task.first == context.ir[irIndex].typeId
+}
+
 public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, functions: ref [Int; ~] -> Int {
     context.ir[irIndex] => node
     node.kind == 43 -> if {
@@ -802,7 +856,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         false => enumMatchSubjectValid!
         node.operand0 >= 0 and node.operand0 < irCount
             -> if {
-                context.ir[node.operand0].typeId => enumMatchSubjectTypeId
+                context.types -> typeIds.materializedReadTypeId(context.ir[node.operand0].typeId) => enumMatchSubjectTypeId
                 enumMatchSubjectTypeId >= 0 and enumMatchSubjectTypeId < (context.types -> len)
                     -> if {
                         context.types[enumMatchSubjectTypeId] => enumMatchSubjectType
@@ -844,7 +898,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         and node.sourceModule < (context.ranges -> len)
         -> if {
             context.ranges[node.sourceModule] => enumVariantUseRange
-            context.ir[node.operand0].typeId => enumVariantCheckedSubjectType
+            context.types -> typeIds.materializedReadTypeId(context.ir[node.operand0].typeId) => enumVariantCheckedSubjectType
             0 => enumVariantPatternSearch!
             enumVariantPatternSearch! < enumVariantUseRange.astCount
                 -> while {
@@ -875,6 +929,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
             context.ir[node.operand0] => enumValueSubject
             enumValueSubject.kind == 0
                 or enumValueSubject.kind == 1
+                or (enumValueSubject.kind == 9 and enumValueSubject.opcode == -1)
                 or enumValueSubject.kind == 10
                 or enumValueSubject.kind == 11
                 or enumValueSubject.kind == 17
@@ -1210,38 +1265,40 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
     # A transparent parser wrapper has no standalone SSA definition. Even if
     # it carries the correct contextual type, a value-producing match arm must
     # store the concrete producer beneath that wrapper.
-    code! == 0 and node.kind == 27 -> if {
-        false => concreteMatchResultDemanded!
-        node.parent >= 0 and node.parent < irCount -> if {
-            context.ir[node.parent] => concreteMatchParent
-            (concreteMatchParent.kind == 1 and concreteMatchParent.operand0 == irIndex)
-                or (concreteMatchParent.kind == 19 and concreteMatchParent.operand1 == irIndex)
-                -> if {
-                    true => concreteMatchResultDemanded!
-                }
+    code! == 0 and node.kind == 27
+        and not (node.typeOrigin == 1 and node.typeSymbol == 0)
+        -> if {
+            false => concreteMatchResultDemanded!
+            node.parent >= 0 and node.parent < irCount -> if {
+                context.ir[node.parent] => concreteMatchParent
+                (concreteMatchParent.kind == 1 and concreteMatchParent.operand0 == irIndex)
+                    or (concreteMatchParent.kind == 19 and concreteMatchParent.operand1 == irIndex)
+                    -> if {
+                        true => concreteMatchResultDemanded!
+                    }
+            }
+            concreteMatchResultDemanded! -> if {
+                node.operand1 => concreteMatchArmIndex!
+                concreteMatchArmIndex! >= 0 and concreteMatchArmIndex! < irCount and code! == 0
+                    -> while {
+                        context.ir[concreteMatchArmIndex!] => concreteMatchArm
+                        concreteMatchArmIndex! => concreteMatchRegionIndex!
+                        concreteMatchArm.operand1 >= 0
+                            and concreteMatchArm.operand1 < irCount
+                            and context.ir[concreteMatchArm.operand1].kind == 19
+                            -> if {
+                                concreteMatchArm.operand1 => concreteMatchRegionIndex!
+                            }
+                        context.ir[concreteMatchRegionIndex!].operand1 => concreteMatchValueIndex
+                        concreteMatchValueIndex >= 0
+                            and concreteMatchValueIndex < irCount
+                            and context.ir[concreteMatchValueIndex].kind == 9
+                            and context.ir[concreteMatchValueIndex].opcode == -1
+                            -> if { 26 => code! }
+                        concreteMatchArm.nextOperand => concreteMatchArmIndex!
+                    }
+            }
         }
-        concreteMatchResultDemanded! -> if {
-            node.operand1 => concreteMatchArmIndex!
-            concreteMatchArmIndex! >= 0 and concreteMatchArmIndex! < irCount and code! == 0
-                -> while {
-                    context.ir[concreteMatchArmIndex!] => concreteMatchArm
-                    concreteMatchArmIndex! => concreteMatchRegionIndex!
-                    concreteMatchArm.operand1 >= 0
-                        and concreteMatchArm.operand1 < irCount
-                        and context.ir[concreteMatchArm.operand1].kind == 19
-                        -> if {
-                            concreteMatchArm.operand1 => concreteMatchRegionIndex!
-                        }
-                    context.ir[concreteMatchRegionIndex!].operand1 => concreteMatchValueIndex
-                    concreteMatchValueIndex >= 0
-                        and concreteMatchValueIndex < irCount
-                        and context.ir[concreteMatchValueIndex].kind == 9
-                        and context.ir[concreteMatchValueIndex].opcode == -1
-                        -> if { 26 => code! }
-                    concreteMatchArm.nextOperand => concreteMatchArmIndex!
-                }
-        }
-    }
     # Subject `when` controls must retain the value that every relational arm
     # compares. Losing it can leave individually plausible one-sided binary
     # nodes that only fail after nested enum payload lowering.
@@ -1468,6 +1525,8 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 -> if {
                     true => bindingReadCompatible!
                 }
+            context -> canonicalTaskAwaitRead(irIndex, bindingReadInitializerTypeId)
+                -> if { true => bindingReadCompatible! }
             not bindingReadCompatible! -> if { 37 => code! }
         }
     # A partition result is a structural product whose route fields preserve
@@ -1678,6 +1737,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
             aliasOwner! >= 0
                 and context.ir[aliasOwner!].kind == 0
                 and (context -> parameterIndexForFunction(aliasOwner!, context.ir[node.operand0].symbol)) < 0
+                and (node.operand0 -> eachRoleOwner(context)) < 0
                 -> if {
                     16 => code!
                 }
@@ -1691,6 +1751,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         and node.operand0 >= 0
         and node.operand0 < irCount
         and context.ir[node.operand0].kind == 29
+        and not (irIndex -> isAwaitSourceNode(context))
         and node.typeId != context.ir[node.operand0].typeId
         -> if {
             43 => code!
@@ -1778,7 +1839,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
     # representation without extending the canonical predicate, stop before an
     # emitter can silently discard the effect in one of its scope-specific paths.
     code! == 0
-        and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116)
+        and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116 or node.symbol == -117)
         and not (node -> typedIr.isConsoleRuntimeCall)
         -> if { 49 => code! }
     # A source method that declares `self` must retain that receiver as the
@@ -1870,6 +1931,11 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
                 context -> linkedCallArgumentCount(irIndex, callInvariantExpected) => callInvariantActual
                 context -> implicitFlowArgumentCount(irIndex, callInvariantActual, callInvariantExpected) => callInvariantImplicit
                 callInvariantActual + callInvariantImplicit != callInvariantExpected
+                    and not (node.kind == 6
+                    and callInvariantExpected == 1
+                    and callInvariantActual == 0
+                    and callInvariantImplicit == 0
+                    and (context -> callHasDiagnosedOwnInitializerArgument(irIndex)))
                     -> if { 42 => code! }
                 code! == 0
                     and (context -> arrayCallElementMismatch(irIndex, callInvariantFunction)) > 0
@@ -1885,6 +1951,7 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         and node.operand0 < irCount
         and context.ir[node.operand0].kind == 17
         and node.typeId != context.ir[node.operand0].typeId
+        and not (context -> canonicalTaskAwaitRead(irIndex, context.ir[node.operand0].typeId))
         -> if { 52 => code! }
     # A canonical non-Unit arm terminal makes its value-producing match
     # non-Unit. Retaining the provisional Unit identity would otherwise reach
@@ -2155,27 +2222,54 @@ mapProducerContractValid context: ref emitterContext.EmitContext, producerIndex:
     valid!
 }
 
+# Templates remain available for call materialization, but their body operands
+# have no concrete contract until substitution. Every instance is checked.
+irFunctionOwner context: ref emitterContext.EmitContext, irIndex: Int -> Int {
+    context.ir[irIndex].parent => owner!
+    owner! >= 0 and owner! < (context.ir -> len)
+        and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner!
+}
+
+isUnspecializedTemplateBody context: ref emitterContext.EmitContext, irIndex: Int -> Bool {
+    context -> irFunctionOwner(irIndex) => owner
+    owner < 0 or owner >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[owner] => function
+    function.kind != 0 or (context -> emitterContext.isGenericInstance(owner))
+        -> if { false -> return }
+    context.ir -> typedIr.functionSignatureContainsParameter(context.types, owner)
+}
+
 invalidMapBindingIr context: ref emitterContext.EmitContext -> Int {
     [Int; ~] => mapIrByAst!
-    [Int; ~] => mapIrCountByAst!
+    [Int; ~] => nextMapIrByNode!
+    0 => irInit!
+    irInit! < (context.ir -> len) -> while {
+        nextMapIrByNode! -> push(-1)
+        irInit! + 1 => irInit!
+    }
     0 => astInit!
     astInit! < (context.nodes -> len) -> while {
         mapIrByAst! -> push(-1)
-        mapIrCountByAst! -> push(0)
         astInit! + 1 => astInit!
     }
+    # A function body can share the AST index of its final map statement.
+    # Count only the actual map producer, never the enclosing body node.
     0 => irIndex!
     irIndex! < (context.ir -> len) -> while {
         context.ir[irIndex!] => candidate
-        candidate.sourceModule >= 0 and candidate.sourceModule < (context.ranges -> len)
+        candidate.kind == 9 and (candidate.opcode == -306 or candidate.opcode == -307)
+            and candidate.sourceModule >= 0 and candidate.sourceModule < (context.ranges -> len)
             -> if {
                 context.ranges[candidate.sourceModule] => sourceRange
                 candidate.astNode >= 0 and candidate.astNode < sourceRange.astCount
                     and context.nodes[sourceRange.astStart + candidate.astNode].kind == 49
                     -> if {
                         sourceRange.astStart + candidate.astNode => globalAst
-                        mapIrByAst![globalAst] < 0 -> if { irIndex! => mapIrByAst![globalAst] }
-                        mapIrCountByAst![globalAst] + 1 => mapIrCountByAst![globalAst]
+                        mapIrByAst![globalAst] => nextMapIrByNode![irIndex!]
+                        irIndex! => mapIrByAst![globalAst]
                     }
             }
         irIndex! + 1 => irIndex!
@@ -2190,23 +2284,37 @@ invalidMapBindingIr context: ref emitterContext.EmitContext -> Int {
                 and binding.sourceModule < (context.ranges -> len)
                 -> if {
                     context -> mapAstForBinding(bindingIndex!) => mapAst
-                    mapAst >= 0 -> if {
-                        context.ranges[binding.sourceModule] => sourceRange
-                        sourceRange.astStart + mapAst => globalMapAst
-                        context -> mapAstOpcode(binding.sourceModule, mapAst) => expectedOpcode
-                        -1 => expectedSymbol!
-                        expectedOpcode == -306 -> if { 17 => expectedSymbol! }
-                        expectedOpcode == -307 -> if { 18 => expectedSymbol! }
-                        mapIrByAst![globalMapAst] => producerIndex
-                        producerIndex < 0 or mapIrCountByAst![globalMapAst] != 1
-                            -> if { bindingIndex! => invalid! } else {
-                                context.ir[producerIndex] => producer
-                                (expectedOpcode != -306 and expectedOpcode != -307)
-                                    or not (context -> mapProducerContractValid(producerIndex, expectedOpcode, expectedSymbol!))
-                                    or binding.operand0 != producerIndex
-                                    -> if { bindingIndex! => invalid! }
+                    mapAst >= 0 and not (context -> isUnspecializedTemplateBody(bindingIndex!))
+                        -> if {
+                            context.ranges[binding.sourceModule] => sourceRange
+                            sourceRange.astStart + mapAst => globalMapAst
+                            context -> mapAstOpcode(binding.sourceModule, mapAst) => expectedOpcode
+                            -1 => expectedSymbol!
+                            expectedOpcode == -306 -> if { 17 => expectedSymbol! }
+                            expectedOpcode == -307 -> if { 18 => expectedSymbol! }
+                            # Clones retain their source AST. Uniqueness belongs to
+                            # that AST within one concrete function, not all clones.
+                            context -> irFunctionOwner(bindingIndex!) => bindingOwner
+                            -1 => producerIndex!
+                            0 => producerCount!
+                            mapIrByAst![globalMapAst] => candidateIndex!
+                            candidateIndex! >= 0 -> while {
+                                (context -> irFunctionOwner(candidateIndex!)) == bindingOwner
+                                    -> if {
+                                        candidateIndex! => producerIndex!
+                                        producerCount! + 1 => producerCount!
+                                    }
+                                nextMapIrByNode![candidateIndex!] => candidateIndex!
                             }
-                    }
+                            producerIndex! < 0 or producerCount! != 1
+                                -> if { bindingIndex! => invalid! } else {
+                                    context.ir[producerIndex!] => producer
+                                    (expectedOpcode != -306 and expectedOpcode != -307)
+                                        or not (context -> mapProducerContractValid(producerIndex!, expectedOpcode, expectedSymbol!))
+                                        or binding.operand0 != producerIndex!
+                                        -> if { bindingIndex! => invalid! }
+                                }
+                        }
                 }
             bindingIndex! + 1 => bindingIndex!
         }
@@ -2258,6 +2366,8 @@ irInvariantDiagnosticCount context: ref emitterContext.EmitContext -> Int {
         irIndex! + 1 => irIndex!
     }
     (context -> invalidInterpolationCapacityNode) >= 0
+        -> if { count! + 1 => count! }
+    (context -> invalidInterpolationFlowTargetNode) >= 0
         -> if { count! + 1 => count! }
     count! + (context -> runtimeAbiDiagnosticCount) => count!
     (context -> unresolvedGenericAbiNode) >= 0 -> if { count! + 1 => count! }

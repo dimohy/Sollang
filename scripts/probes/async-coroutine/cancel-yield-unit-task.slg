@@ -1,0 +1,22 @@
+namespace probes.cancel_yield_unit_task
+public child: -> async Unit uses Console {
+    "unexpected-child-start" -> println
+    yield
+    "unexpected-child-resume" -> println
+}
+public parent: -> async Unit uses Console {
+    "parent-start" -> println
+    probes.cancel_yield_unit_task.child() => childTask
+    yield
+    childTask -> await
+}
+public gate: -> async Int { 1 }
+main {
+    probes.cancel_yield_unit_task.parent() => parentTask
+    probes.cancel_yield_unit_task.gate() => firstGate
+    firstGate -> await => first
+    parentTask -> cancel
+    probes.cancel_yield_unit_task.gate() => secondGate
+    secondGate -> await => second
+    "cancelled:$first,$second" -> println
+}

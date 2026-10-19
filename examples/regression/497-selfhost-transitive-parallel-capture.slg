@@ -66,5 +66,27 @@ main {
     }
     """ -> countE18 => immutable
 
-    "direct=$direct, transitive=$transitive, immutable=$immutable" -> println
+    # Ordinary callees create worker-local storage, not callback captures.
+    """
+    shiftGlobal value: Int -> Int {
+        addOffset item: Int -> Int {
+            item + offset!
+        }
+    
+        10 => offset!
+        value -> addOffset
+    }
+    
+    main {
+        [1, 2, 3; ~] => values!
+        values! -> parallel value {
+            value -> shiftGlobal
+        } => shifted!
+        shifted! -> each value {
+            value -> println
+        }
+    }
+    """ -> countE18 => globalMutable
+
+    "direct=$direct, transitive=$transitive, immutable=$immutable, global=$globalMutable" -> println
 }

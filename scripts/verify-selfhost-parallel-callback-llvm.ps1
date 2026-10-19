@@ -11,7 +11,7 @@ Set-StrictMode -Version Latest
 
 $resolvedPath = (Resolve-Path -LiteralPath $LlvmPath).Path
 $llvm = [System.IO.File]::ReadAllText($resolvedPath)
-$callbackPattern = '(?ms)^define internal void @sollang_parallel_callback_[0-9]+\(ptr %group, i64 %index\)(?: #[0-9]+)? \{\r?\n.*?^\}\r?$'
+$callbackPattern = '(?ms)^define internal void @sollang_parallel_callback_(?:[0-9]+|x(?:[0-9A-F]{2})+)\(ptr %group, i64 %index\)(?: #[0-9]+)? \{\r?\n.*?^\}\r?$'
 $callbacks = @([regex]::Matches($llvm, $callbackPattern))
 if ($callbacks.Count -lt $MinimumCallbackCount) {
     throw "self-host LLVM contains $($callbacks.Count) parallel callback(s), but at least $MinimumCallbackCount are required: $resolvedPath. Verify that the source parallel region is reachable and parallelUsesComputePool accepts its worker-transfer input and output types."
@@ -20,9 +20,11 @@ if ($callbacks.Count -lt $MinimumCallbackCount) {
 $nominalTransferCount = 0
 foreach ($callback in $callbacks) {
     $body = $callback.Value
-    $hasNominalInputAddress = $body -match '%input_address = getelementptr %sollang\.struct\.[^,\r\n]+, ptr %input, i64 %index'
+    $hasNominalInputAddress = $body -match '%input_address = getelementptr %sollang\.struct\.[^,\r\n]+, ptr %input, i64 %index' -or
+        ($body -match '%input_offset = mul i64 %index, [1-9][0-9]*' -and
+         $body -match '%input_address = getelementptr i8, ptr %input, i64 %input_offset')
     $hasNominalInputLoad = $body -match '%item = load %sollang\.struct\.[^,\r\n]+'
-    $hasNominalResultCall = $body -match '%mapped = call %sollang\.struct\.[^ @\r\n]+ @sollang_m[0-9]+_s[0-9]+'
+    $hasNominalResultCall = $body -match '%mapped = call %sollang\.struct\.[^ @\r\n]+ @sollang_(?:m[0-9]+_s[0-9]+|fn_[A-Za-z0-9_]+)'
     $hasNominalResultStore = $body -match 'store %sollang\.struct\.[^ ]+ %mapped, ptr %output_address'
     if ($hasNominalInputAddress -and $hasNominalInputLoad -and
         $hasNominalResultCall -and $hasNominalResultStore) {

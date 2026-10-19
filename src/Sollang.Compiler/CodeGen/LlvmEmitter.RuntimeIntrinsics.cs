@@ -293,7 +293,7 @@ internal sealed partial class LlvmEmitter
             $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 8");
         EmitStore("i64", deadline, deadlineAddress, 8);
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(BoundType.Unit),
             null,
             BoundType.Unit,
@@ -391,7 +391,7 @@ internal sealed partial class LlvmEmitter
             EmitStore("i32", "1", explicitAddress, 4);
         }
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             null,
             function.ReturnType,
@@ -481,7 +481,7 @@ internal sealed partial class LlvmEmitter
         EmitAssign(operationAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
         EmitStore("i32", "1", operationAddress, 4);
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             null,
             function.ReturnType,
@@ -550,7 +550,7 @@ internal sealed partial class LlvmEmitter
         EmitAssign(operationAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
         EmitStore("i32", "2", operationAddress, 4);
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             null,
             function.ReturnType,
@@ -591,6 +591,23 @@ internal sealed partial class LlvmEmitter
         var succeeded = NextTemp("atomic_replace_succeeded");
         EmitCompare(succeeded, "ne", "i32", raw, "0");
         return new RuntimeBool(succeeded);
+    }
+
+    private RuntimeInt EmitRuntimeFilePathStatus(BoundFunction function, RuntimeValue argument)
+    {
+        // The platform path copy retains the existing 259-byte UTF-8 ceiling on
+        // both native targets; these status intrinsics additionally reject NUL.
+        var path = argument as RuntimeText
+            ?? throw new SollangException($"{function.Name} expects Text");
+        var symbol = function.Kind switch
+        {
+            BoundFunctionKind.RuntimeCreateExclusiveFile => "sollang_platform_create_exclusive_file",
+            BoundFunctionKind.RuntimeRemoveFile => "sollang_platform_remove_file",
+            _ => throw new SollangException($"unsupported file path intrinsic '{function.Name}'")
+        };
+        var status = NextTemp("file_path_status");
+        EmitCall(status, "i32", symbol, $"ptr {path.PointerName}, i64 {path.LengthName}");
+        return new RuntimeInt(status);
     }
 
     private RuntimeEnum EmitRuntimeOpenFile(BoundFunction function, RuntimeValue argument)
@@ -721,6 +738,68 @@ internal sealed partial class LlvmEmitter
         return EmitEnumPhi(
             "directory_result",
             function.ReturnType,
+            [(success, successExit), (failure, errorExit)]);
+    }
+
+    private RuntimeEnum EmitRuntimePathAbsolute(BoundFunction function, RuntimeValue argument)
+    {
+        if (argument is not RuntimeStruct path
+            || !_program.Types.IsStruct(path.Type)
+            || _program.Types.GetStruct(path.Type) is not { Name: "sys.path.Path" } definition
+            || !_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || resultTypes.Ok != path.Type || resultTypes.Error != BoundType.Text)
+        {
+            throw new SollangException($"{function.Name} expects Path -> Result<Path, Text>");
+        }
+        var bytesField = definition.Fields.First(field => field.Name == "bytes");
+        var styleField = definition.Fields.First(field => field.Name == "style");
+        var bytesValue = NextTemp("absolute_input_bytes");
+        EmitAssign(bytesValue, $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {bytesField.Index}");
+        if (DematerializeAggregateValue(bytesField.Type, bytesValue) is not RuntimeDynamicInlineArray bytes
+            || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("sys.path.Path.bytes must be [UInt8; ~]");
+        }
+        var styleValue = NextTemp("absolute_style");
+        EmitAssign(styleValue, $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {styleField.Index}");
+        var styleTag = NextTemp("absolute_style_tag");
+        EmitAssign(styleTag, $"extractvalue {LlvmEnumType(styleField.Type)} {styleValue}, 0");
+        var platform = NextTemp("absolute_platform");
+        EmitCall(platform, "%sollang.path_absolute_result", "sollang_platform_absolute_path",
+            $"ptr {bytes.PointerName}, i64 {bytes.LengthName}, i32 {styleTag}");
+        string Extract(string name, int index)
+        {
+            var value = NextTemp(name);
+            EmitAssign(value, $"extractvalue %sollang.path_absolute_result {platform}, {index}");
+            return value;
+        }
+        var pointer = Extract("absolute_pointer", 0);
+        var length = Extract("absolute_length", 1);
+        var status = Extract("absolute_status", 2);
+        var succeeded = NextTemp("absolute_succeeded");
+        EmitCompare(succeeded, "eq", "i32", status, "1");
+        var variants = _program.Types.GetEnum(function.ReturnType).Variants;
+        var ok = variants.First(variant => variant.Name == "Ok");
+        var err = variants.First(variant => variant.Name == "Err");
+        var successLabel = NextLabel("absolute_success");
+        var errorLabel = NextLabel("absolute_error");
+        var endLabel = NextLabel("absolute_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+        EmitLabel(successLabel);
+        var array = BuildDynamicArrayAggregate(pointer, length, length);
+        var withBytes = NextTemp("absolute_owned_bytes");
+        EmitAssign(withBytes, $"insertvalue {LlvmStructType(path.Type)} poison, %sollang.dynamic_int_array {array}, {bytesField.Index}");
+        var ownedPath = NextTemp("absolute_owned_path");
+        EmitAssign(ownedPath, $"insertvalue {LlvmStructType(path.Type)} {withBytes}, {LlvmEnumType(styleField.Type)} {styleValue}, {styleField.Index}");
+        var success = EmitEnumValue(function.ReturnType, ok, new RuntimeStruct(path.Type, ownedPath));
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+        EmitLabel(errorLabel);
+        var failure = EmitEnumValue(function.ReturnType, err, EmitRuntimeErrorText("io"));
+        EmitBranch(endLabel);
+        var errorExit = _currentBlockLabel;
+        EmitLabel(endLabel);
+        return EmitEnumPhi("absolute_result", function.ReturnType,
             [(success, successExit), (failure, errorExit)]);
     }
 
@@ -919,7 +998,7 @@ internal sealed partial class LlvmEmitter
             operationAddress,
             4);
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             null,
             function.ReturnType,
@@ -1224,7 +1303,7 @@ internal sealed partial class LlvmEmitter
         EmitAssign(operationAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 20");
         EmitStore("i32", operation, operationAddress, 4);
 
-        return new RuntimeTask(
+        return CreateRuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             function.InputType,
             function.ReturnType,

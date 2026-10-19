@@ -4,33 +4,23 @@ import sollang.compiler.llvm.text as llvm
 # Container storage must use the inferred Text element layout, never i32.
 main {
     [
-        """
-        namespace sys.process
+    """
+    import sys.process as process
 
-        public struct RunToFileRequest {
-            public argv: [Text; ~]
-            public output: Text
-        }
+    targetMode target: Int -> Text => target == 0
+        -> if { "windows" } else { "linux" }
 
-        public arguments: -> Arguments uses Process = intrinsic
-        """,
-        """
-        import sys.process as process
+    collect root: Text -> [Text; ~] uses Process {
+        process.arguments() => arguments
+        "" => selectedRoot!
+        (root -> len) > 0 -> if { root => selectedRoot! }
+        [arguments[0], 0 -> targetMode, selectedRoot!; ~]
+    }
 
-        targetMode target: Int -> Text => target == 0
-            -> if { "windows" } else { "linux" }
-
-        collect root: Text -> [Text; ~] uses Process {
-            process.arguments() => arguments
-            "" => selectedRoot!
-            (root -> len) > 0 -> if { root => selectedRoot! }
-            [arguments[0], 0 -> targetMode, selectedRoot!; ~]
-        }
-
-        main {
-            "root" -> collect -> len -> println
-        }
-        """; ~
+    main {
+        "root" -> collect -> len -> println
+    }
+    """; ~
     ] => sources!
     sources! -> llvm.emit
 }

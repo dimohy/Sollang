@@ -21,6 +21,127 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
+# A binding that provisionally points into an intrinsic call's argument tree
+# still owns the direct call result. Follow that exact parent chain instead of
+# choosing an argument by its already-inferred type or source proximity.
+repairDirectIntrinsicBindingSources nodes: mut [TypedIrNode; ~], first: Int, end: Int -> Unit {
+    first => bindingIndex!
+    bindingIndex! < end -> while {
+        nodes[bindingIndex!] => binding!
+        binding!.kind == 17 and binding!.operand0 >= first and binding!.operand0 < end
+            -> if {
+                binding!.operand0 => ancestorIndex!
+                ancestorIndex! >= first and ancestorIndex! < end and ancestorIndex! != bindingIndex!
+                    -> while {
+                        nodes[ancestorIndex!] => ancestor
+                        ancestor.parent == bindingIndex!
+                            -> if {
+                                ancestorIndex! != binding!.operand0
+                                    and ancestor.kind == 9
+                                    and ancestor.opcode != -1
+                                    and ancestor.opcode != -27
+                                    and ancestor.typeOrigin >= 0
+                                    -> if {
+                                        ancestorIndex! => binding!.operand0
+                                        ancestor.typeId => binding!.typeId
+                                        ancestor.typeKind => binding!.typeKind
+                                        ancestor.typeOrigin => binding!.typeOrigin
+                                        ancestor.typeModule => binding!.typeModule
+                                        ancestor.typeSymbol => binding!.typeSymbol
+                                        ancestor.typeFlags => binding!.typeFlags
+                                        binding! => nodes[bindingIndex!]
+                                    }
+                                end => ancestorIndex!
+                            } else { ancestor.parent => ancestorIndex! }
+                    }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+}
+
+sealSourceOrderedSiblingLinks nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, expressionStart: Int, expressionEnd: Int -> Unit {
+    prepared.package.ranges[sourceIndex] => sourceRange
+    # Parent membership is stable while sibling links are sealed. Keep each
+    # candidate chain in original IR order so equal-position ties stay exact.
+    [Int; ~] => siblingHeadByParent!
+    [Int; ~] => siblingCandidateNext!
+    [Bool; ~] => preservedTapArgument!
+    0 => siblingIndexSeed!
+    siblingIndexSeed! <= expressionEnd -> while {
+        siblingHeadByParent! -> push(-1)
+        siblingCandidateNext! -> push(-1)
+        preservedTapArgument! -> push(false)
+        siblingIndexSeed! + 1 => siblingIndexSeed!
+    }
+    expressionEnd - 1 => siblingIndexBuild!
+    siblingIndexBuild! >= expressionStart
+        -> while {
+            nodes[siblingIndexBuild!] => indexedSibling
+            indexedSibling.parent + 1 => indexedSiblingParent
+            siblingHeadByParent![indexedSiblingParent] => siblingCandidateNext![siblingIndexBuild!]
+            siblingIndexBuild! => siblingHeadByParent![indexedSiblingParent]
+            indexedSibling.kind == 6
+                and indexedSibling.parent >= 0
+                and nodes[indexedSibling.parent].kind == 36
+                and indexedSibling.operand0 >= expressionStart
+                and indexedSibling.operand0 < expressionEnd
+                -> if { true => preservedTapArgument![indexedSibling.operand0] }
+            siblingIndexBuild! - 1 => siblingIndexBuild!
+        }
+    expressionStart => siblingIr!
+    siblingIr! < expressionEnd -> while {
+        nodes[siblingIr!] => sibling!
+        preservedTapArgument![siblingIr!] => preserveTapArgumentLink
+        -1 => nextSibling!
+        UIntSize(0) => nextSiblingStart!
+        siblingHeadByParent![sibling!.parent + 1] => siblingSearch!
+        siblingSearch! >= 0 -> while {
+            nodes[siblingSearch!] => siblingCandidate
+            sibling!.parent >= 0
+                and (nodes[sibling!.parent].kind == 14 or nodes[sibling!.parent].kind == 16)
+                and siblingCandidate.kind == 3 and sibling!.kind == 3 => numericLiteralOrder
+            siblingCandidate.parent == sibling!.parent
+                and ((numericLiteralOrder and siblingCandidate.astNode > sibling!.astNode)
+                or (not numericLiteralOrder and prepared.package.nodes[sourceRange.astStart + siblingCandidate.astNode].start > prepared.package.nodes[sourceRange.astStart + sibling!.astNode].start))
+                -> if {
+                    prepared.package.nodes[sourceRange.astStart + siblingCandidate.astNode].start => siblingCandidateStart
+                    nextSibling! < 0
+                        or (numericLiteralOrder and nodes[nextSibling!].kind == 3 and siblingCandidate.astNode < nodes[nextSibling!].astNode)
+                        or ((not numericLiteralOrder or nodes[nextSibling!].kind != 3) and siblingCandidateStart < nextSiblingStart!)
+                        -> if {
+                            siblingSearch! => nextSibling!
+                            siblingCandidateStart => nextSiblingStart!
+                        }
+                }
+            siblingCandidateNext![siblingSearch!] => siblingSearch!
+        }
+        preserveTapArgumentLink -> unless {
+            nextSibling! => sibling!.nextOperand
+        }
+        sibling! => nodes[siblingIr!]
+        siblingIr! + 1 => siblingIr!
+    }
+}
+
+indexSourceOrderedChildren nodes: ref [TypedIrNode; ~], expressionStart: Int, expressionEnd: Int, heads: mut [Int; ~], next: mut [Int; ~] -> Unit {
+    expressionStart => seed!
+    seed! < expressionEnd -> while {
+        heads -> push(-1)
+        next -> push(-1)
+        seed! + 1 => seed!
+    }
+    expressionEnd - 1 => child!
+    child! >= expressionStart -> while {
+        nodes[child!].parent => parent
+        parent >= expressionStart and parent < expressionEnd
+            -> if {
+                heads[parent - expressionStart] => next[child! - expressionStart]
+                child! => heads[parent - expressionStart]
+            }
+        child! - 1 => child!
+    }
+}
+
 # Normalize a completed source entry without copying its owned IR.
 finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], resolvedNames: ref [resolution.ResolvedName; ~], prepared: ref semanticContext.SemanticSnapshot, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], recursiveTypeFlags: ref [Int; ~], sourceIndex: Int, entryAstIndex: Int, entryIr: Int, entryExpressionStart: Int, entryHasResolvedCall: Bool, entryResultTypeIndex: Int -> Unit {
     prepared.package.ranges[sourceIndex] => sourceRange
@@ -49,10 +170,13 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
         entryIrNode! => nodes[entryParentIr!]
         entryParentIr! + 1 => entryParentIr!
     }
+    [Int; ~] => entryChildHeads!
+    [Int; ~] => entryChildNext!
+    nodes -> indexSourceOrderedChildren(entryExpressionStart, entryExpressionEnd, entryChildHeads!, entryChildNext!)
     entryExpressionStart => entryOperandIr!
     entryOperandIr! < entryExpressionEnd -> while {
         nodes[entryOperandIr!] => entryOperator!
-        entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and (entryOperator!.opcode == -27 or (entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229 or entryOperator!.opcode == -236)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or (entryOperator!.opcode -> isArrayExchangeOpcode))) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+        entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and (entryOperator!.opcode == -27 or (entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229 or entryOperator!.opcode == -236)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -320 or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
             -> if {
                 -1 => entryFirstOperand!
                 -1 => entrySecondOperand!
@@ -64,44 +188,63 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                         -> if { true => entryOperatorHasDirectQualifiedTarget! }
                 }
                 entryExpressionStart => entryChildIr!
-                entryChildIr! < entryExpressionEnd -> while {
-                    nodes[entryChildIr!] => entryChild
-                    entryChild.parent == entryOperandIr!
-                        and not (entryOperatorHasDirectQualifiedTarget!
-                        and (entryChild.kind == 18 or entryChild.kind == 20 or entryChild.kind == 27 or entryChild.kind == 33 or entryChild.kind == 34))
-                        -> if {
-                            prepared.package.nodes[sourceRange.astStart + entryChild.astNode].start => entryChildStart
-                            entryFirstOperand! < 0 -> if {
-                                entryChildIr! => entryFirstOperand!
-                                entryChildStart => entryFirstStart!
-                            } else {
-                                (entryOperator!.kind == 17
-                                    and entryChild.kind == 6
-                                    and ((entryChild.typeKind == 7
-                                    and entryChild.typeOrigin == 4
-                                    and entryChild.typeSymbol >= 5
-                                    and entryChild.typeSymbol <= 7)
-                                    or (entryChild.typeKind == 14
-                                    and entryChild.typeOrigin == 4
-                                    and entryChild.typeSymbol == 8))
-                                    and prepared.package.nodes[sourceRange.astStart + entryChild.astNode].length > prepared.package.nodes[sourceRange.astStart + nodes[entryFirstOperand!].astNode].length)
-                                    or (entryOperator!.kind != 17 and entryChildStart < entryFirstStart!)
-                                    -> if {
-                                        entryFirstOperand! => entrySecondOperand!
-                                        entryFirstStart! => entrySecondStart!
-                                        entryChildIr! => entryFirstOperand!
-                                        entryChildStart => entryFirstStart!
-                                    } else {
-                                        entrySecondOperand! < 0 or entryChildStart < entrySecondStart!
-                                            -> if {
-                                                entryChildIr! => entrySecondOperand!
-                                                entryChildStart => entrySecondStart!
-                                            }
-                                    }
-                            }
-                        }
-                    entryChildIr! + 1 => entryChildIr!
+                # Bindings can acquire a block call from another parent. Other
+                # operators only lose children; their live parent check stays exact.
+                entryOperator!.kind != 17 -> if {
+                    entryChildHeads![entryOperandIr! - entryExpressionStart] => entryChildIr!
                 }
+                entryChildIr! >= entryExpressionStart and entryChildIr! < entryExpressionEnd
+                    -> while {
+                        nodes[entryChildIr!] => entryChild
+                        entryOperator!.kind == 17 and entryChild.kind == 6
+                            and entryChild.astNode == entryOperator!.astNode
+                            and prepared.package.nodes[sourceRange.astStart + entryChild.astNode].kind == 48
+                            -> if {
+                                entryChild => entryBoundBlockCall!
+                                entryOperandIr! => entryBoundBlockCall!.parent
+                                entryBoundBlockCall! => nodes[entryChildIr!]
+                            }
+                        nodes[entryChildIr!].parent == entryOperandIr!
+                            and not (entryOperatorHasDirectQualifiedTarget!
+                            and (entryChild.kind == 18 or entryChild.kind == 20 or entryChild.kind == 27 or entryChild.kind == 33 or entryChild.kind == 34))
+                            -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryChild.astNode].start => entryChildStart
+                                entryFirstOperand! < 0 -> if {
+                                    entryChildIr! => entryFirstOperand!
+                                    entryChildStart => entryFirstStart!
+                                } else {
+                                    (entryOperator!.kind == 17
+                                        and entryChild.kind == 6
+                                        and ((entryChild.typeKind == 7
+                                        and entryChild.typeOrigin == 4
+                                        and entryChild.typeSymbol >= 5
+                                        and entryChild.typeSymbol <= 7)
+                                        or (entryChild.typeKind == 14
+                                        and entryChild.typeOrigin == 4
+                                        and entryChild.typeSymbol == 8))
+                                        and prepared.package.nodes[sourceRange.astStart + entryChild.astNode].length > prepared.package.nodes[sourceRange.astStart + nodes[entryFirstOperand!].astNode].length)
+                                        or (entryOperator!.kind != 17 and entryChildStart < entryFirstStart!)
+                                        -> if {
+                                            entryFirstOperand! => entrySecondOperand!
+                                            entryFirstStart! => entrySecondStart!
+                                            entryChildIr! => entryFirstOperand!
+                                            entryChildStart => entryFirstStart!
+                                        } else {
+                                            entrySecondOperand! < 0 or entryChildStart < entrySecondStart!
+                                                -> if {
+                                                    entryChildIr! => entrySecondOperand!
+                                                    entryChildStart => entrySecondStart!
+                                                }
+                                        }
+                                }
+                            }
+                        entryOperator!.kind == 17
+                            -> if {
+                                entryChildIr! + 1 => entryChildIr!
+                            } else {
+                                entryChildNext![entryChildIr! - entryExpressionStart] => entryChildIr!
+                            }
+                    }
                 entryFirstOperand! => entryOperator!.operand0
                 entryOperator!.kind == 7 and entryOperator!.opcode != -26 and entryFirstOperand! >= 0
                     -> if {
@@ -113,7 +256,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                         entryUnaryOperand.typeKind => entryOperator!.typeKind
                         entryUnaryOperand.typeFlags => entryOperator!.typeFlags
                     }
-                entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -243) or (entryOperator!.opcode <= -246 and entryOperator!.opcode >= -247) or entryOperator!.opcode == -252 or (entryOperator!.opcode <= -255 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or (entryOperator!.opcode -> isArrayExchangeOpcode))) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+                entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -243) or (entryOperator!.opcode <= -246 and entryOperator!.opcode >= -247) or entryOperator!.opcode == -252 or (entryOperator!.opcode <= -255 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -320 or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
                     -> if { entrySecondOperand! => entryOperator!.operand1 }
                 entryOperator!.kind == 22 -> if {
                     -1 => entryOperator!.operand0
@@ -166,7 +309,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                     entryExpressionStart => entryTapStageSearch!
                     entryTapStageSearch! < entryExpressionEnd -> while {
                         nodes[entryTapStageSearch!] => entryTapStageCandidate
-                        entryTapStageCandidate.parent == entryTapIr! and entryTapStageCandidate.kind == 6
+                        entryTapStageCandidate.parent == entryTapIr! and (entryTapStageCandidate.kind == 6 or (entryTapStageCandidate.kind == 9 and (entryTapStageCandidate.opcode == -227 or entryTapStageCandidate.opcode == -228)))
                             -> if {
                                 prepared.package.nodes[sourceRange.astStart + entryTapStageCandidate.astNode].start => entryTapStageStart
                                 previousEntryTapStage! < 0 or entryTapStageStart > previousEntryTapStageStart!
@@ -662,44 +805,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                 }
             entryCanonicalConstructorMemberIr! + 1 => entryCanonicalConstructorMemberIr!
         }
-    entryExpressionStart => entrySiblingIr!
-    entrySiblingIr! < entryExpressionEnd -> while {
-        nodes[entrySiblingIr!] => entrySibling!
-        false => preserveEntryTapArgumentLink!
-        -1 => entryNextSibling!
-        UIntSize(0) => entryNextSiblingStart!
-        entryExpressionStart => entrySiblingSearch!
-        entrySiblingSearch! < entryExpressionEnd -> while {
-            nodes[entrySiblingSearch!] => entrySiblingCandidate
-            entrySiblingCandidate.kind == 6
-                and entrySiblingCandidate.parent >= 0
-                and nodes[entrySiblingCandidate.parent].kind == 36
-                and entrySiblingCandidate.operand0 == entrySiblingIr!
-                -> if { true => preserveEntryTapArgumentLink! }
-            entrySibling!.parent >= 0
-                and (nodes[entrySibling!.parent].kind == 14 or nodes[entrySibling!.parent].kind == 16)
-                and entrySiblingCandidate.kind == 3 and entrySibling!.kind == 3 => entryNumericLiteralOrder
-            entrySiblingCandidate.parent == entrySibling!.parent
-                and ((entryNumericLiteralOrder and entrySiblingCandidate.astNode > entrySibling!.astNode)
-                or (not entryNumericLiteralOrder and prepared.package.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start > prepared.package.nodes[sourceRange.astStart + entrySibling!.astNode].start))
-                -> if {
-                    prepared.package.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start => entrySiblingCandidateStart
-                    entryNextSibling! < 0
-                        or (entryNumericLiteralOrder and nodes[entryNextSibling!].kind == 3 and entrySiblingCandidate.astNode < nodes[entryNextSibling!].astNode)
-                        or ((not entryNumericLiteralOrder or nodes[entryNextSibling!].kind != 3) and entrySiblingCandidateStart < entryNextSiblingStart!)
-                        -> if {
-                            entrySiblingSearch! => entryNextSibling!
-                            entrySiblingCandidateStart => entryNextSiblingStart!
-                        }
-                }
-            entrySiblingSearch! + 1 => entrySiblingSearch!
-        }
-        preserveEntryTapArgumentLink! -> unless {
-            entryNextSibling! => entrySibling!.nextOperand
-        }
-        entrySibling! => nodes[entrySiblingIr!]
-        entrySiblingIr! + 1 => entrySiblingIr!
-    }
+    nodes -> sealSourceOrderedSiblingLinks(prepared, sourceIndex, entryExpressionStart, entryExpressionEnd)
 
     # Map operands are only the expressions that actually occur in source.
     # The generic sibling chain already preserves their source order, so seal
@@ -741,7 +847,8 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                 entryFoldSourceCandidate.typeId >= 0 -> if {
                     frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(entryFoldSourceCandidate.typeId) => entryFoldSourceCandidateValueType
                     entryFoldSourceCandidateValueType >= 0
-                        and (frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 3
+                        and (frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 2
+                        or frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 3
                         or frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 4)
                         -> if { true => entryFoldSourceSupported! }
                 }
@@ -870,11 +977,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                 }
                 entryTryOperandIr! >= 0 -> if {
                     nodes[entryTryOperandIr!] => directEntryTryOperand
-                    directEntryTryOperand.typeId < 0
-                        or directEntryTryOperand.typeId >= (frozenRecursiveSemanticTypes -> len)
-                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].kind != 7
-                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].origin != 4
-                        or frozenRecursiveSemanticTypes[directEntryTryOperand.typeId].symbol != 1
+                    (directEntryTryOperand.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes)) < 0
                         -> if { -1 => entryTryOperandIr! }
                 }
                 entryTryOperandIr! < 0 -> if {
@@ -898,11 +1001,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                                                         }
                                                 }
                                             entryTryFlowOperandDescends!
-                                                and entryTryFlowOperandCandidate.typeId >= 0
-                                                and entryTryFlowOperandCandidate.typeId < (frozenRecursiveSemanticTypes -> len)
-                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].kind == 7
-                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].origin == 4
-                                                and frozenRecursiveSemanticTypes[entryTryFlowOperandCandidate.typeId].symbol == 1
+                                                and (entryTryFlowOperandCandidate.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes)) >= 0
                                                 -> if {
                                                     prepared.package.nodes[sourceRange.astStart + entryTryFlowOperandCandidate.astNode].start => entryTryFlowOperandCandidateStart
                                                     entryTryOperandIr! < 0 or entryTryFlowOperandCandidateStart >= entryTryFlowOperandStart!
@@ -933,9 +1032,10 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                 entryTryOperandIr! >= 0 -> if {
                     entryTryOperandIr! => entryControl!.operand0
                     nodes[entryTryOperandIr!] => entryTryOperand
-                    entryTryOperand.typeId >= 0 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].kind == 7 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].origin == 4 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].symbol == 1 and frozenRecursiveSemanticTypes[entryTryOperand.typeId].first >= 0
+                    entryTryOperand.typeId -> intrinsicResultTypeId(frozenRecursiveSemanticTypes) => entryTryResultTypeId
+                    entryTryResultTypeId >= 0 and frozenRecursiveSemanticTypes[entryTryResultTypeId].first >= 0
                         -> if {
-                            frozenRecursiveSemanticTypes[entryTryOperand.typeId].first => entryTryPayloadTypeId
+                            frozenRecursiveSemanticTypes[entryTryResultTypeId].first => entryTryPayloadTypeId
                             frozenRecursiveSemanticTypes[entryTryPayloadTypeId] => entryTryPayloadType
                             entryTryPayloadTypeId => entryControl!.typeId
                             entryTryPayloadType.kind => entryControl!.typeKind
@@ -1017,7 +1117,6 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                     entryMatchCandidateResolvedType.origin => entryMatchCandidateEnumOrigin!
                 }
                 not entryMatchCandidateEnum!
-                    and entryMatchCandidate.typeId < 0
                     and (entryMatchCandidateEnumOrigin! == 0 or entryMatchCandidateEnumOrigin! == 2)
                     and entryMatchCandidateEnumModule! >= 0
                     and entryMatchCandidateEnumModule! < (prepared.package.ranges -> len)
@@ -1046,7 +1145,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
                                 entryMatchCandidateAst.start => entryMatchMemberSubjectStart!
                             }
                     }
-                entryMatchCandidateBelongs! and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and ((entryMatchUsesEnumPattern! and entryMatchCandidateEnum!) or (not entryMatchUsesEnumPattern! and entryMatchCandidateInteger))
+                entryMatchCandidateBelongs! and entryMatchCandidate.astNode != entryMatchFlowAst and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and ((entryMatchUsesEnumPattern! and entryMatchCandidateEnum!) or (not entryMatchUsesEnumPattern! and entryMatchCandidateInteger))
                     -> if {
                         entryMatchSubject! < 0 or (entryMatchCandidateEnum! and not entryMatchSubjectEnum!) or (((entryMatchCandidateEnum! and entryMatchSubjectEnum!) or (not entryMatchCandidateEnum! and not entryMatchSubjectEnum!)) and (entryMatchCandidateDistance! < entryMatchSubjectDistance! or (entryMatchCandidateDistance! == entryMatchSubjectDistance! and entryMatchCandidateAst.start > entryMatchSubjectStart!)))
                             -> if {
@@ -1442,7 +1541,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
             -> if {
                 entryExpressionStart => entryRoleCallSearch!
                 entryRoleCallSearch! < entryExpressionEnd -> while {
-                    nodes[entryRoleCallSearch!].kind == 6 and nodes[entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and (nodes[entryRoleCallSearch!].opcode == -207 or nodes[entryRoleCallSearch!].opcode == -208 or nodes[entryRoleCallSearch!].opcode == -209)
+                    nodes[entryRoleCallSearch!].kind == 6 and nodes[entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and (nodes[entryRoleCallSearch!].opcode == -207 or (nodes[entryRoleCallSearch!].opcode -> isDirectIterationOpcode) or nodes[entryRoleCallSearch!].opcode == -209)
                         -> if { entryRoleCallSearch! => entryRoleBinding!.operand0 }
                     entryRoleCallSearch! + 1 => entryRoleCallSearch!
                 }
@@ -1515,6 +1614,7 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
             entryMemberAssignmentIr! + 1 => entryMemberAssignmentIr!
         }
 
+    nodes -> repairDirectIntrinsicBindingSources(entryExpressionStart, entryExpressionEnd)
     entryExpressionStart => entryCanonicalBindingIr!
     entryCanonicalBindingIr! < entryExpressionEnd
         -> while {

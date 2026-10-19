@@ -39,6 +39,7 @@ internal sealed record SemanticReusePlan(
     IReadOnlyList<SemanticStaticArrayReuse> StaticArrays,
     IReadOnlyDictionary<string, SemanticFunctionReuse> Functions,
     IReadOnlyDictionary<string, string> ResolvedCalls,
+    IReadOnlyDictionary<string, string> ContextualNumericTypes,
     IReadOnlyDictionary<string, SemanticSpecializationReuse> Specializations,
     string? MainModuleName,
     IReadOnlyDictionary<string, string>? MainBindings,

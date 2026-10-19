@@ -2,6 +2,8 @@ namespace sollang.compiler.semantic.analysis
 
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.ir.interpolation as interpolation
 import sollang.compiler.semantic.constant_collection_lowering as constantLowering
 import sollang.compiler.semantic.resolve as resolution
 import sollang.compiler.semantic.symbols as symbols
@@ -36,6 +38,7 @@ public struct SourceAnalysisRange {
 public struct PackageAnalysis {
     public sources: [file.SourceText; ~]
     public entrySourceModule: Int
+    public interpolationRanges: [interpolation.InterpolationSourceRange; ~]
     public ranges: [SourceAnalysisRange; ~]
     public nodes: [ast.AstNode; ~]
     public tokens: [syntax.SyntaxToken; ~]
@@ -45,6 +48,7 @@ public struct PackageAnalysis {
     public typeUses: [types.TypeUse; ~]
     public constantLiterals: [constantLowering.Literal; ~]
     public constantFailures: [constantLowering.Failure; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
 }
 
 withSelectedFunctionFlag symbol: symbols.Symbol, selected: Bool -> symbols.Symbol {
@@ -77,6 +81,7 @@ public struct SourceAnalysis {
     public typeUses: [types.TypeUse; ~]
     public constantLiterals: [constantLowering.Literal; ~]
     public constantFailures: [constantLowering.Failure; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
 }
 
 failedSource failure: constantLowering.Failure -> SourceAnalysis {
@@ -91,7 +96,148 @@ failedSource failure: constantLowering.Failure -> SourceAnalysis {
         typeUses: [types.TypeUse; ~]
         constantLiterals: [constantLowering.Literal; ~]
         constantFailures: failures!
+        interpolations: [interpolation.InterpolationNode; ~]
     }
+}
+
+public struct CompletedSourceInterpolations {
+    public nodes: [ast.AstNode; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
+}
+
+# Prepared adapters reuse the same real product without reparsing supplied AST.
+public completeSourceInterpolations source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], sourceSymbols: ref [symbols.Symbol; ~] -> CompletedSourceInterpolations {
+    [ast.AstNode; ~] => sourceNodes!
+    nodes -> each node { sourceNodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => sourceTokens!
+    tokens -> each token { sourceTokens! -> push(token) }
+    [symbols.Symbol; ~] => interpolationSymbols!
+    sourceSymbols -> each symbol { interpolationSymbols! -> push(symbol) }
+    [ast.AstNode; ~] => interpolationNodes!
+    nodes -> each node { interpolationNodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => interpolationTokens!
+    tokens -> each token { interpolationTokens! -> push(token) }
+    interpolation.PreparedInterpolationRequest {
+        source: source, nodes: interpolationNodes!, tokens: interpolationTokens!, symbols: interpolationSymbols!
+    } -> interpolation.lowerPreparedWithTypes => interpolationProduct
+    sourceNodes! -> len => typeNodeStart
+    sourceTokens! -> len => typeTokenStart
+    interpolationProduct.typeNodes -> each typeNode {
+        typeNode => relocated!
+        relocated!.parent >= 0 -> if {
+            relocated!.parent + typeNodeStart => relocated!.parent
+        } else {
+            # Preserve the original lexical function owner for generic type parameters.
+            -1 => owner!
+            0 => ownerIndex!
+            ownerIndex! < typeNodeStart -> while {
+                sourceNodes![ownerIndex!] => candidate
+                candidate.start <= relocated!.start and relocated!.start < candidate.start + candidate.length
+                    -> if {
+                        owner! < 0 -> if { ownerIndex! => owner! } else {
+                            candidate.length < sourceNodes![owner!].length
+                                -> if { ownerIndex! => owner! }
+                        }
+                    }
+                ownerIndex! + 1 => ownerIndex!
+            }
+            owner! => relocated!.parent
+        }
+        relocated!.firstToken + typeTokenStart => relocated!.firstToken
+        relocated!.payloadToken >= 0 -> if { relocated!.payloadToken + typeTokenStart => relocated!.payloadToken }
+        relocated!.secondaryToken >= 0 -> if { relocated!.secondaryToken + typeTokenStart => relocated!.secondaryToken }
+        relocated!.tertiaryToken >= 0 -> if { relocated!.tertiaryToken + typeTokenStart => relocated!.tertiaryToken }
+        sourceNodes! -> push(relocated!)
+    }
+    interpolationProduct.typeTokens -> each token { sourceTokens! -> push(token) }
+    interpolationProduct.nodes => sourceInterpolations!
+    0 => interpolationIndex!
+    interpolationIndex! < (sourceInterpolations! -> len)
+        -> while {
+            sourceInterpolations![interpolationIndex!] => node!
+            node!.typeAst >= 0 -> if { node!.typeAst + typeNodeStart => node!.typeAst }
+            node!.targetAst >= 0 -> if { node!.targetAst + typeNodeStart => node!.targetAst }
+            node!.valueAst >= 0 -> if { node!.valueAst + typeNodeStart => node!.valueAst }
+            node! => sourceInterpolations![interpolationIndex!]
+            interpolationIndex! + 1 => interpolationIndex!
+        }
+    CompletedSourceInterpolations { nodes: sourceNodes!, tokens: sourceTokens!, interpolations: sourceInterpolations! }
+}
+
+# Complete legacy prepared packages before building global AST indexes.
+# Supplied source-local AST, symbol and semantic-reference identities are retained.
+public completePackageInterpolations package: move PackageAnalysis -> PackageAnalysis {
+    (package.interpolationRanges -> len) == (package.ranges -> len)
+        -> if { package -> return }
+    [ast.AstNode; ~] => nodes!
+    [syntax.SyntaxToken; ~] => tokens!
+    [SourceAnalysisRange; ~] => ranges!
+    [typeTerms.TypeTerm; ~] => terms!
+    [types.TypeUse; ~] => typeUses!
+    [interpolation.InterpolationSourceRange; ~] => interpolationRanges!
+    [interpolation.InterpolationNode; ~] => interpolations!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => originalRange
+        [ast.AstNode; ~] => sourceNodes!
+        [syntax.SyntaxToken; ~] => sourceTokens!
+        [symbols.Symbol; ~] => sourceSymbols!
+        0 => copyIndex!
+        copyIndex! < originalRange.astCount -> while {
+            sourceNodes! -> push(package.nodes[originalRange.astStart + copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        0 => copyIndex!
+        copyIndex! < originalRange.tokenCount -> while {
+            sourceTokens! -> push(package.tokens[originalRange.tokenStart + copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        0 => copyIndex!
+        copyIndex! < originalRange.symbolCount -> while {
+            sourceSymbols! -> push(package.symbols[originalRange.symbolStart + copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        package.sources[sourceIndex!] -> slice(UIntSize(0), package.sources[sourceIndex!] -> len) => source
+        source -> completeSourceInterpolations(sourceNodes!, sourceTokens!, sourceSymbols!) => completed
+        source -> typeTerms.lowerPrepared(completed.nodes, completed.tokens) => sourceTerms
+        source -> types.canonicalizePrepared(completed.nodes, completed.tokens) => sourceTypeUses
+        originalRange => range!
+        nodes! -> len => range!.astStart
+        completed.nodes -> len => range!.astCount
+        tokens! -> len => range!.tokenStart
+        completed.tokens -> len => range!.tokenCount
+        terms! -> len => range!.termStart
+        sourceTerms -> len => range!.termCount
+        typeUses! -> len => range!.typeStart
+        sourceTypeUses -> len => range!.typeCount
+        ranges! -> push(range!)
+        completed.nodes -> each node { nodes! -> push(node) }
+        completed.tokens -> each token { tokens! -> push(token) }
+        sourceTerms -> each term { terms! -> push(term) }
+        sourceTypeUses -> each typeUse { typeUses! -> push(typeUse) }
+        interpolations! -> len => interpolationStart
+        interpolationRanges! -> push(interpolation.InterpolationSourceRange {
+            sourceModule: sourceIndex!, nodeStart: interpolationStart, nodeCount: completed.interpolations -> len
+        })
+        completed.interpolations -> each node {
+            node => relocated!
+            relocated!.parent >= 0 -> if { relocated!.parent + interpolationStart => relocated!.parent }
+            relocated!.operand0 >= 0 -> if { relocated!.operand0 + interpolationStart => relocated!.operand0 }
+            relocated!.operand1 >= 0 -> if { relocated!.operand1 + interpolationStart => relocated!.operand1 }
+            relocated!.operand2 >= 0 -> if { relocated!.operand2 + interpolationStart => relocated!.operand2 }
+            interpolations! -> push(relocated!)
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    PackageAnalysis {
+        sources: package.sources, entrySourceModule: package.entrySourceModule,
+        interpolationRanges: interpolationRanges!, ranges: ranges!, nodes: nodes!, tokens: tokens!,
+        symbols: package.symbols, names: package.names, terms: terms!, typeUses: typeUses!,
+        constantLiterals: package.constantLiterals, constantFailures: package.constantFailures,
+        interpolations: interpolations!
+    }
+
 }
 
 public analyzeSource sourceText: file.SourceText -> SourceAnalysis {
@@ -101,14 +247,35 @@ public analyzeSource sourceText: file.SourceText -> SourceAnalysis {
         Ok(lowered) { lowered }
         Err(failure) { failure -> failedSource -> return }
     } => lowered
-    source -> lexer.lex => sourceTokens
+    source -> lexer.lex => originalTokens
+    sourceText -> analyzeLoweredSource(lowered, originalTokens)
+}
+
+analyzePreparedSource sourceText: file.SourceText, parsed: move syntaxDiagnostics.PreparedSyntax -> SourceAnalysis {
+    sourceText -> len => sourceLength
+    sourceText -> slice(UIntSize(0), sourceLength) => source
+    parsed.nodes => nodes
+    nodes -> constantLowering.lower(source) -> when {
+        Ok(value) { value }
+        Err(failure) { failure -> failedSource -> return }
+    } => lowered
+    sourceText -> analyzeLoweredSource(lowered, parsed.tokens)
+}
+
+analyzeLoweredSource sourceText: file.SourceText, lowered: move constantLowering.Lowering, originalTokens: ref [syntax.SyntaxToken; ~] -> SourceAnalysis {
+    sourceText -> len => sourceLength
+    sourceText -> slice(UIntSize(0), sourceLength) => source
     lowered.nodes -> symbols.collectPrepared => sourceSymbols
-    source -> resolution.resolvePrepared(lowered.nodes, sourceSymbols, sourceTokens) => sourceNames
-    source -> typeTerms.lowerPrepared(lowered.nodes, sourceTokens) => sourceTerms
-    source -> types.canonicalizePrepared(lowered.nodes, sourceTokens) => sourceTypeUses
+    source -> resolution.resolvePrepared(lowered.nodes, sourceSymbols, originalTokens) => sourceNames
+    source -> completeSourceInterpolations(lowered.nodes, originalTokens, sourceSymbols) => completed
+    completed.nodes => sourceNodes
+    completed.tokens => sourceTokens
+    completed.interpolations => sourceInterpolations
+    source -> typeTerms.lowerPrepared(sourceNodes, sourceTokens) => sourceTerms
+    source -> types.canonicalizePrepared(sourceNodes, sourceTokens) => sourceTypeUses
 
     SourceAnalysis {
-        nodes: lowered.nodes
+        nodes: sourceNodes
         tokens: sourceTokens
         symbols: sourceSymbols
         names: sourceNames
@@ -116,12 +283,15 @@ public analyzeSource sourceText: file.SourceText -> SourceAnalysis {
         typeUses: sourceTypeUses
         constantLiterals: lowered.literals
         constantFailures: [constantLowering.Failure; ~]
+        interpolations: sourceInterpolations
     } => result
     result
 }
 
 assembleSelectedSources sources: move [file.SourceText; ~], sourceAnalyses: move [SourceAnalysis; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {
     [SourceAnalysisRange; ~] => ranges!
+    [interpolation.InterpolationSourceRange; ~] => interpolationRanges!
+    [interpolation.InterpolationNode; ~] => interpolations!
     [ast.AstNode; ~] => nodes!
     [syntax.SyntaxToken; ~] => tokens!
     [symbols.Symbol; ~] => symbolTable!
@@ -153,6 +323,18 @@ assembleSelectedSources sources: move [file.SourceText; ~], sourceAnalyses: move
             constantFailureCount: sourceAnalysis.constantFailures -> len
         } => range
         ranges! -> push(range)
+        interpolations! -> len => interpolationStart
+        interpolationRanges! -> push(interpolation.InterpolationSourceRange {
+            sourceModule: sourceIndex!, nodeStart: interpolationStart, nodeCount: sourceAnalysis.interpolations -> len
+        })
+        sourceAnalysis.interpolations -> each interpolationNode {
+            interpolationNode => relocated!
+            relocated!.parent >= 0 -> if { relocated!.parent + interpolationStart => relocated!.parent }
+            relocated!.operand0 >= 0 -> if { relocated!.operand0 + interpolationStart => relocated!.operand0 }
+            relocated!.operand1 >= 0 -> if { relocated!.operand1 + interpolationStart => relocated!.operand1 }
+            relocated!.operand2 >= 0 -> if { relocated!.operand2 + interpolationStart => relocated!.operand2 }
+            interpolations! -> push(relocated!)
+        }
         sourceAnalysis.constantLiterals -> each literal { constantLiterals! -> push(literal) }
         sourceAnalysis.constantFailures -> each failure { constantFailures! -> push(failure) }
         0 => nodeCopyIndex93!
@@ -214,6 +396,8 @@ assembleSelectedSources sources: move [file.SourceText; ~], sourceAnalyses: move
     PackageAnalysis {
         sources: sources
         entrySourceModule: entrySourceModule!
+        interpolationRanges: interpolationRanges!
+        interpolations: interpolations!
         ranges: ranges!
         nodes: nodes!
         tokens: tokens!
@@ -254,6 +438,35 @@ public analyzeSourcesParallel sources: move [file.SourceText; ~] -> PackageAnaly
     [Int; ~] => selectedSourceIndices
     [Int; ~] => selectedSymbolIndices
     sources -> assembleSelectedSources(sourceAnalyses, selectedSourceIndices, selectedSymbolIndices)
+}
+
+analyzeCheckedSource sourceText: file.SourceText -> Result<SourceAnalysis, Int> {
+    sourceText -> len => sourceLength
+    sourceText -> slice(UIntSize(0), sourceLength) -> syntaxDiagnostics.prepare => parsed
+    (parsed.diagnostics -> len) > 0 -> if { 1 -> Result<SourceAnalysis, Int>.Err -> return }
+    sourceText -> analyzePreparedSource(parsed) -> Result<SourceAnalysis, Int>.Ok
+}
+
+public analyzeCheckedTextSources sources: [Text; ~] -> Result<PackageAnalysis, Int> {
+    [file.SourceText; ~] => owners!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> file.borrowText => owner
+        owners! -> push(owner)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    owners! -> parallel sourceText { sourceText -> analyzeCheckedSource } => checkedSources!
+    [SourceAnalysis; ~] => sourceAnalyses!
+    (checkedSources! -> len) > 0 -> while {
+        checkedSources! -> take(0) -> when {
+            Err(code) { code -> Result<PackageAnalysis, Int>.Err -> return }
+            Ok(value) { sourceAnalyses! -> push(value) }
+        }
+    }
+    [Int; ~] => selectedSourceIndices
+    [Int; ~] => selectedSymbolIndices
+    owners! -> assembleSelectedSources(sourceAnalyses!, selectedSourceIndices, selectedSymbolIndices) -> Result<PackageAnalysis, Int>.Ok
 }
 
 public analyzeTestSources sources: move [file.SourceText; ~], selectedSourceIndices: [Int; ~], selectedSymbolIndices: [Int; ~] -> PackageAnalysis {

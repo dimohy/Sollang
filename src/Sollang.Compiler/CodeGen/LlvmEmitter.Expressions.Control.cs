@@ -15,13 +15,20 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(value);
     }
 
-    private void EmitTrapUnless(string condition, string prefix)
+    private void EmitTrapUnless(string condition, string prefix, string? diagnosticCode = null)
     {
         var okLabel = NextLabel(prefix + "_ok");
         var failLabel = NextLabel(prefix + "_fail");
+        var diagnosticIdentity = diagnosticCode ?? failLabel;
+        var functionName = _currentFunction is null
+            ? null
+            : diagnosticCode is null
+                ? _currentFunction.Name
+                : _currentFunction.DeclarationName
+                    ?? throw new SollangException("runtime diagnostic requires a source function declaration identity");
         var trapMessage = _currentFunction is null
-            ? $"main:{failLabel}"
-            : $"{_currentFunction.ModuleName}.{_currentFunction.Name}:{failLabel}";
+            ? $"main:{diagnosticIdentity}"
+            : $"{_currentFunction.ModuleName}.{functionName}:{diagnosticIdentity}";
         EmitConditionalBranch(condition, okLabel, failLabel);
         EmitFunctionLine();
         EmitLabel(failLabel);
@@ -198,7 +205,15 @@ internal sealed partial class LlvmEmitter
     private RuntimeBool EmitCompareExpression(CompareExpression expression)
     {
         var left = EmitExpression(expression.Left);
+        if (left is RuntimeFormattedText or RuntimeTextChoice)
+        {
+            left = EmitTransientText(left);
+        }
         var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
+        if (right is RuntimeFormattedText or RuntimeTextChoice)
+        {
+            right = EmitTransientText(right);
+        }
         if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
         {
             right = EmitExpression(expression.Right);
@@ -315,11 +330,23 @@ internal sealed partial class LlvmEmitter
         return new RuntimeBool(result);
     }
 
+    private BoundType? CommittedNumericResultType(Expression expression, BoundType? requestedType)
+    {
+        if (!_program.ContextualNumericTypes.TryGetValue(expression, out var committedType))
+            return requestedType;
+        if (requestedType is { } requested && requested != committedType)
+            throw new SollangException("contextual numeric result disagrees with its committed semantic type");
+        return committedType;
+    }
+
     private RuntimeValue EmitIfExpression(IfExpression expression, BoundType? expectedResultType = null)
     {
+        expectedResultType = CommittedNumericResultType(expression, expectedResultType);
         var condition = EmitBoolExpression(expression.Condition);
         var conditionLabel = _currentBlockLabel;
         var entryScope = CaptureLocals();
+        var continuationScopes = CaptureAsyncContinuationBranchScopes();
+        var continuationEdges = new List<(LocalScope[] Scopes, string Label)>();
         var thenLabel = NextLabel("if_then");
         var elseLabel = expression.Else is null ? null : NextLabel("if_else");
         var endLabel = NextLabel("if_end");
@@ -334,8 +361,11 @@ internal sealed partial class LlvmEmitter
         var thenTerminated = _currentBlockTerminated;
         if (!thenTerminated)
         {
+            continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), thenEndLabel));
             EmitBranch(endLabel);
         }
+
+        RestoreAsyncContinuationScopes(continuationScopes);
 
         BlockResult? elseResult = null;
         var elseTerminated = false;
@@ -349,6 +379,7 @@ internal sealed partial class LlvmEmitter
             elseTerminated = _currentBlockTerminated;
             if (!elseTerminated)
             {
+                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), elseResult.EndLabel));
                 EmitBranch(endLabel);
             }
         }
@@ -369,12 +400,13 @@ internal sealed partial class LlvmEmitter
         if (expression.Else is null)
         {
             incomingScopes.Add((entryScope, conditionLabel));
+            continuationEdges.Add((continuationScopes.Select(item => item.Entry).ToArray(), conditionLabel));
         }
         else if (!elseTerminated)
         {
             incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
         }
-        if (HasCurrentFunctionAsyncCfg())
+        if (HasCurrentFunctionAsyncCfg() || continuationScopes.Count > 0)
         {
             MergeAsyncOuterScope(entryScope, incomingScopes);
         }
@@ -382,6 +414,7 @@ internal sealed partial class LlvmEmitter
         {
             MergeSynchronousOuterScope(entryScope, incomingScopes);
         }
+        MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entryScope, incomingScopes);
 
         if (expression.Else is null)
         {
@@ -406,6 +439,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitWhenExpression(WhenExpression expression, BoundType? expectedResultType = null)
     {
+        expectedResultType = CommittedNumericResultType(expression, expectedResultType);
         var endLabel = NextLabel("when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
         var scopeResults = new List<(LocalScope Scope, string Label)>();
@@ -663,14 +697,11 @@ internal sealed partial class LlvmEmitter
         }
         try
         {
-            EmitStatements(body.Statements);
+            EmitStatements(body.Statements, body.Value);
             if (_currentBlockTerminated)
             {
                 return new BlockResult(null, _currentBlockLabel, CaptureLocals());
             }
-            var transferredOwnerName = body.Value is null
-                ? null
-                : GetBlockResultTransferredOwnerName(body.Value);
             var value = body.Value is null
                 ? null
                 : expectedResultType is { } expected
@@ -680,6 +711,7 @@ internal sealed partial class LlvmEmitter
             {
                 return new BlockResult(null, _currentBlockLabel, CaptureLocals());
             }
+            var copiedOuterFixedStorage = false;
             if (value is RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray)
             {
                 var copyExistingValue = _program.Types.IsCopyableFixedArray(value.Type)
@@ -688,6 +720,7 @@ internal sealed partial class LlvmEmitter
                             && RegisterOwnedFieldProjectionTransfer(body.Value, value.Type,
                                 new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal)));
                 value = PrepareStaticArrayBlockResult(value, copyExistingValue);
+                copiedOuterFixedStorage = copyExistingValue;
             }
             if (value is RuntimeStruct && _program.Types.RequiresFixedStorageCopy(value.Type)
                 && (body.Value is NameExpression structName && outerLocals.Locals.ContainsKey(structName.Name)
@@ -696,10 +729,23 @@ internal sealed partial class LlvmEmitter
                             new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal))))
             {
                 value = CopyFixedStorageValue(value);
+                copiedOuterFixedStorage = true;
             }
+            var transferredOwnerName = body.Value is not null
+                && value is not null
+                && !copiedOuterFixedStorage
+                && IsOwnedContainerRuntimeValue(value)
+                    ? GetBlockResultTransferredOwnerName(body.Value)
+                    : null;
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName, body.Value);
             if (transferredOwnerName is not null
-                && outerLocals.Locals.ContainsKey(transferredOwnerName))
+                && outerLocals.Locals.ContainsKey(transferredOwnerName)
+                && !(_movedOwnedStructFields.TryGetValue(transferredOwnerName, out var transferredFields)
+                    && transferredFields.Count > 0
+                    // A match payload still owns its untransferred fields even
+                    // when no later expression reads the binding.
+                    && (OwnerReadInContinuation(transferredOwnerName)
+                        || HasOwnedMatchPayloadCleanup(transferredOwnerName))))
             {
                 RemoveLocal(transferredOwnerName);
             }
@@ -713,6 +759,180 @@ internal sealed partial class LlvmEmitter
             }
             RestoreLocals(outerLocals);
         }
+    }
+
+    private sealed record AsyncContinuationBranchScope(LocalScope Scope, LocalScope Entry);
+
+    private static LocalScope SnapshotAsyncContinuationScope(LocalScope scope)
+    {
+        var snapshot = KeepLocalsInScope(scope, scope.Locals.Keys);
+        foreach (var (value, pointer) in scope.ReadonlyValueSlots)
+            snapshot.ReadonlyValueSlots[value] = pointer;
+        return snapshot;
+    }
+
+    private List<AsyncContinuationBranchScope> CaptureAsyncContinuationBranchScopes(bool includeLoopSnapshots = false)
+    {
+        if (_activeAsyncCfg is null)
+            return [];
+        var scopes = _asyncHiddenScopes
+            .SelectMany(hidden => new[] { hidden.Scope }.Concat(hidden.Mirrors))
+            .Concat(includeLoopSnapshots ? _asyncScopeSnapshots : Enumerable.Empty<LocalScope>());
+        return scopes
+            .Distinct<LocalScope>(ReferenceEqualityComparer.Instance)
+            .Select(scope => new AsyncContinuationBranchScope(scope, SnapshotAsyncContinuationScope(scope)))
+            .ToList();
+    }
+
+    private static LocalScope[] SnapshotAsyncContinuationScopes(
+        IReadOnlyList<AsyncContinuationBranchScope> scopes) =>
+        scopes.Select(item => SnapshotAsyncContinuationScope(item.Scope)).ToArray();
+
+    private static void ReplaceAsyncContinuationScope(LocalScope target, LocalScope source)
+    {
+        static void CopyMap<TKey, TValue>(Dictionary<TKey, TValue> target, Dictionary<TKey, TValue> source)
+            where TKey : notnull
+        {
+            target.Clear();
+            foreach (var (key, value) in source) target.Add(key, value);
+        }
+        static void CopySet(HashSet<string> target, HashSet<string> source)
+        {
+            target.Clear();
+            target.UnionWith(source);
+        }
+        CopyMap(target.Locals, source.Locals);
+        CopySet(target.MutableLocals, source.MutableLocals);
+        CopySet(target.BorrowedMutableLocals, source.BorrowedMutableLocals);
+        CopySet(target.BorrowedOwnedLocals, source.BorrowedOwnedLocals);
+        target.MovedOwnedStructFields.Clear();
+        foreach (var (name, fields) in source.MovedOwnedStructFields)
+            target.MovedOwnedStructFields.Add(name, new HashSet<string>(fields, StringComparer.Ordinal));
+        CopyMap(target.MutableContainerSlots, source.MutableContainerSlots);
+        CopyMap(target.MutableStructSlots, source.MutableStructSlots);
+        CopyMap(target.MutableScalarSlots, source.MutableScalarSlots);
+        CopyMap(target.ReadonlyCaptureBorrowPointers, source.ReadonlyCaptureBorrowPointers);
+        CopyMap(target.ReadonlyValueSlots, source.ReadonlyValueSlots);
+        CopyMap(target.BorrowedOwnedTransferFlags, source.BorrowedOwnedTransferFlags);
+        target.TerminatingOwnedCleanupObligations.Clear();
+        target.TerminatingOwnedCleanupObligations.AddRange(source.TerminatingOwnedCleanupObligations);
+    }
+
+    private static void RestoreAsyncContinuationScopes(IReadOnlyList<AsyncContinuationBranchScope> scopes)
+    {
+        foreach (var item in scopes) ReplaceAsyncContinuationScope(item.Scope, item.Entry);
+    }
+
+    private void MergeAsyncContinuationScopes(
+        IReadOnlyList<AsyncContinuationBranchScope> scopes,
+        IReadOnlyList<(LocalScope[] Scopes, string Label)> edges,
+        LocalScope activeEntry,
+        IReadOnlyList<(LocalScope Scope, string Label)> activeEdges,
+        bool preserveBindingOwnership = false)
+    {
+        if (scopes.Count == 0 || edges.Count == 0) return;
+        if (!edges.Select(edge => edge.Label).SequenceEqual(activeEdges.Select(edge => edge.Label)))
+            throw new SollangException("async continuation branch predecessors do not match active scope");
+        var activeMerged = CaptureLocals();
+        var merged = scopes.Select(item => SnapshotAsyncContinuationScope(item.Entry)).ToArray();
+        var aliases = new List<(LocalScope Entry, string Name, LocalScope Merged, LocalScope[] Incoming)>();
+        foreach (var name in activeEntry.Locals.Keys)
+            aliases.Add((activeEntry, name, activeMerged, activeEdges.Select(edge => edge.Scope).ToArray()));
+        try
+        {
+            for (var index = 0; index < scopes.Count; index++)
+            {
+                var entry = scopes[index].Entry;
+                var incoming = edges.Select(edge => edge.Scopes[index]).ToArray();
+                foreach (var name in entry.Locals.Keys)
+                {
+                    var aliasIndex = aliases.FindIndex(alias =>
+                        AsyncScopeSharesBinding(alias.Entry, alias.Name, entry, name)
+                        && incoming.Select((scope, edge) =>
+                        {
+                            var aliasPresent = alias.Incoming[edge].Locals.ContainsKey(alias.Name);
+                            var present = scope.Locals.ContainsKey(name);
+                            return aliasPresent == present && (!present || AsyncScopeSharesBinding(
+                                alias.Incoming[edge], alias.Name, scope, name));
+                        }).All(static matches => matches));
+                    if (aliasIndex >= 0)
+                    {
+                        var alias = aliases[aliasIndex];
+                        // A cleanup snapshot can retain a borrowed view after
+                        // the active owner transfers. Only reuse an alias whose
+                        // incoming bindings still agree; otherwise join this
+                        // scope's values and ownership independently below.
+                        if (preserveBindingOwnership)
+                            RestoreAsyncLoopBinding(merged[index], alias.Merged, name, alias.Name);
+                        else
+                            RestoreAsyncShadowedBinding(merged[index], alias.Merged, name, alias.Name);
+                        continue;
+                    }
+                    var selected = incoming.Select((scope, edge) =>
+                        (KeepLocalsInScope(scope, [name]), edges[edge].Label)).ToArray();
+                    MergeAsyncOuterScope(KeepLocalsInScope(entry, [name]), selected);
+                    var value = CaptureLocals();
+                    if (preserveBindingOwnership)
+                        RestoreAsyncLoopBinding(merged[index], value, name);
+                    else
+                        RestoreAsyncShadowedBinding(merged[index], value, name);
+                    aliases.Add((entry, name, value, incoming));
+                }
+            }
+            for (var index = 0; index < scopes.Count; index++)
+                ReplaceAsyncContinuationScope(scopes[index].Scope, merged[index]);
+        }
+        finally
+        {
+            RestoreLocals(activeMerged);
+        }
+    }
+
+    private static void RestoreAsyncLoopBinding(
+        LocalScope target, LocalScope source, string name, string? sourceName = null)
+    {
+        sourceName ??= name;
+        var borrowedOwned = target.BorrowedOwnedLocals.Contains(name);
+        var borrowedMutable = target.BorrowedMutableLocals.Contains(name);
+        var obligations = target.TerminatingOwnedCleanupObligations
+            .Where(obligation => obligation.BindingName == name).ToArray();
+        RestoreAsyncShadowedBinding(target, source, name, sourceName);
+        if (borrowedOwned) target.BorrowedOwnedLocals.Add(name);
+        else target.BorrowedOwnedLocals.Remove(name);
+        if (borrowedMutable) target.BorrowedMutableLocals.Add(name);
+        else target.BorrowedMutableLocals.Remove(name);
+        target.TerminatingOwnedCleanupObligations.RemoveAll(obligation => obligation.BindingName == name);
+        if (target.Locals.TryGetValue(name, out var value))
+            target.TerminatingOwnedCleanupObligations.AddRange(obligations.Select(obligation => obligation with
+            {
+                Value = value,
+                RetainedFlag = target.BorrowedOwnedTransferFlags.GetValueOrDefault(name) ?? obligation.RetainedFlag
+            }));
+    }
+
+    private void MergeAsyncLoopScopes(
+        LocalScope activeEntry,
+        IReadOnlyList<(LocalScope Scope, string Label)> activeEdges,
+        IReadOnlyList<AsyncContinuationBranchScope> continuations,
+        IReadOnlyList<(LocalScope[] Scopes, string Label)> continuationEdges)
+    {
+        MergeAsyncOuterScope(activeEntry, activeEdges);
+        var merged = CaptureLocals();
+        var canonical = new List<string>();
+        foreach (var name in activeEntry.Locals.Keys)
+        {
+            var alias = canonical.FirstOrDefault(candidate =>
+                AsyncScopeSharesBinding(activeEntry, candidate, activeEntry, name)
+                && activeEdges.All(edge =>
+                    edge.Scope.Locals.ContainsKey(candidate) == edge.Scope.Locals.ContainsKey(name)
+                    && (!edge.Scope.Locals.ContainsKey(name)
+                        || AsyncScopeSharesBinding(edge.Scope, candidate, edge.Scope, name))));
+            if (alias is null) canonical.Add(name);
+            else RestoreAsyncLoopBinding(merged, merged, name, alias);
+        }
+        RestoreLocals(merged);
+        MergeAsyncContinuationScopes(continuations, continuationEdges,
+            activeEntry, activeEdges, preserveBindingOwnership: true);
     }
 
     private void MergeAsyncOuterScope(
@@ -754,6 +974,11 @@ internal sealed partial class LlvmEmitter
             if (entryScope.MutableLocals.Contains(name))
             {
                 MergeAsyncMutableSlot(name, entryScope, incoming);
+                continue;
+            }
+            if (incoming.All(item => AsyncScopeSharesBinding(entryScope, name, item.Scope, name)))
+            {
+                _locals[name] = entryValue;
                 continue;
             }
             var values = incoming
@@ -962,14 +1187,37 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitPhiValue(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
     {
+        if (incoming.All(item => item.Value.Type == BoundType.Text)
+            && incoming.Any(item => item.Value is RuntimeFormattedText or RuntimeTextChoice))
+        {
+            // Keep deferred formatting as a tagged SSA choice. Each inactive
+            // alternative has poison components, read only after its tag wins.
+            // No branch is formatted, copied or allocated at the join.
+            var tag = NextTemp($"{prefix}_text_tag");
+            EmitPhi(tag, "i64", incoming.Select((item, index) =>
+                (index.ToString(CultureInfo.InvariantCulture), item.Label)).ToArray());
+            var alternatives = new List<RuntimeValue>(incoming.Count);
+            for (var index = 0; index < incoming.Count; index++)
+            {
+                var template = incoming[index].Value;
+                var active = index;
+                var components = incoming.Select((item, position) => (
+                    Value: position == active ? template : PoisonRuntimeValue(template),
+                    item.Label)).ToArray();
+                alternatives.Add(EmitDeferredTextComponentsPhi(prefix, template, components));
+            }
+            return new RuntimeTextChoice(tag, alternatives);
+        }
         return incoming[0].Value switch
         {
             RuntimeArguments => new RuntimeArguments(EmitScalarPhi(prefix, "i64", incoming)),
+            RuntimeMappedBytes mapped => EmitMappedBytesPhi(prefix, mapped, incoming),
             RuntimeInt integer => new RuntimeInt(integer.Type, EmitScalarPhi(prefix, LlvmType(integer.Type), incoming)),
             RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
             RuntimeTask task => EmitTaskPhi(prefix, task, incoming),
+            RuntimeProducerStream stream => EmitProducerStreamPhi(prefix, stream, incoming),
             RuntimeBox box => EmitBoxPhi(prefix, box, incoming),
             RuntimeReference reference => EmitReferencePhi(prefix, reference, incoming),
             RuntimeInlineSlice slice => EmitInlineSlicePhi(prefix, slice, incoming),
@@ -986,14 +1234,105 @@ internal sealed partial class LlvmEmitter
         };
     }
 
+    private RuntimeValue EmitDeferredTextComponentsPhi(
+        string prefix,
+        RuntimeValue template,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (template is RuntimeFormattedText formatted)
+        {
+            var segments = new List<RuntimeFormattedTextSegment>(formatted.Segments.Count);
+            for (var index = 0; index < formatted.Segments.Count; index++)
+            {
+                var active = index;
+                var segment = formatted.Segments[index];
+                var components = incoming.Select(item => (
+                    Value: ((RuntimeFormattedText)item.Value).Segments[active] switch
+                    {
+                        RuntimeFormattedTextLiteral literal => (RuntimeValue)literal.Text,
+                        RuntimeFormattedTextValue value => value.Value,
+                        _ => throw new SollangException("unsupported deferred text segment")
+                    }, item.Label)).ToArray();
+                var value = EmitDeferredTextComponentsPhi(prefix, components[0].Value, components);
+                segments.Add(segment is RuntimeFormattedTextLiteral
+                    ? new RuntimeFormattedTextLiteral((RuntimeText)value)
+                    : new RuntimeFormattedTextValue(value));
+            }
+            return new RuntimeFormattedText(segments);
+        }
+        if (template is RuntimeTextChoice choice)
+        {
+            var tag = NextTemp($"{prefix}_nested_text_tag");
+            EmitPhi(tag, "i64", incoming.Select(item =>
+                (((RuntimeTextChoice)item.Value).TagName, item.Label)).ToArray());
+            var alternatives = new List<RuntimeValue>(choice.Alternatives.Count);
+            for (var index = 0; index < choice.Alternatives.Count; index++)
+            {
+                var active = index;
+                var components = incoming.Select(item => (
+                    Value: ((RuntimeTextChoice)item.Value).Alternatives[active], item.Label)).ToArray();
+                alternatives.Add(EmitDeferredTextComponentsPhi(prefix, choice.Alternatives[index], components));
+            }
+            return new RuntimeTextChoice(tag, alternatives);
+        }
+        return EmitPhiValue(prefix, incoming);
+    }
+
+    private RuntimeValue EmitConsumeTextChoice(RuntimeTextChoice choice, Func<RuntimeValue, RuntimeValue> consume)
+    {
+        var end = NextLabel("text_choice_end");
+        var incoming = new List<(RuntimeValue Value, string Label)>(choice.Alternatives.Count);
+        for (var index = 0; index < choice.Alternatives.Count; index++)
+        {
+            var arm = NextLabel("text_choice_arm");
+            string? next = null;
+            if (index + 1 < choice.Alternatives.Count)
+            {
+                next = NextLabel("text_choice_next");
+                var selected = NextTemp("text_choice_selected");
+                EmitCompare(selected, "eq", "i64", choice.TagName, index.ToString(CultureInfo.InvariantCulture));
+                EmitConditionalBranch(selected, arm, next);
+            }
+            else
+            {
+                // Tags are emitted solely from the exhaustive predecessor list.
+                EmitBranch(arm);
+            }
+            EmitLabel(arm);
+            var value = consume(choice.Alternatives[index]);
+            incoming.Add((value, _currentBlockLabel));
+            EmitBranch(end);
+            if (next is not null) EmitLabel(next);
+        }
+        EmitLabel(end);
+        return EmitPhiValue("text_choice_result", incoming);
+    }
+
     private static RuntimeValue PoisonRuntimeValue(RuntimeValue template) => template switch
     {
         RuntimeArguments value => value with { LengthName = "poison" },
+        RuntimeMappedBytes value => value with
+        {
+            DataPointerName = "poison", LengthName = "poison",
+            BasePointerName = "poison", MappedLengthName = "poison"
+        },
         RuntimeInt value => value with { ValueName = "poison" },
         RuntimeFloat value => value with { ValueName = "poison" },
         RuntimeBool value => value with { ValueName = "poison" },
         RuntimeText value => value with { PointerName = "poison", LengthName = "poison" },
+        RuntimeFormattedText value => new RuntimeFormattedText(value.Segments.Select(segment => segment switch
+        {
+            RuntimeFormattedTextLiteral literal => (RuntimeFormattedTextSegment)new RuntimeFormattedTextLiteral(
+                (RuntimeText)PoisonRuntimeValue(literal.Text)),
+            RuntimeFormattedTextValue item => new RuntimeFormattedTextValue(PoisonRuntimeValue(item.Value)),
+            _ => throw new SollangException("unsupported deferred text segment")
+        }).ToArray()),
+        RuntimeTextChoice value => new RuntimeTextChoice("poison", value.Alternatives.Select(PoisonRuntimeValue).ToArray()),
         RuntimeTask value => value with { HandleName = "poison", ContextName = "poison" },
+        RuntimeProducerStream value => value with
+        {
+            ContextName = "poison", NextName = "poison", DropName = "poison"
+        },
         RuntimeBox value => value with { PointerName = "poison" },
         RuntimeReference value => value with { PointerName = "poison" },
         RuntimeInlineSlice value => value with { PointerName = "poison", LengthName = "poison" },
@@ -1090,6 +1429,35 @@ internal sealed partial class LlvmEmitter
         return result;
     }
 
+    private RuntimeMappedBytes EmitMappedBytesPhi(
+        string prefix,
+        RuntimeMappedBytes first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeMappedBytes mapped
+            || mapped.MappedType != first.MappedType))
+        {
+            throw new SollangException("MappedBytes phi inputs disagree on runtime shape");
+        }
+        var data = NextTemp(prefix + "_data");
+        EmitPhi(data, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeMappedBytes)value).DataPointerName));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming,
+            static value => ((RuntimeMappedBytes)value).LengthName));
+        var basePointer = NextTemp(prefix + "_base");
+        EmitPhi(basePointer, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeMappedBytes)value).BasePointerName));
+        var mappedLength = NextTemp(prefix + "_mapped_len");
+        EmitPhi(mappedLength, "i64", FormatPhiIncoming(incoming,
+            static value => ((RuntimeMappedBytes)value).MappedLengthName));
+        return first with
+        {
+            DataPointerName = data, LengthName = length,
+            BasePointerName = basePointer, MappedLengthName = mappedLength
+        };
+    }
+
     private RuntimeText EmitTextPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
     {
         var pointer = NextTemp(prefix + "_ptr");
@@ -1099,6 +1467,27 @@ internal sealed partial class LlvmEmitter
         EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeText)value).LengthName));
 
         return new RuntimeText(pointer, length);
+    }
+
+    private RuntimeProducerStream EmitProducerStreamPhi(
+        string prefix,
+        RuntimeProducerStream first,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeProducerStream stream
+            || stream.Type != first.Type || stream.ElementType != first.ElementType
+            || stream.IsEvent != first.IsEvent))
+            throw new SollangException("Stream phi inputs disagree on runtime shape");
+        var context = NextTemp(prefix + "_context");
+        EmitPhi(context, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeProducerStream)value).ContextName));
+        var next = NextTemp(prefix + "_next");
+        EmitPhi(next, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeProducerStream)value).NextName));
+        var drop = NextTemp(prefix + "_drop");
+        EmitPhi(drop, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeProducerStream)value).DropName));
+        return first with { ContextName = context, NextName = next, DropName = drop };
     }
 
     private RuntimeTask EmitTaskPhi(

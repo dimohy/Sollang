@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "total", "completed", "passed", "managedCompilerSha256", "managedDllSha256", "selfhostCompilerSha256", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "cases", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-file-intrinsics" },
+    "state": { "enum": ["running", "passed", "failed"] },
+    "total": { "const": 4 },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "passed": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "managedCompilerSha256": { "$ref": "#/$defs/sha" },
+    "managedDllSha256": { "$ref": "#/$defs/sha" },
+    "selfhostCompilerSha256": { "$ref": "#/$defs/sha" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "cases": { "type": "array", "maxItems": 4, "items": { "$ref": "#/$defs/case" } },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "completed": { "const": 4 }, "passed": { "const": 4 }, "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "inputsStable": { "const": true }, "failureId": { "type": "null" }, "failure": { "type": "null" }, "cases": { "minItems": 4, "maxItems": 4, "prefixItems": [ { "allOf": [ { "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "exclusive-remove" } } } ] }, { "allOf": [ { "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "managed" }, "fixture": { "const": "nul-path" } } } ] }, { "allOf": [ { "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "exclusive-remove" } } } ] }, { "allOf": [ { "$ref": "#/$defs/passedCase" }, { "properties": { "compiler": { "const": "selfhost" }, "fixture": { "const": "nul-path" } } } ] } ] } } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "passedCase": { "allOf": [ { "$ref": "#/$defs/case" }, { "properties": { "state": { "const": "passed" }, "buildExitCode": { "const": 0 }, "closureExitCode": { "const": 0 }, "llvmAsExitCode": { "const": 0 }, "runExitCode": { "const": 0 }, "failure": { "type": "null" }, "exeSha256": { "$ref": "#/$defs/sha" }, "llvmSha256": { "$ref": "#/$defs/sha" }, "bitcodeSha256": { "$ref": "#/$defs/sha" }, "stdoutSha256": { "$ref": "#/$defs/sha" } } } ] },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["compiler", "fixture", "sourceSha256", "expectedStdoutSha256", "caseDirectory", "state", "buildExitCode", "closureExitCode", "llvmAsExitCode", "runExitCode", "exeSha256", "llvmSha256", "bitcodeSha256", "stdoutSha256", "failure"],
+      "properties": {
+        "compiler": { "enum": ["managed", "selfhost"] },
+        "fixture": { "enum": ["exclusive-remove", "nul-path"] },
+        "sourceSha256": { "$ref": "#/$defs/sha" },
+        "expectedStdoutSha256": { "$ref": "#/$defs/sha" },
+        "caseDirectory": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["running", "passed", "failed"] },
+        "buildExitCode": { "type": ["integer", "null"] },
+        "closureExitCode": { "type": ["integer", "null"] },
+        "llvmAsExitCode": { "type": ["integer", "null"] },
+        "runExitCode": { "type": ["integer", "null"] },
+        "exeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "llvmSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "bitcodeSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "stdoutSha256": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+        "failure": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

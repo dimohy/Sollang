@@ -106,7 +106,7 @@ public static class GlobRuneReference {
     [IO.File]::WriteAllText((Join-Path $output 'actual.stdout.txt'),$actualText,[Text.UTF8Encoding]::new($false))
     $record.executableSha256 = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
     Complete-Check 'warning-free-native-exact-output'
-    $ir = [IO.Path]::ChangeExtension($exe,'.ll')
+    $ir = $exe + '.ll'
     & (Join-Path $llvm 'bin/llvm-as.exe') $ir -o ([IO.Path]::ChangeExtension($exe,'.bc'))
     if ($LASTEXITCODE -ne 0) { throw 'Glob LLVM assembly failed' }
     & (Join-Path $PSScriptRoot 'verify-llvm-direct-call-closure.ps1') -LlvmPath $ir
@@ -124,7 +124,7 @@ public static class GlobRuneReference {
         $failure = (& dotnet $compiler build $negative --llvm $llvm -o $negativeExe --keep-temps 2>&1) -join "`n"
         $failureExit = $LASTEXITCODE
         [IO.File]::WriteAllText((Join-Path $output "$name.log"),$failure + "`n")
-        $products = @(@($negativeExe,[IO.Path]::ChangeExtension($negativeExe,'.ll'),(Join-Path $output "$name.slg-tmp/$name.ll")) | Where-Object { Test-Path -LiteralPath $_ })
+        $products = @(@($negativeExe,($negativeExe + '.ll'),(Join-Path $output "$name.slg-tmp/$name.ll")) | Where-Object { Test-Path -LiteralPath $_ })
         if ($failureExit -eq 0 -or $failure -notmatch 'semantic error at' -or $failure -match '(?m)^(warning S|note N)' -or -not $failure.Contains($diagnostic,[StringComparison]::Ordinal) -or $products.Count -ne 0) { throw "Glob negative did not fail before LLVM: $name" }
         Complete-Check $name
     }

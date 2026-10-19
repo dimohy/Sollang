@@ -1,0 +1,340 @@
+namespace sollang.compiler.semantic.declaration_fingerprints
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.module_artifact_types as artifacts
+import std.crypto.sha256 as sha256
+import syntax.generated.slg as grammar
+
+public struct Fingerprint {
+    public bytes: [UInt8; 32]
+    public status: Int
+    public sourceModule: Int
+    public symbol: Int
+}
+
+struct HeaderTypes {
+    types: [Int; ~]
+    lengths: [Int; ~]
+}
+
+# A concrete outer reference may still contain a deferred associated Item.
+# Classify the complete graph once; such declarations keep their canonical
+# dependent syntax instead of trying to serialize the unresolved sentinel.
+concrete prepared: ref context.SemanticSnapshot, typeId: Int, memo: mut [Int; ~] -> Bool {
+    typeId < 0 or typeId >= (prepared.semantic.types -> len)
+        -> if { false -> return }
+    memo[typeId] == 1 -> if { true -> return }
+    memo[typeId] == 0 or memo[typeId] == 2 -> if { false -> return }
+    2 => memo[typeId]
+    prepared.semantic.types[typeId] => type
+    type.status != 0 or type.containsParameter or type.kind <= 0
+        -> if { 0 => memo[typeId]
+            false -> return }
+    type.kind != 1 and type.kind != 9 -> if {
+        type.first >= 0 -> if {
+            prepared -> concrete(type.first, memo) -> unless { 0 => memo[typeId]
+                false -> return }
+        }
+        type.second >= 0 -> if {
+            prepared -> concrete(type.second, memo) -> unless { 0 => memo[typeId]
+                false -> return }
+        }
+        type.kind == 10 -> if {
+            prepared.semantic.fields -> each field {
+                field.ownerType == typeId -> if {
+                    prepared -> concrete(field.fieldType, memo) -> unless { 0 => memo[typeId]
+                        false -> return }
+                }
+            }
+        }
+    }
+    1 => memo[typeId]
+    true
+}
+
+surface prepared: ref context.SemanticSnapshot, source: Int, symbol: Int -> Bool {
+    prepared.package.ranges[source] => range
+    prepared.package.symbols[range.symbolStart + symbol] => declaration
+    declaration.kind == 3 or declaration.kind == 4 or declaration.kind == 5 or declaration.kind == 7
+        -> if {
+            declaration.parent => enclosing!
+            0 => nesting!
+            enclosing! >= 0 and enclosing! < range.symbolCount and nesting! < range.symbolCount
+                -> while {
+                    prepared.package.symbols[range.symbolStart + enclosing!] => scope
+                    scope.kind == 7 or scope.kind == 31 -> if { false -> return }
+                    scope.parent => enclosing!
+                    nesting! + 1 => nesting!
+                }
+            declaration.flags / 4 % 2 == 1 -> return
+        }
+    declaration.kind < 26 or declaration.kind > 35
+        -> if { false -> return }
+    declaration.parent => parent!
+    0 => depth!
+    parent! >= 0 and parent! < range.symbolCount and depth! < range.symbolCount
+        -> while {
+            prepared.package.symbols[range.symbolStart + parent!] => owner
+            owner.kind == 3 or owner.kind == 4 or owner.kind == 5 or owner.kind == 7
+                -> if { owner.flags / 4 % 2 == 1 -> return }
+            owner.kind == 6 -> if {
+                0 => member!
+                member! < range.symbolCount -> while {
+                    prepared.package.symbols[range.symbolStart + member!] => candidate
+                    candidate.parent == parent! and candidate.kind == 7 and candidate.flags / 4 % 2 == 1
+                        -> if { true -> return }
+                    member! + 1 => member!
+                }
+                false -> return
+            }
+            # Callback roles and local declarations belong to bodies.
+            owner.kind != 27 and owner.kind != 28 and owner.kind != 29 and owner.kind != 32 and owner.kind != 33 and owner.kind != 34
+                -> if { false -> return }
+            owner.parent => parent!
+            depth! + 1 => depth!
+        }
+    false
+}
+
+appendType prepared: ref context.SemanticSnapshot, details: ref artifacts.TypeDetails, typeId: Int, depth: Int, words: mut [UInt64; ~] -> Bool {
+    typeId < 0 or typeId >= (prepared.semantic.types -> len) or depth > (prepared.semantic.types -> len)
+        -> if { false -> return }
+    prepared.semantic.types[typeId] => type
+    type.status != 0 -> if { false -> return }
+    words -> push(UInt64(type.kind))
+    (type.kind == 1 or type.kind == 7 or type.kind == 9) and (type.origin == 0 or type.origin == 2) and type.module >= 0 and type.symbol >= 0
+        -> if {
+            words -> push(0)
+            type.module < 0 or type.symbol < 0 -> if { false -> return }
+            prepared.package -> interfaces.declarationIdentityAnalyzed(prepared.modules, type.module, type.symbol) => key
+            key.status != 0 -> if { false -> return }
+            words -> push(UInt64(key.words -> len))
+            key.words -> each word { words -> push(word) }
+        } else {
+            words -> push(UInt64(type.origin + 1))
+            type.symbol < -1 -> if { false -> return }
+            words -> push(UInt64(type.symbol + 1))
+        }
+    type.kind == 1 or type.kind == 9 -> if { true -> return }
+    type.length < -1 -> if { false -> return }
+    words -> push(UInt64(type.length + 1))
+    type.length < 0 -> if { words -> push(type.lengthHash) }
+    type.kind == 10 -> if {
+        typeId >= (details.starts -> len) or details.lengths[typeId] <= 0
+            -> if { false -> return }
+        details.starts[typeId] + 1 => cursor!
+        details.starts[typeId] + details.lengths[typeId] => end
+        0..<type.length -> each fieldOrdinal {
+            cursor! >= end -> if { false -> return }
+            details.words[cursor!] => label
+            words -> push(label)
+            cursor! + 1 => cursor!
+            0 => length!
+            label > 0 -> if {
+                label - 1 > UInt64(end - cursor!) -> if { false -> return }
+                Int(label - 1) => length!
+            }
+            0..<length! -> each labelByte {
+                words -> push(details.words[cursor!])
+                cursor! + 1 => cursor!
+            }
+            cursor! >= end or details.words[cursor!] >= UInt64(prepared.semantic.types -> len)
+                -> if { false -> return }
+            prepared -> appendType(details, Int(details.words[cursor!]), depth + 1, words)
+                -> unless { false -> return }
+            cursor! + 1 => cursor!
+        }
+        cursor! == end -> return
+    }
+    type.kind == 11 -> if {
+        typeId >= (details.starts -> len) -> if { false -> return }
+        words -> push(UInt64(details.lengths[typeId]))
+        0..<details.lengths[typeId] -> each index {
+            words -> push(details.words[details.starts[typeId] + index])
+        }
+    }
+    type.first >= 0 -> if {
+        words -> push(1)
+        prepared -> appendType(details, type.first, depth + 1, words)
+            -> unless { false -> return }
+    } else { words -> push(0) }
+    type.second >= 0 -> if {
+        words -> push(1)
+        prepared -> appendType(details, type.second, depth + 1, words)
+            -> unless { false -> return }
+    } else { words -> push(0) }
+    true
+}
+
+# Non-generic annotations use resolved structural types, so changing an import
+# alias cannot change the declaration universe. Generic/associated syntax is
+# retained as canonical tokens, as it is not a concrete type at this phase.
+appendHeader prepared: ref context.SemanticSnapshot, details: ref artifacts.TypeDetails, headerTypes: ref HeaderTypes, source: Int, symbol: Int, words: mut [UInt64; ~] -> Bool {
+    prepared.package.ranges[source] => range
+    prepared.package.symbols[range.symbolStart + symbol] => declaration
+    prepared.package.nodes[range.astStart + declaration.astNode] => node
+    node.firstToken => tokenIndex!
+    node.firstToken + node.tokenCount => end
+    tokenIndex! < end -> while {
+        prepared.package.tokens[range.tokenStart + tokenIndex!] => token
+        prepared.package -> interfaces.isDeclarationHeaderDelimiter(source, range.tokenStart + tokenIndex!)
+            -> if { break }
+        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment() and token.kind != grammar.tokenIdNewLine()
+            -> if {
+                headerTypes.types[range.tokenStart + tokenIndex!] => selected
+                headerTypes.lengths[range.tokenStart + tokenIndex!] => selectedCount
+                selected >= 0 -> if {
+                    words -> push(18446744073709551614)
+                    prepared -> appendType(details, selected, 0, words)
+                        -> unless { false -> return }
+                    tokenIndex! + selectedCount => tokenIndex!
+                } else {
+                    words -> push(UInt64(token.kind + 1))
+                    words -> push(UInt64(token.span.length))
+                    UIntSize(0) => byteIndex!
+                    byteIndex! < token.span.length -> while {
+                        words -> push(UInt64(prepared.package.sources[source] -> byte(token.span.start + byteIndex!)))
+                        byteIndex! + 1 => byteIndex!
+                    }
+                    tokenIndex! + 1 => tokenIndex!
+                }
+            } else { tokenIndex! + 1 => tokenIndex! }
+    }
+    true
+}
+
+record prepared: ref context.SemanticSnapshot, details: ref artifacts.TypeDetails, headerTypes: ref HeaderTypes, source: Int, symbol: Int -> interfaces.DeclarationIdentity {
+    interfaces.DeclarationIdentity { words: [UInt64; ~], status: 1 } => invalid
+    prepared.package.ranges[source] => range
+    [Int; ~] => scopes!
+    symbol => owner!
+    owner! >= 0 -> while {
+        owner! >= range.symbolCount or (scopes! -> len) >= range.symbolCount
+            -> if { invalid -> return }
+        scopes! -> push(owner!)
+        prepared.package.symbols[range.symbolStart + owner!].parent => owner!
+    }
+    # The declaration key supplies exact namespace bytes. Scope headers are
+    # rebuilt below to normalize concrete annotation aliases and omit trivia.
+    prepared.package -> interfaces.declarationIdentityAnalyzed(prepared.modules, source, symbol) => key
+    key.status != 0 or (key.words -> len) == 0 -> if { invalid -> return }
+    [UInt64; ~] => words!
+    key.words[0] >= UInt64(key.words -> len) -> if { invalid -> return }
+    0..<(Int(key.words[0]) + 1) -> each index { words! -> push(key.words[index]) }
+    words! -> push(UInt64(scopes! -> len))
+    (scopes! -> len) - 1 => scope!
+    scope! >= 0 -> while {
+        scopes![scope!] => currentSymbol
+        prepared.package.symbols[range.symbolStart + currentSymbol] => current
+        words! -> push(UInt64(current.kind))
+        current.nameToken >= 0 -> if {
+            prepared.package.tokens[range.tokenStart + current.nameToken] => name
+            words! -> push(UInt64(name.span.length))
+            UIntSize(0) => byteIndex!
+            byteIndex! < name.span.length -> while {
+                words! -> push(UInt64(prepared.package.sources[source] -> byte(name.span.start + byteIndex!)))
+                byteIndex! + 1 => byteIndex!
+            }
+        } else { words! -> push(0) }
+        current.kind == 6 or current.kind == 7 or current.kind == 29 or currentSymbol == symbol
+            -> if {
+                words! -> len => lengthIndex
+                words! -> push(0)
+                prepared -> appendHeader(details, headerTypes, source, currentSymbol, words!)
+                    -> unless { invalid -> return }
+                UInt64((words! -> len) - lengthIndex - 1) => words![lengthIndex]
+            } else { words! -> push(0) }
+        scope! - 1 => scope!
+    }
+    prepared.package.symbols[range.symbolStart + symbol] => declaration
+    words! -> push(UInt64(declaration.flags))
+    declaration.kind >= 26 and declaration.kind <= 35
+        -> if {
+            0 => ordinal!
+            0..<symbol -> each prior {
+                prepared.package.symbols[range.symbolStart + prior] => previous
+                previous.parent == declaration.parent and previous.kind == declaration.kind
+                    -> if { ordinal! + 1 => ordinal! }
+            }
+            words! -> push(UInt64(ordinal!))
+        }
+    interfaces.DeclarationIdentity { words: words!, status: 0 }
+}
+
+public capture prepared: ref context.SemanticSnapshot -> Fingerprint {
+    prepared.package -> artifacts.captureTypeDetailsAnalyzed(prepared.semantic.types, prepared.semantic.references, prepared.semantic.fields) => details
+    details.status != 0 -> if { Fingerprint { bytes: [0; 32], status: 10 + details.status, sourceModule: -1, symbol: -1 } -> return }
+    [Int; ~] => tokenTypes!
+    [Int; ~] => tokenLengths!
+    [Int; ~] => concreteTypes!
+    prepared.semantic.types -> each type { concreteTypes! -> push(-1) }
+    prepared.package.tokens -> each token {
+        tokenTypes! -> push(-1)
+        tokenLengths! -> push(0)
+    }
+    prepared.semantic.references -> each reference {
+        reference.sourceModule >= 0 and reference.sourceModule < (prepared.package.ranges -> len)
+            and reference.status == 0 and reference.typeId >= 0 and reference.typeId < (prepared.semantic.types -> len)
+            and (prepared -> concrete(reference.typeId, concreteTypes!))
+            -> if {
+                prepared.package.ranges[reference.sourceModule] => range
+                reference.typeAst >= 0 and reference.typeAst < range.astCount
+                    -> if {
+                        prepared.package.nodes[range.astStart + reference.typeAst] => node
+                        node.firstToken >= 0 and node.firstToken < range.tokenCount and node.tokenCount > 0
+                            and node.tokenCount <= range.tokenCount - node.firstToken
+                            -> if {
+                                range.tokenStart + node.firstToken => index
+                                node.tokenCount > tokenLengths![index] -> if {
+                                    reference.typeId => tokenTypes![index]
+                                    node.tokenCount => tokenLengths![index]
+                                }
+                            }
+                    }
+            }
+    }
+    HeaderTypes { types: tokenTypes!, lengths: tokenLengths! } => headerTypes
+    [Int; ~] => keyIndexBySymbol!
+    prepared.package.symbols -> each { keyIndexBySymbol! -> push(-1) }
+    [Int; ~] => sources!
+    [Int; ~] => symbols!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => hashes!
+    [UInt64; ~] => words!
+    0 => source!
+    source! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[source!] => range
+        0..<range.symbolCount -> each symbol {
+            prepared -> surface(source!, symbol) -> if {
+                prepared -> record(details, headerTypes, source!, symbol) => entry
+                entry.status != 0 -> if { Fingerprint { bytes: [0; 32], status: 20 + entry.status, sourceModule: source!, symbol: symbol } -> return }
+                sources! -> len => keyIndexBySymbol![range.symbolStart + symbol]
+                sources! -> push(source!)
+                symbols! -> push(symbol)
+                starts! -> push(words! -> len)
+                lengths! -> push(entry.words -> len)
+                hashes! -> push(entry.words -> interfaces.hashWords)
+                entry.words -> each word { words! -> push(word) }
+            }
+        }
+        source! + 1 => source!
+    }
+    interfaces.DeclarationIdentityIndex { keyIndexBySymbol: keyIndexBySymbol!, sourceModules: sources!, symbols: symbols!, starts: starts!, lengths: lengths!, hashes: hashes!, words: words!, status: 0 } => index
+    index -> interfaces.encodeDeclarationKeys => canonical
+    canonical.status != 0 -> if { Fingerprint { bytes: [0; 32], status: 30 + canonical.status, sourceModule: -1, symbol: -1 } -> return }
+    [UInt8; ~] => bytes!
+    canonical.words -> each word {
+        word => remaining!
+        0..<8 -> each {
+            bytes! -> push(UInt8(remaining! % 256))
+            remaining! / 256 => remaining!
+        }
+    }
+    sha256.create() => hasher!
+    hasher! -> update(bytes!)
+    hasher! -> finish => digest
+    Fingerprint { bytes: digest, status: 0, sourceModule: -1, symbol: -1 }
+}

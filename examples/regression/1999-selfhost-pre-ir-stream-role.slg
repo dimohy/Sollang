@@ -1,0 +1,84 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    [
+    """
+    import std.sequence
+
+    main {
+        2..9 -> beforeEach dan {
+            "value=$dan" -> println
+        } -> each line {
+            line -> println
+        }
+    }
+    """,
+    """
+    namespace std.sequence
+
+    public beforeEach values: Range -> stream Int block item: Int -> Unit {
+        values -> each item {
+            item -> yield
+            item -> emit
+        }
+    }
+    """; ~
+    ] => sourceForSymbols
+    [
+    """
+    import std.sequence
+
+    main {
+        2..9 -> beforeEach dan {
+            "value=$dan" -> println
+        } -> each line {
+            line -> println
+        }
+    }
+    """,
+    """
+    namespace std.sequence
+
+    public beforeEach values: Range -> stream Int block item: Int -> Unit {
+        values -> each item {
+            item -> yield
+            item -> emit
+        }
+    }
+    """; ~
+    ] => sourceForTypes
+    sourceForSymbols -> semanticContext.prepare => prepared
+    sourceForTypes -> expressionTypeIds.resolve => resolved
+    0 => streamRoleCount!
+    0 => streamRoleTypeCount!
+    0 => streamRoleAstTypeCount!
+    0 => symbolIndex!
+    symbolIndex! < (prepared.package.symbols -> len)
+        -> while {
+            prepared.package.symbols[symbolIndex!] => role
+            role.kind == 35 and role.parent >= 0 -> if {
+                prepared.package.ranges[0] => range
+                symbolIndex! >= range.symbolStart and symbolIndex! < range.symbolStart + range.symbolCount
+                    -> if {
+                        prepared.package.symbols[range.symbolStart + role.parent] => owner
+                        owner.kind == 48 -> if {
+                            streamRoleCount! + 1 => streamRoleCount!
+                            resolved.streamRoleTypeBySymbol[symbolIndex!] >= 0
+                                -> if {
+                                    streamRoleTypeCount! + 1 => streamRoleTypeCount!
+                                }
+                            resolved.expressions -> each expression {
+                                expression.sourceModule == 0 and expression.astNode == role.astNode
+                                    and expression.status == 0 and expression.typeId >= 0
+                                    -> if { streamRoleAstTypeCount! + 1 => streamRoleAstTypeCount! }
+                            }
+                        }
+                    }
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+    streamRoleCount! -> println
+    streamRoleAstTypeCount! -> println
+    streamRoleTypeCount! -> println
+}

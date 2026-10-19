@@ -1,0 +1,45 @@
+import sys.file as file
+
+enum Failure {
+    Incomplete
+}
+
+struct Source {
+    bytes: [UInt8; ~]
+    label: Text
+    complete: Bool
+}
+
+struct Target {
+    bytes: [UInt8; ~]
+    label: Text
+}
+
+impl Source {
+    finish: move self -> Result<Target, Failure> {
+        self.complete -> unless { Result<Target, Failure>.Err(Failure.Incomplete) -> return }
+        Result<Target, Failure>.Ok(Target {
+            bytes: self.bytes
+            label: self.label
+        })
+    }
+}
+
+escape: -> Result<Target, Failure> {
+    [UInt8(97); ~] => originBytes
+    originBytes -> file.borrowBytes => owner
+    owner -> slice(0, owner -> len) => label
+    Source {
+        bytes: [98; ~]
+        label: label
+        complete: true
+    } => source
+    source -> finish
+}
+
+main {
+    escape() -> when {
+        Err(_) => "error" -> println
+        Ok(target) => target.label -> println
+    }
+}

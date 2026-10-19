@@ -11,8 +11,10 @@ Set-StrictMode -Version Latest
 $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
 $repoRoot = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $cases = @(
-    @("logical-and-flow-result", "right operand of 'and' must be Bool", "E29"),
-    @("enum-non-exhaustive", "non-exhaustive enum when", "E30")
+    @("logical-and-flow-result", "sollang: semantic error at 2:23: [module '<main>'] right operand of 'and' must be Bool"),
+    @("logical-and-both-non-bool", "sollang: semantic error at 2:5: [module '<main>'] left operand of 'and' must be Bool"),
+    @("logical-or-both-non-bool", "sollang: semantic error at 2:5: [module '<main>'] left operand of 'or' must be Bool"),
+    @("enum-non-exhaustive", "sollang: semantic error at 7:25: [module '<main>'] non-exhaustive enum when; missing Reading.Missing")
 )
 $positiveCases = @("1546-logical-flow-bool")
 
@@ -26,8 +28,8 @@ foreach ($case in $cases) {
     if ($result.ExitCode -ne 1 -or $text -notmatch [regex]::Escape($case[1])) {
         throw "$($case[0]) did not fail once with its actionable semantic diagnostic under $compilerPath.`n$text"
     }
-    if ([regex]::Matches($text, "error\[$($case[2])\]").Count -ne 1 -or $text -match '(?m)^target (datalayout|triple)') {
-        throw "$($case[0]) did not stop exactly once before LLVM emission under $compilerPath.`n$text"
+    if ($text.Trim() -cne $case[1] -or [regex]::Matches($text, "sollang: semantic error at ").Count -ne 1 -or $text -match '(?m)^target (datalayout|triple)') {
+        throw "$($case[0]) did not stop exactly once with its canonical diagnostic before LLVM emission under $compilerPath.`n$text"
     }
 }
 
@@ -38,7 +40,7 @@ foreach ($case in $positiveCases) {
         -ArgumentList @("windows", $source) `
         -Description "self-host semantic parity $case"
     $text = $result.Stdout + $result.Stderr
-    if ($result.ExitCode -ne 0 -or $text -notmatch '(?m)^target triple' -or $text -match 'error\[E29\]') {
+    if ($result.ExitCode -ne 0 -or $text -notmatch '(?m)^target triple' -or $text -match 'error\[E29\]' -or $text -match 'sollang: semantic error at ') {
         throw "$case did not preserve its Bool flow operand through LLVM emission under $compilerPath.`n$text"
     }
 }

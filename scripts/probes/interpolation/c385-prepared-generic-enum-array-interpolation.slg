@@ -1,0 +1,169 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+
+import sys.file as file
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+
+main {
+    "scripts/probes/interpolation/c385-enum-interpolation-ownership-anonymous-readonly.slg" -> file.mapText => sourceOwner
+    sourceOwner -> sourceDecoding.utf8Text => originalProgram
+    ["namespace prepared.prefix\nidentity value: Int -> Int { value }", originalProgram; ~] => sources
+    sources -> typeIds.resolve => semantic
+    sources -> nominalTypes.resolve => nominal
+    sources -> compositeTypes.resolve => composite
+    sources -> modules.identities => moduleIdentities
+    sources -> qualified.resolve => qualifiedResults
+    [Text; ~] => callSources!
+    sources -> each callSource { callSources! -> push(callSource) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities -> each callModule { callModules! -> push(callModule) }
+    [qualified.QualifiedResolution; ~] => callQualified!
+    qualifiedResults -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest
+    callRequest -> calls.resolveModulesPrepared => resolvedCalls
+    sources -> analysis.analyze => packageAnalysis
+    [analysis.SourceAnalysisRange; ~] => analysisRanges!
+    packageAnalysis.ranges -> each sourceRange { analysisRanges! -> push(sourceRange) }
+    [ast.AstNode; ~] => analysisNodes!
+    packageAnalysis.nodes -> each analysisNode { analysisNodes! -> push(analysisNode) }
+    [syntax.SyntaxToken; ~] => analysisTokens!
+    packageAnalysis.tokens -> each analysisToken { analysisTokens! -> push(analysisToken) }
+    [symbols.Symbol; ~] => analysisSymbols!
+    packageAnalysis.symbols -> each analysisSymbol { analysisSymbols! -> push(analysisSymbol) }
+    [resolution.ResolvedName; ~] => analysisNames!
+    packageAnalysis.names -> each analysisName { analysisNames! -> push(analysisName) }
+    [Text; ~] => preparedSources!
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    [typeIds.SemanticType; ~] => preparedTypes!
+    semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
+    [typeIds.TypeReference; ~] => preparedReferences!
+    semantic.references -> each preparedReference { preparedReferences! -> push(preparedReference) }
+    [typeIds.NominalField; ~] => preparedFields!
+    semantic.fields -> each preparedField { preparedFields! -> push(preparedField) }
+    [analysis.SourceAnalysisRange; ~] => factRanges!
+    packageAnalysis.ranges -> each sourceRange { factRanges! -> push(sourceRange) }
+    [ast.AstNode; ~] => factNodes!
+    packageAnalysis.nodes -> each analysisNode { factNodes! -> push(analysisNode) }
+    [syntax.SyntaxToken; ~] => factTokens!
+    packageAnalysis.tokens -> each analysisToken { factTokens! -> push(analysisToken) }
+    [symbols.Symbol; ~] => factSymbols!
+    packageAnalysis.symbols -> each analysisSymbol { factSymbols! -> push(analysisSymbol) }
+    [resolution.ResolvedName; ~] => factNames!
+    packageAnalysis.names -> each analysisName { factNames! -> push(analysisName) }
+    [Text; ~] => factSources!
+    sources -> each preparedSource { factSources! -> push(preparedSource) }
+    [typeIds.SemanticType; ~] => factTypes!
+    semantic.types -> each preparedType { factTypes! -> push(preparedType) }
+    [typeIds.TypeReference; ~] => factReferences!
+    semantic.references -> each preparedReference { factReferences! -> push(preparedReference) }
+    [typeIds.NominalField; ~] => factFields!
+    semantic.fields -> each preparedField { factFields! -> push(preparedField) }
+    [modules.ModuleIdentity; ~] => factModules!
+    moduleIdentities -> each item { factModules! -> push(item) }
+    [qualified.QualifiedResolution; ~] => factQualified!
+    qualifiedResults -> each item { factQualified! -> push(item) }
+    [calls.ModuleCallResolution; ~] => factCalls!
+    resolvedCalls -> each item { factCalls! -> push(item) }
+    expressionTypeIds.ExpressionTypeIdRequest {
+        sources: factSources!, types: factTypes!, references: factReferences!, fields: factFields!
+        modules: factModules!, qualified: factQualified!, calls: factCalls!
+        analysisRanges: factRanges!, analysisNodes: factNodes!, analysisTokens: factTokens!
+        analysisSymbols: factSymbols!, analysisNames: factNames!
+    } -> expressionTypeIds.resolvePrepared => preparedFacts
+    typedIr.TypedIrRequest {
+        sources: preparedSources!
+        types: preparedTypes!
+        references: preparedReferences!
+        fields: preparedFields!
+        nominal: nominal
+        composite: composite
+        modules: moduleIdentities
+        qualified: qualifiedResults
+        calls: resolvedCalls
+        analysisRanges: analysisRanges!
+        analysisNodes: analysisNodes!
+        analysisTokens: analysisTokens!
+        analysisSymbols: analysisSymbols!
+        analysisNames: analysisNames!
+    } => request
+    request -> typedIr.lowerPrepared => prepared
+    sources -> typedIr.lower => baseline
+    sources -> semanticContext.prepare => sharedContext
+    sharedContext -> typedIr.lowerContext => shared
+    sharedContext -> expressionTypeIds.resolveContext => sharedRecursiveTypes
+    sharedContext -> typedIr.lowerResolvedContext(sharedRecursiveTypes) => sharedResolved
+
+    true => suppliedPreserved!
+    0 => suppliedTypeIndex!
+    semantic.types -> each type {
+        preparedFacts.types[suppliedTypeIndex!] => retainedType
+        type.kind != retainedType.kind or type.origin != retainedType.origin
+            or type.module != retainedType.module or type.symbol != retainedType.symbol
+            or type.first != retainedType.first or type.second != retainedType.second
+            or type.length != retainedType.length or type.lengthHash != retainedType.lengthHash
+            or type.status != retainedType.status
+            or (type.containsParameter and not retainedType.containsParameter)
+            or (not type.containsParameter and retainedType.containsParameter)
+            -> if { false => suppliedPreserved! }
+        suppliedTypeIndex! + 1 => suppliedTypeIndex!
+    }
+    0 => suppliedIndex!
+    semantic.references -> each reference {
+        preparedFacts.references[suppliedIndex!] => retained
+        reference.sourceModule != retained.sourceModule or reference.typeAst != retained.typeAst
+            or reference.typeId != retained.typeId or reference.status != retained.status
+            -> if { false => suppliedPreserved! }
+        suppliedIndex! + 1 => suppliedIndex!
+    }
+    true => newReferencesResolved!
+    false => appendedReference!
+    semantic.references -> len => appendedIndex!
+    appendedIndex! < (preparedFacts.references -> len)
+        -> while {
+            preparedFacts.references[appendedIndex!] => reference
+            true => appendedReference!
+            reference.status != 0 or reference.typeId < 0
+                -> if { false => newReferencesResolved! }
+            appendedIndex! + 1 => appendedIndex!
+        }
+    (preparedFacts.enumConstructorArguments -> len) == (sharedRecursiveTypes.enumConstructorArguments -> len)
+        and (preparedFacts.enumConstructorArguments -> len) > 0 => factsEqual!
+    0 => factIndex!
+    factsEqual! and factIndex! < (preparedFacts.enumConstructorArguments -> len)
+        -> while {
+            preparedFacts.enumConstructorArguments[factIndex!] => left
+            sharedRecursiveTypes.enumConstructorArguments[factIndex!] => right
+            left.sourceModule != right.sourceModule or left.enumTypeId != right.enumTypeId
+                or left.expectedTypeId != right.expectedTypeId or left.actualTypeId != right.actualTypeId
+                or left.expectedTypeId < 0 or left.actualTypeId != left.expectedTypeId
+                -> if { false => factsEqual! }
+            factIndex! + 1 => factIndex!
+        }
+    (prepared -> len) == (baseline -> len) => irEqual!
+    0 => irIndex!
+    irEqual! and irIndex! < (prepared -> len) -> while {
+        prepared[irIndex!] => left
+        baseline[irIndex!] => right
+        left.kind != right.kind or left.typeId != right.typeId or left.typeKind != right.typeKind
+            or left.typeFlags != right.typeFlags -> if { false => irEqual! }
+        irIndex! + 1 => irIndex!
+    }
+    (packageAnalysis.ranges[1].astStart > 0 and packageAnalysis.ranges[1].tokenStart > 0) => relocated
+    "supplied=$(suppliedPreserved!),new-refs=$(newReferencesResolved! and appendedReference!),enum-facts=$(factsEqual!),prepared-ir=$(irEqual!),relocated=$relocated" -> println
+}

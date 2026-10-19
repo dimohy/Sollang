@@ -1,0 +1,36 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.process as process
+
+# Trace the reduced each-role assignment before and after each Typed IR phase.
+main {
+    process.arguments() => arguments
+    [arguments[1]; ~] -> semanticContext.prepareFiles => snapshot
+    snapshot -> expressionTypeIds.resolveContext => types
+    snapshot.package.ranges[0] => range
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        snapshot.package.symbols[range.symbolStart + symbolIndex!] => symbol
+        "symbol $(symbolIndex!) $(symbol.kind) $(symbol.astNode)" -> println
+        symbolIndex! + 1 => symbolIndex!
+    }
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        snapshot.package.nodes[range.astStart + astIndex!] => ast
+        "ast $(astIndex!) $(ast.kind) $(ast.parent) $(ast.start) $(ast.length)" -> println
+        astIndex! + 1 => astIndex!
+    }
+    [0, 3] -> each phase {
+        snapshot -> typedIr.profileResolvedContext(types, phase) => ir
+        0 => index!
+        index! < (ir -> len) -> while {
+            ir[index!] => node
+            node.sourceModule == 0
+                -> if {
+                    "$phase $(index!) $(node.kind) $(node.astNode) $(node.symbol) $(node.typeId) $(node.operand0) $(node.operand1) $(node.parent) $(node.flags) $(node.opcode) $(node.nextOperand)" -> println
+                }
+            index! + 1 => index!
+        }
+    }
+}

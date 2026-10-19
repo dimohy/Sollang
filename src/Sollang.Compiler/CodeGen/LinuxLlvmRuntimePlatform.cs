@@ -58,6 +58,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i32 @dup(i32)");
         functions.AppendLine("declare i32 @fsync(i32)");
         functions.AppendLine("declare i32 @rename(ptr, ptr)");
+        functions.AppendLine("declare i32 @unlink(ptr)");
         functions.AppendLine("declare i64 @lseek(i32, i64, i32)");
         functions.AppendLine("declare i32 @ftruncate(i32, i64)");
         functions.AppendLine("declare ptr @mmap(ptr, i64, i32, i32, i32, i64)");
@@ -86,10 +87,11 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare ptr @readdir(ptr)");
             functions.AppendLine("declare i32 @closedir(ptr)");
             functions.AppendLine("declare ptr @realpath(ptr, ptr)");
+            functions.AppendLine("declare ptr @getcwd(ptr, i64)");
             functions.AppendLine("declare i64 @strlen(ptr)");
             functions.AppendLine("declare i32 @stat(ptr, ptr)");
         }
-        if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
+        if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins || UsesSocketCompletion)
         {
             functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
@@ -98,7 +100,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
         }
-        if (UsesAsyncFile || UsesMouseEvents)
+        if (UsesAsyncFile || UsesMouseEvents || UsesNetwork)
         {
             functions.AppendLine("declare i32 @poll(ptr, i64, i32)");
         }
@@ -2755,6 +2757,73 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitFilePrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
+            define internal i32 @sollang_platform_create_exclusive_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [4096 x i8], align 1
+              %buf_ptr = getelementptr inbounds [4096 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %copied = icmp ne i32 %copy_ok, 0
+              br i1 %copied, label %check_nul, label %fail
+
+            check_nul:
+              %no_nul = call i32 @sollang_file_path_has_no_nul(ptr %path, i64 %len)
+              %valid = icmp ne i32 %no_nul, 0
+              br i1 %valid, label %create, label %fail
+
+            create:
+              %fd = call i32 @open(ptr %buf_ptr, i32 193, i32 384)
+              %opened = icmp sge i32 %fd, 0
+              br i1 %opened, label %close, label %create_failed
+
+            close:
+              %closed = call i32 @close(i32 %fd)
+              %close_ok = icmp eq i32 %closed, 0
+              %status = select i1 %close_ok, i32 1, i32 -1
+              ret i32 %status
+
+            create_failed:
+              %errno_ptr = call ptr @__errno_location()
+              %errno = load i32, ptr %errno_ptr, align 4
+              %exists = icmp eq i32 %errno, 17
+              %status_failed = select i1 %exists, i32 0, i32 -1
+              ret i32 %status_failed
+
+            fail:
+              ret i32 -1
+            }
+
+            define internal i32 @sollang_platform_remove_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [4096 x i8], align 1
+              %buf_ptr = getelementptr inbounds [4096 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %copied = icmp ne i32 %copy_ok, 0
+              br i1 %copied, label %check_nul, label %fail
+
+            check_nul:
+              %no_nul = call i32 @sollang_file_path_has_no_nul(ptr %path, i64 %len)
+              %valid = icmp ne i32 %no_nul, 0
+              br i1 %valid, label %remove, label %fail
+
+            remove:
+              %removed = call i32 @unlink(ptr %buf_ptr)
+              %success = icmp eq i32 %removed, 0
+              br i1 %success, label %removed_file, label %remove_failed
+
+            removed_file:
+              ret i32 1
+
+            remove_failed:
+              %errno_ptr = call ptr @__errno_location()
+              %errno = load i32, ptr %errno_ptr, align 4
+              %missing = icmp eq i32 %errno, 2
+              %status = select i1 %missing, i32 0, i32 -1
+              ret i32 %status
+
+            fail:
+              ret i32 -1
+            }
+
             define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_len, ptr %destination, i64 %destination_len) #0 {
             entry:
               %temporary_buf = alloca [4096 x i8], align 1
@@ -3190,6 +3259,175 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitDirectoryPrimitives(StringBuilder functions)
     {
         EmitDirectoryNodePrimitives(functions);
+        functions.AppendLine("""
+            define internal %sollang.path_absolute_result @sollang_platform_absolute_path(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %native_style = icmp eq i32 %style, 0
+              %nonempty = icmp ugt i64 %len, 0
+              %valid = and i1 %native_style, %nonempty
+              br i1 %valid, label %scan, label %fail
+            scan:
+              %scan_index = phi i64 [0, %entry], [%scan_next, %scan_step]
+              %byte_ptr = getelementptr i8, ptr %path, i64 %scan_index
+              %byte = load i8, ptr %byte_ptr, align 1
+              %nul = icmp eq i8 %byte, 0
+              br i1 %nul, label %fail, label %scan_step
+            scan_step:
+              %scan_next = add i64 %scan_index, 1
+              %scan_done = icmp eq i64 %scan_next, %len
+              br i1 %scan_done, label %select_base, label %scan
+            select_base:
+              %first = load i8, ptr %path, align 1
+              %absolute_input = icmp eq i8 %first, 47
+              br i1 %absolute_input, label %without_cwd, label %with_cwd
+            with_cwd:
+              %cwd = call ptr @getcwd(ptr null, i64 0)
+              %cwd_ok = icmp ne ptr %cwd, null
+              br i1 %cwd_ok, label %measure_cwd, label %fail
+            measure_cwd:
+              %cwd_len = call i64 @strlen(ptr %cwd)
+              %prefix_len = add i64 %cwd_len, 1
+              br label %allocate_input
+            without_cwd:
+              br label %allocate_input
+            allocate_input:
+              %base = phi ptr [%cwd, %measure_cwd], [null, %without_cwd]
+              %base_len = phi i64 [%cwd_len, %measure_cwd], [0, %without_cwd]
+              %prefix = phi i64 [%prefix_len, %measure_cwd], [0, %without_cwd]
+              %total = add i64 %prefix, %len
+              %capacity = add i64 %total, 1
+              %sum_ok = icmp uge i64 %total, %len
+              %capacity_ok = icmp ugt i64 %capacity, %total
+              %allocation_size_ok = and i1 %sum_ok, %capacity_ok
+              br i1 %allocation_size_ok, label %allocate, label %base_fail
+            allocate:
+              %combined = call ptr @sollang_alloc(i64 %capacity)
+              %combined_ok = icmp ne ptr %combined, null
+              br i1 %combined_ok, label %copy_base, label %base_fail
+            copy_base:
+              br i1 %absolute_input, label %copy_path, label %copy_cwd
+            copy_cwd:
+              call void @llvm.memcpy.p0.p0.i64(ptr %combined, ptr %base, i64 %base_len, i1 false)
+              %base_end = getelementptr i8, ptr %combined, i64 %base_len
+              store i8 47, ptr %base_end, align 1
+              br label %copy_path
+            copy_path:
+              %destination = getelementptr i8, ptr %combined, i64 %prefix
+              call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %path, i64 %len, i1 false)
+              call void @sollang_free(ptr %base)
+              %output = call ptr @sollang_alloc(i64 %capacity)
+              %output_ok = icmp ne ptr %output, null
+              br i1 %output_ok, label %initialize, label %combined_fail
+            initialize:
+              store i8 47, ptr %output, align 1
+              br label %components
+            components:
+              %cursor = phi i64 [0, %initialize], [%separator_next, %separator], [%component_end, %publish]
+              %output_len = phi i64 [1, %initialize], [%output_len, %separator], [%published_len, %publish]
+              %done = icmp eq i64 %cursor, %total
+              br i1 %done, label %complete, label %inspect
+            inspect:
+              %component_ptr = getelementptr i8, ptr %combined, i64 %cursor
+              %component_first = load i8, ptr %component_ptr, align 1
+              %is_separator = icmp eq i8 %component_first, 47
+              br i1 %is_separator, label %separator, label %find_end
+            separator:
+              %separator_next = add i64 %cursor, 1
+              br label %components
+            find_end:
+              %end_cursor = phi i64 [%cursor, %inspect], [%end_next, %end_step]
+              %at_end = icmp eq i64 %end_cursor, %total
+              br i1 %at_end, label %classify, label %end_byte
+            end_byte:
+              %end_ptr = getelementptr i8, ptr %combined, i64 %end_cursor
+              %end_value = load i8, ptr %end_ptr, align 1
+              %at_separator = icmp eq i8 %end_value, 47
+              br i1 %at_separator, label %classify, label %end_step
+            end_step:
+              %end_next = add i64 %end_cursor, 1
+              br label %find_end
+            classify:
+              %component_end = phi i64 [%end_cursor, %find_end], [%end_cursor, %end_byte]
+              %component_len = sub i64 %component_end, %cursor
+              %first_dot = icmp eq i8 %component_first, 46
+              %one_byte = icmp eq i64 %component_len, 1
+              %dot = and i1 %first_dot, %one_byte
+              br i1 %dot, label %unchanged, label %check_parent
+            check_parent:
+              %two_bytes = icmp eq i64 %component_len, 2
+              %possible_parent = and i1 %first_dot, %two_bytes
+              br i1 %possible_parent, label %parent_second, label %append
+            parent_second:
+              %second_ptr = getelementptr i8, ptr %component_ptr, i64 1
+              %second = load i8, ptr %second_ptr, align 1
+              %parent = icmp eq i8 %second, 46
+              br i1 %parent, label %pop, label %append
+            pop:
+              %pop_index = phi i64 [%output_len, %parent_second], [%previous, %pop_byte]
+              %at_root = icmp eq i64 %pop_index, 1
+              br i1 %at_root, label %popped_root, label %pop_byte
+            pop_byte:
+              %previous = sub i64 %pop_index, 1
+              %previous_ptr = getelementptr i8, ptr %output, i64 %previous
+              %previous_byte = load i8, ptr %previous_ptr, align 1
+              %previous_separator = icmp eq i8 %previous_byte, 47
+              br i1 %previous_separator, label %popped, label %pop
+            popped:
+              %is_root_separator = icmp eq i64 %previous, 0
+              %popped_len = select i1 %is_root_separator, i64 1, i64 %previous
+              br label %publish
+            popped_root:
+              br label %publish
+            unchanged:
+              br label %publish
+            append:
+              %needs_separator = icmp ugt i64 %output_len, 1
+              br i1 %needs_separator, label %append_separator, label %append_bytes
+            append_separator:
+              %separator_ptr = getelementptr i8, ptr %output, i64 %output_len
+              store i8 47, ptr %separator_ptr, align 1
+              %after_separator = add i64 %output_len, 1
+              br label %append_bytes
+            append_bytes:
+              %append_offset = phi i64 [%output_len, %append], [%after_separator, %append_separator]
+              %append_ptr = getelementptr i8, ptr %output, i64 %append_offset
+              call void @llvm.memcpy.p0.p0.i64(ptr %append_ptr, ptr %component_ptr, i64 %component_len, i1 false)
+              %appended_len = add i64 %append_offset, %component_len
+              br label %publish
+            publish:
+              %published_len = phi i64 [%popped_len, %popped], [1, %popped_root], [%output_len, %unchanged], [%appended_len, %append_bytes]
+              br label %components
+            complete:
+              %last_index = sub i64 %total, 1
+              %last_ptr = getelementptr i8, ptr %combined, i64 %last_index
+              %last = load i8, ptr %last_ptr, align 1
+              %trailing_separator = icmp eq i8 %last, 47
+              %nonroot_result = icmp ugt i64 %output_len, 1
+              %retain_trailing = and i1 %trailing_separator, %nonroot_result
+              br i1 %retain_trailing, label %trailing, label %success
+            trailing:
+              %trailing_ptr = getelementptr i8, ptr %output, i64 %output_len
+              store i8 47, ptr %trailing_ptr, align 1
+              %trailing_len = add i64 %output_len, 1
+              br label %success
+            success:
+              %result_len = phi i64 [%output_len, %complete], [%trailing_len, %trailing]
+              call void @sollang_free(ptr %combined)
+              %result0 = insertvalue %sollang.path_absolute_result poison, ptr %output, 0
+              %result1 = insertvalue %sollang.path_absolute_result %result0, i64 %result_len, 1
+              %result2 = insertvalue %sollang.path_absolute_result %result1, i32 1, 2
+              ret %sollang.path_absolute_result %result2
+            combined_fail:
+              call void @sollang_free(ptr %combined)
+              br label %fail
+            base_fail:
+              call void @sollang_free(ptr %base)
+              br label %fail
+            fail:
+              ret %sollang.path_absolute_result zeroinitializer
+            }
+            """);
+
         functions.AppendLine("""
             define internal i32 @sollang_platform_create_directory(ptr %path, i64 %len, i32 %style) #0 {
             entry:

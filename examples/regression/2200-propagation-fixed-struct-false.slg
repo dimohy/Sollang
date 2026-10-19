@@ -1,0 +1,31 @@
+struct Holder {
+    values: [UInt8; 8]
+}
+
+create: -> Holder => Holder { values: [7; 8] }
+
+setSecond values: mut [UInt8; 8] -> Unit {
+    9 => values[1]
+}
+
+consume value: move Holder -> UInt8 {
+    value.values[0]
+}
+
+validate selected: Bool -> Result<Unit, Int> {
+    selected -> if { Result<Unit, Int>.Ok } else { Result<Unit, Int>.Err(1) }
+}
+
+checked selected: Bool -> Result<UInt8, Int> {
+    selected -> validate?
+    create() => owner!
+    owner!.values -> setSecond
+    Result<UInt8, Int>.Ok(owner! -> consume)
+}
+
+main {
+    false -> checked -> when {
+        Ok(value) { "first=$value" -> println }
+        Err(error) { "error=$error" -> println }
+    }
+}

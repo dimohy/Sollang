@@ -2,10 +2,12 @@ namespace Sollang.Compiler.Semantics;
 
 internal static class IntDictionaryLayout
 {
-    public static int CapacityForLength(int length)
+    public const int EntryStride = sizeof(int) * 2;
+
+    public static long CapacityForLength(int length)
     {
-        var minimum = Math.Max(checked(length * 2), 4);
-        var capacity = 1;
+        var minimum = Math.Max((long)length * 2, 4);
+        var capacity = 1L;
         while (capacity < minimum)
         {
             capacity = checked(capacity * 2);
@@ -14,13 +16,13 @@ internal static class IntDictionaryLayout
         return capacity;
     }
 
-    public static int EntriesOffsetForCapacity(int capacity)
+    public static long EntriesOffsetForCapacity(long capacity)
     {
         return checked((capacity + 23) & ~7);
     }
 
-    public static int AllocationBytesForCapacity(int capacity)
+    public static long AllocationBytesForCapacity(long capacity)
     {
-        return checked(EntriesOffsetForCapacity(capacity) + (capacity * 8));
+        return checked(EntriesOffsetForCapacity(capacity) + (capacity * EntryStride));
     }
 }

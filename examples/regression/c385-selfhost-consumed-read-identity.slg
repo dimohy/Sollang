@@ -1,0 +1,33 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.ownership_check as ownership
+import sollang.compiler.syntax as syntax
+
+readNode sourceModule: Int, astNode: Int -> typedIr.TypedIrNode {
+    typedIr.TypedIrNode {
+        kind: 5, parent: -1, sourceModule: sourceModule, astNode: astNode
+        symbol: 0, targetModule: -1, typeOrigin: -1, typeModule: -1
+        typeSymbol: -1, typeId: -1, typeKind: -1, typeFlags: 0
+        payloadToken: 0, opcode: -1, operand0: -1, operand1: -1
+        nextOperand: -1, flags: 0
+    }
+}
+
+readFailure sourceModule: Int, readIndex: Int -> ownership.OwnershipDiagnostic {
+    ownership.OwnershipDiagnostic {
+        code: 24, sourceModule: sourceModule, functionSymbol: -1
+        expectedOrigin: -1, expectedModule: -1, expectedSymbol: -1
+        actualOrigin: -1, actualModule: -1, actualSymbol: readIndex
+        actualBuiltin: -1
+        span: syntax.SourceSpan { fileId: sourceModule, start: UIntSize(readIndex), length: 1 }
+    }
+}
+
+main {
+    [readNode(0, 10), readNode(0, 11), readNode(1, 10); ~] => typed
+    [readFailure(0, 0), readFailure(0, 0), readFailure(0, 1), readFailure(1, 2); ~] => failures
+    failures -> ownership.consumedBindingReads(typed) => reads
+    "reads=$(reads -> len)" -> println
+    reads -> each read {
+        "module=$(read.sourceModule),ast=$(read.astNode)" -> println
+    }
+}

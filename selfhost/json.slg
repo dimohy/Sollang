@@ -1,6 +1,7 @@
 namespace sollang.compiler.json
 
 import sys.file as file
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
 
 # JSON is represented by spans into one affine SourceText owner. Values are
 # cheap scalar views and therefore never copy a Clang AST or an LSP payload.
@@ -328,4 +329,167 @@ public nextArrayValue source: ref file.SourceText, array: Value, cursor: UIntSiz
         }
     }
     result!
+}
+
+# This admission pass checks the whole raw document once, before a caller
+# starts cheap span lookup. Escape spelling is validated without decoding:
+# JsonDocument accepts isolated UTF-16 surrogate escapes in unused strings.
+documentStringEnd source: ref file.SourceText, view: Text, start: UIntSize, end: UIntSize -> UIntSize {
+    start + 1 => index!
+    index! < end -> while {
+        source -> byte(index!) => value
+        value == 34 -> if { index! + 1 -> return }
+        value < 32 -> if { end + 1 -> return }
+        value == 92 -> if {
+            index! + 1 < end -> unless { end + 1 -> return }
+            source -> byte(index! + 1) => escaped
+            escaped == 117 -> if {
+                source -> parseHex4(index! + 2, end) >= 0
+                    -> unless { end + 1 -> return }
+                index! + 6 => index!
+            } else {
+                escaped == 34 or escaped == 92 or escaped == 47
+                    or escaped == 98 or escaped == 102 or escaped == 110
+                    or escaped == 114 or escaped == 116
+                    -> unless { end + 1 -> return }
+                index! + 2 => index!
+            }
+        } else {
+            view -> unicodeIdentifier.scalarWidth(index!) => width
+            width > 0 and width <= end - index!
+                -> unless { end + 1 -> return }
+            index! + width => index!
+        }
+    }
+    end + 1
+}
+
+documentDigit value: UInt8 -> Bool => value >= 48 and value <= 57
+
+documentNumberEnd source: ref file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
+    start => index!
+    index! < end and (source -> byte(index!)) == 45
+        -> if { index! + 1 => index! }
+    index! < end -> unless { end + 1 -> return }
+    source -> byte(index!) => first
+    first == 48 -> if {
+        index! + 1 => index!
+    } else {
+        first >= 49 and first <= 57 -> unless { end + 1 -> return }
+        index! < end and ((source -> byte(index!)) -> documentDigit)
+            -> while { index! + 1 => index! }
+    }
+    index! < end and (source -> byte(index!)) == 46
+        -> if {
+            index! + 1 => index!
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> unless { end + 1 -> return }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> while { index! + 1 => index! }
+        }
+    index! < end and ((source -> byte(index!)) == 101 or (source -> byte(index!)) == 69)
+        -> if {
+            index! + 1 => index!
+            index! < end and ((source -> byte(index!)) == 43 or (source -> byte(index!)) == 45)
+                -> if { index! + 1 => index! }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> unless { end + 1 -> return }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> while { index! + 1 => index! }
+        }
+    index!
+}
+
+documentScalarEnd source: ref file.SourceText, view: Text, start: UIntSize, end: UIntSize -> UIntSize {
+    source -> byte(start) => first
+    first == 34 -> if { source -> documentStringEnd(view, start, end) -> return }
+    first == 45 or (first -> documentDigit)
+        -> if { source -> documentNumberEnd(start, end) -> return }
+    ["null", "false", "true"] -> each literal {
+        start + (literal -> len) <= end -> if {
+            true => matches!
+            UIntSize(0) => offset!
+            matches! and offset! < (literal -> len) -> while {
+                (source -> byte(start + offset!)) != (literal -> byte(offset!))
+                    -> if { false => matches! }
+                offset! + 1 => offset!
+            }
+            matches! -> if { start + (literal -> len) -> return }
+        }
+    }
+    end + 1
+}
+
+# Stack states: root0/1; array10 first value,11 required value,12 comma/end;
+# object20 first name,21 required name,22 colon,23 value,24 comma/end.
+# Parents are advanced before a child container is pushed, so validation is
+# linear and bounded by maxDepth without recursively rescanning member values.
+public validateDocument source: ref file.SourceText, maxDepth: Int -> Bool {
+    maxDepth > 0 -> unless { false -> return }
+    source -> len => end
+    source -> slice(0, end) => view
+    [Int; ~] => states!
+    states! -> push(0)
+    UIntSize(0) => index!
+    true -> while {
+        source -> skipWhitespace(index!, end) => index!
+        (states! -> len) - 1 => top
+        states![top] => state
+        state == 1 -> if { index! == end -> return }
+        index! < end -> unless { false -> return }
+        source -> byte(index!) => value
+        state == 20 or state == 21 -> if {
+            state == 20 and value == 125 -> if {
+                states! -> take(top) => discarded
+                index! + 1 => index!
+                continue
+            }
+            value == 34 -> unless { false -> return }
+            source -> documentStringEnd(view, index!, end) => after
+            after <= end -> unless { false -> return }
+            after => index!
+            22 => states![top]
+            continue
+        }
+        state == 22 -> if {
+            value == 58 -> unless { false -> return }
+            23 => states![top]
+            index! + 1 => index!
+            continue
+        }
+        state == 24 or state == 12 -> if {
+            value == 44 -> if {
+                state == 24 -> if { 21 } else { 11 } => states![top]
+            } else {
+                state == 24 -> if { UInt8(125) } else { UInt8(93) } => closing
+                value == closing -> unless { false -> return }
+                states! -> take(top) => discarded
+            }
+            index! + 1 => index!
+            continue
+        }
+        state == 10 and value == 93 -> if {
+            states! -> take(top) => discarded
+            index! + 1 => index!
+            continue
+        }
+        state == 0 or state == 10 or state == 11 or state == 23
+            -> unless { false -> return }
+        state -> when {
+            == 0 { 1 => states![top] }
+            == 23 { 24 => states![top] }
+            else { 12 => states![top] }
+        }
+        value == 123 or value == 91 -> if {
+            (states! -> len) <= maxDepth -> unless { false -> return }
+            value == 123 -> if { 20 } else { 10 } => childState
+            states! -> push(childState)
+            index! + 1 => index!
+        } else {
+            source -> documentScalarEnd(view, index!, end) => after
+            after <= end -> unless { false -> return }
+            after => index!
+        }
+    }
+    false
 }

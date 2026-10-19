@@ -1,0 +1,20 @@
+import std.net.quic.keys
+import std.net.quic.error as errors
+import std.net.quic.version_negotiation as negotiation
+
+decodeVersion: -> Result<Bool, errors.Error> {
+    negotiation.Information {
+        chosen: keys.version1()
+        available: [keys.version1(), keys.version2(); ~]
+    } -> encode? => encoded
+    negotiation.decode(encoded)? => information
+    information -> validateClient?
+    Result<Bool, errors.Error>.Ok(true)
+}
+
+main {
+    decodeVersion() -> when {
+        Ok(valid) { "version-valid=$valid" -> println }
+        Err(error) { "version-error=$(error.code)" -> println }
+    }
+}

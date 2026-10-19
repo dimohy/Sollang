@@ -29,18 +29,20 @@ bootstrap and independent oracle, not the design authority or a release asset.
 
 Normal compiler work follows this order:
 
-1. implement the contract in the `.slg` self-host compiler;
-2. compile it with the newest compatible verified SLG executable and run the
-   focused Typed IR, LLVM, and execution fixture; prefer fixed-point Stage 3,
-   while a receipt-bound Stage 2 may bridge one generation when the older Stage
-   3 cannot represent current source;
-3. implement the same contract in C# and run the managed differential oracle;
-4. require Stage 2/Stage 3 fixed-point convergence before release or global
+1. implement the contract or fix in C# and verify its focused behavior;
+2. compare the corresponding C# and SLG source structure, branches, logic, and
+   diagnostic decisions before changing the separate SLG compiler;
+3. make the SLG implementation match those decisions, then compile and run
+   focused paired cases and related controls;
+4. after every unit is resolved, run the exhaustive compiler comparison and
+   require Stage 2/Stage 3 fixed-point convergence before release or global
    installation.
 
-If no verified SLG seed can parse or represent the new compiler source, a
-minimal C# bootstrap bridge may precede step 1. That exception must be explicit
-and cannot become a second semantic authority.
+A reproduced mismatch or a rule name alone does not authorize a self-host
+build before source comparison. Prefer a verified fixed-point Stage 3 seed;
+a receipt-bound Stage 2 may bridge one generation when Stage 3 cannot represent
+the current source. Use the C# bootstrap when no compatible verified SLG seed
+exists, while retaining the same source comparison and verification gates.
 
 ## Bootstrap and fixed-point proof
 

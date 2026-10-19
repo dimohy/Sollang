@@ -1,0 +1,42 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.owner_type_facts as ownerTypes
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import sollang.compiler.semantic.semantic_cache as cache
+
+sameWords left: ref [UInt64; ~], right: ref [UInt64; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<Int(left -> len) -> each index {
+        left[index] != right[index] -> if { false -> return }
+    }
+    true
+}
+
+main {
+    "import stored.provider as provider\nmain { provider.plus(UInt8(3)) => value\nvalue -> println\n}\n" => mainSource
+    "namespace stored.provider\npublic plus<T> value: T -> T => value\n" => provider
+    "namespace unrelated\npublic value: -> Int => 1\n" => other
+    [mainSource, provider, other; ~] -> context.prepare => before
+    before -> expressions.resolveCallContext => resolved
+    ["main.slg", "provider.slg", "other.slg"; ~] => paths
+    generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
+    resolved.prepared -> fingerprints.capture => fingerprint
+    resolved.prepared -> ownerTypes.prepareCaptureMetadata(resolved.types) => metadata
+    0..<3 -> each source {
+        resolved.prepared -> generations.capture(resolved.types, paths, source, identity, fingerprint.bytes) => legacy
+        resolved.prepared -> generations.capturePrepared(resolved.types, paths, source, identity, fingerprint.bytes, metadata) => shared
+        (legacy.status == 0 and shared.status == 0 and (legacy.words -> sameWords(shared.words))) -> println
+    }
+    resolved.prepared -> generations.capturePrepared(resolved.types, paths, -1, identity, fingerprint.bytes, metadata) => invalidSource
+    invalidSource.status == 1 -> println
+    [UInt8; ~] => invalidFingerprint
+    resolved.prepared -> generations.capturePrepared(resolved.types, paths, 0, identity, invalidFingerprint, metadata) => invalidIdentity
+    invalidIdentity.status == 10 -> println
+    [mainSource, provider, other; ~] -> context.prepare => fresh
+    cache.Loaded { words: [UInt64; ~], status: 50 } => cold
+    fresh -> cache.resolve(cold, paths, identity) -> when {
+        Err(_) { false -> println }
+        Ok(value) { (value.skipped == 0 and value.words[3] == 3 and (value.words -> cache.validate) == 0) -> println }
+    }
+}

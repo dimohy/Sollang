@@ -139,6 +139,10 @@ internal sealed partial class LlvmEmitter
         var blockFunctionLocals = CaptureLocals();
         var blockFunctionFunctions = _currentFunctions;
         var blockFunction = _currentFunction;
+        var producerSnapshots = _asyncScopeSnapshots.ToArray();
+        var producerLoops = _loopContexts.ToArray();
+        RuntimeCallbackLoopBoundary? callbackBoundary = null;
+        var preserveProducer = _activeAsyncCfg is not null;
         RestoreLocals(invocation.CallerLocals);
         var callbackOuterLocals = CaptureLocals();
         _locals[invocation.ItemName] = value;
@@ -158,6 +162,17 @@ internal sealed partial class LlvmEmitter
             : CaptureLocals();
         _currentFunctions = invocation.CallerFunctions;
         _currentFunction = invocation.CallerFunction;
+        if (!invocation.OwnsItem)
+        {
+            var authority = invocation.LoopAuthority
+                ?? throw new SollangException("block callback has no lexical loop authority");
+            callbackBoundary = new RuntimeCallbackLoopBoundary(
+                authority, blockFunctionLocals, producerSnapshots,
+                invocation.CallerLocals, invocation.CallerAsyncScopes ?? []);
+            _callbackLoopBoundaries.Push(callbackBoundary);
+            _loopContexts.Clear();
+            foreach (var loop in authority.Loops.Reverse()) _loopContexts.Push(loop);
+        }
         var adjustedLoopContext = false;
         if (invocation.OwnsItem && _loopContexts.TryPeek(out var activeLoop))
         {
@@ -165,6 +180,13 @@ internal sealed partial class LlvmEmitter
             adjustedLoopContext = true;
         }
         RuntimeValue result = RuntimeUnit.Instance;
+        if (preserveProducer)
+        {
+            _asyncHiddenScopes.Push(new AsyncHiddenScope(blockFunctionLocals, producerSnapshots));
+            _asyncScopeSnapshots.Clear();
+            foreach (var scope in (invocation.CallerAsyncScopes ?? []).Reverse())
+                _asyncScopeSnapshots.Push(scope);
+        }
         try
         {
             if (invocation.ResultType == BoundType.Unit)
@@ -184,19 +206,36 @@ internal sealed partial class LlvmEmitter
                 }
 
                 EmitStatements(invocation.Body.Take(invocation.Body.Count - 1).ToArray());
-                result = EmitExpression(callbackResult.Expression);
-                EnsureRuntimeType(result, invocation.ResultType, "block callback");
-                var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
-                    ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
-                    : null;
-                DropOwnedLocalsCreatedSince(
-                    yieldedBlockLocals,
-                    transferredOwnerName,
-                    callbackResult.Expression);
+                if (!_currentBlockTerminated)
+                {
+                    result = EmitExpression(callbackResult.Expression);
+                    EnsureRuntimeType(result, invocation.ResultType, "block callback");
+                    var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
+                        ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
+                        : null;
+                    DropOwnedLocalsCreatedSince(
+                        yieldedBlockLocals,
+                        transferredOwnerName,
+                        callbackResult.Expression);
+                }
             }
         }
         finally
         {
+            if (callbackBoundary is not null)
+            {
+                if (!ReferenceEquals(_callbackLoopBoundaries.Pop(), callbackBoundary))
+                    throw new SollangException("block callback lexical boundary stack diverged");
+                _loopContexts.Clear();
+                foreach (var loop in producerLoops.Reverse()) _loopContexts.Push(loop);
+            }
+            if (preserveProducer)
+            {
+                _asyncHiddenScopes.Pop();
+                _asyncScopeSnapshots.Clear();
+                foreach (var scope in producerSnapshots.Reverse())
+                    _asyncScopeSnapshots.Push(scope);
+            }
             if (adjustedLoopContext)
             {
                 _loopContexts.Pop();
@@ -217,27 +256,70 @@ internal sealed partial class LlvmEmitter
                 _ = EmitYield(value, [], consumer.Invocation);
                 return;
             case RuntimeStreamStage stage:
-                EmitUserBlockFunctionCall(
-                    stage.Call with { ResultName = null, ResultIsSynthetic = false },
-                    stage.Function,
-                    stage.Next,
-                    streamedArgument: value,
-                    callSite: stage.CallSite,
-                    streamedAdditionalArguments: stage.AdditionalArguments);
+                var preserveStageArguments = stage.AdditionalArgumentNames is { Count: > 0 };
+                if (preserveStageArguments)
+                    _asyncHiddenScopes.Push(new AsyncHiddenScope(stage.CallSite.Locals, []));
+                try
+                {
+                    EmitUserBlockFunctionCall(
+                        stage.Call with { ResultName = null, ResultIsSynthetic = false },
+                        stage.Function,
+                        stage.Next,
+                        streamedArgument: value,
+                        callSite: stage.CallSite,
+                        streamedAdditionalArguments: ResolveAsyncStreamArguments(
+                            stage.CallSite, stage.AdditionalArguments, stage.AdditionalArgumentNames));
+                }
+                finally
+                {
+                    if (preserveStageArguments)
+                        _asyncHiddenScopes.Pop();
+                }
                 return;
             case RuntimeUserStreamStage stage:
                 EmitUserStreamStage(value, stage);
                 return;
             case RuntimeStreamTerminalStage terminal:
-                EmitUserBlockFunctionCall(
-                    terminal.Call with { ResultName = null, ResultIsSynthetic = false },
-                    terminal.Function,
-                    streamedArgument: value,
-                    callSite: terminal.CallSite,
-                    streamedAdditionalArguments: terminal.AdditionalArguments);
+                var preserveTerminalArguments = terminal.AdditionalArgumentNames is { Count: > 0 };
+                if (preserveTerminalArguments)
+                    _asyncHiddenScopes.Push(new AsyncHiddenScope(terminal.CallSite.Locals, []));
+                try
+                {
+                    EmitUserBlockFunctionCall(
+                        terminal.Call with { ResultName = null, ResultIsSynthetic = false },
+                        terminal.Function,
+                        streamedArgument: value,
+                        callSite: terminal.CallSite,
+                        streamedAdditionalArguments: ResolveAsyncStreamArguments(
+                            terminal.CallSite, terminal.AdditionalArguments, terminal.AdditionalArgumentNames));
+                }
+                finally
+                {
+                    if (preserveTerminalArguments)
+                        _asyncHiddenScopes.Pop();
+                }
                 return;
             default:
                 throw new SollangException("unknown runtime stream sink");
+        }
+    }
+
+    private IReadOnlyList<RuntimeValue> ResolveAsyncStreamArguments(
+        RuntimeStreamCallSite callSite,
+        IReadOnlyList<RuntimeValue> arguments,
+        IReadOnlyList<string>? names)
+    {
+        if (names is null)
+            return arguments;
+        var current = CaptureLocals();
+        try
+        {
+            RestoreLocals(callSite.Locals);
+            return names.Select(ResolveLocal).ToArray();
+        }
+        finally
+        {
+            RestoreLocals(current);
         }
     }
 
@@ -248,6 +330,14 @@ internal sealed partial class LlvmEmitter
         var previousFunction = _currentFunction;
         var previousFunctions = _currentFunctions;
         var previousContinuation = _currentStreamContinuation;
+        var callerAsyncScopes = _asyncScopeSnapshots.ToArray();
+        var preserveCaller = _activeAsyncCfg is not null;
+        if (preserveCaller)
+        {
+            _asyncHiddenScopes.Push(new AsyncHiddenScope(returnLocals, callerAsyncScopes));
+            _asyncScopeSnapshots.Clear();
+            _asyncScopeSnapshots.Push(stage.StateLocals);
+        }
         try
         {
             RestoreLocals(stage.StateLocals);
@@ -271,7 +361,9 @@ internal sealed partial class LlvmEmitter
                     stage.CallSite.Functions,
                     stage.CallSite.Function,
                     stage.Function.BlockResultType ?? BoundType.Unit,
-                    OwnsItem: false);
+                    OwnsItem: false,
+                    CallerAsyncScopes: stage.CallSite.AsyncScopes,
+                    LoopAuthority: stage.CallSite.LoopAuthority);
             }
             _currentFunction = stage.Function;
             _currentFunctions = CreateFunctionScope(stage.CallSite.Functions, stage.Function.LocalFunctions);
@@ -287,6 +379,13 @@ internal sealed partial class LlvmEmitter
         }
         finally
         {
+            if (preserveCaller)
+            {
+                _asyncHiddenScopes.Pop();
+                _asyncScopeSnapshots.Clear();
+                foreach (var scope in callerAsyncScopes.Reverse())
+                    _asyncScopeSnapshots.Push(scope);
+            }
             _currentBlockInvocation = previousInvocation;
             _currentFunction = previousFunction;
             _currentFunctions = previousFunctions;
@@ -310,7 +409,7 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_mutableScalarSlots, StringComparer.Ordinal),
             new Dictionary<string, string>(_readonlyCaptureBorrowPointers, StringComparer.Ordinal),
-            new Dictionary<RuntimeValue, string>(_readonlyValueSlots),
+            new Dictionary<RuntimeValue, string>(_readonlyValueSlots, ReferenceEqualityComparer.Instance),
             new Dictionary<string, string>(_borrowedOwnedTransferFlags, StringComparer.Ordinal),
             [.. _terminatingOwnedCleanupObligations]);
     }
@@ -472,7 +571,7 @@ internal sealed partial class LlvmEmitter
         var retainedLocals = scope.Locals
             .Where(local => retainedNames.Contains(local.Key))
             .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal);
-        var retainedValues = retainedLocals.Values.ToHashSet();
+        var retainedValues = retainedLocals.Values.ToHashSet<RuntimeValue>(ReferenceEqualityComparer.Instance);
         return new LocalScope(
             retainedLocals,
             scope.MutableLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
@@ -498,7 +597,7 @@ internal sealed partial class LlvmEmitter
                 .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
             scope.ReadonlyValueSlots
                 .Where(slot => retainedValues.Contains(slot.Key))
-                .ToDictionary(static slot => slot.Key, static slot => slot.Value),
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, scope.ReadonlyValueSlots.Comparer),
             scope.BorrowedOwnedTransferFlags
                 .Where(flag => retainedNames.Contains(flag.Key))
                 .ToDictionary(static flag => flag.Key, static flag => flag.Value, StringComparer.Ordinal),
@@ -506,6 +605,41 @@ internal sealed partial class LlvmEmitter
                 .Where(obligation => obligation.BindingName is null
                     || retainedNames.Contains(obligation.BindingName))
                 .ToList());
+    }
+
+    private static void RestoreAsyncShadowedBinding(
+        LocalScope target, LocalScope protectedBinding, string name, string? sourceName = null)
+    {
+        sourceName ??= name;
+        static void CopySet(HashSet<string> targetSet, HashSet<string> sourceSet, string key, string sourceKey)
+        {
+            if (sourceSet.Contains(sourceKey)) targetSet.Add(key);
+            else targetSet.Remove(key);
+        }
+        static void CopyMap<T>(Dictionary<string, T> targetMap, Dictionary<string, T> sourceMap, string key, string sourceKey)
+        {
+            if (sourceMap.TryGetValue(sourceKey, out var value)) targetMap[key] = value;
+            else targetMap.Remove(key);
+        }
+        CopyMap(target.Locals, protectedBinding.Locals, name, sourceName);
+        CopySet(target.MutableLocals, protectedBinding.MutableLocals, name, sourceName);
+        CopySet(target.BorrowedMutableLocals, protectedBinding.BorrowedMutableLocals, name, sourceName);
+        CopySet(target.BorrowedOwnedLocals, protectedBinding.BorrowedOwnedLocals, name, sourceName);
+        CopyMap(target.MutableScalarSlots, protectedBinding.MutableScalarSlots, name, sourceName);
+        CopyMap(target.MutableStructSlots, protectedBinding.MutableStructSlots, name, sourceName);
+        CopyMap(target.MutableContainerSlots, protectedBinding.MutableContainerSlots, name, sourceName);
+        CopyMap(target.ReadonlyCaptureBorrowPointers, protectedBinding.ReadonlyCaptureBorrowPointers, name, sourceName);
+        CopyMap(target.BorrowedOwnedTransferFlags, protectedBinding.BorrowedOwnedTransferFlags, name, sourceName);
+        if (protectedBinding.MovedOwnedStructFields.TryGetValue(sourceName, out var fields))
+            target.MovedOwnedStructFields[name] = new HashSet<string>(fields, StringComparer.Ordinal);
+        else
+            target.MovedOwnedStructFields.Remove(name);
+        foreach (var (value, pointer) in protectedBinding.ReadonlyValueSlots)
+            target.ReadonlyValueSlots[value] = pointer;
+        target.TerminatingOwnedCleanupObligations.RemoveAll(obligation => obligation.BindingName == name);
+        target.TerminatingOwnedCleanupObligations.AddRange(protectedBinding.TerminatingOwnedCleanupObligations
+            .Where(obligation => obligation.BindingName == sourceName)
+            .Select(obligation => obligation with { BindingName = name }));
     }
 
     private void DropOwnedLocals(
@@ -534,8 +668,10 @@ internal sealed partial class LlvmEmitter
     private void DropOwnedLocalsCreatedSince(
         LocalScope outerScope,
         string? transferredOwnerName,
-        Expression? transferredExpression = null)
+        Expression? transferredExpression = null,
+        List<(LocalScope Scope, string Name)>? droppedBindings = null)
     {
+        var cleanupScope = droppedBindings is null ? null : CaptureLocals();
         foreach (var (name, storedValue) in _locals.Reverse())
         {
             if (outerScope.Locals.ContainsKey(name))
@@ -554,6 +690,10 @@ internal sealed partial class LlvmEmitter
             }
 
             DropOwnedLocal(name, storedValue);
+            if (cleanupScope is not null
+                && !cleanupScope.BorrowedMutableLocals.Contains(name)
+                && !cleanupScope.BorrowedOwnedLocals.Contains(name))
+                droppedBindings!.Add((cleanupScope, name));
         }
     }
 
@@ -1693,24 +1833,23 @@ internal sealed partial class LlvmEmitter
             : throw new SollangException($"codegen error at {expression.Line}:{expression.Column}: integer literal is out of range");
     }
 
-    private static int DictionaryCapacityForLength(int length)
+    private static long DictionaryCapacityForLength(int length)
     {
         return IntDictionaryLayout.CapacityForLength(length);
     }
 
-    private static string SymbolForFunction(string name)
-    {
-        return "@sollang_fn_" + string.Concat(name.Select(static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-    }
-
     private static string SymbolForFunction(BoundFunction function)
     {
-        var baseSymbol = SymbolForFunction(CanonicalFunctionName(function));
+        var baseSymbol = "sollang_fn_" + string.Concat(CanonicalFunctionName(function).Select(
+            static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
         var module = string.Concat(function.ModuleName.Select(
             static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
-        return function.IsLocal
+        var symbol = function.IsLocal
             ? $"{baseSymbol}_local_m{module}_{function.Line.ToString(CultureInfo.InvariantCulture)}_{function.Column.ToString(CultureInfo.InvariantCulture)}"
             : baseSymbol;
+        return symbol.Any(static c => c > 0x7F)
+            ? $"@\"{EscapeLlvmBytes(Encoding.UTF8.GetBytes(symbol))}\""
+            : "@" + symbol;
     }
 
     private static string CanonicalFunctionName(BoundFunction function) =>
@@ -1756,6 +1895,9 @@ internal sealed partial class LlvmEmitter
     private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
 
     private sealed record RuntimeFormattedText(IReadOnlyList<RuntimeFormattedTextSegment> Segments)
+        : RuntimeValue(BoundType.Text);
+
+    private sealed record RuntimeTextChoice(string TagName, IReadOnlyList<RuntimeValue> Alternatives)
         : RuntimeValue(BoundType.Text);
 
     private abstract record RuntimeFormattedTextSegment;
@@ -1964,7 +2106,8 @@ internal sealed partial class LlvmEmitter
         string BreakLabel,
         LocalScope OuterScope,
         List<(LocalScope Scope, string Label)>? ContinueEdges,
-        List<(LocalScope Scope, string Label)>? BreakEdges);
+        List<(LocalScope Scope, string Label)>? BreakEdges,
+        Action<LoopControlKind, string>? CaptureContinuationEdge = null);
 
     private sealed record RuntimeBlockInvocation(
         string ItemName,
@@ -1974,12 +2117,90 @@ internal sealed partial class LlvmEmitter
         IReadOnlyDictionary<string, BoundFunction> CallerFunctions,
         BoundFunction? CallerFunction,
         BoundType ResultType,
-        bool OwnsItem);
+        bool OwnsItem,
+        IReadOnlyList<LocalScope>? CallerAsyncScopes = null,
+        RuntimeCallbackLoopAuthority? LoopAuthority = null);
 
     private sealed record RuntimeStreamCallSite(
         LocalScope Locals,
         IReadOnlyDictionary<string, BoundFunction> Functions,
-        BoundFunction? Function);
+        BoundFunction? Function,
+        IReadOnlyList<LocalScope>? AsyncScopes = null,
+        RuntimeCallbackLoopAuthority? LoopAuthority = null);
+
+    private sealed record RuntimeCallbackLoopAuthority(
+        IReadOnlyList<LoopContext> Loops,
+        IReadOnlyList<AsyncHiddenScope> HiddenScopes);
+
+    private sealed record RuntimeCallbackLoopBoundary(
+        RuntimeCallbackLoopAuthority Authority,
+        LocalScope ProducerLocals,
+        IReadOnlyList<LocalScope> ProducerSnapshots,
+        LocalScope CallerLocals,
+        IReadOnlyList<LocalScope> CallerSnapshots);
+
+    private readonly Stack<RuntimeCallbackLoopBoundary> _callbackLoopBoundaries = new();
+
+    private RuntimeCallbackLoopAuthority CaptureCallbackLoopAuthority() =>
+        new(_loopContexts.ToArray(), _asyncHiddenScopes.ToArray());
+
+    private void DropAbandonedCallbackProducerScopes(
+        LoopContext target, IReadOnlyList<(LocalScope Scope, string Name)> callbackDroppedBindings)
+    {
+        var boundaries = _callbackLoopBoundaries.TakeWhile(boundary =>
+            boundary.Authority.Loops.Any(loop => ReferenceEquals(loop, target))).ToArray();
+        if (boundaries.Length == 0) return;
+
+        var active = CaptureLocals();
+        var retainedHidden = boundaries[^1].Authority.HiddenScopes;
+        var scopes = boundaries.SelectMany(boundary =>
+                new[] { boundary.ProducerLocals }.Concat(boundary.ProducerSnapshots))
+            .Concat(_asyncHiddenScopes
+                .Where(hidden => !retainedHidden.Any(retained => ReferenceEquals(retained, hidden)))
+                .SelectMany(hidden => new[] { hidden.Scope }.Concat(hidden.Mirrors)))
+            .Distinct<LocalScope>(ReferenceEqualityComparer.Instance).ToArray();
+        var survivor = target.OuterScope;
+        var dropped = new List<(LocalScope Scope, string Name)>();
+        var obligations = new List<TerminatingOwnedCleanupObligation>();
+        try
+        {
+            foreach (var scope in scopes)
+            {
+                RestoreLocals(scope);
+                foreach (var (name, value) in scope.Locals.Reverse())
+                {
+                    if (scope.BorrowedMutableLocals.Contains(name) || scope.BorrowedOwnedLocals.Contains(name))
+                        continue;
+                    if (survivor.Locals.Keys.Any(survivorName =>
+                            AsyncScopeSharesBinding(scope, name, survivor, survivorName))
+                        || callbackDroppedBindings.Any(binding =>
+                            AsyncScopeSharesBinding(scope, name, binding.Scope, binding.Name))
+                        || dropped.Any(binding => AsyncScopeSharesBinding(scope, name, binding.Scope, binding.Name)))
+                        continue;
+                    DropOwnedLocal(name, value);
+                    dropped.Add((scope, name));
+                }
+                foreach (var obligation in scope.TerminatingOwnedCleanupObligations.AsEnumerable().Reverse())
+                {
+                    static bool SameObligation(TerminatingOwnedCleanupObligation left,
+                        TerminatingOwnedCleanupObligation right) =>
+                        left.BindingId == right.BindingId
+                        && left.ExcludedProjectedField == right.ExcludedProjectedField
+                        && left.RetainedFlag == right.RetainedFlag;
+                    if (survivor.TerminatingOwnedCleanupObligations.Any(
+                            other => SameObligation(obligation, other))
+                        || obligations.Any(other => SameObligation(obligation, other)))
+                        continue;
+                    DropTerminatingOwnedCleanupObligation(obligation);
+                    obligations.Add(obligation);
+                }
+            }
+        }
+        finally
+        {
+            RestoreLocals(active);
+        }
+    }
 
     private abstract record RuntimeStreamSink;
 
@@ -1990,7 +2211,8 @@ internal sealed partial class LlvmEmitter
         BoundFunction Function,
         RuntimeStreamSink Next,
         RuntimeStreamCallSite CallSite,
-        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
+        IReadOnlyList<RuntimeValue> AdditionalArguments,
+        IReadOnlyList<string>? AdditionalArgumentNames = null) : RuntimeStreamSink;
 
     private sealed record RuntimeUserStreamStage(
         BlockFunctionCallStatement Call,
@@ -2005,6 +2227,7 @@ internal sealed partial class LlvmEmitter
         BlockFunctionCallStatement Call,
         BoundFunction Function,
         RuntimeStreamCallSite CallSite,
-        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
+        IReadOnlyList<RuntimeValue> AdditionalArguments,
+        IReadOnlyList<string>? AdditionalArgumentNames = null) : RuntimeStreamSink;
 }
 

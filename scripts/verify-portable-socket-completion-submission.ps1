@@ -211,22 +211,34 @@ if (([regex]::Matches($dequeue.Value, '@GetQueuedCompletionStatusEx')).Count -ne
     throw 'dequeue must transfer the retained owner, clear its source, and select one terminal completion without freeing payload storage'
 }
 $close = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_close\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+$requestCancel = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_request_cancel_all\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
 $closeBody = $close.Groups['body'].Value
-if (-not $close.Success -or
+$requestCancelBody = $requestCancel.Groups['body'].Value
+if (-not $close.Success -or -not $requestCancel.Success -or
     $closeBody.Contains('@GetQueuedCompletionStatusEx', [StringComparison]::Ordinal) -or
-    $closeBody.IndexOf('@CancelIoEx', [StringComparison]::Ordinal) -gt $closeBody.IndexOf('@PostQueuedCompletionStatus', [StringComparison]::Ordinal) -or
+    $closeBody.IndexOf('@sollang_platform_socket_completion_request_cancel_all', [StringComparison]::Ordinal) -gt $closeBody.IndexOf('@PostQueuedCompletionStatus', [StringComparison]::Ordinal) -or
     $closeBody.IndexOf('@PostQueuedCompletionStatus', [StringComparison]::Ordinal) -gt $closeBody.IndexOf('@WaitForSingleObject', [StringComparison]::Ordinal) -or
     $closeBody.IndexOf('@WaitForSingleObject', [StringComparison]::Ordinal) -gt $closeBody.IndexOf('sollang_free(ptr %completed_buffer)', [StringComparison]::Ordinal) -or
     $closeBody.IndexOf('sollang_free(ptr %completed_buffer)', [StringComparison]::Ordinal) -gt $closeBody.IndexOf('@closesocket', [StringComparison]::Ordinal)) {
     throw 'close must cancel, let the waiter drain, stop/join it, then free retained buffers and sockets'
 }
 foreach ($invariant in @(
-    '%cancel_is_pending = icmp eq i64 %cancel_active, 1',
     '%completed_is_terminal = icmp eq i64 %completed_active, 2',
     '%waiting_task_clear = icmp eq ptr %waiting_task, null'
 )) { if (-not $closeBody.Contains($invariant, [StringComparison]::Ordinal)) { throw "close invariant omission: $invariant" } }
+foreach ($invariant in @(
+    '%cancel_is_pending = icmp eq i64 %cancel_active, 1',
+    'store atomic i32 1, ptr %cancel_requested_slot release',
+    '%completion_already_won = icmp eq i32 %cancel_error, 1168'
+)) { if (-not $requestCancelBody.Contains($invariant, [StringComparison]::Ordinal)) { throw "cancel request invariant omission: $invariant" } }
+$cancelMarkerIndex = $requestCancelBody.IndexOf('store atomic i32 1, ptr %cancel_requested_slot release', [StringComparison]::Ordinal)
+$nativeCancelIndex = $requestCancelBody.IndexOf('@CancelIoEx', [StringComparison]::Ordinal)
+if ($cancelMarkerIndex -lt 0 -or $nativeCancelIndex -lt 0 -or $cancelMarkerIndex -gt $nativeCancelIndex) {
+    throw 'cancel request must publish its marker before native cancellation'
+}
 $closeCallSites = [ordered]@{
-    cancelIoEx = ([regex]::Matches($closeBody, '@CancelIoEx')).Count
+    cancelRequest = ([regex]::Matches($closeBody, '@sollang_platform_socket_completion_request_cancel_all')).Count
+    cancelIoEx = ([regex]::Matches($requestCancelBody, '@CancelIoEx')).Count
     stopPacket = ([regex]::Matches($closeBody, '@PostQueuedCompletionStatus')).Count
     waiterJoin = ([regex]::Matches($closeBody, '@WaitForSingleObject')).Count
     retainedBufferFree = ([regex]::Matches($closeBody, 'sollang_free\(ptr %completed_buffer\)')).Count

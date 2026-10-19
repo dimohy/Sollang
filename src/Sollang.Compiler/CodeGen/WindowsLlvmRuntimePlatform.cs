@@ -67,6 +67,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @GetOverlappedResult(ptr, ptr, ptr, i32)");
         functions.AppendLine("declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)");
+        functions.AppendLine("declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)");
         functions.AppendLine("declare dllimport i32 @CloseHandle(ptr)");
         functions.AppendLine("declare dllimport ptr @GetCurrentProcess()");
         functions.AppendLine("declare dllimport i32 @DuplicateHandle(ptr, ptr, ptr, ptr, i32, i32, i32)");
@@ -79,6 +80,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @FlushViewOfFile(ptr, i64)");
         functions.AppendLine("declare dllimport i32 @FlushFileBuffers(ptr)");
         functions.AppendLine("declare dllimport i32 @MoveFileExA(ptr, ptr, i32)");
+        functions.AppendLine("declare dllimport i32 @MoveFileExW(ptr, ptr, i32)");
+        functions.AppendLine("declare dllimport i32 @DeleteFileA(ptr)");
+        functions.AppendLine("declare dllimport i32 @DeleteFileW(ptr)");
         functions.AppendLine("declare dllimport ptr @GetProcessHeap()");
         functions.AppendLine("declare dllimport ptr @HeapAlloc(ptr, i32, i64)");
         functions.AppendLine("declare dllimport i32 @HeapFree(ptr, i32, ptr)");
@@ -121,13 +125,13 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         }
         if (UsesDirectoryTraversal)
         {
-            functions.AppendLine("declare dllimport i32 @CreateDirectoryA(ptr, ptr)");
-            functions.AppendLine("declare dllimport i32 @GetFileAttributesA(ptr)");
-            functions.AppendLine("declare dllimport ptr @FindFirstFileA(ptr, ptr)");
-            functions.AppendLine("declare dllimport i32 @FindNextFileA(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @CreateDirectoryW(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @GetFileAttributesW(ptr)");
+            functions.AppendLine("declare dllimport ptr @FindFirstFileW(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @FindNextFileW(ptr, ptr)");
             functions.AppendLine("declare dllimport i32 @FindClose(ptr)");
-            functions.AppendLine("declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)");
             functions.AppendLine("declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)");
+            functions.AppendLine("declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)");
             functions.AppendLine("declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)");
         }
         if (UsesProcessCapture || UsesAsyncFile || UsesComputePool || UsesMouseEvents || UsesConcurrentStreamJoins)
@@ -157,6 +161,39 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @SleepConditionVariableSRW(ptr, ptr, i32, i32)");
             functions.AppendLine("declare dllimport void @WakeAllConditionVariable(ptr)");
         }
+        functions.AppendLine("""
+            define internal i32 @sollang_windows_utf8_path(ptr %data, i64 %length, ptr %wide, i32 %capacity) #0 {
+            entry:
+              %positive = icmp ugt i64 %length, 0
+              %fits_i32 = icmp ule i64 %length, 2147483647
+              %length_valid = and i1 %positive, %fits_i32
+              br i1 %length_valid, label %check, label %failure
+            check:
+              %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+              %done = icmp eq i64 %index, %length
+              br i1 %done, label %convert, label %inspect
+            inspect:
+              %byte_ptr = getelementptr i8, ptr %data, i64 %index
+              %byte = load i8, ptr %byte_ptr, align 1
+              %nul = icmp eq i8 %byte, 0
+              br i1 %nul, label %failure, label %advance
+            advance:
+              %next = add i64 %index, 1
+              br label %check
+            convert:
+              %length32 = trunc i64 %length to i32
+              %room = sub i32 %capacity, 1
+              %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length32, ptr %wide, i32 %room)
+              %converted_ok = icmp sgt i32 %converted, 0
+              br i1 %converted_ok, label %terminate, label %failure
+            terminate:
+              %zero = getelementptr i16, ptr %wide, i32 %converted
+              store i16 0, ptr %zero, align 2
+              ret i32 1
+            failure:
+              ret i32 0
+            }
+            """);
     }
 
     protected override void EmitConcurrentStreamJoinPlatformPrimitives(StringBuilder functions)
@@ -1895,6 +1932,34 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret ptr null
             }
 
+            define internal ptr @sollang_process_windows_path(ptr %data, i64 %length) #0 {
+            entry:
+              %present = icmp ugt i64 %length, 0
+              br i1 %present, label %check, label %fail
+
+            check:
+              %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+              %done = icmp eq i64 %index, %length
+              br i1 %done, label %convert, label %inspect
+
+            inspect:
+              %byte_ptr = getelementptr i8, ptr %data, i64 %index
+              %byte = load i8, ptr %byte_ptr, align 1
+              %nul = icmp eq i8 %byte, 0
+              br i1 %nul, label %fail, label %advance
+
+            advance:
+              %next = add i64 %index, 1
+              br label %check
+
+            convert:
+              %wide = call ptr @sollang_process_windows_text(ptr %data, i64 %length)
+              ret ptr %wide
+
+            fail:
+              ret ptr null
+            }
+
             define internal ptr @sollang_join_windows_args(ptr %argv, i64 %count) #0 {
             entry:
               %i_slot = alloca i64, align 8
@@ -2677,23 +2742,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %sollang.process_spawn_result %result
             }
 
-            define internal ptr @sollang_process_copy_stdio_path(ptr %data, i64 %length) #0 {
-            entry:
-              %bytes = add i64 %length, 1
-              %copy = call ptr @sollang_alloc(i64 %bytes)
-              %allocated = icmp ne ptr %copy, null
-              br i1 %allocated, label %initialize, label %failure
-
-            initialize:
-              call void @llvm.memcpy.p0.p0.i64(ptr %copy, ptr %data, i64 %length, i1 false)
-              %end = getelementptr i8, ptr %copy, i64 %length
-              store i8 0, ptr %end, align 1
-              ret ptr %copy
-
-            failure:
-              ret ptr null
-            }
-
             @sollang_process_null_windows = private unnamed_addr constant [4 x i8] c"NUL\00"
 
             define internal ptr @sollang_process_open_windows_stdio(i32 %mode, ptr %path, i64 %path_length, i1 %input) #0 {
@@ -2710,14 +2758,14 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %is_null, label %open_null, label %failure
 
             copy_path:
-              %path_copy = call ptr @sollang_process_copy_stdio_path(ptr %path, i64 %path_length)
+              %path_copy = call ptr @sollang_process_windows_path(ptr %path, i64 %path_length)
               %path_ok = icmp ne ptr %path_copy, null
               br i1 %path_ok, label %open, label %failure
 
             open:
               %access = select i1 %input, i32 -2147483648, i32 1073741824
               %creation = select i1 %input, i32 3, i32 2
-              %handle = call ptr @CreateFileA(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+              %handle = call ptr @CreateFileW(ptr %path_copy, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
               call void @sollang_free(ptr %path_copy)
               ret ptr %handle
 
@@ -2939,14 +2987,13 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %working_directory, i64 %working_directory_length, i1 %has_working_directory, ptr %environment_changes, i64 %environment_change_count, i1 %inherits_environment, ptr %path, i64 %path_len) #0 {
             entry:
-              %path_buffer = alloca [260 x i8], align 1
-              %path_buffer_ptr = getelementptr inbounds [260 x i8], ptr %path_buffer, i64 0, i64 0
-              %path_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %path_len, ptr %path_buffer_ptr)
-              %path_valid = icmp ne i32 %path_ok, 0
+              %wide_path = call ptr @sollang_process_windows_path(ptr %path, i64 %path_len)
+              %path_valid = icmp ne ptr %wide_path, null
               br i1 %path_valid, label %open, label %error
 
             open:
-              %handle = call ptr @CreateFileA(ptr %path_buffer_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 128, ptr null)
+              %handle = call ptr @CreateFileW(ptr %wide_path, i32 1073741824, i32 1, ptr null, i32 2, i32 128, ptr null)
+              call void @sollang_free(ptr %wide_path)
               %handle_value = ptrtoint ptr %handle to i64
               %open_ok = icmp ne i64 %handle_value, -1
               br i1 %open_ok, label %run, label %error
@@ -3343,23 +3390,95 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitFilePrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
+            define internal i32 @sollang_platform_create_exclusive_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [260 x i16], align 2
+              %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+              %fits = icmp ule i64 %len, 259
+              br i1 %fits, label %convert, label %fail
+            convert:
+              %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+              %copied = icmp ne i32 %copy_ok, 0
+              br i1 %copied, label %create, label %fail
+
+            create:
+              %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 1073741824, i32 0, ptr null, i32 1, i32 128, ptr null)
+              %handle_int = ptrtoint ptr %handle to i64
+              %invalid = icmp eq i64 %handle_int, -1
+              br i1 %invalid, label %create_failed, label %close
+
+            close:
+              %closed = call i32 @CloseHandle(ptr %handle)
+              %close_ok = icmp ne i32 %closed, 0
+              %status = select i1 %close_ok, i32 1, i32 -1
+              ret i32 %status
+
+            create_failed:
+              %error = call i32 @GetLastError()
+              %file_exists = icmp eq i32 %error, 80
+              %already_exists = icmp eq i32 %error, 183
+              %exists = or i1 %file_exists, %already_exists
+              %status_failed = select i1 %exists, i32 0, i32 -1
+              ret i32 %status_failed
+
+            fail:
+              ret i32 -1
+            }
+
+            define internal i32 @sollang_platform_remove_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [260 x i16], align 2
+              %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+              %fits = icmp ule i64 %len, 259
+              br i1 %fits, label %convert, label %fail
+            convert:
+              %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+              %copied = icmp ne i32 %copy_ok, 0
+              br i1 %copied, label %remove, label %fail
+
+            remove:
+              %removed = call i32 @DeleteFileW(ptr %buf_ptr)
+              %success = icmp ne i32 %removed, 0
+              br i1 %success, label %removed_file, label %remove_failed
+
+            removed_file:
+              ret i32 1
+
+            remove_failed:
+              %error = call i32 @GetLastError()
+              %file_missing = icmp eq i32 %error, 2
+              %path_missing = icmp eq i32 %error, 3
+              %missing = or i1 %file_missing, %path_missing
+              %status = select i1 %missing, i32 0, i32 -1
+              ret i32 %status
+
+            fail:
+              ret i32 -1
+            }
+
             define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_len, ptr %destination, i64 %destination_len) #0 {
             entry:
-              %temporary_buf = alloca [260 x i8], align 1
-              %temporary_ptr = getelementptr inbounds [260 x i8], ptr %temporary_buf, i64 0, i64 0
-              %temporary_ok = call i32 @sollang_copy_text_to_c_path(ptr %temporary, i64 %temporary_len, ptr %temporary_ptr)
+              %temporary_buf = alloca [260 x i16], align 2
+              %temporary_ptr = getelementptr inbounds [260 x i16], ptr %temporary_buf, i64 0, i64 0
+              %temporary_fits = icmp ule i64 %temporary_len, 259
+              br i1 %temporary_fits, label %convert_temporary, label %fail
+            convert_temporary:
+              %temporary_ok = call i32 @sollang_windows_utf8_path(ptr %temporary, i64 %temporary_len, ptr %temporary_ptr, i32 260)
               %temporary_valid = icmp ne i32 %temporary_ok, 0
               br i1 %temporary_valid, label %copy_destination, label %fail
 
             copy_destination:
-              %destination_buf = alloca [260 x i8], align 1
-              %destination_ptr = getelementptr inbounds [260 x i8], ptr %destination_buf, i64 0, i64 0
-              %destination_ok = call i32 @sollang_copy_text_to_c_path(ptr %destination, i64 %destination_len, ptr %destination_ptr)
+              %destination_buf = alloca [260 x i16], align 2
+              %destination_ptr = getelementptr inbounds [260 x i16], ptr %destination_buf, i64 0, i64 0
+              %destination_fits = icmp ule i64 %destination_len, 259
+              br i1 %destination_fits, label %convert_destination, label %fail
+            convert_destination:
+              %destination_ok = call i32 @sollang_windows_utf8_path(ptr %destination, i64 %destination_len, ptr %destination_ptr, i32 260)
               %destination_valid = icmp ne i32 %destination_ok, 0
               br i1 %destination_valid, label %replace, label %fail
 
             replace:
-              %result = call i32 @MoveFileExA(ptr %temporary_ptr, ptr %destination_ptr, i32 9)
+              %result = call i32 @MoveFileExW(ptr %temporary_ptr, ptr %destination_ptr, i32 9)
               ret i32 %result
 
             fail:
@@ -3368,14 +3487,17 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal %sollang.file_handle_result @sollang_platform_open_owned_read_file(ptr %path, i64 %len) #0 {
             entry:
-              %buf = alloca [260 x i8], align 1
-              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
-              %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %buf = alloca [260 x i16], align 2
+              %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+              %fits = icmp ule i64 %len, 259
+              br i1 %fits, label %convert, label %fail
+            convert:
+              %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
               %copy_is_ok = icmp ne i32 %copy_ok, 0
               br i1 %copy_is_ok, label %open, label %fail
 
             open:
-              %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 1073741952, ptr null)
+              %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 1073741952, ptr null)
               %handle_int = ptrtoint ptr %handle to i64
               %invalid = icmp eq i64 %handle_int, -1
               br i1 %invalid, label %fail, label %success
@@ -3393,14 +3515,17 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal %sollang.file_handle_result @sollang_platform_open_owned_write_file(ptr %path, i64 %len) #0 {
             entry:
-              %buf = alloca [260 x i8], align 1
-              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
-              %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %buf = alloca [260 x i16], align 2
+              %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+              %fits = icmp ule i64 %len, 259
+              br i1 %fits, label %convert, label %fail
+            convert:
+              %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
               %copy_is_ok = icmp ne i32 %copy_ok, 0
               br i1 %copy_is_ok, label %open, label %fail
 
             open:
-              %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 1073741952, ptr null)
+              %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 1073741952, ptr null)
               %handle_int = ptrtoint ptr %handle to i64
               %invalid = icmp eq i64 %handle_int, -1
               br i1 %invalid, label %fail, label %success
@@ -3753,16 +3878,16 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("""
             define internal %sollang.mapped_bytes @sollang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) #0 {
             entry:
-              %buf = alloca [260 x i8], align 1
-              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
-              %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %path_len, ptr %buf_ptr)
+              %buf = alloca [260 x i16], align 2
+              %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %path_len, ptr %buf_ptr, i32 260)
               %path_ok = icmp ne i32 %copy_ok, 0
               br i1 %path_ok, label %open, label %fail
 
             open:
               %access = select i1 %writable, i32 -1073741824, i32 -2147483648
               %creation = select i1 %writable, i32 4, i32 3
-              %file = call ptr @CreateFileA(ptr %buf_ptr, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+              %file = call ptr @CreateFileW(ptr %buf_ptr, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
               %file_int = ptrtoint ptr %file to i64
               %file_ok = icmp ne i64 %file_int, -1
               br i1 %file_ok, label %resize_check, label %fail
@@ -3861,31 +3986,160 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         EmitDirectoryNodePrimitives(functions);
         functions.AppendLine("""
+            define internal %sollang.path_absolute_result @sollang_platform_absolute_path(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %native_style = icmp eq i32 %style, 1
+              %nonempty = icmp ugt i64 %len, 0
+              %bounded = icmp ult i64 %len, 2147483647
+              %sized = and i1 %nonempty, %bounded
+              %valid = and i1 %native_style, %sized
+              br i1 %valid, label %scan, label %fail
+            scan:
+              %scan_index = phi i64 [0, %entry], [%scan_next, %scan_step]
+              %only_spaces = phi i1 [true, %entry], [%remaining_spaces, %scan_step]
+              %byte_ptr = getelementptr i8, ptr %path, i64 %scan_index
+              %byte = load i8, ptr %byte_ptr, align 1
+              %nul = icmp eq i8 %byte, 0
+              br i1 %nul, label %fail, label %scan_step
+            scan_step:
+              %space = icmp eq i8 %byte, 32
+              %remaining_spaces = and i1 %only_spaces, %space
+              %scan_next = add i64 %scan_index, 1
+              %scan_done = icmp eq i64 %scan_next, %len
+              br i1 %scan_done, label %validated, label %scan
+            validated:
+              br i1 %remaining_spaces, label %fail, label %measure
+            measure:
+              %len32 = trunc i64 %len to i32
+              %input_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr null, i32 0)
+              %input_valid = icmp sgt i32 %input_chars, 0
+              br i1 %input_valid, label %allocate_input, label %fail
+            allocate_input:
+              %input_chars64 = zext i32 %input_chars to i64
+              %input_capacity = add i64 %input_chars64, 1
+              %input_bytes = mul i64 %input_capacity, 2
+              %input = call ptr @sollang_alloc(i64 %input_bytes)
+              %input_ok = icmp ne ptr %input, null
+              br i1 %input_ok, label %convert_input, label %fail
+            convert_input:
+              %input_written = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr %input, i32 %input_chars)
+              %converted = icmp eq i32 %input_written, %input_chars
+              br i1 %converted, label %terminate_input, label %input_fail
+            terminate_input:
+              %input_end = getelementptr i16, ptr %input, i64 %input_chars64
+              store i16 0, ptr %input_end, align 2
+              %has_prefix = icmp uge i64 %len, 4
+              br i1 %has_prefix, label %inspect_prefix, label %measure_absolute
+            inspect_prefix:
+              %prefix0 = load i8, ptr %path, align 1
+              %prefix1_ptr = getelementptr i8, ptr %path, i64 1
+              %prefix2_ptr = getelementptr i8, ptr %path, i64 2
+              %prefix3_ptr = getelementptr i8, ptr %path, i64 3
+              %prefix1 = load i8, ptr %prefix1_ptr, align 1
+              %prefix2 = load i8, ptr %prefix2_ptr, align 1
+              %prefix3 = load i8, ptr %prefix3_ptr, align 1
+              %slash0 = icmp eq i8 %prefix0, 92
+              %slash1 = icmp eq i8 %prefix1, 92
+              %question1 = icmp eq i8 %prefix1, 63
+              %question2 = icmp eq i8 %prefix2, 63
+              %slash3 = icmp eq i8 %prefix3, 92
+              %extended_second = or i1 %slash1, %question1
+              %extended_front = and i1 %slash0, %extended_second
+              %extended_back = and i1 %question2, %slash3
+              %extended = and i1 %extended_front, %extended_back
+              br i1 %extended, label %preserve_extended, label %measure_absolute
+            preserve_extended:
+              %preserved = call ptr @sollang_alloc(i64 %len)
+              %preserved_ok = icmp ne ptr %preserved, null
+              br i1 %preserved_ok, label %copy_extended, label %input_fail
+            copy_extended:
+              call void @llvm.memcpy.p0.p0.i64(ptr %preserved, ptr %path, i64 %len, i1 false)
+              call void @sollang_free(ptr %input)
+              %extended_result0 = insertvalue %sollang.path_absolute_result poison, ptr %preserved, 0
+              %extended_result1 = insertvalue %sollang.path_absolute_result %extended_result0, i64 %len, 1
+              %extended_result2 = insertvalue %sollang.path_absolute_result %extended_result1, i32 1, 2
+              ret %sollang.path_absolute_result %extended_result2
+            measure_absolute:
+              %needed = call i32 @GetFullPathNameW(ptr %input, i32 0, ptr null, ptr null)
+              %has_size = icmp ugt i32 %needed, 0
+              br i1 %has_size, label %allocate_absolute, label %input_fail
+            allocate_absolute:
+              %needed64 = zext i32 %needed to i64
+              %absolute_bytes = mul i64 %needed64, 2
+              %absolute = call ptr @sollang_alloc(i64 %absolute_bytes)
+              %absolute_ok = icmp ne ptr %absolute, null
+              br i1 %absolute_ok, label %resolve, label %input_fail
+            resolve:
+              %written = call i32 @GetFullPathNameW(ptr %input, i32 %needed, ptr %absolute, ptr null)
+              %resolved_nonempty = icmp ugt i32 %written, 0
+              %resolved_fits = icmp ult i32 %written, %needed
+              %resolved = and i1 %resolved_nonempty, %resolved_fits
+              call void @sollang_free(ptr %input)
+              br i1 %resolved, label %measure_output, label %absolute_fail
+            measure_output:
+              %utf8_size = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %absolute, i32 %written, ptr null, i32 0, ptr null, ptr null)
+              %output_nonempty = icmp sgt i32 %utf8_size, 0
+              br i1 %output_nonempty, label %allocate_output, label %absolute_fail
+            allocate_output:
+              %utf8_size64 = zext i32 %utf8_size to i64
+              %output = call ptr @sollang_alloc(i64 %utf8_size64)
+              %output_ok = icmp ne ptr %output, null
+              br i1 %output_ok, label %convert_output, label %absolute_fail
+            convert_output:
+              %output_written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %absolute, i32 %written, ptr %output, i32 %utf8_size, ptr null, ptr null)
+              %output_complete = icmp eq i32 %output_written, %utf8_size
+              call void @sollang_free(ptr %absolute)
+              br i1 %output_complete, label %success, label %output_fail
+            success:
+              %result0 = insertvalue %sollang.path_absolute_result poison, ptr %output, 0
+              %result1 = insertvalue %sollang.path_absolute_result %result0, i64 %utf8_size64, 1
+              %result2 = insertvalue %sollang.path_absolute_result %result1, i32 1, 2
+              ret %sollang.path_absolute_result %result2
+            output_fail:
+              call void @sollang_free(ptr %output)
+              br label %fail
+            absolute_fail:
+              call void @sollang_free(ptr %absolute)
+              br label %fail
+            input_fail:
+              call void @sollang_free(ptr %input)
+              br label %fail
+            fail:
+              ret %sollang.path_absolute_result zeroinitializer
+            }
+            """);
+
+        functions.AppendLine("""
             define internal i32 @sollang_platform_create_directory(ptr %path, i64 %len, i32 %style) #0 {
             entry:
               %style_ok = icmp eq i32 %style, 1
-              br i1 %style_ok, label %prepare, label %fail
+              %length_ok = icmp ule i64 %len, 32766
+              %valid = and i1 %style_ok, %length_ok
+              br i1 %valid, label %prepare, label %fail
 
             prepare:
-              %buffer_size = add i64 %len, 1
+              %capacity = add i64 %len, 1
+              %buffer_size = mul i64 %capacity, 2
               %buffer = call ptr @sollang_alloc(i64 %buffer_size)
               %buffer_ok = icmp ne ptr %buffer, null
-              br i1 %buffer_ok, label %copy, label %fail
+              br i1 %buffer_ok, label %convert, label %fail
 
-            copy:
-              call void @llvm.memcpy.p0.p0.i64(ptr %buffer, ptr %path, i64 %len, i1 false)
-              %zero = getelementptr i8, ptr %buffer, i64 %len
-              store i8 0, ptr %zero, align 1
-              %created = call i32 @CreateDirectoryA(ptr %buffer, ptr null)
+            convert:
+              %capacity32 = trunc i64 %capacity to i32
+              %converted = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buffer, i32 %capacity32)
+              %path_ok = icmp ne i32 %converted, 0
+              br i1 %path_ok, label %create, label %fail_free
+            create:
+              %created = call i32 @CreateDirectoryW(ptr %buffer, ptr null)
               %created_ok = icmp ne i32 %created, 0
               br i1 %created_ok, label %success_free, label %inspect_existing
 
             inspect_existing:
-              %attributes = call i32 @GetFileAttributesA(ptr %buffer)
-              %valid = icmp ne i32 %attributes, -1
+              %attributes = call i32 @GetFileAttributesW(ptr %buffer)
+              %attributes_valid = icmp ne i32 %attributes, -1
               %directory_bits = and i32 %attributes, 16
               %is_directory = icmp ne i32 %directory_bits, 0
-              %exists_as_directory = and i1 %valid, %is_directory
+              %exists_as_directory = and i1 %attributes_valid, %is_directory
               br i1 %exists_as_directory, label %success_free, label %fail_free
 
             success_free:
@@ -3903,7 +4157,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
             entry:
               %style_ok = icmp eq i32 %style, 1
-              br i1 %style_ok, label %prepare, label %fail
+              %length_ok = icmp ule i64 %len, 32764
+              %valid = and i1 %style_ok, %length_ok
+              br i1 %valid, label %prepare, label %fail
 
             prepare:
               %buffer_size = add i64 %len, 3
@@ -3945,24 +4201,45 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br label %open
 
             open:
-              %find_data = alloca [320 x i8], align 8
-              %handle = call ptr @FindFirstFileA(ptr %pattern, ptr %find_data)
+              %pattern_extra = phi i64 [ 2, %append_separator ], [ 1, %append_star ]
+              %pattern_capacity = add i64 %len, 3
+              %wide_bytes = mul i64 %pattern_capacity, 2
+              %wide_pattern = call ptr @sollang_alloc(i64 %wide_bytes)
+              %wide_ok = icmp ne ptr %wide_pattern, null
+              br i1 %wide_ok, label %convert_pattern, label %pattern_fail
+            convert_pattern:
+              %actual_pattern_length = add i64 %len, %pattern_extra
+              %capacity32 = trunc i64 %pattern_capacity to i32
+              %converted = call i32 @sollang_windows_utf8_path(ptr %pattern, i64 %actual_pattern_length, ptr %wide_pattern, i32 %capacity32)
               call void @sollang_free(ptr %pattern)
+              %converted_ok = icmp ne i32 %converted, 0
+              br i1 %converted_ok, label %open_wide, label %wide_fail
+            open_wide:
+              %find_data = alloca [592 x i8], align 8
+              %utf8_name = alloca [1040 x i8], align 1
+              %handle = call ptr @FindFirstFileW(ptr %wide_pattern, ptr %find_data)
+              call void @sollang_free(ptr %wide_pattern)
               %invalid = icmp eq ptr %handle, inttoptr (i64 -1 to ptr)
               br i1 %invalid, label %fail, label %enumerate
+            pattern_fail:
+              call void @sollang_free(ptr %pattern)
+              br label %fail
+            wide_fail:
+              call void @sollang_free(ptr %wide_pattern)
+              br label %fail
 
             enumerate:
-              %head = phi ptr [ null, %open ], [ %advanced_head, %advance ]
-              %count = phi i64 [ 0, %open ], [ %advanced_count, %advance ]
-              %total = phi i64 [ 0, %open ], [ %advanced_total, %advance ]
+              %head = phi ptr [ null, %open_wide ], [ %advanced_head, %advance ]
+              %count = phi i64 [ 0, %open_wide ], [ %advanced_count, %advance ]
+              %total = phi i64 [ 0, %open_wide ], [ %advanced_total, %advance ]
               %name = getelementptr i8, ptr %find_data, i64 44
               br label %name_length
 
             name_length:
               %name_index = phi i64 [ 0, %enumerate ], [ %name_next, %name_continue ]
-              %name_slot = getelementptr i8, ptr %name, i64 %name_index
-              %name_byte = load i8, ptr %name_slot, align 1
-              %name_end = icmp eq i8 %name_byte, 0
+              %name_slot = getelementptr i16, ptr %name, i64 %name_index
+              %name_unit = load i16, ptr %name_slot, align 2
+              %name_end = icmp eq i16 %name_unit, 0
               %name_limit = icmp eq i64 %name_index, 259
               %name_done = or i1 %name_end, %name_limit
               br i1 %name_done, label %inspect_name, label %name_continue
@@ -3972,21 +4249,27 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br label %name_length
 
             inspect_name:
-              %first = load i8, ptr %name, align 1
-              %second_ptr = getelementptr i8, ptr %name, i64 1
-              %second = load i8, ptr %second_ptr, align 1
+              %first = load i16, ptr %name, align 2
+              %second_ptr = getelementptr i16, ptr %name, i64 1
+              %second = load i16, ptr %second_ptr, align 2
               %length_one = icmp eq i64 %name_index, 1
               %length_two = icmp eq i64 %name_index, 2
-              %first_dot = icmp eq i8 %first, 46
-              %second_dot = icmp eq i8 %second, 46
+              %first_dot = icmp eq i16 %first, 46
+              %second_dot = icmp eq i16 %second, 46
               %dot = and i1 %length_one, %first_dot
               %two_dots = and i1 %first_dot, %second_dot
               %dotdot = and i1 %length_two, %two_dots
               %special = or i1 %dot, %dotdot
-              br i1 %special, label %skip, label %allocate_node
+              br i1 %special, label %skip, label %convert_name
+            convert_name:
+              %name_index32 = trunc i64 %name_index to i32
+              %utf8_length32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %name, i32 %name_index32, ptr %utf8_name, i32 1040, ptr null, ptr null)
+              %name_valid = icmp sgt i32 %utf8_length32, 0
+              br i1 %name_valid, label %allocate_node, label %conversion_failed
 
             allocate_node:
-              %node_size = add i64 %name_index, 24
+              %utf8_length = zext i32 %utf8_length32 to i64
+              %node_size = add i64 %utf8_length, 24
               %node = call ptr @sollang_alloc(i64 %node_size)
               %node_ok = icmp ne ptr %node, null
               br i1 %node_ok, label %initialize_node, label %allocation_failed
@@ -3995,7 +4278,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
               store ptr null, ptr %node_next, align 8
               %node_length = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
-              store i64 %name_index, ptr %node_length, align 8
+              store i64 %utf8_length, ptr %node_length, align 8
               %attributes = load i32, ptr %find_data, align 4
               %reparse_bits = and i32 %attributes, 1024
               %is_reparse = icmp ne i32 %reparse_bits, 0
@@ -4006,10 +4289,10 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %node_kind = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
               store i8 %kind, ptr %node_kind, align 1
               %node_name = getelementptr i8, ptr %node, i64 24
-              call void @llvm.memcpy.p0.p0.i64(ptr %node_name, ptr %name, i64 %name_index, i1 false)
+              call void @llvm.memcpy.p0.p0.i64(ptr %node_name, ptr %utf8_name, i64 %utf8_length, i1 false)
               %inserted_head = call ptr @sollang_directory_insert_sorted(ptr %head, ptr %node)
               %inserted_count = add i64 %count, 1
-              %record_size = add i64 %name_index, 5
+              %record_size = add i64 %utf8_length, 5
               %inserted_total = add i64 %total, %record_size
               br label %advance
 
@@ -4021,7 +4304,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %advanced_count = phi i64 [ %count, %skip ], [ %inserted_count, %initialize_node ]
               %advanced_total = phi i64 [ %total, %skip ], [ %inserted_total, %initialize_node ]
               call void @SetLastError(i32 0)
-              %has_next_status = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+              %has_next_status = call i32 @FindNextFileW(ptr %handle, ptr %find_data)
               %has_next = icmp ne i32 %has_next_status, 0
               br i1 %has_next, label %enumerate, label %finish_enumeration
 
@@ -4048,6 +4331,10 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             allocation_failed:
               call void @sollang_directory_free_nodes(ptr %head)
               %allocation_closed = call i32 @FindClose(ptr %handle)
+              br label %fail
+            conversion_failed:
+              call void @sollang_directory_free_nodes(ptr %head)
+              %conversion_closed = call i32 @FindClose(ptr %handle)
               br label %fail
 
             enumeration_failed:

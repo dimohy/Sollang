@@ -20,6 +20,7 @@ public enum Error {
 public struct Constant {
     public value: Long
     public sourceNode: Int
+    public diagnosticStart: UIntSize
 }
 
 public struct Expansion {
@@ -30,6 +31,11 @@ public struct Expansion {
 enum ItemName {
     Implicit
     Named(syntax.SourceSpan)
+}
+
+struct ItemBinding {
+    name: ItemName
+    diagnosticStart: UIntSize
 }
 
 struct Range {
@@ -101,33 +107,35 @@ range source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Range, Erro
     Range { start: start, count: Int(distance + inclusive!) } -> Result<Range, Error>.Ok
 }
 
-itemName source: Text, nodes: ref [ast.AstNode; ~], rangeRoot: Int, eachRoot: Int -> Result<ItemName, Error> {
+itemName source: Text, nodes: ref [ast.AstNode; ~], rangeRoot: Int, eachRoot: Int -> Result<ItemBinding, Error> {
     source -> lexer.lex => tokens
     nodes[rangeRoot].firstToken + nodes[rangeRoot].tokenCount => index!
     nodes[eachRoot].firstToken + nodes[eachRoot].tokenCount => end
     index! < 0 or end > (tokens -> len) -> if {
-        Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+        Error.InvalidAst(eachRoot) -> Result<ItemBinding, Error>.Err -> return
     }
-    false => sawEach!
+    -1 => eachToken!
     index! < end -> while {
         tokens[index!] => token
         token.kind == grammar.tokenIdLeftBrace() -> if {
-            sawEach! -> if { ItemName.Implicit -> Result<ItemName, Error>.Ok -> return }
-            Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+            eachToken! >= 0 -> if {
+                ItemBinding { name: ItemName.Implicit, diagnosticStart: tokens[eachToken!].span.start } -> Result<ItemBinding, Error>.Ok -> return
+            }
+            Error.InvalidAst(eachRoot) -> Result<ItemBinding, Error>.Err -> return
         }
         token.kind == grammar.tokenIdIdentifier() -> if {
-            sawEach! -> if {
-                ItemName.Named(token.span) -> Result<ItemName, Error>.Ok -> return
+            eachToken! >= 0 -> if {
+                ItemBinding { name: ItemName.Named(token.span), diagnosticStart: tokens[eachToken!].span.start } -> Result<ItemBinding, Error>.Ok -> return
             }
             (source -> slice(token.span.start, token.span.length)) != "each"
                 -> if {
-                    Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err -> return
+                    Error.InvalidAst(eachRoot) -> Result<ItemBinding, Error>.Err -> return
                 }
-            true => sawEach!
+            index! => eachToken!
         }
         index! + 1 => index!
     }
-    Error.InvalidAst(eachRoot) -> Result<ItemName, Error>.Err
+    Error.InvalidAst(eachRoot) -> Result<ItemBinding, Error>.Err
 }
 
 # Expand one range or each element in its owning array/dictionary. Dictionary
@@ -151,12 +159,12 @@ public expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Exp
         [Constant; ~] => constants!
         0 => index!
         index! < bounds.count -> while {
-            constants! -> push(Constant { value: bounds.start + Long(index!), sourceNode: root })
+            constants! -> push(Constant { value: bounds.start + Long(index!), sourceNode: root, diagnosticStart: node.start })
             index! + 1 => index!
         }
         Expansion { constants: constants!, dictionary: false } -> Result<Expansion, Error>.Ok -> return
     }
-    node.kind != 83 -> if {
+    node.kind != 84 -> if {
         Error.InvalidSelector(root) -> Result<Expansion, Error>.Err -> return
     }
     -1 => rangeRoot!
@@ -192,7 +200,7 @@ public expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Exp
         Expansion { constants: [Constant; ~], dictionary: dictionary } -> Result<Expansion, Error>.Ok -> return
     }
     source -> itemName(nodes, rangeRoot!, root)? => nameSource
-    nameSource -> when {
+    nameSource.name -> when {
         Implicit { "it" }
         Named(span) { source -> slice(span.start, span.length) }
     } => name
@@ -205,8 +213,8 @@ public expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Exp
             bounds.start + Long(itemIndex!) => item
             firstPlan! -> evaluatePlan(item)? => key
             secondPlan! -> evaluatePlan(item)? => value
-            constants! -> push(Constant { value: key, sourceNode: first! })
-            constants! -> push(Constant { value: value, sourceNode: second! })
+            constants! -> push(Constant { value: key, sourceNode: first!, diagnosticStart: nameSource.diagnosticStart })
+            constants! -> push(Constant { value: value, sourceNode: second!, diagnosticStart: nameSource.diagnosticStart })
             itemIndex! + 1 => itemIndex!
         }
     } else {
@@ -214,7 +222,7 @@ public expand source: Text, nodes: ref [ast.AstNode; ~], root: Int -> Result<Exp
         itemIndex! < bounds.count -> while {
             bounds.start + Long(itemIndex!) => item
             firstPlan! -> evaluatePlan(item)? => value
-            constants! -> push(Constant { value: value, sourceNode: first! })
+            constants! -> push(Constant { value: value, sourceNode: first!, diagnosticStart: nameSource.diagnosticStart })
             itemIndex! + 1 => itemIndex!
         }
     }

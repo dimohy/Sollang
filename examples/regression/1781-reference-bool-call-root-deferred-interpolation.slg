@@ -1,0 +1,28 @@
+# A Bool-returning call reads its readonly reference argument and formats the
+# call result in both deferred Text paths.
+struct State {
+    ready: Bool
+}
+
+ready state: ref State -> ref Bool { state.ready }
+
+readReady value: ref Bool -> Bool { value }
+
+show prefix: Text, value: Text -> Unit uses Console {
+    prefix -> print
+    value -> println
+}
+
+main {
+    State { ready: true } => yes
+    State { ready: false } => no
+    yes -> ready => borrowedYes
+    no -> ready => borrowedNo
+    Arena(0) => storage!
+
+    "arena=$(readReady(borrowedYes))"
+        -> materialize(storage!) => materialized
+    materialized -> println
+
+    "call:" -> show("result=$(readReady(borrowedNo))")
+}

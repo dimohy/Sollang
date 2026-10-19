@@ -1,0 +1,40 @@
+struct Holder { bytes: [UInt8; 4] }
+
+bytes value: UInt8 -> [UInt8; 4] => [value; 4]
+
+choose enabled: Bool -> Result<Int, Int> {
+    enabled -> if { Result<Int, Int>.Ok(1) } else { Result<Int, Int>.Err(2) }
+}
+
+replace holder: mut Holder, enabled: Bool -> Result<Int, Int> {
+    bytes(11) => next
+    choose(enabled) -> when {
+        Ok(value) {
+            next => holder.bytes
+            Result<Int, Int>.Ok(value)
+        }
+        Err(error) { Result<Int, Int>.Err(error) }
+    }
+}
+
+replaceLoop holder: mut Holder -> Unit {
+    0 => index!
+    index! < 3 -> while {
+        bytes(UInt8(index!)) => next
+        choose(index! % 2 == 0) -> when {
+            Ok(value) { next => holder.bytes }
+            Err(error) {}
+        }
+        index! + 1 => index!
+    }
+}
+
+main {
+    Holder { bytes: bytes(1) } => holder!
+    holder! -> replace(false) -> when { Ok(value) {} Err(error) {} }
+    "retained=$(holder!.bytes[0])" -> println
+    holder! -> replace(true) -> when { Ok(value) {} Err(error) {} }
+    "transferred=$(holder!.bytes[0])" -> println
+    holder! -> replaceLoop
+    "loop=$(holder!.bytes[0])" -> println
+}

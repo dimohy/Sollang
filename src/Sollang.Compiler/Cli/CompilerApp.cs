@@ -19,6 +19,7 @@ internal static class CompilerApp
 
     public static int Run(string[] args)
     {
+        Console.OutputEncoding = new UTF8Encoding(false);
         try
         {
             if (args is ["--version"] or ["-v"])
@@ -326,52 +327,30 @@ internal static class CompilerApp
         LlvmToolchain toolchain,
         LlvmCodegenOutput codegenOutput)
     {
-        var workDir = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))
-                ?? Directory.GetCurrentDirectory(),
-            Path.GetFileNameWithoutExtension(options.OutputPath) + ".slg-tmp");
-
-        if (Directory.Exists(workDir))
+        using var transaction = new NativeOutputTransaction(options.OutputPath);
+        using (var writer = new StreamWriter(
+            transaction.LlvmStagePath,
+            append: false,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
         {
-            Directory.Delete(workDir, recursive: true);
+            codegenOutput.CopyTo(new TextWriterOutputSink(writer));
         }
-
-        Directory.CreateDirectory(workDir);
-
-        try
-        {
-            var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
-            using (var writer = new StreamWriter(
-                llPath,
-                append: false,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-            {
-                codegenOutput.CopyTo(new TextWriterOutputSink(writer));
-            }
-            LinkLlvmIr(options, toolchain, llPath, workDir);
-
-            if (options.KeepTemps)
-            {
-                var keptLlPath = Path.ChangeExtension(options.OutputPath, ".ll");
-                File.Copy(llPath, keptLlPath, overwrite: true);
-            }
-        }
-        finally
-        {
-            if (!options.KeepTemps && Directory.Exists(workDir))
-            {
-                Directory.Delete(workDir, recursive: true);
-            }
-        }
+        LinkLlvmIr(options, toolchain, transaction.LlvmStagePath,
+            transaction.ExecutableStagePath, transaction.WorkDirectory);
+        transaction.Publish(options.KeepTemps);
     }
 
     private static void WriteKeptLlvm(string outputPath, LlvmCodegenOutput codegenOutput)
     {
-        using var writer = new StreamWriter(
-            Path.ChangeExtension(outputPath, ".ll"),
+        using var transaction = new NativeOutputTransaction(outputPath);
+        using (var writer = new StreamWriter(
+            transaction.LlvmStagePath,
             append: false,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        codegenOutput.CopyTo(new TextWriterOutputSink(writer));
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+        {
+            codegenOutput.CopyTo(new TextWriterOutputSink(writer));
+        }
+        transaction.PublishLlvmOnly();
     }
 
     internal static void CompileStandalone(CliOptions options, SollangProgram program)
@@ -391,45 +370,21 @@ internal static class CompilerApp
         LlvmToolchain toolchain,
         BoundProgram program)
     {
-        var workDir = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))
-                ?? Directory.GetCurrentDirectory(),
-            Path.GetFileNameWithoutExtension(options.OutputPath) + ".slg-tmp");
-
-        if (Directory.Exists(workDir))
+        using var transaction = new NativeOutputTransaction(options.OutputPath);
+        using (var writer = new StreamWriter(
+            transaction.LlvmStagePath,
+            append: false,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
         {
-            Directory.Delete(workDir, recursive: true);
+            LlvmIrGenerator.WriteProgram(
+                program,
+                options.Target,
+                writer,
+                options.OutputKind == CompilationOutputKind.SharedLibrary);
         }
-
-        Directory.CreateDirectory(workDir);
-        try
-        {
-            var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
-            using (var writer = new StreamWriter(
-                llPath,
-                append: false,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
-            {
-                LlvmIrGenerator.WriteProgram(
-                    program,
-                    options.Target,
-                    writer,
-                    options.OutputKind == CompilationOutputKind.SharedLibrary);
-            }
-            LinkLlvmIr(options, toolchain, llPath, workDir);
-
-            if (options.KeepTemps)
-            {
-                File.Copy(llPath, Path.ChangeExtension(options.OutputPath, ".ll"), overwrite: true);
-            }
-        }
-        finally
-        {
-            if (!options.KeepTemps && Directory.Exists(workDir))
-            {
-                Directory.Delete(workDir, recursive: true);
-            }
-        }
+        LinkLlvmIr(options, toolchain, transaction.LlvmStagePath,
+            transaction.ExecutableStagePath, transaction.WorkDirectory);
+        transaction.Publish(options.KeepTemps);
     }
 
     private static void PrintOutput(string outputPath)
@@ -454,14 +409,15 @@ internal static class CompilerApp
         return code.StartsWith('N') ? "note" : "warning";
     }
 
-    private static void LinkLlvmIr(CliOptions options, LlvmToolchain toolchain, string llPath, string workDir)
+    private static void LinkLlvmIr(CliOptions options, LlvmToolchain toolchain,
+        string llPath, string executableStagePath, string workDir)
     {
         switch (options.Target)
         {
             case CompilationTarget.WindowsX64:
-                new WindowsLinker(toolchain).LinkLlvmIr(
+                new WindowsLinker(toolchain) { MaximumWorkers = options.Jobs }.LinkLlvmIr(
                     llPath,
-                    options.OutputPath,
+                    executableStagePath,
                     workDir,
                     options.OptimizationLevel,
                     options.OutputKind == CompilationOutputKind.SharedLibrary);
@@ -469,13 +425,13 @@ internal static class CompilerApp
             case CompilationTarget.LinuxX64:
                 new WslLinuxLinker(toolchain).LinkLlvmIr(
                     llPath,
-                    options.OutputPath,
+                    executableStagePath,
                     workDir,
                     options.OptimizationLevel,
                     options.OutputKind == CompilationOutputKind.SharedLibrary);
                 break;
             case CompilationTarget.Wasm32Browser:
-                new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
+                new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, executableStagePath, workDir, options.OptimizationLevel);
                 break;
             default:
                 throw new SollangException($"unsupported target '{options.Target}'");
@@ -508,7 +464,7 @@ internal static class CompilerApp
         }
 
         var program = new SollangProgram(
-            [],
+            executableFiles.Length == 1 ? executableFiles[0].Program.NamespacePath : [],
             [],
             standardLibrary.SelectMany(static source => source.Program.Structs)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Structs))
@@ -1033,12 +989,7 @@ internal static class CompilerApp
         IReadOnlyDictionary<string, IReadOnlyList<OpenImportCandidate>>? openImports = null)
     {
         var sourceBytes = File.ReadAllBytes(path);
-        using var stream = new MemoryStream(sourceBytes, writable: false);
-        using var reader = new StreamReader(
-            stream,
-            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
-            detectEncodingFromByteOrderMarks: true);
-        var sourceText = reader.ReadToEnd();
+        var sourceText = Utf8SourceDecoder.Decode(sourceBytes);
         var tokens = new Lexer(sourceText).Lex();
         try
         {
@@ -1076,7 +1027,8 @@ internal static class CompilerApp
                 throw new SollangException(
                     $"{import.Line}:{import.Column}: library alias '{import.Alias}' already exists");
             }
-            var loaded = SollangLibraryManifest.Load(import, sourcePath, target);
+            var loaded = SollangLibraryManifest.Load(
+                import, sourcePath, target, string.Join('.', parsed.Program.NamespacePath));
             functions.AddRange(loaded.Functions);
             inputs.Add(loaded.Input);
         }

@@ -61,6 +61,7 @@ whenReturns whenIndex: Int, context: ref emitterContext.EmitContext, state: ref 
     false => hasElse!
     true => allArmsReturn!
     whenNode.operand1 => armIndex!
+    whenNode.kind == 33 -> if { whenNode.operand0 => armIndex! }
     true => armOpen!
     armIndex! >= 0 and armOpen! -> while {
         context.ir[armIndex!] => arm
@@ -68,12 +69,10 @@ whenReturns whenIndex: Int, context: ref emitterContext.EmitContext, state: ref 
             false => armOpen!
         } else {
             true => hasArm!
+            arm -> sourceNode(context, state) => armSource
             armIndex! => armRegion!
-            arm.kind == 19 and arm.operand1 >= 0 -> if {
-                arm.operand1 => armRegion!
-            } else {
-                true => hasElse!
-            }
+            armSource.kind == 58 and arm.operand1 >= 0
+                -> if { arm.operand1 => armRegion! } else { true => hasElse! }
             armRegion! -> regionReturns(context, state)
                 -> unless { false => allArmsReturn! }
             arm.nextOperand => armIndex!
@@ -86,7 +85,13 @@ controlReturns controlIndex: Int, context: ref emitterContext.EmitContext, state
     context.ir[controlIndex] => control
     control.kind == 23 -> if { true } else {
         control.kind == 27 -> if { controlIndex -> enumMatchReturns(context, state) } else {
-            control.kind == 34 -> if { controlIndex -> whenReturns(context, state) } else { false }
+            control.kind == 33 or control.kind == 34 -> if { controlIndex -> whenReturns(context, state) } else {
+                control.kind == 18 and control.operand1 >= 0 and control.nextOperand >= 0
+                    -> if {
+                        (control.operand1 -> regionReturns(context, state))
+                            and (control.nextOperand -> regionReturns(context, state))
+                    } else { false }
+            }
         }
     }
 }
@@ -194,7 +199,7 @@ regionReturns regionIndex: Int, context: ref emitterContext.EmitContext, state: 
     }
     returns!
 }
-emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, tryAst: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, tryAst: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     operandIndex < 0 or operandIndex >= (context.ir -> len)
         -> if {
             "; sollang compiler error S039: result propagation lacks an operand at ir $tryIndex (operand $operandIndex, parent $parentIndex, ast $tryAst, owner $ownerIndex)" -> println
@@ -202,7 +207,7 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
         }
     context.ir[operandIndex] => operand
     context.ir[ownerIndex] => owner
-    operand.typeId => operandTypeId
+    context.types -> typeIds.materializedReadTypeId(operand.typeId) => operandTypeId
     owner.typeId => ownerTypeId
     operandTypeId < 0 or operandTypeId >= (context.types -> len)
         or ownerTypeId < 0 or ownerTypeId >= (context.types -> len)
@@ -244,6 +249,14 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
         }
     operandType.first => okTypeId
     operandType.second => errorTypeId
+    operand.typeId != operandTypeId => borrowedResult
+    borrowedResult -> if {
+        "  %try$(tryIndex)_read = load " -> print
+        operandTypeId -> writeSemanticTypeId(context, state)
+        ", ptr " -> print
+        operandIndex -> writeValue(ownerIndex, context, state)
+        ", align $(context.typeAligns[operandTypeId])" -> println
+    }
 
     "  %try$(tryIndex)_slot = alloca " -> print
     operandTypeId -> writeSemanticTypeId(context, state)
@@ -251,12 +264,16 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
     "  store " -> print
     operandTypeId -> writeSemanticTypeId(context, state)
     " " -> print
-    operandIndex -> writeValue(ownerIndex, context, state)
+    borrowedResult -> if { "%try$(tryIndex)_read" -> print } else {
+        operandIndex -> writeValue(ownerIndex, context, state)
+    }
     ", ptr %try$(tryIndex)_slot, align $(context.typeAligns[operandTypeId])" -> println
     "  %try$(tryIndex)_tag = extractvalue " -> print
     operandTypeId -> writeSemanticTypeId(context, state)
     " " -> print
-    operandIndex -> writeValue(ownerIndex, context, state)
+    borrowedResult -> if { "%try$(tryIndex)_read" -> print } else {
+        operandIndex -> writeValue(ownerIndex, context, state)
+    }
     ", 0" -> println
     "  %try$(tryIndex)_is_error = icmp eq i32 %try$(tryIndex)_tag, 1" -> println
     "  br i1 %try$(tryIndex)_is_error, label %try$(tryIndex)_error, label %try$(tryIndex)_ok" -> println
@@ -295,9 +312,13 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
                 }
             context.ir[tryCleanupAncestor!].parent => tryCleanupAncestor!
         }
-    "  ret " -> print
-    ownerTypeId -> writeSemanticTypeId(context, state)
-    " %try$(tryIndex)_return_value" -> println
+    owner.flags / 8 % 2 == 1 -> if {
+        ownerIndex -> emitAsyncFunctionCompletion(tryIndex, "%try$(tryIndex)_return_value", context, state)
+    } else {
+        "  ret " -> print
+        ownerTypeId -> writeSemanticTypeId(context, state)
+        " %try$(tryIndex)_return_value" -> println
+    }
     "try$(tryIndex)_ok:" -> println
     context.types[okTypeId] => okType
     # Unit has no LLVM value. A statement-valued `?` only needs the success
@@ -311,8 +332,7 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
                 okType.first < 0 or okType.length < 0 -> if {
                     "; sollang compiler error S038: fixed-array try payload lacks canonical element or static length at ir $tryIndex (type $okTypeId)" -> println
                 }
-                "  %v$(tryIndex)_0 = insertvalue { ptr, i64 } poison, ptr %try$(tryIndex)_ok_addr, 0" -> println
-                "  %v$(tryIndex) = insertvalue { ptr, i64 } %v$(tryIndex)_0, i64 $(okType.length), 1" -> println
+                "  %v$(tryIndex) = load { ptr, i64 }, ptr %try$(tryIndex)_ok_addr, align $(context.pointerBitWidth / 8)" -> println
             } else {
                 "  %v$(tryIndex) = load " -> print
                 okTypeId -> writeSemanticTypeId(context, state)
@@ -320,7 +340,7 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
             }
         }
 }
-emitResultPropagation tryIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitResultPropagation tryIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[tryIndex] => tryNode
     tryIndex -> emitResultPropagationValue(tryNode.operand0, tryNode.parent, tryNode.astNode, ownerIndex, emissionOrder, context, state)
 }
@@ -334,14 +354,217 @@ localSchedulePending nodeIndex: Int, localStart: Int, localEnd: Int, scheduled: 
         and not scheduled[nodeIndex - localStart]
 }
 
-emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+# A projected user-block result executes inside its lexical invocation.
+# The outer readiness table waits for that scope; nested tables own its values.
+regionValueScheduleIndex valueIndex: Int, regionIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    valueIndex => dependency!
+    valueIndex => ancestor!
+    0 => depth!
+    ancestor! >= 0 and ancestor! < (context.ir -> len)
+        and ancestor! != regionIndex and depth! < (context.ir -> len)
+        -> while {
+            context.ir[ancestor!] => owner
+            owner -> isUserBlockScope -> if { ancestor! => dependency! }
+            owner.parent => ancestor!
+            depth! + 1 => depth!
+        }
+    ancestor! == regionIndex -> if { dependency! } else { valueIndex }
+}
+
+struct RegionStatementProjection {
+    known: [Bool; ~]
+    scopes: [Int; ~]
+    roots: [Int; ~]
+    previousKnown: [Bool; ~]
+    previousRoots: [Int; ~]
+    firstChildren: [Int; ~]
+    nextSiblings: [Int; ~]
+}
+
+prepareRegionStatementProjection localStart: Int, localEnd: Int, context: ref emitterContext.EmitContext -> RegionStatementProjection {
+    [Bool; ~] => known!
+    [Int; ~] => scopes!
+    [Int; ~] => roots!
+    [Bool; ~] => previousKnown!
+    [Int; ~] => previousRoots!
+    [Int; ~] => firstChildren!
+    [Int; ~] => lastChildren!
+    [Int; ~] => nextSiblings!
+    localStart => index!
+    index! < localEnd -> while {
+        known! -> push(false)
+        scopes! -> push(-1)
+        roots! -> push(-1)
+        previousKnown! -> push(false)
+        previousRoots! -> push(-1)
+        firstChildren! -> push(-1)
+        lastChildren! -> push(-1)
+        nextSiblings! -> push(-1)
+        index! + 1 => index!
+    }
+    localStart => child!
+    child! < localEnd -> while {
+        context.ir[child!].parent => parent
+        parent >= localStart and parent < localEnd -> if {
+            parent - localStart => parentSlot
+            lastChildren![parentSlot] => previousChild
+            previousChild < 0 -> if { child! => firstChildren![parentSlot] } else {
+                child! => nextSiblings![previousChild - localStart]
+            }
+            child! => lastChildren![parentSlot]
+        }
+        child! + 1 => child!
+    }
+    RegionStatementProjection {
+        known: known!, scopes: scopes!, roots: roots!,
+        previousKnown: previousKnown!, previousRoots: previousRoots!,
+        firstChildren: firstChildren!, nextSiblings: nextSiblings!
+    }
+}
+
+# Only frozen identities are projected. The nearest earlier root is shared by
+# every candidate in that statement; its subtree is a shared member bucket.
+# Caller arguments and parameter aliases precede the copied producer body.
+# At a yield, producer inputs likewise precede caller role aliases and effects.
+# Source offsets belong to different declarations and cannot order these phases.
+struct UserBlockStatementOrder {
+    phase: Int
+    position: UIntSize
+}
+
+userBlockStatementOrder rootIndex: Int, scopeIndex: Int, localStart: Int, localEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> UserBlockStatementOrder {
+    context.ir[rootIndex] => root
+    root -> sourceStart(context, state) => position!
+    2 => phase!
+    context.ir[scopeIndex] => scope
+    scope.kind == 19 and scope.opcode == -227 and scope.symbol >= -1
+        -> if {
+            root.kind == 17 and root.opcode == -227
+                -> if { 1 => phase! }
+            localStart => search!
+            search! < localEnd -> while {
+                context.ir[search!] => alias
+                alias.parent == scopeIndex and alias.kind == 17
+                    and alias.opcode == -227 and alias.operand0 == rootIndex
+                    -> if {
+                        0 => phase!
+                        alias -> sourceStart(context, state) => position!
+                    }
+                search! + 1 => search!
+            }
+        }
+    UserBlockStatementOrder { phase: phase!, position: position! }
+}
+
+regionStatementPrecedes candidateIndex: Int, rootIndex: Int, scopeIndex: Int, localStart: Int, localEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[candidateIndex] => candidate
+    candidate.kind == 19 and candidate.opcode == -227 and candidate.symbol == -2
+        -> if { false -> return }
+    candidateIndex -> userBlockStatementOrder(scopeIndex, localStart, localEnd, context, state) => candidateOrder
+    rootIndex -> userBlockStatementOrder(scopeIndex, localStart, localEnd, context, state) => rootOrder
+    candidateOrder.phase < rootOrder.phase
+        or (candidateOrder.phase == rootOrder.phase and candidateOrder.position < rootOrder.position)
+}
+
+projectRegionStatement candidateIndex: Int, regionIndex: Int, localStart: Int, localEnd: Int, bindingViaOperand: Bool, known: mut [Bool; ~], scopes: mut [Int; ~], roots: mut [Int; ~], previousKnown: mut [Bool; ~], previousRoots: mut [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit {
+    regionIndex => scope!
+    candidateIndex => child!
+    context.ir[candidateIndex].parent => ancestor!
+    ancestor! >= localStart and ancestor! < localEnd and ancestor! != regionIndex
+        -> while {
+            context.ir[ancestor!] => owner
+            owner.kind == 6 and (owner.opcode -> typedIr.isDirectIterationOpcode) and child! != owner.operand0 and scope! == regionIndex
+                -> if { ancestor! => scope! }
+            ancestor! => child!
+            owner.parent => ancestor!
+        }
+    candidateIndex => root!
+    context.ir[candidateIndex].parent => rootParent!
+    bindingViaOperand -> if {
+        context.ir[candidateIndex].operand0 => root!
+        context.ir[root!].parent => rootParent!
+    }
+    rootParent! >= 0 and rootParent! != scope! -> while {
+        rootParent! => root!
+        context.ir[rootParent!].parent => rootParent!
+    }
+    candidateIndex - localStart => candidateSlot
+    scope! => scopes[candidateSlot]
+    root! => roots[candidateSlot]
+    true => known[candidateSlot]
+    root! - localStart => rootSlot
+    not previousKnown[rootSlot] -> if {
+        -1 => previousRoot!
+        localStart => search!
+        search! < localEnd -> while {
+            context.ir[search!] => rootCandidate
+            rootCandidate.parent == scope!
+                and (search! -> regionStatementPrecedes(root!, scope!, localStart, localEnd, context, state))
+                -> if {
+                    previousRoot! < 0
+                        or (previousRoot! -> regionStatementPrecedes(search!, scope!, localStart, localEnd, context, state))
+                        -> if {
+                            search! => previousRoot!
+                        }
+                }
+            search! + 1 => search!
+        }
+        previousRoot! => previousRoots[rootSlot]
+        true => previousKnown[rootSlot]
+    }
+}
+
+# Read completion afresh. A control node itself remains a member; only its
+# descendants are outside the enclosing statement's non-nested member bucket.
+regionPreviousStatementPending rootIndex: Int, localStart: Int, scheduled: ref [Bool; ~], projection: ref RegionStatementProjection, context: ref emitterContext.EmitContext -> Bool {
+    rootIndex => member!
+    true => searching!
+    searching! -> while {
+        not scheduled[member! - localStart] -> if { true -> return }
+        -1 => child!
+        context.ir[member!].kind != 19 and context.ir[member!].kind != 20
+            -> if { projection.firstChildren[member! - localStart] => child! }
+        child! >= 0 -> if { child! => member! } else {
+            true => seekingSibling!
+            seekingSibling! -> while {
+                member! == rootIndex -> if {
+                    false => searching!
+                    false => seekingSibling!
+                } else {
+                    projection.nextSiblings[member! - localStart] => sibling
+                    sibling >= 0 -> if {
+                        sibling => member!
+                        false => seekingSibling!
+                    } else { context.ir[member!].parent => member! }
+                }
+            }
+        }
+    }
+    false
+}
+
+emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    regionIndex -> emitRegionState(emissionOrder, context, state) => terminated
+}
+
+emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     context.pointerBitWidth / 8 => regionPointerAlignment
     context.ir[regionIndex] => region
     region.parent => ownerIndex!
+    region.kind == 0 or region.kind == 11 -> if { regionIndex => ownerIndex! }
     ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11
         -> while { context.ir[ownerIndex!].parent => ownerIndex! }
     ownerIndex! + 1 => regionLocalStart
     ownerIndex! -> functionEnd(context, state) => regionLocalEnd
+    # Region tasks share frozen IR. Select condition candidates once instead of
+    # scanning every function node for every expression's condition ownership.
+    [Int; ~] => regionIfIndices!
+    regionLocalStart => regionIfIndex!
+    regionIfIndex! < regionLocalEnd -> while {
+        context.ir[regionIfIndex!].kind == 18
+            -> if { regionIfIndices! -> push(regionIfIndex!) }
+        regionIfIndex! + 1 => regionIfIndex!
+    }
     [Int; ~] => regionEventKinds!
     [Int; ~] => regionOrder!
     [Int; ~] => regionTaskKinds!
@@ -365,10 +588,29 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
         regionTaskKinds![regionTaskSize!] => regionTaskKind
         regionTaskNodes![regionTaskSize!] => regionTaskNode
         regionTaskKind == 0 -> if {
+            regionLocalStart -> prepareRegionStatementProjection(regionLocalEnd, context) => statementProjection!
+            # Root eligibility is fixed for this region task. Nested regions
+            # select their own roots; candidate ancestry remains independent.
+            [Int; ~] => localLogicalIfRoots!
+            0 => localIfRootCursor!
+            localIfRootCursor! < (regionIfIndices! -> len)
+                -> while {
+                    regionIfIndices![localIfRootCursor!] => localIfIndex
+                    context.ir[localIfIndex] => localIfNode
+                    NodeAncestorRequest { nodeIndex: localIfIndex, ownerIndex: regionTaskNode } -> irDescendsFrom(context, state) => localIfBelongsToRegion
+                    context.ir[localIfNode.operand0] => localIfRoot
+                    localIfBelongsToRegion and (localIfRoot.kind == 8 and (localIfRoot.opcode == -25 or localIfRoot.opcode == -24) or (localIfRoot.kind == 7 and localIfRoot.opcode == -26))
+                        -> if { localLogicalIfRoots! -> push(localIfNode.operand0) }
+                    localIfRootCursor! + 1 => localIfRootCursor!
+                }
             [Bool; ~] => localScheduled!
+            [Bool; ~] => localIfConditionKnown!
+            [Bool; ~] => localIfConditions!
             regionLocalStart => localScheduleInit!
             localScheduleInit! < regionLocalEnd -> while {
                 localScheduled! -> push(false)
+                localIfConditionKnown! -> push(false)
+                localIfConditions! -> push(false)
                 localScheduleInit! + 1 => localScheduleInit!
             }
             [Int; ~] => localOrder!
@@ -405,28 +647,42 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             }
                                         }
                                 }
+                            # Parallel evaluates its source before entering the callback.
+                            # A callback region rooted at the call owns only its body.
+                            belongsToLocalRegion! and context.ir[regionTaskNode].kind == 6
+                                and (context.ir[regionTaskNode].opcode == -207 or context.ir[regionTaskNode].opcode == -209)
+                                and context.ir[regionTaskNode].operand0 >= 0
+                                -> if {
+                                    context.ir[regionTaskNode].operand0 => parallelSourceRoot
+                                    NodeAncestorRequest { nodeIndex: localCandidateIndex!, ownerIndex: parallelSourceRoot } -> irDescendsFrom(context, state) => belongsToParallelSource
+                                    localCandidateIndex! == parallelSourceRoot or belongsToParallelSource
+                                        -> if {
+                                            false => belongsToLocalRegion!
+                                            true => localScheduled![localCandidateIndex! - regionLocalStart]
+                                            true => localProgress!
+                                        }
+                                }
                             belongsToLocalRegion! -> if {
                                 false => localIfCondition!
-                                regionLocalStart => localIfSearch!
-                                localIfSearch! < regionLocalEnd -> while {
-                                    context.ir[localIfSearch!] => localIfCandidate
-                                    localIfCandidate.kind == 18 -> if {
-                                        # A nested branch owns its own expression emission.
-                                        # Outer short-circuit conditions cannot suppress that region.
-                                        NodeAncestorRequest { nodeIndex: localIfSearch!, ownerIndex: regionTaskNode } -> irDescendsFrom(context, state) => localIfBelongsToRegion
-                                        context.ir[localIfCandidate.operand0] => localIfRoot
-                                        localIfBelongsToRegion and (localIfRoot.kind == 8 and (localIfRoot.opcode == -25 or localIfRoot.opcode == -24) or (localIfRoot.kind == 7 and localIfRoot.opcode == -26))
-                                            -> if {
-                                                NodeAncestorRequest { nodeIndex: localCandidateIndex!, ownerIndex: localIfCandidate.operand0 } => localIfAncestorRequest
-                                                localIfAncestorRequest -> irDescendsFrom(context, state) => localIfDescends
-                                                localCandidateIndex! == localIfCandidate.operand0 or localIfDescends
-                                                    -> if {
-                                                        true => localIfCondition!
-                                                    }
+                                # Condition ownership depends only on frozen IR and this
+                                # region task. Readiness revisits reuse that decision;
+                                # dynamic operand readiness still runs on every pass.
+                                localIfConditionKnown![localCandidateIndex! - regionLocalStart]
+                                    -> if {
+                                        localIfConditions![localCandidateIndex! - regionLocalStart] => localIfCondition!
+                                    } else {
+                                        0 => localIfCursor!
+                                        localIfCursor! < (localLogicalIfRoots! -> len)
+                                            -> while {
+                                                localLogicalIfRoots![localIfCursor!] => localIfRootIndex
+                                                NodeAncestorRequest { nodeIndex: localCandidateIndex!, ownerIndex: localIfRootIndex } -> irDescendsFrom(context, state) => localIfDescends
+                                                localCandidateIndex! == localIfRootIndex or localIfDescends
+                                                    -> if { true => localIfCondition! }
+                                                localIfCursor! + 1 => localIfCursor!
                                             }
+                                        localIfCondition! => localIfConditions![localCandidateIndex! - regionLocalStart]
+                                        true => localIfConditionKnown![localCandidateIndex! - regionLocalStart]
                                     }
-                                    localIfSearch! + 1 => localIfSearch!
-                                }
                                 false => localInsideLogicalValue!
                                 localCandidate.parent => localLogicalAncestor!
                                 localLogicalAncestor! >= 0 and localLogicalAncestor! != regionTaskNode and not localInsideLogicalValue!
@@ -443,18 +699,22 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                     true => localScheduled![localCandidateIndex! - regionLocalStart]
                                     true => localProgress!
                                 }
-                                not localIfCondition! and localCandidate.kind == 19
+                                not localIfCondition! and localCandidate.kind == 19 and not (localCandidate -> isUserBlockScope)
                                     -> if {
                                         true => localScheduled![localCandidateIndex! - regionLocalStart]
                                         true => localProgress!
                                     }
-                                not localIfCondition! and localCandidate.kind != 19
+                                not localIfCondition! and (localCandidate.kind != 19 or (localCandidate -> isUserBlockScope))
                                     -> if {
                                         true => localReady!
-                                        regionTaskNode => localStatementScope!
-                                        # A role's body reads the item created by its
-                                        # loop header. Its source is evaluated before
-                                        # that header and must not acquire this edge.
+                                        not statementProjection!.known[localCandidateIndex! - regionLocalStart]
+                                            -> if {
+                                                localCandidateIndex! -> projectRegionStatement(regionTaskNode, regionLocalStart, regionLocalEnd, bindingBelongsViaOperand!, statementProjection!.known, statementProjection!.scopes, statementProjection!.roots, statementProjection!.previousKnown, statementProjection!.previousRoots, context, state)
+                                            }
+                                        statementProjection!.roots[localCandidateIndex! - regionLocalStart] => localStatementRoot
+                                        statementProjection!.previousRoots[localStatementRoot - regionLocalStart] => localPreviousRoot
+                                        # A role's body still waits for its current header state.
+                                        # Its source does not acquire that dynamic edge.
                                         localCandidateIndex! => eachChild!
                                         localCandidate.parent => eachAncestor!
                                         eachAncestor! >= regionLocalStart
@@ -462,66 +722,16 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             and eachAncestor! != regionTaskNode
                                             -> while {
                                                 context.ir[eachAncestor!] => eachOwner
-                                                eachOwner.kind == 6 and eachOwner.opcode == -208
-                                                    and eachChild! != eachOwner.operand0
-                                                    and localStatementScope! == regionTaskNode
-                                                    -> if { eachAncestor! => localStatementScope! }
-                                                eachOwner.kind == 6 and eachOwner.opcode == -208
+                                                eachOwner.kind == 6 and (eachOwner.opcode -> typedIr.isDirectIterationOpcode)
                                                     and eachChild! != eachOwner.operand0
                                                     and not localScheduled![eachAncestor! - regionLocalStart]
                                                     -> if { false => localReady! }
                                                 eachAncestor! => eachChild!
                                                 eachOwner.parent => eachAncestor!
                                             }
-                                        localCandidateIndex! => localStatementRoot!
-                                        localCandidate.parent => localRootParent!
-                                        bindingBelongsViaOperand! -> if {
-                                            localCandidate.operand0 => localStatementRoot!
-                                            context.ir[localCandidate.operand0].parent => localRootParent!
-                                        }
-                                        localRootParent! >= 0 and localRootParent! != localStatementScope!
-                                            -> while {
-                                                localRootParent! => localStatementRoot!
-                                                context.ir[localRootParent!].parent => localRootParent!
-                                            }
-                                        -1 => localPreviousRoot!
-                                        UIntSize(0) => localPreviousRootStart!
-                                        regionLocalStart => localRootSearch!
-                                        localRootSearch! < regionLocalEnd -> while {
-                                            context.ir[localRootSearch!] => localRootCandidate
-                                            localRootCandidate.parent == localStatementScope! and (localRootCandidate -> sourceStart(context, state)) < (context.ir[localStatementRoot!] -> sourceStart(context, state))
-                                                -> if {
-                                                    localRootCandidate -> sourceStart(context, state) => localRootCandidateStart
-                                                    localPreviousRoot! < 0 or localRootCandidateStart > localPreviousRootStart!
-                                                        -> if {
-                                                            localRootSearch! => localPreviousRoot!
-                                                            localRootCandidateStart => localPreviousRootStart!
-                                                        }
-                                                }
-                                            localRootSearch! + 1 => localRootSearch!
-                                        }
-                                        localPreviousRoot! >= 0 -> if {
-                                            regionLocalStart => localPreviousMemberSearch!
-                                            localPreviousMemberSearch! < regionLocalEnd -> while {
-                                                not localScheduled![localPreviousMemberSearch! - regionLocalStart]
-                                                    -> if {
-                                                        localPreviousMemberSearch! => localPreviousMemberRoot!
-                                                        context.ir[localPreviousMemberSearch!].parent => localPreviousMemberParent!
-                                                        false => localPreviousMemberNested!
-                                                        localPreviousMemberParent! >= 0 and localPreviousMemberParent! != localStatementScope! and not localPreviousMemberNested!
-                                                            -> while {
-                                                                context.ir[localPreviousMemberParent!].kind == 19 or context.ir[localPreviousMemberParent!].kind == 20
-                                                                    -> if { true => localPreviousMemberNested! } else {
-                                                                        localPreviousMemberParent! => localPreviousMemberRoot!
-                                                                        context.ir[localPreviousMemberParent!].parent => localPreviousMemberParent!
-                                                                    }
-                                                            }
-                                                        not localPreviousMemberNested! and localPreviousMemberParent! == localStatementScope! and localPreviousMemberRoot! == localPreviousRoot!
-                                                            -> if { false => localReady! }
-                                                    }
-                                                localPreviousMemberSearch! + 1 => localPreviousMemberSearch!
-                                            }
-                                        }
+                                        localPreviousRoot >= 0
+                                            and (localPreviousRoot -> regionPreviousStatementPending(regionLocalStart, localScheduled!, statementProjection!, context))
+                                            -> if { false => localReady! }
                                         localCandidate.kind != 20 and localCandidate.operand0 >= 0 and (localCandidate.kind != 5 or context.ir[localCandidate.operand0].flags % 2 == 0)
                                             -> if {
                                                 context.ir[localCandidate.operand0].parent => localOperandAncestor!
@@ -544,7 +754,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             and localCandidate.operand0 >= regionLocalStart
                                             and localCandidate.operand0 < regionLocalEnd
                                             -> if {
-                                                localCandidate.operand0 -> aggregateValueIndex(context, state) => localAssignmentValue
+                                                localCandidate.operand0 -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localAssignmentValue
                                                 localAssignmentValue >= regionLocalStart
                                                     and localAssignmentValue < regionLocalEnd
                                                     and not localScheduled![localAssignmentValue - regionLocalStart]
@@ -553,12 +763,12 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                                 localAssignmentChildSearch! < regionLocalEnd and localReady!
                                                     -> while {
                                                         context.ir[localAssignmentChildSearch!].parent == localCandidate.operand0
-                                                            and not localScheduled![localAssignmentChildSearch! - regionLocalStart]
+                                                            and ((localAssignmentChildSearch! -> regionValueScheduleIndex(regionTaskNode, context)) -> localSchedulePending(regionLocalStart, regionLocalEnd, localScheduled!))
                                                             -> if { false => localReady! }
                                                         localAssignmentChildSearch! + 1 => localAssignmentChildSearch!
                                                     }
                                             }
-                                        localCandidate.kind != 6 and localCandidate.kind != 18 and localCandidate.kind != 20 and localCandidate.operand1 >= 0
+                                        localCandidate.kind != 6 and localCandidate.kind != 18 and localCandidate.kind != 20 and not (localCandidate -> isUserBlockScope) and localCandidate.operand1 >= 0
                                             -> if {
                                                 context.ir[localCandidate.operand1].parent => localSecondAncestor!
                                                 false => localSecondBelongs!
@@ -570,9 +780,9 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                                     and (localCandidate.operand1 -> localSchedulePending(regionLocalStart, regionLocalEnd, localScheduled!))
                                                     -> if { false => localReady! }
                                             }
-                                        localCandidate.kind == 6 and localCandidate.opcode != -207 and localCandidate.opcode != -208 and localCandidate.opcode != -209 and localCandidate.operand1 >= 0
+                                        localCandidate.kind == 6 and localCandidate.opcode != -207 and not (localCandidate.opcode -> typedIr.isDirectIterationOpcode) and localCandidate.opcode != -209 and localCandidate.operand1 >= 0
                                             -> if {
-                                                localCandidate.operand1 -> aggregateValueIndex(context, state) => localAdditionalArgument
+                                                localCandidate.operand1 -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localAdditionalArgument
                                                 localAdditionalArgument >= regionLocalStart and localAdditionalArgument < regionLocalEnd
                                                     -> if {
                                                         context.ir[localAdditionalArgument].parent => localAdditionalAncestor!
@@ -605,7 +815,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                         (localCandidate.kind == 9 or localCandidate.kind == 6)
                                             and localCandidate.operand0 >= 0
                                             and localCandidate.opcode != -207
-                                            and localCandidate.opcode != -208
+                                            and not (localCandidate.opcode -> typedIr.isDirectIterationOpcode)
                                             and localCandidate.opcode != -209
                                             -> if {
                                                 localCandidate.operand0 => localCallArgument!
@@ -613,7 +823,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                                     -> while {
                                                         not localScheduled![localCallArgument! - regionLocalStart]
                                                             -> if { false => localReady! }
-                                                        localCallArgument! -> aggregateValueIndex(context, state) => localCallArgumentValue
+                                                        localCallArgument! -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localCallArgumentValue
                                                         localCallArgumentValue >= regionLocalStart
                                                             and localCallArgumentValue < regionLocalEnd
                                                             and not localScheduled![localCallArgumentValue - regionLocalStart]
@@ -636,7 +846,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             }
                                         localCandidate.kind == 9 and (localCandidate.opcode == -204 or localCandidate.opcode == -213) and localCandidate.operand1 >= 0
                                             -> if {
-                                                localCandidate.operand1 -> aggregateValueIndex(context, state) => localPushValue
+                                                localCandidate.operand1 -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localPushValue
                                                 localPushValue >= 0 and localPushValue != localCandidate.operand1
                                                     -> if {
                                                         context.ir[localPushValue].parent => localPushValueAncestor!
@@ -652,7 +862,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             }
                                         localCandidate.kind == 26 and localCandidate.operand0 >= 0
                                             -> if {
-                                                localCandidate.operand0 -> aggregateValueIndex(context, state) => localEnumPayloadValue
+                                                localCandidate.operand0 -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localEnumPayloadValue
                                                 localEnumPayloadValue >= regionLocalStart and localEnumPayloadValue < regionLocalEnd and not localScheduled![localEnumPayloadValue - regionLocalStart]
                                                     -> if { false => localReady! }
                                             }
@@ -660,7 +870,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                                             -> if {
                                                 localCandidate.operand0 => localAggregateOperand!
                                                 localAggregateOperand! >= 0 -> while {
-                                                    localAggregateOperand! -> aggregateValueIndex(context, state) => localAggregateValue
+                                                    localAggregateOperand! -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localAggregateValue
                                                     localAggregateValue -> localSchedulePending(regionLocalStart, regionLocalEnd, localScheduled!)
                                                         -> if { false => localReady! }
                                                     context.ir[localAggregateOperand!].nextOperand => localAggregateOperand!
@@ -690,65 +900,53 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                 localReverseIndex! - 1 => localReverseIndex!
                 localOrder![localReverseIndex!] => localNodeIndex
                 context.ir[localNodeIndex] => localNode
-                localNode.kind == 18 -> if {
-                    regionTaskSize! == (regionTaskKinds! -> len)
-                        -> if {
-                            regionTaskKinds! -> push(4)
-                            regionTaskNodes! -> push(localNodeIndex)
-                        } else {
-                            4 => regionTaskKinds![regionTaskSize!]
-                            localNodeIndex => regionTaskNodes![regionTaskSize!]
-                        }
-                    regionTaskSize! + 1 => regionTaskSize!
-                    localNode.nextOperand >= 0 -> if {
-                        regionTaskSize! == (regionTaskKinds! -> len)
-                            -> if {
-                                regionTaskKinds! -> push(0)
-                                regionTaskNodes! -> push(localNode.nextOperand)
-                            } else {
-                                0 => regionTaskKinds![regionTaskSize!]
-                                localNode.nextOperand => regionTaskNodes![regionTaskSize!]
-                            }
-                        regionTaskSize! + 1 => regionTaskSize!
-                        regionTaskSize! == (regionTaskKinds! -> len)
-                            -> if {
-                                regionTaskKinds! -> push(3)
-                                regionTaskNodes! -> push(localNodeIndex)
-                            } else {
-                                3 => regionTaskKinds![regionTaskSize!]
-                                localNodeIndex => regionTaskNodes![regionTaskSize!]
-                            }
-                        regionTaskSize! + 1 => regionTaskSize!
+                localNode -> isUserBlockScope -> if {
+                    regionTaskSize! == (regionTaskKinds! -> len) -> if {
+                        regionTaskKinds! -> push(9)
+                        regionTaskNodes! -> push(localNodeIndex)
+                    } else {
+                        9 => regionTaskKinds![regionTaskSize!]
+                        localNodeIndex => regionTaskNodes![regionTaskSize!]
                     }
-                    regionTaskSize! == (regionTaskKinds! -> len)
-                        -> if {
-                            regionTaskKinds! -> push(0)
-                            regionTaskNodes! -> push(localNode.operand1)
-                        } else {
-                            0 => regionTaskKinds![regionTaskSize!]
-                            localNode.operand1 => regionTaskNodes![regionTaskSize!]
-                        }
                     regionTaskSize! + 1 => regionTaskSize!
-                    regionTaskSize! == (regionTaskKinds! -> len)
-                        -> if {
-                            regionTaskKinds! -> push(2)
-                            regionTaskNodes! -> push(localNodeIndex)
-                        } else {
-                            2 => regionTaskKinds![regionTaskSize!]
-                            localNodeIndex => regionTaskNodes![regionTaskSize!]
-                        }
+                    regionTaskSize! == (regionTaskKinds! -> len) -> if {
+                        regionTaskKinds! -> push(0)
+                        regionTaskNodes! -> push(localNodeIndex)
+                    } else {
+                        0 => regionTaskKinds![regionTaskSize!]
+                        localNodeIndex => regionTaskNodes![regionTaskSize!]
+                    }
                     regionTaskSize! + 1 => regionTaskSize!
-                } else {
-                    localNode.kind == 20 -> if {
+                } else { localNode.kind == 18 -> if {
                         regionTaskSize! == (regionTaskKinds! -> len)
                             -> if {
-                                regionTaskKinds! -> push(8)
+                                regionTaskKinds! -> push(4)
                                 regionTaskNodes! -> push(localNodeIndex)
                             } else {
-                                8 => regionTaskKinds![regionTaskSize!]
+                                4 => regionTaskKinds![regionTaskSize!]
                                 localNodeIndex => regionTaskNodes![regionTaskSize!]
                             }
                         regionTaskSize! + 1 => regionTaskSize!
+                        localNode.nextOperand >= 0 -> if {
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(0)
+                                    regionTaskNodes! -> push(localNode.nextOperand)
+                                } else {
+                                    0 => regionTaskKinds![regionTaskSize!]
+                                    localNode.nextOperand => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(3)
+                                    regionTaskNodes! -> push(localNodeIndex)
+                                } else {
+                                    3 => regionTaskKinds![regionTaskSize!]
+                                    localNodeIndex => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                        }
                         regionTaskSize! == (regionTaskKinds! -> len)
                             -> if {
                                 regionTaskKinds! -> push(0)
@@ -760,32 +958,62 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
                         regionTaskSize! + 1 => regionTaskSize!
                         regionTaskSize! == (regionTaskKinds! -> len)
                             -> if {
-                                regionTaskKinds! -> push(7)
+                                regionTaskKinds! -> push(2)
                                 regionTaskNodes! -> push(localNodeIndex)
                             } else {
-                                7 => regionTaskKinds![regionTaskSize!]
-                                localNodeIndex => regionTaskNodes![regionTaskSize!]
-                            }
-                        regionTaskSize! + 1 => regionTaskSize!
-                        regionTaskSize! == (regionTaskKinds! -> len)
-                            -> if {
-                                regionTaskKinds! -> push(6)
-                                regionTaskNodes! -> push(localNodeIndex)
-                            } else {
-                                6 => regionTaskKinds![regionTaskSize!]
+                                2 => regionTaskKinds![regionTaskSize!]
                                 localNodeIndex => regionTaskNodes![regionTaskSize!]
                             }
                         regionTaskSize! + 1 => regionTaskSize!
                     } else {
-                        regionTaskSize! == (regionTaskKinds! -> len)
-                            -> if {
-                                regionTaskKinds! -> push(1)
-                                regionTaskNodes! -> push(localNodeIndex)
-                            } else {
-                                1 => regionTaskKinds![regionTaskSize!]
-                                localNodeIndex => regionTaskNodes![regionTaskSize!]
-                            }
-                        regionTaskSize! + 1 => regionTaskSize!
+                        localNode.kind == 20 -> if {
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(8)
+                                    regionTaskNodes! -> push(localNodeIndex)
+                                } else {
+                                    8 => regionTaskKinds![regionTaskSize!]
+                                    localNodeIndex => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(0)
+                                    regionTaskNodes! -> push(localNode.operand1)
+                                } else {
+                                    0 => regionTaskKinds![regionTaskSize!]
+                                    localNode.operand1 => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(7)
+                                    regionTaskNodes! -> push(localNodeIndex)
+                                } else {
+                                    7 => regionTaskKinds![regionTaskSize!]
+                                    localNodeIndex => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(6)
+                                    regionTaskNodes! -> push(localNodeIndex)
+                                } else {
+                                    6 => regionTaskKinds![regionTaskSize!]
+                                    localNodeIndex => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                        } else {
+                            regionTaskSize! == (regionTaskKinds! -> len)
+                                -> if {
+                                    regionTaskKinds! -> push(1)
+                                    regionTaskNodes! -> push(localNodeIndex)
+                                } else {
+                                    1 => regionTaskKinds![regionTaskSize!]
+                                    localNodeIndex => regionTaskNodes![regionTaskSize!]
+                                }
+                            regionTaskSize! + 1 => regionTaskSize!
+                        }
                     }
                 }
             }
@@ -794,7 +1022,7 @@ emitRegion regionIndex: Int, emissionOrder: [Int], context: ref emitterContext.E
             regionOrder! -> push(regionTaskNode)
         }
     }
-    regionIndex -> emitRegionOrder(emissionOrder, regionEventKinds!, regionOrder!, ifActive!, ifThenReachesMerge!, loopActive!, regionTerminated, context, state)
+    regionIndex -> emitRegionOrderState(emissionOrder, regionEventKinds!, regionOrder!, ifActive!, ifThenReachesMerge!, loopActive!, regionTerminated, context, state)
 }
 subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     armResultIndex => resolved!
@@ -854,7 +1082,7 @@ subjectWhenArmResultValueIndex armResultIndex: Int, context: ref emitterContext.
         }
     resolved!
 }
-emitRegionValueRoot valueIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitRegionValueRoot valueIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     valueIndex => regionOwner!
     regionOwner! >= 0 and context.ir[regionOwner!].kind != 0 and context.ir[regionOwner!].kind != 11
         -> while { context.ir[regionOwner!].parent => regionOwner! }
@@ -863,11 +1091,11 @@ emitRegionValueRoot valueIndex: Int, emissionOrder: [Int], context: ref emitterC
     valueIndex -> emitRegionControlExpressions(regionOwner!, context, state)
     valueIndex -> emitRegionIntrinsicExpressions(regionOwner!, regionPointerAlignment, context, state)
     valueIndex -> emitRegionArrayExpressions(regionOwner!, context, state)
-    valueIndex -> emitRegionMemberExpressions(regionOwner!, context, state)
+    valueIndex -> emitIndexRead(regionOwner!, context, state)
     valueIndex -> emitRegionOperatorExpressions(regionOwner!, emissionOrder, context, state)
     valueIndex -> emitRegionCallExpressions(regionOwner!, emissionOrder, context, state)
 }
-emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[whenIndex] => booleanWhen
     whenIndex => whenOwner!
     whenOwner! >= 0 and context.ir[whenOwner!].kind != 0 and context.ir[whenOwner!].kind != 11
@@ -893,13 +1121,10 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             false => returnArmOpen!
         } else {
             true => whenHasArm!
+            returnArm -> sourceNode(context, state) => returnArmSource
             returnArmIndex! => returnArmRegion!
-            returnArm.kind == 19 and returnArm.operand1 >= 0
-                -> if {
-                    returnArm.operand1 => returnArmRegion!
-                } else {
-                    true => whenHasElse!
-                }
+            returnArmSource.kind == 58 and returnArm.operand1 >= 0
+                -> if { returnArm.operand1 => returnArmRegion! } else { true => whenHasElse! }
             returnArmRegion! -> regionReturns(context, state)
                 -> unless { false => whenAllArmsReturn! }
             returnArm.nextOperand => returnArmIndex!
@@ -931,6 +1156,7 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             arm.operand1 -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
                             booleanWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
+                    OwnedDropRequest { regionIndex: arm.operand1, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
                     "  br label %when$(whenIndex)_end" -> println
                 }
                 "while$(armIndex!)_exit:" -> println
@@ -946,6 +1172,7 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             armIndex! -> subjectWhenArmResultValueIndex(context, state) => elseValueIndex
                             booleanWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
+                    OwnedDropRequest { regionIndex: armIndex!, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
                     "  br label %when$(whenIndex)_end" -> println
                 }
                 false => armOpen!
@@ -963,7 +1190,7 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             }
     }
 }
-emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[whenIndex] => subjectWhen
     context.ir[subjectWhen.operand0] => subject
     whenIndex => whenOwner!
@@ -983,13 +1210,10 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             false => returnArmOpen!
         } else {
             true => whenHasArm!
+            returnArm -> sourceNode(context, state) => returnArmSource
             returnArmIndex! => returnArmRegion!
-            returnArm.kind == 19 and returnArm.operand1 >= 0
-                -> if {
-                    returnArm.operand1 => returnArmRegion!
-                } else {
-                    true => whenHasElse!
-                }
+            returnArmSource.kind == 58 and returnArm.operand1 >= 0
+                -> if { returnArm.operand1 => returnArmRegion! } else { true => whenHasElse! }
             returnArmRegion! -> regionReturns(context, state)
                 -> unless { false => whenAllArmsReturn! }
             returnArm.nextOperand => returnArmIndex!
@@ -1052,6 +1276,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             emittedArmRegion! -> subjectWhenArmResultValueIndex(context, state) => armValueIndex
                             subjectWhen -> emitIfResultStore(armValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
+                    OwnedDropRequest { regionIndex: emittedArmRegion!, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
                     "  br label %when$(whenIndex)_end" -> println
                 }
                 "while$(armIndex!)_exit:" -> println
@@ -1067,6 +1292,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
                             emittedElseRegion -> subjectWhenArmResultValueIndex(context, state) => elseValueIndex
                             subjectWhen -> emitIfResultStore(elseValueIndex, whenOwner!, whenIndex, armOrdinal!, context, state)
                         }
+                    OwnedDropRequest { regionIndex: emittedElseRegion, beforeAst: -1, edgeIndex: whenIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
                     "  br label %when$(whenIndex)_end" -> println
                 }
                 false => armOpen!
@@ -1085,14 +1311,29 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
     }
 }
 
-emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    matchIndex -> emitEnumMatchWithSubjectDomain(-1, emissionOrder, context, state)
+}
+
+# A condition evaluates its subject in its selected short-circuit block. The
+# ordinary region path retains its canonical value names and ownership logic.
+writeEnumMatchInput matchIndex: Int, subjectIndex: Int, ownerIndex: Int, conditionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    conditionIndex < 0 -> if {
+        subjectIndex -> writeEnumSubjectValue(ownerIndex, context, state)
+    } else {
+        (context.ir[subjectIndex] -> referenceValueTypeId(context, state)) >= 0
+            -> if {
+                "%v$(matchIndex)_condition_subject" -> print
+            } else {
+                WhileValueRequest { whileIndex: conditionIndex, ownerIndex: ownerIndex, nodeIndex: subjectIndex } -> writeWhileValue(context, state)
+            }
+    }
+}
+
+emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[matchIndex] => match
-    context.ir[match.operand0] => subject
-    (match.operand0 -> enumMatchOwnsSubject(context, state))
-        or (subject.kind == 5 and subject.operand0 >= 0
-        and (context.ir[subject.operand0].kind == 17
-        or context.ir[subject.operand0].kind == 29)
-        and (state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(match.operand0, subject.kind, subject.operand0))) => matchOwnsSubject
+    match.operand0 -> materializedEnumSubject(context, state) => subject
+    matchIndex -> enumMatchOwnsPayload(context, state) => matchOwnsSubject
     matchIndex => matchOwner!
     matchOwner! >= 0 and context.ir[matchOwner!].kind != 0 and context.ir[matchOwner!].kind != 11
         -> while {
@@ -1100,6 +1341,20 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
         }
     matchOwner! + 1 => matchOwnerStart
     matchOwner! -> functionEnd(context, state) => matchOwnerEnd
+    matchIndex => matchResultTypeIndex!
+    match.typeOrigin == 1
+        and match.typeSymbol == 0
+        and context.ir[matchOwner!].operand0 >= 0
+        and context.ir[matchOwner!].operand0 < (context.ir -> len)
+        -> if {
+            context.ir[matchOwner!].operand0 => matchResultOwnerBodyIndex
+            context.ir[matchResultOwnerBodyIndex].kind == 1
+                and context.ir[matchResultOwnerBodyIndex].operand0 == matchIndex
+                and not (context.ir[matchResultOwnerBodyIndex].typeOrigin == 1
+                and context.ir[matchResultOwnerBodyIndex].typeSymbol == 0)
+                -> if { matchResultOwnerBodyIndex => matchResultTypeIndex! }
+        }
+    context.ir[matchResultTypeIndex!] => matchResultType
     matchIndex - 1 => matchOwnerIndex!
     matchOwnerIndex! >= 0 and context.ir[matchOwnerIndex!].kind != 0 and context.ir[matchOwnerIndex!].kind != 11
         -> while {
@@ -1173,15 +1428,24 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
             matchPayloadTypeId -> isOwnedFileType(context, state)
                 -> if { matchPayloadTypeId => ownedMatchFileTypeId! }
         }
+    conditionIndex >= 0 and (context.ir[match.operand0] -> referenceValueTypeId(context, state)) >= 0
+        -> if {
+            "  %v$(matchIndex)_condition_subject = load " -> print
+            subject -> writeIrType(context, state)
+            ", ptr " -> print
+            WhileValueRequest { whileIndex: conditionIndex, ownerIndex: matchOwner!, nodeIndex: match.operand0 } -> writeWhileValue(context, state)
+            ", align " -> print
+            subject -> storageAlign(context, state) -> writeDecimalLine
+        }
     "  %v$(matchIndex)_tag = extractvalue " -> print
     subject -> writeIrType(context, state)
     " " -> print
-    match.operand0 -> writeValue(matchOwner!, context, state)
+    matchIndex -> writeEnumMatchInput(match.operand0, matchOwner!, conditionIndex, context, state)
     ", 0" -> println
     "  store " -> print
     subject -> writeIrType(context, state)
     " " -> print
-    match.operand0 -> writeValue(matchOwner!, context, state)
+    matchIndex -> writeEnumMatchInput(match.operand0, matchOwner!, conditionIndex, context, state)
     ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
     match.operand1 => armIndex!
     0 => armOrdinal!
@@ -1196,16 +1460,8 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
         "match$(matchIndex)_arm$(armOrdinal!):" -> println
         armIndex! -> matchArmBindingValueIndex(context, state) => armBindingIndex
         false => armBindingTransferred!
-        false => armBindingHasMove!
-        0 => armBindingMoveSearch!
-        armBindingIndex >= 0
-            and armBindingMoveSearch! < (context.moves -> len)
-            and not armBindingHasMove!
-            -> while {
-                context.moves[armBindingMoveSearch!].bindingIr == armBindingIndex
-                    -> if { true => armBindingHasMove! }
-                armBindingMoveSearch! + 1 => armBindingMoveSearch!
-            }
+        false => armBindingCopied!
+        armBindingIndex -> patternBindingNeedsOwnershipFlag(context, state) => armBindingHasOwnershipFlag
         armBindingIndex >= 0 -> if {
             context.ir[armBindingIndex] => armBinding
             not (armBinding.typeOrigin == 1 and armBinding.typeSymbol == 0)
@@ -1218,8 +1474,7 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
                         and context.types[matchArmBindingTypeId].kind == 4
                         and context.types[matchArmBindingTypeId].length >= 0
                         -> if {
-                            "  %v$(armBindingIndex)_0 = insertvalue { ptr, i64 } poison, ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, 0" -> println
-                            "  %v$(armBindingIndex) = insertvalue { ptr, i64 } %v$(armBindingIndex)_0, i64 $(context.types[matchArmBindingTypeId].length), 1" -> println
+                            "  %v$(armBindingIndex) = load { ptr, i64 }, ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align 8" -> println
                         } else {
                             "  %v$(armBindingIndex) = load " -> print
                             armBinding -> writeIrType(context, state)
@@ -1227,15 +1482,25 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
                             armBinding -> storageAlign(context, state) -> writeDecimalLine
                         }
                 }
-            armBindingHasMove! -> if {
+            armBindingHasOwnershipFlag -> if {
                 "  store i1 true, ptr %v$(armBindingIndex)_owned, align 1" -> println
+            }
+            armBindingIndex -> asyncFrameBindingRoot(matchOwner!, context, state) => patternFrameRoot
+            patternFrameRoot >= 0 -> if {
+                "  store " -> print
+                armBinding -> writeIrType(context, state)
+                " %v$(armBindingIndex), ptr " -> print
+                patternFrameRoot -> writeAsyncLocalAddress(context)
+                ", align " -> print
+                armBinding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
             }
         }
         armIndex! -> enumMatchArmRegion(context, state) => emittedArmRegion
         emittedArmRegion -> regionReturns(context, state) => armReturns
         emittedArmRegion -> emitRegion(emissionOrder, context, state)
         not armReturns -> if {
-            matchValueUsed! and not (match.typeOrigin == 1 and match.typeSymbol == 0)
+            matchValueUsed!
+                and not (matchResultType.typeOrigin == 1 and matchResultType.typeSymbol == 0)
                 -> if {
                     armIndex! -> matchRegionResultValueIndex(context, state) => armValueIndex
                     armValueIndex >= 0 and armValueIndex < (context.ir -> len)
@@ -1244,16 +1509,13 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
                             return
                         }
                     context.ir[armValueIndex] => armValue
-                    (armBindingIndex >= 0
-                        and not (context.ir[armBindingIndex].typeOrigin == 1
-                        and context.ir[armBindingIndex].typeSymbol == 0)
-                        and armValue.kind == 26
-                        and armValue.operand0 < 0) => missingDirectArmPayload
+                    # The result constructor's operand owns its payload. A bound
+                    # subject payload does not become an implicit result payload:
+                    # an explicit payloadless variant retains only its tag.
                     armValue.kind == 26
                         and armValue.parent != armIndex!
                         and armValue.parent != emittedArmRegion
-                        and (missingDirectArmPayload
-                        or not (armValueIndex -> nodeBelongsToOwnershipRegion(emittedArmRegion, context, state)))
+                        and not (armValueIndex -> nodeBelongsToOwnershipRegion(emittedArmRegion, context, state))
                         -> if {
                             false => nestedArmValueDefinition!
                             armValue.parent => armValueAncestor!
@@ -1262,50 +1524,48 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
                                     context.ir[armValueAncestor!].kind == 19 or context.ir[armValueAncestor!].kind == 20
                                         -> if { true => nestedArmValueDefinition! } else { context.ir[armValueAncestor!].parent => armValueAncestor! }
                                 }
-                            not nestedArmValueDefinition! and not missingDirectArmPayload
+                            not nestedArmValueDefinition!
                                 -> if {
                                     WhileValueRequest { whileIndex: armValueIndex, ownerIndex: matchIndex, nodeIndex: armValueIndex } -> emitEnumConstructor(context, state)
                                 }
                         }
-                    missingDirectArmPayload -> if {
-                        true => armBindingTransferred!
-                        "  %v$(armValueIndex)_enum_payload_direct = getelementptr inbounds " -> print
-                        armValue -> writeIrType(context, state)
-                        ", ptr %v$(armValueIndex)_enum_slot, i32 0, i32 1" -> println
-                        "  store " -> print
-                        context.ir[armBindingIndex] -> writeIrType(context, state)
-                        " %v$(armBindingIndex), ptr %v$(armValueIndex)_enum_payload_direct, align " -> print
-                        context.ir[armBindingIndex] -> storageAlign(context, state) -> writeDecimalLine
-                        "  %v$(armValueIndex)_with_direct_payload = load " -> print
-                        armValue -> writeIrType(context, state)
-                        ", ptr %v$(armValueIndex)_enum_slot, align 8" -> println
-                    }
                     (armBindingIndex < 0 and (armValueIndex == armIndex! or (armValue.kind == 19 and armValue.operand0 < 0))) => directArmPayload
                     0 => safeArmBindingIndex!
                     armBindingIndex >= 0 -> if { armBindingIndex => safeArmBindingIndex! }
                     context.ir[safeArmBindingIndex!].symbol => resolvedArmBindingSymbol
                     (armBindingIndex >= 0 and armValue.kind == 5 and armValue.parent != armIndex! and (armValue.operand0 == armBindingIndex or armValue.symbol == resolvedArmBindingSymbol)) => armValueUsesBlockBinding
                     armValueUsesBlockBinding -> if { true => armBindingTransferred! }
+                    false => fixedArmResultPromoted!
+                    matchResultType.typeId >= 0
+                        and context.types[matchResultType.typeId].kind == 4
+                        -> if {
+                            armValueIndex -> emitFixedArrayReturnPromotion(matchOwner!, matchResultType.typeId, armIndex!, context, state)
+                                => fixedArmResultPromoted!
+                            fixedArmResultPromoted! and armValueUsesBlockBinding
+                                -> if {
+                                    true => armBindingCopied!
+                                    false => armBindingTransferred!
+                                }
+                        }
                     0 => safeMatchTypeIndex!
-                    match.typeId >= 0 -> if { match.typeId => safeMatchTypeIndex! }
+                    matchResultType.typeId >= 0 -> if { matchResultType.typeId => safeMatchTypeIndex! }
                     context.types[safeMatchTypeIndex!].kind => resolvedMatchTypeKind
-                    (armBindingIndex >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (match.typeKind == 7 or (match.typeId >= 0 and resolvedMatchTypeKind == 7))) => emptyPayloadlessArm
+                    (armBindingIndex >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (matchResultType.typeKind == 7 or (matchResultType.typeId >= 0 and resolvedMatchTypeKind == 7))) => emptyPayloadlessArm
                     directArmPayload -> if {
                         "  %v$(matchIndex)_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
                         subject -> writeIrType(context, state)
                         ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
                         "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value = load " -> print
-                        match -> writeIrType(context, state)
+                        matchResultType -> writeIrType(context, state)
                         ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align " -> print
-                        match -> storageAlign(context, state) -> writeDecimalLine
+                        matchResultType -> storageAlign(context, state) -> writeDecimalLine
                     }
-                    match -> integerNodeWidth(context, state) => matchResultWidth
+                    matchResultType -> integerNodeWidth(context, state) => matchResultWidth
                     armValue -> integerNodeWidth(context, state) => armResultWidth
                     (matchResultWidth > 0
                         and armResultWidth > 0
                         and matchResultWidth != armResultWidth
                         and not directArmPayload
-                        and not missingDirectArmPayload
                         and not emptyPayloadlessArm
                         and not armValueUsesBlockBinding) => convertsArmInteger
                     convertsArmInteger -> if {
@@ -1318,31 +1578,38 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
                         " " -> print
                         armValueIndex -> writeValue(matchOwner!, context, state)
                         " to " -> print
-                        match -> writeIrType(context, state)
+                        matchResultType -> writeIrType(context, state)
                         "" -> println
                     }
                     "  store " -> print
-                    match -> writeIrType(context, state)
+                    matchResultType -> writeIrType(context, state)
                     " " -> print
-                    convertsArmInteger -> if { "%match$(matchIndex)_arm$(armOrdinal!)_result_value" -> print } else {
-                        directArmPayload -> if { "%v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> print } else {
-                            missingDirectArmPayload -> if { "%v$(armValueIndex)_with_direct_payload" -> print } else {
-                                emptyPayloadlessArm -> if { "zeroinitializer" -> print } else {
-                                    armValueUsesBlockBinding -> if { "%v$(armBindingIndex)" -> print } else {
-                                        armValue.kind == 3 or armValue.kind == 4 -> if {
-                                            armValue -> sourceToken(context, state) => armValueToken
-                                            armValue.kind == 3 -> if { armValue -> writeIntegerLiteral(context, state) } else {
-                                                (context.sources[armValue.sourceModule] -> byte(armValueToken.span.start)) == 116
-                                                    -> if { "1" -> print } else { "0" -> print }
+                    matchIndex -> isDeferredTextChoice(context, state)
+                        -> if { "poison" -> print } else {
+                            fixedArmResultPromoted! -> if { "%return_fixed$(armIndex!)" -> print } else {
+                                convertsArmInteger -> if { "%match$(matchIndex)_arm$(armOrdinal!)_result_value" -> print } else {
+                                    directArmPayload -> if { "%v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> print } else {
+                                        emptyPayloadlessArm -> if { "zeroinitializer" -> print } else {
+                                            armValueUsesBlockBinding -> if { "%v$(armBindingIndex)" -> print } else {
+                                                armValue.kind == 3 or armValue.kind == 4 -> if {
+                                                    armValue -> sourceToken(context, state) => armValueToken
+                                                    armValue.kind == 3 -> if { armValue -> writeIntegerLiteral(context, state) } else {
+                                                        (context.sources[armValue.sourceModule] -> byte(armValueToken.span.start)) == 116
+                                                            -> if { "1" -> print } else { "0" -> print }
+                                                    }
+                                                } else { armValueIndex -> writeValue(matchOwner!, context, state) }
                                             }
-                                        } else { "%v$(armValueIndex)" -> print }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
                     ", ptr %v$(matchIndex)_result, align " -> print
-                    match -> storageAlign(context, state) -> writeDecimalLine
+                    matchResultType -> storageAlign(context, state) -> writeDecimalLine
+                    matchIndex -> isDeferredTextChoice(context, state)
+                        -> if {
+                            armValueIndex -> emitDeferredTextCaptureStore(matchOwner!, matchIndex, armOrdinal!, context, state)
+                        }
                 }
             false => armBindingMoved!
             0 => armBindingMoveIndex!
@@ -1356,29 +1623,28 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
             armBindingIndex >= 0
                 and matchOwnsSubject
                 and context.ir[armBindingIndex].typeId >= 0
-                and (context.ir[armBindingIndex].typeId -> semanticTypeOwns(context, state))
+                and ((context.ir[armBindingIndex].typeId -> semanticTypeOwns(context, state))
+                or context.types[context.ir[armBindingIndex].typeId].kind == 4)
                 and not armBindingTransferred!
-                and not (state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(armBindingIndex, context.ir[armBindingIndex].kind, context.ir[armBindingIndex].operand0))
-                and not armBindingMoved!
+                and (armBindingCopied! or not (state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(armBindingIndex, context.ir[armBindingIndex].kind, context.ir[armBindingIndex].operand0)))
+                and (armBindingCopied! or not armBindingMoved!)
                 -> if {
-                    context.ir[armBindingIndex].typeId => armBindingTypeId
-                    armBindingHasMove! -> if {
+                    armBindingHasOwnershipFlag -> if {
                         "  %v$(armBindingIndex)_still_owned = load i1, ptr %v$(armBindingIndex)_owned, align 1" -> println
                         "  br i1 %v$(armBindingIndex)_still_owned, label %match$(matchIndex)_arm$(armOrdinal!)_drop, label %match$(matchIndex)_arm$(armOrdinal!)_drop_done" -> println
                         "match$(matchIndex)_arm$(armOrdinal!)_drop:" -> println
-                        "  call void @sollang_drop_t$armBindingTypeId(" -> print
-                        context.ir[armBindingIndex].typeId -> writeSemanticTypeId(context, state)
-                        " %v$(armBindingIndex))" -> println
+                        armBindingIndex -> emitPatternBindingDrop(emittedArmRegion, context, state)
                         "  br label %match$(matchIndex)_arm$(armOrdinal!)_drop_done" -> println
                         "match$(matchIndex)_arm$(armOrdinal!)_drop_done:" -> println
                     } else {
-                        not armBindingMoved! -> if {
-                            "  call void @sollang_drop_t$armBindingTypeId(" -> print
-                            context.ir[armBindingIndex].typeId -> writeSemanticTypeId(context, state)
-                            " %v$(armBindingIndex))" -> println
+                        armBindingCopied! or not armBindingMoved! -> if {
+                            armBindingIndex -> emitPatternBindingDrop(emittedArmRegion, context, state)
                         }
                     }
                 }
+            # Pattern payload cleanup above owns only the matched subject.
+            # The arm's own locals have a separate region and leave on this edge.
+            OwnedDropRequest { regionIndex: emittedArmRegion, beforeAst: -1, edgeIndex: matchIndex * 10 + 5, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
             "  br label %match$(matchIndex)_merge" -> println
         }
         "match$(matchIndex)_next$(armOrdinal!):" -> println
@@ -1389,12 +1655,12 @@ emitEnumMatch matchIndex: Int, emissionOrder: [Int], context: ref emitterContext
     "  unreachable" -> println
     not matchAllArmsReturn! -> if {
         "match$(matchIndex)_merge:" -> println
-        matchValueUsed! and not (match.typeOrigin == 1 and match.typeSymbol == 0)
+        matchValueUsed! and not (matchResultType.typeOrigin == 1 and matchResultType.typeSymbol == 0)
             -> if {
                 "  %v$(matchIndex) = load " -> print
-                match -> writeIrType(context, state)
+                matchResultType -> writeIrType(context, state)
                 ", ptr %v$(matchIndex)_result, align " -> print
-                match -> storageAlign(context, state) -> writeDecimalLine
+                matchResultType -> storageAlign(context, state) -> writeDecimalLine
             }
         ownedMatchFileTypeId! >= 0 and match.typeId != ownedMatchFileTypeId!
             -> if {

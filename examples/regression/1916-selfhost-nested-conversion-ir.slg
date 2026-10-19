@@ -1,0 +1,26 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+
+main {
+    "value -> slice(UIntSize(1), UIntSize(2))" => expression
+    expression -> ast.lowerExpression => expressionNodes
+    0 => astIndex!
+    expressionNodes -> each expressionNode {
+        expression -> slice(expressionNode.start, expressionNode.length) => astPayload
+        "ast $(astIndex!): kind=$(expressionNode.kind), parent=$(expressionNode.parent), payload=$(astPayload)" -> println
+        astIndex! + 1 => astIndex!
+    }
+    """
+    main {
+        "abc" => value
+        "byte=$(value -> byte(UIntSize(1))), slice=$(value -> slice(UIntSize(1), UIntSize(2)))" -> println
+    }
+    """ => source
+    source -> interpolation.lower => nodes
+    0 => index!
+    nodes -> each node {
+        source -> slice(node.payloadStart, node.payloadLength) => payload
+        "$(index!): kind=$(node.kind), parent=$(node.parent), type=$(node.typeSymbol), payload=$(payload), operands=$(node.operand0),$(node.operand1),$(node.operand2)" -> println
+        index! + 1 => index!
+    }
+}

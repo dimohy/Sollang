@@ -1,0 +1,20 @@
+# Result payload members anchor the type of a named arithmetic call argument.
+struct Cursor { nextOffset: UIntSize }
+
+copyPayload bytes: [UInt8], offset: UIntSize -> UIntSize => offset
+
+decode value: UIntSize -> Result<Cursor, Int> => Result<Cursor, Int>.Ok(Cursor { nextOffset: value })
+
+advance value: UIntSize -> Result<UIntSize, Int> {
+    decode(value)? => cursor
+    cursor.nextOffset + 1 => offset
+    copyPayload([], offset) => next
+    Result<UIntSize, Int>.Ok(next)
+}
+
+main {
+    advance(6) -> when {
+        Ok(offset) { "offset=$offset" -> println }
+        Err(error) { "error=$error" -> println }
+    }
+}

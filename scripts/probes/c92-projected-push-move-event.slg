@@ -1,0 +1,33 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+    """
+    struct Owned {
+        data: [UInt8; ~]
+    }
+
+    struct Decoded {
+        frame: Owned
+        nextOffset: Int
+    }
+
+    main {
+        Decoded { frame: Owned { data: [1; ~] }, nextOffset: 1 } => decoded
+        [Owned; ~] => values!
+        values! -> push(decoded.frame)
+        decoded.nextOffset -> println
+    }
+    """; ~
+    ] => sources
+    sources -> typedIr.lower => ir
+    sources -> typedIr.moves => moves
+    0 => projectedPushMoves!
+    moves -> each event {
+        ir[event.siteIr].opcode == -204 and event.memberIr >= 0 -> if {
+            projectedPushMoves! + 1 => projectedPushMoves!
+            "site=$(event.siteIr),value=$(event.valueIr),member=$(event.memberIr),region=$(event.regionIr)" -> println
+        }
+    }
+    "projected push moves=$(projectedPushMoves!)" -> println
+}

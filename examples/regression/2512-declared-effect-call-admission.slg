@@ -1,0 +1,606 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.effects as effects
+import sollang.compiler.semantic.diagnostics as diagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+
+verifyPrepared initialPrepared: move semanticContext.SemanticSnapshot, expected: Int -> Unit uses Console {
+    initialPrepared -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    committed.types => resolved
+    prepared -> typedIr.lowerResolvedContext(resolved) => ir
+    [diagnostics.UnresolvedMutableNameDiagnostic; ~] => mutableNames
+    prepared.package -> diagnostics.firstExpressionOperandDiagnostic(prepared, resolved, ir, mutableNames, 64) => result
+    result.code == 32 -> if { result.operandTypeSymbol } else { 0 } => actual
+    actual -> effects.declaredEffectName => name
+    "effect=$actual name=$name expected=$expected code=$(result.code)" -> println
+    result.code == 44 or result.code == 45 -> if {
+        prepared.package.ranges[result.sourceModule] => range
+        prepared.package.nodes[range.astStart + result.operandAst] => reference
+        prepared.package.sources[result.sourceModule] -> slice(reference.start, reference.length) => declaredName
+        "declaration=$declaredName" -> println
+    }
+}
+
+verify sources: [Text; ~], expected: Int -> Unit uses Console {
+    sources -> len => libraryStart
+    [Text; ~] => loaded!
+    sources -> each source { loaded! -> push(source) }
+    # Retain canonical declarations and their explicit loader authority.
+    # Alias visibility and Console effects must not come from ABI markers.
+    loaded! -> push(
+    """
+    namespace sys.io
+    public print value: Text -> Unit uses Console {}
+    public println value: Text -> Unit uses Console {}
+    public readInt prompt: Text -> Int uses Console => 1
+    """)
+    loaded! -> push(
+    """
+    namespace sys.random
+    seed value: Int -> Unit uses Random {}
+    below maxExclusive: Int -> Int uses Random => 1
+    """)
+    loaded! -> push(
+    """
+    namespace sys.file
+    openIntWriter path: Text -> Int uses File => 1
+    writeInt writer: Int, value: Int -> Unit uses File {}
+    closeIntWriter writer: Int -> Unit uses File {}
+    openIntReader path: Text -> Int uses File => 1
+    closestInt reader: Int, value: Int -> Int uses File => 1
+    closeIntReader reader: Int -> Unit uses File {}
+    """)
+    loaded! -> semanticContext.prepare => prepared!
+    libraryStart => prepared!.standardLibrarySourceStart
+    3 => prepared!.standardLibrarySourceCount
+    prepared! -> freeze -> verifyPrepared(expected)
+}
+
+verifyRuntime sources: [Text; ~], expected: Int -> Unit uses Console {
+    # These eight cases model a user source followed by a loaded ABI source.
+    # Only the ABI source receives the loader's explicit authority.
+    [Text; ~] => loaded!
+    sources -> each source { loaded! -> push(source) }
+    loaded! -> push(
+    """
+    namespace sys.io
+    public println value: Text -> Unit uses Console {}
+    """)
+    loaded! -> semanticContext.prepare => prepared!
+    1 => prepared!.standardLibrarySourceStart
+    2 => prepared!.standardLibrarySourceCount
+    prepared! -> freeze -> verifyPrepared(expected)
+}
+
+verifyUnknown sources: [Text; ~] -> Unit uses Console {
+    sources -> semanticContext.prepare -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared.calls -> each call {
+        "unknown status=$(call.status) symbol=$(call.functionSymbol)" -> println
+    }
+}
+
+verifySourceAuthority count: Int -> Unit uses Console {
+    ["namespace sys.runtime\npublic sample: -> Int => 1\n", "main {}\n"; ~] => sources
+    sources -> semanticContext.prepareWithStandardLibrarySources(count)
+        -> expressionTypeIds.resolveCallContext => serial
+    sources -> semanticContext.prepareParallelWithStandardLibrarySources(count)
+        -> expressionTypeIds.resolveCallContext => parallel
+    "authority expected=$count serial=$(serial.prepared.standardLibrarySourceCount) parallel=$(parallel.prepared.standardLibrarySourceCount)" -> println
+}
+
+verifyTestSourceAuthority count: Int -> Unit uses Console {
+    ["test_scope: -> Bool => true\n", "namespace sys.runtime\npublic sample: -> Int => 1\n", "main {}\n"; ~] => sources
+    sources -> semanticContext.prepareTestsWithStandardLibrarySources([0; ~], [0; ~], 1, count)
+        -> expressionTypeIds.resolveCallContext => committed
+    committed.prepared => prepared
+    prepared -> semanticContext.isStandardLibrarySource(-1) => before
+    prepared -> semanticContext.isStandardLibrarySource(0) => user
+    prepared -> semanticContext.isStandardLibrarySource(1) => library
+    prepared -> semanticContext.isStandardLibrarySource(2) => harness
+    "test authority count=$count before=$before user=$user library=$library harness=$harness" -> println
+}
+
+main {
+    0 -> verifyTestSourceAuthority
+    1 -> verifyTestSourceAuthority
+    0 -> verifySourceAuthority
+    1 -> verifySourceAuthority
+    2 -> verifySourceAuthority
+    [
+    """
+    verify: -> Unit uses Random { 1 -> seedRandom }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Int uses Random { 2 -> randomBelow }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Unit uses File { "x" -> openIntWriter }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Unit uses File { 1 -> writeInt }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Unit uses File { closeIntWriter() }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Unit uses File { "x" -> openIntReader }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Int uses File { 1 -> closestInt }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify: -> Unit uses File { closeIntReader() }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    main { 1 -> seedRandom }
+    """; ~] -> verify(0)
+    [
+    """
+    main { 2 -> randomBelow }
+    """; ~] -> verify(0)
+    [
+    """
+    main { "x" -> openIntWriter }
+    """; ~] -> verify(0)
+    [
+    """
+    main { 1 -> writeInt }
+    """; ~] -> verify(0)
+    [
+    """
+    main { closeIntWriter() }
+    """; ~] -> verify(0)
+    [
+    """
+    main { "x" -> openIntReader }
+    """; ~] -> verify(0)
+    [
+    """
+    main { 1 -> closestInt }
+    """; ~] -> verify(0)
+    [
+    """
+    main { closeIntReader() }
+    """; ~] -> verify(0)
+    [
+    """
+    print: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    println: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    readInt: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    seedRandom: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    randomBelow: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    openIntWriter: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    writeInt: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    closeIntWriter: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    openIntReader: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    closestInt: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    closeIntReader: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    nowMillis: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    sys: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    it: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    sleep: -> Int => 1
+    main { sleep() -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    eprint: -> Int => 1
+    main { eprint() -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    eprintln: -> Int => 1
+    main { eprintln() -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    flush: -> Int => 1
+    main { flush() -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    namespace sample
+    nowMillis: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    sample.nowMillis: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    outer: -> Int { nowMillis: -> Int => 1
+     1 }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    nowMillis: -> Int uses Missing => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    earlier: -> Int uses Missing => 1
+    nowMillis: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    nowMillis: -> Int => 1
+    later: -> Int uses Missing => 1
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    outer: -> Int uses Missing { nowMillis: -> Int => 1
+     1 }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    earlier: -> Unit { "x" -> println }
+    nowMillis: -> Int => 1
+    main {}
+    """; ~] -> verify(0)
+    ["main { nowMillis() }"; ~] -> verifyUnknown
+    ["main { 1 -> nowMillis }"; ~] -> verifyUnknown
+    ["main { sleep() }"; ~] -> verifyUnknown
+    ["main { 1 -> sleep }"; ~] -> verifyUnknown
+    ["main { eprint() }"; ~] -> verifyUnknown
+    ["main { 1 -> eprint }"; ~] -> verifyUnknown
+    ["main { eprintln() }"; ~] -> verifyUnknown
+    ["main { 1 -> eprintln }"; ~] -> verifyUnknown
+    [
+    """
+    verify: -> Unit {
+        map read "x" => data
+    }
+    main {}
+    """; ~] -> verify(2)
+    [
+    """
+    verify: -> Unit uses File {
+        map read "x" => data
+    }
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Console => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(1)
+    [
+    """
+    required value: Int -> Int uses Console => value
+    forward value: Int -> Int uses Console => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses File => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(2)
+    [
+    """
+    required value: Int -> Int uses File => value
+    forward value: Int -> Int uses File => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Clock => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(4)
+    [
+    """
+    required value: Int -> Int uses Clock => value
+    forward value: Int -> Int uses Clock => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Random => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(8)
+    [
+    """
+    required value: Int -> Int uses Random => value
+    forward value: Int -> Int uses Random => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Process => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(16)
+    [
+    """
+    required value: Int -> Int uses Process => value
+    forward value: Int -> Int uses Process => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Environment => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(32)
+    [
+    """
+    required value: Int -> Int uses Environment => value
+    forward value: Int -> Int uses Environment => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Network => value
+    forward value: Int -> Int => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(64)
+    [
+    """
+    required value: Int -> Int uses Network => value
+    forward value: Int -> Int uses Network => value -> required
+    main { forward(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    required value: Int -> Int uses Network, File => value
+    forward value: Int -> Int => required(value)
+    main { forward(1) -> println }
+    """; ~] -> verify(64)
+    [
+    """
+    required value: Int -> Int uses Network, File => value
+    forward value: Int -> Int uses Network => required(value)
+    main { forward(1) -> println }
+    """; ~] -> verify(2)
+    [
+    """
+    required value: Int -> Int uses File => value
+    main { required(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    outer value: Int -> Int uses File {
+     inner item: Int -> Int => item
+     value -> inner
+    }
+    main { outer(1) -> println }
+    """; ~] -> verify(0)
+    [
+    """
+    outer value: Int -> Int uses File {
+     required item: Int -> Int uses File => item
+     inner item: Int -> Int => item -> required
+     value -> inner
+    }
+    main { outer(1) -> println }
+    """; ~] -> verify(2)
+    [
+    """
+    namespace app
+    import lib as x
+    forward value: Int -> Int => value -> x.required
+    main { forward(1) -> println }
+    """,
+    """
+    namespace lib
+    public required value: Int -> Int uses Clock => value
+    """; ~] -> verify(4)
+    [
+    """
+    import sys.runtime as rt
+    verify: -> Long { rt.nowMillis() }
+    main {}
+    """,
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """; ~] -> verifyRuntime(4)
+    [
+    """
+    import sys.runtime as rt
+    main { rt.nowMillis() -> println }
+    """,
+    """
+    namespace sys.runtime
+    public nowMillis: -> Long = intrinsic
+    """; ~] -> verifyRuntime(0)
+    [
+    """
+    import sys.runtime as rt
+    verify value: Int -> Unit { value -> rt.writeInt }
+    main {}
+    """,
+    """
+    namespace sys.runtime
+    public writeInt value: Int -> Unit = intrinsic
+    """; ~] -> verifyRuntime(2)
+    [
+    """
+    import sys.runtime as rt
+    main { 1 -> rt.writeInt }
+    """,
+    """
+    namespace sys.runtime
+    public writeInt value: Int -> Unit = intrinsic
+    """; ~] -> verifyRuntime(0)
+    [
+    """
+    import sys.runtime as rt
+    verify value: Int -> Unit { value -> rt.seedRandom }
+    main {}
+    """,
+    """
+    namespace sys.runtime
+    public seedRandom value: Int -> Unit = intrinsic
+    """; ~] -> verifyRuntime(8)
+    [
+    """
+    import sys.runtime as rt
+    main { 1 -> rt.seedRandom }
+    """,
+    """
+    namespace sys.runtime
+    public seedRandom value: Int -> Unit = intrinsic
+    """; ~] -> verifyRuntime(0)
+    [
+    """
+    import sys.runtime as rt
+    verify value: Text -> Unit { value -> rt.print }
+    main {}
+    """,
+    """
+    namespace sys.runtime
+    public print value: Text -> Unit = intrinsic
+    """; ~] -> verifyRuntime(1)
+    [
+    """
+    import sys.runtime as rt
+    main { "x" -> rt.print }
+    """,
+    """
+    namespace sys.runtime
+    public print value: Text -> Unit = intrinsic
+    """; ~] -> verifyRuntime(0)
+    [
+    """
+    verify value: Int -> Int uses Console, Console => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses File, File => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Clock, Clock => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Random, Random => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Process, Process => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Environment, Environment => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Network, Network => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses Missing => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses MissingLegacy => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses File, Missing, File => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    verify value: Int -> Int uses File, File, Missing => value
+    main {}
+    """; ~] -> verify(0)
+    [
+    """
+    bad value: Int -> Int => value -> randomBelow
+    verify value: Int -> Int uses Missing => value
+    main {}
+    """; ~] -> verify(0)
+}

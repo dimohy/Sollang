@@ -1,4 +1,25 @@
 import sollang.compiler.ast as ast
+import syntax.generated.slg as grammar
+
+inspect source: Text, name: Text -> Unit uses Console {
+    source -> ast.lower => nodes
+    0 => equality!
+    0 => greaterOrEqual!
+    0 => additive!
+    0 => multiplicative!
+    nodes -> each node {
+        node.kind == 18 and node.operatorKind == grammar.tokenIdEqualEqual()
+            -> if { equality! + 1 => equality! }
+        node.kind == 19 and node.operatorKind == grammar.tokenIdGreaterEqual()
+            -> if { greaterOrEqual! + 1 => greaterOrEqual! }
+        node.kind == 20 and node.operatorKind == grammar.tokenIdPlus()
+            -> if { additive! + 1 => additive! }
+        node.kind == 21 and node.operatorKind == grammar.tokenIdStar()
+            -> if { multiplicative! + 1 => multiplicative! }
+    }
+    "$name = $(equality!),$(greaterOrEqual!),$(additive!),$(multiplicative!)" -> println
+}
+
 
 main {
     """
@@ -11,4 +32,9 @@ main {
             "operator = $(node.kind),$(node.parent),$(node.operatorKind),$(node.payloadToken),$(node.start),$(node.length)" -> println
         }
     }
+
+    "main {\n    1 + 2 * 3 == 7\n}\n" -> inspect("ordinary")
+    "main {\n    3 -> double == 6\n}\n" -> inspect("flow-equality")
+    "main {\n    1 == 1 == true\n}\n" -> inspect("equality-chain")
+    "main {\n    3 -> double >= 6\n}\n" -> inspect("flow-comparison")
 }

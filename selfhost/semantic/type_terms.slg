@@ -11,7 +11,7 @@ import syntax.generated.slg as grammar
 # 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
 # 10 structural product, 11 structural product field,
 # 12 bounded inline array, 13 bounded inline dictionary,
-# 14 fixed inline BitSet.
+# 14 fixed inline BitSet, 15 erased trait object.
 public struct TypeTerm {
     public astNode: Int
     public canonical: Int
@@ -37,6 +37,103 @@ public struct SubstitutionResult {
     public status: Int
 }
 
+sameTypePathTokens source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], leftAst: Int, rightAst: Int -> Bool {
+    nodes[leftAst].firstToken => left!
+    nodes[rightAst].firstToken => right!
+    nodes[leftAst].firstToken + nodes[leftAst].tokenCount => leftEnd
+    nodes[rightAst].firstToken + nodes[rightAst].tokenCount => rightEnd
+    left! < leftEnd or right! < rightEnd -> while {
+        left! < leftEnd and (tokens[left!].kind == grammar.triviaIdWhitespace() or tokens[left!].kind == grammar.triviaIdComment() or tokens[left!].kind == grammar.tokenIdNewLine())
+            -> while { left! + 1 => left! }
+        right! < rightEnd and (tokens[right!].kind == grammar.triviaIdWhitespace() or tokens[right!].kind == grammar.triviaIdComment() or tokens[right!].kind == grammar.tokenIdNewLine())
+            -> while { right! + 1 => right! }
+        left! == leftEnd or right! == rightEnd -> if { left! == leftEnd and right! == rightEnd -> return }
+        tokens[left!] => leftToken
+        tokens[right!] => rightToken
+        leftToken.kind != rightToken.kind or leftToken.span.length != rightToken.span.length
+            -> if { false -> return }
+        UIntSize(0) => index!
+        index! < leftToken.span.length -> while {
+            (source -> byte(leftToken.span.start + index!)) != (source -> byte(rightToken.span.start + index!))
+                -> if { false -> return }
+            index! + 1 => index!
+        }
+        left! + 1 => left!
+        right! + 1 => right!
+    }
+    true
+}
+
+# A storage suffix belongs to the outer collection only. Generic applications,
+# products and nested collections keep their own semicolons and capacities.
+public struct TypeStorageSuffix {
+    public semicolon: Bool
+    public dynamic: Bool
+    public bounded: Bool
+    public lengthToken: Int
+}
+
+# ProductElement and ProductTypeField have the same optional Identifier Colon
+# prefix. Colons inside the value or type are never labels of this field.
+public productFieldLabelToken tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, firstToken: Int, tokenCount: Int -> Int {
+    -1 => nameToken!
+    firstToken => cursor!
+    cursor! < firstToken + tokenCount -> while {
+        tokens[tokenStart + cursor!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment()
+            and kind != grammar.tokenIdNewLine()
+            -> if {
+                nameToken! < 0 -> if {
+                    kind != grammar.tokenIdIdentifier() -> if { -1 -> return }
+                    cursor! => nameToken!
+                } else {
+                    kind == grammar.tokenIdColon() -> if { nameToken! -> return }
+                    -1 -> return
+                }
+            }
+        cursor! + 1 => cursor!
+    }
+    -1
+}
+
+public outerTypeStorageSuffix firstToken: Int, tokenEnd: Int, tokens: ref [syntax.SyntaxToken; ~] -> TypeStorageSuffix {
+    0 => depth!
+    false => semicolon!
+    false => dynamic!
+    false => bounded!
+    -1 => lengthToken!
+    firstToken => tokenIndex!
+    tokenIndex! < tokenEnd -> while {
+        tokens[tokenIndex!].kind => kind
+        kind == grammar.tokenIdLeftBracket()
+            or kind == grammar.tokenIdLeftBrace()
+            or kind == grammar.tokenIdLeftParen()
+            or kind == grammar.tokenIdLess()
+            -> if { depth! + 1 => depth! }
+        kind == grammar.tokenIdRightBracket()
+            or kind == grammar.tokenIdRightBrace()
+            or kind == grammar.tokenIdRightParen()
+            or kind == grammar.tokenIdGreater()
+            -> if { depth! - 1 => depth! }
+        depth! == 1 -> if {
+            kind == grammar.tokenIdSemicolon() -> if { true => semicolon! }
+            semicolon! -> if {
+                kind == grammar.tokenIdTilde() -> if { true => dynamic! }
+                kind == grammar.tokenIdLessEqual() -> if { true => bounded! }
+                lengthToken! < 0 and (kind == grammar.tokenIdNumber() or kind == grammar.tokenIdIdentifier())
+                    -> if { tokenIndex! => lengthToken! }
+            }
+        }
+        tokenIndex! + 1 => tokenIndex!
+    }
+    TypeStorageSuffix {
+        semicolon: semicolon!
+        dynamic: dynamic!
+        bounded: bounded!
+        lengthToken: lengthToken!
+    }
+}
+
 # Lowers every TypeAnnotation, including nested children, into one arena. An
 # impl's direct nominal Path also becomes a term so every impl owner publishes
 # a canonical TypeReference without changing the bootstrap-compatible AST.
@@ -59,11 +156,39 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
     astIndex! < (nodes -> len) -> while {
         nodes[astIndex!] => node
         node.kind == 12
-            or (node.kind == 16 and node.parent >= 0 and nodes[node.parent].kind == 6)
+            or (node.kind == 16 and node.parent >= 0
+            and (nodes[node.parent].kind == 6
+            or (nodes[node.parent].kind == 12 and nodes[node.parent].parent >= 0 and nodes[nodes[node.parent].parent].kind == 6)))
             -> if {
                 node.firstToken => firstToken!
+                node.firstToken + node.tokenCount => typeTokenEnd!
+                # The CST for a structural impl owner keeps its brackets on the
+                # ImplDeclaration rather than on the direct TypeAnnotation. Pull
+                # that exact balanced span into semantic lowering; otherwise
+                # `impl [UInt8]` is indistinguishable from nominal `impl UInt8`.
+                node.kind == 12 and node.parent >= 0 and nodes[node.parent].kind == 6
+                    and node.start > 0 and (source -> byte(node.start - 1)) == 91
+                    -> if {
+                        firstToken! - 1 => ownerOpenToken!
+                        ownerOpenToken! >= 0 and tokens[ownerOpenToken!].kind != grammar.tokenIdLeftBracket()
+                            -> while { ownerOpenToken! - 1 => ownerOpenToken! }
+                        ownerOpenToken! >= 0 -> if {
+                            ownerOpenToken! => firstToken!
+                            0 => ownerBracketDepth!
+                            firstToken! => ownerBracketToken!
+                            ownerBracketToken! < (tokens -> len) and typeTokenEnd! <= node.firstToken + node.tokenCount
+                                -> while {
+                                    tokens[ownerBracketToken!].kind == grammar.tokenIdLeftBracket()
+                                        -> if { ownerBracketDepth! + 1 => ownerBracketDepth! }
+                                    tokens[ownerBracketToken!].kind == grammar.tokenIdRightBracket()
+                                        -> if { ownerBracketDepth! - 1 => ownerBracketDepth! }
+                                    ownerBracketToken! + 1 => ownerBracketToken!
+                                    ownerBracketDepth! == 0 -> if { ownerBracketToken! => typeTokenEnd! }
+                                }
+                        }
+                    }
                 true => findingFirst!
-                firstToken! < node.firstToken + node.tokenCount and findingFirst!
+                firstToken! < typeTokenEnd! and findingFirst!
                     -> while {
                         tokens[firstToken!].kind == grammar.triviaIdWhitespace() or tokens[firstToken!].kind == grammar.triviaIdComment()
                             -> if {
@@ -82,68 +207,28 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
                 node.cstRuleId == grammar.ruleIdProductTypeField()
                     -> if {
                         11 => kind!
-                        node.firstToken => productFieldToken!
-                        false => productFieldColon!
-                        productFieldToken! < node.firstToken + node.tokenCount
-                            -> while {
-                                tokens[productFieldToken!].kind == grammar.tokenIdColon()
-                                    -> if { true => productFieldColon! }
-                                not productFieldColon! and nameToken! < 0 and tokens[productFieldToken!].kind == grammar.tokenIdIdentifier()
-                                    -> if {
-                                        productFieldToken! => nameToken!
-                                    }
-                                productFieldToken! + 1 => productFieldToken!
-                            }
-                        not productFieldColon! -> if { -1 => nameToken! }
+                        tokens -> productFieldLabelToken(0, node.firstToken, node.tokenCount) => nameToken!
                     }
                 kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBracket()
                     -> if {
                         2 => kind!
-                        0 => depth!
-                        false => outerSemicolon!
-                        false => outerTilde!
-                        false => outerBounded!
-                        firstToken! => shapeToken!
-                        shapeToken! < node.firstToken + node.tokenCount
-                            -> while {
-                                tokens[shapeToken!].kind == grammar.tokenIdLeftBracket()
-                                    -> if { depth! + 1 => depth! }
-                                tokens[shapeToken!].kind == grammar.tokenIdRightBracket()
-                                    -> if { depth! - 1 => depth! }
-                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdSemicolon()
-                                    -> if { true => outerSemicolon! }
-                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdTilde()
-                                    -> if { true => outerTilde! }
-                                depth! == 1 and tokens[shapeToken!].kind == grammar.tokenIdLessEqual()
-                                    -> if { true => outerBounded! }
-                                outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or tokens[shapeToken!].kind == grammar.tokenIdNumber())
-                                    -> if {
-                                        shapeToken! => lengthToken!
-                                    }
-                                shapeToken! + 1 => shapeToken!
-                            }
-                        outerSemicolon! -> if {
-                            outerBounded! -> if { 12 => kind! } else {
-                                outerTilde! -> if { 3 => kind! } else { 4 => kind! }
+                        firstToken! -> outerTypeStorageSuffix(typeTokenEnd!, tokens) => suffix
+                        suffix.semicolon => outerSemicolon
+                        suffix.dynamic => outerTilde
+                        suffix.bounded => outerBounded
+                        suffix.lengthToken => lengthToken!
+                        outerSemicolon -> if {
+                            outerBounded -> if { 12 => kind! } else {
+                                outerTilde -> if { 3 => kind! } else { 4 => kind! }
                             }
                         }
                     } else {
                         kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdLeftBrace()
                             -> if {
                                 5 => kind!
-                                false => dictionaryBounded!
-                                firstToken! => dictionaryShapeToken!
-                                dictionaryShapeToken! < node.firstToken + node.tokenCount
-                                    -> while {
-                                        tokens[dictionaryShapeToken!].kind == grammar.tokenIdLessEqual()
-                                            -> if { true => dictionaryBounded! }
-                                        dictionaryBounded! and lengthToken! < 0 and tokens[dictionaryShapeToken!].kind == grammar.tokenIdNumber()
-                                            -> if {
-                                                dictionaryShapeToken! => lengthToken!
-                                            }
-                                        dictionaryShapeToken! + 1 => dictionaryShapeToken!
-                                    }
-                                dictionaryBounded! -> if { 13 => kind! }
+                                firstToken! -> outerTypeStorageSuffix(typeTokenEnd!, tokens) => suffix
+                                suffix.lengthToken => lengthToken!
+                                suffix.bounded -> if { 13 => kind! }
                             } else {
                                 kind! == 1 and tokens[firstToken!].kind == grammar.tokenIdIdentifier()
                                     -> if {
@@ -163,6 +248,14 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
                                                     8 => kind!
                                                     -1 => nameToken!
                                                 }
+                                            keywordByte0 == 100 and keywordByte1 == 121 and keywordByte2 == 110
+                                                -> if {
+                                                    15 => kind!
+                                                    firstToken! + 1 => traitToken!
+                                                    traitToken! < typeTokenEnd! and tokens[traitToken!].kind != grammar.tokenIdIdentifier()
+                                                        -> while { traitToken! + 1 => traitToken! }
+                                                    traitToken! < typeTokenEnd! -> if { traitToken! => nameToken! }
+                                                }
                                         }
                                         firstName.span.length == 6 -> if {
                                             source -> byte(firstName.span.start) => keywordByte0
@@ -175,7 +268,7 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
                                                 -> if {
                                                     14 => kind!
                                                     firstToken! + 1 => bitSetToken!
-                                                    bitSetToken! < node.firstToken + node.tokenCount and lengthToken! < 0
+                                                    bitSetToken! < typeTokenEnd! and lengthToken! < 0
                                                         -> while {
                                                             tokens[bitSetToken!].kind == grammar.tokenIdNumber()
                                                                 -> if { bitSetToken! => lengthToken! }
@@ -265,6 +358,11 @@ public lowerPrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syn
                                 source -> byte(priorName.span.start + nameByte!) => priorByte
                                 currentByte != priorByte -> if { false => sameName! }
                                 nameByte! + 1 => nameByte!
+                            }
+                        sameName! and (term!.kind == 15 or terms![priorNameIndex!].kind == 15)
+                            -> if {
+                                term!.kind == terms![priorNameIndex!].kind
+                                    and (source -> sameTypePathTokens(nodes, tokens, term!.astNode, terms![priorNameIndex!].astNode)) => sameName!
                             }
                         sameName! -> if { terms![priorNameIndex!].nameId => term!.nameId }
                     }
@@ -418,7 +516,26 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
         -> if {
             1 => status!
         }
-    status! == 0 -> if {
+    0 => validationIndex!
+    validationIndex! < (request.terms -> len) -> while {
+        request.terms[validationIndex!] => sourceTerm
+        sourceTerm.firstArgument >= (request.terms -> len)
+            or sourceTerm.secondArgument >= (request.terms -> len)
+            or sourceTerm.canonical >= (request.terms -> len)
+            -> if { 1 => status! }
+        status! != 1 and sourceTerm.canonical < 0 -> if { 2 => status! }
+        validationIndex! + 1 => validationIndex!
+    }
+    # Freeze the original replacement before substituting the input tree.
+    # A replacement containing the parameter is a value, not another request.
+    -1 => replacementRoot!
+    0 => pass!
+    status! == 0 and pass! < 2 -> while {
+        0 => resetIndex!
+        resetIndex! < (mapped! -> len) -> while {
+            -1 => mapped![resetIndex!]
+            resetIndex! + 1 => resetIndex!
+        }
         0 => completed!
         true => changed!
         completed! < (request.terms -> len) and changed!
@@ -428,13 +545,11 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
                 sourceIndex! < (request.terms -> len) -> while {
                     mapped![sourceIndex!] < 0 -> if {
                         request.terms[sourceIndex!] => sourceTerm
-                        sourceTerm.canonical == request.terms[request.parameter].canonical
+                        pass! == 1 and sourceTerm.canonical == request.terms[request.parameter].canonical
                             -> if {
-                                mapped![request.replacement] >= 0 -> if {
-                                    mapped![request.replacement] => mapped![sourceIndex!]
-                                    completed! + 1 => completed!
-                                    true => changed!
-                                }
+                                replacementRoot! => mapped![sourceIndex!]
+                                completed! + 1 => completed!
+                                true => changed!
                             } else {
                                 false => firstReady!
                                 sourceTerm.firstArgument < 0 -> if {
@@ -488,6 +603,8 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
                 }
             }
         completed! < (request.terms -> len) -> if { 2 => status! }
+        status! == 0 and pass! == 0 -> if { mapped![request.replacement] => replacementRoot! }
+        pass! + 1 => pass!
     }
     -1 => resultRoot!
     status! == 0 -> if { mapped![request.root] => resultRoot! }

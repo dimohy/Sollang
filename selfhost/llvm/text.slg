@@ -31,8 +31,9 @@ import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
-emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context -> emitCorePreambleFeatures(false, state) => coreFeatures
+    context -> emitRuntimeTaskResultCompletionFunctions(state)
     coreFeatures.usesArguments => usesArguments
     coreFeatures.usesNativeInterop => usesNativeInterop
     coreFeatures.usesComInterop => usesComInterop
@@ -103,13 +104,15 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
             functionIndex! -> bodyScheduleIndex(state) => entryScheduleIndex
             state.bodySchedules[entryScheduleIndex] -> emitScheduledStreamBody(functionIndex!, entryEnd!, entryPointerAlignment, context, state)
             OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+            context -> usesReachableAsyncRuntime(state)
+                -> if { "  call void @sollang_async_shutdown()" -> println }
             usesComInterop -> if { "  call void @sollang_com_cleanup()" -> println }
             usesNativeInterop -> if { "  call void @sollang_native_cleanup()" -> println }
             context.supportsComputePool and (context -> diagnostics.usesParallelRuntime)
                 -> if { "  call void @sollang_compute_shutdown()" -> println }
             context.expectedPathStyle == 1 and (context -> diagnostics.usesEnvironmentRuntime)
                 -> if { "  call void @sollang_dispose_environment()" -> println }
-            context.expectedPathStyle == 1 and (context -> diagnostics.usesSocketRuntime)
+            context.expectedPathStyle == 1 and (context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions))
                 -> if { "  call void @sollang_platform_socket_cleanup()" -> println }
             usesArguments and context.expectedPathStyle == 1 and context.pointerBitWidth != 32
                 -> if {
@@ -135,7 +138,7 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
     # Keep attribute group zero authoritative. LLVM assigns group zero to
     # llvm.trap when this line is absent, which would make every runtime helper
     # carrying #0 cold+noreturn and lets O1 miscompile returning platform calls.
-    context -> diagnostics.usesSocketRuntime
+    context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions)
         -> if {
             "attributes #0 = { nounwind }" -> println
         }

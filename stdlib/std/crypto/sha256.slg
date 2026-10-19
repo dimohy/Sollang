@@ -16,60 +16,109 @@ rotateRight word: UInt64, count: Int -> UInt64 {
     word / lowDivisor + (word % lowDivisor) * highMultiplier
 }
 
+# Each readonly table maps two four-bit values to their exact result.
+# Eight steps retain the original low32-bit contract without32 bit loops.
+xorNibbles: -> [UInt8] => [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14,
+    2, 3, 0, 1, 6, 7, 4, 5, 10, 11, 8, 9, 14, 15, 12, 13,
+    3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12,
+    4, 5, 6, 7, 0, 1, 2, 3, 12, 13, 14, 15, 8, 9, 10, 11,
+    5, 4, 7, 6, 1, 0, 3, 2, 13, 12, 15, 14, 9, 8, 11, 10,
+    6, 7, 4, 5, 2, 3, 0, 1, 14, 15, 12, 13, 10, 11, 8, 9,
+    7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8,
+    8, 9, 10, 11, 12, 13, 14, 15, 0, 1, 2, 3, 4, 5, 6, 7,
+    9, 8, 11, 10, 13, 12, 15, 14, 1, 0, 3, 2, 5, 4, 7, 6,
+    10, 11, 8, 9, 14, 15, 12, 13, 2, 3, 0, 1, 6, 7, 4, 5,
+    11, 10, 9, 8, 15, 14, 13, 12, 3, 2, 1, 0, 7, 6, 5, 4,
+    12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3,
+    13, 12, 15, 14, 9, 8, 11, 10, 5, 4, 7, 6, 1, 0, 3, 2,
+    14, 15, 12, 13, 10, 11, 8, 9, 6, 7, 4, 5, 2, 3, 0, 1,
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
+]
+
+andNibbles: -> [UInt8] => [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
+    0, 0, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2, 0, 0, 2, 2,
+    0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3,
+    0, 0, 0, 0, 4, 4, 4, 4, 0, 0, 0, 0, 4, 4, 4, 4,
+    0, 1, 0, 1, 4, 5, 4, 5, 0, 1, 0, 1, 4, 5, 4, 5,
+    0, 0, 2, 2, 4, 4, 6, 6, 0, 0, 2, 2, 4, 4, 6, 6,
+    0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7,
+    0, 0, 0, 0, 0, 0, 0, 0, 8, 8, 8, 8, 8, 8, 8, 8,
+    0, 1, 0, 1, 0, 1, 0, 1, 8, 9, 8, 9, 8, 9, 8, 9,
+    0, 0, 2, 2, 0, 0, 2, 2, 8, 8, 10, 10, 8, 8, 10, 10,
+    0, 1, 2, 3, 0, 1, 2, 3, 8, 9, 10, 11, 8, 9, 10, 11,
+    0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12,
+    0, 1, 0, 1, 4, 5, 4, 5, 8, 9, 8, 9, 12, 13, 12, 13,
+    0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 14, 14,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+]
+
 xor3 xorLeft: UInt64, xorMiddle: UInt64, xorRight: UInt64 -> UInt64 {
+    xorNibbles() => lookup
     UInt64(0) => result!
     UInt64(1) => place!
     xorLeft => left!
     xorMiddle => middle!
     xorRight => right!
-    0 => bit!
-    bit! < 32 -> while {
-        ((left! % 2) + (middle! % 2) + (right! % 2)) % 2 => parity
-        result! + parity * place! => result!
-        left! / 2 => left!
-        middle! / 2 => middle!
-        right! / 2 => right!
-        place! * 2 => place!
-        bit! + 1 => bit!
+    0..<8 -> each {
+        lookup[Int(left! % 16) * 16 + Int(middle! % 16)] => pair
+        lookup[Int(pair) * 16 + Int(right! % 16)] => parity
+        result! + UInt64(parity) * place! => result!
+        left! / 16 => left!
+        middle! / 16 => middle!
+        right! / 16 => right!
+        place! * 16 => place!
     }
     result!
 }
 
 choose selector: UInt64, whenSet: UInt64, whenClear: UInt64 -> UInt64 {
+    xorNibbles() => exclusive
+    andNibbles() => intersection
     UInt64(0) => result!
     UInt64(1) => place!
     selector => selectBits!
     whenSet => setBits!
     whenClear => clearBits!
-    0 => bit!
-    bit! < 32 -> while {
-        selectBits! % 2 => selected
-        selected == 1 -> if { setBits! % 2 } else { clearBits! % 2 } => chosenBit
-        result! + chosenBit * place! => result!
-        selectBits! / 2 => selectBits!
-        setBits! / 2 => setBits!
-        clearBits! / 2 => clearBits!
-        place! * 2 => place!
-        bit! + 1 => bit!
+    0..<8 -> each {
+        Int(clearBits! % 16) => clear
+        exclusive[Int(setBits! % 16) * 16 + clear] => difference
+        intersection[Int(selectBits! % 16) * 16 + Int(difference)] => selected
+        exclusive[Int(selected) * 16 + clear] => chosen
+        result! + UInt64(chosen) * place! => result!
+        selectBits! / 16 => selectBits!
+        setBits! / 16 => setBits!
+        clearBits! / 16 => clearBits!
+        place! * 16 => place!
     }
     result!
 }
 
 majority first: UInt64, second: UInt64, third: UInt64 -> UInt64 {
+    xorNibbles() => exclusive
+    andNibbles() => intersection
     UInt64(0) => result!
     UInt64(1) => place!
     first => left!
     second => middle!
     third => right!
-    0 => bit!
-    bit! < 32 -> while {
-        (left! % 2) + (middle! % 2) + (right! % 2) => count
-        count >= 2 -> if { result! + place! => result! }
-        left! / 2 => left!
-        middle! / 2 => middle!
-        right! / 2 => right!
-        place! * 2 => place!
-        bit! + 1 => bit!
+    0..<8 -> each {
+        Int(left! % 16) => left
+        Int(middle! % 16) => middle
+        Int(right! % 16) => right
+        intersection[left * 16 + middle] => firstPair
+        intersection[left * 16 + right] => secondPair
+        intersection[middle * 16 + right] => thirdPair
+        exclusive[Int(firstPair) * 16 + Int(secondPair)] => pair
+        exclusive[Int(pair) * 16 + Int(thirdPair)] => common
+        result! + UInt64(common) * place! => result!
+        left! / 16 => left!
+        middle! / 16 => middle!
+        right! / 16 => right!
+        place! * 16 => place!
     }
     result!
 }

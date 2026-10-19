@@ -4,6 +4,11 @@ import sollang.compiler.project
 import sys.file as file
 import sys.path as path
 
+public struct LockResult {
+    public status: Int
+    public diagnostic: Text
+}
+
 unitValue: -> Unit {
     false => ignored
 }
@@ -198,13 +203,16 @@ sortedIndexes values: [path.Path; ~] -> [Int; ~] {
 }
 
 public render packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], style: path.Style -> [UInt8; ~] uses File {
+    packageManifests[0] -> pathText -> directoryOf => rootDirectory
+    rootDirectory -> renderAt(packageManifests, packageNames, packageVersions, style)
+}
+
+public renderAt rootDirectory: Text, packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], style: path.Style -> [UInt8; ~] uses File {
     [UInt8; ~] => bytes!
     bytes! -> appendLine("lock {")
     bytes! -> appendLine("    format: 2")
     bytes! -> appendLine("    packages: [")
     packageNames -> sortedIndexes => order
-    packageManifests[0] -> pathText => rootManifestText
-    rootManifestText -> directoryOf => rootDirectory
 
     0 => orderIndex!
     orderIndex! < (order -> len) -> while {
@@ -296,13 +304,22 @@ sameFile pathValue: Text, expected: [UInt8; ~] -> Bool uses File {
     pathValue -> file.openRead -> when {
         Ok(_) {
             pathValue -> file.mapText => source
-            (source -> len) == UIntSize(expected -> len) => same!
-            UIntSize(0) => index!
-            same! and index! < (source -> len) -> while {
-                (source -> byte(index!)) != expected[Int(index!)]
-                    -> if { false => same! }
-                index! + 1 => index!
+            true => same!
+            UIntSize(0) => sourceIndex!
+            0 => expectedIndex!
+            same! and sourceIndex! < (source -> len) -> while {
+                (source -> byte(sourceIndex!)) == 13 and sourceIndex! + 1 < (source -> len) and (source -> byte(sourceIndex! + 1)) == 10
+                    -> if { sourceIndex! + 1 => sourceIndex! }
+                expectedIndex! >= (expected -> len) -> if {
+                    false => same!
+                } else {
+                    (source -> byte(sourceIndex!)) != expected[expectedIndex!]
+                        -> if { false => same! }
+                }
+                sourceIndex! + 1 => sourceIndex!
+                expectedIndex! + 1 => expectedIndex!
             }
+            same! and expectedIndex! == (expected -> len) => same!
         }
         Err(_) {}
     }
@@ -351,6 +368,10 @@ writeBytes destination: Text, temporary: Text, bytes: [UInt8; ~] -> Bool uses Fi
 lockPath manifest: ref path.Path, style: path.Style -> path.Path {
     manifest -> pathText => manifestText
     manifestText -> directoryOf => directory
+    directory -> destinationAt(style)
+}
+
+public destinationAt directory: Text, style: path.Style -> path.Path {
     style -> when {
         Windows { path.fromText("$directory\\sollang.lock", style) }
         Posix { path.fromText("$directory/sollang.lock", style) }
@@ -365,6 +386,42 @@ temporaryPath destination: ref path.Path -> path.Path {
 
 public destination packageManifests: [path.Path; ~], style: path.Style -> path.Path {
     packageManifests[0] -> lockPath(style)
+}
+
+public requireSnapshot destination: ref path.Path, locked: Bool, diagnosticStorage: mut Arena -> LockResult uses File {
+    destination -> pathText => destinationText
+    locked and not (destinationText -> fileExists)
+        -> if {
+            "package lock is missing: $destinationText; run 'sollang resolve' without --locked"
+                -> materialize(diagnosticStorage) => diagnostic
+            LockResult { status: 2, diagnostic: diagnostic } -> return
+        }
+    LockResult { status: 0, diagnostic: "" }
+}
+
+public ensureAt rootDirectory: Text, packageManifests: [path.Path; ~], packageNames: [path.Path; ~], packageVersions: [path.Path; ~], locked: Bool, style: path.Style, diagnosticStorage: mut Arena -> LockResult uses File {
+    (packageManifests -> len) == 0 -> if {
+        LockResult { status: 1, diagnostic: "" } -> return
+    }
+    rootDirectory -> renderAt(packageManifests, packageNames, packageVersions, style) => expected
+    rootDirectory -> destinationAt(style) => destination
+    destination -> pathText => destinationText
+    destinationText -> sameFile(expected) -> if {
+        LockResult { status: 0, diagnostic: "" } -> return
+    }
+    locked -> if {
+        "package lock is missing or out of date: $destinationText; run 'sollang resolve' without --locked"
+            -> materialize(diagnosticStorage) => diagnostic
+        LockResult { status: 2, diagnostic: diagnostic } -> return
+    }
+    destination -> temporaryPath => temporary
+    temporary -> pathText => temporaryText
+    destinationText -> writeBytes(temporaryText, expected)
+        -> if {
+            LockResult { status: 0, diagnostic: "" }
+        } else {
+            LockResult { status: 3, diagnostic: "" }
+        }
 }
 
 # Status: 0 absent/current/written, 1 no graph, 2 locked mismatch,

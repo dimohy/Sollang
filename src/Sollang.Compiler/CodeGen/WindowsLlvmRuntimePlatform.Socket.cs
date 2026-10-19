@@ -23,6 +23,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @send(i64, ptr, i32, i32)");
         functions.AppendLine("declare dllimport i32 @WSARecv(i64, ptr, i32, ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @WSASend(i64, ptr, i32, ptr, i32, ptr, ptr)");
+        functions.AppendLine("declare dllimport i32 @WSAGetOverlappedResult(i64, ptr, ptr, i32, ptr)");
         functions.AppendLine("declare dllimport i32 @recvfrom(i64, ptr, i32, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @WSARecvFrom(i64, ptr, i32, ptr, ptr, ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @sendto(i64, ptr, i32, i32, ptr, i32)");
@@ -1488,9 +1489,32 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           %completion_status_slot = getelementptr i8, ptr %completion_table, i64 16
           %completion_status64 = load i64, ptr %completion_status_slot, align 8
           %completion_status = trunc i64 %completion_status64 to i32
-          %record_status_slot = getelementptr i8, ptr %pending_record, i64 116
-          store i32 %completion_status, ptr %record_status_slot, align 4
           %transferred_slot = getelementptr i8, ptr %completion_table, i64 24
+          %completion_succeeded = icmp eq i32 %completion_status, 0
+          br i1 %completion_succeeded, label %record_success, label %resolve_failure
+        resolve_failure:
+          %registration_table_slot = getelementptr i8, ptr %state, i64 8
+          %registration_table = load ptr, ptr %registration_table_slot, align 8
+          %registration_index_slot = getelementptr i8, ptr %pending_record, i64 16
+          %registration_index = load i64, ptr %registration_index_slot, align 8
+          %registration_offset = mul nuw i64 %registration_index, 32
+          %registration_entry = getelementptr i8, ptr %registration_table, i64 %registration_offset
+          %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
+          %socket = load i64, ptr %socket_slot, align 8
+          %completion_flags = alloca i32, align 4
+          store i32 0, ptr %completion_flags, align 4
+          %resolved = call i32 @WSAGetOverlappedResult(i64 %socket, ptr %overlapped, ptr %transferred_slot, i32 0, ptr %completion_flags)
+          %resolved_failed = icmp eq i32 %resolved, 0
+          br i1 %resolved_failed, label %record_failure, label %trap
+        record_failure:
+          %completion_error = call i32 @WSAGetLastError()
+          br label %record_status
+        record_success:
+          br label %record_status
+        record_status:
+          %published_status = phi i32 [ 0, %record_success ], [ %completion_error, %record_failure ]
+          %record_status_slot = getelementptr i8, ptr %pending_record, i64 116
+          store i32 %published_status, ptr %record_status_slot, align 4
           %transferred = load i32, ptr %transferred_slot, align 4
           %record_transferred_slot = getelementptr i8, ptr %pending_record, i64 120
           store i32 %transferred, ptr %record_transferred_slot, align 4
@@ -1556,7 +1580,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           %old_count = atomicrmw add ptr @sollang_io_outstanding, i64 1 acq_rel
           store atomic i32 1, ptr %phase_slot release, align 4
           %status_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 4
-          store i32 6, ptr %status_slot, align 4
+          store i32 7, ptr %status_slot, align 4
           %registration = cmpxchg ptr %task_slot, ptr null, ptr %control acq_rel acquire
           %registered = extractvalue { ptr, i1 } %registration, 1
           br i1 %registered, label %race_probe, label %trap
@@ -1588,9 +1612,25 @@ internal sealed partial class WindowsLlvmRuntimePlatform
 
         define internal void @sollang_socket_completion_dequeue_task_cancel(ptr %control) #0 {
         entry:
+          %cancel_phase_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 19
+          %cancel_phase = load atomic i32, ptr %cancel_phase_slot acquire, align 4
+          %requesting = icmp eq i32 %cancel_phase, 1
+          br i1 %requesting, label %request, label %inspect_final
+        request:
+          store atomic i32 2, ptr %cancel_phase_slot release, align 4
           %identity_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 17
           %identity = load i64, ptr %identity_slot, align 8
-          call void @sollang_platform_socket_completion_close(i64 %identity)
+          call void @sollang_platform_socket_completion_request_cancel_all(i64 %identity)
+          ret void
+        inspect_final:
+          %final = icmp eq i32 %cancel_phase, 2
+          %not_started = icmp eq i32 %cancel_phase, 0
+          %can_cleanup = or i1 %final, %not_started
+          br i1 %can_cleanup, label %cleanup, label %trap
+        cleanup:
+          %identity_slot_final = getelementptr %sollang.task_control, ptr %control, i32 0, i32 17
+          %identity_final = load i64, ptr %identity_slot_final, align 8
+          call void @sollang_platform_socket_completion_close(i64 %identity_final)
           %descriptor_value_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 13
           %descriptor_value = load i64, ptr %descriptor_value_slot, align 8
           %descriptor = inttoptr i64 %descriptor_value to ptr
@@ -1599,6 +1639,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           %context = load ptr, ptr %context_slot, align 8
           call void @sollang_free(ptr %context)
           ret void
+        trap:
+          call void @llvm.trap()
+          unreachable
         }
 
         define internal %sollang.socket_result @sollang_platform_socket_completion_create(i64 %registrations, i64 %pending, i64 %batch) #0 {
@@ -2155,11 +2198,12 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           %terminal_state = select i1 %terminal_cancelled, i32 3, i32 2
           %descriptor_state_slot = getelementptr i8, ptr %descriptor, i64 64
           store i32 %terminal_state, ptr %descriptor_state_slot, align 4
-          %failed_kind = select i1 %terminal_cancelled, i32 6, i32 8
+          %completion_code = trunc i64 %completion_status to i32
+          %mapped_failure_kind = call i32 @sollang_socket_error_kind(i32 %completion_code)
+          %failed_kind = select i1 %terminal_cancelled, i32 6, i32 %mapped_failure_kind
           %terminal_kind = select i1 %completion_succeeded, i32 -1, i32 %failed_kind
           %descriptor_kind_slot = getelementptr i8, ptr %descriptor, i64 68
           store i32 %terminal_kind, ptr %descriptor_kind_slot, align 4
-          %completion_code = trunc i64 %completion_status to i32
           %descriptor_code_slot = getelementptr i8, ptr %descriptor, i64 72
           store i32 %completion_code, ptr %descriptor_code_slot, align 4
           %native_identity = ptrtoint ptr %pending_record to i64
@@ -2188,30 +2232,23 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           ret %sollang.socket_result %invalid_result
         }
 
-        define internal void @sollang_platform_socket_completion_close(i64 %identity) #0 {
+        define internal void @sollang_platform_socket_completion_request_cancel_all(i64 %identity) #0 {
         entry:
           %valid = icmp ugt i64 %identity, 0
-          br i1 %valid, label %close, label %done
-        close:
+          br i1 %valid, label %request, label %done
+        request:
           %state = inttoptr i64 %identity to ptr
-          %port = load ptr, ptr %state, align 8
           %registration_table_slot = getelementptr i8, ptr %state, i64 8
           %registration_table = load ptr, ptr %registration_table_slot, align 8
           %pending_table_slot = getelementptr i8, ptr %state, i64 16
           %pending_table = load ptr, ptr %pending_table_slot, align 8
-          %completion_table_slot = getelementptr i8, ptr %state, i64 24
-          %completion_table = load ptr, ptr %completion_table_slot, align 8
-          %registration_capacity_slot = getelementptr i8, ptr %state, i64 32
-          %registration_capacity = load i64, ptr %registration_capacity_slot, align 8
           %pending_capacity_slot = getelementptr i8, ptr %state, i64 40
           %pending_capacity = load i64, ptr %pending_capacity_slot, align 8
-          %pending_count_slot = getelementptr i8, ptr %state, i64 64
-          %pending_count = load i64, ptr %pending_count_slot, align 8
           br label %cancel_pending_loop
         cancel_pending_loop:
-          %cancel_index = phi i64 [ 0, %close ], [ %cancel_next, %cancel_pending_continue ]
+          %cancel_index = phi i64 [ 0, %request ], [ %cancel_next, %cancel_pending_continue ]
           %cancel_done = icmp uge i64 %cancel_index, %pending_capacity
-          br i1 %cancel_done, label %wait_pending_loop, label %cancel_pending_check
+          br i1 %cancel_done, label %done, label %cancel_pending_check
         cancel_pending_check:
           %cancel_offset = mul nuw i64 %cancel_index, 128
           %cancel_entry = getelementptr i8, ptr %pending_table, i64 %cancel_offset
@@ -2235,10 +2272,37 @@ internal sealed partial class WindowsLlvmRuntimePlatform
         cancel_pending_error:
           %cancel_error = call i32 @GetLastError()
           %completion_already_won = icmp eq i32 %cancel_error, 1168
-          br i1 %completion_already_won, label %cancel_pending_continue, label %close_trap
+          br i1 %completion_already_won, label %cancel_pending_continue, label %trap
         cancel_pending_continue:
           %cancel_next = add nuw i64 %cancel_index, 1
           br label %cancel_pending_loop
+        done:
+          ret void
+        trap:
+          call void @llvm.trap()
+          unreachable
+        }
+
+        define internal void @sollang_platform_socket_completion_close(i64 %identity) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %close, label %done
+        close:
+          %state = inttoptr i64 %identity to ptr
+          %port = load ptr, ptr %state, align 8
+          %registration_table_slot = getelementptr i8, ptr %state, i64 8
+          %registration_table = load ptr, ptr %registration_table_slot, align 8
+          %pending_table_slot = getelementptr i8, ptr %state, i64 16
+          %pending_table = load ptr, ptr %pending_table_slot, align 8
+          %completion_table_slot = getelementptr i8, ptr %state, i64 24
+          %completion_table = load ptr, ptr %completion_table_slot, align 8
+          %registration_capacity_slot = getelementptr i8, ptr %state, i64 32
+          %registration_capacity = load i64, ptr %registration_capacity_slot, align 8
+          %pending_capacity_slot = getelementptr i8, ptr %state, i64 40
+          %pending_capacity = load i64, ptr %pending_capacity_slot, align 8
+          %pending_count_slot = getelementptr i8, ptr %state, i64 64
+          call void @sollang_platform_socket_completion_request_cancel_all(i64 %identity)
+          br label %wait_pending_loop
         wait_pending_loop:
           %remaining_pending = load atomic i64, ptr %pending_count_slot acquire, align 8
           %pending_done = icmp eq i64 %remaining_pending, 0

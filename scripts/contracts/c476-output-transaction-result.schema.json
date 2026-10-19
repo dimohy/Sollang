@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "gate", "state", "contractPath", "contractSha256", "compilerPath", "compilerSha256", "negativeSource", "negativeSourceSha256", "negativeExpectedStderr", "negativeExpectedStderrSha256", "positiveSource", "positiveSourceSha256", "positiveExpectedStdout", "positiveExpectedStdoutSha256", "llvmRoot", "stdlibRoot", "stageAuditScope", "sourceObservationScope", "fixtureSelectionScope", "inputFingerprintStart", "inputFingerprintEnd", "inputsStable", "completed", "focusedPassed", "aliasRequested", "aliasCompleted", "aliasPassed", "aliasCollision", "fullContractPassed", "orphanProcessIds", "scenarios", "failureId", "failure"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "gate": { "const": "c476-output-transaction-focused" },
+    "state": { "enum": ["running", "focused-passed", "failed"] },
+    "contractPath": { "$ref": "#/$defs/path" },
+    "contractSha256": { "$ref": "#/$defs/sha" },
+    "compilerPath": { "$ref": "#/$defs/path" },
+    "compilerSha256": { "$ref": "#/$defs/sha" },
+    "negativeSource": { "$ref": "#/$defs/path" },
+    "negativeSourceSha256": { "$ref": "#/$defs/sha" },
+    "negativeExpectedStderr": { "$ref": "#/$defs/path" },
+    "negativeExpectedStderrSha256": { "$ref": "#/$defs/sha" },
+    "positiveSource": { "$ref": "#/$defs/path" },
+    "positiveSourceSha256": { "$ref": "#/$defs/sha" },
+    "positiveExpectedStdout": { "$ref": "#/$defs/path" },
+    "positiveExpectedStdoutSha256": { "$ref": "#/$defs/sha" },
+    "llvmRoot": { "$ref": "#/$defs/path" },
+    "stdlibRoot": { "$ref": "#/$defs/path" },
+    "stageAuditScope": { "const": "case-output-tree-and-isolated-working-directory" },
+    "sourceObservationScope": { "const": "historical-contract-only-not-current-input" },
+    "fixtureSelectionScope": { "const": "caller-supplied-source-and-exact-expected-bytes" },
+    "inputFingerprintStart": { "$ref": "#/$defs/sha" },
+    "inputFingerprintEnd": { "oneOf": [{ "$ref": "#/$defs/sha" }, { "type": "null" }] },
+    "inputsStable": { "type": "boolean" },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "focusedPassed": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "aliasRequested": { "type": "boolean" },
+    "aliasCompleted": { "type": "integer", "minimum": 0, "maximum": 1 },
+    "aliasPassed": { "type": "integer", "minimum": 0, "maximum": 1 },
+    "aliasCollision": { "$ref": "#/$defs/aliasCase" },
+    "fullContractPassed": { "const": false },
+    "orphanProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["semanticFailureFresh", "emitterFailureFresh", "linkerFailureFresh", "successKeepTempsOn", "successKeepTempsOff", "existingSentinelSemanticFailure", "existingSentinelEmitterFailure", "existingSentinelLinkerFailure", "sameOutputParallel", "differentOutputParallel", "stageCleanup", "publicationFailure", "spawnFailure"],
+      "properties": {
+        "semanticFailureFresh": { "$ref": "#/$defs/case" },
+        "emitterFailureFresh": { "$ref": "#/$defs/neverRunCase" },
+        "linkerFailureFresh": { "$ref": "#/$defs/neverRunCase" },
+        "successKeepTempsOn": { "$ref": "#/$defs/case" },
+        "successKeepTempsOff": { "$ref": "#/$defs/case" },
+        "existingSentinelSemanticFailure": { "$ref": "#/$defs/case" },
+        "existingSentinelEmitterFailure": { "$ref": "#/$defs/neverRunCase" },
+        "existingSentinelLinkerFailure": { "$ref": "#/$defs/neverRunCase" },
+        "sameOutputParallel": { "$ref": "#/$defs/neverRunCase" },
+        "differentOutputParallel": { "$ref": "#/$defs/neverRunCase" },
+        "stageCleanup": { "$ref": "#/$defs/neverRunCase" },
+        "publicationFailure": { "$ref": "#/$defs/neverRunCase" },
+        "spawnFailure": { "$ref": "#/$defs/neverRunCase" }
+      }
+    },
+    "failureId": { "type": ["string", "null"] },
+    "failure": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    { "if": { "properties": { "state": { "const": "focused-passed" } } }, "then": { "properties": { "completed": { "const": 4 }, "focusedPassed": { "const": 4 }, "inputsStable": { "const": true }, "inputFingerprintEnd": { "$ref": "#/$defs/sha" }, "orphanProcessIds": { "maxItems": 0 }, "failureId": { "type": "null" }, "failure": { "type": "null" }, "scenarios": { "properties": { "semanticFailureFresh": { "$ref": "#/$defs/negativePassedCase" }, "existingSentinelSemanticFailure": { "$ref": "#/$defs/negativePassedCase" }, "successKeepTempsOn": { "$ref": "#/$defs/positivePassedCase" }, "successKeepTempsOff": { "$ref": "#/$defs/positivePassedCase" } } } } } },
+    { "if": { "properties": { "aliasRequested": { "const": false } }, "required": ["aliasRequested"] }, "then": { "properties": { "aliasCompleted": { "const": 0 }, "aliasPassed": { "const": 0 }, "aliasCollision": { "properties": { "state": { "const": "not-run" } } } } } },
+    { "if": { "properties": { "aliasCollision": { "properties": { "state": { "const": "not-run" } }, "required": ["state"] } }, "required": ["aliasCollision"] }, "then": { "properties": { "aliasCompleted": { "const": 0 }, "aliasPassed": { "const": 0 } } } },
+    { "if": { "properties": { "aliasCollision": { "properties": { "state": { "const": "passed" } }, "required": ["state"] } }, "required": ["aliasCollision"] }, "then": { "properties": { "aliasCompleted": { "const": 1 }, "aliasPassed": { "const": 1 } } } },
+    { "if": { "properties": { "aliasCollision": { "properties": { "state": { "const": "failed" } }, "required": ["state"] } }, "required": ["aliasCollision"] }, "then": { "properties": { "aliasCompleted": { "const": 1 }, "aliasPassed": { "const": 0 } } } },
+    { "if": { "properties": { "state": { "const": "focused-passed" }, "aliasRequested": { "const": true } }, "required": ["state", "aliasRequested"] }, "then": { "properties": { "aliasCompleted": { "const": 1 }, "aliasPassed": { "const": 1 }, "aliasCollision": { "$ref": "#/$defs/aliasPassedCase" } } } },
+    { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failureId": { "type": "string", "minLength": 1 }, "failure": { "type": "string", "minLength": 1 } } } }
+  ],
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[0-9A-F]{64}$" },
+    "path": { "type": "string", "minLength": 1 },
+    "aliasCase": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "firstOutput", "secondOutput", "firstExitCode", "secondExitCode", "firstStdoutPath", "firstStderrPath", "secondStdoutPath", "secondStderrPath", "lockObserved", "overlapObserved", "products", "failure"],
+      "properties": {
+        "state": { "enum": ["not-run", "passed", "failed"] },
+        "firstOutput": { "type": ["string", "null"] }, "secondOutput": { "type": ["string", "null"] },
+        "firstExitCode": { "type": ["integer", "null"] }, "secondExitCode": { "type": ["integer", "null"] },
+        "firstStdoutPath": { "type": ["string", "null"] }, "firstStderrPath": { "type": ["string", "null"] },
+        "secondStdoutPath": { "type": ["string", "null"] }, "secondStderrPath": { "type": ["string", "null"] },
+        "lockObserved": { "type": "boolean" }, "overlapObserved": { "type": "boolean" },
+        "products": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+        "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "not-run" } } }, "then": { "properties": { "firstExitCode": { "type": "null" }, "secondExitCode": { "type": "null" }, "lockObserved": { "const": false }, "overlapObserved": { "const": false }, "products": { "maxItems": 0 }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "firstExitCode": { "const": 0 }, "secondExitCode": { "type": "integer", "not": { "const": 0 } }, "lockObserved": { "const": true }, "overlapObserved": { "const": true }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "failure": { "type": "string", "minLength": 1 } } } }
+      ]
+    },
+    "aliasPassedCase": { "allOf": [{ "$ref": "#/$defs/aliasCase" }, { "properties": { "state": { "const": "passed" } } }] },
+    "neverRunCase": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "state": { "const": "not-run" } } }] },
+    "passedCase": { "allOf": [{ "$ref": "#/$defs/case" }, { "properties": { "state": { "const": "passed" } } }] },
+    "negativePassedCase": { "allOf": [{ "$ref": "#/$defs/passedCase" }, { "properties": { "exitCode": { "not": { "const": 0 } } } }] },
+    "positivePassedCase": { "allOf": [{ "$ref": "#/$defs/passedCase" }, { "properties": { "exitCode": { "const": 0 } } }] },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "exitCode", "buildStdoutPath", "buildStderrPath", "runStdoutPath", "runStderrPath", "products", "assertionsPassed", "failure"],
+      "properties": {
+        "state": { "enum": ["not-run", "passed", "failed"] },
+        "exitCode": { "type": ["integer", "null"] },
+        "buildStdoutPath": { "type": ["string", "null"] },
+        "buildStderrPath": { "type": ["string", "null"] },
+        "runStdoutPath": { "type": ["string", "null"] },
+        "runStderrPath": { "type": ["string", "null"] },
+        "products": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+        "assertionsPassed": { "type": "boolean" },
+        "failure": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "not-run" } } }, "then": { "properties": { "exitCode": { "type": "null" }, "assertionsPassed": { "const": false }, "products": { "maxItems": 0 } } } },
+        { "if": { "properties": { "state": { "const": "passed" } } }, "then": { "properties": { "exitCode": { "type": "integer" }, "assertionsPassed": { "const": true }, "failure": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "failed" } } }, "then": { "properties": { "assertionsPassed": { "const": false }, "failure": { "type": "string", "minLength": 1 } } } }
+      ]
+    }
+  }
+}

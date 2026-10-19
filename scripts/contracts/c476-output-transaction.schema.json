@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "status", "platforms", "sourceObservations", "requiredDesign", "scenarios", "atomicityAndDurability"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "const": "c476-output-transaction" },
+    "status": { "const": "requirements-frozen-unverified" },
+    "platforms": { "const": ["windows-x64", "linux-x64"] },
+    "sourceObservations": {
+      "type": "object", "additionalProperties": false,
+      "required": ["selfhostDriver", "managedCompiler", "existingFilePublication"],
+      "properties": {
+        "selfhostDriver": { "allOf": [{ "$ref": "#/$defs/observation" }, { "properties": { "path": { "const": "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.slg" } } }] },
+        "managedCompiler": { "allOf": [{ "$ref": "#/$defs/observation" }, { "properties": { "path": { "const": "src/Sollang.Compiler/Cli/CompilerApp.cs" } } }] },
+        "existingFilePublication": { "allOf": [{ "$ref": "#/$defs/observation" }, { "properties": { "path": { "const": "selfhost/llvm/runtime.slg" } } }] }
+      }
+    },
+    "requiredDesign": {
+      "type": "object", "additionalProperties": false,
+      "required": ["staging", "failureDiagnostics", "semanticFailureKeepTemps", "successfulKeepTemps", "sameOutputConcurrency", "crossOutputAlias", "differentOutputConcurrency", "publishedExecutable"],
+      "properties": {
+        "staging": { "const": "unique-same-directory-per-artifact-owned-cleanup" },
+        "failureDiagnostics": { "const": "relay-from-live-stage-to-stderr-before-discard" },
+        "semanticFailureKeepTemps": { "const": "discard-diagnostic-only-stage-even-when-keep-temps" },
+        "successfulKeepTemps": { "const": "publish-complete-llvm-only-when-enabled" },
+        "sameOutputConcurrency": { "const": "serialize-or-fail-before-publication" },
+        "crossOutputAlias": { "const": "lock-both-final-paths-before-publication" },
+        "differentOutputConcurrency": { "const": "allow-independent-progress" },
+        "publishedExecutable": { "const": "only-after-emitter-link-and-validation-success" }
+      }
+    },
+    "scenarios": {
+      "type": "object", "additionalProperties": false,
+      "required": ["semanticFailureFresh", "emitterFailureFresh", "linkerFailureFresh", "successKeepTempsOn", "successKeepTempsOff", "existingSentinelSemanticFailure", "existingSentinelEmitterFailure", "existingSentinelLinkerFailure", "sameOutputParallel", "differentOutputParallel", "stageCleanup", "publicationFailure", "spawnFailure"],
+      "properties": {
+        "semanticFailureFresh": { "$ref": "#/$defs/scenario" },
+        "emitterFailureFresh": { "$ref": "#/$defs/scenario" },
+        "linkerFailureFresh": { "$ref": "#/$defs/scenario" },
+        "successKeepTempsOn": { "$ref": "#/$defs/scenario" },
+        "successKeepTempsOff": { "$ref": "#/$defs/scenario" },
+        "existingSentinelSemanticFailure": { "$ref": "#/$defs/scenario" },
+        "existingSentinelEmitterFailure": { "$ref": "#/$defs/scenario" },
+        "existingSentinelLinkerFailure": { "$ref": "#/$defs/scenario" },
+        "sameOutputParallel": { "allOf": [{ "$ref": "#/$defs/scenario" }, { "properties": { "assertions": { "contains": { "const": "cross-output-alias-blocked-before-publication" } } } }] },
+        "differentOutputParallel": { "$ref": "#/$defs/scenario" },
+        "stageCleanup": { "$ref": "#/$defs/scenario" },
+        "publicationFailure": { "$ref": "#/$defs/scenario" },
+        "spawnFailure": { "$ref": "#/$defs/scenario" }
+      }
+    },
+    "atomicityAndDurability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["singleFilePublication", "executableAndLlPair", "crashDurability"],
+      "properties": {
+        "singleFilePublication": { "$ref": "#/$defs/requiredAtomicity" },
+        "executableAndLlPair": { "$ref": "#/$defs/pairLimit" },
+        "crashDurability": { "$ref": "#/$defs/durabilityLimit" }
+      }
+    }
+  },
+  "$defs": {
+    "sha": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "observation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "kind", "facts"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha" },
+        "kind": { "const": "source-inspected-not-behavior-proven" },
+        "facts": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/fact" } }
+      }
+    },
+    "fact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lines", "fact"],
+      "properties": {
+        "lines": { "type": "string", "pattern": "^[0-9]+-[0-9]+$" },
+        "fact": { "type": "string", "minLength": 1 }
+      }
+    },
+    "scenario": {
+      "type": "object", "additionalProperties": false,
+      "required": ["given", "assertions", "technique", "proofStatus"],
+      "properties": {
+        "given": { "$ref": "#/$defs/given" },
+        "assertions": {
+          "type": "array", "minItems": 2, "uniqueItems": true,
+          "items": { "enum": [
+            "exit-zero", "exit-nonzero", "diagnostic-stderr-exact", "diagnostic-stderr-actionable",
+            "no-new-final-artifact", "final-executable-present", "final-llvm-present", "final-llvm-absent",
+            "preserve-existing-executable-sha256", "preserve-existing-llvm-sha256", "no-stage-residue",
+            "no-cross-invocation-stage-deletion", "same-output-serialized-or-one-fails-before-publication",
+            "cross-output-alias-blocked-before-publication",
+            "terminal-no-mixed-generation", "different-output-both-succeed", "single-file-complete-or-unchanged"
+          ] }
+        },
+        "technique": { "enum": ["exact-native-fixture", "fault-injection", "parallel-process", "artifact-audit"] },
+        "proofStatus": { "const": "not-run" }
+      }
+    },
+    "given": {
+      "type": "object", "additionalProperties": false,
+      "required": ["artifactState", "failurePoint", "keepTemps", "parallelism"],
+      "properties": {
+        "artifactState": { "enum": ["fresh", "sentinel-exe-and-llvm"] },
+        "failurePoint": { "enum": ["none", "semantic", "emitter", "linker", "publication", "spawn", "matrix"] },
+        "keepTemps": { "type": ["boolean", "null"] },
+        "parallelism": { "enum": ["single", "same-output", "different-output"] }
+      }
+    },
+    "requiredAtomicity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "claim"],
+      "properties": {
+        "classification": { "const": "required-unverified" },
+        "claim": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pairLimit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "claim"],
+      "properties": {
+        "classification": { "const": "limitation-not-claimed" },
+        "claim": { "type": "string", "minLength": 1 }
+      }
+    },
+    "durabilityLimit": {
+      "type": "object", "additionalProperties": false,
+      "required": ["classification", "claim"],
+      "properties": {
+        "classification": { "const": "limitation-unverified" },
+        "claim": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

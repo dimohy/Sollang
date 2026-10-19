@@ -1,0 +1,392 @@
+import sollang.compiler.llvm.text as llvmText
+
+probe0: -> Unit uses Console {
+    """
+    main {
+        [[0; ~]; ~] => owners!
+        owners![0] => selected
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe1: -> Unit uses Console {
+    """
+    main {
+        {1: [0; ~]} => owners!
+        owners![1] => selected
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe2: -> Unit uses Console {
+    """
+    select owners: [[Int; ~]; ~] -> [Int; ~] {
+        owners[0]
+    }
+    main {}
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe3: -> Unit uses Console {
+    """
+    select owners: {Int: [Int; ~]} -> [Int; ~] {
+        owners[1]
+    }
+    main {}
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe4: -> Unit uses Console {
+    """
+    main {
+        [[[0; ~]; ~]; ~] => owners!
+        owners![0][0] => selected
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe5: -> Unit uses Console {
+    """
+    struct Entry {
+        values: [Int; ~]
+    }
+    main {
+        [Entry { values: [0; ~] }; ~] => owners!
+        owners![0].values => selected
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe6: -> Unit uses Console {
+    """
+    main {
+        [[0; ~]; ~] => owners!
+        [[1; ~]; ~] => destination!
+        owners![0] => destination![0]
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe7: -> Unit uses Console {
+    """
+    struct Entry { values: [Int; ~] }
+    main {
+        [[0; ~]; ~] => owners!
+        Entry { values: [1; ~] } => destination!
+        owners![0] => destination!.values
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe8: -> Unit uses Console {
+    """
+    struct Entry { values: [Int; ~] }
+    inspect owners: [Entry] -> Unit {
+        owners[0].values => selected
+    }
+    main {}
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+probe9: -> Unit uses Console {
+    """
+    struct Entry { values: [Int; 1] }
+    main {
+        [Entry { values: [1] }; ~] => owners!
+        owners![0] => selected
+    }
+
+    """ => input
+    [Text; ~] => sources!
+    sources! -> push(input)
+    sources! -> llvmText.emitChecked => count
+    "count=$count" -> println
+}
+
+main {
+    probe0()
+    probe1()
+    probe2()
+    probe3()
+    probe4()
+    probe5()
+    probe6()
+    probe7()
+    probe8()
+    probe9()
+
+    """
+    read values: [Int; ~] -> Int => values[0]
+    main {
+        [[0; ~]; ~] => owners
+        read(owners[0]) -> println
+    }
+
+    """ => input0
+    input0 -> llvmText.ownedIndexPlaceControl("") => owner0
+    "readonly-call=$owner0" -> println
+    """
+    struct Entry {
+        values: [Int; ~]
+        count: Int
+    }
+    main {
+        [Entry { values: [0; ~], count: 7 }] => owners
+        owners[0].count -> println
+    }
+
+    """ => input1
+    input1 -> llvmText.ownedIndexPlaceControl("") => owner1
+    "scalar-field=$owner1" -> println
+    """
+    main {
+        [[3; ~]; ~] => owners
+        owners[0][0] -> println
+    }
+
+    """ => input2
+    input2 -> llvmText.ownedIndexPlaceControl("") => owner2
+    "nested-scalar=$owner2" -> println
+    """
+    main {
+        [[3; ~]; ~] => owners!
+        owners! -> take(0) => selected!
+        selected![0] + 1 => selected![0]
+        selected![0] -> println
+        owners! -> len -> println
+    }
+
+    """ => input3
+    input3 -> llvmText.ownedIndexPlaceControl("") => owner3
+    "take=$owner3" -> println
+    """
+    struct Entry { values: [Int; ~] }
+    inspect owners: [Entry] -> Entry => owners[0]
+    main {}
+
+    """ => input4
+    input4 -> llvmText.ownedIndexPlaceControl("") => owner4
+    "slice-direct=$owner4" -> println
+    """
+    import sys.file as file
+    inspect buffers: [[UInt8; ~]; ~] -> Unit {
+        file.borrowBytes(buffers[0]) => source
+    }
+    main {}
+
+    """ => input5
+    """
+    namespace sys.file
+    public struct SourceText { bytes: [UInt8] }
+    public borrowBytes bytes: ref [UInt8; ~] -> SourceText = intrinsic
+
+    """ => additional5
+    input5 -> llvmText.ownedIndexPlaceControl(additional5) => owner5
+    "borrow-bytes=$owner5" -> println
+    """
+    import sys.path as path
+    inspect paths: [path.Path; ~] -> Unit {
+        paths[0] -> pathText => result
+    }
+    main {}
+
+    """ => input6
+    """
+    namespace sys.path
+    public struct Path { bytes: [UInt8; ~] }
+    impl Path { public pathText: self -> Text = intrinsic }
+
+    """ => additional6
+    input6 -> llvmText.ownedIndexPlaceControl(additional6) => owner6
+    "path-text=$owner6" -> println
+    """
+    struct Span {
+        start: UIntSize
+        length: UIntSize
+    }
+    struct Field {
+        name: Span
+        value: Span
+    }
+    read fields: ref [Field; ~] -> UIntSize {
+        fields[0] => field
+        field.name.start + field.value.length
+    }
+    main {
+        [Field { name: Span { start: 1, length: 2 }, value: Span { start: 3, length: 4 } }; ~] => fields!
+        fields! -> read -> println
+        fields! -> take(0) => removed
+    }
+
+    """ => input7
+    input7 -> llvmText.ownedIndexPlaceControl("") => owner7
+    "copyable-local=$owner7" -> println
+    """
+    import copied.spans as spans
+
+    read fields: ref [spans.Field; ~] -> UIntSize {
+        fields[0] => field
+        field.name.start + field.value.length
+    }
+    main {
+        [spans.Field { name: spans.Span { start: 1, length: 2 }, value: spans.Span { start: 3, length: 4 } }; ~] => fields!
+        fields! -> read -> println
+        fields! -> take(0) => removed
+    }
+
+    """ => input8
+    """
+    namespace copied.spans
+
+    public struct Span {
+        public start: UIntSize
+        public length: UIntSize
+    }
+    public struct Field {
+        public name: Span
+        public value: Span
+    }
+
+    """ => additional8
+    input8 -> llvmText.ownedIndexPlaceControl(additional8) => owner8
+    "copyable-imported=$owner8" -> println
+    """
+    struct Entry { values: [Int; <=2] }
+    read fields: ref [Entry; ~] -> Int {
+        fields[0] => field
+        field.values[0]
+    }
+    main {
+        [Entry { values: [5; <=2] }; ~] => fields!
+        fields! -> read -> println
+        fields! -> take(0) => removed
+    }
+
+    """ => input9
+    input9 -> llvmText.ownedIndexPlaceControl("") => owner9
+    "bounded-scalar-field=$owner9" -> println
+    input9 -> llvmText.ownedIndexLateDiagnosticCount => late9
+    "bounded-scalar-late=$late9" -> println
+    """
+    struct Entry { values: [Int; ~] }
+    read owners: ref [Entry; ~] -> Int { owners[0].values -> len }
+    main {}
+
+    """ => builtinInput
+    builtinInput -> llvmText.ownedIndexPlaceControl("") => builtinOwner
+    "builtin-length-borrow=$builtinOwner" -> println
+    """
+    namespace regression.owned_mut
+    struct Entry { values: [Int; ~] }
+    len values: mut [Int; ~] -> Int { 0 }
+    read owners: ref [Entry; ~] -> Int { owners[0].values -> len }
+    main {}
+
+    """ => mutInput
+    mutInput -> llvmText.ownedIndexPlaceControl("") => mutOwner
+    "shadow-mut-length=$mutOwner" -> println
+    """
+    namespace regression.owned_move
+    struct Entry { values: [Int; ~] }
+    len values: move [Int; ~] -> Int { 0 }
+    read owners: ref [Entry; ~] -> Int { owners[0].values -> len }
+    main {}
+
+    """ => moveInput
+    moveInput -> llvmText.ownedIndexPlaceControl("") => moveOwner
+    "shadow-move-length=$moveOwner" -> println
+    "scripts/probes/owned-index-storage-responsibility/shadow-mut-length.slg" -> llvmText.ownedIndexExactDiagnosticFile(3, 10, 14, 36) => exactMut
+    "shadow-mut-exact=$exactMut" -> println
+    "scripts/probes/owned-index-storage-responsibility/shadow-move-length.slg" -> llvmText.ownedIndexExactDiagnosticFile(3, 10, 14, 36) => exactMove
+    "shadow-move-exact=$exactMove" -> println
+    "scripts/probes/owned-index-storage-responsibility/dynamic-field.slg" -> llvmText.ownedIndexExactDiagnosticFile(1, 6, 12, 41) => exactBinding
+    "ordinary-binding-exact=$exactBinding" -> println
+    llvmText.ownedStorageClassificationChecks()
+    """
+    struct Inner { values: [UInt8; 8] }
+    struct Outer { inner: Inner }
+    main {
+        Inner { values: [7; 8] } => original!
+        Outer { inner: original! } => copied
+        copied.inner.values[0] -> println
+    }
+
+    """ -> llvmText.ownedStorageMoveCount => copyMoves
+    "fixed-struct-copy-moves=$copyMoves" -> println
+    """
+    struct Holder { values: [Int; ~] }
+    main {
+        [7; ~] => original!
+        Holder { values: original! } => owner
+        owner.values -> len -> println
+    }
+
+    """ -> llvmText.ownedStorageMoveCount => dynamicMoves
+    "dynamic-field-moves=$dynamicMoves" -> println
+    """
+    struct Holder { values: [UInt8; 8] }
+    consume value: move Holder -> UInt8 { value.values[0] }
+    main {
+        Holder { values: [7; 8] } => original
+        original -> consume -> println
+    }
+
+    """ -> llvmText.ownedStorageMoveCount => explicitMoves
+    "explicit-fixed-struct-moves=$explicitMoves" -> println
+    """
+    enum Payload { Owned([Int; ~]) }
+    struct Holder { values: [Payload; 1] }
+    main {
+        [Payload.Owned([7; ~])] => original
+        Holder { values: original } => owner
+        owner.values -> len -> println
+    }
+
+    """ -> llvmText.ownedStorageMoveCount => enumMoves
+    "fixed-owned-enum-field-moves=$enumMoves" -> println
+}

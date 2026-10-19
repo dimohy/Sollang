@@ -1,0 +1,55 @@
+import sollang.compiler.ir.typed as typedIr
+
+node kind: Int, parent: Int, operand: Int, flags: Int -> typedIr.TypedIrNode {
+    typedIr.TypedIrNode {
+        kind: kind
+        parent: parent
+        sourceModule: 0
+        astNode: operand
+        symbol: -1
+        targetModule: -1
+        typeOrigin: 0
+        typeModule: -1
+        typeSymbol: -1
+        typeId: -1
+        typeKind: -1
+        typeFlags: 0
+        payloadToken: -1
+        opcode: -1
+        operand0: operand
+        operand1: parent
+        nextOperand: operand
+        flags: flags
+    }
+}
+
+main {
+    [typedIr.TypedIrNode; ~] => nodes!
+    nodes! -> push(node(0, -1, 1, 0))
+    nodes! -> push(node(1, 0, 2, 0))
+    nodes! -> push(node(6, 1, -1, 8))
+    nodes! -> push(node(0, -1, 4, 0))
+    nodes! -> push(node(1, 3, 5, 0))
+    nodes! -> push(node(6, 4, -1, 8))
+    nodes! -> push(node(11, -1, -1, 0))
+    nodes! -> push(node(5, 1, 2, 0))
+    nodes! -> push(node(5, 4, 5, 0))
+    nodes! -> typedIr.sealDirectAwaitFunctionOrder => relocation
+    "map=$(relocation[0]),$(relocation[1]),$(relocation[2]),$(relocation[3]),$(relocation[4]),$(relocation[5]),$(relocation[6]),$(relocation[7]),$(relocation[8])" -> println
+    nodes![7] => secondAwait
+    "edges=$(secondAwait.parent),$(secondAwait.operand0),$(secondAwait.operand1),$(secondAwait.nextOperand)" -> println
+    [typedIr.GenericCallPlan; ~] => plans!
+    plans! -> push(typedIr.GenericCallPlan { callNode: 5, interpolationNode: 42, templateNode: 3, inputTemplates: [41, 43; ~], actualInputs: [47, 53; ~], resultType: 59, status: 0 })
+    plans! -> push(typedIr.GenericCallPlan { callNode: 2, interpolationNode: 61, templateNode: 0, inputTemplates: [67,; ~], actualInputs: [71,; ~], resultType: 73, status: 0 })
+    plans! -> typedIr.relocateAwaitGenericPlans(relocation) => relocatedPlans!
+    relocatedPlans! -> take(0) => firstPlan
+    relocatedPlans! -> take(0) => secondPlan
+    "plan=$(firstPlan.callNode),$(firstPlan.templateNode),$(firstPlan.interpolationNode),$(firstPlan.inputTemplates[0]),$(firstPlan.actualInputs[0]),$(firstPlan.resultType);second=$(secondPlan.callNode),$(secondPlan.templateNode),$(secondPlan.interpolationNode)" -> println
+    [typedIr.GenericFunctionInstance; ~] => instances!
+    instances! -> push(typedIr.GenericFunctionInstance { callNode: 5, interpolationNode: 42, templateNode: 3, functionNode: 3, nodeCount: 3, status: 0 })
+    relocation -> typedIr.relocateAwaitGenericInstances(nodes!, instances!)
+    instances![0] => instance
+    "instance=$(instance.callNode),$(instance.templateNode),$(instance.functionNode),$(instance.nodeCount),$(instance.interpolationNode)" -> println
+    nodes! -> typedIr.sealDirectAwaitFunctionOrder => repeated
+    "repeat=$(repeated -> len);main=$(nodes![8].kind)" -> println
+}

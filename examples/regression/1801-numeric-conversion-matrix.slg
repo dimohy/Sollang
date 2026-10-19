@@ -1,0 +1,29 @@
+# Numeric casts must agree across entry, function, and control paths.
+promote value: Float32 -> Float64 => Float64(value)
+demote value: Float64 -> Float32 => Float32(value)
+toUnsigned value: Float32 -> UInt8 => UInt8(value)
+
+main {
+    # Exponents and signed or unsigned integer inputs retain their numeric meaning.
+    Int(Float32(1e3)) => exponent
+    Int(Float32(Int8(-7))) => signed
+    Int(Float64(UInt8(200))) => unsigned
+    Float32(1.5) -> promote => promotedFloat
+    Float64(6.25) -> demote => demotedFloat
+    Int(promotedFloat) => promoted
+    Int(demotedFloat) => demoted
+    # Float to unsigned conversion truncates without reinterpreting the sign.
+    UInt8(Float32(42.75)) => truncatedUnsigned
+    UInt8(Float32(200.75)) => largeUnsigned
+    Int32(Float32(17.75)) => sameWidthSigned
+    UInt32(Float32(18.75)) => sameWidthUnsigned
+    Int64(Float64(19.75)) => wideSigned
+    UInt64(Float64(20.75)) => wideUnsigned
+    Float32(23.75) -> toUnsigned => functionUnsigned
+
+    "$exponent $signed $unsigned $promoted $demoted $truncatedUnsigned $largeUnsigned $sameWidthSigned $sameWidthUnsigned $wideSigned $wideUnsigned $functionUnsigned" -> println
+    true -> if {
+        UInt8(Float32(22.75)) => regionUnsigned
+        "$regionUnsigned" -> println
+    }
+}

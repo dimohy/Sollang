@@ -1,14 +1,23 @@
 [CmdletBinding()]
-param()
+param(
+    [string]$OutputDirectory = ''
+)
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compiler = Join-Path $repoRoot "src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll"
 $manifest = Join-Path $repoRoot "examples/regression/expected/613-selfhost-com-runtime.sources.txt"
-$outputRoot = Join-Path $repoRoot "artifacts/llvm-emitter-split-abi"
+$outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    Join-Path $repoRoot "artifacts/llvm-emitter-split-abi"
+} else {
+    [IO.Path]::GetFullPath($OutputDirectory)
+}
+if (-not [string]::IsNullOrWhiteSpace($OutputDirectory) -and
+    (Test-Path -LiteralPath $outputRoot)) {
+    throw "LLVM emitter split ABI output already exists: $outputRoot"
+}
 $output = Join-Path $outputRoot "generator.exe"
-$temporary = [IO.Path]::ChangeExtension($output, ".slg-tmp")
-$llvm = Join-Path $temporary "generator.ll"
+$llvm = "${output}.ll"
 $fragmentPaths = @(
     "selfhost/llvm/text/entry_expressions.slg"
     "selfhost/llvm/text/core_prepare.slg"
@@ -36,6 +45,9 @@ $readonlyFragmentPaths = @(
 New-Item -ItemType Directory -Force $outputRoot | Out-Null
 $sources = [IO.File]::ReadAllLines($manifest)
 $sources[0] = "examples/regression/1195-selfhost-emitter-split-abi.slg"
+$stdlibSources = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'stdlib') -Recurse -File -Filter '*.slg' |
+    ForEach-Object { $_.FullName })
+& (Join-Path $PSScriptRoot 'verify-source-manifest-closure.ps1') -SourcePath (@($sources) + $stdlibSources)
 & dotnet $compiler build @sources -o $output --keep-temps
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if (-not (Test-Path -LiteralPath $llvm -PathType Leaf)) {
@@ -51,10 +63,19 @@ $helperNames = foreach ($relativePath in $fragmentPaths) {
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 331) {
-    throw "Expected 331 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 342) {
+    throw "Expected 342 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredStatefulHelpers = @(
+    "boundedIntrinsicDictionaryTypeId"
+    "emitAsyncFileReadCall"
+    "emitBoundedDictionaryIndexAssignment"
+    "emitBoundedDictionaryPut"
+    "emitBoundedDictionaryTake"
+    "emitCancelTaskValue"
+    "emitCompletedFileRead"
+    "emitDeferredBoolTextRoot"
+    "emitWhilePathText"
     "isImportedLibraryFunction"
     "targetsImportedLibraryFunction"
     "emitNativeTargetLoad"
@@ -93,10 +114,24 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 103) {
-    throw "Expected 103 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 118) {
+    throw "Expected 118 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredDiagnosticReadonlyHelpers = @(
+    "boundedDictionaryInitializerDiagnostics"
+    "comparisonOperandDiagnosticCount"
+    "expressionOperandDiagnosticCount"
+    "comparisonOperandFailureAt"
+    "dictionaryPutArgumentDiagnostics"
+    "emitComparisonOperandDiagnostics"
+    "emitExpressionOperandDiagnostics"
+    "emitUnresolvedMutableNameDiagnostics"
+    "emitConsumedBindingReadDiagnostics"
+    "invalidInterpolationFlowTargetNode"
+    "isBlockingMappedIndexInterpolation"
+    "isBlockingInvalidUnaryInterpolation"
+    "usesAsyncFileRuntime"
+    "usesMappedBytesRuntime"
     "arrayElementLayoutDiagnosticCount"
     "emitArrayElementLayoutDiagnostics"
     "libraryImportDiagnosticCount"

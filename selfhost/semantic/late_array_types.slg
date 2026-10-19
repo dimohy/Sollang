@@ -21,7 +21,7 @@ public struct Resolved {
 # Indexed/member paths are resolved after the first composite sweep. Resolve
 # each direct element subtree again at the path fixed point, and replace any
 # stale scalar or array shape before Typed IR can observe it.
-public resolve prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], candidates: [Candidate], expressionIndexByAst: [Int] -> [Resolved; ~] {
+public resolve prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], candidates: [Candidate], expressionIndexByAst: [Int], expectedContextByAst: [Int] -> [Resolved; ~] {
     [Int; ~] => nearestDistanceByChild!
     [Int; ~] => nearestTypeByChild!
     [Bool; ~] => nearestHomogeneousByChild!
@@ -120,6 +120,21 @@ public resolve prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.S
             astIndex! < sourceRange.astCount -> while {
                 prepared.package.nodes[sourceRange.astStart + astIndex!] => node
                 sourceRange.astStart + astIndex! => globalAst
+                expectedContextByAst[globalAst] => expectedType
+                node.kind == 37 and expectedType >= 0 and expectedType < (types -> len)
+                    and (types[expectedType].kind == 3 or types[expectedType].kind == 4 or types[expectedType].kind == 12)
+                    -> if {
+                        # This is provisional field context; array facts still validate
+                        # element compatibility, numeric range and storage extents.
+                        resolved! -> push(Resolved {
+                            sourceModule: sourceIndex!
+                            astNode: astIndex!
+                            globalAst: globalAst
+                            typeId: expectedType
+                        })
+                        astIndex! + 1 => astIndex!
+                        continue
+                    }
                 node.kind == 37
                     and firstChildType![globalAst] >= 0
                     and directChildCount![globalAst] > 0

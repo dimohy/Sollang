@@ -1,0 +1,27 @@
+namespace sollang.compiler.probes.mutable_owner
+
+import sollang.compiler.semantic.context as semanticContext
+
+public check source: Text, expectedOwners: [Int] -> Bool {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared.package -> semanticContext.indexMutableBindingOwners => owners
+    [Int; ~] => mutableSymbols!
+    0 => symbol!
+    symbol! < (prepared.package.symbols -> len) -> while {
+        prepared.package.symbols[symbol!] => declaration
+        (declaration.kind == 9 or declaration.kind == 61) and declaration.flags % 2 == 1
+            -> if { mutableSymbols! -> push(symbol!) }
+        symbol! + 1 => symbol!
+    }
+    (mutableSymbols! -> len) != (expectedOwners -> len)
+        -> if { false -> return }
+    0 => index!
+    index! < (expectedOwners -> len) -> while {
+        expectedOwners[index!] < 0 or expectedOwners[index!] >= (mutableSymbols! -> len)
+            -> if { false -> return }
+        owners[mutableSymbols![index!]] != mutableSymbols![expectedOwners[index!]]
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}

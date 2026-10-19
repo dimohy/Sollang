@@ -3,9 +3,15 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "status", "compilerSha256", "inputHashes", "completed", "total", "cases", "failureIds", "acceptance"],
+  "dependentRequired": {
+    "historicalEvidenceStatus": ["missingHistoricalPaths"],
+    "missingHistoricalPaths": ["historicalEvidenceStatus"]
+  },
   "properties": {
     "schemaVersion": { "const": 1 },
     "status": { "enum": ["passed", "failed"] },
+    "historicalEvidenceStatus": { "enum": ["available", "missing-unverified"] },
+    "missingHistoricalPaths": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
     "compilerSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
     "inputHashes": {
       "type": "object",
@@ -49,6 +55,14 @@
     "acceptance": { "const": "managed Windows focused native and LLVM evidence only; selfhost and other platforms pending" }
   },
   "allOf": [
+    {
+      "if": { "properties": { "historicalEvidenceStatus": { "const": "available" } }, "required": ["historicalEvidenceStatus"] },
+      "then": { "properties": { "missingHistoricalPaths": { "maxItems": 0 } } }
+    },
+    {
+      "if": { "properties": { "historicalEvidenceStatus": { "const": "missing-unverified" } }, "required": ["historicalEvidenceStatus"] },
+      "then": { "properties": { "missingHistoricalPaths": { "minItems": 1 } } }
+    },
     {
       "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] },
       "then": {

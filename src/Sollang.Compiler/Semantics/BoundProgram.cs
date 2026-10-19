@@ -8,6 +8,8 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<string, BoundTraitDefinition> Traits,
     IReadOnlyDictionary<string, BoundFunction> Functions,
     IReadOnlyDictionary<object, BoundFunction> ResolvedGenericCalls,
+    IReadOnlyDictionary<Expression, BoundType> ContextualNumericTypes,
+    IReadOnlyDictionary<string, BoundType> StableContextualNumericTypes,
     IReadOnlyDictionary<object, ContainerIntrinsicKind> ContainerIntrinsics,
     IReadOnlyDictionary<object, BoundDynTraitConversion> DynTraitConversions,
     IReadOnlyDictionary<object, BoundDynTraitDispatch> DynTraitDispatches,
@@ -146,7 +148,8 @@ internal sealed record BoundFunction(
     NativeErrorConvention NativeError = NativeErrorConvention.Direct,
     BoundType? NativeSuccessType = null,
     IReadOnlyList<GenericParameterDeclaration>? GenericParameters = null,
-    IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null)
+    IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null,
+    string? DeclarationName = null)
 {
     public bool IsVisibleFrom(string moduleName) => IsLocal || IsPublic || ModuleName == moduleName;
 }
@@ -202,6 +205,7 @@ internal enum BoundFunctionKind
     UserBlock,
     RuntimePrint,
     RuntimePrintLine,
+    RuntimePrintError,
     RuntimePrintErrorLine,
     RuntimeFlushStandardOutput,
     RuntimeReadInt,
@@ -262,6 +266,8 @@ internal enum BoundFunctionKind
     RuntimeSyncFileAsync,
     RuntimeSyncFile,
     RuntimeAtomicReplaceFile,
+    RuntimeCreateExclusiveFile,
+    RuntimeRemoveFile,
     RuntimeSocketListen,
     RuntimeSocketAccept,
     RuntimeSocketTryClone,
@@ -310,7 +316,8 @@ internal enum BoundFunctionKind
     RuntimeDnsLookup,
     RuntimeRangeStream,
     RuntimeMouseEvents,
-    Native
+    Native,
+    RuntimePathAbsolute
 }
 
 internal enum TypeId
@@ -474,8 +481,11 @@ internal sealed record BoundBitSetDefinition(
     int Size,
     int Alignment);
 
-internal sealed class TypeDefinitionTable
+internal sealed partial class TypeDefinitionTable
 {
+    internal const int StaticArrayDescriptorSize = 16;
+    internal const int StaticArrayDescriptorAlignment = 8;
+
     private readonly Dictionary<string, TypeId> _names;
     private readonly Dictionary<TypeId, BoundStructDefinition> _structs;
     private readonly Dictionary<TypeId, BoundEnumDefinition> _enums;
@@ -520,6 +530,9 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, TypeId> _eventStreamValues = [];
     private readonly Dictionary<string, TypeId> _productsByShape = new(StringComparer.Ordinal);
     private int _nextParametricTypeId;
+    internal long TypeGraphRevision { get; private set; }
+
+    private void RecordTypeGraphMutation() => TypeGraphRevision = checked(TypeGraphRevision + 1);
     private readonly int _pointerSize;
 
     public TypeDefinitionTable(
@@ -534,8 +547,10 @@ internal sealed class TypeDefinitionTable
         IReadOnlyDictionary<string, TypeId>? declaredProducts = null)
     {
         _names = new Dictionary<string, TypeId>(names, StringComparer.Ordinal);
-        _structs = new Dictionary<TypeId, BoundStructDefinition>(structs);
-        _enums = new Dictionary<TypeId, BoundEnumDefinition>(enums);
+        _structs = structs.ToDictionary(static pair => pair.Key, static pair => pair.Value with
+        { Fields = Array.AsReadOnly(pair.Value.Fields.ToArray()) });
+        _enums = enums.ToDictionary(static pair => pair.Key, static pair => pair.Value with
+        { Variants = Array.AsReadOnly(pair.Value.Variants.ToArray()) });
         _boxes = new Dictionary<TypeId, BoundBoxDefinition>(boxes);
         _references = new Dictionary<TypeId, BoundReferenceDefinition>(references);
         _referencesByElement = references.Values.ToDictionary(
@@ -646,8 +661,9 @@ internal sealed class TypeDefinitionTable
         var boundFields = fields.Select((field, index) => new BoundStructField(
             field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
         _structs.Add(id, new BoundStructDefinition(
-            id, displayName, boundFields, line, column,
+            id, displayName, Array.AsReadOnly(boundFields), line, column,
             ModuleName: string.Empty, IsPublic: true, IsProduct: true));
+        RecordTypeGraphMutation();
         _productsByShape.Add(shape, id);
         _names.TryAdd(displayName, id);
         return id;
@@ -698,6 +714,7 @@ internal sealed class TypeDefinitionTable
 
         var id = AllocateParametricTypeId();
         _references.Add(id, new BoundReferenceDefinition(id, elementType));
+        RecordTypeGraphMutation();
         _referencesByElement.Add(elementType, id);
         return id;
     }
@@ -738,8 +755,9 @@ internal sealed class TypeDefinitionTable
 
         var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment));
+        RecordTypeGraphMutation();
         _staticArraysByElement.Add(elementType, id);
         return id;
     }
@@ -766,8 +784,9 @@ internal sealed class TypeDefinitionTable
 
         var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment, length));
+        RecordTypeGraphMutation();
         _fixedStaticArraysByShape.Add((elementType, length), id);
         return id;
     }
@@ -782,6 +801,11 @@ internal sealed class TypeDefinitionTable
 
     public void RegisterStaticArrays(
         IReadOnlyDictionary<TypeId, (TypeId ElementType, int? Length)> definitions)
+        => RegisterStaticArrayIdentities(definitions, deferElementLayout: false);
+
+    private void RegisterStaticArrayIdentities(
+        IReadOnlyDictionary<TypeId, (TypeId ElementType, int? Length)> definitions,
+        bool deferElementLayout)
     {
         foreach (var (id, shape) in definitions)
         {
@@ -810,11 +834,12 @@ internal sealed class TypeDefinitionTable
                     $"cannot register static array type id '{(int)id}' because that id is already in use");
             }
 
-            var size = InlineSizeOf(shape.ElementType);
-            var alignment = Math.Min(Math.Max(size, 1), 8);
+            var size = deferElementLayout ? 0 : InlineSizeOf(shape.ElementType);
+            var alignment = deferElementLayout ? 1 : AlignmentOf(shape.ElementType);
             _staticArrays.Add(
                 id,
                 new BoundStaticArrayDefinition(id, shape.ElementType, size, alignment, shape.Length));
+            RecordTypeGraphMutation();
             if (shape.Length is { } fixedLength)
             {
                 _fixedStaticArraysByShape.Add((shape.ElementType, fixedLength), id);
@@ -870,6 +895,9 @@ internal sealed class TypeDefinitionTable
     public bool TryGetStaticArrayForElement(TypeId elementType, out TypeId arrayType) =>
         _staticArraysByElement.TryGetValue(elementType, out arrayType);
 
+    public bool TryGetFixedStaticArrayForShape(TypeId elementType, int length, out TypeId arrayType) =>
+        _fixedStaticArraysByShape.TryGetValue((elementType, length), out arrayType);
+
     public TypeId GetOrAddDynamicArray(TypeId elementType)
     {
         if (_dynamicArraysByElement.TryGetValue(elementType, out var existing))
@@ -879,8 +907,9 @@ internal sealed class TypeDefinitionTable
 
         var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        RecordTypeGraphMutation();
         _dynamicArraysByElement.Add(elementType, id);
         return id;
     }
@@ -897,13 +926,19 @@ internal sealed class TypeDefinitionTable
         }
 
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        RecordTypeGraphMutation();
         _dynamicArraysByElement.Add(elementType, id);
         _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
     }
 
     public void RegisterDynamicArrays(IReadOnlyDictionary<TypeId, TypeId> definitions)
+        => RegisterDynamicArrayIdentities(definitions, deferElementLayout: false);
+
+    private void RegisterDynamicArrayIdentities(
+        IReadOnlyDictionary<TypeId, TypeId> definitions,
+        bool deferElementLayout)
     {
         // Declare every recursive container identity before measuring element
         // layouts. An element struct may itself contain another predeclared
@@ -922,14 +957,18 @@ internal sealed class TypeDefinitionTable
             }
 
             _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, 0, 1));
+            RecordTypeGraphMutation();
             _dynamicArraysByElement.Add(elementType, id);
             _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
         }
 
+        if (deferElementLayout)
+            return;
+
         foreach (var (id, elementType) in definitions)
         {
             var size = InlineSizeOf(elementType);
-            var alignment = Math.Min(Math.Max(size, 1), 8);
+            var alignment = AlignmentOf(elementType);
             _dynamicArrays[id] = new BoundDynamicArrayDefinition(
                 id, elementType, size, alignment);
         }
@@ -941,13 +980,14 @@ internal sealed class TypeDefinitionTable
         foreach (var (id, shape) in definitions)
         {
             var elementSize = InlineSizeOf(shape.ElementType);
-            var elementAlignment = Math.Min(Math.Max(elementSize, 1), 8);
+            var elementAlignment = AlignmentOf(shape.ElementType);
             var dataOffset = AlignUp(8, elementAlignment);
             var alignment = Math.Max(8, elementAlignment);
             var size = AlignUp(checked(dataOffset + checked(elementSize * shape.Capacity)), alignment);
             _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
                 id, shape.ElementType, shape.Capacity, elementSize, elementAlignment,
                 dataOffset, size, alignment));
+            RecordTypeGraphMutation();
             _boundedArraysByShape.Add((shape.ElementType, shape.Capacity), id);
             _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
         }
@@ -975,6 +1015,7 @@ internal sealed class TypeDefinitionTable
             _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
                 id, shape.KeyType, shape.ValueType, shape.MaxEntries, bucketCapacity,
                 ControlsOffset: 0, entriesOffset, storageSize, size, alignment, layout));
+            RecordTypeGraphMutation();
             _boundedDictionariesByShape.Add(
                 (shape.KeyType, shape.ValueType, shape.MaxEntries), id);
             _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
@@ -996,7 +1037,7 @@ internal sealed class TypeDefinitionTable
         }
 
         var elementSize = InlineSizeOf(elementType);
-        var elementAlignment = Math.Min(Math.Max(elementSize, 1), 8);
+        var elementAlignment = AlignmentOf(elementType);
         var dataOffset = AlignUp(8, elementAlignment);
         var alignment = Math.Max(8, elementAlignment);
         var size = AlignUp(checked(dataOffset + checked(elementSize * capacity)), alignment);
@@ -1004,6 +1045,7 @@ internal sealed class TypeDefinitionTable
         _boundedArrays.Add(id, new BoundBoundedArrayDefinition(
             id, elementType, capacity, elementSize, elementAlignment,
             dataOffset, size, alignment));
+        RecordTypeGraphMutation();
         _boundedArraysByShape.Add((elementType, capacity), id);
         return id;
     }
@@ -1020,19 +1062,26 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var keySize = InlineSizeOf(keyType);
-        var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
-        var valueSize = InlineSizeOf(valueType);
-        var valueAlignment = Math.Min(Math.Max(valueSize, 1), 8);
-        var valueOffset = AlignUp(keySize, valueAlignment);
-        var entryAlignment = Math.Max(keyAlignment, valueAlignment);
-        var stride = AlignUp(checked(valueOffset + valueSize), entryAlignment);
+        var layout = DictionaryEntryLayout(keyType, valueType);
         var id = AllocateParametricTypeId();
         _dictionaries.Add(id, new BoundDictionaryDefinition(
-            id, keyType, valueType, keySize, keyAlignment,
-            valueOffset, valueSize, valueAlignment, stride));
+            id, keyType, valueType, layout.KeySize, layout.KeyAlignment,
+            layout.ValueOffset, layout.ValueSize, layout.ValueAlignment, layout.EntryStride));
+        RecordTypeGraphMutation();
         _dictionariesByTypes.Add((keyType, valueType), id);
         return id;
+    }
+
+    private (int KeySize, int KeyAlignment, int ValueOffset, int ValueSize, int ValueAlignment, int EntryStride)
+        DictionaryEntryLayout(TypeId keyType, TypeId valueType)
+    {
+        var keySize = InlineSizeOf(keyType);
+        var keyAlignment = AlignmentOf(keyType);
+        var valueSize = InlineSizeOf(valueType);
+        var valueAlignment = AlignmentOf(valueType);
+        var valueOffset = AlignUp(keySize, valueAlignment);
+        var stride = AlignUp(checked(valueOffset + valueSize), Math.Max(keyAlignment, valueAlignment));
+        return (keySize, keyAlignment, valueOffset, valueSize, valueAlignment, stride);
     }
 
     public TypeId GetOrAddBoundedDictionary(TypeId keyType, TypeId valueType, int maxEntries)
@@ -1064,6 +1113,7 @@ internal sealed class TypeDefinitionTable
         _boundedDictionaries.Add(id, new BoundBoundedDictionaryDefinition(
             id, keyType, valueType, maxEntries, bucketCapacity,
             controlsOffset, entriesOffset, storageSize, size, alignment, layout));
+        RecordTypeGraphMutation();
         _boundedDictionariesByShape.Add((keyType, valueType, maxEntries), id);
         return id;
     }
@@ -1083,6 +1133,25 @@ internal sealed class TypeDefinitionTable
                 ? bounded.Layout
                 : throw new KeyNotFoundException($"type id '{(int)type}' is not a dictionary");
 
+    public void RegisterBitSets(IReadOnlyDictionary<TypeId, int> definitions)
+    {
+        foreach (var (id, bitCount) in definitions)
+        {
+            RegisterBitSet(id, bitCount);
+            _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+        }
+    }
+
+    private void RegisterBitSet(TypeId id, int bitCount)
+    {
+        var wordCount = checked((int)((bitCount + 63L) / 64));
+        _bitSets.Add(id, new BoundBitSetDefinition(id, bitCount, wordCount,
+            checked(wordCount * 8), Alignment: 8));
+        _bitSetsByBitCount.Add(bitCount, id);
+        _names.TryAdd($"BitSet<{bitCount}>", id);
+        RecordTypeGraphMutation();
+    }
+
     public TypeId GetOrAddBitSet(int bitCount)
     {
         if (bitCount <= 0)
@@ -1093,12 +1162,8 @@ internal sealed class TypeDefinitionTable
         {
             return existing;
         }
-        var wordCount = checked((bitCount + 63) / 64);
         var id = AllocateParametricTypeId();
-        _bitSets.Add(id, new BoundBitSetDefinition(id, bitCount, wordCount,
-            checked(wordCount * 8), Alignment: 8));
-        _bitSetsByBitCount.Add(bitCount, id);
-        _names.TryAdd($"BitSet<{bitCount}>", id);
+        RegisterBitSet(id, bitCount);
         return id;
     }
 
@@ -1115,8 +1180,9 @@ internal sealed class TypeDefinitionTable
         }
         var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        RecordTypeGraphMutation();
         _binaryHeaps.Add(id, elementType);
         _binaryHeapsByElement.Add(elementType, id);
         _names.TryAdd($"BinaryHeap<{DisplayTypeName(elementType)}>", id);
@@ -1136,8 +1202,9 @@ internal sealed class TypeDefinitionTable
         }
         var id = AllocateParametricTypeId();
         var size = InlineSizeOf(elementType);
-        var alignment = Math.Min(Math.Max(size, 1), 8);
+        var alignment = AlignmentOf(elementType);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        RecordTypeGraphMutation();
         _deques.Add(id, elementType);
         _dequesByElement.Add(elementType, id);
         _names.TryAdd($"Deque<{DisplayTypeName(elementType)}>", id);
@@ -1156,13 +1223,14 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
         var keySize = InlineSizeOf(elementType);
-        var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
+        var keyAlignment = AlignmentOf(elementType);
         var id = AllocateParametricTypeId();
         _dictionaries.Add(id, new BoundDictionaryDefinition(
             id, elementType, BoundType.Unit,
             keySize, keyAlignment,
             ValueOffset: keySize, ValueSize: 0, ValueAlignment: 1,
             EntryStride: AlignUp(keySize, keyAlignment)));
+        RecordTypeGraphMutation();
         _sets.Add(id, elementType);
         _setsByElement.Add(elementType, id);
         _names.TryAdd($"Set<{DisplayTypeName(elementType)}>", id);
@@ -1190,16 +1258,17 @@ internal sealed class TypeDefinitionTable
         var id = AllocateParametricTypeId();
         var payloadWords = (InlineSizeOf(valueType) + 7) / 8;
         _enums.Add(id, CreateOptionDefinition(id, valueType, displayName, payloadWords));
+        RecordTypeGraphMutation();
         RegisterOptionShape(id, valueType, displayName);
         return id;
     }
 
     internal static BoundEnumDefinition CreateOptionDefinition(
         TypeId id, TypeId valueType, string displayName, int payloadWords) =>
-        new(id, displayName, [
+        new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
             new BoundEnumVariant("None", null, 0, 0, 0),
             new BoundEnumVariant("Some", valueType, 1, 0, 0)
-        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+        ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
 
     private void RegisterOptionShape(TypeId id, TypeId valueType, string displayName)
     {
@@ -1218,16 +1287,17 @@ internal sealed class TypeDefinitionTable
         var id = AllocateParametricTypeId();
         var payloadWords = (Math.Max(InlineSizeOf(okType), InlineSizeOf(errorType)) + 7) / 8;
         _enums.Add(id, CreateResultDefinition(id, okType, errorType, displayName, payloadWords));
+        RecordTypeGraphMutation();
         RegisterResultShape(id, okType, errorType, displayName);
         return id;
     }
 
     internal static BoundEnumDefinition CreateResultDefinition(
         TypeId id, TypeId okType, TypeId errorType, string displayName, int payloadWords) =>
-        new(id, displayName, [
+        new(id, displayName, Array.AsReadOnly<BoundEnumVariant>([
             new BoundEnumVariant("Ok", okType, 0, 0, 0),
             new BoundEnumVariant("Err", errorType, 1, 0, 0)
-        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true);
+        ]), payloadWords, 0, 0, ModuleName: "", IsPublic: true);
 
     private void RegisterResultShape(TypeId id, TypeId okType, TypeId errorType, string displayName)
     {
@@ -1270,6 +1340,7 @@ internal sealed class TypeDefinitionTable
         var id = AllocateParametricTypeId();
         _streamsByValue.Add(valueType, id);
         _streamValues.Add(id, valueType);
+        RecordTypeGraphMutation();
         return id;
     }
 
@@ -1288,6 +1359,7 @@ internal sealed class TypeDefinitionTable
         var id = AllocateParametricTypeId();
         _eventStreamsByValue.Add(valueType, id);
         _eventStreamValues.Add(id, valueType);
+        RecordTypeGraphMutation();
         return id;
     }
 
@@ -1408,6 +1480,20 @@ internal sealed class TypeDefinitionTable
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a box");
     }
 
+    public void FinalizeDeclaredBoxLayouts()
+    {
+        foreach (var (id, definition) in _boxes.ToArray())
+        {
+            _boxes[id] = definition with
+            {
+                Size = InlineSizeOf(definition.ElementType),
+                Alignment = AlignmentOf(definition.ElementType)
+            };
+        }
+        if (_boxes.Count > 0)
+            RecordTypeGraphMutation();
+    }
+
     public BoundReferenceDefinition GetReference(TypeId type)
     {
         return _references.TryGetValue(type, out var definition)
@@ -1428,6 +1514,7 @@ internal sealed class TypeDefinitionTable
 
         var id = AllocateParametricTypeId();
         _slices.Add(id, new BoundSliceDefinition(id, elementType));
+        RecordTypeGraphMutation();
         _slicesByElement.Add(elementType, id);
         return id;
     }
@@ -1479,9 +1566,9 @@ internal sealed class TypeDefinitionTable
         {
             return 24;
         }
-        if (IsStaticArray(type))
+        if (IsStaticArray(type) || IsSlice(type))
         {
-            return checked(_pointerSize * 2);
+            return StaticArrayDescriptorSize;
         }
         if (_boxes.ContainsKey(type) || _references.ContainsKey(type))
         {
@@ -1553,9 +1640,9 @@ internal sealed class TypeDefinitionTable
         {
             return boundedArray.Alignment;
         }
-        if (IsStaticArray(type))
+        if (IsStaticArray(type) || IsSlice(type))
         {
-            return _pointerSize;
+            return StaticArrayDescriptorAlignment;
         }
         if (_structs.TryGetValue(type, out var structure))
         {

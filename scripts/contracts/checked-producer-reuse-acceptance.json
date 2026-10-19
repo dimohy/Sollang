@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "status": "frozen-before-implementation",
+  "feature": "explicit-reusable-checked-producer",
+  "scope": "Existing numeric/generator/validator integration only; no new runner, no production C#/SLG/stdlib edits; original 13-case behavior dispatch awaits root authorization",
+  "costEvidence": {
+    "before": "numeric runner builds each case independently at line315 and invokes [exe] without runtime arguments at322",
+    "requiredAfter": "one build per explicit identical producer group, then original program files as exact argv inputs; not a generic binary cache"
+  },
+  "agreedSchema": {
+    "reusableCheckedProducer": [
+      "id",
+      "source",
+      "additionalSources",
+      "stdlibSourceOrder"
+    ],
+    "caseFields": [
+      "source",
+      "additionalSources",
+      "programSource",
+      "runArguments",
+      "observedSourceOrder"
+    ],
+    "caseIdentityRules": [
+      "source and ordered additionalSources exactly equal shared producer",
+      "runArguments exactly [programSource], byte-identical repo-relative original path",
+      "observedSourceOrder exactly shared stdlibSourceOrder followed by original programSource",
+      "stdlibSourceOrder exact current 143 .slg files with declared immutable order"
+    ],
+    "generatorSwitch": "--runtime-program-argument",
+    "requiredGeneratorSwitches": [
+      "--checked",
+      "--load-program-from-file",
+      "--package-contract"
+    ],
+    "newContextFields": false
+  },
+  "leaseAndProvenance": {
+    "unionInputs": [
+      "contracts",
+      "driver source and additionalSources",
+      "all original programs",
+      "full stdlib order",
+      "semantic/stdlib proofs and their input fingerprints",
+      "compiler exe/DLL/deps/runtimeconfig",
+      "runner/execution/diagnostics/lifecycle/audit tools"
+    ],
+    "holdUntil": "aggregate terminal plus supervised child shutdown",
+    "compiledDriver": "_checked-producer/<id>/probe.exe",
+    "binaryHash": "record after build; verify before every consumer command",
+    "perCase": "separate stdout/stderr/result stages; exact own program hash and observedSourceOrder",
+    "cleanup": "existing VerificationExecution/ArtifactLifecycle only; aggregate passed/stable/stopped is required; no cleanup between cases"
+  },
+  "behaviorOracle": {
+    "originalScopeCases": 13,
+    "buildCount": 1,
+    "sameDriverBinaryHash": true,
+    "unchangedOriginalProgramBytes": true,
+    "unchangedExpectedStdoutAndDiagnostics": true,
+    "negativeEmitterExit": 0,
+    "negativeEmittedLLVM": false,
+    "resourceAudit": "Existing expectedAllocations and owned_array_audit.c; exact allocations/releases and invalid release rejection retained",
+    "authorization": "Original13 actual behavior unexecuted until root dispatch; deterministic focused tests do not replace actual13"
+  },
+  "cases": [
+    {
+      "id": "legacy-fixed-path-preserved",
+      "owner": "generator",
+      "condition": "fixed-path mode remains byte-identical and uses original one-case validator",
+      "expectation": "accept"
+    },
+    {
+      "id": "runtime-driver-mode-explicit",
+      "owner": "generator",
+      "condition": "runtime mode requires checked, load-program-from-file, and package-contract; runtime allowlist is exact immutable programSource set",
+      "expectation": "accept"
+    },
+    {
+      "id": "nongroup-runtime-fields-denied",
+      "owner": "numeric",
+      "condition": "programSource/runArguments/per-case observedSourceOrder appears without explicit reusableCheckedProducer",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "runtime-mode-missing-prerequisite",
+      "owner": "generator",
+      "condition": "runtime mode without any required explicit prerequisite",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "runtime-argc-program-allowlist",
+      "owner": "generator",
+      "condition": "zero/multiple program arguments or an unlisted program path",
+      "expectation": "reject-before-emission"
+    },
+    {
+      "id": "group-producer-source-mismatch",
+      "owner": "validator",
+      "condition": "case.source differs from reusableCheckedProducer.source",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-compile-closure-mismatch",
+      "owner": "validator",
+      "condition": "case.additionalSources differs in members/order from reusableCheckedProducer.additionalSources",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-program-argument-mismatch",
+      "owner": "validator",
+      "condition": "runArguments is not exactly [programSource], including alternate spelling or extra arguments",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-stdlib-inventory-or-order-mismatch",
+      "owner": "validator",
+      "condition": "case stdlib prefix differs from exact shared stdlibSourceOrder or current 143-source inventory; duplicate/missing/extra input",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-program-last-mismatch",
+      "owner": "validator",
+      "condition": "observedSourceOrder is not exactly [*stdlibSourceOrder,programSource]",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-missing-or-outside-program",
+      "owner": "validator",
+      "condition": "programSource missing, outside repository, or not an original .slg input",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-producer-proof-mismatch",
+      "owner": "numeric",
+      "condition": "producer compiler/source fingerprint or required semantic/stdlib proof does not match current inputs",
+      "expectation": "reject-before-build"
+    },
+    {
+      "id": "group-input-drift",
+      "owner": "numeric",
+      "condition": "leased program/source/closure/proof changes after fingerprint capture or between case commands",
+      "expectation": "failed-preserved"
+    },
+    {
+      "id": "group-binary-drift",
+      "owner": "numeric",
+      "condition": "one compiled driver hash differs before a later consumer command",
+      "expectation": "failed-before-consumer"
+    },
+    {
+      "id": "shared-one-build-many-cases",
+      "owner": "numeric",
+      "condition": "one checked driver compiled once and same physical executable hash used for every original case",
+      "expectation": "accept"
+    },
+    {
+      "id": "shared-oracles-and-audits-preserved",
+      "owner": "numeric",
+      "condition": "positive exact LLVM/assemble/link/native stdout and resource allocation/release checks; negative exact diagnostic plus no LLVM retained unchanged",
+      "expectation": "accept"
+    },
+    {
+      "id": "active-consumer-cleanup-denied",
+      "owner": "lifecycle",
+      "condition": "shared driver or generated output removal attempted while any supervised consumer remains active",
+      "expectation": "reject"
+    },
+    {
+      "id": "failed-cancelled-drift-not-promoted",
+      "owner": "lifecycle",
+      "condition": "failed/cancelled/changed case or unfinished aggregate presented as completed for cleanup",
+      "expectation": "reject"
+    },
+    {
+      "id": "terminal-group-official-cleanup",
+      "owner": "lifecycle",
+      "condition": "all cases passed, union inputs stable, supervised children stopped; official lifecycle removes owned products only",
+      "expectation": "accept"
+    }
+  ],
+  "existingTestConsumers": [
+    "scripts/test_selection_result_emitter_generation.py",
+    "scripts/test_checked_package_emitter.py",
+    "existing numeric focused test owned by s003_managed"
+  ],
+  "productionOwnership": {
+    "generatorAndValidator": "runner_contract",
+    "numericRunner": "s003_managed",
+    "acceptanceContractAndIndependentReview": "s003_slg"
+  },
+  "executionStarted": false
+}

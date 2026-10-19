@@ -1,7 +1,9 @@
 namespace sollang.compiler.semantic.symbols
 
 import sollang.compiler.ast as ast
+import sollang.compiler.syntax as syntax
 import sys.file as file
+import syntax.generated.slg as grammar
 
 # Symbol and AST indexes are stable offsets into owned arrays. This keeps the
 # semantic graph relocatable and avoids one heap allocation per declaration.
@@ -16,6 +18,87 @@ public struct Symbol {
     public blockTypeNode: Int
     public blockResultTypeNode: Int
     public flags: Int
+}
+
+# A dotted function declaration owns its complete path, not a value named by
+# the first segment. Shared by lexical and qualified call resolution.
+public hasQualifiedFunctionName symbol: Symbol, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int -> Bool {
+    symbol.kind != 7 or symbol.nameToken < 0 -> if { false -> return }
+    symbol.nameToken + 1 => index!
+    index! < tokenCount -> while {
+        tokens[tokenStart + index!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment()
+            -> if {
+                kind == grammar.tokenIdDot() -> return
+            }
+        index! + 1 => index!
+    }
+    false
+}
+
+public reservedBindingName name: Text -> Bool {
+    name == "main"
+        or name == "sys"
+        or name == "print"
+        or name == "println"
+        or name == "readInt"
+        or name == "seedRandom"
+        or name == "randomBelow"
+        or name == "openIntWriter"
+        or name == "writeInt"
+        or name == "closeIntWriter"
+        or name == "openIntReader"
+        or name == "closestInt"
+        or name == "closeIntReader"
+        or name == "nowMillis"
+        or name == "each"
+        or name == "fold"
+        or name == "if"
+        or name == "else"
+        or name == "when"
+        or name == "and"
+        or name == "or"
+        or name == "not"
+        or name == "true"
+        or name == "false"
+        or name == "in"
+        or name == "it"
+        or name == "repeat"
+        or name == "block"
+        or name == "yield"
+        or name == "stream"
+        or name == "namespace"
+        or name == "import"
+        or name == "public"
+        or name == "opaque"
+        or name == "struct"
+        or name == "enum"
+        or name == "trait"
+        or name == "impl"
+        or name == "com"
+        or name == "class"
+        or name == "interface"
+        or name == "sta"
+        or name == "mta"
+        or name == "for"
+        or name == "self"
+        or name == "as"
+        or name == "move"
+        or name == "mut"
+}
+
+# Synthetic role names retain a real source token for provenance.
+# 262144 contextual it; 524288 fold accumulator; 1048576 fold item.
+public contextualName symbol: Symbol -> Text {
+    symbol.flags / 524288 % 2 == 1 -> if { "acc" -> return }
+    symbol.flags / 262144 % 2 == 1 -> if { "it" -> return }
+    ""
+}
+
+public implicitFoldRole symbol: Symbol -> Int {
+    symbol.flags / 524288 % 2 == 1 -> if { 0 -> return }
+    symbol.flags / 1048576 % 2 == 1 -> if { 1 -> return }
+    -1
 }
 
 public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
@@ -169,14 +252,16 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                                             owner!.blockTypeNode < 0 -> if {
                                                 typeAstIndex! => owner!.blockTypeNode
                                             } else {
-                                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                                typeAst.operatorKind == grammar.tokenIdArrow()
+                                                    -> if { typeAstIndex! => owner!.blockResultTypeNode }
                                             }
                                         }
                                     } else {
                                         owner!.blockTypeNode < 0 -> if {
                                             typeAstIndex! => owner!.blockTypeNode
                                         } else {
-                                            owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                            typeAst.operatorKind == grammar.tokenIdArrow()
+                                                -> if { typeAstIndex! => owner!.blockResultTypeNode }
                                         }
                                     }
                                 }
@@ -189,7 +274,8 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                                             owner!.blockTypeNode < 0 -> if {
                                                 typeAstIndex! => owner!.blockTypeNode
                                             } else {
-                                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                                typeAst.operatorKind == grammar.tokenIdArrow()
+                                                    -> if { typeAstIndex! => owner!.blockResultTypeNode }
                                             }
                                         }
                                     } else {
@@ -363,7 +449,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                         symbols! -> push(parameterSymbol)
                     }
             }
-            declarationSymbol.kind == 7
+            (declarationSymbol.kind == 7 or declarationSymbol.kind == 31)
                 and declarationAst.secondaryToken < 0
                 and declarationSymbol.typeNode >= 0
                 and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 32 % 2 == 1)
@@ -582,33 +668,29 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         symbols![foldScopeIndex!] => foldScope
         foldScope.kind == 64 -> if {
             nodes[foldScope.astNode] => foldAst
-            foldAst.secondaryToken >= 0 -> if {
+            [foldAst.secondaryToken, foldAst.tertiaryToken] => roleTokens
+            [524288, 262144 + 1048576] => defaultFlags
+            0 => role!
+            role! < 2 -> while {
+                roleTokens[role!] => nameToken!
+                0 => flags!
+                nameToken! < 0 -> if {
+                    foldAst.payloadToken => nameToken!
+                    defaultFlags[role!] => flags!
+                }
                 symbols! -> push(Symbol {
                     kind: 35
                     parent: foldScopeIndex!
                     astNode: foldScope.astNode
-                    nameToken: foldAst.secondaryToken
+                    nameToken: nameToken!
                     typeNode: -1
                     secondaryTypeNode: -1
                     blockNameToken: -1
                     blockTypeNode: -1
                     blockResultTypeNode: -1
-                    flags: 0
+                    flags: flags!
                 })
-            }
-            foldAst.tertiaryToken >= 0 -> if {
-                symbols! -> push(Symbol {
-                    kind: 35
-                    parent: foldScopeIndex!
-                    astNode: foldScope.astNode
-                    nameToken: foldAst.tertiaryToken
-                    typeNode: -1
-                    secondaryTypeNode: -1
-                    blockNameToken: -1
-                    blockTypeNode: -1
-                    blockResultTypeNode: -1
-                    flags: 0
-                })
+                role! + 1 => role!
             }
         }
         foldScopeIndex! + 1 => foldScopeIndex!

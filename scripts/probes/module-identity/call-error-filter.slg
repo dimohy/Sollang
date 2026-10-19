@@ -1,0 +1,77 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.type_ids as typeIds
+
+row source: Int, call: Int, function: Int, status: Int, origin: Int, target: Int -> calls.ModuleCallResolution {
+    calls.ModuleCallResolution {
+        sourceModule: source
+        callAst: call
+        origin: origin
+        targetModule: source
+        targetSourceModule: target
+        functionSymbol: function
+        status: status
+    }
+}
+
+# Retained pre-index contract: preserve order and all non-error records.
+reference rows: ref [calls.ModuleCallResolution; ~] -> [calls.ModuleCallResolution; ~] {
+    [calls.ModuleCallResolution; ~] => result!
+    rows -> each candidate {
+        candidate.status != 6 -> if {
+            false => duplicate!
+            candidate.status == 5 -> if {
+                result! -> each previous {
+                    previous.status == 5 and previous.sourceModule == candidate.sourceModule
+                        and previous.callAst == candidate.callAst and previous.functionSymbol == candidate.functionSymbol
+                        -> if { true => duplicate! }
+                }
+            }
+            not duplicate! -> if { result! -> push(candidate) }
+        }
+    }
+    result!
+}
+
+main {
+    ["namespace alpha\nidentity value: Int -> Int { value }", "namespace beta\nidentity value: Int -> Int { value }"; ~] => sources
+    sources -> analysis.analyze => package
+    package -> typeIds.resolveAnalyzed => semantic
+    [Int; ~] => receivers!
+    package.nodes -> each node { receivers! -> push(-1) }
+    [true, true; ~] => owners
+    [
+    row(0, 0, 17, 5, 0, 1),
+    row(0, 0, 17, 5, 1, 99),
+    row(0, 0, 18, 5, 0, 2),
+    row(1, 0, 17, 5, 0, 3),
+    row(0, 1, 17, 5, 0, 4),
+    row(0, 0, 17, 4, 1, 5),
+    row(0, 0, 17, 4, 2, 6),
+    row(0, 0, 17, 6, 0, 7),
+    row(0, -1, 17, 5, 0, 8),
+    row(0, -1, 17, 5, 1, 98),
+    row(0, 1000000, 17, 5, 0, 9),
+    row(0, 1000000, 17, 5, 1, 97),
+    row(1, 1000000, 17, 5, 0, 10),
+    row(0, -1, 18, 5, 0, 11),
+    row(0, 0, 17, 0, 9, 12); ~
+    ] => seeded
+    seeded -> reference => expected
+    package -> calls.resolveModulesTypedWithReceiverTypeSeeds(semantic, receivers!, semantic.types, owners, seeded) => actual
+    0 => matched!
+    (actual -> len) == (expected -> len) -> if {
+        0..<(actual -> len) -> each index {
+            actual[index] => observed
+            expected[index] => original
+            observed.sourceModule == original.sourceModule and observed.callAst == original.callAst
+                and observed.origin == original.origin and observed.targetModule == original.targetModule
+                and observed.targetSourceModule == original.targetSourceModule
+                and observed.functionSymbol == original.functionSymbol and observed.status == original.status
+                -> if { matched! + 1 => matched! }
+        }
+    }
+    actual -> len -> println
+    expected -> len -> println
+    matched! -> println
+}

@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.types
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
 import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.type_terms as typeTerms
 import syntax.generated.slg as grammar
 
 public struct TypeUse {
@@ -14,6 +15,45 @@ public struct TypeUse {
     public keyCanonical: Int
     public valueCanonical: Int
     public lengthToken: Int
+}
+
+# The same comparison domain rule is consumed by source inference and the
+# checked Typed IR gate. Result codes: 0 valid, 1 invalid left operand,
+# 2 Text ordering, 3 mixed Text equality, 4 mismatched numeric operands,
+# 5 unresolved operand or comparison operator.
+comparisonNumericCanonicalSymbol symbol: Int -> Int {
+    symbol -> when {
+        == 5 { 2 } # Int32 is Int.
+        == 7 { 6 } # Long is Int64.
+        == 19 { 20 } # Float is Float32.
+        == 22 { 21 } # Double is Float64.
+        else { symbol }
+    }
+}
+
+public comparisonOperandFailure opcode: Int, leftOrigin: Int, leftSymbol: Int, rightOrigin: Int, rightSymbol: Int -> Int {
+    opcode == grammar.tokenIdEqualEqual() or opcode == grammar.tokenIdBangEqual() => equality
+    opcode == grammar.tokenIdLess() or opcode == grammar.tokenIdLessEqual()
+        or opcode == grammar.tokenIdGreater() or opcode == grammar.tokenIdGreaterEqual() => ordering
+    not equality and not ordering -> if { 5 -> return }
+    leftOrigin == 1 and leftSymbol == 1 => leftText
+    rightOrigin == 1 and rightSymbol == 1 => rightText
+    leftText or rightText -> if {
+        ordering -> if { 2 -> return }
+        leftText and rightText -> if { 0 -> return }
+        3 -> return
+    }
+    leftOrigin == 1 and ((leftSymbol >= 2 and leftSymbol <= 14)
+        or (leftSymbol >= 19 and leftSymbol <= 22)) => leftNumeric
+    leftNumeric -> unless { 1 -> return }
+    rightOrigin == 1 and ((rightSymbol >= 2 and rightSymbol <= 14)
+        or (rightSymbol >= 19 and rightSymbol <= 22)) => rightNumeric
+    rightNumeric -> if {
+        leftSymbol -> comparisonNumericCanonicalSymbol => canonicalLeft
+        rightSymbol -> comparisonNumericCanonicalSymbol => canonicalRight
+        canonicalLeft == canonicalRight -> if { 0 -> return }
+    }
+    4
 }
 
 # Kinds: 1 named, 2 slice, 3 dynamic array, 4 fixed array,
@@ -60,33 +100,20 @@ public canonicalizePrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: r
                 tokens[firstSignificant!].kind == grammar.tokenIdLeftBracket()
                     -> if {
                         2 => typeKind!
-                        false => hasSemicolon!
-                        false => hasTilde!
-                        false => hasBounded!
+                        firstSignificant! -> typeTerms.outerTypeStorageSuffix(node.firstToken + node.tokenCount, tokens) => storage
+                        storage.lengthToken => lengthToken!
                         firstSignificant! => shapeToken!
                         shapeToken! < node.firstToken + node.tokenCount
                             -> while {
-                                tokens[shapeToken!].kind == grammar.tokenIdSemicolon()
-                                    -> if { true => hasSemicolon! }
-                                tokens[shapeToken!].kind == grammar.tokenIdTilde()
-                                    -> if { true => hasTilde! }
-                                tokens[shapeToken!].kind == grammar.tokenIdLessEqual()
-                                    -> if { true => hasBounded! }
                                 elementToken! < 0 and tokens[shapeToken!].kind == grammar.tokenIdIdentifier()
                                     -> if {
                                         shapeToken! => elementToken!
                                     }
-                                hasSemicolon! -> if {
-                                    tokens[shapeToken!].kind == grammar.tokenIdIdentifier() or tokens[shapeToken!].kind == grammar.tokenIdNumber()
-                                        -> if {
-                                            shapeToken! != elementToken! -> if { shapeToken! => lengthToken! }
-                                        }
-                                }
                                 shapeToken! + 1 => shapeToken!
                             }
-                        hasSemicolon! -> if {
-                            hasBounded! -> if { 12 => typeKind! } else {
-                                hasTilde! -> if { 3 => typeKind! } else { 4 => typeKind! }
+                        storage.semicolon -> if {
+                            storage.bounded -> if { 12 => typeKind! } else {
+                                storage.dynamic -> if { 3 => typeKind! } else { 4 => typeKind! }
                             }
                         }
                     } else {
@@ -94,7 +121,8 @@ public canonicalizePrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: r
                             -> if {
                                 5 => typeKind!
                                 false => afterTypeColon!
-                                false => dictionaryBounded!
+                                firstSignificant! -> typeTerms.outerTypeStorageSuffix(node.firstToken + node.tokenCount, tokens) => storage
+                                storage.lengthToken => lengthToken!
                                 firstSignificant! => dictionaryToken!
                                 dictionaryToken! < node.firstToken + node.tokenCount
                                     -> while {
@@ -102,12 +130,6 @@ public canonicalizePrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: r
                                             -> if {
                                                 true => afterTypeColon!
                                             } else {
-                                                tokens[dictionaryToken!].kind == grammar.tokenIdLessEqual()
-                                                    -> if { true => dictionaryBounded! }
-                                                dictionaryBounded! and lengthToken! < 0 and tokens[dictionaryToken!].kind == grammar.tokenIdNumber()
-                                                    -> if {
-                                                        dictionaryToken! => lengthToken!
-                                                    }
                                                 tokens[dictionaryToken!].kind == grammar.tokenIdIdentifier()
                                                     -> if {
                                                         afterTypeColon! -> if {
@@ -119,7 +141,7 @@ public canonicalizePrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: r
                                             }
                                         dictionaryToken! + 1 => dictionaryToken!
                                     }
-                                dictionaryBounded! -> if { 13 => typeKind! }
+                                storage.bounded -> if { 13 => typeKind! }
                             } else {
                                 tokens[firstSignificant!] => firstTypeToken
                                 firstTypeToken.kind == grammar.tokenIdIdentifier()
@@ -136,6 +158,8 @@ public canonicalizePrepared source: Text, nodes: ref [ast.AstNode; ~], tokens: r
                                                 -> if {
                                                     8 => typeKind!
                                                 }
+                                            keywordByte0 == 100 and keywordByte1 == 121 and keywordByte2 == 110
+                                                -> if { 15 => typeKind! }
                                             typeKind! == 6 or typeKind! == 8 -> if {
                                                 firstSignificant! + 1 => wrappedElementToken!
                                                 true => findingWrappedElement!

@@ -1,0 +1,69 @@
+echo value: Text -> Unit uses Console { value -> println }
+
+show flag: Bool, value: Int -> Unit uses Console {
+    flag -> if { "value=$value" } else { "other=$value" } -> println
+}
+
+mixed flag: Bool, value: Int -> Unit uses Console {
+    flag -> if { "mixed=$value" } else { "plain" } -> println
+}
+
+nested outer: Bool, inner: Bool, value: Int -> Unit uses Console {
+    outer -> if {
+        inner -> if { "inner=$value" } else { "inner=false,$value" }
+    } else { "outer=false" } -> println
+}
+
+select value: Int -> Unit uses Console {
+    when {
+        value < 0 { "minus=$value" }
+        value == 0 { "zero" }
+        else { "plus=$value" }
+    } -> println
+}
+
+match result: Result<Int, Int> -> Unit uses Console {
+    result -> when {
+        Ok(value) => "ok=$value"
+        Err(error) => "err=$error"
+    } -> println
+}
+
+consume flag: Bool, value: Int -> Unit uses Console {
+    flag -> if { "argument=$value" } else { "plain" } -> echo
+    (flag -> if { "value=$value" } else { "other=$value" }) == "value=42" -> println
+    flag -> if { "bool=$flag" } else { "bool=$flag" } -> println
+}
+
+outerOwner flag: Bool -> Unit uses Console {
+    Arena(64) => storage!
+    "outer" -> materialize(storage!) => text
+    flag -> if { "owner=$text" } else { "plain" } -> println
+}
+
+localScalar flag: Bool -> Unit uses Console {
+    flag -> if {
+        Arena(64) => storage!
+        "local" -> materialize(storage!) => text
+        text -> len => size
+        "length=$size"
+    } else { "plain" } -> println
+}
+
+main {
+    show(true, 42)
+    show(false, 9)
+    mixed(true, 7)
+    mixed(false, 7)
+    nested(true, false, 5)
+    nested(false, true, 5)
+    select(-3)
+    select(0)
+    select(4)
+    match(Result<Int, Int>.Ok(6))
+    match(Result<Int, Int>.Err(8))
+    consume(true, 42)
+    consume(false, 10)
+    outerOwner(true)
+    localScalar(true)
+}

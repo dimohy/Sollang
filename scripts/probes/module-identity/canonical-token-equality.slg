@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+
+main {
+    [Text; ~] => sources!
+    sources! -> push("namespace example.shared\n")
+    sources! -> push("namespace example . shared\n")
+    sources! -> push("namespace example.other\n")
+    sources! -> push("main { }\n")
+    sources! -> push("main { }\n")
+    sources! -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    sources! -> modules.sameLogicalSource(identities, 0, 1, package.tokens, package.ranges) -> println
+    package.sources -> modules.sameLogicalAnalyzedSource(identities, 0, 1, package.tokens, package.ranges) -> println
+    sources! -> modules.sameLogicalSource(identities, 0, 2, package.tokens, package.ranges) -> println
+    sources! -> modules.sameLogicalSource(identities, 3, 4, package.tokens, package.ranges) -> println
+    sources! -> modules.sameLogicalSource(identities, -1, 0, package.tokens, package.ranges) -> println
+    [modules.ModuleIdentity; ~] => collided!
+    collided! -> push(identities[0])
+    identities[2] => other
+    collided! -> push(modules.ModuleIdentity { sourceIndex: other.sourceIndex, pathHash: identities[0].pathHash, pathStart: other.pathStart, pathLength: other.pathLength, importCount: other.importCount })
+    # Identity 1 now points at source 2, so use its matching source/range pair.
+    [Text; ~] => collisionSources!
+    collisionSources! -> push(sources![0])
+    collisionSources! -> push(sources![2])
+    [analysis.SourceAnalysisRange; ~] => collisionRanges!
+    collisionRanges! -> push(package.ranges[0])
+    collisionRanges! -> push(package.ranges[2])
+    collisionSources! -> modules.sameLogicalSource(collided!, 0, 1, package.tokens, collisionRanges!) -> println
+}

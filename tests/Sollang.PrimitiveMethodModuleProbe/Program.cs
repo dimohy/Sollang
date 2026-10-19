@@ -1,6 +1,9 @@
 using System.Collections;
 using System.Reflection;
 
+if (args.Length >= 2 && args[0] == "--drop-reachability")
+    return DropReachabilityProbe.Run(args[1], args.Skip(2).ToArray());
+
 if (args.Length != 3)
 {
     Console.Error.WriteLine("expected two primitive-method and one array-method module fixture paths");

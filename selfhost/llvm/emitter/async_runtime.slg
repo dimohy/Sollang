@@ -1,18 +1,16 @@
 namespace sollang.compiler.llvm.emitter.async_runtime
 
 import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.async_file_runtime as asyncFileRuntime
 
-# Single-threaded affine Task scheduler used by native self-host output. A
-# Duration.sleep call creates a Task and only the scheduler's idle path waits on
-# the platform clock; the call site itself never blocks.
-emitCommonRuntime: -> Unit uses Console {
+emitNoFileRuntime: -> Unit uses Console {
     """
     define internal i1 @sollang_file_drain_completions() {
     entry:
       ret i1 false
     }
 
-    define internal void @sollang_platform_file_worker_wait_completion(i64 %requested) {
+    define internal void @sollang_platform_io_wait_completion(i64 %requested) {
     entry:
       ret void
     }
@@ -26,7 +24,14 @@ emitCommonRuntime: -> Unit uses Console {
     entry:
       ret void
     }
+    """ -> println
+}
 
+# Single-threaded affine Task scheduler used by native self-host output. A
+# Duration.sleep call creates a Task and only the scheduler's idle path waits on
+# the platform clock; the call site itself never blocks.
+emitCommonRuntime: -> Unit uses Console {
+    """
     define internal void @sollang_task_enqueue_ready(ptr %control) {
     entry:
       %status_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 4
@@ -179,7 +184,12 @@ emitCommonRuntime: -> Unit uses Console {
     inspect_timer:
       %timer = load ptr, ptr @sollang_task_timer_head, align 8
       %has_timer = icmp ne ptr %timer, null
-      br i1 %has_timer, label %timer_timeout, label %stalled
+      %file_outstanding = load atomic i64, ptr @sollang_io_outstanding acquire, align 8
+      %has_file = icmp ne i64 %file_outstanding, 0
+      br i1 %has_timer, label %timer_timeout, label %inspect_file
+
+    inspect_file:
+      br i1 %has_file, label %wait_file_only, label %stalled
 
     timer_timeout:
       %deadline_slot = getelementptr %sollang.task_control, ptr %timer, i32 0, i32 8
@@ -188,6 +198,20 @@ emitCommonRuntime: -> Unit uses Console {
       %remaining_raw = sub i64 %deadline, %now
       %positive = icmp sgt i64 %remaining_raw, 0
       %remaining = select i1 %positive, i64 %remaining_raw, i64 0
+      br i1 %has_file, label %wait_file_or_timer, label %wait_timer_only
+
+    wait_file_or_timer:
+      call void @sollang_platform_io_wait_completion(i64 %remaining)
+      %file_timer_progress = call i1 @sollang_file_drain_completions()
+      call void @sollang_timer_wake_due()
+      br label %progress
+
+    wait_file_only:
+      call void @sollang_platform_io_wait_completion(i64 -1)
+      %file_only_progress = call i1 @sollang_file_drain_completions()
+      br label %progress
+
+    wait_timer_only:
       call void @sollang_wait_millis(i64 %remaining)
       call void @sollang_timer_wake_due()
       br label %progress
@@ -225,7 +249,7 @@ emitCommonRuntime: -> Unit uses Console {
 
     define internal ptr @sollang_task_start(ptr %worker, ptr %destroy, ptr %cancel, ptr %context) {
     entry:
-      %control = call ptr @malloc(i64 152)
+      %control = call ptr @malloc(i64 168)
       %allocated = icmp ne ptr %control, null
       br i1 %allocated, label %initialize, label %fail
 
@@ -272,6 +296,10 @@ emitCommonRuntime: -> Unit uses Console {
       store i32 0, ptr %file_explicit_slot, align 4
       %file_operation_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 20
       store i32 0, ptr %file_operation_slot, align 4
+      %result_address_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 21
+      store ptr %context, ptr %result_address_slot, align 8
+      %result_completion_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 22
+      store ptr null, ptr %result_completion_slot, align 8
       call void @sollang_task_enqueue_ready(ptr %control)
       ret ptr %control
 
@@ -371,7 +399,49 @@ emitCommonRuntime: -> Unit uses Console {
 
     check_timer:
       %waiting_timer = icmp eq i32 %status, 4
-      br i1 %waiting_timer, label %timer_find, label %fail
+      br i1 %waiting_timer, label %timer_find, label %check_child
+
+    check_child:
+      %waiting_child = icmp eq i32 %status, 5
+      br i1 %waiting_child, label %detach_child, label %check_file
+
+    detach_child:
+      %waiting_child_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 10
+      %child = load ptr, ptr %waiting_child_slot, align 8
+      %has_child = icmp ne ptr %child, null
+      br i1 %has_child, label %clear_child_waiter, label %fail
+
+    clear_child_waiter:
+      %child_waiter_slot = getelementptr %sollang.task_control, ptr %child, i32 0, i32 9
+      store ptr null, ptr %child_waiter_slot, align 8
+      store ptr null, ptr %waiting_child_slot, align 8
+      store i32 3, ptr %status_slot, align 4
+      br label %destroy
+
+    check_file:
+      %waiting_file = icmp eq i32 %status, 6
+      br i1 %waiting_file, label %cancel_file, label %check_socket_completion
+
+    check_socket_completion:
+      %waiting_socket_completion = icmp eq i32 %status, 7
+      br i1 %waiting_socket_completion, label %cancel_socket_completion, label %fail
+
+    cancel_socket_completion:
+      %socket_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 12
+      store atomic i32 3, ptr %socket_phase_slot release, align 4
+      store i32 3, ptr %status_slot, align 4
+      %socket_cancel_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 19
+      store atomic i32 1, ptr %socket_cancel_phase_slot release, align 4
+      %socket_cancel_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 6
+      %socket_cancel_fn = load ptr, ptr %socket_cancel_slot, align 8
+      call void %socket_cancel_fn(ptr %handle)
+      ret i1 true
+
+    cancel_file:
+      %file_phase_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 12
+      store atomic i32 3, ptr %file_phase_slot release, align 4
+      store i32 3, ptr %status_slot, align 4
+      ret i1 true
 
     ready_find:
       %ready_head = load ptr, ptr @sollang_task_ready_head, align 8
@@ -481,17 +551,32 @@ emitWindowsWaitRuntime: -> Unit uses Console {
     """ -> println
 }
 
-public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
+# File requests and socket completions share the scheduler's IO queue, but
+# socket-only programs must not emit or initialize the file worker.
+emitIoRuntime windows: Bool, usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
+    usesAsyncFile -> if {
+        asyncFileRuntime.emitSharedRuntime()
+        windows -> if { asyncFileRuntime.emitWindowsRuntime() } else { asyncFileRuntime.emitLinuxRuntime() }
+    } else {
+        usesSocketCompletion -> if {
+            asyncFileRuntime.emitSharedIoRuntime()
+            windows -> if { asyncFileRuntime.emitWindowsIoRuntime() } else { asyncFileRuntime.emitLinuxIoRuntime() }
+        } else { emitNoFileRuntime() }
+    }
+}
+
+public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
     "define internal i64 @sollang_now_millis() {" -> println
     "entry:" -> println
     "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
     "  ret i64 %value" -> println
     "}" -> println
     emitWindowsWaitRuntime()
+    emitIoRuntime(true, usesAsyncFile, usesSocketCompletion)
     emitCommonRuntime()
 }
 
-public emitStandaloneWindowsRuntime: -> Unit uses Console {
+public emitStandaloneWindowsRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
     "declare dllimport i64 @GetTickCount64()" -> println
     """
     define internal i64 @sollang_now_millis() {
@@ -501,6 +586,7 @@ public emitStandaloneWindowsRuntime: -> Unit uses Console {
     }
     """ -> println
     emitWindowsWaitRuntime()
+    emitIoRuntime(true, usesAsyncFile, usesSocketCompletion)
     emitCommonRuntime()
 }
 
@@ -523,17 +609,18 @@ emitLinuxWaitRuntime: -> Unit uses Console {
     """ -> println
 }
 
-public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols -> Unit uses Console {
+public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
     "define internal i64 @sollang_now_millis() {" -> println
     "entry:" -> println
     "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
     "  ret i64 %value" -> println
     "}" -> println
     emitLinuxWaitRuntime()
+    emitIoRuntime(false, usesAsyncFile, usesSocketCompletion)
     emitCommonRuntime()
 }
 
-public emitStandaloneLinuxRuntime: -> Unit uses Console {
+public emitStandaloneLinuxRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
     "declare i32 @clock_gettime(i32, ptr)" -> println
     """
     define internal i64 @sollang_now_millis() {
@@ -551,5 +638,350 @@ public emitStandaloneLinuxRuntime: -> Unit uses Console {
     }
     """ -> println
     emitLinuxWaitRuntime()
+    emitIoRuntime(false, usesAsyncFile, usesSocketCompletion)
     emitCommonRuntime()
+}
+
+# DiagnosticSession storage is separate from the affine Task control ABI.
+# The error ordinal matches std.async.diagnostics.DiagnosticError; -1 is success.
+public emitDiagnosticSessionRuntime: -> Unit uses Console {
+    """
+    @sollang_diagnostic_next_session_id = internal global i64 1
+    define internal { ptr, i32 } @sollang_diagnostic_start(i32 %capacity) {
+    entry:
+      %minimum_ok = icmp sge i32 %capacity, 1
+      %maximum_ok = icmp sle i32 %capacity, 65535
+      %valid = and i1 %minimum_ok, %maximum_ok
+      br i1 %valid, label %check_id, label %invalid
+    invalid:
+      ret { ptr, i32 } { ptr null, i32 0 }
+    check_id:
+      %id = load i64, ptr @sollang_diagnostic_next_session_id, align 8
+      %available = icmp ne i64 %id, -1
+      br i1 %available, label %allocate, label %exhausted
+    exhausted:
+      ret { ptr, i32 } { ptr null, i32 1 }
+    allocate:
+      %wide_capacity = sext i32 %capacity to i64
+      %records_bytes = mul i64 %wide_capacity, 112
+      %bytes = add i64 %records_bytes, 40
+      %session = call ptr @malloc(i64 %bytes)
+      %allocated = icmp ne ptr %session, null
+      br i1 %allocated, label %initialize, label %allocation_failed
+    allocation_failed:
+      ret { ptr, i32 } { ptr null, i32 2 }
+    initialize:
+      %next_id = add i64 %id, 1
+      store i64 %next_id, ptr @sollang_diagnostic_next_session_id, align 8
+      store i64 %id, ptr %session, align 8
+      %capacity_slot = getelementptr i8, ptr %session, i64 8
+      store i64 %wide_capacity, ptr %capacity_slot, align 8
+      %count_slot = getelementptr i8, ptr %session, i64 16
+      store i64 0, ptr %count_slot, align 8
+      %untracked_slot = getelementptr i8, ptr %session, i64 24
+      store i64 0, ptr %untracked_slot, align 8
+      %records_slot = getelementptr i8, ptr %session, i64 32
+      %records = getelementptr i8, ptr %session, i64 40
+      store ptr %records, ptr %records_slot, align 8
+      %success0 = insertvalue { ptr, i32 } poison, ptr %session, 0
+      %success = insertvalue { ptr, i32 } %success0, i32 -1, 1
+      ret { ptr, i32 } %success
+    }
+    define internal i32 @sollang_diagnostic_observed_status(ptr %record) {
+    entry:
+      %terminal_slot = getelementptr i8, ptr %record, i64 24
+      %terminal = load i32, ptr %terminal_slot, align 4
+      %frozen = icmp sge i32 %terminal, 0
+      br i1 %frozen, label %frozen_status, label %live
+    frozen_status:
+      ret i32 %terminal
+    live:
+      %control_slot = getelementptr i8, ptr %record, i64 16
+      %control = load ptr, ptr %control_slot, align 8
+      %has_control = icmp ne ptr %control, null
+      br i1 %has_control, label %read_control, label %no_control
+    no_control:
+      ret i32 0
+    read_control:
+      %status_slot = getelementptr i8, ptr %control, i64 32
+      %status = load i32, ptr %status_slot, align 4
+      ret i32 %status
+    }
+    
+    define internal { i1, i64, i64, i64 } @sollang_diagnostic_close(ptr %session) {
+    entry:
+      %count_slot = getelementptr i8, ptr %session, i64 16
+      %count = load i64, ptr %count_slot, align 8
+      %records_slot = getelementptr i8, ptr %session, i64 32
+      %records = load ptr, ptr %records_slot, align 8
+      br label %inspect_loop
+    inspect_loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %inspect_next ]
+      %any_busy = phi i1 [ false, %entry ], [ %combined_busy, %inspect_next ]
+      %more = icmp ult i64 %index, %count
+      br i1 %more, label %inspect, label %inspect_done
+    inspect:
+      %offset = mul i64 %index, 112
+      %record = getelementptr i8, ptr %records, i64 %offset
+      %status = call i32 @sollang_diagnostic_observed_status(ptr %record)
+      %completed = icmp eq i32 %status, 2
+      %cancelled = icmp eq i32 %status, 3
+      %terminal = or i1 %completed, %cancelled
+      %active = xor i1 %terminal, true
+      %combined_busy = or i1 %any_busy, %active
+      br label %inspect_next
+    inspect_next:
+      %next = add i64 %index, 1
+      br label %inspect_loop
+    inspect_done:
+      br i1 %any_busy, label %busy, label %detach_start
+    busy:
+      ret { i1, i64, i64, i64 } zeroinitializer
+    detach_start:
+      %id = load i64, ptr %session, align 8
+      %untracked_slot = getelementptr i8, ptr %session, i64 24
+      %untracked = load i64, ptr %untracked_slot, align 8
+      br label %detach_loop
+    detach_loop:
+      %detach_index = phi i64 [ 0, %detach_start ], [ %detach_next, %advance ]
+      %detach_more = icmp ult i64 %detach_index, %count
+      br i1 %detach_more, label %detach, label %done
+    detach:
+      %detach_offset = mul i64 %detach_index, 112
+      %detach_record = getelementptr i8, ptr %records, i64 %detach_offset
+      %observed = call i32 @sollang_diagnostic_observed_status(ptr %detach_record)
+      %terminal_slot = getelementptr i8, ptr %detach_record, i64 24
+      store i32 %observed, ptr %terminal_slot, align 4
+      %control_slot = getelementptr i8, ptr %detach_record, i64 16
+      store ptr null, ptr %control_slot, align 8
+      %header_slot = getelementptr i8, ptr %detach_record, i64 104
+      %header = load ptr, ptr %header_slot, align 8
+      %has_header = icmp ne ptr %header, null
+      br i1 %has_header, label %detach_header, label %advance
+    detach_header:
+      store ptr null, ptr %header, align 8
+      %record_slot = getelementptr i8, ptr %header, i64 8
+      store ptr null, ptr %record_slot, align 8
+      store ptr null, ptr %header_slot, align 8
+      br label %advance
+    advance:
+      %detach_next = add i64 %detach_index, 1
+      br label %detach_loop
+    done:
+      call void @free(ptr %session)
+      %summary0 = insertvalue { i1, i64, i64, i64 } poison, i1 true, 0
+      %summary1 = insertvalue { i1, i64, i64, i64 } %summary0, i64 %id, 1
+      %summary2 = insertvalue { i1, i64, i64, i64 } %summary1, i64 %count, 2
+      %summary = insertvalue { i1, i64, i64, i64 } %summary2, i64 %untracked, 3
+      ret { i1, i64, i64, i64 } %summary
+    }
+    define internal void @sollang_diagnostic_mark_terminal(ptr %header, i32 %terminal) {
+    entry:
+      %record_slot = getelementptr i8, ptr %header, i64 8
+      %record = load ptr, ptr %record_slot, align 8
+      %tracked = icmp ne ptr %record, null
+      br i1 %tracked, label %mark, label %done
+    mark:
+      %control_slot = getelementptr i8, ptr %record, i64 16
+      store ptr null, ptr %control_slot, align 8
+      %terminal_slot = getelementptr i8, ptr %record, i64 24
+      store i32 %terminal, ptr %terminal_slot, align 4
+      %resume_slot = getelementptr i8, ptr %record, i64 28
+      store i32 0, ptr %resume_slot, align 4
+      br label %clear
+    clear:
+      %offset = phi i64 [ 32, %mark ], [ %next, %clear ]
+      %slot = getelementptr i8, ptr %record, i64 %offset
+      store i64 0, ptr %slot, align 8
+      %next = add i64 %offset, 8
+      %more = icmp ult i64 %next, 104
+      br i1 %more, label %clear, label %done
+    done:
+      ret void
+    }
+    define internal void @sollang_diagnostic_suspend(ptr %header, ptr %child, i32 %resume, ptr %module, i64 %module_length, ptr %symbol, i64 %symbol_length, i64 %byte, i64 %line, i64 %column, i64 %deadline) {
+    entry:
+      %record_slot = getelementptr i8, ptr %header, i64 8
+      %record = load ptr, ptr %record_slot, align 8
+      %tracked = icmp ne ptr %record, null
+      br i1 %tracked, label %child_test, label %done
+    child_test:
+      %has_child = icmp ne ptr %child, null
+      br i1 %has_child, label %child_id, label %write
+    child_id:
+      %id_slot = getelementptr i8, ptr %child, i64 16
+      %id = load i64, ptr %id_slot, align 8
+      br label %write
+    write:
+      %awaited = phi i64 [ 0, %child_test ], [ %id, %child_id ]
+      %field28 = getelementptr i8, ptr %record, i64 28
+      store i32 %resume, ptr %field28, align 4
+      %field32 = getelementptr i8, ptr %record, i64 32
+      store i64 %awaited, ptr %field32, align 8
+      %field40 = getelementptr i8, ptr %record, i64 40
+      store i64 %deadline, ptr %field40, align 8
+      %field48 = getelementptr i8, ptr %record, i64 48
+      store ptr %module, ptr %field48, align 8
+      %field56 = getelementptr i8, ptr %record, i64 56
+      store i64 %module_length, ptr %field56, align 8
+      %field64 = getelementptr i8, ptr %record, i64 64
+      store ptr %symbol, ptr %field64, align 8
+      %field72 = getelementptr i8, ptr %record, i64 72
+      store i64 %symbol_length, ptr %field72, align 8
+      %field80 = getelementptr i8, ptr %record, i64 80
+      store i64 %byte, ptr %field80, align 8
+      %field88 = getelementptr i8, ptr %record, i64 88
+      store i64 %line, ptr %field88, align 8
+      %field96 = getelementptr i8, ptr %record, i64 96
+      store i64 %column, ptr %field96, align 8
+      br label %done
+    done:
+      ret void
+    }
+    define internal void @sollang_diagnostic_release_header(ptr %header, i32 %terminal) {
+    entry:
+      call void @sollang_diagnostic_mark_terminal(ptr %header, i32 %terminal)
+      %record_slot = getelementptr i8, ptr %header, i64 8
+      %record = load ptr, ptr %record_slot, align 8
+      %has_record = icmp ne ptr %record, null
+      br i1 %has_record, label %freeze, label %detach
+    freeze:
+      %terminal_slot = getelementptr i8, ptr %record, i64 24
+      store i32 %terminal, ptr %terminal_slot, align 4
+      %control_slot = getelementptr i8, ptr %record, i64 16
+      store ptr null, ptr %control_slot, align 8
+      %header_slot = getelementptr i8, ptr %record, i64 104
+      store ptr null, ptr %header_slot, align 8
+      br label %detach
+    detach:
+      store ptr null, ptr %header, align 8
+      store ptr null, ptr %record_slot, align 8
+      ret void
+    }
+    define internal void @sollang_diagnostic_inherit(ptr %header, ptr %control, ptr %parent) {
+    entry:
+      %has_parent = icmp ne ptr %parent, null
+      br i1 %has_parent, label %read, label %done
+    read:
+      %session = load ptr, ptr %parent, align 8
+      %has_session = icmp ne ptr %session, null
+      br i1 %has_session, label %attach, label %done
+    attach:
+      %parent_id_slot = getelementptr i8, ptr %parent, i64 16
+      %parent_id = load i64, ptr %parent_id_slot, align 8
+      %child_parent_slot = getelementptr i8, ptr %header, i64 24
+      store i64 %parent_id, ptr %child_parent_slot, align 8
+      %ignored = call i32 @sollang_diagnostic_track(ptr %session, ptr %header, ptr %control)
+      br label %done
+    done:
+      ret void
+    }
+    define internal i32 @sollang_diagnostic_track(ptr %session, ptr %header, ptr %control) {
+    entry:
+      %existing = load ptr, ptr %header, align 8
+      %record_slot = getelementptr i8, ptr %header, i64 8
+      %untracked = icmp eq ptr %existing, null
+      br i1 %untracked, label %attach, label %already
+    already:
+      %same = icmp eq ptr %existing, %session
+      br i1 %same, label %same_session, label %cross
+    same_session:
+      %previous_record = load ptr, ptr %record_slot, align 8
+      %capacity_rejected = icmp eq ptr %previous_record, null
+      br i1 %capacity_rejected, label %capacity, label %duplicate
+    cross:
+      ret i32 1
+    duplicate:
+      ret i32 0
+    capacity:
+      ret i32 2
+    attach:
+      %capacity_slot = getelementptr i8, ptr %session, i64 8
+      %capacity_value = load i64, ptr %capacity_slot, align 8
+      %count_slot = getelementptr i8, ptr %session, i64 16
+      %count = load i64, ptr %count_slot, align 8
+      %available = icmp ult i64 %count, %capacity_value
+      br i1 %available, label %record, label %full
+    full:
+      store ptr %session, ptr %header, align 8
+      %untracked_slot = getelementptr i8, ptr %session, i64 24
+      %untracked_count = load i64, ptr %untracked_slot, align 8
+      %untracked_next = add i64 %untracked_count, 1
+      store i64 %untracked_next, ptr %untracked_slot, align 8
+      ret i32 2
+    record:
+      %records_slot = getelementptr i8, ptr %session, i64 32
+      %records = load ptr, ptr %records_slot, align 8
+      %offset = mul i64 %count, 112
+      %new_record = getelementptr i8, ptr %records, i64 %offset
+      br label %initialize
+    initialize:
+      %field = phi i64 [ 0, %record ], [ %next_field, %initialize ]
+      %field_slot = getelementptr i64, ptr %new_record, i64 %field
+      store i64 0, ptr %field_slot, align 8
+      %next_field = add i64 %field, 1
+      %more_fields = icmp ult i64 %next_field, 14
+      br i1 %more_fields, label %initialize, label %publish
+    publish:
+      %task_id = add i64 %count, 1
+      store i64 %task_id, ptr %new_record, align 8
+      %parent_slot = getelementptr i8, ptr %header, i64 24
+      %parent_id = load i64, ptr %parent_slot, align 8
+      %record_parent_slot = getelementptr i8, ptr %new_record, i64 8
+      store i64 %parent_id, ptr %record_parent_slot, align 8
+      %control_slot = getelementptr i8, ptr %new_record, i64 16
+      store ptr %control, ptr %control_slot, align 8
+      %terminal_slot = getelementptr i8, ptr %new_record, i64 24
+      store i32 -1, ptr %terminal_slot, align 4
+      %header_slot = getelementptr i8, ptr %new_record, i64 104
+      store ptr %header, ptr %header_slot, align 8
+      store ptr %session, ptr %header, align 8
+      store ptr %new_record, ptr %record_slot, align 8
+      %task_id_slot = getelementptr i8, ptr %header, i64 16
+      store i64 %task_id, ptr %task_id_slot, align 8
+      %next_count = add i64 %count, 1
+      store i64 %next_count, ptr %count_slot, align 8
+      ret i32 -1
+    }
+    """ -> println
+}
+
+# Diagnostic timer products use their own private header. Production-off timers
+# retain the compact result-only context and ordinary scheduler workers.
+public emitDiagnosticSleepRuntime: -> Unit uses Console {
+    """
+    define internal void @sollang_diagnostic_sleep_destroy(ptr %context) {
+    entry:
+      %header = getelementptr i8, ptr %context, i64 8
+      call void @sollang_diagnostic_release_header(ptr %header, i32 2)
+      call void @free(ptr %context)
+      ret void
+    }
+    define internal void @sollang_diagnostic_sleep_cancel(ptr %control) {
+    entry:
+      %context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0
+      %context = load ptr, ptr %context_slot, align 8
+      %header = getelementptr i8, ptr %context, i64 8
+      call void @sollang_diagnostic_release_header(ptr %header, i32 3)
+      call void @free(ptr %context)
+      ret void
+    }
+    define internal i1 @sollang_diagnostic_sleep_worker(ptr %control) {
+    entry:
+      %deadline_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 8
+      %deadline = load i64, ptr %deadline_slot, align 8
+      %now = call i64 @sollang_now_millis()
+      %ready = icmp sge i64 %now, %deadline
+      br i1 %ready, label %complete, label %pending
+    complete:
+      %context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0
+      %context = load ptr, ptr %context_slot, align 8
+      %header = getelementptr i8, ptr %context, i64 8
+      call void @sollang_diagnostic_release_header(ptr %header, i32 2)
+      ret i1 true
+    pending:
+      call void @sollang_timer_park(ptr %control, i64 %deadline)
+      ret i1 false
+    }
+    """ -> println
 }

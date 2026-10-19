@@ -1,0 +1,100 @@
+import sys.runtime as runtime
+import std.net.quic as quic
+
+# One Endpoint must queue connection A traffic while Listener accepts B, then
+# keep both accepted Connections usable after the Listener is closed.
+routeTwoConnections: -> Result<Bool, quic.QuicError> uses Network, Random, Clock, Console {
+    "quic-phase-00" -> runtime.eprintln
+    quic.generateIdentity()? => identity
+    "quic-phase-01" -> runtime.eprintln
+    identity -> certificate? => certificateA
+    "quic-phase-02" -> runtime.eprintln
+    identity -> certificate? => certificateB
+    "quic-phase-03" -> runtime.eprintln
+
+    quic.bind(quic.loopback(0))? => clientEndpointA!
+    "quic-phase-04" -> runtime.eprintln
+    quic.bind(quic.loopback(0))? => clientEndpointB!
+    "quic-phase-05" -> runtime.eprintln
+    quic.bind(quic.loopback(0))? => serverEndpoint!
+    "quic-phase-06" -> runtime.eprintln
+    serverEndpoint! -> listen(identity)? => listener!
+    "quic-phase-07" -> runtime.eprintln
+    quic.loopback(serverEndpoint! -> localPort) => serverAddress
+    "quic-phase-08" -> runtime.eprintln
+
+    clientEndpointA! -> connect(serverAddress, certificateA)? => clientConnectionA!
+    "quic-phase-09" -> runtime.eprintln
+    listener! -> accept(serverEndpoint!)? => serverConnectionA!
+    "quic-phase-10" -> runtime.eprintln
+    clientConnectionA! -> openBi(clientEndpointA!)? => clientStreamA!
+    "quic-phase-11" -> runtime.eprintln
+    clientStreamA! -> send(clientConnectionA!, clientEndpointA!, [65])? => sentA
+    "quic-phase-12" -> runtime.eprintln
+
+    clientEndpointB! -> connect(serverAddress, certificateB)? => clientConnectionB!
+    "quic-phase-13" -> runtime.eprintln
+    listener! -> accept(serverEndpoint!)? => serverConnectionB!
+    "quic-phase-14" -> runtime.eprintln
+    listener! -> close(serverEndpoint!)
+    "quic-phase-15" -> runtime.eprintln
+
+    serverConnectionA! -> acceptBi(serverEndpoint!)? => serverStreamA!
+    "quic-phase-16" -> runtime.eprintln
+    serverStreamA! -> receive(serverConnectionA!, serverEndpoint!, 8)? => receivedA
+    "quic-phase-17" -> runtime.eprintln
+
+    clientConnectionB! -> openBi(clientEndpointB!)? => clientStreamB!
+    "quic-phase-18" -> runtime.eprintln
+    clientStreamB! -> send(clientConnectionB!, clientEndpointB!, [66])? => sentB
+    "quic-phase-19" -> runtime.eprintln
+    serverConnectionB! -> acceptBi(serverEndpoint!)? => serverStreamB!
+    "quic-phase-20" -> runtime.eprintln
+    serverStreamB! -> receive(serverConnectionB!, serverEndpoint!, 8)? => receivedB
+    "quic-phase-21" -> runtime.eprintln
+
+    serverStreamA! -> send(serverConnectionA!, serverEndpoint!, [97])? => replySentA
+    "quic-phase-22" -> runtime.eprintln
+    serverStreamB! -> send(serverConnectionB!, serverEndpoint!, [98])? => replySentB
+    "quic-phase-23" -> runtime.eprintln
+    clientStreamA! -> receive(clientConnectionA!, clientEndpointA!, 8)? => replyA
+    "quic-phase-24" -> runtime.eprintln
+    clientStreamB! -> receive(clientConnectionB!, clientEndpointB!, 8)? => replyB
+    "quic-phase-25" -> runtime.eprintln
+
+    sentA == 1
+        and sentB == 1
+        and replySentA == 1
+        and replySentB == 1
+        and (receivedA -> len) == 1
+        and receivedA[0] == 65
+        and (receivedB -> len) == 1
+        and receivedB[0] == 66
+        and (replyA -> len) == 1
+        and replyA[0] == 97
+        and (replyB -> len) == 1
+        and replyB[0] == 98 => routed
+
+    clientConnectionA! -> close(clientEndpointA!, 0)?
+    "quic-phase-26" -> runtime.eprintln
+    clientConnectionB! -> close(clientEndpointB!, 0)?
+    "quic-phase-27" -> runtime.eprintln
+    serverConnectionA! -> close(serverEndpoint!, 0)?
+    "quic-phase-28" -> runtime.eprintln
+    serverConnectionB! -> close(serverEndpoint!, 0)?
+    "quic-phase-29" -> runtime.eprintln
+    clientEndpointA! -> close
+    "quic-phase-30" -> runtime.eprintln
+    clientEndpointB! -> close
+    "quic-phase-31" -> runtime.eprintln
+    serverEndpoint! -> close
+    "quic-phase-32" -> runtime.eprintln
+    Result<Bool, quic.QuicError>.Ok(routed)
+}
+
+main {
+    routeTwoConnections() -> when {
+        Ok(routed) { "quic-two-routes=$routed" -> println }
+        Err(error) { "quic-two-routes-error=$(error.code)" -> println }
+    }
+}
