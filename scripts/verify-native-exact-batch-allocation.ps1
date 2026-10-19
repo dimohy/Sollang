@@ -156,21 +156,32 @@ if ($measuredNineCaseShape.Parallelism -ne 6 -or
 }
 Assert-DynamicScheduleBudget -Allocation $measuredNineCaseShape -Jobs 9
 
-$realClosureAllocation = Get-NativeExactBatchAllocation `
-    -Fixture @(
+$realClosureFixtures = @(
         "1396-selfhost-binary-operand-topology",
         "1264-selfhost-late-numeric-payload-subject",
         "1393-selfhost-opaque-struct-diagnostics",
         "1222-selfhost-numeric-subject-when-binding",
-        "1379-selfhost-nested-control-implicit-return") `
-    -Jobs 5
+        "1379-selfhost-nested-control-implicit-return")
+$realExpectedRoot = Join-Path (Split-Path $PSScriptRoot -Parent) 'examples/regression/expected'
+$realSourceCounts = @{}
+foreach ($fixtureName in $realClosureFixtures) {
+    $manifest = Join-Path $realExpectedRoot "$fixtureName.sources.txt"
+    $realSourceCounts[$fixtureName] = if (Test-Path -LiteralPath $manifest) {
+        @(Get-Content -LiteralPath $manifest | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+    } else { 1 }
+}
+$realClosureAllocation = Get-NativeExactBatchAllocation -Fixture $realClosureFixtures -Jobs 5
+foreach ($item in $realClosureAllocation.Items) {
+    if ($item.EstimatedCost -ne $realSourceCounts[$item.Fixture]) {
+        throw "repository fixture cost differs from its source manifest: $($item.Fixture)"
+    }
+}
 if (($realClosureAllocation.Items.Fixture -join ",") -cne
     "1393-selfhost-opaque-struct-diagnostics,1222-selfhost-numeric-subject-when-binding,1264-selfhost-late-numeric-payload-subject,1396-selfhost-binary-operand-topology,1379-selfhost-nested-control-implicit-return" -or
-    ($realClosureAllocation.Items.EstimatedCost -join ",") -cne "96,42,42,42,1" -or
     $realClosureAllocation.Items[0].EstimatedSourceBytes -le $realClosureAllocation.Items[1].EstimatedSourceBytes -or
     $realClosureAllocation.Items[1].EstimatedSourceBytes -le $realClosureAllocation.Items[2].EstimatedSourceBytes -or
     $realClosureAllocation.Items[2].EstimatedSourceBytes -le $realClosureAllocation.Items[3].EstimatedSourceBytes) {
-    throw "authoritative 117-fixture plan costs did not prioritize its 96/42/42/42-source closures"
+    throw "repository fixture costs did not prioritize current source closures and source bytes"
 }
 Assert-DynamicScheduleBudget -Allocation $realClosureAllocation -Jobs 5
 

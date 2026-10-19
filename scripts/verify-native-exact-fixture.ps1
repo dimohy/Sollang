@@ -248,9 +248,7 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
     if (-not $compilerIsManagedDll) {
         $arguments += @("--stdlib", $stdlibPath)
     }
-    if (-not $compilerIsManagedDll) {
-        $arguments += @("--jobs", $jobText)
-    }
+    $arguments += @("--jobs", $jobText)
     $arguments += @("-O1", "--keep-temps")
     $build = Invoke-VerificationProcessCapture `
         -FilePath $windowsCompilerPath `
@@ -283,9 +281,7 @@ if (-not $reuseVerifiedArtifacts -and $Platform -eq "windows") {
     if (-not $compilerIsManagedDll) {
         $arguments += @("--stdlib", (Convert-ToExactFixtureWslPath $stdlibPath))
     }
-    if (-not $compilerIsManagedDll) {
-        $arguments += @("--jobs", $jobText)
-    }
+    $arguments += @("--jobs", $jobText)
     $arguments += @("-O1", "--keep-temps")
     $build = Invoke-VerificationProcessCapture `
         -FilePath "wsl.exe" `
