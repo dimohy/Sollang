@@ -274,7 +274,7 @@ $extraCase = $originalCase | ConvertTo-Json -Depth 15 | ConvertFrom-Json -AsHash
 $extraCase.id = 'extra-phase-witness'
 $extraCase.fixture = Get-NativeExactPhaseReference $gateRoot $extraSource
 $gateContract.cases += @($extraCase); Save-Json $gateContractPath $gateContract
-Assert-Rejected 'extra-positive-missing-oracle' { Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') $PSCommandPath } 'PHASE_EXECUTION_FILE_BOUNDARY'
+Assert-Rejected 'extra-positive-missing-oracle' { Get-NativeExactPhaseContext $gateRoot $gateContractPath managed (Join-Path $gateRoot 'm.bin') (Join-Path $gateRoot 'scripts/verify-native-exact-fixture-batch.ps1') } 'PHASE_EXECUTION_FILE_BOUNDARY: examples/regression/expected/extra-phase-witness.stdout.txt'
 [IO.File]::WriteAllText($extraExpected, "extra-output`n")
 $extraDependency = Join-Path $gateRoot 'extra-dependency.slg'
 [IO.File]::WriteAllText($extraDependency, 'extra-dependency')
