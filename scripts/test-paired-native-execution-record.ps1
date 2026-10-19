@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$OutputDirectory)
+param([Parameter(Mandatory)][string]$OutputDirectory, [string]$PreviousWrapper = '')
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -12,6 +12,7 @@ if (-not $output.StartsWith((Join-Path $root 'artifacts') + [IO.Path]::Directory
 $wrapper = Join-Path $PSScriptRoot 'verify-compiler-paired-native-fixtures.ps1'
 $helper = Join-Path $PSScriptRoot 'verification-process.ps1'
 $paths = @($PSCommandPath, $wrapper, $helper)
+if ($PreviousWrapper) { $paths += (Resolve-Path -LiteralPath $PreviousWrapper).Path }
 $before = [ordered]@{}
 foreach ($path in $paths) { $before[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 $tokens = $null
@@ -28,7 +29,68 @@ if ($functions.Count -ne 1) { throw 'PAIRED_EXECUTION_WRAPPER_FUNCTION_NOT_UNIQU
 $shellPath = (Get-Process -Id $PID).Path
 $rows = [Collections.Generic.List[object]]::new()
 $failure = $null
+$expectedControls = 9 + [int]([bool]$PreviousWrapper)
 try {
+    $finalizationSource = {
+        param($wrapperAst)
+        $mainTry = @($wrapperAst.EndBlock.Statements | Where-Object {
+            $_ -is [Management.Automation.Language.TryStatementAst]
+        })[-1]
+        (@($wrapperAst.EndBlock.Statements | Where-Object {
+            $_.Extent.StartOffset -ge $mainTry.Extent.EndOffset
+        }) | ForEach-Object { $_.Extent.Text }) -join "`n"
+    }
+    $checkOwnership = {
+        param($tail, $controlRoot, $activeSeed)
+        $output = Join-Path $controlRoot 'owned'
+        $seedOutput = Join-Path $controlRoot 'shared-seed'
+        [IO.Directory]::CreateDirectory($output) | Out-Null
+        [IO.Directory]::CreateDirectory($seedOutput) | Out-Null
+        $seedFile = Join-Path $seedOutput 'product.bin'
+        [IO.File]::WriteAllText($seedFile, 'pending-consumer-product')
+        $seedHash = (Get-FileHash -LiteralPath $seedFile -Algorithm SHA256).Hash
+        $requests = [Collections.Generic.List[string]]::new()
+        $failure = $null
+        $ownsSeed = $true
+        $usesPrivateSeed = $true
+        $ReusableCompilerDirectories = @($seedOutput)
+        $cases = @('fixture')
+        function Write-Host { }
+        function Complete-VerifiedArtifactOutput {
+            param([string]$OutputDirectory, [switch]$KeepCompiler, [string[]]$ReusableCompilerDirectories)
+            if ($OutputDirectory -cne $output) { throw 'PAIRED_UNOWNED_COMPILER_CLEANUP' }
+            $requests.Add($OutputDirectory)
+        }
+        $reader = if ($activeSeed) {
+            [IO.File]::Open($seedFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        } else { $null }
+        try { & ([ScriptBlock]::Create($tail)) }
+        finally { if ($null -ne $reader) { $reader.Dispose() } }
+        if ($requests.Count -ne 1 -or
+            (Get-FileHash -LiteralPath $seedFile -Algorithm SHA256).Hash -cne $seedHash) {
+            throw 'PAIRED_ARTIFACT_OWNERSHIP_VIOLATION'
+        }
+    }
+    $tail = & $finalizationSource $ast
+    foreach ($activeSeed in @($false, $true)) {
+        & $checkOwnership $tail (Join-Path $output "ownership-$activeSeed") $activeSeed
+    }
+    $rows.Add([ordered]@{ id = 'consumer-cleans-owned-output-only'; passed = $true; controls = 2 })
+    if ($PreviousWrapper) {
+        $previousTokens = $null
+        $previousErrors = $null
+        $previousAst = [Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path -LiteralPath $PreviousWrapper).Path, [ref]$previousTokens, [ref]$previousErrors)
+        if ($previousErrors.Count -ne 0) { throw 'PAIRED_PREVIOUS_WRAPPER_PARSE_FAILED' }
+        $previousFailure = $null
+        try {
+            & $checkOwnership (& $finalizationSource $previousAst) (Join-Path $output 'previous-ownership') $true
+        } catch { $previousFailure = $_.Exception.Message }
+        if ($previousFailure -cne 'PAIRED_UNOWNED_COMPILER_CLEANUP') {
+            throw 'PAIRED_PREVIOUS_OWNERSHIP_FAILURE_NOT_REPRODUCED'
+        }
+        $rows.Add([ordered]@{ id = 'previous-shared-seed-cleanup-rejected'; passed = $true })
+    }
     $countExpressions = [regex]::Matches([IO.File]::ReadAllText($wrapper), '(?m)^\s*completed = (.+)\r?$')
     if ($countExpressions.Count -ne 1) { throw 'PAIRED_COMPLETION_EXPRESSION_NOT_UNIQUE' }
     $countCompleted = [ScriptBlock]::Create('param($rows) ' + $countExpressions[0].Groups[1].Value)
@@ -127,8 +189,8 @@ finally {
     $after = [ordered]@{}
     foreach ($path in $paths) { $after[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     $stable = @($paths | Where-Object { $before[$_] -cne $after[$_] }).Count -eq 0
-    $result = [ordered]@{ schemaVersion = 1; status = if (-not $failure -and $stable -and $rows.Count -eq 8) { 'passed' } else { 'failed' }
-        completed = $rows.Count; total = 8; inputsStable = $stable; inputHashesStart = $before; inputHashesEnd = $after
+    $result = [ordered]@{ schemaVersion = 1; status = if (-not $failure -and $stable -and $rows.Count -eq $expectedControls) { 'passed' } else { 'failed' }
+        completed = $rows.Count; total = $expectedControls; inputsStable = $stable; inputHashesStart = $before; inputHashesEnd = $after
         cases = @($rows.ToArray()); failure = $failure
         limitations = @('stdout/stderr logs are persisted after child termination, not streamed live.',
             'CPU telemetry remains console output; this test does not prove durable CPU diagnostics.',

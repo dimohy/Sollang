@@ -258,6 +258,27 @@ class ArtifactLifecycleTests(unittest.TestCase):
         contract.write_text(json.dumps({'cases': [{'id': 'negative', 'expectedExit': 0}]}))
         self.assertFalse(policy.completed(record))
 
+    def test_probe_matrix_exit_requires_literal_pinned_authority(self):
+        contract = self.repo / 'probe-matrix.json'
+        contract.write_text(json.dumps({'probeMatrix': [
+            {'id': 'rejected', 'expectation': 'compiler-rejected', 'expectedBuildExit': 1}]}))
+        record = {'status': 'passed', 'inputsStable': True, 'completed': 1, 'total': 1,
+                  'inputHashes': {str(contract): hashlib.sha256(contract.read_bytes()).hexdigest()},
+                  'cases': [{'id': 'rejected', 'status': 'passed', 'compileExit': 1}]}
+        self.assertTrue(policy.completed(record))
+        for actual in (0, 2):
+            wrong = copy.deepcopy(record)
+            wrong['cases'][0]['compileExit'] = actual
+            self.assertFalse(policy.completed(wrong))
+        unpinned = copy.deepcopy(record)
+        unpinned['inputHashes'] = {}
+        self.assertFalse(policy.completed(unpinned))
+        contract.write_text(json.dumps({'probeMatrix': [
+            {'id': 'rejected', 'expectation': 'compiler-rejected'}]}))
+        self.assertFalse(policy.completed(record))
+        record['inputHashes'][str(contract)] = hashlib.sha256(contract.read_bytes()).hexdigest()
+        self.assertFalse(policy.completed(record))
+
     def test_expected_runtime_exit_requires_pinned_exact_outcome_and_shutdown(self):
         contract = self.repo / 'runtime-trap.json'
         contract.write_text(json.dumps({'cases': [{'id': 'trap', 'expectedRuntimeExit': -1073741795}]}))

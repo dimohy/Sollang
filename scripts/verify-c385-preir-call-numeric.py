@@ -598,6 +598,10 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                                 ("call ptr @realloc(", "call ptr @audit_realloc("),
                                 ("call void @free(", "call void @audit_free("),
                                 ("call void @sollang_free(", "call void @audit_free("),
+                                ("ptr @free,", "ptr @audit_free,"),
+                                ("ptr @free)", "ptr @audit_free)"),
+                                ("ptr @sollang_free,", "ptr @audit_free,"),
+                                ("ptr @sollang_free)", "ptr @audit_free)"),
                                 ("@sollang_start()", "@slg_program_main()"),
                                 ("define i32 @main()", "define i32 @slg_program_main()"),
                                 ("define dso_local i32 @main()", "define dso_local i32 @slg_program_main()")):

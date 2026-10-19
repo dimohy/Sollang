@@ -5,7 +5,7 @@
   "required": ["$schema", "schemaVersion", "capabilityId", "implementationStatus", "module", "authority", "activation", "identity", "snapshot", "stateModel", "bounds", "close", "productionOffGate", "focusedInitialGate", "publicSurface", "forbidden", "probeMatrix", "denominators"],
   "properties": {
     "$schema": { "const": "async-task-observability.schema.json" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "capabilityId": { "const": "async-task-observability" },
     "implementationStatus": { "const": "contract-frozen" },
     "module": { "const": "std.async.diagnostics" },
@@ -55,9 +55,11 @@
     "close": { "$ref": "#/$defs/stringMap" },
     "productionOffGate": {
       "type": "object", "additionalProperties": false,
-      "required": ["fixture", "taskControlBytes", "allocationCount", "releaseCount", "invalidReleaseCount", "required"],
+      "required": ["fixture", "taskControlBytes", "taskControlStructBytes", "taskControlLlvmType", "allocationCount", "releaseCount", "invalidReleaseCount", "required"],
       "properties": {
-        "fixture": { "type": "string", "minLength": 1 }, "taskControlBytes": { "const": 152 },
+        "fixture": { "type": "string", "minLength": 1 }, "taskControlBytes": { "const": 168 },
+        "taskControlStructBytes": { "const": 160 },
+        "taskControlLlvmType": { "type": "string", "pattern": "^%sollang\\.task_control = type \\{ (?:ptr|i32|i64)(?:, (?:ptr|i32|i64))* \\}$" },
         "allocationCount": { "const": 2 }, "releaseCount": { "const": 2 }, "invalidReleaseCount": { "const": 0 },
         "required": { "type": "array", "minItems": 4, "maxItems": 4, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
       }
@@ -108,15 +110,17 @@
       "type": "array", "minItems": 13, "maxItems": 13,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["id", "class", "source", "expectation", "managed", "selfhost", "platforms"],
+        "required": ["id", "class", "source", "expectation", "expectedBuildExit", "managed", "selfhost", "platforms"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
           "class": { "enum": ["normal", "boundary", "authority-negative", "production-off"] },
           "source": { "type": "string", "pattern": "^scripts/probes/async-task-observability/.+\\.slg$" },
           "expectation": { "enum": ["exact-stdout", "compiler-rejected", "exact-stdout-and-allocation-audit"] },
+          "expectedBuildExit": { "enum": [0, 1] },
           "managed": { "const": true }, "selfhost": { "const": true },
           "platforms": { "type": "array", "uniqueItems": true, "items": { "enum": ["windows-x64", "linux-x64", "wasm32-browser"] } }
-        }
+        },
+        "allOf": [{ "if": { "properties": { "expectation": { "const": "compiler-rejected" } } }, "then": { "properties": { "expectedBuildExit": { "const": 1 } } }, "else": { "properties": { "expectedBuildExit": { "const": 0 } } } }]
       }
     },
     "denominators": {

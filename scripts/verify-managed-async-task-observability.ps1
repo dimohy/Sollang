@@ -155,8 +155,8 @@ try {
             $record.rootProcessIds += $compile.RootProcessId
             $record.descendantProcessIds += @($compile.DescendantProcessIds)
             $record.orphanProcessIds += @($compile.OrphanProcessIds)
-            $ll = Get-ChildItem $caseDirectory -Recurse -Filter '*.ll' | Where-Object FullName -Like '*slg-tmp*' | Select-Object -First 1 -ExpandProperty FullName
-            if ($compile.ExitCode -ne 0 -or -not $ll) { throw "$($case.id) compile failed" }
+            $ll = $exe + '.ll'
+            if ($compile.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $ll -PathType Leaf)) { throw "$($case.id) compile failed or emitted no LLVM" }
             $diagnostics = [Text.Encoding]::UTF8.GetString($compile.StdoutBytes + $compile.StderrBytes)
             $warningCount = [regex]::Matches($diagnostics, '(?im)\bwarning\b').Count
             $noteCount = [regex]::Matches($diagnostics, '(?im)\bnote\b').Count
@@ -210,8 +210,9 @@ try {
             if ($case.id -ceq 'production-off-zero-overhead') {
                 $failureId = 'ASYNC_TASK_OBSERVABILITY_PRODUCTION_OFF_AUDIT_FAILED'
                 $llvmText = [IO.File]::ReadAllText($ll)
-                $layout = '%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }'
-                $taskControlBytes = if ($llvmText.Contains($layout, [StringComparison]::Ordinal)) { 152 } else { 0 }
+                $layout = [string]$contract.productionOffGate.taskControlLlvmType
+                $reservation = [regex]::Match($llvmText, '%control = call ptr @sollang_alloc\(i64 ([0-9]+)\)')
+                $taskControlBytes = if ($llvmText.Contains($layout, [StringComparison]::Ordinal) -and $reservation.Success) { [int]$reservation.Groups[1].Value } else { 0 }
                 $diagnosticSymbols = [regex]::Matches($llvmText, '(?i)sollang_diagnostic_|diagnostic_session|diagnostic_header').Count
                 if ($taskControlBytes -ne $contract.productionOffGate.taskControlBytes -or $diagnosticSymbols -ne 0) { throw 'production-off ABI or zero-symbol invariant failed' }
                 $auditText = $llvmText.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(').Replace('ptr @sollang_free', 'ptr @audit_free').Replace('@sollang_start()', '@slg_program_main()')
@@ -261,6 +262,10 @@ try {
     }
 }
 
+if (-not $ValidateInputsOnly -and $record.status -ne 'passed') {
+    [IO.File]::WriteAllText($resultPath, (($record | ConvertTo-Json -Depth 16) + "`n"), [Text.UTF8Encoding]::new($false))
+    throw $record.failure
+}
 if ($ValidateInputsOnly) {
     $record.status = 'passed'; $record.completed = 4
     foreach ($case in $cases) {
@@ -271,7 +276,7 @@ if ($ValidateInputsOnly) {
             id=$case.id; sourceSha256=Hash $paths["source:$($case.id)"]; expectedSha256=Hash $paths["expected:$($case.id)"]
             compileExit=0; warningCount=0; noteCount=0; nativeExit=0; nativeExact=$true
             llvmSha256=('A' * 64); bitcodeSha256=('B' * 64); llvmAsExit=0; v004Exit=0; passed=$true; artifacts=$fakeArtifacts
-            taskControlBytes=if($case.id -ceq 'production-off-zero-overhead'){152}else{$null}
+            taskControlBytes=if($case.id -ceq 'production-off-zero-overhead'){$contract.productionOffGate.taskControlBytes}else{$null}
             diagnosticSymbolCount=if($case.id -ceq 'production-off-zero-overhead'){0}else{$null}
             allocationCount=if($case.id -ceq 'production-off-zero-overhead'){2}else{$null}
             releaseCount=if($case.id -ceq 'production-off-zero-overhead'){2}else{$null}

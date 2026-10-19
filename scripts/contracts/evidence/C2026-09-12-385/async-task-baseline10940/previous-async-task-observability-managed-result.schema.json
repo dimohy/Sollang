@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "scope", "compilerPath", "expectedCompilerSha256", "compilerSha256Start", "compilerSha256End", "compilerDrift", "inputHashesStart", "inputHashesEnd", "inputDrift", "completed", "total", "cases", "failureIds", "rootProcessIds", "descendantProcessIds", "orphanProcessIds", "schemaControls"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "status": { "enum": ["passed", "failed"] },
+    "scope": { "const": "async-task-observability-managed-initial" },
+    "compilerPath": { "type": "string", "minLength": 1 },
+    "expectedCompilerSha256": { "$ref": "#/$defs/hash" },
+    "compilerSha256Start": { "$ref": "#/$defs/hash" },
+    "compilerSha256End": { "$ref": "#/$defs/hash" },
+    "compilerDrift": { "type": "boolean" },
+    "inputHashesStart": { "$ref": "#/$defs/hashMap" },
+    "inputHashesEnd": { "$ref": "#/$defs/hashMap" },
+    "inputDrift": { "type": "boolean" },
+    "completed": { "type": "integer", "minimum": 0, "maximum": 4 },
+    "total": { "const": 4 },
+    "cases": {
+      "type": "array", "minItems": 0, "maxItems": 4,
+      "items": { "$ref": "#/$defs/case" }
+    },
+    "failureIds": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Z0-9_]+$" } },
+    "rootProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "descendantProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+    "orphanProcessIds": { "type": "array", "maxItems": 0 },
+    "schemaControls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["positiveAccepted", "negativeRejected", "negativeTotal"],
+      "properties": { "positiveAccepted": { "const": true }, "negativeRejected": { "const": 5 }, "negativeTotal": { "const": 5 } }
+    },
+    "failure": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+    "hashMap": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/hash" } },
+    "artifact": {
+      "type": "object", "additionalProperties": false,
+      "required": ["exit", "rootProcessId", "descendantProcessIds", "orphanProcessIds", "stdoutSha256", "stderrSha256", "stdoutBytes", "stderrBytes"],
+      "properties": {
+        "exit": { "const": 0 }, "rootProcessId": { "type": "integer", "minimum": 1 },
+        "descendantProcessIds": { "type": "array", "uniqueItems": true, "items": { "type": "integer", "minimum": 1 } },
+        "orphanProcessIds": { "type": "array", "maxItems": 0 },
+        "stdoutSha256": { "$ref": "#/$defs/hash" }, "stderrSha256": { "$ref": "#/$defs/hash" },
+        "stdoutBytes": { "type": "integer", "minimum": 0 }, "stderrBytes": { "const": 0 }
+      }
+    },
+    "artifacts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["compile", "native", "llvmAs", "v004"],
+      "properties": {
+        "compile": { "$ref": "#/$defs/artifact" }, "native": { "$ref": "#/$defs/artifact" },
+        "llvmAs": { "$ref": "#/$defs/artifact" }, "v004": { "$ref": "#/$defs/artifact" },
+        "auditLink": { "$ref": "#/$defs/artifact" }, "audit": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "locatorPoint": {
+      "type": "object", "additionalProperties": false, "required": ["utf8ByteOffset", "line", "column"],
+      "properties": { "utf8ByteOffset": { "type": "integer", "minimum": 1 }, "line": { "type": "integer", "minimum": 1 }, "column": { "type": "integer", "minimum": 1 } }
+    },
+    "locator": {
+      "type": "object", "additionalProperties": false, "required": ["sleep", "await"],
+      "properties": {
+        "sleep": { "allOf": [{ "$ref": "#/$defs/locatorPoint" }, { "properties": { "utf8ByteOffset": { "const": 2888 }, "line": { "const": 78 }, "column": { "const": 30 } } }] },
+        "await": { "allOf": [{ "$ref": "#/$defs/locatorPoint" }, { "properties": { "utf8ByteOffset": { "const": 2897 }, "line": { "const": 78 }, "column": { "const": 39 } } }] }
+      }
+    },
+    "case": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "sourceSha256", "expectedSha256", "compileExit", "warningCount", "noteCount", "nativeExit", "nativeExact", "llvmSha256", "bitcodeSha256", "llvmAsExit", "v004Exit", "passed", "artifacts", "taskControlBytes", "diagnosticSymbolCount", "allocationCount", "releaseCount", "invalidReleaseCount", "locator"],
+      "properties": {
+        "id": { "enum": ["normal-parent-child-states", "normal-stable-id-transitions", "normal-suspension-locator", "production-off-zero-overhead"] },
+        "sourceSha256": { "$ref": "#/$defs/hash" }, "expectedSha256": { "$ref": "#/$defs/hash" },
+        "compileExit": { "const": 0 }, "warningCount": { "const": 0 }, "noteCount": { "const": 0 },
+        "nativeExit": { "const": 0 }, "nativeExact": { "const": true }, "llvmSha256": { "$ref": "#/$defs/hash" }, "bitcodeSha256": { "$ref": "#/$defs/hash" },
+        "llvmAsExit": { "const": 0 }, "v004Exit": { "const": 0 }, "passed": { "const": true }, "artifacts": { "$ref": "#/$defs/artifacts" },
+        "taskControlBytes": { "type": ["integer", "null"] }, "diagnosticSymbolCount": { "type": ["integer", "null"] },
+        "allocationCount": { "type": ["integer", "null"] }, "releaseCount": { "type": ["integer", "null"] }, "invalidReleaseCount": { "type": ["integer", "null"] },
+        "locator": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/locator" }] }
+      },
+      "allOf": [
+        { "if": { "properties": { "id": { "const": "normal-suspension-locator" } }, "required": ["id"] }, "then": { "properties": { "locator": { "$ref": "#/$defs/locator" } } }, "else": { "properties": { "locator": { "type": "null" } } } },
+        { "if": { "properties": { "id": { "const": "production-off-zero-overhead" } }, "required": ["id"] },
+          "then": { "properties": { "taskControlBytes": { "const": 152 }, "diagnosticSymbolCount": { "const": 0 }, "allocationCount": { "const": 2 }, "releaseCount": { "const": 2 }, "invalidReleaseCount": { "const": 0 }, "artifacts": { "required": ["compile", "native", "llvmAs", "v004", "auditLink", "audit"] } } },
+          "else": { "properties": { "taskControlBytes": { "type": "null" }, "diagnosticSymbolCount": { "type": "null" }, "allocationCount": { "type": "null" }, "releaseCount": { "type": "null" }, "invalidReleaseCount": { "type": "null" } } }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "passed" } }, "required": ["status"] }, "then": { "properties": {
+      "completed": { "const": 4 }, "failureIds": { "maxItems": 0 }, "compilerDrift": { "const": false }, "inputDrift": { "const": false }, "expectedCompilerSha256": { "$ref": "#/$defs/hash" },
+      "cases": { "minItems": 4, "maxItems": 4, "allOf": [
+        { "contains": { "properties": { "id": { "const": "normal-parent-child-states" } }, "required": ["id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "id": { "const": "normal-stable-id-transitions" } }, "required": ["id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "id": { "const": "normal-suspension-locator" } }, "required": ["id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "id": { "const": "production-off-zero-overhead" } }, "required": ["id"] }, "minContains": 1, "maxContains": 1 }
+      ] }
+    } } },
+    { "if": { "properties": { "status": { "const": "failed" } }, "required": ["status"] }, "then": { "required": ["failure"], "properties": { "failureIds": { "minItems": 1 } } } }
+  ]
+}

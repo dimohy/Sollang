@@ -27,9 +27,9 @@ $sourceClosure = Join-Path $PSScriptRoot 'verify-source-manifest-closure.ps1'
 $stdlib = Join-Path $root 'stdlib'
 $output = [IO.Path]::GetFullPath($OutputDirectory, $root)
 $seedOutput = [IO.Path]::GetDirectoryName($selfhost)
-$ownsSeed = $seedOutput.StartsWith((Join-Path $root 'artifacts/scratch') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
+$usesPrivateSeed = $seedOutput.StartsWith((Join-Path $root 'artifacts/scratch') + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and
     (Test-Path -LiteralPath (Join-Path $seedOutput 'result.json'))
-if ($ownsSeed) {
+if ($usesPrivateSeed) {
     $ReusableCompilerDirectories = @($ReusableCompilerDirectories | ForEach-Object {
         (Resolve-Path -LiteralPath $_).Path
     } | Select-Object -Unique)
@@ -279,7 +279,6 @@ try {
 }
 if ($null -ne $failure) { throw "$failure result=$(Join-Path $output 'result.json')" }
 Complete-VerifiedArtifactOutput -OutputDirectory $output -ReusableCompilerDirectories $ReusableCompilerDirectories
-if ($ownsSeed) {
-    Complete-VerifiedArtifactOutput -OutputDirectory $seedOutput -KeepCompiler -ReusableCompilerDirectories $ReusableCompilerDirectories
-}
+# The caller owns the shared compiler's lifecycle and any other pending consumers.
+# This consumer closes only the fixture output it created.
 Write-Host "[compiler paired native] PASS $($cases.Count)/$($cases.Count); result=$(Join-Path $output 'result.json')"

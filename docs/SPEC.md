@@ -1539,6 +1539,15 @@ structs, enums, and boxes cross into an async worker only through a `move` input
 the task becomes their sole owner. Mutable borrows and borrowed views are rejected
 because the caller could otherwise access the same storage while the worker runs.
 
+The ordinary task-control record also stores the result address and completion
+callback needed when a task's originating worker is no longer statically known.
+On the native x64 targets its LLVM record occupies 160 bytes and the runtime
+reserves 168 bytes for that control allocation. These are separate bounds.
+Diagnostic tracking uses the same ordinary control layout; disabling diagnostics
+emits no diagnostic session storage, calls, or allocations. The exact baseline
+layout, reservation, and allocation audit are retained in
+`scripts/contracts/async-task-observability.json`.
+
 A Task owns its control and context even when its result is `Unit` or another
 scalar. The compiler-owned `DiagnosticSession.track<T>` intrinsic requires
 `T` to be a Task, consumes that exact owner, and returns the same Task type in

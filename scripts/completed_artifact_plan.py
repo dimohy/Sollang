@@ -214,7 +214,7 @@ def expected_build_exit(record: dict, row: dict, *, default: int | None = 0) -> 
             continue
         if not isinstance(contract, dict):
             continue
-        for case in contract.get('cases', []):
+        for case in [*contract.get('cases', []), *contract.get('probeMatrix', [])]:
             if isinstance(case, dict) and case.get('id') == row.get('id'):
                 for key in ('exit', 'expected_exit', 'expectedBuildExit', 'expectedExit'):
                     if type(case.get(key)) is int:

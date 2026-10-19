@@ -124,6 +124,10 @@ function Add-ProcessEvidence($Capture, [hashtable]$Item) {
 }
 
 if ($cases.Count -ne 13 -or @($cases.id | Sort-Object -Unique).Count -ne 13) { throw 'managed observability matrix identity drifted' }
+foreach ($case in $cases) {
+    $expectedExit = if ($case.expectation -ceq 'compiler-rejected') { 1 } else { 0 }
+    if ($case.expectedBuildExit -ne $expectedExit) { throw "managed observability exit contract mismatch: $($case.id)" }
+}
 $paths = @{ compiler=$Compiler; contract=$contractPath; schema=$schemaPath; verifier=$PSCommandPath; closure=$closurePath; auditShim=$auditShim; llvmAs=$llvmAs; clang=$clang }
 foreach ($case in $cases) {
     $paths["source:$($case.id)"] = Join-Path $root $case.source
@@ -169,7 +173,7 @@ try {
             if ($case.expectation -ceq 'compiler-rejected') {
                 $failureId = ('ASYNC_TASK_OBSERVABILITY_' + $case.id.Replace('-', '_').ToUpperInvariant() + '_REJECTION_FAILED')
                 $item.diagnosticMatched = $diagnosticById.ContainsKey($case.id) -and $diagnostics.Contains($diagnosticById[$case.id], [StringComparison]::Ordinal)
-                if ($compile.ExitCode -eq 0 -or -not $item.diagnosticMatched -or (Test-Path -LiteralPath $nativePath)) { throw "$($case.id) did not fail closed with its actionable diagnostic" }
+                if ($compile.ExitCode -ne $case.expectedBuildExit -or -not $item.diagnosticMatched -or (Test-Path -LiteralPath $nativePath)) { throw "$($case.id) did not fail closed with its actionable diagnostic" }
             } else {
                 $failureId = ('ASYNC_TASK_OBSERVABILITY_' + $case.id.Replace('-', '_').ToUpperInvariant() + '_EXECUTION_FAILED')
                 if ($compile.ExitCode -ne 0 -or $compile.StderrBytes.Length -ne 0 -or $item.warningCount -ne 0 -or $item.noteCount -ne 0) { throw "$($case.id) compile failed or emitted diagnostics" }
@@ -195,8 +199,11 @@ try {
                 if ($assembled.ExitCode -ne 0 -or $assembled.StdoutBytes.Length -ne 0 -or $assembled.StderrBytes.Length -ne 0 -or $closed.ExitCode -ne 0 -or $closed.StderrBytes.Length -ne 0) { throw "$($case.id) LLVM verification failed" }
                 if ($case.id -ceq 'production-off-zero-overhead') {
                     $llvmText = [IO.File]::ReadAllText($ll)
-                    $layout = '%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }'
-                    if (-not $llvmText.Contains($layout, [StringComparison]::Ordinal) -or [regex]::Matches($llvmText, '(?i)sollang_diagnostic_|diagnostic_session|diagnostic_header').Count -ne 0) { throw 'production-off layout or symbol parity failed' }
+                    $layout = [string]$contract.productionOffGate.taskControlLlvmType
+                    $reservation = "%control = call ptr @sollang_alloc(i64 $($contract.productionOffGate.taskControlBytes))"
+                    if (-not $llvmText.Contains($layout, [StringComparison]::Ordinal) -or
+                        -not $llvmText.Contains($reservation, [StringComparison]::Ordinal) -or
+                        [regex]::Matches($llvmText, '(?i)sollang_diagnostic_|diagnostic_session|diagnostic_header').Count -ne 0) { throw 'production-off layout or symbol parity failed' }
                     $auditText = $llvmText.Replace('call ptr @sollang_alloc(', 'call ptr @audit_malloc(').Replace('call void @sollang_free(', 'call void @audit_free(').Replace('ptr @sollang_free', 'ptr @audit_free').Replace('@sollang_start()', '@slg_program_main()')
                     $auditText += "`ndeclare ptr @audit_malloc(i64)`ndeclare void @audit_free(ptr)`n"
                     $auditLl = Join-Path $caseDirectory 'probe.audit.ll'

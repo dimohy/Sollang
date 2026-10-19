@@ -177,8 +177,18 @@ try {
         Assert-Contains $spec $needle 'structured async authority'
     }
     foreach ($text in @($managedLayout, $selfhostLayout)) {
-        Assert-Contains $text '%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }' 'task-control layout authority'
+        Assert-Contains $text $contract.productionOffGate.taskControlLlvmType 'task-control layout authority'
     }
+    $fieldText = [regex]::Match($contract.productionOffGate.taskControlLlvmType, '\{ ([^}]+) \}').Groups[1].Value
+    $recordBytes = 0
+    foreach ($field in ($fieldText -split ', ')) {
+        $bytes = switch ($field) { 'ptr' { 8 } 'i64' { 8 } 'i32' { 4 } default { throw 'unsupported task-control field' } }
+        $recordBytes = [int]([Math]::Ceiling($recordBytes / $bytes) * $bytes + $bytes)
+    }
+    $recordBytes = [int]([Math]::Ceiling($recordBytes / 8) * 8)
+    if ($recordBytes -ne $contract.productionOffGate.taskControlStructBytes) { throw 'task-control record size differs from declared fields' }
+    Assert-Contains (Read-Text (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs')) "%control = call ptr @sollang_alloc(i64 $($contract.productionOffGate.taskControlBytes))" 'managed task-control reservation'
+    Assert-Contains $selfhostRuntime "%control = call ptr @malloc(i64 $($contract.productionOffGate.taskControlBytes))" 'selfhost task-control reservation'
     foreach ($text in @($managedAsync, $selfhostRuntime)) {
         foreach ($needle in @('getelementptr %sollang.task_control, ptr %control, i32 0, i32 5', 'sollang_task_cancel')) {
             Assert-Contains $text $needle 'async state/cancel authority'
@@ -335,7 +345,8 @@ try {
     }
     Complete 'fixed-matrix-denominators'
 
-    if ($contract.productionOffGate.taskControlBytes -ne 152 -or
+    if ($contract.productionOffGate.taskControlBytes -ne 168 -or
+        $contract.productionOffGate.taskControlStructBytes -ne 160 -or
         $contract.productionOffGate.allocationCount -ne 2 -or
         $contract.productionOffGate.releaseCount -ne 2 -or
         $contract.productionOffGate.invalidReleaseCount -ne 0 -or
