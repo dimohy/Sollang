@@ -3,10 +3,10 @@
 Artifact selection and cleanup remain exclusively in completed_artifact_plan.
 """
 import hashlib
-import json
 import os
 from pathlib import Path
 import subprocess
+from verification_json_records import write_json_atomic
 
 from completed_artifact_plan import cleanup_output, initialize_output, assert_output_shutdown, GENERATED
 
@@ -16,7 +16,8 @@ def sha(path):
 
 
 def lifecycle_inputs(root):
-    return [Path(__file__).resolve(), root / "scripts/completed_artifact_plan.py",
+    return [Path(__file__).resolve(), root / "scripts/verification_json_records.py",
+            root / "scripts/completed_artifact_plan.py",
             root / "scripts/ArtifactLifecycle.ps1", root / "scripts/Invoke-CompletedArtifactCleanup.ps1",
             root / "scripts/contracts/artifact-lifecycle.json"]
 
@@ -37,9 +38,7 @@ class VerificationOutput:
         self.save()
 
     def save(self):
-        temporary = self.output / "result.json.tmp"
-        temporary.write_text(json.dumps(self.result, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(self.output / "result.json")
+        write_json_atomic(self.output / "result.json", self.result)
 
     def stable(self):
         return self.hashes == {str(path): sha(path) if path.is_file() else "MISSING" for path in self.inputs}

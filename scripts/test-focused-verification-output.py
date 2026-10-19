@@ -1,8 +1,10 @@
 """Exercise focused output supervision without deleting live verification products."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -41,6 +43,35 @@ class FocusedOutputTests(unittest.TestCase):
                 self.assertEqual(0, code)
                 self.record['cases'][0].update(status='passed', passed=True)
             self.assertEqual(1, call.call_count)
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows delete-sharing contract')
+    def test_brief_progress_reader_lock_does_not_repeat_verification(self):
+        import ctypes
+        from ctypes import wintypes
+        api = ctypes.WinDLL('kernel32', use_last_error=True)
+        api.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                   wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        api.CreateFileW.restype = wintypes.HANDLE
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        with patch('focused_verification_output.cleanup_output'):
+            with self.session() as execution:
+                code = execution.run([sys.executable, '-c', 'print("once")'],
+                                     self.output/'stdout.log', self.output/'stderr.log')
+                self.assertEqual(0, code)
+                self.record['cases'][0].update(status='passed', passed=True)
+                handle = api.CreateFileW(str(self.output/'result.json'), 0x80000000, 3, None, 3, 0, None)
+                self.assertNotEqual(handle, ctypes.c_void_p(-1).value)
+                release = threading.Timer(0.05, api.CloseHandle, args=(handle,))
+                release.start()
+                try:
+                    execution.save()
+                finally:
+                    release.join()
+        result = self.read()
+        self.assertEqual('passed', result['status'])
+        self.assertEqual(1, len(result['processes']))
+        self.assertEqual('once\n', (self.output/'stdout.log').read_text())
+        self.assertFalse(list(self.output.glob('*.tmp')))
 
     def test_expected_compile_failure_preserved(self):
         with patch('focused_verification_output.cleanup_output') as call:
