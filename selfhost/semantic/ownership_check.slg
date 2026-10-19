@@ -1609,44 +1609,47 @@ borrowedTextScalarReplacementSupported prepared: ref semanticContext.SemanticSna
 
 # This is the same direct-sibling source-order authority as lowering714-744.
 # Control nextOperand is an alternative edge, so it cannot be a suffix link.
-borrowedTextScalarNextStatement prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], regionIr: Int, afterIr: Int -> Int {
+borrowedTextScalarNextStatement prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], regionIr: Int, afterIr: Int, irIndex: ref OwnershipIrIndex -> Int {
     typed[regionIr].sourceModule => sourceModule
     sourceModule >= 0 and sourceModule < (prepared.package.ranges -> len)
         -> unless { -1 -> return }
     prepared.package.ranges[sourceModule] => range
     -1 => nextIr!
     UIntSize(0) => nextStart!
-    0 => candidateIr!
-    candidateIr! < (typed -> len) -> while {
-        typed[candidateIr!] => candidate
-        candidate.parent == regionIr and candidate.sourceModule == sourceModule
-            and candidate.kind != 10 and candidate.kind != 29
-            and candidate.astNode >= 0 and candidate.astNode < range.astCount
-            -> if {
-                prepared.package.nodes[range.astStart + candidate.astNode].start => start
-                true => afterBoundary!
-                afterIr >= 0 -> if {
-                    typed[afterIr].astNode >= 0 and typed[afterIr].astNode < range.astCount
-                        -> if {
-                            start > prepared.package.nodes[range.astStart + typed[afterIr].astNode].start => afterBoundary!
-                        } else { false => afterBoundary! }
-                }
-                afterBoundary! and (nextIr! < 0 or start < nextStart!)
-                    -> if {
-                        candidateIr! => nextIr!
-                        start => nextStart!
+    # The immutable child index retains the original ascending IR order.
+    # Keep source offsets and ambiguity decisions in this query.
+    irIndex.firstChild[regionIr] => candidateIr!
+    candidateIr! >= 0 and candidateIr! < (typed -> len)
+        -> while {
+            typed[candidateIr!] => candidate
+            candidate.parent == regionIr and candidate.sourceModule == sourceModule
+                and candidate.kind != 10 and candidate.kind != 29
+                and candidate.astNode >= 0 and candidate.astNode < range.astCount
+                -> if {
+                    prepared.package.nodes[range.astStart + candidate.astNode].start => start
+                    true => afterBoundary!
+                    afterIr >= 0 -> if {
+                        typed[afterIr].astNode >= 0 and typed[afterIr].astNode < range.astCount
+                            -> if {
+                                start > prepared.package.nodes[range.astStart + typed[afterIr].astNode].start => afterBoundary!
+                            } else { false => afterBoundary! }
                     }
-                afterBoundary! and nextIr! >= 0 and candidateIr! != nextIr! and start == nextStart!
-                    -> if { -2 -> return }
-            }
-        candidateIr! + 1 => candidateIr!
-    }
+                    afterBoundary! and (nextIr! < 0 or start < nextStart!)
+                        -> if {
+                            candidateIr! => nextIr!
+                            start => nextStart!
+                        }
+                    afterBoundary! and nextIr! >= 0 and candidateIr! != nextIr! and start == nextStart!
+                        -> if { -2 -> return }
+                }
+            irIndex.nextChild[candidateIr!] => candidateIr!
+        }
     nextIr!
 }
 
 # Only completed replacements on every continuing path can kill an old version.
 # Loops and unsupported controls cannot establish a new must-replace proof.
-borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], returnControls: ref [Bool; ~], slotIr: Int, regionIr: Int, queryIr: Int, definitionStart: UIntSize, depth: Int -> Bool {
+borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], returnControls: ref [Bool; ~], slotIr: Int, regionIr: Int, queryIr: Int, definitionStart: UIntSize, depth: Int, irIndex: ref OwnershipIrIndex -> Bool {
     depth < (typed -> len) and regionIr >= 0 and regionIr < (typed -> len)
         and slotIr >= 0 and slotIr < (typed -> len) and queryIr >= 0 and queryIr < (typed -> len)
         and typed[slotIr].sourceModule == typed[queryIr].sourceModule
@@ -1659,7 +1662,7 @@ borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapsh
     typed[queryIr].astNode >= 0 and typed[queryIr].astNode < range.astCount
         -> unless { false -> return }
     prepared.package.nodes[range.astStart + typed[queryIr].astNode].start => queryStart
-    prepared -> borrowedTextScalarNextStatement(typed, regionIr, -1) => statementIr!
+    prepared -> borrowedTextScalarNextStatement(typed, regionIr, -1, irIndex) => statementIr!
     false => replaced!
     0 => steps!
     statementIr! >= 0 and statementIr! < (typed -> len) and steps! < (typed -> len)
@@ -1678,7 +1681,8 @@ borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapsh
                 statementIr! => controlIr!
                 statement.kind == 9 and statement.opcode == -1
                     and statement.operand1 >= 0 and statement.operand1 < (typed -> len)
-                    and typed[statement.operand1].kind == 18
+                    and (typed[statement.operand1].kind == 18 or typed[statement.operand1].kind == 27
+                    or typed[statement.operand1].kind == 33 or typed[statement.operand1].kind == 34)
                     and typed[statement.operand1].parent == statementIr!
                     and typed[statement.operand1].sourceModule == statement.sourceModule
                     -> if { statement.operand1 => controlIr! }
@@ -1688,34 +1692,58 @@ borrowedTextScalarRegionMustReplace prepared: ref semanticContext.SemanticSnapsh
                         queryInside -> if {
                             typed -> borrowedTextNodeBelongsTo(queryIr, control.operand1)
                                 -> if {
-                                    (replaced! or (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.operand1, queryIr, definitionStart, depth + 1))) -> return
+                                    (replaced! or (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.operand1, queryIr, definitionStart, depth + 1, irIndex))) -> return
                                 }
                             control.nextOperand >= 0 and (typed -> borrowedTextNodeBelongsTo(queryIr, control.nextOperand))
                                 -> if {
-                                    (replaced! or (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.nextOperand, queryIr, definitionStart, depth + 1))) -> return
+                                    (replaced! or (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.nextOperand, queryIr, definitionStart, depth + 1, irIndex))) -> return
                                 }
                             replaced! -> return
                         }
                         control.nextOperand >= 0 -> if {
-                            prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.operand1, queryIr, definitionStart, depth + 1) => thenReplaces
-                            prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.nextOperand, queryIr, definitionStart, depth + 1) => elseReplaces
+                            prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.operand1, queryIr, definitionStart, depth + 1, irIndex) => thenReplaces
+                            prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, control.nextOperand, queryIr, definitionStart, depth + 1, irIndex) => elseReplaces
                             control.operand1 < (returnControls -> len) and returnControls[control.operand1] => thenReturns
                             control.nextOperand < (returnControls -> len) and returnControls[control.nextOperand] => elseReturns
                             (thenReturns or thenReplaces) and (elseReturns or elseReplaces) and not (thenReturns and elseReturns)
                                 -> if { true => replaced! }
                         }
                     }
+                queryInside and (control.kind == 27 or control.kind == 33 or control.kind == 34)
+                    -> if {
+                        # Only the selected arm body precedes this query.
+                        # Subject and condition reads retain the incoming version.
+                        control.operand0 => arm!
+                        control.kind == 27 or control.kind == 34 -> if { control.operand1 => arm! }
+                        0 => armEdges!
+                        arm! >= 0 and arm! < (typed -> len) and armEdges! < (typed -> len)
+                            -> while {
+                                typed[arm!].parent != controlIr! or typed[arm!].sourceModule != control.sourceModule
+                                    -> if { replaced! -> return }
+                                typed[arm!].operand1 => bodyIr
+                                bodyIr >= 0 and bodyIr < (typed -> len)
+                                    and typed[bodyIr].kind == 19 and typed[bodyIr].parent == arm!
+                                    and typed[bodyIr].sourceModule == control.sourceModule
+                                    and (typed -> borrowedTextNodeBelongsTo(queryIr, bodyIr))
+                                    -> if {
+                                        (replaced! or (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, slotIr, bodyIr, queryIr, definitionStart, depth + 1, irIndex))) -> return
+                                    }
+                                typed[arm!].nextOperand => arm!
+                                armEdges! + 1 => armEdges!
+                            }
+                        replaced! -> return
+                    }
             }
             queryInside -> if { replaced! -> return }
             statement.kind == 21 or statement.kind == 22 or statement.kind == 23
                 -> if { false -> return }
-            prepared -> borrowedTextScalarNextStatement(typed, regionIr, statementIr!) => statementIr!
+            prepared -> borrowedTextScalarNextStatement(typed, regionIr, statementIr!, irIndex) => statementIr!
             steps! + 1 => steps!
         }
     statementIr! == -1 -> if { replaced! } else { false }
 }
 
-borrowedTextScalarVersionReaches prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], returnControls: ref [Bool; ~], definitionIr: Int, queryIr: Int -> Bool {
+borrowedTextScalarVersionReaches prepared: ref semanticContext.SemanticSnapshot, typed: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], returnControls: ref [Bool; ~], definitionIr: Int, queryIr: Int, irIndex: ref OwnershipIrIndex -> Bool {
     definitionIr >= 0 and definitionIr < (typed -> len) and queryIr >= 0 and queryIr < (typed -> len)
         -> unless { true -> return }
     typed[definitionIr].sourceModule == typed[queryIr].sourceModule
@@ -1729,7 +1757,7 @@ borrowedTextScalarVersionReaches prepared: ref semanticContext.SemanticSnapshot,
     typed[definitionIr].astNode >= 0 and typed[definitionIr].astNode < range.astCount
         -> unless { true -> return }
     prepared.package.nodes[range.astStart + typed[definitionIr].astNode].start => definitionStart
-    not (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, definitionIr, regionIr, queryIr, definitionStart, 0))
+    not (prepared -> borrowedTextScalarRegionMustReplace(typed, types, returnControls, definitionIr, regionIr, queryIr, definitionStart, 0, irIndex))
 }
 
 borrowedTextValueOrigin typed: ref [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], querySiteIr: Int, storeSites: ref [Int; ~], returnControls: ref [Bool; ~], contracts: ref [BorrowedTextReturn; ~], callFunctionIndex: ref BorrowedTextCallFunctionIndex, viewTypes: ref [Bool; ~], parameterLoans: Bool, concrete: Bool, valueIr: Int, originIr: Int, active: mut [Int; ~], depth: Int -> BorrowedTextOriginFact {
@@ -2303,7 +2331,7 @@ borrowedTextValueOriginCore typed: ref [typedIr.TypedIrNode; ~], prepared: ref s
                                 }
                             scalarVersion.operand0 >= 0 and scalarVersion.operand0 < (typed -> len)
                                 and (prepared -> borrowedTextScalarVersionVisible(typed, types, callFunctionIndex, returnControls, scalarVersionIr!, querySiteIr))
-                                and (prepared -> borrowedTextScalarVersionReaches(typed, types, returnControls, scalarVersionIr!, querySiteIr))
+                                and (prepared -> borrowedTextScalarVersionReaches(typed, types, returnControls, scalarVersionIr!, querySiteIr, callFunctionIndex.irIndex))
                                 -> if {
                                     typed -> borrowedTextValueOrigin(prepared, types, scalarVersionIr!, storeSites, returnControls, contracts, callFunctionIndex, viewTypes, parameterLoans, concrete, scalarVersion.operand0, originIr, active, depth) => versionOrigin
                                     versions! -> mergeBorrowedTextOrigin(versionOrigin, typed) => versions!
@@ -2313,7 +2341,7 @@ borrowedTextValueOriginCore typed: ref [typedIr.TypedIrNode; ~], prepared: ref s
                     callFunctionIndex.scalarVersionNext[scalarVersionIr!] => scalarVersionIr!
                 }
                 queriedVersion! -> if { versions! -> return }
-                prepared -> borrowedTextScalarVersionReaches(typed, types, returnControls, valueIr, querySiteIr)
+                prepared -> borrowedTextScalarVersionReaches(typed, types, returnControls, valueIr, querySiteIr, callFunctionIndex.irIndex)
                     -> unless { versions! -> return }
                 querySiteIr != valueIr and not (prepared -> borrowedTextScalarVersionVisible(typed, types, callFunctionIndex, returnControls, valueIr, querySiteIr))
                     -> if { BorrowedTextOriginFact { status: 0, usesOrigin: false, placeIr: -1 } -> return }
@@ -5017,7 +5045,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                             }
                     }
                 siteStart >= 0 and use.kind == 5 and use.sourceModule == borrowedTyped[siteIr].sourceModule and use.astNode >= 0 and matchesCarrierUse!
-                    and (not (borrowedTyped -> borrowedTextScalarSlot(types, bindingIr)) or (borrowedPrepared -> borrowedTextScalarVersionReaches(borrowedTyped, types, returnControls, bindingIr, useIndex!)))
+                    and (not (borrowedTyped -> borrowedTextScalarSlot(types, bindingIr)) or (borrowedPrepared -> borrowedTextScalarVersionReaches(borrowedTyped, types, returnControls, bindingIr, useIndex!, callFunctionIndex.irIndex)))
                     and (carrierTypeId >= 0 or (borrowedPrepared -> borrowedTextCarrierUseTouchesLoan(types, borrowedTyped, useIndex!)))
                     and (carrierTypeId < 0 or use.operand0 != bindingIr or (borrowedPrepared -> readonlyCarrierUseTouchesReference(types, borrowedTyped, useIndex!, carrierTypeId)))
                     and (use.operand0 != bindingIr or (borrowedPrepared -> readonlyReferencePathTouchesUse(borrowedTyped, useIndex!, referencePath)))

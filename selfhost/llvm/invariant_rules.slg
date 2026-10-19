@@ -1,5 +1,19 @@
 namespace sollang.compiler.llvm.invariant_rules
 
+# A parenthesized receiver is the member AST's direct child but starts after
+# the opening parenthesis. Containment alone must not admit a nested argument.
+public memberBaseStructuralPrefixAccepted memberKind: Int, memberAst: Int, memberStart: UIntSize, memberLength: UIntSize, baseParent: Int, baseStart: UIntSize, baseLength: UIntSize, sourceLength: UIntSize -> Bool {
+    memberStart > sourceLength -> if { false -> return }
+    memberLength > sourceLength - memberStart -> if { false -> return }
+    baseLength >= memberLength or baseStart < memberStart
+        -> if { false -> return }
+    baseStart - memberStart => relativeStart
+    relativeStart > memberLength -> if { false -> return }
+    baseLength > memberLength - relativeStart -> if { false -> return }
+    relativeStart == 0 -> if { true -> return }
+    memberKind == 36 and baseParent == memberAst and baseLength > 0
+}
+
 # A declared source method keeps its synthetic self symbol as the first
 # concrete Typed IR parameter. This pure rule is shared by LLVM verification
 # and its focused self-host fixture without constructing compiler-wide state.

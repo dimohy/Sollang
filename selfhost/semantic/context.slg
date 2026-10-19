@@ -735,9 +735,11 @@ public indexCallsByAst package: ref analysis.PackageAnalysis, resolvedCalls: ref
     indices!
 }
 
-# A resolved call can be wrapped by multiple same-start paths before a real
+# A resolved call can be wrapped by multiple containing paths before a real
 # trailing field. The final member token must begin after the resolved call;
 # a longer wrapper caused only by the call parentheses is still the callee.
+# Parentheses can make an ancestor begin before the call. Follow only direct
+# member ancestors so an argument call cannot claim its consumer's fields.
 # Publish that ancestry once with the semantic snapshot so
 # parallel Typed IR workers perform one indexed lookup instead of rescanning
 # every call for every function.
@@ -762,7 +764,9 @@ public indexCallResultMembersByAst package: ref analysis.PackageAnalysis, resolv
                         callNode.parent => pathAncestor!
                         pathAncestor! >= 0 -> while {
                             package.nodes[sourceRange.astStart + pathAncestor!] => pathNode
-                            pathNode.kind == 36 and pathNode.start == callNode.start
+                            pathNode.kind == 36 and pathNode.start <= callNode.start
+                                and callNode.start - pathNode.start <= pathNode.length
+                                and callNode.length <= pathNode.length - (callNode.start - pathNode.start)
                                 -> if {
                                     pathNode.payloadToken >= 0
                                         and package.tokens[sourceRange.tokenStart + pathNode.payloadToken].span.start >= callNode.start + callNode.length

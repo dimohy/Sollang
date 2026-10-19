@@ -113,9 +113,11 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         var bitcodePath = Path.Combine(workDir, outputName + ".partition-input.bc");
         var partitionPrefix = Path.Combine(workDir, outputName + ".partition.bc");
 
+        // Optimize across function boundaries before splitting the module;
+        // isolated partitions cannot recover those interprocedural opportunities.
         Run(toolchain.Clang,
         [
-            "-target", "x86_64-pc-windows-msvc", "-O0", "-flto=full", "-emit-llvm",
+            "-target", "x86_64-pc-windows-msvc", optimizationLevel, "-flto=full", "-emit-llvm",
             "-Werror", "-Wno-override-module", "-c", llPath, "-o", bitcodePath
         ]);
         Run(toolchain.LlvmSplit,

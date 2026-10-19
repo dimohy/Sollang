@@ -1617,9 +1617,8 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
         -> if {
             40 => code!
         }
-    # A dotted member base must be a proper structural prefix of the member
-    # expression. A base outside that span proves that flattened IR parent
-    # recovery crossed into another expression or control region.
+    # A dotted member base must be a proper structural prefix. Parentheses may
+    # shift its start only when the AST identifies the canonical receiver child.
     code! == 0
         and node.kind == 13
         and node.operand0 >= 0
@@ -1632,11 +1631,31 @@ public irInvariantCode context: ref emitterContext.EmitContext, irIndex: Int, fu
             context.ranges[node.sourceModule] => memberBaseInvariantRange
             context.nodes[memberBaseInvariantRange.astStart + node.astNode] => memberBaseInvariantAst
             context.nodes[memberBaseInvariantRange.astStart + context.ir[node.operand0].astNode] => memberBaseInvariantOperandAst
-            memberBaseInvariantOperandAst.start != memberBaseInvariantAst.start
-                or memberBaseInvariantOperandAst.length >= memberBaseInvariantAst.length
-                or memberBaseInvariantOperandAst.start + memberBaseInvariantOperandAst.length > memberBaseInvariantAst.start + memberBaseInvariantAst.length
-                -> if {
-                    39 => code!
+            # A qualified direct call can own a same-span callee wrapper.
+            # Only that transparent ancestry may connect it to the receiver;
+            # nested arguments have a different span or a non-member parent.
+            memberBaseInvariantOperandAst.parent => memberBaseInvariantParent!
+            0 => memberBaseInvariantDepth!
+            true => memberBaseInvariantFollowing!
+            memberBaseInvariantFollowing!
+                and memberBaseInvariantParent! != node.astNode
+                and memberBaseInvariantParent! >= 0
+                and memberBaseInvariantParent! < memberBaseInvariantRange.astCount
+                and memberBaseInvariantDepth! < memberBaseInvariantRange.astCount
+                -> while {
+                    context.nodes[memberBaseInvariantRange.astStart + memberBaseInvariantParent!] => memberBaseInvariantWrapper
+                    memberBaseInvariantWrapper.kind == 36
+                        and memberBaseInvariantWrapper.start == memberBaseInvariantOperandAst.start
+                        and memberBaseInvariantWrapper.length == memberBaseInvariantOperandAst.length
+                        -> if {
+                            memberBaseInvariantWrapper.parent => memberBaseInvariantParent!
+                        } else { false => memberBaseInvariantFollowing! }
+                    memberBaseInvariantDepth! + 1 => memberBaseInvariantDepth!
+                }
+            node.sourceModule >= (context.sources -> len)
+                -> if { 39 => code! } else {
+                    invariantRules.memberBaseStructuralPrefixAccepted(memberBaseInvariantAst.kind, node.astNode, memberBaseInvariantAst.start, memberBaseInvariantAst.length, memberBaseInvariantParent!, memberBaseInvariantOperandAst.start, memberBaseInvariantOperandAst.length, context.sources[node.sourceModule] -> len)
+                        -> unless { 39 => code! }
                 }
         }
     # Once a nominal base is canonical, a dotted member of a field-bearing
