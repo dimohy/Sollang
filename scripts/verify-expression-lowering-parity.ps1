@@ -148,8 +148,15 @@ function Test-StreamSchedulingBoundary {
     $orderCall = '->\s*' + [regex]::Escape($Scheduling.sharedOrderEmitter) + '\('
     $bodyCall = '->\s*' + [regex]::Escape($Scheduling.sharedBodyEmitter) + '\('
     $mutablePolicy = [regex]::Escape($Scheduling.mutableSlotPolicyField)
+    # Require the allocation itself inside the policy guard. The additional
+    # ordinary-function restriction is stronger than the original policy.
+    $mutableCall = '->\s*emitScheduledMutableSlots\('
+    $guardedMutableCall = '(?m)^[ \t]*plan\.' + $mutablePolicy +
+        '(?:[ \t]+and[ \t]+context\.ir\[functionIndex\]\.kind[ \t]*==[ \t]*11)?\s*' +
+        '->\s*if\s*\{\s*functionIndex\s*->\s*emitScheduledMutableSlots\(entryEnd,\s*context,\s*state\)\s*\}'
     return ($body -ne '' -and $order -ne '' -and $region -ne '' -and
-        $body -match "plan\.$mutablePolicy\s*-> if" -and $body -match $orderCall -and
+        $body -match $guardedMutableCall -and [regex]::Matches($body, $mutableCall).Count -eq 1 -and
+        $body -match $orderCall -and
         $region -match $orderCall -and $region -notmatch $bodyCall -and
         $region -match "${mutablePolicy}:\s*false" -and
         $order -notmatch $bodyCall -and $order -notmatch '->\s*(?:emitRegionState|emitScheduledMutableSlots)\(')
@@ -158,7 +165,9 @@ function Test-StreamSchedulingBoundary {
 if ($SelfTest) {
     $entryControl = @'
 emitScheduledStreamBody plan: Plan -> Unit {
-    plan.emitMutableSlots -> if { }
+    plan.emitMutableSlots -> if {
+        functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)
+    }
     plan -> emitScheduledStreamOrder()
 }
 emitScheduledStreamOrder plan: Plan -> Unit {
@@ -173,6 +182,12 @@ emitRegionStreamPipeline plan: Plan -> Unit {
 '@
     $controls = @(
         @{ entry = $entryControl; region = $regionControl; expected = $true },
+        @{ entry = $entryControl.Replace('plan.emitMutableSlots ->', 'plan.emitMutableSlots and context.ir[functionIndex].kind == 11 ->'); region = $regionControl; expected = $true },
+        @{ entry = $entryControl.Replace('plan.emitMutableSlots ->', 'plan.emitMutableSlots or context.ir[functionIndex].kind == 11 ->'); region = $regionControl; expected = $false },
+        @{ entry = $entryControl.Replace('plan.emitMutableSlots ->', 'true ->'); region = $regionControl; expected = $false },
+        @{ entry = $entryControl.Replace('plan -> emitScheduledStreamOrder()', 'functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)'); region = $regionControl; expected = $false },
+        @{ entry = $entryControl.Replace('plan -> emitValue()', 'functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)'); region = $regionControl; expected = $false },
+        @{ entry = $entryControl.Replace('plan -> emitValue()', 'functionIndex -> emitRegionState()'); region = $regionControl; expected = $false },
         @{ entry = $entryControl; region = $regionControl.Replace('-> emitScheduledStreamOrder(', '-> emitScheduledStreamBody('); expected = $false },
         @{ entry = $entryControl; region = $regionControl.Replace('emitMutableSlots: false', 'emitMutableSlots: true'); expected = $false },
         @{ entry = $entryControl.Replace('-> emitValue(', '-> emitScheduledStreamBody('); region = $regionControl; expected = $false }
@@ -182,7 +197,7 @@ emitRegionStreamPipeline plan: Plan -> Unit {
             throw 'Stream scheduling boundary self-test failed'
         }
     }
-    Write-Host '[expression lowering parity] scheduling boundary controls PASS 4/4.'
+    Write-Host "[expression lowering parity] scheduling boundary controls PASS $($controls.Count)/$($controls.Count)."
 }
 
 $streamOwnershipClassifier = [string]$contract.nestedStreamScheduling.ownershipClassifier
