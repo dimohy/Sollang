@@ -135,6 +135,17 @@ streamSliceKind node: typed.TypedIrNode, prepared: semanticContext.SemanticSnaps
             prepared.package.ranges[node.sourceModule] => sourceRange
             node.astNode < sourceRange.astCount -> if {
                 prepared.package.nodes[sourceRange.astStart + node.astNode] => callAst
+                # Declared stream calls can lose their intrinsic opcode
+                # during generic resolution. Retain the same nested-stage
+                # identity used by Typed IR lowering before token recovery.
+                prepared.package.sources[node.sourceModule] -> len => stageSourceLength
+                prepared.package.sources[node.sourceModule] -> slice(UIntSize(0), stageSourceLength) => stageSource
+                stageSource -> typed.nestedStreamSliceOpcode(
+                prepared.package.nodes, sourceRange.astStart,
+                prepared.package.tokens, sourceRange.tokenStart, callAst
+                ) => nestedSliceOpcode
+                nestedSliceOpcode == -275 -> if { 1 => kind! }
+                nestedSliceOpcode == -276 -> if { 2 => kind! }
                 callAst.kind == 48 and callAst.payloadToken >= 0
                     -> if {
                         prepared.package.tokens[sourceRange.tokenStart + callAst.payloadToken] => target

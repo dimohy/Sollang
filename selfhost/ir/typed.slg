@@ -754,9 +754,18 @@ streamSliceOpcode request: IntrinsicNameRequest -> Int {
 # enclosing stream call. Preserve take/skip as stream stages there; treating
 # the same spelling as an array mutation loses the producer chain before the
 # stream planner can build the continuation.
-nestedStreamSliceOpcode source: Text, nodes: ref [ast.AstNode; ~], astStart: Int, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> Int {
-    node.parent >= 0
-        and nodes[astStart + node.parent].kind == 48
+public nestedStreamSliceOpcode source: Text, nodes: ref [ast.AstNode; ~], astStart: Int, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> Int {
+    node.parent => pipelineOwner!
+    0 => pipelineSteps!
+    pipelineOwner! >= 0 and pipelineSteps! < (nodes -> len)
+        and (nodes[astStart + pipelineOwner!].kind -> isFlowIntrinsicAstKind)
+        and nodes[astStart + pipelineOwner!].start == node.start
+        -> while {
+            nodes[astStart + pipelineOwner!].parent => pipelineOwner!
+            pipelineSteps! + 1 => pipelineSteps!
+        }
+    pipelineOwner! >= 0
+        and nodes[astStart + pipelineOwner!].kind == 48
         and node.payloadToken >= 0
         -> if {
             IntrinsicNameRequest { source: source, token: tokens[tokenStart + node.payloadToken] }

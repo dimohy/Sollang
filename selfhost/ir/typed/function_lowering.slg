@@ -304,6 +304,13 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
                     call! => nodes[plan.callNode]
                 }
         }
+        # Publishing a stream stage's substituted result also changes its
+        # downstream each role. Commit that edge before cloning any body:
+        # a foreign stage parameter cannot be substituted by the caller.
+        typeIds.enumPayloadEdges(resolved.types, resolved.references, prepared.package.ranges, prepared.package.symbols, resolved.referenceIndexByTypeAst) => rolePayloadEdges
+        prepared -> semanticContext.ownedResourceSeeds(resolved.types) => roleResourceSeeds
+        resolved.types -> typeIds.classifyWithResources(resolved.fields, rolePayloadEdges, roleResourceSeeds) => roleFlags
+        nodes -> sealEachRoleTypes(prepared, resolved.types, roleFlags)
         [Int; ~] => planSlots!
         [Bool; ~] => selected!
         plans! -> each plan {
@@ -1071,10 +1078,10 @@ repairIndexedControlProducerWrappers nodes: mut [TypedIrNode; ~], prepared: ref 
 # enum payload projection. Seal it from that exact role's source after payload
 # fields are known; an enclosing pattern binding is a different symbol.
 sealEachRoleTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
-    [Int; ~] => elementByRoleAst!
+    [Int; ~] => elementByRoleNode!
     0 => seed!
-    seed! < (prepared.package.nodes -> len) -> while {
-        elementByRoleAst! -> push(-1)
+    seed! < (nodes -> len) -> while {
+        elementByRoleNode! -> push(-1)
         seed! + 1 => seed!
     }
     0 => roleIndex!
@@ -1091,15 +1098,44 @@ sealEachRoleTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.Sem
                 collectionType! >= 0 -> if {
                     types[collectionType!] => collection
                     -1 => element!
-                    collection.kind >= 2 and collection.kind <= 4
-                        -> if { collection.first => element! }
-                    collection.kind == 1 and collection.origin == 1
-                        and collection.symbol == 25
-                        -> if { 2 => element! }
+                    # A stream call's result is already its element type. Follow
+                    # only value aliases to its declaration before interpreting
+                    # an array-shaped element as an ordinary collection.
+                    role.operand0 => producer!
+                    0 => producerSteps!
+                    producer! >= 0 and producer! < (nodes -> len)
+                        and producerSteps! < (nodes -> len)
+                        and (nodes[producer!].kind == 5 or nodes[producer!].kind == 17)
+                        -> while {
+                            nodes[producer!].operand0 => producer!
+                            producerSteps! + 1 => producerSteps!
+                        }
+                    false => streamProducer!
+                    producer! >= 0 and producer! < (nodes -> len)
+                        -> if {
+                            nodes[producer!] => producer
+                            producer.kind == 6 and producer.targetModule >= 0
+                                and producer.targetModule < (prepared.package.ranges -> len)
+                                and producer.symbol >= 0 -> if {
+                                    prepared.package.ranges[producer.targetModule] => producerRange
+                                    producer.symbol < producerRange.symbolCount -> if {
+                                        prepared.package.symbols[producerRange.symbolStart + producer.symbol] => declaration
+                                        declaration.flags / 64 % 2 == 1 -> if {
+                                            true => streamProducer!
+                                            producer.typeId => element!
+                                        }
+                                    }
+                                }
+                        }
+                    not streamProducer! -> if {
+                        collection.kind >= 2 and collection.kind <= 4
+                            -> if { collection.first => element! }
+                        collection.kind == 1 and collection.origin == 1
+                            and collection.symbol == 25
+                            -> if { 2 => element! }
+                    }
                     role.opcode == repeatOpcode() -> if { 2 => element! }
-                    prepared.package.ranges[role.sourceModule] => roleRange
-                    roleRange.astStart + role.astNode => globalRoleAst
-                    element! => elementByRoleAst![globalRoleAst]
+                    element! => elementByRoleNode![roleIndex!]
                 }
             }
         roleIndex! + 1 => roleIndex!
@@ -1111,9 +1147,23 @@ sealEachRoleTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.Sem
             prepared.package.ranges[read!.sourceModule] => sourceRange
             prepared.package.symbols[sourceRange.symbolStart + read!.symbol] => symbol
             symbol.kind == 35 and symbol.astNode >= 0 -> if {
-                elementByRoleAst![sourceRange.astStart + symbol.astNode] => element
-                element >= 0 -> if {
-                    read! -> sealNodeTypeIdentity(element, types, flags)
+                # Generic bodies share source AST ordinals, but each role
+                # belongs to its own cloned lexical iteration scope.
+                read!.parent => owner!
+                0 => ownerSteps!
+                -1 => element!
+                owner! >= 0 and owner! < (nodes -> len)
+                    and ownerSteps! < (nodes -> len) and element! < 0
+                    -> while {
+                        nodes[owner!] => scope
+                        scope.sourceModule == read!.sourceModule
+                            and scope.astNode == symbol.astNode
+                            -> if { elementByRoleNode![owner!] => element! }
+                        scope.parent => owner!
+                        ownerSteps! + 1 => ownerSteps!
+                    }
+                element! >= 0 -> if {
+                    read! -> sealNodeTypeIdentity(element!, types, flags)
                     read! => nodes[readIndex!]
                 }
             }
