@@ -161,7 +161,8 @@ public taskOperationContractCode: -> Int { 51 }
 public borrowedTextBlockEscapeCode: -> Int { 50 }
 
 public struct ReadonlyReferencePathStep {
-    # 0 named field, 1 canonical unlabeled product field.
+    # 0 named field, 1 canonical unlabeled product field,
+    # 2 intrinsic enum payload (ordinal 0 Some, 1 Ok, 2 Err).
     public kind: Int
     public sourceModule: Int
     public nameToken: Int
@@ -2558,6 +2559,25 @@ appendReadonlyReferenceLeafLoans prepared: ref semanticContext.SemanticSnapshot,
         loans -> push(ReadonlyReferenceLoan { path: cloneReadonlyReferencePath(path) })
         return
     }
+    valueType.kind == 7 and valueType.origin == 4
+        and (valueType.symbol == 0 or valueType.symbol == 1)
+        -> if {
+            0 => payloadOrdinal!
+            valueType.symbol == 1 -> if { 1 => payloadOrdinal! }
+            cloneReadonlyReferencePath(path) => payloadPath!
+            payloadPath! -> push(ReadonlyReferencePathStep {
+                kind: 2, sourceModule: -1, nameToken: -1, ordinal: payloadOrdinal!
+            })
+            prepared -> appendReadonlyReferenceLeafLoans(types, fields, valueType.first, payloadPath!, loans, depth + 1)
+            valueType.symbol == 1 -> if {
+                cloneReadonlyReferencePath(path) => errorPath!
+                errorPath! -> push(ReadonlyReferencePathStep {
+                    kind: 2, sourceModule: -1, nameToken: -1, ordinal: 2
+                })
+                prepared -> appendReadonlyReferenceLeafLoans(types, fields, valueType.second, errorPath!, loans, depth + 1)
+            }
+            return
+        }
     valueType.kind == 1 or valueType.kind == 10 -> if {
         loans -> len => initialCount
         fields -> each field {
@@ -2656,6 +2676,8 @@ readonlyReferencePathTouchesUse prepared: ref semanticContext.SemanticSnapshot, 
     useIr => current!
     0 => stepIndex!
     stepIndex! < (path -> len) -> while {
+        # A when consumes the enum carrier, rather than selecting a struct field.
+        path[stepIndex!].kind == 2 -> if { true -> return }
         typed[current!].parent => parentIr
         parentIr < 0 or parentIr >= (typed -> len) -> if { true -> return }
         typed[parentIr] => projection
@@ -2702,6 +2724,7 @@ readonlyReferencePathTouchesInterpolation prepared: ref semanticContext.Semantic
     0 => stepIndex!
     stepIndex! < (path -> len) and cursor! < memberEnd!
         -> while {
+            path[stepIndex!].kind == 2 -> if { true -> return }
             (prepared.package.sources[sourceModule] -> byte(cursor!)) != 46
                 -> if { true -> return }
             cursor! + 1 => start
@@ -2876,6 +2899,8 @@ semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, 
                                         pending! -> push(currentType.first)
                                     } else {
                                         currentType.kind == 5 or currentType.kind == 11 or currentType.kind == 13
+                                            or (currentType.kind == 7 and currentType.origin == 4
+                                            and (currentType.symbol == 0 or currentType.symbol == 1))
                                             -> if {
                                                 pending! -> push(currentType.first)
                                                 pending! -> push(currentType.second)

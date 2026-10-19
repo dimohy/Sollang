@@ -6,6 +6,58 @@ import sollang.compiler.llvm.emitter.context as emitterContext
 import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 
+# Console reads of a lexical readonly reference materialize its value; the
+# binding and call ABI continue to carry the pointer. Both ordinary functions
+# and nested control regions use this boundary, as entry expressions do.
+emitReadonlyReferenceConsoleOutput callIndex: Int, argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    context.ir[callIndex] => call
+    context.ir[argumentIndex] => argument
+    call.opcode == -203 or argument.kind != 5 -> if { false -> return }
+    argument -> referenceValueTypeId(context, state) => valueTypeId
+    valueTypeId < 0 -> if { false -> return }
+    context.types[valueTypeId] => valueType
+    valueType.symbol -> integerWidth(context, state) => width
+    valueType.kind != 1 or valueType.origin != 1
+        or (valueType.symbol != 1 and valueType.symbol != 23 and width <= 0)
+        -> if { false -> return }
+    "  %v$(callIndex)_runtime_reference_value = load " -> print
+    valueTypeId -> writeAggregateFieldTypeId(context, state)
+    ", ptr " -> print
+    ownerIndex -> writeForwardedReferenceValue(argumentIndex, context, state)
+    ", align " -> print
+    context.typeAligns[valueTypeId] -> writeDecimalLine
+    call.symbol == -116 or call.symbol == -117 => errorOutput
+    call.symbol == -102 or call.symbol == -116 => newline
+    valueType.symbol == 1 -> if {
+        "  %v$(callIndex)_runtime_ptr = extractvalue %sollang.text %v$(callIndex)_runtime_reference_value, 0" -> println
+        "  %v$(callIndex)_runtime_len = extractvalue %sollang.text %v$(callIndex)_runtime_reference_value, 1" -> println
+        errorOutput -> if { "  call void @sollang_runtime_eprint" -> print } else { "  call void @sollang_runtime_print" -> print }
+        "(ptr %v$(callIndex)_runtime_ptr, i64 %v$(callIndex)_runtime_len, i1 " -> print
+    } else {
+        valueType.symbol != 23 and width < 32 -> if {
+            "  %v$(callIndex)_runtime_integer = " -> print
+            valueType.symbol -> integerSigned(context, state)
+                -> if { "sext" -> print } else { "zext" -> print }
+            " i$(width) %v$(callIndex)_runtime_reference_value to i32" -> println
+        }
+        errorOutput -> if { "  call void @sollang_runtime_eprint_" -> print } else { "  call void @sollang_runtime_print_" -> print }
+        valueType.symbol == 23 -> if { "i1(i1 " -> print } else {
+            width == 64 -> if { "i64(i64 " -> print } else { "i32(i32 " -> print }
+        }
+        valueType.symbol != 23 and width < 32 -> if {
+            "%v$(callIndex)_runtime_integer" -> print
+        } else { "%v$(callIndex)_runtime_reference_value" -> print }
+        valueType.symbol != 23 and width == 64 -> if {
+            ", i1 " -> print
+            valueType.symbol -> integerSigned(context, state)
+                -> if { "true" -> print } else { "false" -> print }
+        }
+        ", i1 " -> print
+    }
+    newline -> if { "true)" -> println } else { "false)" -> println }
+    true
+}
+
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
 
@@ -100,6 +152,7 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                 -> if {
                     expressionIndex -> callArgumentIndex(context, state) => runtimeArgumentIndex
                     context.ir[runtimeArgumentIndex] => runtimeArgument
+                    false => referenceConsoleOutput!
                     runtimeArgument.kind == 2 -> if {
                         runtimeArgument -> sourceToken(context, state) => runtimeArgumentToken
                         Int(TextLiteralRequest { sourceModule: runtimeArgument.sourceModule, token: runtimeArgumentToken } -> textLiteralLength(context, state)) => runtimeArgumentLength
@@ -567,73 +620,78 @@ emitFunctionCalls expressionIndex: Int, functionIndex: Int, expressionStart: Int
                             }
                         }
                     } else {
-                        runtimeArgument.typeOrigin == 1 and runtimeArgument.typeSymbol == 1
-                            -> if {
-                                "  %v$(expressionIndex)_runtime_ptr = extractvalue %sollang.text " -> print
-                                expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
-                                    runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
-                                        -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
-                                }
-                                ", 0" -> println
-                                "  %v$(expressionIndex)_runtime_len = extractvalue %sollang.text " -> print
-                                expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
-                                    runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
-                                        -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
-                                }
-                                ", 1" -> println
-                                expression.symbol == -116 or expression.symbol == -117
-                                    -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print } else {
-                                        "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print
+                        expressionIndex -> emitReadonlyReferenceConsoleOutput(runtimeArgumentIndex, functionIndex, context, state) => referenceConsoleOutput!
+                        not referenceConsoleOutput! -> if {
+                            runtimeArgument.typeOrigin == 1 and runtimeArgument.typeSymbol == 1
+                                -> if {
+                                    "  %v$(expressionIndex)_runtime_ptr = extractvalue %sollang.text " -> print
+                                    expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
+                                        runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
+                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
                                     }
-                            } else {
-                                runtimeArgument -> integerNodeWidth(context, state) => runtimeArgumentWidth!
-                                runtimeArgument.kind == 6
-                                    and runtimeArgument.typeKind == 1
-                                    and runtimeArgument.typeOrigin == 1 -> if {
-                                        runtimeArgument.typeSymbol -> integerWidth(context, state) => runtimeArgumentWidth!
+                                    ", 0" -> println
+                                    "  %v$(expressionIndex)_runtime_len = extractvalue %sollang.text " -> print
+                                    expression.opcode == -203 -> if { "%v$(expressionIndex)" -> print } else {
+                                        runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol
+                                            -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
                                     }
-                                runtimeArgument.typeSymbol == 23 -> if {
+                                    ", 1" -> println
                                     expression.symbol == -116 or expression.symbol == -117
-                                        -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
-                                } else {
-                                    runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < 32 and runtimeArgument.kind != 3
-                                        -> if {
-                                            "  %v$(expressionIndex)_runtime_integer = " -> print
-                                            runtimeArgument -> integerNodeSigned(context, state)
-                                                -> if { "sext" -> print } else { "zext" -> print }
-                                            " i$(runtimeArgumentWidth!) " -> print
-                                            runtimeArgumentIndex -> writeValue(functionIndex, context, state)
-                                            " to i32" -> println
+                                        -> if { "  call void @sollang_runtime_eprint(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print } else {
+                                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex)_runtime_ptr, i64 %v$(expressionIndex)_runtime_len, i1 " -> print
                                         }
-                                    runtimeArgumentWidth! == 64 -> if {
+                                } else {
+                                    runtimeArgument -> integerNodeWidth(context, state) => runtimeArgumentWidth!
+                                    runtimeArgument.kind == 6
+                                        and runtimeArgument.typeKind == 1
+                                        and runtimeArgument.typeOrigin == 1 -> if {
+                                            runtimeArgument.typeSymbol -> integerWidth(context, state) => runtimeArgumentWidth!
+                                        }
+                                    runtimeArgument.typeSymbol == 23 -> if {
                                         expression.symbol == -116 or expression.symbol == -117
-                                            -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(i64 " -> print }
+                                            -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
                                     } else {
-                                        expression.symbol == -116 or expression.symbol == -117
-                                            -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
-                                    }
-                                }
-                                runtimeArgument.kind == 3 -> if {
-                                    runtimeArgument -> writeIntegerLiteral(context, state)
-                                } else {
-                                    runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < 32
-                                        -> if {
-                                            "%v$(expressionIndex)_runtime_integer" -> print
+                                        runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < 32 and runtimeArgument.kind != 3
+                                            -> if {
+                                                "  %v$(expressionIndex)_runtime_integer = " -> print
+                                                runtimeArgument -> integerNodeSigned(context, state)
+                                                    -> if { "sext" -> print } else { "zext" -> print }
+                                                " i$(runtimeArgumentWidth!) " -> print
+                                                runtimeArgumentIndex -> writeValue(functionIndex, context, state)
+                                                " to i32" -> println
+                                            }
+                                        runtimeArgumentWidth! == 64 -> if {
+                                            expression.symbol == -116 or expression.symbol == -117
+                                                -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(i64 " -> print }
                                         } else {
-                                            runtimeArgumentIndex -> writeValue(functionIndex, context, state)
+                                            expression.symbol == -116 or expression.symbol == -117
+                                                -> if { "  call void @sollang_runtime_eprint_i32(i32 " -> print } else { "  call void @sollang_runtime_print_i32(i32 " -> print }
                                         }
-                                }
-                                runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth! == 64
-                                    -> if {
-                                        ", i1 " -> print
-                                        runtimeArgument -> integerNodeSigned(context, state)
-                                            -> if { "true" -> print } else { "false" -> print }
                                     }
-                                ", i1 " -> print
-                            }
+                                    runtimeArgument.kind == 3 -> if {
+                                        runtimeArgument -> writeIntegerLiteral(context, state)
+                                    } else {
+                                        runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth! > 0 and runtimeArgumentWidth! < 32
+                                            -> if {
+                                                "%v$(expressionIndex)_runtime_integer" -> print
+                                            } else {
+                                                runtimeArgumentIndex -> writeValue(functionIndex, context, state)
+                                            }
+                                    }
+                                    runtimeArgument.typeSymbol != 23 and runtimeArgumentWidth! == 64
+                                        -> if {
+                                            ", i1 " -> print
+                                            runtimeArgument -> integerNodeSigned(context, state)
+                                                -> if { "true" -> print } else { "false" -> print }
+                                        }
+                                    ", i1 " -> print
+                                }
+                        }
                     }
-                    expression.symbol == -102 or expression.symbol == -116
-                        -> if { "true)" -> println } else { "false)" -> println }
+                    not referenceConsoleOutput! -> if {
+                        expression.symbol == -102 or expression.symbol == -116
+                            -> if { "true)" -> println } else { "false)" -> println }
+                    }
                 } else {
                     expression -> typedIr.isBuiltinNumericConversionCall
                         -> if {
