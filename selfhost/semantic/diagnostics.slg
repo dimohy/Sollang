@@ -244,6 +244,7 @@ public firstInferredInputConflict prepared: ref semanticContext.SemanticSnapshot
 # Code 10 rejects an explicit declaration with a reserved binding name.
 # Codes 11/12 reject indexed assignment value/index type mismatches.
 # Code 13 rejects an unresolved inferred return before lowering.
+# Code 14 rejects an indexed read whose concrete index has the wrong type.
 public struct BindingDeclarationDiagnostic {
     public code: Int
     public sourceModule: Int
@@ -612,7 +613,7 @@ public indexedAssignmentValueType prepared: ref semanticContext.SemanticSnapshot
     -1
 }
 
-indexedAssignmentTypesMatch types: ref [typeIds.SemanticType; ~], actual: Int, expected: Int -> Bool {
+indexedOperandTypesMatch types: ref [typeIds.SemanticType; ~], actual: Int, expected: Int -> Bool {
     actual == expected -> if { true -> return }
     types[actual] => actualType
     types[expected] => expectedType
@@ -620,7 +621,7 @@ indexedAssignmentTypesMatch types: ref [typeIds.SemanticType; ~], actual: Int, e
         and (actualType.symbol -> typeIds.canonicalBuiltinSymbol) == (expectedType.symbol -> typeIds.canonicalBuiltinSymbol)
 }
 
-firstIndexedAssignmentDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], previous: BindingDeclarationDiagnostic -> BindingDeclarationDiagnostic {
+firstIndexedOperandDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], previous: BindingDeclarationDiagnostic -> BindingDeclarationDiagnostic {
     previous => selected!
     # Index the first two children once, for assignment operands and literal negation.
     [Int; ~] => firstChildByAst!
@@ -655,80 +656,99 @@ firstIndexedAssignmentDiagnostic prepared: ref semanticContext.SemanticSnapshot,
         0 => assignmentAst!
         assignmentAst! < range.astCount -> while {
             prepared.package.nodes[range.astStart + assignmentAst!] => assignment
-            assignment.kind == 53 and assignment.payloadToken >= 0
+            ((assignment.kind == 53 and assignment.payloadToken >= 0) or assignment.kind == 41)
                 and (prepared -> declarationBodyIsActive(resolved, range.sourceModule, assignmentAst!))
                 -> if {
-                    prepared -> indexedAssignmentOwnerType(resolved, range.sourceModule, assignmentAst!) => ownerTypeId
-                    ownerTypeId >= 0 -> if {
-                        resolved.types[ownerTypeId] => owner
-                        intType => expectedIndex!
-                        prepared -> indexedAssignmentValueType(resolved, range.sourceModule, assignmentAst!) => expectedValue
-                        owner.kind == 5 or owner.kind == 13 -> if {
-                            owner.first => expectedIndex!
+                    assignment.kind == 41 => reading
+                    -1 => ownerTypeId!
+                    -1 => expectedValue!
+                    reading -> if {
+                        firstChildByAst![range.astStart + assignmentAst!] => sourceAst
+                        sourceAst >= 0 -> if {
+                            typeByAst[range.astStart + sourceAst] => sourceTypeId
+                            resolved.types -> typeIds.materializedReadTypeId(sourceTypeId) => ownerTypeId!
                         }
-                        owner.kind == 1 and owner.origin == 1 and owner.symbol == 18
-                            -> if {
-                                resolved.types -> typeIds.builtinTypeId(13) => expectedIndex!
-                            }
-                        expectedValue >= 0 -> if {
-                            firstChildByAst![range.astStart + assignmentAst!] => valueAst
-                            secondChildByAst![range.astStart + assignmentAst!] => indexAst
-                            -1 => invalidAst!
-                            -1 => expectedType!
-                            -1 => actualType!
-                            0 => code!
-                            # C# binds and checks the value before the index.
-                            0 => operand!
-                            operand! < 2 -> while {
-                                valueAst => ast!
-                                expectedValue => expected!
-                                operand! == 1 -> if {
-                                    indexAst => ast!
-                                    expectedIndex! => expected!
-                                }
-                                ast! >= 0 and expected! >= 0 and invalidAst! < 0
-                                    -> if {
-                                        typeByAst[range.astStart + ast!] => actual!
-                                        prepared.package.nodes[range.astStart + ast!] => node
-                                        # C# InferNameExpression reads one reference layer for a name.
-                                        # Keep reference-producing calls and other expressions unchanged.
-                                        node.kind == 15 -> if {
-                                            resolved.types -> typeIds.materializedReadTypeId(actual!) => actual!
-                                        }
-                                        # Numeric literal context is permitted for values and mapped-byte indexes.
-                                        # An already typed binding never acquires this literal-only permission.
-                                        node.kind == 14 => numericLiteral!
-                                        node.kind == 22 and node.operatorKind == grammar.tokenIdMinus()
-                                            -> if {
-                                                firstChildByAst![range.astStart + ast!] => child
-                                                child >= 0 and secondChildByAst![range.astStart + ast!] < 0
-                                                    and prepared.package.nodes[range.astStart + child].kind == 14
-                                                    -> if { true => numericLiteral! }
-                                            }
-                                        resolved.types[expected!] => expectedSemanticType
-                                        expectedSemanticType.kind == 1 and expectedSemanticType.origin == 1
-                                            and ((expectedSemanticType.symbol >= 2 and expectedSemanticType.symbol <= 13)
-                                            or (expectedSemanticType.symbol >= 19 and expectedSemanticType.symbol <= 22))
-                                            and numericLiteral!
-                                            and (operand! == 0 or (owner.kind == 1 and owner.origin == 1 and owner.symbol == 18)) => contextualNumericLiteral
-                                        actual! >= 0 and not contextualNumericLiteral
-                                            and not (resolved.types -> indexedAssignmentTypesMatch(actual!, expected!))
-                                            -> if {
-                                                ast! => invalidAst!
-                                                expected! => expectedType!
-                                                actual! => actualType!
-                                                operand! + 11 => code!
-                                            }
-                                    }
-                                operand! + 1 => operand!
-                            }
-                            invalidAst! >= 0 and (prepared.package -> diagnosticOriginBefore(range.sourceModule, invalidAst!, selected!.sourceModule, selected!.valueAst))
-                                -> if {
-                                    prepared.package.nodes[range.astStart + invalidAst!].firstToken => token
-                                    BindingDeclarationDiagnostic { code: code!, sourceModule: range.sourceModule, bindingAst: assignmentAst!, valueAst: invalidAst!, nameToken: token, expectedTypeId: expectedType!, actualTypeId: actualType! } => selected!
-                                }
-                        }
+                    } else {
+                        prepared -> indexedAssignmentOwnerType(resolved, range.sourceModule, assignmentAst!) => ownerTypeId!
+                        prepared -> indexedAssignmentValueType(resolved, range.sourceModule, assignmentAst!) => expectedValue!
                     }
+                    ownerTypeId! >= 0 and ownerTypeId! < (resolved.types -> len)
+                        -> if {
+                            resolved.types[ownerTypeId!] => owner
+                            intType => expectedIndex!
+                            owner.kind == 5 or owner.kind == 13 -> if {
+                                owner.first => expectedIndex!
+                            }
+                            owner.kind == 1 and owner.origin == 1
+                                and (owner.symbol == 18 or (reading and (owner.symbol == 16 or owner.symbol == 17)))
+                                -> if {
+                                    resolved.types -> typeIds.builtinTypeId(13) => expectedIndex!
+                                }
+                            reading and ((owner.kind >= 2 and owner.kind <= 5) or owner.kind == 12 or owner.kind == 13
+                                or (owner.kind == 1 and owner.origin == 1 and owner.symbol >= 16 and owner.symbol <= 18))
+                                => supportedRead
+                            supportedRead or (not reading and expectedValue! >= 0)
+                                -> if {
+                                    firstChildByAst![range.astStart + assignmentAst!] => valueAst
+                                    secondChildByAst![range.astStart + assignmentAst!] => indexAst
+                                    -1 => invalidAst!
+                                    -1 => expectedType!
+                                    -1 => actualType!
+                                    0 => code!
+                                    # Reads check the source before its index. Assignments
+                                    # check their value before the index, as in C#.
+                                    reading -> if { 1 } else { 0 } => operand!
+                                    operand! < 2 -> while {
+                                        valueAst => ast!
+                                        expectedValue! => expected!
+                                        operand! == 1 -> if {
+                                            indexAst => ast!
+                                            expectedIndex! => expected!
+                                        }
+                                        ast! >= 0 and expected! >= 0 and invalidAst! < 0
+                                            -> if {
+                                                typeByAst[range.astStart + ast!] => actual!
+                                                prepared.package.nodes[range.astStart + ast!] => node
+                                                # C# InferNameExpression reads one reference layer for a name.
+                                                # Keep reference-producing calls and other expressions unchanged.
+                                                node.kind == 15 -> if {
+                                                    resolved.types -> typeIds.materializedReadTypeId(actual!) => actual!
+                                                }
+                                                # Numeric literal context is permitted for values and mapped-byte indexes.
+                                                # An already typed binding never acquires this literal-only permission.
+                                                node.kind == 14 => numericLiteral!
+                                                node.kind == 22 and node.operatorKind == grammar.tokenIdMinus()
+                                                    -> if {
+                                                        firstChildByAst![range.astStart + ast!] => child
+                                                        child >= 0 and secondChildByAst![range.astStart + ast!] < 0
+                                                            and prepared.package.nodes[range.astStart + child].kind == 14
+                                                            -> if { true => numericLiteral! }
+                                                    }
+                                                resolved.types[expected!] => expectedSemanticType
+                                                expectedSemanticType.kind == 1 and expectedSemanticType.origin == 1
+                                                    and ((expectedSemanticType.symbol >= 2 and expectedSemanticType.symbol <= 13)
+                                                    or (expectedSemanticType.symbol >= 19 and expectedSemanticType.symbol <= 22))
+                                                    and numericLiteral!
+                                                    and (operand! == 0 or (owner.kind == 1 and owner.origin == 1
+                                                    and (owner.symbol == 18 or (reading and (owner.symbol == 16 or owner.symbol == 17))))) => contextualNumericLiteral
+                                                actual! >= 0 and not contextualNumericLiteral
+                                                    and not (resolved.types -> indexedOperandTypesMatch(actual!, expected!))
+                                                    -> if {
+                                                        ast! => invalidAst!
+                                                        expected! => expectedType!
+                                                        actual! => actualType!
+                                                        reading -> if { 14 } else { operand! + 11 } => code!
+                                                    }
+                                            }
+                                        operand! + 1 => operand!
+                                    }
+                                    invalidAst! >= 0 and (prepared.package -> diagnosticOriginBefore(range.sourceModule, invalidAst!, selected!.sourceModule, selected!.valueAst))
+                                        -> if {
+                                            prepared.package.nodes[range.astStart + invalidAst!].firstToken => token
+                                            BindingDeclarationDiagnostic { code: code!, sourceModule: range.sourceModule, bindingAst: assignmentAst!, valueAst: invalidAst!, nameToken: token, expectedTypeId: expectedType!, actualTypeId: actualType! } => selected!
+                                        }
+                                }
+                        }
                 }
             assignmentAst! + 1 => assignmentAst!
         }
@@ -795,7 +815,7 @@ public firstBindingDeclarationDiagnostic prepared: ref semanticContext.SemanticS
             signatureSource! + 1 => signatureSource!
         }
     prepared -> firstContainerTransformDiagnostic(resolved, typeByAst!) => selected!
-    prepared -> firstIndexedAssignmentDiagnostic(resolved, typeByAst!, selected!) => selected!
+    prepared -> firstIndexedOperandDiagnostic(resolved, typeByAst!, selected!) => selected!
     prepared.package.ranges -> each range {
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
