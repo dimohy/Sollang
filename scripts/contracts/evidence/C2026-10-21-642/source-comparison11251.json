@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "status": "source-compared-before-slg-change",
+  "observedAtUtc": "2026-10-20T15:48:24.073716+00:00",
+  "rootCause": "SLG Windows compute shutdown joins worker threads but overwrites worker, semaphore and completion-event handles without CloseHandle. CSharp already closes each owned kernel handle.",
+  "managedDecision": "WindowsLlvmRuntimePlatform.cs:1398-1440; wait worker then CloseHandle, after all joins close semaphore and event before clearing globals. CSharp is already correct; no managed implementation change required.",
+  "slgDecision": "compute_runtime.slg:Windows shutdown lacks all three CloseHandle operations; align existing shutdown only. Linux pthread_join/close path already performs its owned-resource cleanup and stays unchanged.",
+  "managedRuntimeEvidence": "artifacts/scratch/resume-20261006-owner-continuation22/compute-cleanup11249/result.json#/cases/0",
+  "nativeRuntimeEvidence": "artifacts/scratch/resume-20261006-owner-continuation22/compute-cleanup11250/result.json",
+  "measurement": "Diagnostic-instrumented actual generated LLVM saves first worker/semaphore/event before shutdown, then WaitForSingleObject(saved,0) must return WAIT_FAILED for all closed handles. CSharp exits0, native93, both original stdout14/49/3. Not unmodified-program acceptance or total process handle-count measurement.",
+  "inputSources": {
+    "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs": "2A7DC4B328CD4908E0BFE2D286C692240F106CB30800167D71B194E6CF81F69B",
+    "selfhost/llvm/emitter/compute_runtime.slg": "828367A0B77C50A26582FDA3BC9F089866B431C0A12CA193493C1BF45442B274"
+  },
+  "next": "Add exact close operations, extend existing worker runtime leaf test for live resource closure and unstarted/idempotent cleanup. Batch full compiler rebuild after source prerequisites and further related source review; do not claim old compiler includes source fix."
+}

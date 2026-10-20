@@ -1,0 +1,43 @@
+declare i32 @puts(ptr)
+@cleanup_probe_ok = private constant [18 x i8] c"worker-cleanup-ok\00"
+
+define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %configure = icmp eq i32 %argc, 1
+  br i1 %configure, label %configured, label %unstarted
+configured:
+  %selected = call i32 @sollang_compute_limit_workers(i32 1)
+  %selected_ok = icmp eq i32 %selected, 1
+  %worker = load ptr, ptr @sollang_compute_worker_handles, align 8
+  %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
+  %event = load ptr, ptr @sollang_compute_completion_event, align 8
+  call void @sollang_compute_shutdown()
+  call void @sollang_compute_shutdown()
+  %worker_wait = call i32 @WaitForSingleObject(ptr %worker, i32 0)
+  %semaphore_wait = call i32 @WaitForSingleObject(ptr %semaphore, i32 0)
+  %event_wait = call i32 @WaitForSingleObject(ptr %event, i32 0)
+  %worker_closed = icmp eq i32 %worker_wait, -1
+  %semaphore_closed = icmp eq i32 %semaphore_wait, -1
+  %event_closed = icmp eq i32 %event_wait, -1
+  %worker_semaphore_closed = and i1 %worker_closed, %semaphore_closed
+  %all_closed = and i1 %worker_semaphore_closed, %event_closed
+  %configured_ok = and i1 %selected_ok, %all_closed
+  br label %finish
+unstarted:
+  call void @sollang_compute_shutdown()
+  call void @sollang_compute_shutdown()
+  %unstarted_workers = load i32, ptr @sollang_compute_worker_count, align 4
+  %unstarted_ok = icmp eq i32 %unstarted_workers, 0
+  br label %finish
+finish:
+  %ok = phi i1 [ %configured_ok, %configured ], [ %unstarted_ok, %unstarted ]
+  %workers_after = load i32, ptr @sollang_compute_worker_count, align 4
+  %empty = icmp eq i32 %workers_after, 0
+  %finished_ok = and i1 %ok, %empty
+  br i1 %finished_ok, label %success, label %failure
+success:
+  %printed = call i32 @puts(ptr @cleanup_probe_ok)
+  ret i32 0
+failure:
+  ret i32 1
+}

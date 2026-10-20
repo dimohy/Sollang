@@ -1,0 +1,37 @@
+define internal void @sollang_compute_shutdown() {
+entry:
+  %workers = load i32, ptr @sollang_compute_worker_count, align 4
+  %started = icmp sgt i32 %workers, 0
+  br i1 %started, label %stop, label %done
+stop:
+  store atomic i32 1, ptr @sollang_compute_stopping release, align 4
+  %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
+  %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+  br label %join
+join:
+  %index = phi i32 [ 0, %stop ], [ %next, %joined ]
+  %all_joined = icmp eq i32 %index, %workers
+  br i1 %all_joined, label %cleanup, label %join_one
+join_one:
+  %slot = getelementptr [64 x ptr], ptr @sollang_compute_worker_handles, i32 0, i32 %index
+  %worker = load ptr, ptr %slot, align 8
+  %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
+  %closed_worker = call i32 @CloseHandle(ptr %worker)
+  store ptr null, ptr %slot, align 8
+  br label %joined
+joined:
+  %next = add i32 %index, 1
+  br label %join
+cleanup:
+  %closed_semaphore = call i32 @CloseHandle(ptr %semaphore)
+  %event = load ptr, ptr @sollang_compute_completion_event, align 8
+  %closed_event = call i32 @CloseHandle(ptr %event)
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
+  %tls_freed = call i32 @TlsFree(i32 %tls_index)
+  store ptr null, ptr @sollang_compute_semaphore, align 8
+  store ptr null, ptr @sollang_compute_completion_event, align 8
+  store i32 0, ptr @sollang_compute_worker_count, align 4
+  br label %done
+done:
+  ret void
+}

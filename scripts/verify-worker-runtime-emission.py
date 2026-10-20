@@ -31,11 +31,12 @@ def main():
     managed, selfhost, formatter, output = (p.resolve() for p in (args.managed, args.selfhost, args.formatter, args.output))
     fixture = ROOT / 'scripts/contracts/fixtures/worker-runtime-emitter.slg'
     probe = fixture.with_name('worker-runtime-probe.ll.txt')
+    cleanup_probe = fixture.with_name('worker-runtime-cleanup-probe.ll.txt')
     sources = [fixture, ROOT / 'selfhost/llvm/emitter/compute_runtime.slg',
                ROOT / 'selfhost/llvm/emitter/text_output_runtime.slg']
     llvm = ROOT / '.tools/llvm-22.1.8'
     inputs = list(dict.fromkeys([*managed_runtime_inputs(managed), selfhost, formatter, *sources, probe,
-        *sorted((ROOT / 'stdlib').rglob('*.slg')), Path(__file__).resolve(),
+        *sorted((ROOT / 'stdlib').rglob('*.slg')), cleanup_probe, Path(__file__).resolve(),
         llvm / 'bin/llvm-as.exe', llvm / 'bin/clang.exe',
         ROOT / 'selfhost/llvm/text/context_prepare.slg',
         *[ROOT / 'scripts' / name for name in ('verification_execution.py',
@@ -48,7 +49,7 @@ def main():
     with VerificationContractLease(inputs):
         pins = {str(p): sha(p) for p in inputs}
         stable = lambda: all(p.is_file() and sha(p) == pins[str(p)] for p in inputs)
-        record = dict(schemaVersion=1, status='running', completed=0, total=8,
+        record = dict(schemaVersion=1, status='running', completed=0, total=12,
                       scope='actual worker-runtime leaf emission; Windows native, Linux assembly only',
                       inputHashes=pins, cases=[], fullCompilerVerified=False, linuxExecuted=False)
         execution = VerificationExecution(ROOT, output, record, stable, sha)
@@ -83,6 +84,7 @@ def main():
                     outputs[platform] = runtime
                     common = 'declare ptr @malloc(i64)\ndeclare void @free(ptr)\ndeclare void @llvm.trap()\n'
                     declarations = ('declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)\n'
+                                    'declare dllimport i32 @CloseHandle(ptr)\n'
                                     'declare dllimport i32 @WaitForSingleObject(ptr, i32)\n') if platform == 'windows' else (
                                     'declare i32 @pthread_create(ptr, ptr, ptr, ptr)\n'
                                     'declare i32 @pthread_join(i64, ptr)\n')
@@ -99,6 +101,21 @@ def main():
                             if actual != 'worker-runtime-ok\n':
                                 raise ValueError('WORKER_RUNTIME_OUTPUT_MISMATCH:' + name + '-' + mode)
                             record['cases'].append(dict(id=name + '-' + mode, passed=True))
+                            record['completed'] += 1
+                            execution.save()
+                        cleanup_ll = output / (name + '-cleanup.ll')
+                        cleanup_ll.write_text('target triple = "' + triple + '"\n' + common
+                                              + declarations + runtime + cleanup_probe.read_text(), encoding='utf-8')
+                        run([llvm / 'bin/llvm-as.exe', cleanup_ll, '-o', output / (name + '-cleanup.bc')],
+                            name + '-cleanup-assemble')
+                        cleanup_native = output / (name + '-cleanup.exe')
+                        run([llvm / 'bin/clang.exe', '--target=' + triple, cleanup_ll, '-O1', '-o', cleanup_native],
+                            name + '-cleanup-link')
+                        for mode, arguments in [('configured', []), ('unstarted', ['unstarted'])]:
+                            actual = run([cleanup_native, *arguments], name + '-cleanup-' + mode)
+                            if actual != 'worker-cleanup-ok\n':
+                                raise ValueError('WORKER_RUNTIME_CLEANUP_MISMATCH:' + name + '-' + mode)
+                            record['cases'].append(dict(id=name + '-cleanup-' + mode, passed=True))
                             record['completed'] += 1
                             execution.save()
                     else:
