@@ -5256,16 +5256,37 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
                 calleeAst! + 1 => calleeAst!
             }
         }
-    "function '" -> print
-    diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
-        and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
-        and context.modules[diagnostic.targetSourceModule].pathLength > 0
+    -1 => directPathAst!
+    diagnostic.callAst >= 0 and context.nodes[sourceRange.astStart + diagnostic.callAst].kind == 11
         -> if {
-            context.modules[diagnostic.targetSourceModule] => targetIdentity
-            declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
-            "." -> print
-            declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
-        } else { functionName! -> print }
+            0 => childAst!
+            childAst! < sourceRange.astCount -> while {
+                context.nodes[sourceRange.astStart + childAst!] => child
+                child.parent == diagnostic.callAst and child.kind == 16
+                    -> if { childAst! => directPathAst! }
+                childAst! + 1 => childAst!
+            }
+        }
+    "function '" -> print
+    directPathAst! >= 0 -> if {
+        calls.ModuleCallResolution {
+            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
+            origin: 0, targetModule: diagnostic.targetSourceModule,
+            targetSourceModule: diagnostic.targetSourceModule,
+            functionSymbol: diagnostic.functionSymbol, status: 0
+        } => call
+        context -> emitSemanticCallPathName(call, directPathAst!, false)
+    } else {
+        diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
+            and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
+            and context.modules[diagnostic.targetSourceModule].pathLength > 0
+            -> if {
+                context.modules[diagnostic.targetSourceModule] => targetIdentity
+                declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
+                "." -> print
+                declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
+            } else { functionName! -> print }
+    }
     "' " -> print
     diagnostic.parameterOrdinal > 0 -> if { "parameter '$parameterName' " -> print }
     "expects " -> print
@@ -8283,11 +8304,43 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
         "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] sys.path.nativeStyle does not accept arguments" -> println
         return
     }
+    diagnostic.runtimeRequest and diagnostic.targetPathAst >= 0
+        -> if {
+            directCall.start => offset!
+            directCall.kind == 10 -> if {
+                context.nodes[directRange.astStart + diagnostic.targetPathAst].start => offset!
+            }
+            context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(offset!) => location
+            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+            directCall.kind == 10 -> if { "function '" -> print }
+            calls.ModuleCallResolution {
+                sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
+                origin: 0, targetModule: diagnostic.targetSourceModule,
+                targetSourceModule: diagnostic.targetSourceModule,
+                functionSymbol: diagnostic.functionSymbol, status: 0
+            } => call
+            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
+            directCall.kind == 10 -> if {
+                "' expects $(diagnostic.expectedAdditionalArguments) additional argument(s)" -> println
+            } else { " expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println }
+            return
+        }
     directCall.kind == 11 -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
-        context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
-        context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
+        calls.ModuleCallResolution {
+            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
+            origin: 0, targetModule: diagnostic.targetSourceModule,
+            targetSourceModule: diagnostic.targetSourceModule,
+            functionSymbol: diagnostic.functionSymbol, status: 0
+        } => call
+        diagnostic.targetPathAst >= 0 -> if {
+            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
+        } else {
+            context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
+            context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) -> print
+        }
+        "' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
         return
     }
     context.ranges[diagnostic.targetSourceModule] => range

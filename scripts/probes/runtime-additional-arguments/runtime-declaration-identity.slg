@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
+
+main {
+    [Text; ~] => sources!
+    sources! -> push("namespace sys.process\n\nimpl Command {\n    public collect: move self, limits: CaptureLimits -> Result<CapturedOutput, Text> uses Process = intrinsic\n}\n")
+    sources! -> push("namespace user.process\n\nimpl Command {\n    public collect: move self, limits: CaptureLimits -> Result<CapturedOutput, Text> uses Process = intrinsic\n}\n")
+    sources! -> push("namespace sys.process\n\nimpl OtherCommand {\n    public collect: move self, limits: CaptureLimits -> Result<CapturedOutput, Text> uses Process = intrinsic\n}\n")
+    sources! -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities
+    0..<Int(package.ranges -> len) -> each sourceIndex {
+        package.ranges[sourceIndex] => range
+        0..<range.symbolCount -> each index {
+            package.symbols[range.symbolStart + index] => symbol
+            symbol.kind == 31 -> if {
+                package -> calls.isProcessAdditionalRuntimeIntrinsic(identities, sourceIndex, index, 0, 3) => classified
+                "source=$sourceIndex result=$classified" -> println
+                sourceIndex == 0 -> if {
+                    package.symbols[range.symbolStart + symbol.parent] => owner
+                    package -> typeIds.implOwnerTypeAst(0, owner.astNode) => ownerType
+                    package.nodes[range.astStart + ownerType] => node
+                    package.sources[0] -> slice(node.start, node.length) -> println
+                    package -> calls.isProcessAdditionalRuntimeIntrinsic(identities, 0, index, 0, 0) -> println
+                }
+            }
+        }
+    }
+}

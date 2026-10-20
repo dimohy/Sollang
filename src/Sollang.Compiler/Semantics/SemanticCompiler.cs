@@ -11383,6 +11383,16 @@ internal sealed partial class SemanticCompiler
                             function.InputType,
                             currentType);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        ValidateAdditionalFunctionArguments(
+                            function,
+                            target.Arguments,
+                            functions,
+                            bindings,
+                            allowReadIntCall,
+                            mutableBindings,
+                            path,
+                            target.Line,
+                            target.Column);
                         _resolvedGenericCalls[target] = function;
                         currentType = function.ReturnType;
                         continue;
@@ -13011,14 +13021,28 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimeAtomicReplaceFile:
             case BoundFunctionKind.RuntimeCreateExclusiveFile:
             case BoundFunctionKind.RuntimeRemoveFile:
-                if (expression.Arguments.Count != 1)
+                var processRequestArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
+                if (expression.Arguments.Count != processRequestArgumentCount)
                 {
-                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
+                    throw Error(expression.Line, expression.Column,
+                        processRequestArgumentCount == 1
+                            ? $"{path} expects exactly one request"
+                            : $"{path} expects {processRequestArgumentCount} argument(s)");
                 }
                 var argvType = InferExpression(
                     expression.Arguments[0], functions, bindings,
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                ValidateAdditionalFunctionArguments(
+                    function,
+                    expression.Arguments.Skip(1).ToArray(),
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    mutableBindings,
+                    path,
+                    expression.Line,
+                    expression.Column);
                 _resolvedGenericCalls[expression] = function;
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeReadDirectory:
@@ -14758,12 +14782,14 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
         IReadOnlySet<string>? mutableBindings,
-        string path)
+        string path,
+        int? callLine = null,
+        int? callColumn = null)
     {
         var parameters = function.AdditionalParameters ?? [];
         if (arguments.Count != parameters.Count)
         {
-            throw Error(function.Line, function.Column,
+            throw Error(callLine ?? function.Line, callColumn ?? function.Column,
                 $"function '{path}' expects {parameters.Count} additional argument(s)");
         }
 

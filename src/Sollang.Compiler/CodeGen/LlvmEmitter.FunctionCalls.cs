@@ -476,8 +476,15 @@ internal sealed partial class LlvmEmitter
             or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
             or BoundFunctionKind.RuntimeDiagnosticSessionClose
             or BoundFunctionKind.RuntimeDnsLookup
+            or BoundFunctionKind.RuntimeRunProcess
+            or BoundFunctionKind.RuntimeRunProcessToFile
+            or BoundFunctionKind.RuntimeCollectProcess
+            or BoundFunctionKind.RuntimeSpawnProcess
+            or BoundFunctionKind.RuntimeWaitProcess
             or BoundFunctionKind.RuntimePollChildProcess
-            or BoundFunctionKind.RuntimeKillChildProcess))
+            or BoundFunctionKind.RuntimeKillChildProcess
+            or BoundFunctionKind.RuntimeChildProcessId
+            or BoundFunctionKind.RuntimeProcessIdValue))
         {
             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
         }

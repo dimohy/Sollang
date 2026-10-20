@@ -483,6 +483,32 @@ commitAnalyzedGlobalFunctionAliases resolutions: mut [ModuleCallResolution; ~], 
     }
 }
 
+public isProcessAdditionalRuntimeIntrinsic package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Bool {
+    sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
+        or sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { false -> return }
+    package.ranges[sourceModule] => range
+    functionSymbol < 0 or functionSymbol >= range.symbolCount
+        -> if { false -> return }
+    package.symbols[range.symbolStart + functionSymbol] => declaration
+    declaration.kind != 31 or declaration.parent < 0 or declaration.nameToken < 0
+        -> if { false -> return }
+    package.symbols[range.symbolStart + declaration.parent] => owner
+    owner.kind != 6 -> if { false -> return }
+    package -> typeIds.implOwnerTypeAst(sourceModule, owner.astNode) => ownerTypeAst
+    ownerTypeAst < 0 -> if { false -> return }
+    package.sources[sourceModule] -> slice(UIntSize(0), package.sources[sourceModule] -> len) => source
+    source -> modules.logicalNameIs(identities[sourceModule], range, package.tokens, "sys.process")
+        -> unless { false -> return }
+    package.nodes[range.astStart + ownerTypeAst] => receiver
+    source -> slice(receiver.start, receiver.length) => receiverName
+    receiverName != "Command" and receiverName != "sys.process.Command"
+        -> if { false -> return }
+    package.tokens[range.tokenStart + declaration.nameToken] => nameToken
+    source -> slice(nameToken.span.start, nameToken.span.length) => name
+    name == "collect" or name == "runToFile"
+}
+
 public displayFunctionSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Int {
     sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
         or sourceModule < 0 or sourceModule >= (package.ranges -> len)

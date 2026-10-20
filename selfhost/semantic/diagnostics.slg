@@ -259,8 +259,10 @@ public struct BindingDeclarationDiagnostic {
 
 public struct CallArityDiagnostic {
     public nativePathStyle: Bool
+    public runtimeRequest: Bool
     public sourceModule: Int
     public callAst: Int
+    public targetPathAst: Int
     public targetSourceModule: Int
     public functionSymbol: Int
     public expectedAdditionalArguments: Int
@@ -270,7 +272,7 @@ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call
     call.status == 0 and (prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol))
         -> if { 0 -> return }
     call.status != 0 or call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
-        or call.targetSourceModule != call.sourceModule
+        or call.targetSourceModule < 0 or call.targetSourceModule >= (prepared.package.ranges -> len)
         -> if { -1 -> return }
     prepared.package.ranges[call.sourceModule] => range
     prepared.package.ranges[call.targetSourceModule] => targetRange
@@ -287,8 +289,22 @@ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call
             -> if { -1 -> return }
     }
     prepared.package.tokens[range.tokenStart + node.firstToken].kind != grammar.tokenIdIdentifier()
-        or prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind != grammar.tokenIdLeftParen()
         -> if { -1 -> return }
+    # Qualified static calls include every input in parentheses. A dotted local
+    # receiver keeps the existing method-input path, which supplies self.
+    prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind == grammar.tokenIdDot()
+        -> if {
+            0 => nameIndex!
+            nameIndex! < range.nameCount -> while {
+                prepared.package.names[range.nameStart + nameIndex!] => name
+                name.nameToken == node.firstToken and name.symbol >= 0
+                    -> if {
+                        prepared.package.symbols[range.symbolStart + name.symbol] => receiver
+                        receiver.kind == 9 or receiver.kind == 35 -> if { -1 -> return }
+                    }
+                nameIndex! + 1 => nameIndex!
+            }
+        }
     prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
     function.kind != 7 and function.kind != 31 -> if { -1 -> return }
     0 => childIndex!
@@ -335,8 +351,9 @@ directArityOwnsUnknownName prepared: ref semanticContext.SemanticSnapshot, resol
 }
 
 public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> CallArityDiagnostic {
-    CallArityDiagnostic { nativePathStyle: false, sourceModule: -1, callAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
+    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    prepared.package -> semanticContext.indexDirectFlowTargetPathsByAst => targetPaths
     prepared.calls -> each call {
         call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
             and call.targetSourceModule >= 0 and call.targetSourceModule < (prepared.package.ranges -> len)
@@ -367,10 +384,35 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, 
                                 expectedTotal! - 1 => expectedCount!
                                 prepared.package.nodes[range.astStart + call.callAst].kind == 11
                                     -> if { expectedTotal! => expectedCount! }
+                                targetPaths[range.astStart + call.callAst] => targetPath!
+                                prepared.package.nodes[range.astStart + call.callAst].kind == 10 and targetPath! < 0
+                                    -> if {
+                                        0 => childAst!
+                                        childAst! < range.astCount -> while {
+                                            prepared.package.nodes[range.astStart + childAst!] => child
+                                            child.parent == call.callAst
+                                                and range.astStart + childAst! != flowSources[range.astStart + call.callAst]
+                                                and (child.kind == 11 or child.kind == 48 or child.kind == 77)
+                                                -> if { targetPaths[range.astStart + childAst!] => targetPath! }
+                                            childAst! + 1 => childAst!
+                                        }
+                                    }
+                                prepared.package.nodes[range.astStart + call.callAst].kind == 11
+                                    -> if {
+                                        0 => childAst!
+                                        childAst! < range.astCount -> while {
+                                            prepared.package.nodes[range.astStart + childAst!] => child
+                                            child.parent == call.callAst and child.kind == 16
+                                                -> if { childAst! => targetPath! }
+                                            childAst! + 1 => childAst!
+                                        }
+                                    }
                                 CallArityDiagnostic {
                                     nativePathStyle: nativePathStyle
+                                    runtimeRequest: prepared.package -> calls.isProcessAdditionalRuntimeIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)
                                     sourceModule: call.sourceModule
                                     callAst: call.callAst
+                                    targetPathAst: targetPath!
                                     targetSourceModule: call.targetSourceModule
                                     functionSymbol: call.functionSymbol
                                     expectedAdditionalArguments: expectedCount!
@@ -3398,7 +3440,7 @@ emptyNumericCallArgumentDiagnostic: -> NumericCallArgumentDiagnostic => NumericC
     actualTypeId: -1
 }
 
-numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
+numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, identities: ref [modules.ModuleIdentity; ~], libraryStart: Int, libraryCount: Int, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
     emptyNumericCallArgumentDiagnostic() => valid
     argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
         and argument.argumentAst >= 0
@@ -3460,11 +3502,28 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
     argument.status == 0 and argument.expectedTypeId >= 0
         and argument.expectedTypeId < (resolved.types -> len)
         -> unless { valid -> return }
-    resolved.types[argument.expectedTypeId] => expectedType
-    expectedType.kind == 1 and expectedType.origin == 1
-        and ((expectedType.symbol >= 2 and expectedType.symbol <= 13)
-        or (expectedType.symbol >= 19 and expectedType.symbol <= 22))
-        and not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
+    # A default input reads through a readonly reference. Keep this distinct
+    # from mutable and consuming inputs, which retain their ownership checks.
+    resolved.types[argument.actualTypeId] => actualType
+    actualType.kind == 8
+        and (resolved.types -> typeIds.functionArgumentCompatible(actualType.first, argument.expectedTypeId))
+        and argument.targetSourceModule >= 0 and argument.targetSourceModule < (package.ranges -> len)
+        and argument.parameterSymbol >= 0
+        and argument.parameterSymbol < package.ranges[argument.targetSourceModule].symbolCount
+        -> if {
+            package.ranges[argument.targetSourceModule] => parameterRange
+            package.symbols[parameterRange.symbolStart + argument.parameterSymbol] => parameter
+            parameter.flags % 2 == 0 and parameter.flags / 2 % 2 == 0
+                -> if { valid -> return }
+        }
+    # Console facades use the existing, provenance-aware formatter identity.
+    # Their displayable-value contract is not limited by the Text facade type.
+    package -> calls.displayFunctionSymbol(identities, argument.targetSourceModule, argument.functionSymbol, libraryStart, libraryCount) => display
+    display == -101 or display == -102 -> if { valid -> return }
+    # Every committed parameter uses the same compatibility contract. Restricting
+    # this diagnostic to numeric parameters lets invalid nominal/aggregate inputs
+    # reach runtime lowering, where their fields cannot be extracted safely.
+    not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
         -> unless { valid -> return }
     argument.argumentAst => diagnosticAst!
     argument.parameterOrdinal == 0 and argument.callAst >= 0
@@ -3484,9 +3543,10 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
     }
 }
 
-public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> NumericCallArgumentDiagnostic {
+public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, libraryStart: Int, libraryCount: Int -> NumericCallArgumentDiagnostic {
+    package -> modules.identitiesAnalyzed => identities
     resolved.callArguments -> each argument {
-        package -> numericCallArgumentMismatch(resolved, argument) => diagnostic
+        package -> numericCallArgumentMismatch(resolved, identities, libraryStart, libraryCount, argument) => diagnostic
         diagnostic.code > 0 -> if { diagnostic -> return }
     }
     package -> firstFileScalarArgumentDiagnostic(resolved)

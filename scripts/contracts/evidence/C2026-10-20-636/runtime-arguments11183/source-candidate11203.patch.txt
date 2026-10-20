@@ -1,0 +1,463 @@
+diff --git a/examples/regression/1161-process-environment-instance.slg b/examples/regression/1161-process-environment-instance.slg
+index 6095ce3c..8cc5c8fe 100644
+--- a/examples/regression/1161-process-environment-instance.slg
++++ b/examples/regression/1161-process-environment-instance.slg
+@@ -8,7 +8,7 @@ describe value: Option<Text> -> Text {
+     }
+ }
+ 
+-execute command: process.Command -> Int uses Process {
++execute command: move process.Command -> Int uses Process {
+     command -> status -> when {
+         Result<process.ExitStatus, Text>.Ok(status) => status -> exitCode
+         Result<process.ExitStatus, Text>.Err(_) => -1
+diff --git a/selfhost/llvm/emitter/diagnostics.slg b/selfhost/llvm/emitter/diagnostics.slg
+index cbec89d5..8dbd4d68 100644
+--- a/selfhost/llvm/emitter/diagnostics.slg
++++ b/selfhost/llvm/emitter/diagnostics.slg
+@@ -5256,16 +5256,37 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
+                 calleeAst! + 1 => calleeAst!
+             }
+         }
+-    "function '" -> print
+-    diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
+-        and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
+-        and context.modules[diagnostic.targetSourceModule].pathLength > 0
++    -1 => directPathAst!
++    diagnostic.callAst >= 0 and context.nodes[sourceRange.astStart + diagnostic.callAst].kind == 11
+         -> if {
+-            context.modules[diagnostic.targetSourceModule] => targetIdentity
+-            declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
+-            "." -> print
+-            declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
+-        } else { functionName! -> print }
++            0 => childAst!
++            childAst! < sourceRange.astCount -> while {
++                context.nodes[sourceRange.astStart + childAst!] => child
++                child.parent == diagnostic.callAst and child.kind == 16
++                    -> if { childAst! => directPathAst! }
++                childAst! + 1 => childAst!
++            }
++        }
++    "function '" -> print
++    directPathAst! >= 0 -> if {
++        calls.ModuleCallResolution {
++            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++            origin: 0, targetModule: diagnostic.targetSourceModule,
++            targetSourceModule: diagnostic.targetSourceModule,
++            functionSymbol: diagnostic.functionSymbol, status: 0
++        } => call
++        context -> emitSemanticCallPathName(call, directPathAst!, false)
++    } else {
++        diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
++            and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
++            and context.modules[diagnostic.targetSourceModule].pathLength > 0
++            -> if {
++                context.modules[diagnostic.targetSourceModule] => targetIdentity
++                declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
++                "." -> print
++                declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
++            } else { functionName! -> print }
++    }
+     "' " -> print
+     diagnostic.parameterOrdinal > 0 -> if { "parameter '$parameterName' " -> print }
+     "expects " -> print
+@@ -8283,11 +8304,43 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
+         "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] sys.path.nativeStyle does not accept arguments" -> println
+         return
+     }
++    diagnostic.runtimeRequest and diagnostic.targetPathAst >= 0
++        -> if {
++            directCall.start => offset!
++            directCall.kind == 10 -> if {
++                context.nodes[directRange.astStart + diagnostic.targetPathAst].start => offset!
++            }
++            context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(offset!) => location
++            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
++            directCall.kind == 10 -> if { "function '" -> print }
++            calls.ModuleCallResolution {
++                sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++                origin: 0, targetModule: diagnostic.targetSourceModule,
++                targetSourceModule: diagnostic.targetSourceModule,
++                functionSymbol: diagnostic.functionSymbol, status: 0
++            } => call
++            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
++            directCall.kind == 10 -> if {
++                "' expects $(diagnostic.expectedAdditionalArguments) additional argument(s)" -> println
++            } else { " expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println }
++            return
++        }
+     directCall.kind == 11 -> if {
+         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
+-        context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
+-        context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
++        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
++        calls.ModuleCallResolution {
++            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++            origin: 0, targetModule: diagnostic.targetSourceModule,
++            targetSourceModule: diagnostic.targetSourceModule,
++            functionSymbol: diagnostic.functionSymbol, status: 0
++        } => call
++        diagnostic.targetPathAst >= 0 -> if {
++            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
++        } else {
++            context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
++            context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) -> print
++        }
++        "' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
+         return
+     }
+     context.ranges[diagnostic.targetSourceModule] => range
+diff --git a/selfhost/llvm/text/context_prepare.slg b/selfhost/llvm/text/context_prepare.slg
+index 98c1d93a..b7a803ed 100644
+--- a/selfhost/llvm/text/context_prepare.slg
++++ b/selfhost/llvm/text/context_prepare.slg
+@@ -178,7 +178,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+     prepared -> fixedLengthArrays.collect(recursiveTypes!, prepared.interpolations, prepared.interpolationRanges) => fixedLengthArrayWarnings
+     prepared -> interpolationInference.callNumericWarningByNode(recursiveTypes!) => interpolationNumericWarningByNode
+     prepared -> interpolationInference.callArgumentDiagnosticsByNode(recursiveTypes!, pointerBitWidth) => interpolationCallArgumentDiagnosticByNode
+-    prepared.package -> semanticDiagnostics.firstNumericCallArgumentDiagnostic(recursiveTypes!) => numericCallArgumentDiagnostic
++    prepared.package -> semanticDiagnostics.firstNumericCallArgumentDiagnostic(recursiveTypes!, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount) => numericCallArgumentDiagnostic
+     prepared -> semanticDiagnostics.firstCallArityDiagnostic(recursiveTypes!) => callArityDiagnostic
+     prepared -> semanticDiagnostics.unsupportedNominalEnumFlowPaths => unsupportedNominalEnumFlowPaths
+     prepared.package -> semanticDiagnostics.firstNominalFieldMismatch(recursiveTypes!) => nominalFieldMismatch
+diff --git a/selfhost/semantic/calls.slg b/selfhost/semantic/calls.slg
+index 64cbd4c6..5fc16a5d 100644
+--- a/selfhost/semantic/calls.slg
++++ b/selfhost/semantic/calls.slg
+@@ -483,6 +483,30 @@ commitAnalyzedGlobalFunctionAliases resolutions: mut [ModuleCallResolution; ~],
+     }
+ }
+ 
++public isProcessAdditionalRuntimeIntrinsic package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Bool {
++    sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
++        or sourceModule < 0 or sourceModule >= (package.ranges -> len)
++        -> if { false -> return }
++    package.ranges[sourceModule] => range
++    functionSymbol < 0 or functionSymbol >= range.symbolCount
++        -> if { false -> return }
++    package.symbols[range.symbolStart + functionSymbol] => declaration
++    declaration.kind != 31 or declaration.parent < 0 or declaration.nameToken < 0
++        -> if { false -> return }
++    package.symbols[range.symbolStart + declaration.parent] => owner
++    owner.kind != 6 or owner.typeNode < 0 -> if { false -> return }
++    package.sources[sourceModule] -> slice(UIntSize(0), package.sources[sourceModule] -> len) => source
++    source -> modules.logicalNameIs(identities[sourceModule], range, package.tokens, "sys.process")
++        -> unless { false -> return }
++    package.nodes[range.astStart + owner.typeNode] => receiver
++    source -> slice(receiver.start, receiver.length) => receiverName
++    receiverName != "Command" and receiverName != "sys.process.Command"
++        -> if { false -> return }
++    package.tokens[range.tokenStart + declaration.nameToken] => nameToken
++    source -> slice(nameToken.span.start, nameToken.span.length) => name
++    name == "collect" or name == "runToFile"
++}
++
+ public displayFunctionSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Int {
+     sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
+         or sourceModule < 0 or sourceModule >= (package.ranges -> len)
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 6111d2ea..40fd4c6c 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -259,8 +259,10 @@ public struct BindingDeclarationDiagnostic {
+ 
+ public struct CallArityDiagnostic {
+     public nativePathStyle: Bool
++    public runtimeRequest: Bool
+     public sourceModule: Int
+     public callAst: Int
++    public targetPathAst: Int
+     public targetSourceModule: Int
+     public functionSymbol: Int
+     public expectedAdditionalArguments: Int
+@@ -270,7 +272,7 @@ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call
+     call.status == 0 and (prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol))
+         -> if { 0 -> return }
+     call.status != 0 or call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+-        or call.targetSourceModule != call.sourceModule
++        or call.targetSourceModule < 0 or call.targetSourceModule >= (prepared.package.ranges -> len)
+         -> if { -1 -> return }
+     prepared.package.ranges[call.sourceModule] => range
+     prepared.package.ranges[call.targetSourceModule] => targetRange
+@@ -287,8 +289,22 @@ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call
+             -> if { -1 -> return }
+     }
+     prepared.package.tokens[range.tokenStart + node.firstToken].kind != grammar.tokenIdIdentifier()
+-        or prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind != grammar.tokenIdLeftParen()
+         -> if { -1 -> return }
++    # Qualified static calls include every input in parentheses. A dotted local
++    # receiver keeps the existing method-input path, which supplies self.
++    prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind == grammar.tokenIdDot()
++        -> if {
++            0 => nameIndex!
++            nameIndex! < range.nameCount -> while {
++                prepared.package.names[range.nameStart + nameIndex!] => name
++                name.nameToken == node.firstToken and name.symbol >= 0
++                    -> if {
++                        prepared.package.symbols[range.symbolStart + name.symbol] => receiver
++                        receiver.kind == 9 or receiver.kind == 35 -> if { -1 -> return }
++                    }
++                nameIndex! + 1 => nameIndex!
++            }
++        }
+     prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+     function.kind != 7 and function.kind != 31 -> if { -1 -> return }
+     0 => childIndex!
+@@ -335,8 +351,9 @@ directArityOwnsUnknownName prepared: ref semanticContext.SemanticSnapshot, resol
+ }
+ 
+ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> CallArityDiagnostic {
+-    CallArityDiagnostic { nativePathStyle: false, sourceModule: -1, callAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
++    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
++    prepared.package -> semanticContext.indexDirectFlowTargetPathsByAst => targetPaths
+     prepared.calls -> each call {
+         call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+             and call.targetSourceModule >= 0 and call.targetSourceModule < (prepared.package.ranges -> len)
+@@ -367,10 +384,23 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot,
+                                 expectedTotal! - 1 => expectedCount!
+                                 prepared.package.nodes[range.astStart + call.callAst].kind == 11
+                                     -> if { expectedTotal! => expectedCount! }
++                                targetPaths[range.astStart + call.callAst] => targetPath!
++                                prepared.package.nodes[range.astStart + call.callAst].kind == 11
++                                    -> if {
++                                        0 => childAst!
++                                        childAst! < range.astCount -> while {
++                                            prepared.package.nodes[range.astStart + childAst!] => child
++                                            child.parent == call.callAst and child.kind == 16
++                                                -> if { childAst! => targetPath! }
++                                            childAst! + 1 => childAst!
++                                        }
++                                    }
+                                 CallArityDiagnostic {
+                                     nativePathStyle: nativePathStyle
++                                    runtimeRequest: prepared.package -> calls.isProcessAdditionalRuntimeIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)
+                                     sourceModule: call.sourceModule
+                                     callAst: call.callAst
++                                    targetPathAst: targetPath!
+                                     targetSourceModule: call.targetSourceModule
+                                     functionSymbol: call.functionSymbol
+                                     expectedAdditionalArguments: expectedCount!
+@@ -3398,7 +3428,7 @@ emptyNumericCallArgumentDiagnostic: -> NumericCallArgumentDiagnostic => NumericC
+     actualTypeId: -1
+ }
+ 
+-numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
++numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, identities: ref [modules.ModuleIdentity; ~], libraryStart: Int, libraryCount: Int, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
+     emptyNumericCallArgumentDiagnostic() => valid
+     argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
+         and argument.argumentAst >= 0
+@@ -3460,11 +3490,28 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
+     argument.status == 0 and argument.expectedTypeId >= 0
+         and argument.expectedTypeId < (resolved.types -> len)
+         -> unless { valid -> return }
+-    resolved.types[argument.expectedTypeId] => expectedType
+-    expectedType.kind == 1 and expectedType.origin == 1
+-        and ((expectedType.symbol >= 2 and expectedType.symbol <= 13)
+-        or (expectedType.symbol >= 19 and expectedType.symbol <= 22))
+-        and not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
++    # A default input reads through a readonly reference. Keep this distinct
++    # from mutable and consuming inputs, which retain their ownership checks.
++    resolved.types[argument.actualTypeId] => actualType
++    actualType.kind == 8
++        and (resolved.types -> typeIds.functionArgumentCompatible(actualType.first, argument.expectedTypeId))
++        and argument.targetSourceModule >= 0 and argument.targetSourceModule < (package.ranges -> len)
++        and argument.parameterSymbol >= 0
++        and argument.parameterSymbol < package.ranges[argument.targetSourceModule].symbolCount
++        -> if {
++            package.ranges[argument.targetSourceModule] => parameterRange
++            package.symbols[parameterRange.symbolStart + argument.parameterSymbol] => parameter
++            parameter.flags % 2 == 0 and parameter.flags / 2 % 2 == 0
++                -> if { valid -> return }
++        }
++    # Console facades use the existing, provenance-aware formatter identity.
++    # Their displayable-value contract is not limited by the Text facade type.
++    package -> calls.displayFunctionSymbol(identities, argument.targetSourceModule, argument.functionSymbol, libraryStart, libraryCount) => display
++    display == -101 or display == -102 -> if { valid -> return }
++    # Every committed parameter uses the same compatibility contract. Restricting
++    # this diagnostic to numeric parameters lets invalid nominal/aggregate inputs
++    # reach runtime lowering, where their fields cannot be extracted safely.
++    not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
+         -> unless { valid -> return }
+     argument.argumentAst => diagnosticAst!
+     argument.parameterOrdinal == 0 and argument.callAst >= 0
+@@ -3484,9 +3531,10 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
+     }
+ }
+ 
+-public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> NumericCallArgumentDiagnostic {
++public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, libraryStart: Int, libraryCount: Int -> NumericCallArgumentDiagnostic {
++    package -> modules.identitiesAnalyzed => identities
+     resolved.callArguments -> each argument {
+-        package -> numericCallArgumentMismatch(resolved, argument) => diagnostic
++        package -> numericCallArgumentMismatch(resolved, identities, libraryStart, libraryCount, argument) => diagnostic
+         diagnostic.code > 0 -> if { diagnostic -> return }
+     }
+     package -> firstFileScalarArgumentDiagnostic(resolved)
+diff --git a/selfhost/semantic/expression_type_ids.slg b/selfhost/semantic/expression_type_ids.slg
+index 366aa3cd..25065ecf 100644
+--- a/selfhost/semantic/expression_type_ids.slg
++++ b/selfhost/semantic/expression_type_ids.slg
+@@ -2883,6 +2883,36 @@ contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot,
+     contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, sourceModule, argumentAst, expectedTypeId)
+ }
+ 
++contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
++    expectedTypeId < 0 or expectedTypeId >= (resolved.types -> len)
++        -> if { false -> return }
++    resolved.types[expectedTypeId] => expected
++    expected.kind != 2 and expected.kind != 3 and expected.kind != 4 and expected.kind != 12
++        -> if { false -> return }
++    expected.first < 0 or expected.first >= (resolved.types -> len)
++        -> if { false -> return }
++    prepared.package.ranges[sourceModule] => range
++    range.astStart + argumentAst => globalAst
++    prepared.package.nodes[globalAst].kind != 37 -> if { false -> return }
++    index.firstChild[globalAst] => child!
++    child! >= 0 -> while {
++        # Explicitly typed constructors retain their own element contract.
++        prepared.package.nodes[child!].kind == 12 -> if { false -> return }
++        index.nextChild[child!] => child!
++    }
++    expressionByAst[globalAst] => expressionIndex
++    expressionIndex < 0 -> if { false -> return }
++    resolved.expressions[expressionIndex].typeId => actualType
++    actualType < 0 -> if { false -> return }
++    resolved.types[actualType] => actual
++    actual.kind != 3 and actual.kind != 4 and actual.kind != 12
++        -> if { false -> return }
++    # Preserve the literal's storage and length while its parameter supplies the
++    # element type. Existing contextual-field logic checks each numeric element.
++    resolved.types -> internArrayLiteralType(actual.kind, expected.first, actual.length) => contextual
++    resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual, expectedByAst)
++}
++
+ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+     expectedTypeId < 0 or expectedTypeId >= (types -> len)
+         -> if { false -> return }
+@@ -3091,6 +3121,9 @@ resolveSemanticCallArgumentBindings prepared: ref semanticContext.SemanticSnapsh
+ 
+ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
+     seeds.arguments -> each argument { resolved.callArguments -> push(argument) }
++    prepared.package -> indexContextualRecords => contextualIndex
++    [Int; ~] => expectedContextByAst!
++    prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
+     prepared -> indexExplicitFlowTypeByCallAst(resolved.references, resolved.referenceIndexByTypeAst) => explicitTypeByCallAst
+     [Int; ~] => expressionByAst!
+     prepared.package.nodes -> each node { expressionByAst! -> push(-1) }
+@@ -3169,8 +3202,10 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                             callNode.kind != 10 or binding.parameterOrdinal > 0
+                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 14
+                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 22
++                                or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 37
+                                 -> if {
+                                     contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
++                                    contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
+                                 }
+                         }
+                     expressionByAst![sourceRange.astStart + binding.argumentAst] => argumentIndex
+@@ -3263,6 +3298,12 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                                         callNode.kind != 10 -> if {
+                                             contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
+                                             contextual -> if { fact!.expectedTypeId => fact!.actualTypeId }
++                                            contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextualArray
++                                            contextualArray -> if {
++                                                prepared.package.ranges[fact!.sourceModule] => argumentRange
++                                                expressionByAst![argumentRange.astStart + fact!.argumentAst] => argumentExpression
++                                                resolved.expressions[argumentExpression].typeId => fact!.actualTypeId
++                                            }
+                                         }
+                                         resolved.callArguments -> replaceCallArgument(priorIndex, fact!)
+                                     }
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+index c57229f4..b15caca4 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+@@ -476,8 +476,15 @@ internal sealed partial class LlvmEmitter
+             or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+             or BoundFunctionKind.RuntimeDiagnosticSessionClose
+             or BoundFunctionKind.RuntimeDnsLookup
++            or BoundFunctionKind.RuntimeRunProcess
++            or BoundFunctionKind.RuntimeRunProcessToFile
++            or BoundFunctionKind.RuntimeCollectProcess
++            or BoundFunctionKind.RuntimeSpawnProcess
++            or BoundFunctionKind.RuntimeWaitProcess
+             or BoundFunctionKind.RuntimePollChildProcess
+-            or BoundFunctionKind.RuntimeKillChildProcess))
++            or BoundFunctionKind.RuntimeKillChildProcess
++            or BoundFunctionKind.RuntimeChildProcessId
++            or BoundFunctionKind.RuntimeProcessIdValue))
+         {
+             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
+         }
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+index 726623d6..8af6dbe7 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -11383,6 +11383,16 @@ internal sealed partial class SemanticCompiler
+                             function.InputType,
+                             currentType);
+                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
++                        ValidateAdditionalFunctionArguments(
++                            function,
++                            target.Arguments,
++                            functions,
++                            bindings,
++                            allowReadIntCall,
++                            mutableBindings,
++                            path,
++                            target.Line,
++                            target.Column);
+                         _resolvedGenericCalls[target] = function;
+                         currentType = function.ReturnType;
+                         continue;
+@@ -13011,14 +13021,28 @@ internal sealed partial class SemanticCompiler
+             case BoundFunctionKind.RuntimeAtomicReplaceFile:
+             case BoundFunctionKind.RuntimeCreateExclusiveFile:
+             case BoundFunctionKind.RuntimeRemoveFile:
+-                if (expression.Arguments.Count != 1)
++                var processRequestArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
++                if (expression.Arguments.Count != processRequestArgumentCount)
+                 {
+-                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
++                    throw Error(expression.Line, expression.Column,
++                        processRequestArgumentCount == 1
++                            ? $"{path} expects exactly one request"
++                            : $"{path} expects {processRequestArgumentCount} argument(s)");
+                 }
+                 var argvType = InferExpression(
+                     expression.Arguments[0], functions, bindings,
+                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
++                ValidateAdditionalFunctionArguments(
++                    function,
++                    expression.Arguments.Skip(1).ToArray(),
++                    functions,
++                    bindings,
++                    allowReadIntCall,
++                    mutableBindings,
++                    path,
++                    expression.Line,
++                    expression.Column);
+                 _resolvedGenericCalls[expression] = function;
+                 return function.ReturnType;
+             case BoundFunctionKind.RuntimeReadDirectory:
+@@ -14758,12 +14782,14 @@ internal sealed partial class SemanticCompiler
+         IReadOnlyDictionary<string, BoundType> bindings,
+         bool allowReadIntCall,
+         IReadOnlySet<string>? mutableBindings,
+-        string path)
++        string path,
++        int? callLine = null,
++        int? callColumn = null)
+     {
+         var parameters = function.AdditionalParameters ?? [];
+         if (arguments.Count != parameters.Count)
+         {
+-            throw Error(function.Line, function.Column,
++            throw Error(callLine ?? function.Line, callColumn ?? function.Column,
+                 $"function '{path}' expects {parameters.Count} additional argument(s)");
+         }
+ 

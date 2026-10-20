@@ -2883,6 +2883,36 @@ contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot,
     contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, sourceModule, argumentAst, expectedTypeId)
 }
 
+contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+    expectedTypeId < 0 or expectedTypeId >= (resolved.types -> len)
+        -> if { false -> return }
+    resolved.types[expectedTypeId] => expected
+    expected.kind != 2 and expected.kind != 3 and expected.kind != 4 and expected.kind != 12
+        -> if { false -> return }
+    expected.first < 0 or expected.first >= (resolved.types -> len)
+        -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + argumentAst => globalAst
+    prepared.package.nodes[globalAst].kind != 37 -> if { false -> return }
+    index.firstChild[globalAst] => child!
+    child! >= 0 -> while {
+        # Explicitly typed constructors retain their own element contract.
+        prepared.package.nodes[child!].kind == 12 -> if { false -> return }
+        index.nextChild[child!] => child!
+    }
+    expressionByAst[globalAst] => expressionIndex
+    expressionIndex < 0 -> if { false -> return }
+    resolved.expressions[expressionIndex].typeId => actualType
+    actualType < 0 -> if { false -> return }
+    resolved.types[actualType] => actual
+    actual.kind != 3 and actual.kind != 4 and actual.kind != 12
+        -> if { false -> return }
+    # Preserve the literal's storage and length while its parameter supplies the
+    # element type. Existing contextual-field logic checks each numeric element.
+    resolved.types -> internArrayLiteralType(actual.kind, expected.first, actual.length) => contextual
+    resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual, expectedByAst)
+}
+
 contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
     expectedTypeId < 0 or expectedTypeId >= (types -> len)
         -> if { false -> return }
@@ -3091,6 +3121,9 @@ resolveSemanticCallArgumentBindings prepared: ref semanticContext.SemanticSnapsh
 
 resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
     seeds.arguments -> each argument { resolved.callArguments -> push(argument) }
+    prepared.package -> indexContextualRecords => contextualIndex
+    [Int; ~] => expectedContextByAst!
+    prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
     prepared -> indexExplicitFlowTypeByCallAst(resolved.references, resolved.referenceIndexByTypeAst) => explicitTypeByCallAst
     [Int; ~] => expressionByAst!
     prepared.package.nodes -> each node { expressionByAst! -> push(-1) }
@@ -3169,8 +3202,10 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                             callNode.kind != 10 or binding.parameterOrdinal > 0
                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 14
                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 22
+                                or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 37
                                 -> if {
                                     contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
+                                    contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
                                 }
                         }
                     expressionByAst![sourceRange.astStart + binding.argumentAst] => argumentIndex
@@ -3263,6 +3298,12 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                                         callNode.kind != 10 -> if {
                                             contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
                                             contextual -> if { fact!.expectedTypeId => fact!.actualTypeId }
+                                            contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextualArray
+                                            contextualArray -> if {
+                                                prepared.package.ranges[fact!.sourceModule] => argumentRange
+                                                expressionByAst![argumentRange.astStart + fact!.argumentAst] => argumentExpression
+                                                resolved.expressions[argumentExpression].typeId => fact!.actualTypeId
+                                            }
                                         }
                                         resolved.callArguments -> replaceCallArgument(priorIndex, fact!)
                                     }
