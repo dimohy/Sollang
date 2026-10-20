@@ -1,0 +1,392 @@
+diff --git a/selfhost/llvm/text/control_region_expressions.slg b/selfhost/llvm/text/control_region_expressions.slg
+index e5f20a69..cdc2d999 100644
+--- a/selfhost/llvm/text/control_region_expressions.slg
++++ b/selfhost/llvm/text/control_region_expressions.slg
+@@ -288,6 +288,7 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
+ 
+ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[regionNodeIndex] => regionNode
++    regionNodeIndex -> emitPlannedJunctionValue(ownerIndex, context, state)
+     regionNode.kind == 12 or regionNode.kind == 35
+         -> if {
+             regionNode.operand0 < 0 -> if {
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index e68148e4..84d87df4 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -1112,9 +1112,27 @@ callResultPropagationBindingIndex callIndex: Int, context: ref emitterContext.Em
+         }
+     bindingIndex!
+ }
++# Producer sources are evaluated once before entering the callback loop.
++streamPipelineOwnsSource nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    pipelineIndex < 0 -> if { false -> return }
++    context.streamPlan.pipelines[pipelineIndex] => pipeline
++    false => insideSource!
++    pipeline.source0 >= 0 -> if {
++        NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source0 } -> irDescendsFrom(context, state) => insideSource!
++        nodeIndex == pipeline.source0 -> if { true => insideSource! }
++    }
++    pipeline.source1 >= 0 and not insideSource! -> if {
++        NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source1 } -> irDescendsFrom(context, state) => insideSource!
++        nodeIndex == pipeline.source1 -> if { true => insideSource! }
++    }
++    insideSource!
++}
++
+ # Deferred named producers retain callback ownership outside terminal ancestry.
+ streamPipelineOwnsCallback nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     pipelineIndex < 0 -> if { false -> return }
++    nodeIndex -> streamPipelineOwnsSource(pipelineIndex, context, state)
++        -> if { false -> return }
+     context.streamPlan.pipelines[pipelineIndex] => pipeline
+     false => owned!
+     nodeIndex >= pipeline.callbackStart and nodeIndex <= pipeline.callbackEnd
+@@ -1148,16 +1166,8 @@ regionOwnedStreamPipeline nodeIndex: Int, context: ref emitterContext.EmitContex
+                             -> if { true => owned! }
+                         ownedStageIndex! + 1 => ownedStageIndex!
+                     }
+-                false => insideSource!
+-                pipeline.source0 >= 0 -> if {
+-                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source0 } -> irDescendsFrom(context, state) => insideSource!
+-                    nodeIndex == pipeline.source0 -> if { true => insideSource! }
+-                }
+-                pipeline.source1 >= 0 and not insideSource! -> if {
+-                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source1 } -> irDescendsFrom(context, state) => insideSource!
+-                    nodeIndex == pipeline.source1 -> if { true => insideSource! }
+-                }
+-                owned! and not insideSource! -> if { pipelineIndex! => found! }
++                nodeIndex -> streamPipelineOwnsSource(pipelineIndex!, context, state) => insideSource
++                owned! and not insideSource -> if { pipelineIndex! => found! }
+             }
+             pipelineIndex! + 1 => pipelineIndex!
+         }
+diff --git a/selfhost/llvm/text/entry_expressions.slg b/selfhost/llvm/text/entry_expressions.slg
+index 2b30443e..82c5f1b4 100644
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -1327,22 +1327,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+     }
+     entryExpression.kind == 37 -> if { entryExpressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+     entryExpression.kind == 39 -> if { entryExpressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
+-    entryExpression.kind == 43 -> if {
+-        entryExpressionIndex -> plannedStreamJunction(context, state) => entryJunctionIndex
+-        entryJunctionIndex >= 0 and context.streamPlan.junctions[entryJunctionIndex].kind == 2
+-            -> if {
+-                context.streamPlan.junctions[entryJunctionIndex].policy == 0
+-                    -> if { entryExpressionIndex -> emitZipJunctionValue(entryJunctionIndex, functionIndex, context, state) }
+-                context.streamPlan.junctions[entryJunctionIndex].policy == 1 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                    -> if { entryExpressionIndex -> emitMergeJunctionValue(entryJunctionIndex, functionIndex, context, state) }
+-                (context.streamPlan.junctions[entryJunctionIndex].policy == 1 or context.streamPlan.junctions[entryJunctionIndex].policy == 3) and (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                    -> if { entryExpressionIndex -> emitConcurrentJunctionValue(entryJunctionIndex, functionIndex, context, state) }
+-                context.streamPlan.junctions[entryJunctionIndex].policy == 2
+-                    -> if { entryExpressionIndex -> emitConcatJunctionValue(entryJunctionIndex, functionIndex, context, state) }
+-                context.streamPlan.junctions[entryJunctionIndex].policy == 3 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                    -> if { entryExpressionIndex -> emitLatestJunctionValue(entryJunctionIndex, functionIndex, context, state) }
+-            }
+-    }
++    entryExpressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
+     entryExpression.kind == 38 and context.supportsComputePool
+         -> if { entryExpressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
+     entryExpression.kind == 12 or entryExpression.kind == 35
+@@ -3735,7 +3720,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
+                                 "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
+                                 "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                 "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
+-                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context)" -> println
++                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
+                                 "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                 "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
+                                 "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
+@@ -3814,7 +3799,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
+                                 "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
+                                 "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+                                 "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
+-                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context)" -> println
++                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
+                                 "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+                                 "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                             }
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index 8d71f4c4..f7f77170 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -1560,22 +1560,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+             }
+             expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+             expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
+-            expression.kind == 43 -> if {
+-                expressionIndex -> plannedStreamJunction(context, state) => functionJunctionIndex
+-                functionJunctionIndex >= 0 and context.streamPlan.junctions[functionJunctionIndex].kind == 2
+-                    -> if {
+-                        context.streamPlan.junctions[functionJunctionIndex].policy == 0
+-                            -> if { expressionIndex -> emitZipJunctionValue(functionJunctionIndex, functionIndex, context, state) }
+-                        context.streamPlan.junctions[functionJunctionIndex].policy == 1 and not (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                            -> if { expressionIndex -> emitMergeJunctionValue(functionJunctionIndex, functionIndex, context, state) }
+-                        (context.streamPlan.junctions[functionJunctionIndex].policy == 1 or context.streamPlan.junctions[functionJunctionIndex].policy == 3) and (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                            -> if { expressionIndex -> emitConcurrentJunctionValue(functionJunctionIndex, functionIndex, context, state) }
+-                        context.streamPlan.junctions[functionJunctionIndex].policy == 2
+-                            -> if { expressionIndex -> emitConcatJunctionValue(functionJunctionIndex, functionIndex, context, state) }
+-                        context.streamPlan.junctions[functionJunctionIndex].policy == 3 and not (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
+-                            -> if { expressionIndex -> emitLatestJunctionValue(functionJunctionIndex, functionIndex, context, state) }
+-                    }
+-            }
++            expressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
+             expression.kind == 38 and context.supportsComputePool
+                 -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
+             expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+diff --git a/selfhost/llvm/text/stream_junctions.slg b/selfhost/llvm/text/stream_junctions.slg
+index f26026b4..09136d57 100644
+--- a/selfhost/llvm/text/stream_junctions.slg
++++ b/selfhost/llvm/text/stream_junctions.slg
+@@ -3,6 +3,79 @@ namespace sollang.compiler.llvm.text
+ import sollang.compiler.llvm.emitter.context as emitterContext
+ import sollang.compiler.llvm.emitter.stream_join_runtime as streamJoinRuntime
+ 
++emitPlannedJunctionValue expressionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    context.ir[expressionIndex].kind == 43 -> if {
++        expressionIndex -> plannedStreamJunction(context, state) => junctionIndex
++        junctionIndex >= 0 and context.streamPlan.junctions[junctionIndex].kind == 2
++            -> if {
++                context.streamPlan.junctions[junctionIndex] => junction
++                junctionIndex -> junctionRequiresConcurrent(context, state) => concurrent
++                junction.policy == 0 -> if { expressionIndex -> emitZipJunctionValue(junctionIndex, ownerIndex, context, state) }
++                junction.policy == 1 and not concurrent -> if { expressionIndex -> emitMergeJunctionValue(junctionIndex, ownerIndex, context, state) }
++                (junction.policy == 1 or junction.policy == 3) and concurrent
++                    -> if { expressionIndex -> emitConcurrentJunctionValue(junctionIndex, ownerIndex, context, state) }
++                junction.policy == 2 -> if { expressionIndex -> emitConcatJunctionValue(junctionIndex, ownerIndex, context, state) }
++                junction.policy == 3 and not concurrent -> if { expressionIndex -> emitLatestJunctionValue(junctionIndex, ownerIndex, context, state) }
++            }
++    }
++}
++
++emitJunctionDropRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    context.streamPlan.junctions[junctionIndex] => junction
++    junctionIndex -> junctionRequiresConcurrent(context, state) => concurrent
++    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context, i1 %destroy) {" -> println
++    "entry:" -> println
++    concurrent -> if {
++        "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
++        "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
++        "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
++    }
++    0 => cancelInput!
++    cancelInput! < junction.inputCount -> while {
++        context.streamPlan.junctionInputs[junction.inputStart + cancelInput!] => input
++        context.types[input.typeId].symbol == 4 -> if {
++            "  %cancel_stream_address$(cancelInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(cancelInput!)" -> println
++            "  %cancel_stream$(cancelInput!) = load %sollang.event_stream, ptr %cancel_stream_address$(cancelInput!), align 8" -> println
++            "  %cancel_context$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 0" -> println
++            "  %cancel_callback$(cancelInput!) = extractvalue %sollang.event_stream %cancel_stream$(cancelInput!), 2" -> println
++            "  %has_cancel$(cancelInput!) = icmp ne ptr %cancel_callback$(cancelInput!), null" -> println
++            "  br i1 %has_cancel$(cancelInput!), label %cancel_input$(cancelInput!), label %cancel_done$(cancelInput!)" -> println
++            "cancel_input$(cancelInput!):" -> println
++            "  call void %cancel_callback$(cancelInput!)(ptr %cancel_context$(cancelInput!), i1 false)" -> println
++            "  br label %cancel_done$(cancelInput!)" -> println
++            "cancel_done$(cancelInput!):" -> println
++        }
++        cancelInput! + 1 => cancelInput!
++    }
++    "  br i1 %destroy, label %destroy_inputs, label %cancelled_only" -> println
++    "cancelled_only:" -> println
++    "  ret void" -> println
++    "destroy_inputs:" -> println
++    concurrent -> if {
++        "  call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)" -> println
++    }
++    0 => dropInput!
++    dropInput! < junction.inputCount -> while {
++        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
++        "%sollang.stream" => producerType!
++        context.types[input.typeId].symbol == 4 -> if { "%sollang.event_stream" => producerType! }
++        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
++        "  %drop_stream$(dropInput!) = load $(producerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
++        "  %drop_context$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 0" -> println
++        "  %drop_callback$(dropInput!) = extractvalue $(producerType!) %drop_stream$(dropInput!), 2" -> println
++        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
++        "  br i1 %has_drop$(dropInput!), label %drop_input$(dropInput!), label %drop_done$(dropInput!)" -> println
++        "drop_input$(dropInput!):" -> println
++        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!), i1 true)" -> println
++        "  br label %drop_done$(dropInput!)" -> println
++        "drop_done$(dropInput!):" -> println
++        dropInput! + 1 => dropInput!
++    }
++    "  call void @free(ptr %context)" -> println
++    "  ret void" -> println
++    "}" -> println
++}
++
+ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+     context.ir[junction.junctionIr] => junctionNode
+@@ -50,33 +123,7 @@ emitConcatJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+     "done:" -> println
+     "  ret i1 false" -> println
+     "}" -> println
+-    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+-    "entry:" -> println
+-    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+-    0 => dropInput!
+-    dropInput! < junction.inputCount -> while {
+-        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+-        context.types[input.typeId] => inputType
+-        "%sollang.stream" => dropProducerType!
+-        inputType.symbol == 4 -> if { "%sollang.event_stream" => dropProducerType! }
+-        "check$(dropInput!):" -> println
+-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+-        "  %drop_stream$(dropInput!) = load $(dropProducerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
+-        "  %drop_context$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 0" -> println
+-        "  %drop_callback$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 2" -> println
+-        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+-        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+-        "drop$(dropInput!):" -> println
+-        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+-        "  br label %after$(dropInput!)" -> println
+-        "after$(dropInput!):" -> println
+-        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+-        dropInput! + 1 => dropInput!
+-    }
+-    "done:" -> println
+-    "  call void @free(ptr %context)" -> println
+-    "  ret void" -> println
+-    "}" -> println
++    junctionIndex -> emitJunctionDropRuntime(context, state)
+ }
+ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+@@ -142,33 +189,7 @@ emitZipJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitConte
+     "done:" -> println
+     "  ret i1 false" -> println
+     "}" -> println
+-    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+-    "entry:" -> println
+-    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+-    0 => dropInput!
+-    dropInput! < junction.inputCount -> while {
+-        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+-        context.types[input.typeId] => inputType
+-        "%sollang.stream" => dropProducerType!
+-        inputType.symbol == 4 -> if { "%sollang.event_stream" => dropProducerType! }
+-        "check$(dropInput!):" -> println
+-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+-        "  %drop_stream$(dropInput!) = load $(dropProducerType!), ptr %drop_stream_address$(dropInput!), align 8" -> println
+-        "  %drop_context$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 0" -> println
+-        "  %drop_callback$(dropInput!) = extractvalue $(dropProducerType!) %drop_stream$(dropInput!), 2" -> println
+-        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+-        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+-        "drop$(dropInput!):" -> println
+-        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+-        "  br label %after$(dropInput!)" -> println
+-        "after$(dropInput!):" -> println
+-        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+-        dropInput! + 1 => dropInput!
+-    }
+-    "done:" -> println
+-    "  call void @free(ptr %context)" -> println
+-    "  ret void" -> println
+-    "}" -> println
++    junctionIndex -> emitJunctionDropRuntime(context, state)
+ }
+ 
+ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+@@ -235,29 +256,7 @@ emitMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCon
+     "done:" -> println
+     "  ret i1 false" -> println
+     "}" -> println
+-    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+-    "entry:" -> println
+-    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+-    0 => dropInput!
+-    dropInput! < junction.inputCount -> while {
+-        "check$(dropInput!):" -> println
+-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+-        "  %drop_stream$(dropInput!) = load %sollang.stream, ptr %drop_stream_address$(dropInput!), align 8" -> println
+-        "  %drop_context$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 0" -> println
+-        "  %drop_callback$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 2" -> println
+-        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+-        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+-        "drop$(dropInput!):" -> println
+-        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+-        "  br label %after$(dropInput!)" -> println
+-        "after$(dropInput!):" -> println
+-        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+-        dropInput! + 1 => dropInput!
+-    }
+-    "done:" -> println
+-    "  call void @free(ptr %context)" -> println
+-    "  ret void" -> println
+-    "}" -> println
++    junctionIndex -> emitJunctionDropRuntime(context, state)
+ }
+ 
+ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+@@ -381,29 +380,7 @@ emitLatestJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitCo
+     "done:" -> println
+     "  ret i1 false" -> println
+     "}" -> println
+-    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+-    "entry:" -> println
+-    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %done" -> println }
+-    0 => dropInput!
+-    dropInput! < junction.inputCount -> while {
+-        "check$(dropInput!):" -> println
+-        "  %drop_stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+-        "  %drop_stream$(dropInput!) = load %sollang.stream, ptr %drop_stream_address$(dropInput!), align 8" -> println
+-        "  %drop_context$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 0" -> println
+-        "  %drop_callback$(dropInput!) = extractvalue %sollang.stream %drop_stream$(dropInput!), 2" -> println
+-        "  %has_drop$(dropInput!) = icmp ne ptr %drop_callback$(dropInput!), null" -> println
+-        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+-        "drop$(dropInput!):" -> println
+-        "  call void %drop_callback$(dropInput!)(ptr %drop_context$(dropInput!))" -> println
+-        "  br label %after$(dropInput!)" -> println
+-        "after$(dropInput!):" -> println
+-        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %done" -> println }
+-        dropInput! + 1 => dropInput!
+-    }
+-    "done:" -> println
+-    "  call void @free(ptr %context)" -> println
+-    "  ret void" -> println
+-    "}" -> println
++    junctionIndex -> emitJunctionDropRuntime(context, state)
+ }
+ 
+ junctionRequiresConcurrent junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+@@ -504,37 +481,7 @@ emitConcurrentJunctionInputCallbacks junctionIndex: Int, context: ref emitterCon
+ 
+ emitConcurrentJunctionDrop junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.streamPlan.junctions[junctionIndex] => junction
+-    "define internal void @sollang_join_$(junction.junctionIr)_drop(ptr %context) {" -> println
+-    "entry:" -> println
+-    "  %runtime_address = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(junction.inputCount)" -> println
+-    "  %runtime = load ptr, ptr %runtime_address, align 8" -> println
+-    "  call void @sollang_stream_join_runtime_cancel(ptr %runtime)" -> println
+-    junction.inputCount > 0 -> if { "  br label %check0" -> println } else { "  br label %destroy" -> println }
+-    0 => dropInput!
+-    dropInput! < junction.inputCount -> while {
+-        context.streamPlan.junctionInputs[junction.inputStart + dropInput!] => input
+-        context.types[input.typeId] => inputType
+-        "%sollang.stream" => producerType!
+-        inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
+-        "check$(dropInput!):" -> println
+-        "  %stream_address$(dropInput!) = getelementptr %sollang.join.$(junction.junctionIr), ptr %context, i32 0, i32 $(dropInput!)" -> println
+-        "  %stream$(dropInput!) = load $(producerType!), ptr %stream_address$(dropInput!), align 8" -> println
+-        "  %stream_context$(dropInput!) = extractvalue $(producerType!) %stream$(dropInput!), 0" -> println
+-        "  %stream_drop$(dropInput!) = extractvalue $(producerType!) %stream$(dropInput!), 2" -> println
+-        "  %has_drop$(dropInput!) = icmp ne ptr %stream_drop$(dropInput!), null" -> println
+-        "  br i1 %has_drop$(dropInput!), label %drop$(dropInput!), label %after$(dropInput!)" -> println
+-        "drop$(dropInput!):" -> println
+-        "  call void %stream_drop$(dropInput!)(ptr %stream_context$(dropInput!))" -> println
+-        "  br label %after$(dropInput!)" -> println
+-        "after$(dropInput!):" -> println
+-        dropInput! + 1 < junction.inputCount -> if { "  br label %check$(dropInput! + 1)" -> println } else { "  br label %destroy" -> println }
+-        dropInput! + 1 => dropInput!
+-    }
+-    "destroy:" -> println
+-    "  call void @sollang_stream_join_runtime_join_destroy(ptr %runtime)" -> println
+-    "  call void @free(ptr %context)" -> println
+-    "  ret void" -> println
+-    "}" -> println
++    junctionIndex -> emitJunctionDropRuntime(context, state)
+ }
+ 
+ emitConcurrentMergeJunctionRuntime junctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

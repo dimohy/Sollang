@@ -1,0 +1,89 @@
+from pathlib import Path
+import sys,json,re,hashlib
+sys.path.insert(0,str(Path.cwd()/'scripts'))
+from verification_execution import VerificationExecution
+from completed_artifact_plan import initialize_output
+root=Path.cwd(); b=root/'artifacts/scratch/resume-20261006-owner-continuation22'
+source=b/'m11429-mouse-emission/probe.exe.ll'; proof=b/'m11429-mouse-emission/result.json'
+out=b/'mouse11430-baseline'; initialize_output(root,out); out.mkdir(exist_ok=False)
+clang=root/'.tools/llvm-22.1.8/bin/clang.exe'
+sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest().upper()
+pins={str(p):sha(p) for p in [source,proof,Path(__file__),clang]}
+stable=lambda:all(Path(p).is_file() and sha(Path(p))==v for p,v in pins.items())
+r={'schemaVersion':1,'status':'running','scope':'Actual emitted CSharp next/drop functions, exact after-counter-decrement retirement schedule; OS boundaries stubbed, not a real terminal test.','inputHashes':pins,'completed':0,'total':4,'cases':[]}
+e=VerificationExecution(root,out,r,stable,sha)
+s=source.read_text(encoding='utf-8-sig'); parent=json.loads(proof.read_text()); assert parent['status']=='passed' and parent['generatedOutputHashes'][str(source)]==sha(source)
+names=['sollang_mouse_event_next_raw','sollang_mouse_event_stream_drop']
+functions=[]
+for name in names:
+    matches=re.findall(r'^define[^\n]*@'+name+r'\([^\n]*\{\n.*?^}',s,re.M|re.S); assert len(matches)==1,name; functions.append(matches[0].replace(' #0',''))
+stubs='''
+@ctx = internal global [80 x i8] zeroinitializer, align 8
+@buffer = internal global [40 x i8] zeroinitializer, align 8
+@event_closed = internal global i1 false
+@invalid_event_uses = internal global i32 0
+define internal i32 @SetEvent(ptr %event) {
+entry:
+  %closed = load i1, ptr @event_closed
+  %bad = zext i1 %closed to i32
+  %n = load i32, ptr @invalid_event_uses
+  %next = add i32 %n, %bad
+  store i32 %next, ptr @invalid_event_uses
+  ret i32 1
+}
+define internal i32 @CancelSynchronousIo(ptr %thread) { ret i32 1 }
+define internal i32 @WaitForSingleObject(ptr %handle, i32 %timeout) { ret i32 0 }
+define internal i32 @CloseHandle(ptr %handle) {
+entry:
+  %is_event = icmp eq ptr %handle, inttoptr(i64 4 to ptr)
+  %closed = load i1, ptr @event_closed
+  %next = or i1 %closed, %is_event
+  store i1 %next, ptr @event_closed
+  ret i32 1
+}
+define internal i32 @SetConsoleMode(ptr %input, i32 %mode) { ret i32 1 }
+define internal void @sollang_free(ptr %allocation) { ret void }
+define i32 @main() {
+entry:
+  %capacity = getelementptr i8, ptr @ctx, i64 12
+  store i32 2, ptr %capacity
+  %count = getelementptr i8, ptr @ctx, i64 28
+  store i32 COUNT, ptr %count
+  %cancel = getelementptr i8, ptr @ctx, i64 32
+  store atomic i32 CANCEL, ptr %cancel release, align 4
+  %thread = getelementptr i8, ptr @ctx, i64 40
+  store ptr inttoptr(i64 3 to ptr), ptr %thread
+  %event = getelementptr i8, ptr @ctx, i64 48
+  store ptr inttoptr(i64 4 to ptr), ptr %event
+  %buffer = getelementptr i8, ptr @ctx, i64 56
+  store ptr @buffer, ptr %buffer
+  %values = alloca [5 x i32], align 4
+  %y = getelementptr i8, ptr %values, i64 4
+  %delta = getelementptr i8, ptr %values, i64 8
+  %button = getelementptr i8, ptr %values, i64 12
+  %kind = getelementptr i8, ptr %values, i64 16
+  %value = call i1 @sollang_mouse_event_next_raw(ptr @ctx, ptr %values, ptr %y, ptr %delta, ptr %button, ptr %kind)
+DROP
+  %bad = load i32, ptr @invalid_event_uses
+  %ok = icmp eq i32 %bad, 0
+  %exit = select i1 %ok, i32 0, i32 17
+  ret i32 %exit
+}
+'''
+expected=[0,17,0,17]
+for i,(name,closed,hook) in enumerate([('value-normal',False,False),('value-retirement',False,True),('closed-normal',True,False),('closed-retirement',True,True)]):
+    next_fn=functions[0]
+    if hook:
+        pattern=r'(?m)^(  %active_before_(?:value|closed)_return = atomicrmw sub[^\n]*\n)'
+        assert len(re.findall(pattern,next_fn))==2
+        next_fn=re.sub(pattern,lambda m:m[1]+'  call void @sollang_mouse_event_stream_drop(ptr %context)\n',next_fn)
+    llvm='\n\n'.join([next_fn,functions[1],stubs.replace('COUNT','0' if closed else '1').replace('CANCEL','1' if closed else '0').replace('DROP','' if hook else '  call void @sollang_mouse_event_stream_drop(ptr @ctx)')])
+    ll=out/(name+'.ll'); ll.write_text(llvm,encoding='utf-8',newline='\n'); exe=out/(name+'.exe')
+    linked=e.run([str(clang),'-Werror','-Wno-override-module',str(ll),'-O1','-o',str(exe)],out/(name+'-link'),timeout=30)
+    assert linked.returncode==0 and not linked.stderr.strip(),linked.stderr
+    run=e.run([str(exe)],out/(name+'-run'),timeout=5)
+    r['cases'].append({'id':name,'nativeExit':run.returncode,'expectedObservedExit':expected[i],'safe':run.returncode==0,'llvmSha256':sha(ll)})
+    assert run.returncode==expected[i],r['cases'][-1]
+    r['completed']+=1; e.save()
+r['status']='reproduced'; r['runtimeContractSatisfied']=False; e.finalize(cleanup=False)
+print(json.dumps({k:r[k] for k in ['status','completed','total','runtimeContractSatisfied','inputsStable','processesStopped']}))

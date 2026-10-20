@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "status": "reproduced-before-repair",
+  "observedAtUtc": "2026-10-20T19:57:23.962177+00:00",
+  "managedProduct": "M11418",
+  "publicCompileOnlyProof": "artifacts/scratch/resume-20261006-owner-continuation22/m11429-mouse-emission/result.json",
+  "runtimeLeafProof": "artifacts/scratch/resume-20261006-owner-continuation22/mouse11430-baseline/result.json",
+  "observedNativeExits": [
+    0,
+    17,
+    0,
+    17
+  ],
+  "rootCause": "Actual CSharp mouse next decrements active-next before its remaining event access. Concurrent drop sees zero and closes/frees context; next then signals the closed event. Actual generated functions reproduce both value and closed return paths. Native SLG lacks the active-reader guard entirely. Join drop currently calls input destructors before joining its pulling workers, leaving a callback-entry gap as well.",
+  "scope": "Actual CSharp next/drop bodies from a successful public compile. Deterministic legal retirement schedule and OS/allocation stubs; no real console, OS-thread safety or full platform qualification claim.",
+  "sourceHashes": {
+    "selfhost/llvm/emitter/mouse_event_runtime.slg": "01B640F891ECCBFB45F65E0967E694AEF054AF341DB7E5D73902F5C0187EBE87",
+    "src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs": "2A7DC4B328CD4908E0BFE2D286C692240F106CB30800167D71B194E6CF81F69B",
+    "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs": "C9FC1282F745421EEA0B801DB725D5BAB42BB3E4475525DAAF274CDD611F8189",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.StreamJoins.cs": "A5EB6A51F00EAC4DAFAFF762735565209A3B58542B7C2A44320D3DF889CF6573",
+    "selfhost/llvm/emitter/stream_join_runtime.slg": "5D02EA9FA45BDE9E9B5D240549C7A144D3ECBE10CFB09501444999329E04655E"
+  },
+  "relatedSourceFindings": [
+    {
+      "kind": "source-confirmed-caller-order",
+      "evidence": "CSharp EmitStreamJoinDropCallback calls runtime_cancel, input DropOwnedRuntimeValue, then runtime_join_destroy. Shared worker sets pulling before invoking pull; cancellation settlement is not callback-entry lifetime ownership."
+    },
+    {
+      "kind": "pending-focused-reproduction",
+      "evidence": "Windows single CancelSynchronousIo followed by infinite join can race before the worker enters ReadConsoleInputW. Official docs describe cancellation of current pending operations, not later calls.",
+      "primarySource": "https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelsynchronousio"
+    }
+  ],
+  "plannedDirection": "Root lifecycle protocol: separate cancellation signal from reclamation, keep all input contexts alive through join-worker quiescence, then destroy. Prefer an internal lifecycle mode on the existing EventStream third callback over an extra allocation/header or public syntax. Review every producer/materialization/drop consumer before choosing implementation; no SLG edits or native compiler build yet.",
+  "nativeCompilerBuildBudget": 0,
+  "admission": "No fresh native compiler build until CSharp complete focused protocol proof, actual corresponding SLG source comparison and aligned implementation/preflights."
+}
