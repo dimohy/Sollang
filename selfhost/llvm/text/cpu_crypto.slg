@@ -1,12 +1,15 @@
 namespace sollang.compiler.llvm.text
 
 import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.modules as modules
 
 # First CPU-specialized vertical slice. Identity is the complete resolved
 # std.crypto.aes128.Key.encryptBlock owner path, not the method spelling alone.
 isAes128EncryptBlockFunction functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.ir[functionIndex] => function
     function.kind == 0
+        and function.flags / 8 % 2 == 0
         and function.sourceModule >= 0
         and function.sourceModule < (context.modules -> len)
         and context.modules[function.sourceModule].pathHash == 2286033953050804087
@@ -14,11 +17,40 @@ isAes128EncryptBlockFunction functionIndex: Int, context: ref emitterContext.Emi
         and function.operand1 >= 0
         and function.nextOperand >= 0
         and context.ir[function.nextOperand].nextOperand < 0
+        and (function -> typeQueries.isFixedArray)
         => matches!
     matches! -> if {
         context.ranges[function.sourceModule] => range
+        modules.logicalNameIs(context.sources[function.sourceModule], context.modules[function.sourceModule], range, context.tokens, "std.crypto.aes128")
+            -> unless { false -> return }
+        context.ir[function.operand1] => receiver
+        receiver -> typeQueries.isNominalStruct
+            -> unless { false -> return }
+        receiver.typeModule < 0 or receiver.typeModule >= (context.ranges -> len)
+            -> if { false -> return }
+        context.ranges[receiver.typeModule] => receiverRange
+        receiver.typeSymbol < 0 or receiver.typeSymbol >= receiverRange.symbolCount
+            -> if { false -> return }
+        context.symbols[receiverRange.symbolStart + receiver.typeSymbol] => receiverSymbol
+        receiverSymbol.kind != 3 or receiverSymbol.parent >= 0
+            or receiverSymbol.nameToken < 0 or receiverSymbol.nameToken >= receiverRange.tokenCount
+            -> if { false -> return }
+        modules.sameLogicalSource(context.sources, context.modules, function.sourceModule, receiver.typeModule, context.tokens, context.ranges)
+            -> unless { false -> return }
+        context.tokens[receiverRange.tokenStart + receiverSymbol.nameToken] => receiverName
+        context.sources[receiver.typeModule] -> slice(receiverName.span.start, receiverName.span.length) => receiverText
+        receiverText != "Key" -> if { false -> return }
         function.symbol < range.symbolCount -> if {
             context.symbols[range.symbolStart + function.symbol] => symbol
+            # A same-named global taking Key is still not the instance method.
+            symbol.parent < 0 or symbol.parent >= range.symbolCount
+                -> if { false -> return }
+            context.symbols[range.symbolStart + symbol.parent] => owner
+            owner.kind != 6 or owner.nameToken < 0 or owner.nameToken >= range.tokenCount
+                -> if { false -> return }
+            context.tokens[range.tokenStart + owner.nameToken] => ownerName
+            context.sources[function.sourceModule] -> slice(ownerName.span.start, ownerName.span.length) => ownerText
+            ownerText != "Key" -> if { false -> return }
             symbol.nameToken >= 0 and symbol.nameToken < range.tokenCount
                 -> if {
                     context.tokens[range.tokenStart + symbol.nameToken] => token
