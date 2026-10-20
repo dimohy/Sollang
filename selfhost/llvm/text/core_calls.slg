@@ -170,20 +170,22 @@ emitScopedTaskDrop bindingIndex: Int, ownerIndex: Int, regionIndex: Int, beforeA
     "scope_task$(edgeIndex)_$(bindingIndex)_released_ok:" -> println
 }
 
-emitCancelTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCancelTaskValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[nodeIndex] => cancellation
     cancellation.opcode == -321 and (cancellation.kind == 6 or cancellation.kind == 9)
         -> if {
-            nodeIndex -> awaitTaskProducer(context) => producerIndex
-            producerIndex >= 0 and producerIndex < (context.ir -> len)
+            cancellation.operand0 >= 0 and cancellation.operand0 < (context.ir -> len)
                 -> if {
-                    "  %v$(nodeIndex)_cancel_handle = extractvalue %sollang.task %v$(producerIndex), 0" -> println
+                    "  %v$(nodeIndex)_cancel_handle = extractvalue %sollang.task " -> print
+                    cancellation.operand0 -> writeValue(ownerIndex, context, state)
+                    ", 0" -> println
                     "  %v$(nodeIndex)_cancelled = call i1 @sollang_task_cancel(ptr %v$(nodeIndex)_cancel_handle)" -> println
                     "  br i1 %v$(nodeIndex)_cancelled, label %cancel$(nodeIndex)_done, label %cancel$(nodeIndex)_failed" -> println
                     "cancel$(nodeIndex)_failed:" -> println
                     "  call void @llvm.trap()" -> println
                     "  unreachable" -> println
                     "cancel$(nodeIndex)_done:" -> println
+                    nodeIndex -> emitCompletedPatternBindingTransferMarks(context, state)
                 }
         }
 }

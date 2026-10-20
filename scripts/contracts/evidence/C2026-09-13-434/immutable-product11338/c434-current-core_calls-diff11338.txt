@@ -1,0 +1,115 @@
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index b8b90980..2e2b85e7 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -1342,24 +1342,7 @@ isRangeDeferCall callIr: Int, context: ref emitterContext.EmitContext, state: re
+     deferCall!
+ }
+ isMouseEventsCall callIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+-    false => mouseCall!
+-    callIr >= 0 and callIr < (context.ir -> len)
+-        -> if {
+-            context.ir[callIr] => candidate
+-            candidate.kind == 6 and candidate.typeId >= 0 and candidate.typeId < (context.types -> len) and candidate.targetModule >= 0 and candidate.targetModule < (context.ranges -> len) and candidate.symbol >= 0
+-                -> if {
+-                    context.types[candidate.typeId] => resultType
+-                    context.ranges[candidate.targetModule] => targetRange
+-                    candidate.symbol < targetRange.symbolCount -> if {
+-                        context.symbols[targetRange.symbolStart + candidate.symbol] => target
+-                        resultType.kind == 7 and resultType.origin == 4 and resultType.symbol == 4 and (candidate.targetModule -> sourceTokenIs(target.nameToken, "events", context, state))
+-                            -> if {
+-                                true => mouseCall!
+-                            }
+-                    }
+-                }
+-        }
+-    mouseCall!
++    context -> diagnostics.isMouseEventsCall(callIr)
+ }
+ isNativePathStyleCall callIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     callIr >= 0 and callIr < (context.ir -> len)
+@@ -3024,6 +3007,61 @@ writeFloatingLiteral node: typedIr.TypedIrNode, width: Int, context: ref emitter
+     encoding -> floatingLiterals.write
+ }
+ 
++writeNumericConversionOperand argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    context.ir[argumentIndex] => argument
++    argument -> referenceValueTypeId(context, state) => readTypeId
++    readTypeId >= 0 -> if {
++        readTypeId -> writeAggregateFieldTypeId(context, state)
++    } else { argument -> writeIrType(context, state) }
++    " " -> print
++    argumentIndex -> referenceParameterValueIsMaterialized(ownerIndex, context, state)
++        -> if { "%v$(argumentIndex)" -> print } else {
++            argumentIndex -> writeValue(ownerIndex, context, state)
++        }
++}
++
++emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    context.ir[nodeIndex] => conversion
++    conversion -> typedIr.isBuiltinFloatConversionCall
++        -> if {
++            nodeIndex -> emitBuiltinFloatConversion(ownerIndex, context, state)
++            return
++        }
++    conversion.operand0 -> aggregateValueIndex(context, state) => argumentIndex
++    context.ir[argumentIndex] => argument
++    conversion -> integerNodeWidth(context, state) => targetWidth
++    argument -> integerReadNodeWidth(context, state) => inputWidth
++    argument.typeSymbol >= 19 and argument.typeSymbol <= 22 => sourceIsFloat
++    "  %v$(nodeIndex) = " -> print
++    argument.kind == 3 -> if {
++        "add " -> print
++        conversion -> writeIrType(context, state)
++        " " -> print
++        argument -> writeIntegerLiteral(context, state)
++        ", 0" -> println
++        return
++    }
++    sourceIsFloat -> if {
++        conversion -> builtinFloatToIntegerOpcode(context, state) -> print
++    } else {
++        targetWidth < inputWidth -> if { "trunc " -> print } else {
++            targetWidth > inputWidth -> if {
++                argument -> integerNodeSigned(context, state)
++                    -> if { "sext " -> print } else { "zext " -> print }
++            } else { "add " -> print }
++        }
++    }
++    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
++    targetWidth == inputWidth and not sourceIsFloat
++        -> if {
++            ", 0" -> println
++        } else {
++            " to " -> print
++            conversion -> writeIrType(context, state)
++            "" -> println
++        }
++}
++
+ emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[nodeIndex] => conversion
+     conversion.operand0 -> aggregateValueIndex(context, state) => argumentIndex
+@@ -3057,16 +3095,12 @@ emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitter
+         argument -> integerNodeSigned(context, state)
+             -> if { "sitofp " -> print } else { "uitofp " -> print }
+     }
+-    argument -> writeIrType(context, state)
+-    " " -> print
+-    ownerIndex >= 0 and ownerIndex < (context.ir -> len)
+-        and context.ir[ownerIndex].kind == 0
+-        and context.ir[ownerIndex].operand1 >= 0
+-        and argument.kind == 5
+-        and argument.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
+-        -> if { "%arg" -> print } else { "%v$(argumentIndex)" -> print }
+-    " to " -> print
+-    conversion -> writeIrType(context, state)
++    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
++    not sourceIsFloat or targetWidth != sourceWidth
++        -> if {
++            " to " -> print
++            conversion -> writeIrType(context, state)
++        }
+     "" -> println
+ }
+ 

@@ -565,9 +565,16 @@ emitAsyncAwaitPoint nodeIndex: Int, producerIndex: Int, context: ref emitterCont
                 ", 1" -> println
                 "  store ptr %v$(nodeIndex)_pending_handle, ptr %v$(nodeIndex)_child_handle_slot, align $(context.pointerBitWidth / 8)" -> println
                 "  store ptr %v$(nodeIndex)_pending_context, ptr %v$(nodeIndex)_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  %v$(nodeIndex)_pending_status_slot = getelementptr %sollang.task_control, ptr %v$(nodeIndex)_pending_handle, i32 0, i32 4" -> println
+                "  %v$(nodeIndex)_pending_status = load i32, ptr %v$(nodeIndex)_pending_status_slot, align 4" -> println
+                "  %v$(nodeIndex)_already_completed = icmp eq i32 %v$(nodeIndex)_pending_status, 2" -> println
+                "  br i1 %v$(nodeIndex)_already_completed, label %await$(nodeIndex)_ready, label %await$(nodeIndex)_suspend" -> println
+                "await$(nodeIndex)_suspend:" -> println
                 point -> emitAsyncDiagnosticSuspension(producerIndex, context, state)
                 "  call void @sollang_task_park_on(ptr %control, ptr %v$(nodeIndex)_pending_handle)" -> println
                 point -> emitAsyncSuspendPoint(context, state)
+                "  br label %await$(nodeIndex)_ready" -> println
+                "await$(nodeIndex)_ready:" -> println
                 # Resume enters from worker dispatch: recompute addresses here.
                 "  %v$(nodeIndex)_resumed_handle_slot = getelementptr i8, ptr %async_context, i64 $(offset)" -> println
                 "  %v$(nodeIndex)_resumed_context_slot = getelementptr i8, ptr %async_context, i64 $(offset + context.pointerBitWidth / 8)" -> println

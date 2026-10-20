@@ -1,0 +1,93 @@
+diff --git a/selfhost/llvm/text/context_prepare.slg b/selfhost/llvm/text/context_prepare.slg
+index 43ac78cd..913ddcd5 100644
+--- a/selfhost/llvm/text/context_prepare.slg
++++ b/selfhost/llvm/text/context_prepare.slg
+@@ -178,7 +178,7 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
+     prepared -> fixedLengthArrays.collect(recursiveTypes!, prepared.interpolations, prepared.interpolationRanges) => fixedLengthArrayWarnings
+     prepared -> interpolationInference.callNumericWarningByNode(recursiveTypes!) => interpolationNumericWarningByNode
+     prepared -> interpolationInference.callArgumentDiagnosticsByNode(recursiveTypes!, pointerBitWidth) => interpolationCallArgumentDiagnosticByNode
+-    prepared.package -> semanticDiagnostics.firstNumericCallArgumentDiagnostic(recursiveTypes!) => numericCallArgumentDiagnostic
++    prepared.package -> semanticDiagnostics.firstNumericCallArgumentDiagnostic(recursiveTypes!, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount) => numericCallArgumentDiagnostic
+     prepared -> semanticDiagnostics.firstCallArityDiagnostic(recursiveTypes!) => callArityDiagnostic
+     prepared -> semanticDiagnostics.unsupportedNominalEnumFlowPaths => unsupportedNominalEnumFlowPaths
+     prepared.package -> semanticDiagnostics.firstNominalFieldMismatch(recursiveTypes!) => nominalFieldMismatch
+@@ -1126,7 +1126,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
+         "declare dllimport i32 @DeleteFileW(ptr)" -> println
+         not needsDirectoryRuntime and not usesTextOutput and not capturesParallelOutput and not needsEnvironmentRuntime and not needsProcessRuntime
+             -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+-        not needsDirectoryRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime
++        not needsDirectoryRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
+             -> if { "declare dllimport i32 @GetLastError()" -> println }
+     }
+     capturesParallelOutput or needsProcessCapture or needsMouseEventsRuntime or needsConcurrentStreamJoins or needsIoCompletionRuntime
+@@ -1164,7 +1164,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
+             "declare dllimport i32 @SetEvent(ptr)" -> println
+         }
+     needsSocketCompletionRuntime and not needsOwnedFileRuntime and not needsDirectoryRuntime
+-        and not needsProcessCapture and not needsStandardInputSourceTextRuntime
++        and not needsProcessCapture and not needsStandardInputSourceTextRuntime and not needsEnvironmentRuntime
+         -> if { "declare dllimport i32 @GetLastError()" -> println }
+     needsArgumentsRuntime -> if {
+         "declare dllimport ptr @GetCommandLineW()" -> println
+@@ -1175,7 +1175,11 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
+         }
+     }
+     needsEnvironmentRuntime -> if {
+-        "declare ptr @_wgetenv(ptr)" -> println
++        "declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)" -> println
++        not needsDirectoryRuntime -> if {
++            "declare dllimport void @SetLastError(i32)" -> println
++            "declare dllimport i32 @GetLastError()" -> println
++        }
+         not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime
+             -> if {
+                 "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+@@ -1205,8 +1209,11 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
+         "declare dllimport i32 @TerminateProcess(ptr, i32)" -> println
+         needsProcessCapture -> if {
+             "declare dllimport i32 @CreatePipe(ptr, ptr, ptr, i32)" -> println
+-            "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
+-            not needsDirectoryRuntime -> if { "declare dllimport i32 @GetLastError()" -> println }
++            not needsOwnedFileRuntime -> if {
++                "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println
++            }
++            not needsDirectoryRuntime and not needsEnvironmentRuntime
++                -> if { "declare dllimport i32 @GetLastError()" -> println }
+         }
+         not usesTextOutput and not capturesParallelOutput and not needsDirectoryRuntime and not needsEnvironmentRuntime
+             -> if { "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println }
+@@ -1246,7 +1253,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
+                 -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
+             not needsOwnedFileRuntime and not needsProcessCapture
+                 -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
+-            not needsDirectoryRuntime and not needsProcessCapture
++            not needsDirectoryRuntime and not needsProcessCapture and not needsEnvironmentRuntime
+                 -> if { "declare dllimport i32 @GetLastError()" -> println }
+             llvmRuntime.emitWindowsStandardInputSourceText()
+         }
+@@ -1326,12 +1333,15 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
+         or needsSocketRuntime
+         or (needsMouseEventsRuntime and usesTextOutput)
+         => hasCloseDeclaration
++    capturesParallelOutput or (needsMouseEventsRuntime and usesTextOutput)
++        => hasReadDeclaration
+     needsProcessRuntime -> if {
+         hasCloseDeclaration -> processRuntime.emitLinuxProcessRuntime
+     }
+     needsProcessCapture -> if {
+         "declare i32 @pipe2(ptr, i32)" -> println
+-        "declare i64 @read(i32, ptr, i64)" -> println
++        not hasReadDeclaration
++            -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+         processRuntime.emitLinuxProcessCaptureRuntime()
+     }
+     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
+@@ -1355,7 +1365,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
+         llvmRuntime.emitLinuxSourceTextDeclarations()
+         llvmRuntime.emitLinuxSourceText()
+         needsStandardInputSourceTextRuntime -> if {
+-            not capturesParallelOutput and not needsMouseEventsRuntime
++            not hasReadDeclaration and not needsProcessCapture
+                 -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+             llvmRuntime.emitLinuxStandardInputSourceText()
+         }
