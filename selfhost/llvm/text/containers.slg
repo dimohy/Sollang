@@ -2820,7 +2820,26 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
                     takeDictionaryType.second => takeValueTypeId!
                 }
         }
-        "  %take$(takeIndex)_dictionary = load %sollang.dict, ptr %slot$(takeRoot), align 8" -> println
+        # A dictionary borrow addresses its canonical handle. A projected
+        # member takes precedence over the containing mutable struct input.
+        0 => takeDictionaryMemberDepth!
+        takeStructMember -> if {
+            takeNode.operand0 -> emitMutableReferenceMemberPlace(
+            takePlaceRoot,
+            takeIndex,
+            0,
+            request.ownerIndex,
+            false,
+            context,
+            state) => takeDictionaryMemberDepth!
+        }
+        "  %take$(takeIndex)_dictionary = load %sollang.dict, ptr " -> print
+        takeStructMember -> if {
+            "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
+        } else {
+            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+        }
+        ", align 8" -> println
         "  %take$(takeIndex)_storage = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 0" -> println
         "  %take$(takeIndex)_length = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 1" -> println
         "  %take$(takeIndex)_capacity = extractvalue %sollang.dict %take$(takeIndex)_dictionary, 2" -> println
@@ -2930,7 +2949,13 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "take$(takeIndex)_rebuild" -> emitDictionaryRehashEntries(takeEntryLayout, takeKeyTypeId!, takeValueTypeId!, takeSource.typeModule, takeSource.typeSymbol, takeKeyIsText!, takeKeyIsNominal, takeHashMethod!, takeHashWidth, takeHashSigned!, "%take$(takeIndex)_find_index", context, state)
         "  call void @free(ptr %take$(takeIndex)_storage)" -> println
         "take$(takeIndex)_result" -> emitGrowableDictionaryOwner("%take$(takeIndex)_rebuild_storage", "%take$(takeIndex)_new_length", "%take$(takeIndex)_capacity")
-        "  store %sollang.dict %take$(takeIndex)_result, ptr %slot$(takeRoot), align 8" -> println
+        "  store %sollang.dict %take$(takeIndex)_result, ptr " -> print
+        takeStructMember -> if {
+            "%callref$(takeIndex)_arg0_place$(takeDictionaryMemberDepth! - 1)" -> print
+        } else {
+            takeBorrowOrdinal >= 0 -> if { takeBorrowOrdinal -> writeMutableStructParameterPointer } else { "%slot$(takeRoot)" -> print }
+        }
+        ", align 8" -> println
     } else {
         # As with push, a container field of a mutable struct parameter uses
         # the projected member place, not the direct mutable-container ABI.
