@@ -1421,13 +1421,6 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
     matchAllArmsReturn!
         and not (matchIndex -> controlIsLastRegionChild(context, state))
         -> if { false => matchAllArmsReturn! }
-    -1 => ownedMatchFileTypeId!
-    subject.typeId >= 0 and context.types[subject.typeId].kind == 7 and context.types[subject.typeId].first >= 0
-        -> if {
-            context.types[subject.typeId].first => matchPayloadTypeId
-            matchPayloadTypeId -> isOwnedFileType(context, state)
-                -> if { matchPayloadTypeId => ownedMatchFileTypeId! }
-        }
     conditionIndex >= 0 and (context.ir[match.operand0] -> referenceValueTypeId(context, state)) >= 0
         -> if {
             "  %v$(matchIndex)_condition_subject = load " -> print
@@ -1661,24 +1654,6 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                 matchResultType -> writeIrType(context, state)
                 ", ptr %v$(matchIndex)_result, align " -> print
                 matchResultType -> storageAlign(context, state) -> writeDecimalLine
-            }
-        ownedMatchFileTypeId! >= 0 and match.typeId != ownedMatchFileTypeId!
-            -> if {
-                "  %v$(matchIndex)_owned_file_present = icmp eq i32 %v$(matchIndex)_tag, 0" -> println
-                "  br i1 %v$(matchIndex)_owned_file_present, label %match$(matchIndex)_owned_file_close, label %match$(matchIndex)_owned_file_done" -> println
-                "match$(matchIndex)_owned_file_close:" -> println
-                "  %v$(matchIndex)_owned_file_payload = getelementptr inbounds " -> print
-                subject -> writeIrType(context, state)
-                ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
-                "  %v$(matchIndex)_owned_file_value = load " -> print
-                ownedMatchFileTypeId! -> writeSemanticTypeId(context, state)
-                ", ptr %v$(matchIndex)_owned_file_payload, align 8" -> println
-                "  %v$(matchIndex)_owned_file_handle = extractvalue " -> print
-                ownedMatchFileTypeId! -> writeSemanticTypeId(context, state)
-                " %v$(matchIndex)_owned_file_value, 0" -> println
-                "  call void @sollang_platform_close_owned_file(i64 %v$(matchIndex)_owned_file_handle)" -> println
-                "  br label %match$(matchIndex)_owned_file_done" -> println
-                "match$(matchIndex)_owned_file_done:" -> println
             }
     }
 }

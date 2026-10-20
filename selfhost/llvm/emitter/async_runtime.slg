@@ -30,7 +30,7 @@ emitNoFileRuntime: -> Unit uses Console {
 # Single-threaded affine Task scheduler used by native self-host output. A
 # Duration.sleep call creates a Task and only the scheduler's idle path waits on
 # the platform clock; the call site itself never blocks.
-emitCommonRuntime: -> Unit uses Console {
+emitCommonRuntime diagnosticsEnabled: Bool -> Unit uses Console {
     """
     define internal void @sollang_task_enqueue_ready(ptr %control) {
     entry:
@@ -300,6 +300,12 @@ emitCommonRuntime: -> Unit uses Console {
       store ptr %context, ptr %result_address_slot, align 8
       %result_completion_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 22
       store ptr null, ptr %result_completion_slot, align 8
+    """ -> println
+    diagnosticsEnabled -> if {
+        "  %diagnostic_header_slot = getelementptr %sollang.diagnostic_task_control, ptr %control, i32 0, i32 1" -> println
+        "  store ptr null, ptr %diagnostic_header_slot, align 8" -> println
+    }
+    """
       call void @sollang_task_enqueue_ready(ptr %control)
       ret ptr %control
 
@@ -378,6 +384,18 @@ emitCommonRuntime: -> Unit uses Console {
       %destroy_fn = load ptr, ptr %destroy_slot, align 8
       %context_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 0
       %context = load ptr, ptr %context_slot, align 8
+    """ -> println
+    diagnosticsEnabled -> if {
+        "  %diagnostic_header_slot = getelementptr %sollang.diagnostic_task_control, ptr %handle, i32 0, i32 1" -> println
+        "  %diagnostic_header = load ptr, ptr %diagnostic_header_slot, align 8" -> println
+        "  %diagnostic_present = icmp ne ptr %diagnostic_header, null" -> println
+        "  br i1 %diagnostic_present, label %diagnostic_release, label %context_destroy" -> println
+        "diagnostic_release:" -> println
+        "  call void @sollang_diagnostic_release_header(ptr %diagnostic_header, i32 2)" -> println
+        "  br label %context_destroy" -> println
+        "context_destroy:" -> println
+    }
+    """
       call void %destroy_fn(ptr %context)
       call void @free(ptr %handle)
       ret i1 true
@@ -527,6 +545,19 @@ emitCommonRuntime: -> Unit uses Console {
     destroy:
       %cancel_slot = getelementptr %sollang.task_control, ptr %handle, i32 0, i32 6
       %cancel_fn = load ptr, ptr %cancel_slot, align 8
+    """ -> println
+    diagnosticsEnabled -> if {
+        "  %diagnostic_header_slot = getelementptr %sollang.diagnostic_task_control, ptr %handle, i32 0, i32 1" -> println
+        "  %diagnostic_header = load ptr, ptr %diagnostic_header_slot, align 8" -> println
+        "  %diagnostic_present = icmp ne ptr %diagnostic_header, null" -> println
+        "  br i1 %diagnostic_present, label %diagnostic_release, label %context_cancel" -> println
+        "diagnostic_release:" -> println
+        "  %diagnostic_terminal = select i1 %completed, i32 2, i32 3" -> println
+        "  call void @sollang_diagnostic_release_header(ptr %diagnostic_header, i32 %diagnostic_terminal)" -> println
+        "  br label %context_cancel" -> println
+        "context_cancel:" -> println
+    }
+    """
       call void %cancel_fn(ptr %handle)
       call void @free(ptr %handle)
       ret i1 true
@@ -565,7 +596,7 @@ emitIoRuntime windows: Bool, usesAsyncFile: Bool, usesSocketCompletion: Bool -> 
     }
 }
 
-public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
+public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool, diagnosticsEnabled: Bool -> Unit uses Console {
     "define internal i64 @sollang_now_millis() {" -> println
     "entry:" -> println
     "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
@@ -573,10 +604,10 @@ public emitWindowsRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsy
     "}" -> println
     emitWindowsWaitRuntime()
     emitIoRuntime(true, usesAsyncFile, usesSocketCompletion)
-    emitCommonRuntime()
+    diagnosticsEnabled -> emitCommonRuntime
 }
 
-public emitStandaloneWindowsRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
+public emitStandaloneWindowsRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool, diagnosticsEnabled: Bool -> Unit uses Console {
     "declare dllimport i64 @GetTickCount64()" -> println
     """
     define internal i64 @sollang_now_millis() {
@@ -587,7 +618,7 @@ public emitStandaloneWindowsRuntime usesAsyncFile: Bool, usesSocketCompletion: B
     """ -> println
     emitWindowsWaitRuntime()
     emitIoRuntime(true, usesAsyncFile, usesSocketCompletion)
-    emitCommonRuntime()
+    diagnosticsEnabled -> emitCommonRuntime
 }
 
 emitLinuxWaitRuntime: -> Unit uses Console {
@@ -609,7 +640,7 @@ emitLinuxWaitRuntime: -> Unit uses Console {
     """ -> println
 }
 
-public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
+public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsyncFile: Bool, usesSocketCompletion: Bool, diagnosticsEnabled: Bool -> Unit uses Console {
     "define internal i64 @sollang_now_millis() {" -> println
     "entry:" -> println
     "  %value = call i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)()" -> println
@@ -617,10 +648,10 @@ public emitLinuxRuntime functions: llvmRuntime.RuntimeFunctionSymbols, usesAsync
     "}" -> println
     emitLinuxWaitRuntime()
     emitIoRuntime(false, usesAsyncFile, usesSocketCompletion)
-    emitCommonRuntime()
+    diagnosticsEnabled -> emitCommonRuntime
 }
 
-public emitStandaloneLinuxRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool -> Unit uses Console {
+public emitStandaloneLinuxRuntime usesAsyncFile: Bool, usesSocketCompletion: Bool, diagnosticsEnabled: Bool -> Unit uses Console {
     "declare i32 @clock_gettime(i32, ptr)" -> println
     """
     define internal i64 @sollang_now_millis() {
@@ -639,7 +670,7 @@ public emitStandaloneLinuxRuntime usesAsyncFile: Bool, usesSocketCompletion: Boo
     """ -> println
     emitLinuxWaitRuntime()
     emitIoRuntime(false, usesAsyncFile, usesSocketCompletion)
-    emitCommonRuntime()
+    diagnosticsEnabled -> emitCommonRuntime
 }
 
 # DiagnosticSession storage is separate from the affine Task control ABI.

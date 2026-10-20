@@ -1028,16 +1028,21 @@ internal sealed partial class LlvmEmitter
 
     private string? DiagnosticHeaderForTask(RuntimeTask task)
     {
-        if (task.DiagnosticHeaderName is not null)
-            return task.DiagnosticHeaderName;
-        return !_usesAsyncDiagnostics
-            ? null
-            : AsyncContextField(
-                task.ContextName,
-                task.InputType,
-                task.ResultType,
-                10,
-                "diagnostic_task_header");
+        if (!_usesAsyncDiagnostics)
+            return null;
+        var header = NextTemp("diagnostic_task_header");
+        EmitLoad(header, "ptr", TaskDiagnosticHeaderSlot(task.HandleName), 8);
+        return header;
+    }
+
+    private string TaskDiagnosticHeaderSlot(string handle)
+    {
+        // The diagnostic view uses the existing eight-byte reservation after
+        // the ordinary 160-byte record; the runtime still allocates 168 bytes.
+        var slot = NextTemp("diagnostic_task_header_slot");
+        EmitAssign(slot,
+            $"getelementptr %sollang.diagnostic_task_control, ptr {handle}, i32 0, i32 1");
+        return slot;
     }
 
     private void EmitStoreDiagnosticSuspensionLocation(

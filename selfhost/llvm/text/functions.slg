@@ -622,18 +622,18 @@ emitAsyncDiagnosticSuspension point: typedIr.CoroutineSuspendPoint, producerInde
     context.sources[point.sourceModule] -> syntaxDiagnostics.sourceLocation(byteOffset) => location
     point.functionIr -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
     "  %diagnostic_suspend$(point.state)_header = getelementptr i8, ptr %async_context, i64 $(headerOffset)" -> println
-    producerIndex -> diagnosticTaskHeaderOffset(context, state) => childOffset
-    childOffset >= 0 -> if {
-        "  %diagnostic_suspend$(point.state)_child = getelementptr i8, ptr %v$(point.awaitIr)_pending_context, i64 $(childOffset)" -> println
+    producerIndex >= 0 -> if {
+        "  %diagnostic_suspend$(point.state)_child_slot = getelementptr %sollang.diagnostic_task_control, ptr %v$(point.awaitIr)_pending_handle, i32 0, i32 1" -> println
+        "  %diagnostic_suspend$(point.state)_child = load ptr, ptr %diagnostic_suspend$(point.state)_child_slot, align 8" -> println
     }
     context.symbols[range.symbolStart + context.ir[point.functionIr].symbol] => symbol
     context.tokens[range.tokenStart + symbol.nameToken].span.length => symbolLength
     context.modules -> each module {
         module.sourceIndex == point.sourceModule -> if {
             "  call void @sollang_diagnostic_suspend(ptr %diagnostic_suspend$(point.state)_header, ptr " -> print
-            childOffset >= 0 -> if { "%diagnostic_suspend$(point.state)_child" -> print } else { "null" -> print }
+            producerIndex >= 0 -> if { "%diagnostic_suspend$(point.state)_child" -> print } else { "null" -> print }
             ", i32 $(point.state), ptr @sollang_diagnostic_module$(point.functionIr), i64 $(module.pathLength), ptr @sollang_diagnostic_symbol$(point.functionIr), i64 $(symbolLength), i64 $(byteOffset), i64 $(location.line), i64 $(location.column), i64 0)" -> println
-            producerIndex -> diagnosticTaskProducer(context, state) => producer
+            producerIndex -> diagnosticSleepProducer(context, state) => producer
             producer >= 0 and context.ir[producer].opcode == -113
                 -> if {
                     producer -> diagnosticSleepProducerOffset(context) => producerOffset
@@ -968,6 +968,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => inheritedHeaderOffset
         "  %async_inherited_header = getelementptr i8, ptr %async_context, i64 $(inheritedHeaderOffset)" -> println
+        "async_created" -> emitTaskDiagnosticHeaderStore("%async_handle", "%async_inherited_header")
         "  call void @sollang_diagnostic_inherit(ptr %async_inherited_header, ptr %async_handle, ptr %diagnostic_parent)" -> println
     }
     "  %async_task_handle = insertvalue %sollang.task poison, ptr %async_handle, 0" -> println

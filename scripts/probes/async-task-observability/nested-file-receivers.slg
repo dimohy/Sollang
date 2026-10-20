@@ -1,0 +1,34 @@
+import sys.file as file
+import sys.process as process
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Ok(value) => value -> when {
+        Some(byte) => Int(byte)
+        None => -1
+    }
+    Err(error) => -2
+}
+main {
+    file.openRead("scripts/probes/async-task-observability/capacity-retry-text-input.slg") -> when {
+        Ok(reader) {
+            Option<Int>.Some(7) -> when {
+                Some(marker) { reader -> readAt<UInt8>(0) -> valueOrEnd -> println }
+                None { "unexpected-reader" -> println }
+            }
+        }
+        Err(error) { "unexpected-file" -> println }
+    }
+    process.arguments() => arguments
+    Arena(0) => storage!
+    "$(arguments[0]).sync" -> materialize(storage!) => path
+    file.openWrite(path) -> when {
+        Ok(writer) {
+            Option<Int>.Some(9) -> when {
+                Some(marker) { writer -> file.sync -> println }
+                None { "unexpected-writer" -> println }
+            }
+        }
+        Err(error) { "unexpected-output" -> println }
+    }
+    (path -> file.removePath) == 1 -> println
+}

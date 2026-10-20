@@ -1543,6 +1543,11 @@ The ordinary task-control record also stores the result address and completion
 callback needed when a task's originating worker is no longer statically known.
 On the native x64 targets its LLVM record occupies 160 bytes and the runtime
 reserves 168 bytes for that control allocation. These are separate bounds.
+When diagnostics are enabled, a typed view of the ordinary record and its
+reserved eight-byte tail retains the producer's diagnostic-header pointer.
+Copies, result payload projections, and coroutine spills preserve this pointer
+through the Task owner; consumers must not reconstruct the header location
+from a statically guessed worker, input type, or additional parameter layout.
 Diagnostic tracking uses the same ordinary control layout; disabling diagnostics
 emits no diagnostic session storage, calls, or allocations. The exact baseline
 layout, reservation, and allocation audit are retained in

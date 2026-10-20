@@ -1,0 +1,39 @@
+import sys.file as file
+import std.async.diagnostics as diagnostics
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Ok(value) => value -> when {
+        Some(byte) => Int(byte)
+        None => -1
+    }
+    Err(error) => -2
+}
+readFile: -> async Int uses File {
+    file.openRead("scripts/probes/async-task-observability/capacity-retry-text-input.slg") -> when {
+        Ok(reader) { reader -> readAtAsync<UInt8>(0) -> await -> valueOrEnd }
+        Err(error) => -3
+    }
+}
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 2 }) -> when {
+        Ok(session) {
+            session => active!
+            readFile() => pending
+            active! -> track(pending) -> when {
+                Ok(parent) {
+                    parent -> await -> println
+                    active! -> close -> when {
+                        Ok(summary) { "tracked=$(summary.trackedTasks) untracked=$(summary.untrackedTasks)" -> println }
+                        Err(failure) { "unexpected-close" -> println }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> cancel
+                    active! -> close => closed
+                    "unexpected-track" -> println
+                }
+            }
+        }
+        Err(error) { "unexpected-session" -> println }
+    }
+}

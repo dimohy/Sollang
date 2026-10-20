@@ -832,6 +832,7 @@ internal sealed partial class LlvmEmitter
         if (_usesAsyncDiagnostics)
         {
             header += """
+                %sollang.diagnostic_task_control = type { %sollang.task_control, ptr }
                 %sollang.diagnostic_session = type { i64, i64, i64, i64, ptr, ptr }
                 %sollang.diagnostic_record = type { i64, i64, ptr, i32, i32, i64, i64, ptr, i64, ptr, i64, i64, i64, i64, ptr }
 

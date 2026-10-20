@@ -1,0 +1,51 @@
+import sys.file as file
+import std.async.diagnostics as diagnostics
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Ok(value) => value -> when {
+        Some(byte) => Int(byte)
+        None => -1
+    }
+    Err(error) => -2
+}
+main {
+    file.openRead("scripts/probes/async-task-observability/capacity-retry-text-input.slg") -> when {
+        Ok(reader) {
+            diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 2 }) -> when {
+                Ok(session) {
+                    session => active!
+                    reader -> readAtAsync<UInt8>(0) => firstTask
+                    reader -> readAtAsync<UInt8>(1) => secondTask
+                    active! -> track(firstTask) -> when {
+                        Ok(first) {
+                            active! -> track(secondTask) -> when {
+                                Ok(second) {
+                                    first -> await -> valueOrEnd -> println
+                                    second -> cancel
+                                    active! -> close -> when {
+                                        Ok(summary) { "tracked=$(summary.trackedTasks) untracked=$(summary.untrackedTasks)" -> println }
+                                        Err(failure) { "unexpected-close" -> println }
+                                    }
+                                }
+                                Err(failure) {
+                                    first -> await => result
+                                    failure._0 -> cancel
+                                    active! -> close => closed
+                                    "unexpected-second-track" -> println
+                                }
+                            }
+                        }
+                        Err(failure) {
+                            failure._0 -> cancel
+                            secondTask -> cancel
+                            active! -> close => closed
+                            "unexpected-first-track" -> println
+                        }
+                    }
+                }
+                Err(error) { "unexpected-session" -> println }
+            }
+        }
+        Err(error) { "unexpected-file" -> println }
+    }
+}

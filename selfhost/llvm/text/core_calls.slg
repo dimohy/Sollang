@@ -434,6 +434,7 @@ emitDurationSleepTask nodeIndex: Int, ownerIndex: Int, context: ref emitterConte
         "  unreachable" -> println
         "sleep$(nodeIndex)_ready:" -> println
         diagnosticSleep -> if {
+            "v$(nodeIndex)_sleep" -> emitTaskDiagnosticHeaderStore("%v$(nodeIndex)_sleep_handle", "%v$(nodeIndex)_sleep_header")
             ownerIndex -> diagnosticCallerFunction(context) => parentFunction
             parentFunction >= 0 -> if {
                 parentFunction -> asyncDiagnosticHeaderOffset(context, state) => parentOffset
@@ -3176,8 +3177,11 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
                 -> if { "1" -> print } else { "0" -> print }
         }
     } else {
+        # Frame-backed payload reads have their own reload in the current
+        # continuation; their original arm value cannot dominate resume edges.
         value.kind == 5 and value.operand0 >= 0 and context.ir[value.operand0].kind == 29
             and not (nodeIndex -> isAwaitSourceNode(context))
+            and (value.operand0 -> asyncFrameBindingRoot(ownerIndex, context, state)) < 0
             -> if {
                 "%v$(value.operand0)" -> print
             } else {
@@ -4738,7 +4742,36 @@ emitDiagnosticSessionCall nodeIndex: Int, ownerIndex: Int, context: ref emitterC
     ", ptr %v$(nodeIndex)_diagnostic_result_slot, align 8" -> println
 }
 
-diagnosticTaskProducer valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+# The ordinary record is160 bytes inside the existing168-byte allocation.
+# This diagnostic-only view retains the producer's actual header across aliases.
+emitTaskDiagnosticHeaderStore label: Text, controlName: Text, headerName: Text -> Unit uses Console {
+    "  %$(label)_header_slot = getelementptr %sollang.diagnostic_task_control, ptr $(controlName), i32 0, i32 1" -> println
+    "  store ptr $(headerName), ptr %$(label)_header_slot, align 8" -> println
+}
+
+runtimeTaskContextSize resultSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context -> usesReachableAsyncDiagnostics(state)
+        -> if { (resultSize + 7) / 8 * 8 + 48 } else { resultSize }
+}
+
+emitRuntimeTaskDiagnosticContext label: Text, controlName: Text, contextName: Text, resultSize: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context -> usesReachableAsyncDiagnostics(state)
+        -> unless { return }
+    (resultSize + 7) / 8 * 8 => headerOffset
+    "  %$(label)_header = getelementptr i8, ptr $(contextName), i64 $headerOffset" -> println
+    "  store { ptr, ptr, i64, i64, ptr, ptr } zeroinitializer, ptr %$(label)_header, align 8" -> println
+    label -> emitTaskDiagnosticHeaderStore(controlName, "%$(label)_header")
+    ownerIndex -> diagnosticCallerFunction(context) => parentFunction
+    parentFunction >= 0 -> if {
+        parentFunction -> asyncDiagnosticHeaderOffset(context, state) => parentOffset
+        "  %$(label)_parent = getelementptr i8, ptr %async_context, i64 $parentOffset" -> println
+        "  call void @sollang_diagnostic_inherit(ptr %$(label)_header, ptr $(controlName), ptr %$(label)_parent)" -> println
+    }
+}
+
+# Static provenance is used only for optional sleep source locations, never
+# to reconstruct a Task context or its diagnostic-header address.
+diagnosticSleepProducer valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     valueIndex => current!
     0 => depth!
     current! >= 0 and current! < (context.ir -> len)
@@ -4765,23 +4798,6 @@ diagnosticTaskProducer valueIndex: Int, context: ref emitterContext.EmitContext,
             depth! + 1 => depth!
         }
     -1
-}
-
-diagnosticTaskFunction valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    valueIndex -> diagnosticTaskProducer(context, state) => producer
-    producer < 0 -> if { -1 -> return }
-    context.ir[producer] => value
-    value.opcode == -113 -> if { -1 -> return }
-    CallEnvironmentRequest { callerIndex: -1, callIndex: producer, targetModule: value.targetModule, targetSymbol: value.symbol, hasArgument: value.operand0 >= 0 } -> targetFunctionIndex(context, state)
-}
-
-diagnosticTaskHeaderOffset valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    valueIndex -> diagnosticTaskProducer(context, state) => producer
-    producer < 0 -> if { -1 -> return }
-    context.ir[producer].opcode == -113 -> if { 8 -> return }
-    producer -> diagnosticTaskFunction(context, state) => functionIndex
-    functionIndex < 0 -> if { -1 -> return }
-    functionIndex -> asyncDiagnosticHeaderOffset(context, state)
 }
 
 # Resolve the source path belonging to an already-classified sleep intrinsic.
@@ -4812,11 +4828,6 @@ diagnosticSleepProducerOffset producerIndex: Int, context: ref emitterContext.Em
 
 emitDiagnosticTrackCall nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[nodeIndex] => node
-    node.operand1 -> diagnosticTaskHeaderOffset(context, state) => headerOffset
-    headerOffset < 0 -> if {
-        "; sollang internal error: diagnostic Task context origin is unresolved" -> println
-        process.exit(1)
-    }
     context.ir[node.operand0] => session
     "  %v$(nodeIndex)_track_token = extractvalue " -> print
     session -> writeIrType(context, state)
@@ -4829,7 +4840,8 @@ emitDiagnosticTrackCall nodeIndex: Int, ownerIndex: Int, context: ref emitterCon
     "" -> println
     "  %v$(nodeIndex)_track_control = extractvalue %sollang.task %v$(nodeIndex)_track_task, 0" -> println
     "  %v$(nodeIndex)_track_context = extractvalue %sollang.task %v$(nodeIndex)_track_task, 1" -> println
-    "  %v$(nodeIndex)_track_header = getelementptr i8, ptr %v$(nodeIndex)_track_context, i64 $(headerOffset)" -> println
+    "  %v$(nodeIndex)_track_header_slot = getelementptr %sollang.diagnostic_task_control, ptr %v$(nodeIndex)_track_control, i32 0, i32 1" -> println
+    "  %v$(nodeIndex)_track_header = load ptr, ptr %v$(nodeIndex)_track_header_slot, align 8" -> println
     "  %v$(nodeIndex)_track_error = call i32 @sollang_diagnostic_track(ptr %v$(nodeIndex)_track_session, ptr %v$(nodeIndex)_track_header, ptr %v$(nodeIndex)_track_control)" -> println
     "  %v$(nodeIndex)_track_ok = icmp eq i32 %v$(nodeIndex)_track_error, -1" -> println
     "  %v$(nodeIndex)_track_tag_value = select i1 %v$(nodeIndex)_track_ok, i32 0, i32 1" -> println

@@ -164,9 +164,9 @@ internal sealed partial class LlvmEmitter
             EmitLabel(readyLabel);
             if (_usesAsyncDiagnostics)
             {
-                EmitAttachInheritedDiagnosticRecord(
-                    AsyncFunctionDiagnosticHeader(context, function, "async_started_diagnostic_header"),
-                    handle);
+                var header = AsyncFunctionDiagnosticHeader(context, function, "async_started_diagnostic_header");
+                EmitStore("ptr", header, TaskDiagnosticHeaderSlot(handle), 8);
+                EmitAttachInheritedDiagnosticRecord(header, handle);
             }
 
             EmitInitializeTaskResult(handle, context, function.InputType, function.ReturnType, function);
@@ -1895,6 +1895,17 @@ internal sealed partial class LlvmEmitter
         string? DiagnosticHeaderName = null)
     {
         EmitInitializeTaskResult(handle, context, inputType, resultType, function);
+        if (_usesAsyncDiagnostics && function is not { Kind: BoundFunctionKind.User, IsAsync: true })
+        {
+            var header = DiagnosticHeaderName
+                ?? AsyncContextField(context, inputType, resultType, 10, "task_created_diagnostic_header");
+            if (DiagnosticHeaderName is null)
+            {
+                EmitInitializeAsyncDiagnosticHeader(header, _currentAsyncDiagnosticHeader);
+                EmitAttachInheritedDiagnosticRecord(header, handle);
+            }
+            EmitStore("ptr", header, TaskDiagnosticHeaderSlot(handle), 8);
+        }
         return new RuntimeTask(taskType, inputType, resultType, handle, context, function, DiagnosticHeaderName);
     }
 
@@ -1931,7 +1942,8 @@ internal sealed partial class LlvmEmitter
 
     private void EmitTaskResultCompletionFunctions()
     {
-        foreach (var function in _reachableFunctions.Where(HasDeferredTaskResult))
+        foreach (var function in _reachableFunctions.Where(HasDeferredTaskResult)
+            .DistinctBy(TaskResultCompletionSymbol, StringComparer.Ordinal))
         {
             _currentFunction = function;
             _tempId = 0;
