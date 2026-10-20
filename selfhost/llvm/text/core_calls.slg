@@ -3007,6 +3007,61 @@ writeFloatingLiteral node: typedIr.TypedIrNode, width: Int, context: ref emitter
     encoding -> floatingLiterals.write
 }
 
+writeNumericConversionOperand argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[argumentIndex] => argument
+    argument -> referenceValueTypeId(context, state) => readTypeId
+    readTypeId >= 0 -> if {
+        readTypeId -> writeAggregateFieldTypeId(context, state)
+    } else { argument -> writeIrType(context, state) }
+    " " -> print
+    argumentIndex -> referenceParameterValueIsMaterialized(ownerIndex, context, state)
+        -> if { "%v$(argumentIndex)" -> print } else {
+            argumentIndex -> writeValue(ownerIndex, context, state)
+        }
+}
+
+emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[nodeIndex] => conversion
+    conversion -> typedIr.isBuiltinFloatConversionCall
+        -> if {
+            nodeIndex -> emitBuiltinFloatConversion(ownerIndex, context, state)
+            return
+        }
+    conversion.operand0 -> aggregateValueIndex(context, state) => argumentIndex
+    context.ir[argumentIndex] => argument
+    conversion -> integerNodeWidth(context, state) => targetWidth
+    argument -> integerReadNodeWidth(context, state) => inputWidth
+    argument.typeSymbol >= 19 and argument.typeSymbol <= 22 => sourceIsFloat
+    "  %v$(nodeIndex) = " -> print
+    argument.kind == 3 -> if {
+        "add " -> print
+        conversion -> writeIrType(context, state)
+        " " -> print
+        argument -> writeIntegerLiteral(context, state)
+        ", 0" -> println
+        return
+    }
+    sourceIsFloat -> if {
+        conversion -> builtinFloatToIntegerOpcode(context, state) -> print
+    } else {
+        targetWidth < inputWidth -> if { "trunc " -> print } else {
+            targetWidth > inputWidth -> if {
+                argument -> integerNodeSigned(context, state)
+                    -> if { "sext " -> print } else { "zext " -> print }
+            } else { "add " -> print }
+        }
+    }
+    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
+    targetWidth == inputWidth and not sourceIsFloat
+        -> if {
+            ", 0" -> println
+        } else {
+            " to " -> print
+            conversion -> writeIrType(context, state)
+            "" -> println
+        }
+}
+
 emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[nodeIndex] => conversion
     conversion.operand0 -> aggregateValueIndex(context, state) => argumentIndex
@@ -3040,16 +3095,12 @@ emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitter
         argument -> integerNodeSigned(context, state)
             -> if { "sitofp " -> print } else { "uitofp " -> print }
     }
-    argument -> writeIrType(context, state)
-    " " -> print
-    ownerIndex >= 0 and ownerIndex < (context.ir -> len)
-        and context.ir[ownerIndex].kind == 0
-        and context.ir[ownerIndex].operand1 >= 0
-        and argument.kind == 5
-        and argument.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
-        -> if { "%arg" -> print } else { "%v$(argumentIndex)" -> print }
-    " to " -> print
-    conversion -> writeIrType(context, state)
+    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
+    not sourceIsFloat or targetWidth != sourceWidth
+        -> if {
+            " to " -> print
+            conversion -> writeIrType(context, state)
+        }
     "" -> println
 }
 
