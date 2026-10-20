@@ -27,6 +27,7 @@ public struct TypedIrNode {
 public struct GenericCallPlan {
     public callNode: Int
     public interpolationNode: Int
+    public ownerFunction: Int
     public templateNode: Int
     public inputTemplates: [Int; ~]
     public actualInputs: [Int; ~]
@@ -37,6 +38,7 @@ public struct GenericCallPlan {
 public struct GenericFunctionInstance {
     public callNode: Int
     public interpolationNode: Int
+    public ownerFunction: Int
     public templateNode: Int
     public functionNode: Int
     public nodeCount: Int
@@ -45,6 +47,11 @@ public struct GenericFunctionInstance {
 
 public sealDirectAwaitFunctionOrder nodes: mut [TypedIrNode; ~] -> [Int; ~] {
     nodes -> len => count
+    false => hasUserBlockScopes!
+    nodes -> each scopeCandidate {
+        scopeCandidate.kind == 19 and scopeCandidate.opcode == -227
+            -> if { true => hasUserBlockScopes! }
+    }
     [Int; ~] => owners!
     [Int; ~] => first!
     [Int; ~] => last!
@@ -66,21 +73,54 @@ public sealDirectAwaitFunctionOrder nodes: mut [TypedIrNode; ~] -> [Int; ~] {
     0 => candidateIndex!
     candidateIndex! < count -> while {
         nodes[candidateIndex!] => candidate
+        -1 => scopeOwner!
+        hasUserBlockScopes! -> if {
+            candidateIndex! => ancestor!
+            false => insideScope!
+            ancestor! >= 0 and scopeOwner! < 0 -> while {
+                nodes[ancestor!] => ancestor
+                ancestor.kind == 19 and ancestor.opcode == -227
+                    -> if { true => insideScope! }
+                ancestor.kind == 0 or ancestor.kind == 11 -> if {
+                    insideScope! -> if { ancestor! => scopeOwner! }
+                    -1 => ancestor!
+                } else { ancestor.parent => ancestor! }
+            }
+        }
         candidate.kind == 5 and candidate.symbol == -1
             and candidate.parent >= 0 and candidate.parent < count
             and candidate.operand0 >= 0 and candidate.operand0 < count
-            and (nodes[candidate.operand0].flags / 8) % 2 == 1
+            and ((nodes[candidate.operand0].flags / 8) % 2 == 1
+            or (nodes[candidate.operand0].typeKind == 7
+            and nodes[candidate.operand0].typeOrigin == 4
+            and nodes[candidate.operand0].typeSymbol == 2))
             -> if {
-                owners![candidate.parent] => destination
-                destination >= 0 and destination != owners![candidateIndex!]
+                owners![candidate.parent] => destination!
+                # A late projected await is the effect of this exact member
+                # expression. Keep it before the next source statement,
+                # rather than appending it at the end of its function.
+                nodes[candidate.operand0] => producer
+                producer.kind == 13 and producer.astNode == candidate.astNode
+                    and producer.sourceModule == candidate.sourceModule
+                    -> if { candidate.operand0 => destination! }
+                destination! >= 0 and destination! != owners![candidateIndex!]
                     -> if {
-                        last![destination] >= 0 -> if {
-                            candidateIndex! => next![last![destination]]
-                        } else { candidateIndex! => first![destination] }
-                        candidateIndex! => last![destination]
+                        last![destination!] >= 0 -> if {
+                            candidateIndex! => next![last![destination!]]
+                        } else { candidateIndex! => first![destination!] }
+                        candidateIndex! => last![destination!]
                         true => moved![candidateIndex!]
                         moveCount! + 1 => moveCount!
                     }
+            }
+        scopeOwner! >= 0 and scopeOwner! != owners![candidateIndex!]
+            and not moved![candidateIndex!] -> if {
+                last![scopeOwner!] >= 0 -> if {
+                    candidateIndex! => next![last![scopeOwner!]]
+                } else { candidateIndex! => first![scopeOwner!] }
+                candidateIndex! => last![scopeOwner!]
+                true => moved![candidateIndex!]
+                moveCount! + 1 => moveCount!
             }
         candidateIndex! + 1 => candidateIndex!
     }
@@ -101,7 +141,16 @@ public sealDirectAwaitFunctionOrder nodes: mut [TypedIrNode; ~] -> [Int; ~] {
                 }
                 oldIndex! => currentOwner!
             }
-        not moved![oldIndex!] -> if { order! -> push(oldIndex!) }
+        not moved![oldIndex!] -> if {
+            order! -> push(oldIndex!)
+            nodes[oldIndex!].kind == 13 -> if {
+                first![oldIndex!] => pending!
+                pending! >= 0 -> while {
+                    order! -> push(pending!)
+                    next![pending!] => pending!
+                }
+            }
+        }
         relocation! -> push(-1)
         oldIndex! + 1 => oldIndex!
     }
@@ -149,6 +198,7 @@ public relocateAwaitGenericPlans plans: move [GenericCallPlan; ~], relocation: r
         pendingPlans! -> take((pendingPlans! -> len) - 1) => plan!
         plan!.callNode -> relocateAwaitEdge(relocation) => plan!.callNode
         plan!.templateNode -> relocateAwaitEdge(relocation) => plan!.templateNode
+        plan!.ownerFunction -> relocateAwaitEdge(relocation) => plan!.ownerFunction
         reversed! -> push(plan!)
     }
     [GenericCallPlan; ~] => ordered!
@@ -167,6 +217,7 @@ public relocateAwaitGenericInstances relocation: ref [Int; ~], nodes: ref [Typed
         instance!.callNode -> relocateAwaitEdge(relocation) => instance!.callNode
         instance!.templateNode -> relocateAwaitEdge(relocation) => instance!.templateNode
         instance!.functionNode -> relocateAwaitEdge(relocation) => instance!.functionNode
+        instance!.ownerFunction -> relocateAwaitEdge(relocation) => instance!.ownerFunction
         instance!.functionNode >= 0 -> if {
             instance!.functionNode + 1 => end!
             end! < (nodes -> len) and nodes[end!].kind != 0 and nodes[end!].kind != 11
