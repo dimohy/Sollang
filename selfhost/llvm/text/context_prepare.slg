@@ -1333,12 +1333,15 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
         or needsSocketRuntime
         or (needsMouseEventsRuntime and usesTextOutput)
         => hasCloseDeclaration
+    capturesParallelOutput or (needsMouseEventsRuntime and usesTextOutput)
+        => hasReadDeclaration
     needsProcessRuntime -> if {
         hasCloseDeclaration -> processRuntime.emitLinuxProcessRuntime
     }
     needsProcessCapture -> if {
         "declare i32 @pipe2(ptr, i32)" -> println
-        "declare i64 @read(i32, ptr, i64)" -> println
+        not hasReadDeclaration
+            -> if { "declare i64 @read(i32, ptr, i64)" -> println }
         processRuntime.emitLinuxProcessCaptureRuntime()
     }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
@@ -1362,7 +1365,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
         llvmRuntime.emitLinuxSourceTextDeclarations()
         llvmRuntime.emitLinuxSourceText()
         needsStandardInputSourceTextRuntime -> if {
-            not capturesParallelOutput and not needsMouseEventsRuntime
+            not hasReadDeclaration and not needsProcessCapture
                 -> if { "declare i64 @read(i32, ptr, i64)" -> println }
             llvmRuntime.emitLinuxStandardInputSourceText()
         }
