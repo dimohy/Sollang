@@ -1302,6 +1302,10 @@ range or stream consumption. `break` and `continue` may be unconditional or
 guarded with `condition -> if break` / `condition -> if continue`. `return`
 belongs only in a declared function and may carry its value on the left. Avoid
 encoding a fold as mutable state when the accumulator is the actual result.
+The complete `Int` endpoint domain is valid: a half-open range ending at the
+minimum is empty, and an inclusive range ending at the maximum terminates
+after that element. Do not add a wider user-level bound or a sentinel element
+to work around an internal loop cursor.
 
 A fold may declare both body roles (`fold initial accName, itemName { ... }`)
 or omit the pair to use `acc` and `it`. Role names come from that fold header;

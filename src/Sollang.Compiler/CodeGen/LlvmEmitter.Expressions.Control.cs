@@ -606,7 +606,9 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = continueLabel;
         EmitBinary(nextItem, "add", "i32", item, "1");
         var done = NextTemp("fold_done");
-        EmitCompare(done, range.IsEndExclusive ? "sge" : "sgt", "i32", nextItem, end.ValueName);
+        // Inclusive iteration ends on the current last item, before a wrapped
+        // next item could re-enter a range whose end is Int.MaxValue.
+        EmitCompare(done, "sge", "i32", range.IsEndExclusive ? nextItem : item, end.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
 
         EmitLabel(endLabel);

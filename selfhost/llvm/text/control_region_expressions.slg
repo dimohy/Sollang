@@ -173,16 +173,23 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
 
 emitRangeValue rangeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[rangeIndex] => range
-    "  %v$(rangeIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
-    range.operand0 -> writeValue(ownerIndex, context, state)
-    ", 0" -> println
     range.opcode == grammar.tokenIdRangeUntil() -> if {
         "  %v$(rangeIndex)_end_inclusive = sub i32 " -> print
         range.operand1 -> writeValue(ownerIndex, context, state)
         ", 1" -> println
+        "  %v$(rangeIndex)_end_is_minimum = icmp eq i32 " -> print
+        range.operand1 -> writeValue(ownerIndex, context, state)
+        ", -2147483648" -> println
+        "  %v$(rangeIndex)_normalized_start = select i1 %v$(rangeIndex)_end_is_minimum, i32 0, i32 " -> print
+        range.operand0 -> writeValue(ownerIndex, context, state)
+        "" -> println
+        "  %v$(rangeIndex)_normalized_end = select i1 %v$(rangeIndex)_end_is_minimum, i32 -1, i32 %v$(rangeIndex)_end_inclusive" -> println
     }
+    "  %v$(rangeIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
+    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_normalized_start" -> print } else { range.operand0 -> writeValue(ownerIndex, context, state) }
+    ", 0" -> println
     "  %v$(rangeIndex) = insertvalue { i32, i32 } %v$(rangeIndex)_start, i32 " -> print
-    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_end_inclusive" -> print } else { range.operand1 -> writeValue(ownerIndex, context, state) }
+    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_normalized_end" -> print } else { range.operand1 -> writeValue(ownerIndex, context, state) }
     ", 1" -> println
 }
 
@@ -191,6 +198,7 @@ emitRangeValue rangeIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
 
 emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[regionNodeIndex] => regionNode
+    regionNodeIndex -> emitAsyncIntRoleReads(context, state)
     regionNodeIndex -> emitNamedBindingOwnershipInitialization(state)
     regionNode.kind == 2 -> if {
         regionNode -> sourceToken(context, state) => regionTextToken
@@ -2161,7 +2169,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                                             -> if {
                                                                 "%v$(regionNodeIndex)_expression$(regionExpressionRootSearch!)" -> print
                                                             } else {
-                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
+                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
                                                                     or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
                                                                     -> unless {
                                                                         regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
@@ -2186,7 +2194,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                                             -> if {
                                                                 "%v$(regionNodeIndex)_expression$(regionExpressionRootSearch!)" -> print
                                                             } else {
-                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
+                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
                                                                     or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
                                                                     -> unless {
                                                                         regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
@@ -2245,7 +2253,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
                                                                             } else {
                                                                                 regionExpressionRoot.kind == 1 -> if {
                                                                                     (regionExpressionRoot -> writeDirectFoldRoleValue(regionArgument.sourceModule, ownerIndex, context, state))
-                                                                                        or (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
+                                                                                        or (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
                                                                                         or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
                                                                                         -> unless {
                                                                                             regionExpressionRootBinding! >= 0 -> if {

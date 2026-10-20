@@ -516,7 +516,17 @@ internal sealed partial class LlvmEmitter
         {
             var adjustedEnd = NextTemp("range_end_inclusive");
             EmitBinary(adjustedEnd, "sub", "i32", end.ValueName, "1");
-            endInclusive = new RuntimeInt(adjustedEnd);
+            // The predecessor of Int.MinValue is outside the Range bound type.
+            // Every half-open range ending there is empty; retain the two-Int ABI.
+            var minimumEnd = NextTemp("range_end_is_minimum");
+            EmitCompare(minimumEnd, "eq", "i32", end.ValueName,
+                int.MinValue.ToString(CultureInfo.InvariantCulture));
+            var normalizedStart = NextTemp("range_normalized_start");
+            EmitAssign(normalizedStart, $"select i1 {minimumEnd}, i32 0, i32 {start.ValueName}");
+            var normalizedEnd = NextTemp("range_normalized_end");
+            EmitAssign(normalizedEnd, $"select i1 {minimumEnd}, i32 -1, i32 {adjustedEnd}");
+            start = new RuntimeInt(normalizedStart);
+            endInclusive = new RuntimeInt(normalizedEnd);
         }
         var llvmType = LlvmStructType(BoundType.Range);
         var withStart = NextTemp("range");

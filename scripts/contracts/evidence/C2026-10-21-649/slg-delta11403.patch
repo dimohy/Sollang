@@ -1,0 +1,455 @@
+diff --git a/selfhost/llvm/emitter/type_queries.slg b/selfhost/llvm/emitter/type_queries.slg
+index 7601fe53..4d819eb6 100644
+--- a/selfhost/llvm/emitter/type_queries.slg
++++ b/selfhost/llvm/emitter/type_queries.slg
+@@ -258,7 +258,19 @@ public arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext
+     elementTypeId!
+ }
+ 
++public isRange source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
++    source.typeId => typeId!
++    typeId! < 0 or typeId! >= (context.types -> len)
++        -> if { false -> return }
++    context.types[typeId!].kind == 8 -> if { context.types[typeId!].first => typeId! }
++    typeId! < 0 or typeId! >= (context.types -> len)
++        -> if { false -> return }
++    context.types[typeId!] => valueType
++    valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 25
++}
++
+ public directEachElementTypeId source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
++    source -> isRange(context) -> if { 2 -> return }
+     source.typeId >= 0 and context.types[source.typeId].kind == 1
+         and context.types[source.typeId].origin == 1 and context.types[source.typeId].symbol == 2
+         -> if { 2 -> return }
+diff --git a/selfhost/llvm/text/control_region_expressions.slg b/selfhost/llvm/text/control_region_expressions.slg
+index 8350fef3..e5f20a69 100644
+--- a/selfhost/llvm/text/control_region_expressions.slg
++++ b/selfhost/llvm/text/control_region_expressions.slg
+@@ -173,16 +173,23 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
+ 
+ emitRangeValue rangeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[rangeIndex] => range
+-    "  %v$(rangeIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
+-    range.operand0 -> writeValue(ownerIndex, context, state)
+-    ", 0" -> println
+     range.opcode == grammar.tokenIdRangeUntil() -> if {
+         "  %v$(rangeIndex)_end_inclusive = sub i32 " -> print
+         range.operand1 -> writeValue(ownerIndex, context, state)
+         ", 1" -> println
++        "  %v$(rangeIndex)_end_is_minimum = icmp eq i32 " -> print
++        range.operand1 -> writeValue(ownerIndex, context, state)
++        ", -2147483648" -> println
++        "  %v$(rangeIndex)_normalized_start = select i1 %v$(rangeIndex)_end_is_minimum, i32 0, i32 " -> print
++        range.operand0 -> writeValue(ownerIndex, context, state)
++        "" -> println
++        "  %v$(rangeIndex)_normalized_end = select i1 %v$(rangeIndex)_end_is_minimum, i32 -1, i32 %v$(rangeIndex)_end_inclusive" -> println
+     }
++    "  %v$(rangeIndex)_start = insertvalue { i32, i32 } poison, i32 " -> print
++    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_normalized_start" -> print } else { range.operand0 -> writeValue(ownerIndex, context, state) }
++    ", 0" -> println
+     "  %v$(rangeIndex) = insertvalue { i32, i32 } %v$(rangeIndex)_start, i32 " -> print
+-    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_end_inclusive" -> print } else { range.operand1 -> writeValue(ownerIndex, context, state) }
++    range.opcode == grammar.tokenIdRangeUntil() -> if { "%v$(rangeIndex)_normalized_end" -> print } else { range.operand1 -> writeValue(ownerIndex, context, state) }
+     ", 1" -> println
+ }
+ 
+@@ -191,6 +198,7 @@ emitRangeValue rangeIndex: Int, ownerIndex: Int, context: ref emitterContext.Emi
+ 
+ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[regionNodeIndex] => regionNode
++    regionNodeIndex -> emitAsyncIntRoleReads(context, state)
+     regionNodeIndex -> emitNamedBindingOwnershipInitialization(state)
+     regionNode.kind == 2 -> if {
+         regionNode -> sourceToken(context, state) => regionTextToken
+@@ -2161,7 +2169,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                                             -> if {
+                                                                 "%v$(regionNodeIndex)_expression$(regionExpressionRootSearch!)" -> print
+                                                             } else {
+-                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
++                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
+                                                                     or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
+                                                                     -> unless {
+                                                                         regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
+@@ -2186,7 +2194,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                                             -> if {
+                                                                 "%v$(regionNodeIndex)_expression$(regionExpressionRootSearch!)" -> print
+                                                             } else {
+-                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
++                                                                (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
+                                                                     or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
+                                                                     -> unless {
+                                                                         regionExpressionRootDirect! -> if { "%v$(regionExpressionRootBinding!)" -> print } else {
+@@ -2245,7 +2253,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder:
+                                                                             } else {
+                                                                                 regionExpressionRoot.kind == 1 -> if {
+                                                                                     (regionExpressionRoot -> writeDirectFoldRoleValue(regionArgument.sourceModule, ownerIndex, context, state))
+-                                                                                        or (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, context, state))
++                                                                                        or (regionExpressionRoot -> writeParallelRoleValue(regionArgument.sourceModule, regionNodeIndex, context)) or (regionExpressionRoot -> writeDirectEachRoleValue(regionArgument.sourceModule, regionNodeIndex, context, state))
+                                                                                         or (ownerIndex >= 0 and (context -> writeParameterReference(ownerIndex, regionExpressionRoot.symbol)))
+                                                                                         -> unless {
+                                                                                             regionExpressionRootBinding! >= 0 -> if {
+diff --git a/selfhost/llvm/text/entry_expressions.slg b/selfhost/llvm/text/entry_expressions.slg
+index 4c386e18..2b30443e 100644
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -1681,6 +1681,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
+ 
+ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd: Int, entryPointerAlignment: Int, entryOrder: ref [Int; ~], entryActiveEach: mut [Int; ~], activeEachSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+     context.ir[entryExpressionIndex] => entryExpression
++    entryExpressionIndex -> emitAsyncIntRoleReads(context, state)
+     entryExpressionIndex -> emitNamedBindingOwnershipInitialization(state)
+     entryExpression.kind == 9 and (entryExpression.opcode == -306 or entryExpression.opcode == -307) and entryExpression.operand0 >= 0
+         -> if { entryExpressionIndex -> emitMappedBytesExpression(functionIndex, context, state) }
+@@ -3653,7 +3654,7 @@ emitScheduledStreamBody plan: ref BodySchedulePlan, functionIndex: Int, entryEnd
+         -> if {
+             functionIndex -> emitScheduledMutableSlots(entryEnd, context, state)
+         }
+-    functionIndex -> functionHasUserBlockScope(entryEnd, context)
++    functionIndex -> functionNeedsStructuredBody(entryEnd, context)
+         -> if {
+             functionIndex -> emitRegionState(plan.order, context, state) => terminated
+             return
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index 8d8a0892..e8f1aded 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -1203,10 +1203,15 @@ isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref emitter
+     sourceModule -> emitterContext.isDirectEachRoleSymbol(symbolIndex, context)
+ }
+ 
+-writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
++writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+     node -> directEachRoleTypeId(sourceModule, context, state) => typeId
+     typeId >= 0 => matched
+-    matched -> if { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
++    matched -> if {
++        beforeIndex -> asyncIntIteratorForRole(sourceModule, node.symbol, context, state) => iterator
++        iterator >= 0 -> if {
++            "%each_role_m$(sourceModule)_s$(node.symbol)_at$(beforeIndex)" -> print
++        } else { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
++    }
+     matched
+ }
+ 
+@@ -1831,7 +1836,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
+                 -> if { "1" -> print } else { "0" -> print }
+         } else {
+             node.kind == 1 -> if {
+-                node -> writeDirectEachRoleValue(sourceModule, context, state) => directEachRole
++                node -> writeDirectEachRoleValue(sourceModule, beforeIndex, context, state) => directEachRole
+                 not directEachRole -> if {
+                     node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
+                     bindingIndex < 0 -> if {
+@@ -4117,6 +4122,12 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
+                         8 => align!
+                         0 => status!
+                     }
++                    current.symbol == 25 -> if {
++                        # Range stores two Int bounds on every target.
++                        8 => size!
++                        4 => align!
++                        0 => status!
++                    }
+                 }
+             }
+             current.kind == 2 -> if {
+@@ -4533,10 +4544,11 @@ emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterCont
+         "  br label %each$(eachIndex)_continue" -> println
+     }
+     "each$(eachIndex)_continue:" -> println
+-    context.ir[context.ir[eachIndex].operand0].kind == 31 or context.ir[eachIndex].opcode == typedIr.repeatOpcode()
++    (context.ir[context.ir[eachIndex].operand0] -> typeQueries.isRange(context)) or context.ir[eachIndex].opcode == typedIr.repeatOpcode()
+         -> if {
+-            "  %each$(eachIndex)_next = add i32 %each$(eachIndex)_index, 1" -> println
+-            "  store i32 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 4" -> println
++            "  %each$(eachIndex)_current = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
++            "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_current, 1" -> println
++            "  store i64 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 8" -> println
+         } else {
+             context.ir[context.ir[eachIndex].operand0] -> isDirectTextEachSource(context)
+                 -> if {
+@@ -4558,32 +4570,50 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd:
+     eachSource -> isArgumentsType => eachArguments
+     eachSource -> isDirectTextEachSource(context) => eachText
+     eachNode.opcode == typedIr.repeatOpcode() => eachRepeat
++    eachSource -> typeQueries.isRange(context) => eachRange
++    eachIndex -> asyncIntIteratorIsPersistent(context, state) => persistentIntIterator
+     eachRepeat -> if {
+         "  %each$(eachIndex)_count = freeze i32 " -> print
+         eachNode.operand0 -> writeValue(ownerIndex, context, state)
+         "" -> println
+     }
+-    eachSource.kind == 31 or eachRepeat -> if {
+-        "  %each$(eachIndex)_index_slot = alloca i32, align 4" -> println
+-        "  store i32 " -> print
+-        eachRepeat -> if { "1" -> print } else {
+-            eachSource.operand0 -> writeValue(ownerIndex, context, state)
++    eachRange or eachRepeat -> if {
++        eachRange -> if {
++            "  %each$(eachIndex)_range = " -> print
++            (eachSource -> referenceValueTypeId(context, state)) >= 0
++                and not (eachNode.operand0 -> referenceParameterValueIsMaterialized(ownerIndex, context, state))
++                -> if {
++                    "load { i32, i32 }, ptr " -> print
++                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
++                    ", align 4" -> println
++                } else {
++                    "freeze { i32, i32 } " -> print
++                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
++                    "" -> println
++                }
++            "  %each$(eachIndex)_first = extractvalue { i32, i32 } %each$(eachIndex)_range, 0" -> println
++            "  %each$(eachIndex)_last = extractvalue { i32, i32 } %each$(eachIndex)_range, 1" -> println
++            "  %each$(eachIndex)_start = sext i32 %each$(eachIndex)_first to i64" -> println
++        }
++        "  %each$(eachIndex)_limit = sext i32 " -> print
++        eachRepeat -> if { "%each$(eachIndex)_count" -> print } else { "%each$(eachIndex)_last" -> print }
++        " to i64" -> println
++        not persistentIntIterator -> if {
++            "  %each$(eachIndex)_index_slot = alloca i64, align 8" -> println
++            "  %each$(eachIndex)_limit_slot = alloca i64, align 8" -> println
+         }
+-        ", ptr %each$(eachIndex)_index_slot, align 4" -> println
++        "  store i64 " -> print
++        eachRepeat -> if { "1" -> print } else { "%each$(eachIndex)_start" -> print }
++        ", ptr %each$(eachIndex)_index_slot, align 8" -> println
++        "  store i64 %each$(eachIndex)_limit, ptr %each$(eachIndex)_limit_slot, align 8" -> println
+         "  br label %each$(eachIndex)_header" -> println
+         "each$(eachIndex)_header:" -> println
+-        "  %each$(eachIndex)_index = load i32, ptr %each$(eachIndex)_index_slot, align 4" -> println
+-        "  %each$(eachIndex)_done = icmp " -> print
+-        not eachRepeat and eachSource.opcode == grammar.tokenIdRangeUntil()
+-            -> if { "sge" -> print } else { "sgt" -> print }
+-        " i32 %each$(eachIndex)_index, " -> print
+-        eachRepeat -> if { "%each$(eachIndex)_count" -> print } else {
+-            eachSource.operand1 -> writeValue(ownerIndex, context, state)
+-        }
+-        "" -> println
++        "  %each$(eachIndex)_index = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
++        "  %each$(eachIndex)_bound = load i64, ptr %each$(eachIndex)_limit_slot, align 8" -> println
++        "  %each$(eachIndex)_done = icmp sgt i64 %each$(eachIndex)_index, %each$(eachIndex)_bound" -> println
+         "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_body" -> println
+         "each$(eachIndex)_body:" -> println
+-        "  %each$(eachIndex)_item = freeze i32 %each$(eachIndex)_index" -> println
++        "  %each$(eachIndex)_item = trunc i64 %each$(eachIndex)_index to i32" -> println
+     } else {
+         eachSource -> isSetCollection(context) => eachSet
+         false => eachReadonlyReference!
+@@ -4678,6 +4708,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd:
+             }
+         }
+     }
++    persistentIntIterator -> if { return }
+     eachIndex -> emitDirectEachRoleAliases(eachSource, context, state)
+     ownerStart => eachRoleUseIndex!
+     eachRoleUseIndex! < ownerEnd -> while {
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index abef5d2f..e550a14c 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -360,6 +360,11 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
+     context.ir[functionIndex] => function
+     expression.kind == 5 and not (expressionIndex -> isAwaitSourceNode(context))
+         -> if {
++            expressionIndex -> asyncIntIteratorForRole(expression.sourceModule, expression.symbol, context, state) => roleIterator
++            roleIterator >= 0 -> if {
++                "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println
++                return
++            }
+             expressionIndex -> emitComparisonReferenceNameRead(functionIndex, -1, context, state)
+             expression.operand0 -> asyncFrameBindingRoot(functionIndex, context, state) => asyncRoot
+             asyncRoot >= 0 -> if {
+diff --git a/selfhost/llvm/text/function_scheduling.slg b/selfhost/llvm/text/function_scheduling.slg
+index 08051f91..4ca40e9a 100644
+--- a/selfhost/llvm/text/function_scheduling.slg
++++ b/selfhost/llvm/text/function_scheduling.slg
+@@ -8,10 +8,12 @@ isUserBlockScope node: typedIr.TypedIrNode -> Bool {
+     node.kind == 19 and node.opcode == -227 and node.symbol != -2
+ }
+ 
+-functionHasUserBlockScope functionIndex: Int, end: Int, context: ref emitterContext.EmitContext -> Bool {
++functionNeedsStructuredBody functionIndex: Int, end: Int, context: ref emitterContext.EmitContext -> Bool {
+     functionIndex + 1 => index!
+     index! < end -> while {
+-        context.ir[index!] -> isUserBlockScope -> if { true -> return }
++        context.ir[index!] => node
++        (node -> isUserBlockScope) or (node.kind == 6 and (node.opcode -> typedIr.isDirectIterationOpcode))
++            or node.kind == 21 or node.kind == 22 -> if { true -> return }
+         index! + 1 => index!
+     }
+     false
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index a500fab6..c2bb4256 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -3,6 +3,7 @@ namespace sollang.compiler.llvm.text
+ import sollang.compiler.ir.typed as typedIr
+ import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+ import sollang.compiler.llvm.emitter.context as emitterContext
++import sollang.compiler.llvm.emitter.type_queries as typeQueries
+ import sollang.compiler.syntax as syntax
+ import sollang.compiler.semantic.symbols as symbols
+ import sollang.compiler.semantic.type_ids as typeIds
+@@ -105,6 +106,14 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
+     foldBodyResult -> writeValue(functionIndex, context, state)
+     ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+     foldSource.kind == 31 -> if {
++        foldSource.opcode != grammar.tokenIdRangeUntil()
++            -> if {
++                "  %fold$(expressionIndex)_last = icmp sge i32 %fold$(expressionIndex)_item, " -> print
++                foldSource.operand1 -> writeValue(functionIndex, context, state)
++                "" -> println
++                "  br i1 %fold$(expressionIndex)_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
++                "fold$(expressionIndex)_advance:" -> println
++            }
+         "  %fold$(expressionIndex)_next = add i32 %fold$(expressionIndex)_item, 1" -> println
+         "  store i32 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+     } else {
+@@ -294,12 +303,115 @@ asyncDiagnosticHeaderOffset functionIndex: Int, context: ref emitterContext.Emit
+     (functionIndex -> asyncBaseContextStorageSize(context, state)) -> alignedAsyncContextOffset(8)
+ }
+ 
+-asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++asyncNonIteratorContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+     context -> usesReachableAsyncDiagnostics(state)
+         -> if { (functionIndex -> asyncDiagnosticHeaderOffset(context, state)) + 48 -> return }
+     functionIndex -> asyncBaseContextStorageSize(context, state)
+ }
+ 
++# Int iterators have no owned payload. Their hidden cursor and limit must live
++# with the Task when a body suspends, just like C# hidden Int64 spill locals.
++asyncIntIteratorIsPersistent eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    context.ir[eachIndex] => loop
++    loop.kind != 6 or not (loop.opcode -> typedIr.isDirectIterationOpcode)
++        or loop.operand0 < 0 or loop.operand1 < 0 -> if { false -> return }
++    not (context.ir[loop.operand0] -> typeQueries.isRange(context))
++        and loop.opcode != typedIr.repeatOpcode() -> if { false -> return }
++    eachIndex => owner!
++    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
++        -> while { context.ir[owner!].parent => owner! }
++    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
++        -> if { false -> return }
++    false => found!
++    state.coroutine.points -> each point {
++        point.functionIr == owner! -> if {
++            NodeAncestorRequest { nodeIndex: point.awaitIr, ownerIndex: loop.operand1 }
++                -> irDescendsFrom(context, state) -> if { true => found! }
++        }
++    }
++    found!
++}
++
++asyncIntIteratorContextOffset eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    eachIndex -> asyncIntIteratorIsPersistent(context, state)
++        -> unless { -1 -> return }
++    eachIndex => owner!
++    context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
++    (owner! -> asyncNonIteratorContextStorageSize(context, state)) -> alignedAsyncContextOffset(8) => offset!
++    owner! + 1 => index!
++    index! < eachIndex -> while {
++        index! -> asyncIntIteratorIsPersistent(context, state)
++            -> if { offset! + 16 => offset! }
++        index! + 1 => index!
++    }
++    offset!
++}
++
++asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    functionIndex -> asyncNonIteratorContextStorageSize(context, state) => base
++    base -> alignedAsyncContextOffset(8) => offset!
++    functionIndex + 1 => index!
++    functionIndex -> functionEnd(context, state) => end
++    false => hasIterator!
++    index! < end -> while {
++        index! -> asyncIntIteratorIsPersistent(context, state)
++            -> if {
++                true => hasIterator!
++                offset! + 16 => offset!
++            }
++        index! + 1 => index!
++    }
++    hasIterator! -> if { offset! } else { base }
++}
++
++asyncIntIteratorForRole useIndex: Int, sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    useIndex < 0 or useIndex >= (context.ir -> len)
++        or sourceModule < 0 or sourceModule >= (context.ranges -> len) or symbol < 0
++        or symbol >= context.ranges[sourceModule].symbolCount
++        -> if { -1 -> return }
++    context.symbols[context.ranges[sourceModule].symbolStart + symbol] => role
++    sourceModule -> isDirectEachRoleSymbol(symbol, context)
++        -> unless { -1 -> return }
++    useIndex => owner!
++    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
++        -> while { context.ir[owner!].parent => owner! }
++    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
++        -> if { -1 -> return }
++    owner! + 1 => index!
++    owner! -> functionEnd(context, state) => end
++    index! < end -> while {
++        context.ir[index!] => loop
++        loop.sourceModule == sourceModule and loop.astNode == role.astNode
++            and (index! -> asyncIntIteratorIsPersistent(context, state))
++            -> if {
++                NodeAncestorRequest { nodeIndex: useIndex, ownerIndex: loop.operand1 }
++                    -> irDescendsFrom(context, state) -> if { index! -> return }
++            }
++        index! + 1 => index!
++    }
++    -1
++}
++
++emitAsyncIntRoleReads nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    context.ir[nodeIndex] => node
++    node.sourceModule < 0 -> if { return }
++    nodeIndex => owner!
++    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
++        -> while { context.ir[owner!].parent => owner! }
++    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
++        -> if { return }
++    context.ranges[node.sourceModule] => range
++    0 => symbol!
++    symbol! < range.symbolCount -> while {
++        nodeIndex -> asyncIntIteratorForRole(node.sourceModule, symbol!, context, state) => iterator
++        iterator >= 0 -> if {
++            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor = load i64, ptr %each$(iterator)_index_slot, align 8" -> println
++            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex) = trunc i64 %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor to i32" -> println
++        }
++        symbol! + 1 => symbol!
++    }
++}
++
+ writeAsyncLocalAddress bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+     context.ir[bindingIndex].flags == 1 -> if { "%slot$(bindingIndex)" -> print } else { "%async_local$(bindingIndex)" -> print }
+ }
+@@ -312,6 +424,11 @@ emitAsyncLocalStorage functionIndex: Int, context: ref emitterContext.EmitContex
+     functionIndex + 1 => bindingIndex!
+     functionIndex -> functionEnd(context, state) => end
+     bindingIndex! < end -> while {
++        bindingIndex! -> asyncIntIteratorContextOffset(context, state) => iteratorOffset
++        iteratorOffset >= 0 -> if {
++            "  %each$(bindingIndex!)_index_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset)" -> println
++            "  %each$(bindingIndex!)_limit_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset + 8)" -> println
++        }
+         (bindingIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) == bindingIndex!
+             -> if {
+                 "  " -> print
+@@ -1334,7 +1451,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+     }
+     [Int; ~] => activeEach!
+     0 => activeEachSize!
+-    functionIndex -> functionHasUserBlockScope(functionEnd!, context)
++    functionIndex -> functionNeedsStructuredBody(functionEnd!, context)
+         -> if {
+             function.operand0 -> emitRegionState(expressionOrder, context, state) => terminated
+             not terminated -> if {
+@@ -1495,7 +1612,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+ 
+ emitScheduledFunctionBody plan: ref BodySchedulePlan, functionIndex: Int, functionEnd: Int, expressionStart: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     false => terminated!
+-    functionIndex -> functionHasUserBlockScope(functionEnd, context)
++    functionIndex -> functionNeedsStructuredBody(functionEnd, context)
+         -> if {
+             context.ir[functionIndex].operand0 -> emitRegionState(plan.order, context, state) => terminated!
+         } else {

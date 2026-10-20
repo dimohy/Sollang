@@ -1203,10 +1203,15 @@ isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref emitter
     sourceModule -> emitterContext.isDirectEachRoleSymbol(symbolIndex, context)
 }
 
-writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
+writeDirectEachRoleValue node: interpolation.InterpolationNode, sourceModule: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console {
     node -> directEachRoleTypeId(sourceModule, context, state) => typeId
     typeId >= 0 => matched
-    matched -> if { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
+    matched -> if {
+        beforeIndex -> asyncIntIteratorForRole(sourceModule, node.symbol, context, state) => iterator
+        iterator >= 0 -> if {
+            "%each_role_m$(sourceModule)_s$(node.symbol)_at$(beforeIndex)" -> print
+        } else { "%each_role_m$(sourceModule)_s$(node.symbol)" -> print }
+    }
     matched
 }
 
@@ -1831,7 +1836,7 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                 -> if { "1" -> print } else { "0" -> print }
         } else {
             node.kind == 1 -> if {
-                node -> writeDirectEachRoleValue(sourceModule, context, state) => directEachRole
+                node -> writeDirectEachRoleValue(sourceModule, beforeIndex, context, state) => directEachRole
                 not directEachRole -> if {
                     node -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => bindingIndex
                     bindingIndex < 0 -> if {
@@ -4117,6 +4122,12 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                         8 => align!
                         0 => status!
                     }
+                    current.symbol == 25 -> if {
+                        # Range stores two Int bounds on every target.
+                        8 => size!
+                        4 => align!
+                        0 => status!
+                    }
                 }
             }
             current.kind == 2 -> if {
@@ -4533,10 +4544,11 @@ emitDirectEachEnd eachIndex: Int, bodyTerminated: Bool, context: ref emitterCont
         "  br label %each$(eachIndex)_continue" -> println
     }
     "each$(eachIndex)_continue:" -> println
-    context.ir[context.ir[eachIndex].operand0].kind == 31 or context.ir[eachIndex].opcode == typedIr.repeatOpcode()
+    (context.ir[context.ir[eachIndex].operand0] -> typeQueries.isRange(context)) or context.ir[eachIndex].opcode == typedIr.repeatOpcode()
         -> if {
-            "  %each$(eachIndex)_next = add i32 %each$(eachIndex)_index, 1" -> println
-            "  store i32 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 4" -> println
+            "  %each$(eachIndex)_current = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
+            "  %each$(eachIndex)_next = add i64 %each$(eachIndex)_current, 1" -> println
+            "  store i64 %each$(eachIndex)_next, ptr %each$(eachIndex)_index_slot, align 8" -> println
         } else {
             context.ir[context.ir[eachIndex].operand0] -> isDirectTextEachSource(context)
                 -> if {
@@ -4558,32 +4570,50 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
     eachSource -> isArgumentsType => eachArguments
     eachSource -> isDirectTextEachSource(context) => eachText
     eachNode.opcode == typedIr.repeatOpcode() => eachRepeat
+    eachSource -> typeQueries.isRange(context) => eachRange
+    eachIndex -> asyncIntIteratorIsPersistent(context, state) => persistentIntIterator
     eachRepeat -> if {
         "  %each$(eachIndex)_count = freeze i32 " -> print
         eachNode.operand0 -> writeValue(ownerIndex, context, state)
         "" -> println
     }
-    eachSource.kind == 31 or eachRepeat -> if {
-        "  %each$(eachIndex)_index_slot = alloca i32, align 4" -> println
-        "  store i32 " -> print
-        eachRepeat -> if { "1" -> print } else {
-            eachSource.operand0 -> writeValue(ownerIndex, context, state)
+    eachRange or eachRepeat -> if {
+        eachRange -> if {
+            "  %each$(eachIndex)_range = " -> print
+            (eachSource -> referenceValueTypeId(context, state)) >= 0
+                and not (eachNode.operand0 -> referenceParameterValueIsMaterialized(ownerIndex, context, state))
+                -> if {
+                    "load { i32, i32 }, ptr " -> print
+                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                    ", align 4" -> println
+                } else {
+                    "freeze { i32, i32 } " -> print
+                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                    "" -> println
+                }
+            "  %each$(eachIndex)_first = extractvalue { i32, i32 } %each$(eachIndex)_range, 0" -> println
+            "  %each$(eachIndex)_last = extractvalue { i32, i32 } %each$(eachIndex)_range, 1" -> println
+            "  %each$(eachIndex)_start = sext i32 %each$(eachIndex)_first to i64" -> println
         }
-        ", ptr %each$(eachIndex)_index_slot, align 4" -> println
+        "  %each$(eachIndex)_limit = sext i32 " -> print
+        eachRepeat -> if { "%each$(eachIndex)_count" -> print } else { "%each$(eachIndex)_last" -> print }
+        " to i64" -> println
+        not persistentIntIterator -> if {
+            "  %each$(eachIndex)_index_slot = alloca i64, align 8" -> println
+            "  %each$(eachIndex)_limit_slot = alloca i64, align 8" -> println
+        }
+        "  store i64 " -> print
+        eachRepeat -> if { "1" -> print } else { "%each$(eachIndex)_start" -> print }
+        ", ptr %each$(eachIndex)_index_slot, align 8" -> println
+        "  store i64 %each$(eachIndex)_limit, ptr %each$(eachIndex)_limit_slot, align 8" -> println
         "  br label %each$(eachIndex)_header" -> println
         "each$(eachIndex)_header:" -> println
-        "  %each$(eachIndex)_index = load i32, ptr %each$(eachIndex)_index_slot, align 4" -> println
-        "  %each$(eachIndex)_done = icmp " -> print
-        not eachRepeat and eachSource.opcode == grammar.tokenIdRangeUntil()
-            -> if { "sge" -> print } else { "sgt" -> print }
-        " i32 %each$(eachIndex)_index, " -> print
-        eachRepeat -> if { "%each$(eachIndex)_count" -> print } else {
-            eachSource.operand1 -> writeValue(ownerIndex, context, state)
-        }
-        "" -> println
+        "  %each$(eachIndex)_index = load i64, ptr %each$(eachIndex)_index_slot, align 8" -> println
+        "  %each$(eachIndex)_bound = load i64, ptr %each$(eachIndex)_limit_slot, align 8" -> println
+        "  %each$(eachIndex)_done = icmp sgt i64 %each$(eachIndex)_index, %each$(eachIndex)_bound" -> println
         "  br i1 %each$(eachIndex)_done, label %each$(eachIndex)_exit, label %each$(eachIndex)_body" -> println
         "each$(eachIndex)_body:" -> println
-        "  %each$(eachIndex)_item = freeze i32 %each$(eachIndex)_index" -> println
+        "  %each$(eachIndex)_item = trunc i64 %each$(eachIndex)_index to i32" -> println
     } else {
         eachSource -> isSetCollection(context) => eachSet
         false => eachReadonlyReference!
@@ -4678,6 +4708,7 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
             }
         }
     }
+    persistentIntIterator -> if { return }
     eachIndex -> emitDirectEachRoleAliases(eachSource, context, state)
     ownerStart => eachRoleUseIndex!
     eachRoleUseIndex! < ownerEnd -> while {

@@ -1747,7 +1747,7 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = continueLabel;
         EmitBinary(next, "add", "i32", item, "1");
         var done = NextTemp("each_done");
-        EmitCompare(done, "sgt", "i32", next, end);
+        EmitCompare(done, "sge", "i32", item, end);
         EmitConditionalBranch(done, endLabel, bodyLabel);
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
@@ -3246,8 +3246,14 @@ internal sealed partial class LlvmEmitter
     {
         var indexName = NextAsyncBindingName("each_index");
         var endName = NextAsyncBindingName("each_limit");
-        _locals.Add(indexName, start);
-        _locals.Add(endName, end);
+        // The hidden cursor must represent the position after Int.MaxValue.
+        // Source elements remain Int; the wider cursor is ordinary spill state.
+        var wideStart = NextTemp("async_each_start");
+        var wideEnd = NextTemp("async_each_end");
+        EmitAssign(wideStart, $"sext i32 {start.ValueName} to i64");
+        EmitAssign(wideEnd, $"sext i32 {end.ValueName} to i64");
+        _locals.Add(indexName, new RuntimeInt(BoundType.Int64, wideStart));
+        _locals.Add(endName, new RuntimeInt(BoundType.Int64, wideEnd));
         try
         {
             EmitAsyncLoop(
@@ -3257,16 +3263,22 @@ internal sealed partial class LlvmEmitter
                     var current = (RuntimeInt)ResolveLocal(indexName);
                     var limit = (RuntimeInt)ResolveLocal(endName);
                     var condition = NextTemp("async_each_condition");
-                    EmitCompare(condition, "sle", "i32", current.ValueName, limit.ValueName);
+                    EmitCompare(condition, "sle", "i64", current.ValueName, limit.ValueName);
                     return new RuntimeBool(condition);
                 },
-                () => _locals[statement.ItemName] = ResolveLocal(indexName),
+                () =>
+                {
+                    var current = (RuntimeInt)ResolveLocal(indexName);
+                    var item = NextTemp("async_each_item");
+                    EmitAssign(item, $"trunc i64 {current.ValueName} to i32");
+                    _locals[statement.ItemName] = new RuntimeInt(item);
+                },
                 () =>
                 {
                     var current = (RuntimeInt)ResolveLocal(indexName);
                     var next = NextTemp("async_each_next");
-                    EmitBinary(next, "add", "i32", current.ValueName, "1");
-                    _locals[indexName] = new RuntimeInt(next);
+                    EmitBinary(next, "add", "i64", current.ValueName, "1");
+                    _locals[indexName] = new RuntimeInt(BoundType.Int64, next);
                 });
         }
         finally
@@ -4040,7 +4052,7 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = continueLabel;
         EmitBinary(next, "add", "i32", item, "1");
         var done = NextTemp("repeat_done");
-        EmitCompare(done, "sgt", "i32", next, count.ValueName);
+        EmitCompare(done, "sge", "i32", item, count.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;

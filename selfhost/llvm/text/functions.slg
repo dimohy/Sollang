@@ -3,6 +3,7 @@ namespace sollang.compiler.llvm.text
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
 import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
 import sollang.compiler.syntax as syntax
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
@@ -105,6 +106,14 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     foldBodyResult -> writeValue(functionIndex, context, state)
     ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
     foldSource.kind == 31 -> if {
+        foldSource.opcode != grammar.tokenIdRangeUntil()
+            -> if {
+                "  %fold$(expressionIndex)_last = icmp sge i32 %fold$(expressionIndex)_item, " -> print
+                foldSource.operand1 -> writeValue(functionIndex, context, state)
+                "" -> println
+                "  br i1 %fold$(expressionIndex)_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
+                "fold$(expressionIndex)_advance:" -> println
+            }
         "  %fold$(expressionIndex)_next = add i32 %fold$(expressionIndex)_item, 1" -> println
         "  store i32 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
     } else {
@@ -294,10 +303,113 @@ asyncDiagnosticHeaderOffset functionIndex: Int, context: ref emitterContext.Emit
     (functionIndex -> asyncBaseContextStorageSize(context, state)) -> alignedAsyncContextOffset(8)
 }
 
-asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+asyncNonIteratorContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context -> usesReachableAsyncDiagnostics(state)
         -> if { (functionIndex -> asyncDiagnosticHeaderOffset(context, state)) + 48 -> return }
     functionIndex -> asyncBaseContextStorageSize(context, state)
+}
+
+# Int iterators have no owned payload. Their hidden cursor and limit must live
+# with the Task when a body suspends, just like C# hidden Int64 spill locals.
+asyncIntIteratorIsPersistent eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[eachIndex] => loop
+    loop.kind != 6 or not (loop.opcode -> typedIr.isDirectIterationOpcode)
+        or loop.operand0 < 0 or loop.operand1 < 0 -> if { false -> return }
+    not (context.ir[loop.operand0] -> typeQueries.isRange(context))
+        and loop.opcode != typedIr.repeatOpcode() -> if { false -> return }
+    eachIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { false -> return }
+    false => found!
+    state.coroutine.points -> each point {
+        point.functionIr == owner! -> if {
+            NodeAncestorRequest { nodeIndex: point.awaitIr, ownerIndex: eachIndex }
+                -> irDescendsFrom(context, state) -> if { true => found! }
+        }
+    }
+    found!
+}
+
+asyncIntIteratorContextOffset eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    eachIndex -> asyncIntIteratorIsPersistent(context, state)
+        -> unless { -1 -> return }
+    eachIndex => owner!
+    context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
+    (owner! -> asyncNonIteratorContextStorageSize(context, state)) -> alignedAsyncContextOffset(8) => offset!
+    owner! + 1 => index!
+    index! < eachIndex -> while {
+        index! -> asyncIntIteratorIsPersistent(context, state)
+            -> if { offset! + 16 => offset! }
+        index! + 1 => index!
+    }
+    offset!
+}
+
+asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncNonIteratorContextStorageSize(context, state) => base
+    base -> alignedAsyncContextOffset(8) => offset!
+    functionIndex + 1 => index!
+    functionIndex -> functionEnd(context, state) => end
+    false => hasIterator!
+    index! < end -> while {
+        index! -> asyncIntIteratorIsPersistent(context, state)
+            -> if {
+                true => hasIterator!
+                offset! + 16 => offset!
+            }
+        index! + 1 => index!
+    }
+    hasIterator! -> if { offset! } else { base }
+}
+
+asyncIntIteratorForRole useIndex: Int, sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    useIndex < 0 or useIndex >= (context.ir -> len)
+        or sourceModule < 0 or sourceModule >= (context.ranges -> len) or symbol < 0
+        or symbol >= context.ranges[sourceModule].symbolCount
+        -> if { -1 -> return }
+    context.symbols[context.ranges[sourceModule].symbolStart + symbol] => role
+    sourceModule -> isDirectEachRoleSymbol(symbol, context)
+        -> unless { -1 -> return }
+    useIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { -1 -> return }
+    owner! + 1 => index!
+    owner! -> functionEnd(context, state) => end
+    index! < end -> while {
+        context.ir[index!] => loop
+        loop.sourceModule == sourceModule and loop.astNode == role.astNode
+            and (index! -> asyncIntIteratorIsPersistent(context, state))
+            -> if {
+                NodeAncestorRequest { nodeIndex: useIndex, ownerIndex: index! }
+                    -> irDescendsFrom(context, state) -> if { index! -> return }
+            }
+        index! + 1 => index!
+    }
+    -1
+}
+
+emitAsyncIntRoleReads nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[nodeIndex] => node
+    node.sourceModule < 0 -> if { return }
+    nodeIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { return }
+    context.ranges[node.sourceModule] => range
+    0 => symbol!
+    symbol! < range.symbolCount -> while {
+        nodeIndex -> asyncIntIteratorForRole(node.sourceModule, symbol!, context, state) => iterator
+        iterator >= 0 -> if {
+            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor = load i64, ptr %each$(iterator)_index_slot, align 8" -> println
+            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex) = trunc i64 %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor to i32" -> println
+        }
+        symbol! + 1 => symbol!
+    }
 }
 
 writeAsyncLocalAddress bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
@@ -312,6 +424,11 @@ emitAsyncLocalStorage functionIndex: Int, context: ref emitterContext.EmitContex
     functionIndex + 1 => bindingIndex!
     functionIndex -> functionEnd(context, state) => end
     bindingIndex! < end -> while {
+        bindingIndex! -> asyncIntIteratorContextOffset(context, state) => iteratorOffset
+        iteratorOffset >= 0 -> if {
+            "  %each$(bindingIndex!)_index_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset)" -> println
+            "  %each$(bindingIndex!)_limit_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset + 8)" -> println
+        }
         (bindingIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) == bindingIndex!
             -> if {
                 "  " -> print
@@ -1334,7 +1451,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     }
     [Int; ~] => activeEach!
     0 => activeEachSize!
-    functionIndex -> functionHasUserBlockScope(functionEnd!, context)
+    functionIndex -> functionNeedsStructuredBody(functionEnd!, context)
         -> if {
             function.operand0 -> emitRegionState(expressionOrder, context, state) => terminated
             not terminated -> if {
@@ -1495,7 +1612,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
 
 emitScheduledFunctionBody plan: ref BodySchedulePlan, functionIndex: Int, functionEnd: Int, expressionStart: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     false => terminated!
-    functionIndex -> functionHasUserBlockScope(functionEnd, context)
+    functionIndex -> functionNeedsStructuredBody(functionEnd, context)
         -> if {
             context.ir[functionIndex].operand0 -> emitRegionState(plan.order, context, state) => terminated!
         } else {

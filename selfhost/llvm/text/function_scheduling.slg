@@ -8,10 +8,12 @@ isUserBlockScope node: typedIr.TypedIrNode -> Bool {
     node.kind == 19 and node.opcode == -227 and node.symbol != -2
 }
 
-functionHasUserBlockScope functionIndex: Int, end: Int, context: ref emitterContext.EmitContext -> Bool {
+functionNeedsStructuredBody functionIndex: Int, end: Int, context: ref emitterContext.EmitContext -> Bool {
     functionIndex + 1 => index!
     index! < end -> while {
-        context.ir[index!] -> isUserBlockScope -> if { true -> return }
+        context.ir[index!] => node
+        (node -> isUserBlockScope) or (node.kind == 6 and (node.opcode -> typedIr.isDirectIterationOpcode))
+            or node.kind == 21 or node.kind == 22 -> if { true -> return }
         index! + 1 => index!
     }
     false

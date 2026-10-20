@@ -1107,6 +1107,14 @@ Range values use the same kind-31 materializer in entry bodies, ordinary
 functions, and nested control regions. The shared operation owns inclusive and
 exclusive-end normalization and the two-field product construction; an
 emission context may not reconstruct that value independently.
+All `Int` endpoints are valid. A half-open range ending at the minimum `Int`
+is empty. Its inclusive predecessor cannot fit in `Int`, so its first-class
+two-field value uses the canonical empty bounds `start = 0`,
+`endInclusive = -1`. Other endpoint normalization is unchanged. Inclusive
+`each` and `fold`, including an `each` body that suspends, visit the maximum
+`Int` endpoint once and then terminate; an internal cursor must not wrap back
+into the range. The same finite cursor rule applies to a positive `Int`
+`repeat` count; zero repeats execute no body.
 
 A stream pipeline nested inside a control region uses the same scheduled stream
 body as a top-level entry or ordinary function. The enclosing region emits the
