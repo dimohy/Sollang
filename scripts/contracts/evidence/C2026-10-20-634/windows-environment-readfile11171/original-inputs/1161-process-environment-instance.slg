@@ -1,0 +1,50 @@
+# Verifies ordered child-only environment edits and explicit inheritance clear.
+import sys.process as process
+
+describe value: Option<Text> -> Text {
+    value -> when {
+        Option<Text>.None => "missing"
+        Option<Text>.Some(text) => text
+    }
+}
+
+execute command: process.Command -> Int uses Process {
+    command -> status -> when {
+        Result<process.ExitStatus, Text>.Ok(status) => status -> exitCode
+        Result<process.ExitStatus, Text>.Err(_) => -1
+    }
+}
+
+main {
+    process.arguments() => arguments
+    arguments -> len => count
+    count > 1 -> if {
+        process.environment("SOLLANG_PROCESS_INSTANCE") -> describe => configured
+        process.environment("PATH") -> describe => pathValue
+        arguments[1] -> len => modeLength
+        modeLength == 8 -> if {
+            "remove=$configured" -> println
+            "remove-path=$pathValue" -> println
+        } else {
+            "clear=$configured" -> println
+            "clear-path=$pathValue" -> println
+        }
+    } else {
+        process.command(arguments[0]) => removeCommand!
+        removeCommand! -> setEnvironment("SOLLANG_PROCESS_INSTANCE", "old")
+        removeCommand! -> setEnvironment("SOLLANG_PROCESS_INSTANCE", "value")
+        removeCommand! -> removeEnvironment("PATH")
+        removeCommand! -> arg("--remove")
+        removeCommand! -> execute => removeStatus
+
+        process.command(arguments[0]) => clearCommand!
+        clearCommand! -> setEnvironment("DISCARDED", "old")
+        clearCommand! -> clearEnvironment
+        clearCommand! -> setEnvironment("SOLLANG_PROCESS_INSTANCE", "minimal")
+        clearCommand! -> arg("--clear")
+        clearCommand! -> execute => clearStatus
+
+        "status=$removeStatus" -> println
+        "status=$clearStatus" -> println
+    }
+}

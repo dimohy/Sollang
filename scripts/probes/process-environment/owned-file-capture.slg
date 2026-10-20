@@ -1,0 +1,38 @@
+import sys.process as process
+import sys.file as file
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) > 1 -> if {
+        "ok" -> println
+    } else {
+        process.environment("SOLLANG_TEST_VALUE") -> when {
+            Some(value) { value -> println }
+            None { "missing" -> println }
+        }
+        file.openRead("examples/regression/84-process-environment.slg") -> when {
+            Ok(reader) {
+                reader -> readAt<UInt8>(0) -> when {
+                    Ok(value) { value -> when {
+                        Some(byte) { Int(byte) -> println }
+                        None { -1 -> println }
+                    } }
+                    Err(error) { -2 -> println }
+                }
+            }
+            Err(error) { -3 -> println }
+        }
+        process.command(arguments[0]) => command!
+        command! -> arg("--child")
+        command! -> stdin(process.Input.Null)
+        command! -> collect(process.CaptureLimits {
+            standardOutputBytes: 128
+            standardErrorBytes: 128
+        }) -> when {
+            Ok(output) {
+                "status=$(output.status -> exitCode) stdout=$(output.standardOutput -> len) stderr=$(output.standardError -> len)" -> println
+            }
+            Err(error) { "error=$error" -> println }
+        }
+    }
+}
