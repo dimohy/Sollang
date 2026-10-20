@@ -306,7 +306,7 @@ public emitWindowsMouseEventRuntime: -> Unit uses Console {
     closed:
       ret i1 false
     }
-    define internal void @sollang_mouse_event_stream_drop(ptr %context) {
+    define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) {
     entry:
       %cancel_address = getelementptr i8, ptr %context, i64 32
       store atomic i32 1, ptr %cancel_address release, align 4
@@ -316,7 +316,20 @@ public emitWindowsMouseEventRuntime: -> Unit uses Console {
       %event_address = getelementptr i8, ptr %context, i64 48
       %event = load ptr, ptr %event_address, align 8
       %signalled = call i32 @SetEvent(ptr %event)
-      %joined = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
+      br i1 %destroy, label %join_worker, label %cancelled_only
+    cancelled_only:
+      ret void
+    join_worker:
+      %cancel_pending = call i32 @CancelSynchronousIo(ptr %thread)
+      %joined = call i32 @WaitForSingleObject(ptr %thread, i32 1)
+      switch i32 %joined, label %join_failed [
+        i32 0, label %cleanup
+        i32 258, label %join_worker
+      ]
+    join_failed:
+      call void @llvm.trap()
+      unreachable
+    cleanup:
       %thread_closed = call i32 @CloseHandle(ptr %thread)
       %event_closed = call i32 @CloseHandle(ptr %event)
       %input = load ptr, ptr %context, align 8
@@ -733,10 +746,15 @@ public emitLinuxMouseEventRuntime hasTextRuntime: Bool -> Unit uses Console {
     closed:
       ret i1 false
     }
-    define internal void @sollang_mouse_event_stream_drop(ptr %context) {
+    define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) {
     entry:
       %cancel_address = getelementptr i8, ptr %context, i64 20
       store atomic i32 1, ptr %cancel_address release, align 4
+      call void @sollang_linux_mouse_signal(ptr %context)
+      br i1 %destroy, label %join_worker, label %cancelled_only
+    cancelled_only:
+      ret void
+    join_worker:
       %thread_address = getelementptr i8, ptr %context, i64 32
       %thread = load i64, ptr %thread_address, align 8
       %joined = call i32 @pthread_join(i64 %thread, ptr null)

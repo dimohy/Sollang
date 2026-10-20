@@ -123,9 +123,13 @@ internal sealed partial class LlvmEmitter
               ret i1 false
             }
 
-            define internal void @sollang_stream_heap_drop(ptr %context) #0 {
+            define internal void @sollang_stream_heap_drop(ptr %context, i1 %destroy) #0 {
             entry:
+              br i1 %destroy, label %release, label %done
+            release:
               call void @sollang_free(ptr %context)
+              br label %done
+            done:
               ret void
             }
 

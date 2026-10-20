@@ -1560,22 +1560,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
             }
             expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
             expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
-            expression.kind == 43 -> if {
-                expressionIndex -> plannedStreamJunction(context, state) => functionJunctionIndex
-                functionJunctionIndex >= 0 and context.streamPlan.junctions[functionJunctionIndex].kind == 2
-                    -> if {
-                        context.streamPlan.junctions[functionJunctionIndex].policy == 0
-                            -> if { expressionIndex -> emitZipJunctionValue(functionJunctionIndex, functionIndex, context, state) }
-                        context.streamPlan.junctions[functionJunctionIndex].policy == 1 and not (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
-                            -> if { expressionIndex -> emitMergeJunctionValue(functionJunctionIndex, functionIndex, context, state) }
-                        (context.streamPlan.junctions[functionJunctionIndex].policy == 1 or context.streamPlan.junctions[functionJunctionIndex].policy == 3) and (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
-                            -> if { expressionIndex -> emitConcurrentJunctionValue(functionJunctionIndex, functionIndex, context, state) }
-                        context.streamPlan.junctions[functionJunctionIndex].policy == 2
-                            -> if { expressionIndex -> emitConcatJunctionValue(functionJunctionIndex, functionIndex, context, state) }
-                        context.streamPlan.junctions[functionJunctionIndex].policy == 3 and not (functionJunctionIndex -> junctionRequiresConcurrent(context, state))
-                            -> if { expressionIndex -> emitLatestJunctionValue(functionJunctionIndex, functionIndex, context, state) }
-                    }
-            }
+            expressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
             expression.kind == 38 and context.supportsComputePool
                 -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
             expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)

@@ -781,18 +781,7 @@ internal sealed partial class LlvmEmitter
         switch (value)
         {
             case RuntimeProducerStream stream:
-                var hasDrop = NextTemp("stream_has_drop");
-                EmitCompare(hasDrop, "ne", "ptr", stream.DropName, "null");
-                var dropLabel = NextLabel("stream_drop");
-                var doneLabel = NextLabel("stream_drop_done");
-                EmitConditionalBranch(hasDrop, dropLabel, doneLabel);
-                EmitFunctionLine();
-                EmitLabel(dropLabel);
-                EmitIndirectCall(target: null, "void", stream.DropName, $"ptr {stream.ContextName}");
-                EmitBranch(doneLabel);
-                EmitFunctionLine();
-                EmitLabel(doneLabel);
-                _currentBlockLabel = doneLabel;
+                EmitProducerStreamLifecycle(stream, destroy: true);
                 break;
             case RuntimeTask task:
                 EmitAwaitTask(task, discardResult: true);
@@ -833,6 +822,26 @@ internal sealed partial class LlvmEmitter
                 break;
         }
 
+    }
+
+    // Producers keep the three-word handle, but their lifecycle callback
+    // separates cancellation from reclamation. A join must retire its borrowers
+    // before it finally destroys the input handles.
+    private void EmitProducerStreamLifecycle(RuntimeProducerStream stream, bool destroy)
+    {
+        var hasDrop = NextTemp("stream_has_drop");
+        EmitCompare(hasDrop, "ne", "ptr", stream.DropName, "null");
+        var dropLabel = NextLabel("stream_drop");
+        var doneLabel = NextLabel("stream_drop_done");
+        EmitConditionalBranch(hasDrop, dropLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(dropLabel);
+        var arguments = $"ptr {stream.ContextName}, i1 {(destroy ? "true" : "false")}";
+        EmitIndirectCall(target: null, "void", stream.DropName, arguments);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
     }
 
     private void DropStaticInlineArrayElements(RuntimeStaticInlineArray array)

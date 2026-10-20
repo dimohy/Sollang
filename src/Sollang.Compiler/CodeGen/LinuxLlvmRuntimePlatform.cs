@@ -578,8 +578,6 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               store ptr %buffer, ptr %buffer_address, align 8
               %termios_address = getelementptr i8, ptr %context, i64 48
               store ptr %original, ptr %termios_address, align 8
-              %active_next_address = getelementptr i8, ptr %context, i64 56
-              store atomic i32 0, ptr %active_next_address release, align 4
               %enabled = call i64 @write(i32 1, ptr @sollang_mouse_enable, i64 16)
               %thread_slot = alloca i64, align 8
               %created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_mouse_worker, ptr %context)
@@ -618,8 +616,6 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) #0 {
             entry:
-              %active_next_address = getelementptr i8, ptr %context, i64 56
-              %previous_active_next = atomicrmw add ptr %active_next_address, i32 1 acq_rel, align 4
               br label %queue_lock
 
             queue_lock:
@@ -677,39 +673,26 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %next_count = sub i32 %count, 1
               store i32 %next_count, ptr %count_address, align 4
               store atomic i32 0, ptr %lock_address release, align 4
-              %active_before_value_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
-              call void @sollang_linux_mouse_signal(ptr %context)
               ret i1 true
 
             closed:
-              %active_before_closed_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
-              call void @sollang_linux_mouse_signal(ptr %context)
               ret i1 false
             }
 
-            define internal void @sollang_mouse_event_stream_drop(ptr %context) #0 {
+            define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) #0 {
             entry:
-              %counter = alloca i64, align 8
               %cancel_address = getelementptr i8, ptr %context, i64 20
               store atomic i32 1, ptr %cancel_address release, align 4
+              call void @sollang_linux_mouse_signal(ptr %context)
+              br i1 %destroy, label %join_worker, label %cancelled_only
+
+            cancelled_only:
+              ret void
+
+            join_worker:
               %thread_address = getelementptr i8, ptr %context, i64 32
               %thread = load i64, ptr %thread_address, align 8
               %joined = call i32 @pthread_join(i64 %thread, ptr null)
-              br label %wait_active_next
-
-            wait_active_next:
-              %active_next_address = getelementptr i8, ptr %context, i64 56
-              %active_next = load atomic i32, ptr %active_next_address acquire, align 4
-              %next_idle = icmp eq i32 %active_next, 0
-              br i1 %next_idle, label %cleanup, label %wait_next_exit
-
-            wait_next_exit:
-              %event_address_wait = getelementptr i8, ptr %context, i64 28
-              %event_fd_wait = load i32, ptr %event_address_wait, align 4
-              %next_signal = call i64 @read(i32 %event_fd_wait, ptr %counter, i64 8)
-              br label %wait_active_next
-
-            cleanup:
               %disabled = call i64 @write(i32 1, ptr @sollang_mouse_disable, i64 16)
               %termios_address = getelementptr i8, ptr %context, i64 48
               %original = load ptr, ptr %termios_address, align 8

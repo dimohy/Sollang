@@ -855,8 +855,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store i32 0, ptr %buttons_slot, align 4
               %lock_slot = getelementptr i8, ptr %context, i64 68
               store atomic i32 0, ptr %lock_slot release, align 4
-              %active_next_slot = getelementptr i8, ptr %context, i64 72
-              store atomic i32 0, ptr %active_next_slot release, align 4
               %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_mouse_event_worker, ptr %context, i32 0, ptr null)
               %thread_ok = icmp ne ptr %thread, null
               br i1 %thread_ok, label %ready, label %restore
@@ -888,8 +886,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) #0 {
             entry:
-              %active_next_address = getelementptr i8, ptr %context, i64 72
-              %previous_active_next = atomicrmw add ptr %active_next_address, i32 1 acq_rel, align 4
               br label %queue_lock
 
             queue_lock:
@@ -950,21 +946,13 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %next_count = sub i32 %count, 1
               store i32 %next_count, ptr %count_address, align 4
               store atomic i32 0, ptr %lock_address release, align 4
-              %active_before_value_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
-              %value_event_address = getelementptr i8, ptr %context, i64 48
-              %value_event = load ptr, ptr %value_event_address, align 8
-              %value_signalled = call i32 @SetEvent(ptr %value_event)
               ret i1 true
 
             closed:
-              %active_before_closed_return = atomicrmw sub ptr %active_next_address, i32 1 acq_rel, align 4
-              %closed_event_address = getelementptr i8, ptr %context, i64 48
-              %closed_event = load ptr, ptr %closed_event_address, align 8
-              %closed_signalled = call i32 @SetEvent(ptr %closed_event)
               ret i1 false
             }
 
-            define internal void @sollang_mouse_event_stream_drop(ptr %context) #0 {
+            define internal void @sollang_mouse_event_stream_drop(ptr %context, i1 %destroy) #0 {
             entry:
               %cancel_address = getelementptr i8, ptr %context, i64 32
               store atomic i32 1, ptr %cancel_address release, align 4
@@ -974,21 +962,25 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %event_address = getelementptr i8, ptr %context, i64 48
               %event = load ptr, ptr %event_address, align 8
               %signalled = call i32 @SetEvent(ptr %event)
-              %joined = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
-              %thread_closed = call i32 @CloseHandle(ptr %thread)
-              br label %wait_active_next
+              br i1 %destroy, label %join_worker, label %cancelled_only
 
-            wait_active_next:
-              %active_next_address = getelementptr i8, ptr %context, i64 72
-              %active_next = load atomic i32, ptr %active_next_address acquire, align 4
-              %next_idle = icmp eq i32 %active_next, 0
-              br i1 %next_idle, label %cleanup, label %wait_next_exit
+            cancelled_only:
+              ret void
 
-            wait_next_exit:
-              %next_waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
-              br label %wait_active_next
+            join_worker:
+              %cancel_pending = call i32 @CancelSynchronousIo(ptr %thread)
+              %joined = call i32 @WaitForSingleObject(ptr %thread, i32 1)
+              switch i32 %joined, label %join_failed [
+                i32 0, label %cleanup
+                i32 258, label %join_worker
+              ]
+
+            join_failed:
+              call void @llvm.trap()
+              unreachable
 
             cleanup:
+              %thread_closed = call i32 @CloseHandle(ptr %thread)
               %event_closed = call i32 @CloseHandle(ptr %event)
               %input = load ptr, ptr %context, align 8
               %mode_slot = getelementptr i8, ptr %context, i64 8

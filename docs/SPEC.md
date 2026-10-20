@@ -3007,6 +3007,19 @@ a runtime value across a function or library boundary.
 source whose `next` may wait for external input. Dropping it performs structured
 cancellation: signal cancellation, wake or interrupt the producer, join its
 worker, restore platform state, and release its fixed storage.
+Every producer's third ABI word is a lifecycle callback
+`void(context, destroy)`: `destroy=false` signals cancellation and wakes blocked
+readers without reclaiming their context, while `destroy=true` completes
+structured destruction. Cold `Stream` producers use the same callback signature;
+cancellation alone leaves their deferred context intact. The callback contract
+also remains consistent for joins backed entirely by cold inputs that produce
+an `EventStream`.
+An event join first cancels its inputs, joins every worker that can still enter
+or execute an input's `next`, and only then destroys the input contexts. Nested
+joins propagate cancellation without reclaiming storage still borrowed by an
+outer worker. A source's worker and reader resources remain live until these
+borrows have ended; an in-callback reader counter alone cannot cover a worker
+that has registered a pull but has not yet entered the callback.
 
 A local `partition` registers one consumer for every route before dispatching
 its source. Dispatch begins at the final consumer registration, regardless of

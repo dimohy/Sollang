@@ -704,7 +704,7 @@ internal sealed partial class LlvmEmitter
 
     private void EmitStreamJoinDropCallback(StreamJoinRuntimeInfo info)
     {
-        EmitFunctionLine($"define internal void @{info.Prefix}_drop(ptr %context) #0 {{");
+        EmitFunctionLine($"define internal void @{info.Prefix}_drop(ptr %context, i1 %destroy) #0 {{");
         EmitFunctionLine("entry:");
         string? concurrentRuntime = null;
         if (RequiresConcurrentJoinRuntime(info.Join))
@@ -712,13 +712,30 @@ internal sealed partial class LlvmEmitter
             concurrentRuntime = EmitLoadConcurrentJoinRuntime(info);
             EmitCall(target: null, "void", "sollang_stream_join_runtime_cancel", $"ptr {concurrentRuntime}");
         }
-        for (var inputIndex = 0; inputIndex < info.Join.Inputs.Count; inputIndex++)
+        if (info.Join.IsEvent)
         {
-            DropOwnedRuntimeValue(EmitLoadJoinInput(info, inputIndex, info.Join.Inputs[inputIndex]));
+            for (var inputIndex = 0; inputIndex < info.Join.Inputs.Count; inputIndex++)
+            {
+                var input = info.Join.Inputs[inputIndex];
+                if (input.IsEvent)
+                {
+                    EmitProducerStreamLifecycle(EmitLoadJoinInput(info, inputIndex, input), destroy: false);
+                }
+            }
         }
+        EmitConditionalBranch("%destroy", "destroy_inputs", "cancelled");
+        EmitFunctionLine();
+        EmitLabel("cancelled");
+        EmitFunctionLine("  ret void");
+        EmitFunctionLine();
+        EmitLabel("destroy_inputs");
         if (concurrentRuntime is not null)
         {
             EmitCall(target: null, "void", "sollang_stream_join_runtime_join_destroy", $"ptr {concurrentRuntime}");
+        }
+        for (var inputIndex = 0; inputIndex < info.Join.Inputs.Count; inputIndex++)
+        {
+            DropOwnedRuntimeValue(EmitLoadJoinInput(info, inputIndex, info.Join.Inputs[inputIndex]));
         }
         EmitCall(target: null, "void", "sollang_free", "ptr %context");
         EmitFunctionLine("  ret void");

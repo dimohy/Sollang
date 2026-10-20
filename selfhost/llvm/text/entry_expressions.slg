@@ -1327,22 +1327,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
     }
     entryExpression.kind == 37 -> if { entryExpressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
     entryExpression.kind == 39 -> if { entryExpressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
-    entryExpression.kind == 43 -> if {
-        entryExpressionIndex -> plannedStreamJunction(context, state) => entryJunctionIndex
-        entryJunctionIndex >= 0 and context.streamPlan.junctions[entryJunctionIndex].kind == 2
-            -> if {
-                context.streamPlan.junctions[entryJunctionIndex].policy == 0
-                    -> if { entryExpressionIndex -> emitZipJunctionValue(entryJunctionIndex, functionIndex, context, state) }
-                context.streamPlan.junctions[entryJunctionIndex].policy == 1 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
-                    -> if { entryExpressionIndex -> emitMergeJunctionValue(entryJunctionIndex, functionIndex, context, state) }
-                (context.streamPlan.junctions[entryJunctionIndex].policy == 1 or context.streamPlan.junctions[entryJunctionIndex].policy == 3) and (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
-                    -> if { entryExpressionIndex -> emitConcurrentJunctionValue(entryJunctionIndex, functionIndex, context, state) }
-                context.streamPlan.junctions[entryJunctionIndex].policy == 2
-                    -> if { entryExpressionIndex -> emitConcatJunctionValue(entryJunctionIndex, functionIndex, context, state) }
-                context.streamPlan.junctions[entryJunctionIndex].policy == 3 and not (entryJunctionIndex -> junctionRequiresConcurrent(context, state))
-                    -> if { entryExpressionIndex -> emitLatestJunctionValue(entryJunctionIndex, functionIndex, context, state) }
-            }
-    }
+    entryExpressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
     entryExpression.kind == 38 and context.supportsComputePool
         -> if { entryExpressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
     entryExpression.kind == 12 or entryExpression.kind == 35
@@ -3735,7 +3720,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                 "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
                                 "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
                                 "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
-                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context)" -> println
+                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
                                 "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
                                 "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
                                 "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
@@ -3814,7 +3799,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                 "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
                                 "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
                                 "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
-                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context)" -> println
+                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
                                 "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
                                 "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
                             }

@@ -1112,9 +1112,27 @@ callResultPropagationBindingIndex callIndex: Int, context: ref emitterContext.Em
         }
     bindingIndex!
 }
+# Producer sources are evaluated once before entering the callback loop.
+streamPipelineOwnsSource nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    pipelineIndex < 0 -> if { false -> return }
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    false => insideSource!
+    pipeline.source0 >= 0 -> if {
+        NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source0 } -> irDescendsFrom(context, state) => insideSource!
+        nodeIndex == pipeline.source0 -> if { true => insideSource! }
+    }
+    pipeline.source1 >= 0 and not insideSource! -> if {
+        NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source1 } -> irDescendsFrom(context, state) => insideSource!
+        nodeIndex == pipeline.source1 -> if { true => insideSource! }
+    }
+    insideSource!
+}
+
 # Deferred named producers retain callback ownership outside terminal ancestry.
 streamPipelineOwnsCallback nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     pipelineIndex < 0 -> if { false -> return }
+    nodeIndex -> streamPipelineOwnsSource(pipelineIndex, context, state)
+        -> if { false -> return }
     context.streamPlan.pipelines[pipelineIndex] => pipeline
     false => owned!
     nodeIndex >= pipeline.callbackStart and nodeIndex <= pipeline.callbackEnd
@@ -1148,16 +1166,8 @@ regionOwnedStreamPipeline nodeIndex: Int, context: ref emitterContext.EmitContex
                             -> if { true => owned! }
                         ownedStageIndex! + 1 => ownedStageIndex!
                     }
-                false => insideSource!
-                pipeline.source0 >= 0 -> if {
-                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source0 } -> irDescendsFrom(context, state) => insideSource!
-                    nodeIndex == pipeline.source0 -> if { true => insideSource! }
-                }
-                pipeline.source1 >= 0 and not insideSource! -> if {
-                    NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: pipeline.source1 } -> irDescendsFrom(context, state) => insideSource!
-                    nodeIndex == pipeline.source1 -> if { true => insideSource! }
-                }
-                owned! and not insideSource! -> if { pipelineIndex! => found! }
+                nodeIndex -> streamPipelineOwnsSource(pipelineIndex!, context, state) => insideSource
+                owned! and not insideSource -> if { pipelineIndex! => found! }
             }
             pipelineIndex! + 1 => pipelineIndex!
         }
