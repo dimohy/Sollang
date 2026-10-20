@@ -8162,7 +8162,7 @@
     {
       "id": "C2026-09-13-434",
       "classification": "latent-defect",
-      "state": "candidate-fixed",
+      "state": "open",
       "owner": "async diagnostic terminal record lifetime",
       "rootCause": "A tracked Task could complete before owner await, then DiagnosticSession.close freed record storage while later await/release still rewrote the detached record; eager cancel marking and one-pass close also exposed dangling control/header pointers and mutated a Busy session.",
       "focusedFixture": "scripts/probes/async-task-observability/completed-unawaited-close.slg",
@@ -8176,6 +8176,20 @@
         "inputFingerprint": "A6E537CECBBB48B73EE14CA634D530716486D7160B1180EAD23BA391059C9A5E",
         "baselineReceipt": "scripts/contracts/evidence/C2026-09-13-434/baseline.json",
         "candidateReceipt": "scripts/contracts/evidence/C2026-09-13-434/candidate.json"
+      },
+      "capacityCloseReopened11068": {
+        "status": "reproduced",
+        "managedProducer": "M10797",
+        "ordinaryWindows": "closed,7 exact pass; insufficient memory safety evidence",
+        "ordinaryLinux": "exit134 munmap_chunk(): invalid pointer",
+        "asanLinux": "heap-use-after-free READ8 inside freed152-byte DiagnosticSession at +8; actual child creation after capacity-rejected parent survived close",
+        "source": "artifacts/scratch/resume-20261006-owner-continuation22/diagnostic-capacity-close-child11063.slg",
+        "evidence": "artifacts/scratch/resume-20261006-owner-continuation22/linux-asan11068/result.json",
+        "rootCause": "Capacity-rejected task headers retain the session pointer but are absent from fixed tracked records. Successful close detaches only tracked headers before freeing session. Later structured child inherits the freed pointer.",
+        "repairPlan": "Use intrusive previous/next links in existing diagnostic task headers, plus one fixed session head, to detach rejected headers on close and unlink on release/cancel in O(1). No ambient registry or extra allocation; production-off Task ABI unchanged. CSharp first then actual source compare and SLG parity.",
+        "currentState": "CSharp6/6, current native4/6, Linux ASan both1/1 passed for list. Existing async controls remain: capacity-retry baseline and current0xC000001D, completed-unawaited native invalid LLVM dominance. Do not close current unit or promote final gates.",
+        "qualification": "scripts/contracts/evidence/C2026-09-13-434/capacity-session11085/qualification.json",
+        "relatedProjectedTaskCause": "Ordinary CSharp await/cancel did not call ConsumeOwnedFieldProjection for Task fields; aggregate cleanup repeated join/release. Existing CFG ownership primitive reused; permanent list-await and list-cancel controls retained."
       }
     },
     {

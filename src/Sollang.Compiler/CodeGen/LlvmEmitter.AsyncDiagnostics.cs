@@ -8,7 +8,8 @@ namespace Sollang.Compiler.CodeGen;
 internal sealed partial class LlvmEmitter
 {
     private const int AsyncDiagnosticRecordBytes = 112;
-    private const int AsyncDiagnosticHeaderBytes = 32;
+    private const int AsyncDiagnosticHeaderBytes = 48;
+    private const int AsyncDiagnosticSessionBytes = 48;
 
     private RuntimeValue EmitAsyncDiagnosticCall(
         BoundFunction function,
@@ -72,7 +73,8 @@ internal sealed partial class LlvmEmitter
         EmitBinary(recordsBytes, "mul", "i64", maximumWide,
             AsyncDiagnosticRecordBytes.ToString(CultureInfo.InvariantCulture));
         var allocationBytes = NextTemp("diagnostic_allocation_bytes");
-        EmitBinary(allocationBytes, "add", "i64", recordsBytes, "40");
+        EmitBinary(allocationBytes, "add", "i64", recordsBytes,
+            AsyncDiagnosticSessionBytes.ToString(CultureInfo.InvariantCulture));
         var session = NextTemp("diagnostic_session");
         EmitCall(session, "ptr", "sollang_alloc", $"i64 {allocationBytes}");
         var allocationOk = NextTemp("diagnostic_allocation_ok");
@@ -95,8 +97,9 @@ internal sealed partial class LlvmEmitter
         StoreDiagnosticSessionField(session, 2, "i64", "0", 8);
         StoreDiagnosticSessionField(session, 3, "i64", "0", 8);
         var records = NextTemp("diagnostic_records");
-        EmitAssign(records, $"getelementptr i8, ptr {session}, i64 40");
+        EmitAssign(records, $"getelementptr i8, ptr {session}, i64 {AsyncDiagnosticSessionBytes}");
         StoreDiagnosticSessionField(session, 4, "ptr", records, 8);
+        StoreDiagnosticSessionField(session, 5, "ptr", "null", 8);
         var token = NextTemp("diagnostic_session_token");
         EmitAssign(token, $"ptrtoint ptr {session} to i64");
         var sessionValue = EmitRuntimeStructAggregate(
@@ -558,6 +561,7 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(successLabel);
         EmitDetachAllDiagnosticRecords(records, count);
+        EmitDetachUntrackedDiagnosticHeaders(session);
         var sessionId = LoadDiagnosticSessionField(session, 0, "i64", 8, "diagnostic_close_session_id");
         var untracked = LoadDiagnosticSessionField(session, 3, "i64", 8, "diagnostic_close_untracked");
         var summary = EmitRuntimeStructAggregate(resultTypes.Ok,
@@ -666,6 +670,21 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(fullLabel);
         EmitStore("ptr", session, DiagnosticHeaderField(header, 0, "diagnostic_capacity_session"), 8);
+        // Rejected owners still propagate the live session to structured children.
+        // Link their existing headers so close can detach them before freeing it.
+        var untrackedHead = LoadDiagnosticSessionField(session, 5, "ptr", 8, "diagnostic_untracked_head");
+        EmitStore("ptr", "null", DiagnosticHeaderField(header, 4, "diagnostic_untracked_previous"), 8);
+        EmitStore("ptr", untrackedHead, DiagnosticHeaderField(header, 5, "diagnostic_untracked_next"), 8);
+        var hasUntrackedHead = NextTemp("diagnostic_has_untracked_head");
+        EmitCompare(hasUntrackedHead, "ne", "ptr", untrackedHead, "null");
+        var linkHeadLabel = NextLabel("diagnostic_untracked_link_head");
+        var linkedLabel = NextLabel("diagnostic_untracked_linked");
+        EmitConditionalBranch(hasUntrackedHead, linkHeadLabel, linkedLabel);
+        EmitLabel(linkHeadLabel);
+        EmitStore("ptr", header, DiagnosticHeaderField(untrackedHead, 4, "diagnostic_untracked_head_previous"), 8);
+        EmitBranch(linkedLabel);
+        EmitLabel(linkedLabel);
+        StoreDiagnosticSessionField(session, 5, "ptr", header, 8);
         var untracked = LoadDiagnosticSessionField(session, 3, "i64", 8, "diagnostic_untracked_count");
         var incrementedUntracked = NextTemp("diagnostic_untracked_next");
         EmitBinary(incrementedUntracked, "add", "i64", untracked, "1");
@@ -775,14 +794,74 @@ internal sealed partial class LlvmEmitter
         var attached = NextTemp("diagnostic_detach_attached");
         EmitCompare(attached, "ne", "ptr", record, "null");
         var detachLabel = NextLabel("diagnostic_detach");
-        var doneLabel = NextLabel("diagnostic_detach_done");
-        EmitConditionalBranch(attached, detachLabel, doneLabel);
+        var untrackedLabel = NextLabel("diagnostic_detach_untracked");
+        var clearLabel = NextLabel("diagnostic_detach_clear");
+        EmitConditionalBranch(attached, detachLabel, untrackedLabel);
         EmitLabel(detachLabel);
         StoreDiagnosticRecordField(record, 2, "ptr", "null", 8);
         StoreDiagnosticRecordField(record, 14, "ptr", "null", 8);
+        EmitBranch(clearLabel);
+        EmitLabel(untrackedLabel);
+        EmitUnlinkUntrackedDiagnosticHeader(header);
+        EmitBranch(clearLabel);
+        EmitLabel(clearLabel);
         EmitStore("ptr", "null", DiagnosticHeaderField(header, 0, "diagnostic_detach_session_slot"), 8);
         EmitStore("ptr", "null", recordSlot, 8);
+    }
+
+    private void EmitUnlinkUntrackedDiagnosticHeader(string header)
+    {
+        var session = NextTemp("diagnostic_unlink_session");
+        EmitLoad(session, "ptr", DiagnosticHeaderField(header, 0, "diagnostic_unlink_session_slot"), 8);
+        var linked = NextTemp("diagnostic_unlink_linked");
+        EmitCompare(linked, "ne", "ptr", session, "null");
+        var unlinkLabel = NextLabel("diagnostic_unlink");
+        var doneLabel = NextLabel("diagnostic_unlink_done");
+        EmitConditionalBranch(linked, unlinkLabel, doneLabel);
+        EmitLabel(unlinkLabel);
+        var previous = NextTemp("diagnostic_unlink_previous");
+        var next = NextTemp("diagnostic_unlink_next");
+        EmitLoad(previous, "ptr", DiagnosticHeaderField(header, 4, "diagnostic_unlink_previous_slot"), 8);
+        EmitLoad(next, "ptr", DiagnosticHeaderField(header, 5, "diagnostic_unlink_next_slot"), 8);
+        var hasPrevious = NextTemp("diagnostic_unlink_has_previous");
+        EmitCompare(hasPrevious, "ne", "ptr", previous, "null");
+        var previousLabel = NextLabel("diagnostic_unlink_previous");
+        var headLabel = NextLabel("diagnostic_unlink_head");
+        var nextLabel = NextLabel("diagnostic_unlink_update_next");
+        EmitConditionalBranch(hasPrevious, previousLabel, headLabel);
+        EmitLabel(previousLabel);
+        EmitStore("ptr", next, DiagnosticHeaderField(previous, 5, "diagnostic_unlink_previous_next"), 8);
+        EmitBranch(nextLabel);
+        EmitLabel(headLabel);
+        StoreDiagnosticSessionField(session, 5, "ptr", next, 8);
+        EmitBranch(nextLabel);
+        EmitLabel(nextLabel);
+        var hasNext = NextTemp("diagnostic_unlink_has_next");
+        EmitCompare(hasNext, "ne", "ptr", next, "null");
+        var updateNextLabel = NextLabel("diagnostic_unlink_next");
+        EmitConditionalBranch(hasNext, updateNextLabel, doneLabel);
+        EmitLabel(updateNextLabel);
+        EmitStore("ptr", previous, DiagnosticHeaderField(next, 4, "diagnostic_unlink_next_previous"), 8);
         EmitBranch(doneLabel);
+        EmitLabel(doneLabel);
+        EmitStore("ptr", "null", DiagnosticHeaderField(header, 4, "diagnostic_unlinked_previous"), 8);
+        EmitStore("ptr", "null", DiagnosticHeaderField(header, 5, "diagnostic_unlinked_next"), 8);
+    }
+
+    private void EmitDetachUntrackedDiagnosticHeaders(string session)
+    {
+        var loopLabel = NextLabel("diagnostic_close_untracked_loop");
+        var detachLabel = NextLabel("diagnostic_close_untracked_detach");
+        var doneLabel = NextLabel("diagnostic_close_untracked_done");
+        EmitBranch(loopLabel);
+        EmitLabel(loopLabel);
+        var header = LoadDiagnosticSessionField(session, 5, "ptr", 8, "diagnostic_close_untracked_header");
+        var hasHeader = NextTemp("diagnostic_close_has_untracked_header");
+        EmitCompare(hasHeader, "ne", "ptr", header, "null");
+        EmitConditionalBranch(hasHeader, detachLabel, doneLabel);
+        EmitLabel(detachLabel);
+        EmitDetachDiagnosticHeader(header);
+        EmitBranch(loopLabel);
         EmitLabel(doneLabel);
     }
 
@@ -987,7 +1066,7 @@ internal sealed partial class LlvmEmitter
     private string DiagnosticHeaderField(string header, int field, string prefix)
     {
         var slot = NextTemp(prefix);
-        EmitAssign(slot, $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 {field}");
+        EmitAssign(slot, $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {header}, i32 0, i32 {field}");
         return slot;
     }
 

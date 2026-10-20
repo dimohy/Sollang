@@ -664,7 +664,7 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
     allocate:
       %wide_capacity = sext i32 %capacity to i64
       %records_bytes = mul i64 %wide_capacity, 112
-      %bytes = add i64 %records_bytes, 40
+      %bytes = add i64 %records_bytes, 48
       %session = call ptr @malloc(i64 %bytes)
       %allocated = icmp ne ptr %session, null
       br i1 %allocated, label %initialize, label %allocation_failed
@@ -681,8 +681,10 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
       %untracked_slot = getelementptr i8, ptr %session, i64 24
       store i64 0, ptr %untracked_slot, align 8
       %records_slot = getelementptr i8, ptr %session, i64 32
-      %records = getelementptr i8, ptr %session, i64 40
+      %records = getelementptr i8, ptr %session, i64 48
       store ptr %records, ptr %records_slot, align 8
+      %untracked_head_slot = getelementptr i8, ptr %session, i64 40
+      store ptr null, ptr %untracked_head_slot, align 8
       %success0 = insertvalue { ptr, i32 } poison, ptr %session, 0
       %success = insertvalue { ptr, i32 } %success0, i32 -1, 1
       ret { ptr, i32 } %success
@@ -768,6 +770,17 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
       %detach_next = add i64 %detach_index, 1
       br label %detach_loop
     done:
+      %untracked_head_slot = getelementptr i8, ptr %session, i64 40
+      %untracked_header = load ptr, ptr %untracked_head_slot, align 8
+      %has_untracked_header = icmp ne ptr %untracked_header, null
+      br i1 %has_untracked_header, label %detach_untracked, label %release_session
+    detach_untracked:
+      call void @sollang_diagnostic_unlink_untracked(ptr %untracked_header)
+      store ptr null, ptr %untracked_header, align 8
+      %untracked_record_slot = getelementptr i8, ptr %untracked_header, i64 8
+      store ptr null, ptr %untracked_record_slot, align 8
+      br label %done
+    release_session:
       call void @free(ptr %session)
       %summary0 = insertvalue { i1, i64, i64, i64 } poison, i1 true, 0
       %summary1 = insertvalue { i1, i64, i64, i64 } %summary0, i64 %id, 1
@@ -838,13 +851,47 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
     done:
       ret void
     }
+    define internal void @sollang_diagnostic_unlink_untracked(ptr %header) {
+    entry:
+      %session = load ptr, ptr %header, align 8
+      %linked = icmp ne ptr %session, null
+      br i1 %linked, label %unlink, label %clear
+    unlink:
+      %previous_slot = getelementptr i8, ptr %header, i64 32
+      %next_slot = getelementptr i8, ptr %header, i64 40
+      %previous = load ptr, ptr %previous_slot, align 8
+      %next = load ptr, ptr %next_slot, align 8
+      %has_previous = icmp ne ptr %previous, null
+      br i1 %has_previous, label %previous_next, label %session_head
+    previous_next:
+      %previous_next_slot = getelementptr i8, ptr %previous, i64 40
+      store ptr %next, ptr %previous_next_slot, align 8
+      br label %inspect_next
+    session_head:
+      %head_slot = getelementptr i8, ptr %session, i64 40
+      store ptr %next, ptr %head_slot, align 8
+      br label %inspect_next
+    inspect_next:
+      %has_next = icmp ne ptr %next, null
+      br i1 %has_next, label %next_previous, label %clear
+    next_previous:
+      %next_previous_slot = getelementptr i8, ptr %next, i64 32
+      store ptr %previous, ptr %next_previous_slot, align 8
+      br label %clear
+    clear:
+      %clear_previous_slot = getelementptr i8, ptr %header, i64 32
+      %clear_next_slot = getelementptr i8, ptr %header, i64 40
+      store ptr null, ptr %clear_previous_slot, align 8
+      store ptr null, ptr %clear_next_slot, align 8
+      ret void
+    }
     define internal void @sollang_diagnostic_release_header(ptr %header, i32 %terminal) {
     entry:
       call void @sollang_diagnostic_mark_terminal(ptr %header, i32 %terminal)
       %record_slot = getelementptr i8, ptr %header, i64 8
       %record = load ptr, ptr %record_slot, align 8
       %has_record = icmp ne ptr %record, null
-      br i1 %has_record, label %freeze, label %detach
+      br i1 %has_record, label %freeze, label %unlink_untracked
     freeze:
       %terminal_slot = getelementptr i8, ptr %record, i64 24
       store i32 %terminal, ptr %terminal_slot, align 4
@@ -852,6 +899,9 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
       store ptr null, ptr %control_slot, align 8
       %header_slot = getelementptr i8, ptr %record, i64 104
       store ptr null, ptr %header_slot, align 8
+      br label %detach
+    unlink_untracked:
+      call void @sollang_diagnostic_unlink_untracked(ptr %header)
       br label %detach
     detach:
       store ptr null, ptr %header, align 8
@@ -904,6 +954,20 @@ public emitDiagnosticSessionRuntime: -> Unit uses Console {
       br i1 %available, label %record, label %full
     full:
       store ptr %session, ptr %header, align 8
+      %head_slot = getelementptr i8, ptr %session, i64 40
+      %head = load ptr, ptr %head_slot, align 8
+      %previous_slot = getelementptr i8, ptr %header, i64 32
+      %next_slot = getelementptr i8, ptr %header, i64 40
+      store ptr null, ptr %previous_slot, align 8
+      store ptr %head, ptr %next_slot, align 8
+      %has_head = icmp ne ptr %head, null
+      br i1 %has_head, label %link_head, label %publish_head
+    link_head:
+      %head_previous_slot = getelementptr i8, ptr %head, i64 32
+      store ptr %header, ptr %head_previous_slot, align 8
+      br label %publish_head
+    publish_head:
+      store ptr %header, ptr %head_slot, align 8
       %untracked_slot = getelementptr i8, ptr %session, i64 24
       %untracked_count = load i64, ptr %untracked_slot, align 8
       %untracked_next = add i64 %untracked_count, 1

@@ -536,6 +536,10 @@ internal sealed partial class LlvmEmitter
                 {
                     RemoveLocal(awaitedSource.Name);
                 }
+                else if (source is FieldAccessExpression)
+                {
+                    ConsumeOwnedFieldProjection(source, task.Type);
+                }
                 result = new RuntimeFlowResult(awaited, null, _mainOk);
                 return true;
             case "cancel" when current is RuntimeTask task:
@@ -549,6 +553,10 @@ internal sealed partial class LlvmEmitter
                     && ReferenceEquals(cancelledSourceValue, task))
                 {
                     RemoveLocal(cancelledSource.Name);
+                }
+                else if (source is FieldAccessExpression)
+                {
+                    ConsumeOwnedFieldProjection(source, task.Type);
                 }
                 result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
                 return true;

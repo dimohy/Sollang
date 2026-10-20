@@ -2133,12 +2133,13 @@ internal sealed partial class LlvmEmitter
 
     private void EmitInitializeAsyncDiagnosticHeader(string header, string parentHeader)
     {
-        for (var index = 0; index < 4; index++)
+        for (var index = 0; index < 6; index++)
         {
             var slot = NextTemp("async_diagnostic_header_slot");
             EmitAssign(slot,
-                $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 {index}");
-            EmitStore(index < 2 ? "ptr" : "i64", index < 2 ? "null" : "0", slot, 8);
+                $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {header}, i32 0, i32 {index}");
+            var pointer = index < 2 || index >= 4;
+            EmitStore(pointer ? "ptr" : "i64", pointer ? "null" : "0", slot, 8);
         }
 
         var hasParent = NextTemp("async_diagnostic_has_parent");
@@ -2149,21 +2150,21 @@ internal sealed partial class LlvmEmitter
         EmitLabel(inheritLabel);
         var parentSessionSlot = NextTemp("async_diagnostic_parent_session_slot");
         EmitAssign(parentSessionSlot,
-            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {parentHeader}, i32 0, i32 0");
+            $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {parentHeader}, i32 0, i32 0");
         var parentSession = NextTemp("async_diagnostic_parent_session");
         EmitLoad(parentSession, "ptr", parentSessionSlot, 8);
         var childSessionSlot = NextTemp("async_diagnostic_child_session_slot");
         EmitAssign(childSessionSlot,
-            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 0");
+            $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {header}, i32 0, i32 0");
         EmitStore("ptr", parentSession, childSessionSlot, 8);
         var parentTaskIdSlot = NextTemp("async_diagnostic_parent_task_id_slot");
         EmitAssign(parentTaskIdSlot,
-            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {parentHeader}, i32 0, i32 2");
+            $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {parentHeader}, i32 0, i32 2");
         var parentTaskId = NextTemp("async_diagnostic_parent_task_id");
         EmitLoad(parentTaskId, "i64", parentTaskIdSlot, 8);
         var childParentIdSlot = NextTemp("async_diagnostic_child_parent_id_slot");
         EmitAssign(childParentIdSlot,
-            $"getelementptr {{ ptr, ptr, i64, i64 }}, ptr {header}, i32 0, i32 3");
+            $"getelementptr {{ ptr, ptr, i64, i64, ptr, ptr }}, ptr {header}, i32 0, i32 3");
         EmitStore("i64", parentTaskId, childParentIdSlot, 8);
         EmitBranch(readyLabel);
         EmitLabel(readyLabel);
@@ -2213,6 +2214,8 @@ internal sealed partial class LlvmEmitter
             fields.Add("ptr");
             fields.Add("i64");
             fields.Add("i64");
+            fields.Add("ptr");
+            fields.Add("ptr");
         }
     }
 

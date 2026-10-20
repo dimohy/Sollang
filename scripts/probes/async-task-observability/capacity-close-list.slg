@@ -1,0 +1,78 @@
+import std.async.diagnostics as diagnostics
+
+value input: Int -> async Int { input }
+parent input: Int -> async Int {
+    input -> value => child
+    child -> await
+}
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) -> when {
+        Ok(session) {
+            session => active!
+            1 -> value => firstTask
+            2 -> parent => secondTask
+            3 -> value => thirdTask
+            4 -> parent => fourthTask
+            active! -> track(firstTask) -> when {
+                Ok(first) {
+                    active! -> track(secondTask) -> when {
+                        Err(secondFailure) {
+                            active! -> track(thirdTask) -> when {
+                                Err(thirdFailure) {
+                                    active! -> track(fourthTask) -> when {
+                                        Err(fourthFailure) {
+                                            first -> await -> println
+                                            thirdFailure._0 -> await -> println
+                                            secondFailure._0 -> await -> println
+                                            active! -> close -> when {
+                                                Ok(summary) { "untracked=$(summary.untrackedTasks)" -> println }
+                                                Err(failure) {
+                                                    failure.session -> close => closed
+                                                    "unexpected-busy" -> println
+                                                }
+                                            }
+                                            fourthFailure._0 -> await -> println
+                                        }
+                                        Ok(fourth) {
+                                            first -> await => firstValue
+                                            thirdFailure._0 -> await => thirdValue
+                                            secondFailure._0 -> await => secondValue
+                                            fourth -> await => fourthValue
+                                            active! -> close => closed
+                                            "unexpected-fourth-track" -> println
+                                        }
+                                    }
+                                }
+                                Ok(third) {
+                                    first -> await => firstValue
+                                    secondFailure._0 -> await => secondValue
+                                    third -> await => thirdValue
+                                    fourthTask -> await => fourthValue
+                                    active! -> close => closed
+                                    "unexpected-third-track" -> println
+                                }
+                            }
+                        }
+                        Ok(second) {
+                            first -> await => firstValue
+                            second -> await => secondValue
+                            thirdTask -> await => thirdValue
+                            fourthTask -> await => fourthValue
+                            active! -> close => closed
+                            "unexpected-second-track" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => firstValue
+                    secondTask -> await => secondValue
+                    thirdTask -> await => thirdValue
+                    fourthTask -> await => fourthValue
+                    active! -> close => closed
+                    "unexpected-first-track" -> println
+                }
+            }
+        }
+        Err(error) { "unexpected-start" -> println }
+    }
+}
