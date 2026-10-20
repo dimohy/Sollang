@@ -284,12 +284,9 @@ emitFileSharedRuntime: -> Unit uses Console {
       store i64 %count, ptr %count_slot, align 8
       %ok_slot = getelementptr %sollang.task_control, ptr %request, i32 0, i32 15
       store i32 %ok, ptr %ok_slot, align 4
-      %phase_after_read = load atomic i32, ptr %phase_slot acquire, align 4
-      %cancelled_after_read = icmp eq i32 %phase_after_read, 3
-      br i1 %cancelled_after_read, label %queue_completion, label %record_complete
-
-    record_complete:
-      store atomic i32 2, ptr %phase_slot release, align 4
+      ; Completion may publish only from pending. A cancellation that
+      ; wins this transition must remain visible to the drain.
+      %completion_exchange = cmpxchg ptr %phase_slot, i32 1, i32 2 release monotonic
       br label %queue_completion
 
     record_cancelled:

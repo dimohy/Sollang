@@ -1,0 +1,206 @@
+"""Run deterministic cancellation schedules against five emitted IO runtime functions.
+
+The producer must have passed public build/run. Copy its actual worker, queue,
+cancel, ready and drain functions; stub only OS IO and allocation boundaries.
+The boundary schedule calls the actual cancellation API between the old read
+and publication, or before an atomic publication. This is a runtime leaf proof,
+not a whole compiler or concurrent-platform qualification.
+"""
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+
+from verification_execution import VerificationExecution
+from verification_contract_lease import VerificationContractLease
+from completed_artifact_plan import initialize_output
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def runtime_module(source, schedule):
+    drain = next((n for n in ('sollang_io_drain_completions', 'sollang_file_drain_completions')
+                  if re.search(r'^define[^\n]*@' + n + r'\(', source, re.M)), None)
+    if not drain:
+        raise ValueError('FILE_COMPLETION_DRAIN_MISSING')
+    names = ['sollang_file_worker_run', 'sollang_io_push_completion', drain,
+             'sollang_task_cancel', 'sollang_task_enqueue_ready']
+    functions = []
+    for name in names:
+        matches = re.findall(r'^define[^\n]*@' + name + r'\([^\n]*\{\n.*?^}', source, re.M | re.S)
+        if len(matches) != 1:
+            raise ValueError('FILE_COMPLETION_RUNTIME_FUNCTION:' + name)
+        functions.append(matches[0].replace(' #0', ''))
+    worker = functions[0]
+    if schedule == 'boundary':
+        old = r'(?m)^(  %phase_after_read = load atomic i32, ptr %phase_slot acquire, align 4\n)'
+        atomic = r'(?m)^(  %completion_exchange = cmpxchg ptr %phase_slot, i32 1, i32 2 release monotonic\n)'
+        hook = '  %probe_cancelled = call i1 @sollang_task_cancel(ptr %request)\n'
+        if len(re.findall(old, worker)) == 1 and not re.search(atomic, worker):
+            worker = re.sub(old, lambda m: m[1] + hook, worker)
+        elif len(re.findall(atomic, worker)) == 1 and not re.search(old, worker):
+            worker = re.sub(atomic, lambda m: hook + m[1], worker)
+        else:
+            raise ValueError('FILE_COMPLETION_PUBLICATION_SHAPE_UNKNOWN')
+    if schedule == 'after':
+        anchor = 'push_completed_request:\n'
+        if worker.count(anchor) != 1:
+            raise ValueError('FILE_COMPLETION_PUSH_ANCHOR')
+        worker = worker.replace(anchor, anchor + '  %probe_cancelled = call i1 @sollang_task_cancel(ptr %request)\n')
+    functions[0] = worker
+    body = '\n\n'.join(functions)
+    globals_needed = sorted(set(re.findall(r'@([\w.]+)', body)) - set(names))
+    globals_text = []
+    stubs = []
+    for name in globals_needed:
+        declaration = re.search(r'^@' + name + r'\s*=.*$', source, re.M)
+        if declaration:
+            globals_text.append(declaration[0])
+            continue
+        # A declaration for a different dependency must never become this
+        # function's stub. Only the exact free symbol has a declaration-only ABI.
+        pattern = r'^define[^\n]*@' + re.escape(name) + r'\([^\n]*\{'
+        if name == 'free':
+            pattern += r'|^declare void @free\(ptr\)'
+        declaration = re.search(pattern, source, re.M)
+        if not declaration:
+            raise ValueError('FILE_COMPLETION_UNDECLARED_DEPENDENCY:' + name)
+        signature = declaration[0].replace(' #0', '')
+        if signature == 'declare void @free(ptr)':
+            signature = 'define internal void @free(ptr %ignored) {'
+        if name in ('sollang_free', 'free'):
+            code = '  %n = load i32, ptr @probe_free\n  %next = add i32 %n, 1\n  store i32 %next, ptr @probe_free\n  ret void'
+        elif name == 'sollang_platform_file_worker_wait_request':
+            code = ('  %n = load i32, ptr @probe_wait\n  %next = add i32 %n, 1\n'
+                    '  store i32 %next, ptr @probe_wait\n  %stop = icmp eq i32 %next, 2\n'
+                    '  %value = zext i1 %stop to i32\n'
+                    '  store atomic i32 %value, ptr @sollang_file_worker_stopping release, align 4\n  ret void')
+        elif '%sollang.file_count_result @' in signature:
+            code = '  ret %sollang.file_count_result { i64 1, i32 1 }'
+        elif '%sollang.file_handle_result @' in signature:
+            code = '  ret %sollang.file_handle_result { i64 0, i32 0 }'
+        elif ' void @' in signature:
+            code = '  ret void'
+        elif ' i32 @' in signature:
+            code = '  ret i32 1'
+        else:
+            raise ValueError('FILE_COMPLETION_STUB_SIGNATURE:' + name)
+        stubs.append(signature + '\nentry:\n' + code + '\n}')
+    types = []
+    for name in ['task_control', 'file_count_result', 'file_handle_result']:
+        match = re.search(r'%sollang\.' + name + r' = type \{[^}]+\}', source)
+        if not match:
+            raise ValueError('FILE_COMPLETION_TYPE_MISSING:' + name)
+        types.append(match[0])
+    cancelled = schedule != 'normal'
+    main = '''
+@probe_control = internal global %sollang.task_control zeroinitializer
+@probe_wait = internal global i32 0
+@probe_free = internal global i32 0
+@probe_cancel = internal global i32 0
+define internal void @probe_cancel_callback(ptr %control) {
+entry:
+  %n = load i32, ptr @probe_cancel
+  %next = add i32 %n, 1
+  store i32 %next, ptr @probe_cancel
+  ret void
+}
+define i32 @main() {
+entry:
+  %phase = getelementptr %sollang.task_control, ptr @probe_control, i32 0, i32 12
+  store atomic i32 1, ptr %phase release, align 4
+  %status = getelementptr %sollang.task_control, ptr @probe_control, i32 0, i32 4
+  store i32 6, ptr %status, align 4
+  %cancel = getelementptr %sollang.task_control, ptr @probe_control, i32 0, i32 6
+  store ptr @probe_cancel_callback, ptr %cancel
+  store ptr @probe_control, ptr @sollang_file_request_head
+  store atomic i64 1, ptr @sollang_io_outstanding release, align 8
+BEFORE
+  call void @sollang_file_worker_run()
+  %drained = call i1 @DRAIN()
+  %cancel_count = load i32, ptr @probe_cancel
+  %free_count = load i32, ptr @probe_free
+  %head = load ptr, ptr @sollang_task_ready_head
+  %outstanding = load atomic i64, ptr @sollang_io_outstanding acquire, align 8
+  %cancel_ok = icmp eq i32 %cancel_count, COUNT
+  %free_ok = icmp eq i32 %free_count, COUNT
+  %head_ok = icmp PRED ptr %head, null
+  %count_ok = icmp eq i64 %outstanding, 0
+  %a = and i1 %cancel_ok, %free_ok
+  %b = and i1 %head_ok, %count_ok
+  %ok = and i1 %a, %b
+  %exit = select i1 %ok, i32 0, i32 17
+  ret i32 %exit
+}
+'''
+    main = main.replace('BEFORE', '  %before = call i1 @sollang_task_cancel(ptr @probe_control)' if schedule == 'before' else '')
+    main = main.replace('DRAIN', drain).replace('COUNT', '1' if cancelled else '0').replace('PRED', 'eq' if cancelled else 'ne')
+    return '\n\n'.join([*types, *globals_text, body, *stubs, main])
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--llvm-input', required=True, type=Path)
+    parser.add_argument('--producer-proof', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--expect-boundary-exit', type=int, choices=[0, 17], default=0)
+    args = parser.parse_args()
+    source, proof, output = (p.resolve() for p in (args.llvm_input, args.producer_proof, args.output))
+    parent = json.loads(proof.read_text(encoding='utf-8-sig'))
+    if parent.get('status') != 'passed' or not parent.get('inputsStable') or not parent.get('processesStopped'):
+        raise ValueError('FILE_COMPLETION_PRODUCER_NOT_VERIFIED')
+    if parent.get('generatedOutputHashes', {}).get(str(source)) != sha(source):
+        raise ValueError('FILE_COMPLETION_EMITTED_LLVM_NOT_PINNED')
+    llvm = ROOT / '.tools/llvm-22.1.8/bin'
+    inputs = [source, proof, Path(__file__).resolve(), llvm/'clang.exe']
+    if output.exists():
+        raise ValueError('FILE_COMPLETION_OUTPUT_NOT_FRESH')
+    initialize_output(ROOT, output)
+    output.mkdir()
+    with VerificationContractLease(inputs):
+        pins = {str(p): sha(p) for p in inputs}
+        stable = lambda: all(p.is_file() and sha(p) == pins[str(p)] for p in inputs)
+        record = dict(schemaVersion=1, status='running', scope=__doc__, inputHashes=pins,
+                      completed=0, total=4, publicationContractSatisfied=False,
+                      expectedBoundaryExit=args.expect_boundary_exit, cases=[])
+        execution = VerificationExecution(ROOT, output, record, stable, sha)
+        error = None
+        try:
+            for schedule in ['normal', 'before', 'boundary', 'after']:
+                ll, exe = output/(schedule+'.ll'), output/(schedule+'.exe')
+                ll.write_text(runtime_module(source.read_text(encoding='utf-8-sig'), schedule), encoding='utf-8', newline='\n')
+                command = [str(llvm/'clang.exe'), '-Werror', '-Wno-override-module', str(ll), '-O1', '-o', str(exe)]
+                linked = execution.run(command, output/(schedule+'-link'), timeout=30)
+                if linked.returncode or linked.stderr.strip():
+                    raise ValueError('FILE_COMPLETION_LINK_FAILED:' + schedule)
+                ran = execution.run([str(exe)], output/(schedule+'-run'), timeout=5)
+                expected = args.expect_boundary_exit if schedule == 'boundary' else 0
+                passed = ran.returncode == expected and not ran.stdout.strip() and not ran.stderr.strip()
+                record['cases'].append(dict(id=schedule, nativeExit=ran.returncode, expectedExit=expected,
+                                            passed=passed, buildExit=linked.returncode, runExit=ran.returncode,
+                                            expectedRuntimeExit=expected,
+                                            satisfiesPublicationContract=ran.returncode == 0, llvmSha256=sha(ll)))
+                if not passed:
+                    raise ValueError('FILE_COMPLETION_SCHEDULE_MISMATCH:' + schedule)
+                record['completed'] += 1
+                execution.save()
+            record.update(status='reproduced' if args.expect_boundary_exit else 'passed',
+                          publicationContractSatisfied=args.expect_boundary_exit == 0)
+        except BaseException as caught:
+            error = caught
+        finally:
+            execution.finalize(error, cleanup=error is None and args.expect_boundary_exit == 0)
+        print(json.dumps({k: record[k] for k in ['status', 'completed', 'total', 'publicationContractSatisfied']}))
+        if error:
+            raise error
+        if record['status'] not in ('passed', 'reproduced'):
+            raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()
