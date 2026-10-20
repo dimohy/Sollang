@@ -879,6 +879,31 @@ public struct ValueLayoutCycles {
     public recursiveType: Int
 }
 
+# Definition parsing registers structural children before their containing
+# definition. Named types are already declared and do not expand here. Keep
+# this registration walk separate from by-value edges: even a zero-length
+# array or heap container resolves its annotation's synthetic definitions.
+appendValueLayoutDefinitionRoots typeId: Int, types: ref [SemanticType; ~], fields: ref [NominalField; ~], firstField: ref [Int; ~], nextField: ref [Int; ~], registered: mut [Bool; ~], structRoots: mut [Int; ~], enumRoots: mut [Int; ~] -> Unit {
+    typeId < 0 or typeId >= (types -> len) -> if { return }
+    registered[typeId] -> if { return }
+    true => registered[typeId]
+    types[typeId] => current
+    current.kind == 1 -> if { return }
+    current.kind == 10 -> if {
+        firstField[typeId] => fieldIndex!
+        fieldIndex! >= 0 -> while {
+            fields[fieldIndex!].fieldType -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+            nextField[fieldIndex!] => fieldIndex!
+        }
+        structRoots -> push(typeId)
+    } else {
+        current.first -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+        current.second -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+        current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)
+            -> if { enumRoots -> push(typeId) }
+    }
+}
+
 firstValueLayoutBackedge cyclic: ref [Bool; ~], starts: ref [Int; ~], dependencies: ref [Int; ~], canonical: ref [Int; ~], roots: ref [Int; ~] -> Int {
     [Int; ~] => states!
     cyclic -> each value { states! -> push(0) }
@@ -1085,7 +1110,10 @@ public valueLayoutCycles types: ref [SemanticType; ~], fields: ref [NominalField
     }
     # Kahn flags include owners that merely contain a cycle. Ordered DFS names
     # the actual backedge type, matching semantic declaration admission.
-    [Int; ~] => roots!
+    [Int; ~] => structRoots!
+    [Int; ~] => enumRoots!
+    [Bool; ~] => registered!
+    types -> each current { registered! -> push(false) }
     3 => declarationKind!
     declarationKind! <= 4 -> while {
         ranges -> each sourceRange {
@@ -1094,13 +1122,40 @@ public valueLayoutCycles types: ref [SemanticType; ~], fields: ref [NominalField
                 sourceRange.symbolStart + declarationIndex! => globalSymbol
                 declarations[globalSymbol].kind == declarationKind!
                     and canonicalBySymbol![globalSymbol] >= 0
-                    -> if { roots! -> push(canonicalBySymbol![globalSymbol]) }
+                    -> if {
+                        canonicalBySymbol![globalSymbol] => definitionType
+                        declarationKind! == 3 -> if {
+                            firstField![definitionType] => fieldCursor!
+                            fieldCursor! >= 0 -> while {
+                                fields[fieldCursor!].fieldType -> appendValueLayoutDefinitionRoots(types, fields, firstField!, nextField!, registered!, structRoots!, enumRoots!)
+                                nextField![fieldCursor!] => fieldCursor!
+                            }
+                            structRoots! -> push(definitionType)
+                        } else {
+                            firstVariant![globalSymbol] => variantIndex!
+                            variantIndex! >= 0 -> while {
+                                declarations[variantIndex!] => variant
+                                variant.typeNode >= 0 -> if {
+                                    referenceByAst[sourceRange.astStart + variant.typeNode] => referenceIndex
+                                    referenceIndex >= 0 -> if {
+                                        references[referenceIndex] => reference
+                                        reference.status == 0 -> if {
+                                            reference.typeId -> appendValueLayoutDefinitionRoots(types, fields, firstField!, nextField!, registered!, structRoots!, enumRoots!)
+                                        }
+                                    }
+                                }
+                                nextVariant![variantIndex!] => variantIndex!
+                            }
+                            enumRoots! -> push(definitionType)
+                        }
+                    }
                 declarationIndex! + 1 => declarationIndex!
             }
         }
         declarationKind! + 1 => declarationKind!
     }
-    cyclic! -> firstValueLayoutBackedge(dependencyStarts!, dependenciesByOwner!, canonicalByType!, roots!) => recursiveType
+    enumRoots! -> each root { structRoots! -> push(root) }
+    cyclic! -> firstValueLayoutBackedge(dependencyStarts!, dependenciesByOwner!, canonicalByType!, structRoots!) => recursiveType
     ValueLayoutCycles { cyclic: cyclic!, recursiveType: recursiveType }
 }
 
