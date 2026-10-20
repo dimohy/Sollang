@@ -64,3 +64,4 @@ $directory = [IO.Path]::GetDirectoryName($output)
 [IO.Directory]::CreateDirectory($directory) | Out-Null
 [IO.File]::WriteAllText($output, ($result | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 Write-Host "[negative stderr exact] $($result.status) $matched/$($rows.Count); result=$output"
+if ($matched -ne $rows.Count) { exit 1 }

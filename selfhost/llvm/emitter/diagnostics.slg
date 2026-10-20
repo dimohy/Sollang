@@ -356,27 +356,21 @@ public reachableFunctions context: ref emitterContext.EmitContext -> [Bool; ~] {
                                             and interpolation.sourceToken == use.payloadToken
                                             -> if {
                                                 interpolationRange.nodeStart + interpolationOffset! => interpolationNodeIndex
-                                                interpolationNodeIndex < (context.importedInterpolationCallTargetByNode -> len)
+                                                context -> emitterContext.interpolationFunctionForOwner(ownerIndex!, interpolationNodeIndex) => interpolationTarget
+                                                interpolationTarget >= 0 and not reachable![interpolationTarget]
                                                     -> if {
-                                                        context.importedInterpolationCallTargetByNode[interpolationNodeIndex] => interpolationTarget
-                                                        interpolationTarget >= 0 and not reachable![interpolationTarget]
-                                                            -> if {
-                                                                true => reachable![interpolationTarget]
-                                                                true => changed!
-                                                            }
+                                                        true => reachable![interpolationTarget]
+                                                        true => changed!
                                                     }
                                             }
                                         interpolation.kind == 5 and interpolation.sourceToken == use.payloadToken
                                             -> if {
                                                 interpolationRange.nodeStart + interpolationOffset! => memberNodeIndex
-                                                memberNodeIndex < (context.importedInterpolationCallTargetByNode -> len)
+                                                context -> emitterContext.interpolationFunctionForOwner(ownerIndex!, memberNodeIndex) => computedMemberTarget
+                                                computedMemberTarget >= 0 and not reachable![computedMemberTarget]
                                                     -> if {
-                                                        context.importedInterpolationCallTargetByNode[memberNodeIndex] => computedMemberTarget
-                                                        computedMemberTarget >= 0 and not reachable![computedMemberTarget]
-                                                            -> if {
-                                                                true => reachable![computedMemberTarget]
-                                                                true => changed!
-                                                            }
+                                                        true => reachable![computedMemberTarget]
+                                                        true => changed!
                                                     }
                                             }
                                         interpolationOffset! + 1 => interpolationOffset!
@@ -394,6 +388,7 @@ public reachableFunctions context: ref emitterContext.EmitContext -> [Bool; ~] {
                                         instanceInterpolation.kind == 10
                                             and instanceInterpolation.sourceToken == use.payloadToken
                                             and instanceInterpolation.operand0 >= 0
+                                            and (context -> emitterContext.interpolationFunctionForOwner(ownerIndex!, instanceInterpolationRange.nodeStart + instanceInterpolationOffset!)) < 0
                                             -> if {
                                                 1 => instanceArgumentCount!
                                                 instanceInterpolation.operand1 >= 0 -> if {
