@@ -1787,7 +1787,11 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                             homogeneousJoinExpressionCandidate.sourceModule == homogeneousJoinSource!
                                                 -> if {
                                                     prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinExpressionCandidate.astNode] => homogeneousJoinExpressionNode
-                                                    homogeneousJoinExpressionNode.kind == 71
+                                                    (homogeneousJoinExpressionNode.kind == 71
+                                                        or (homogeneousJoinExpressionCandidate.status == 0
+                                                        and homogeneousJoinExpressionCandidate.typeId >= 0
+                                                        and homogeneousJoinExpressionCandidate.typeId < (types -> len)
+                                                        and types[homogeneousJoinExpressionCandidate.typeId].kind == 10))
                                                         and homogeneousJoinExpressionNode.parent == homogeneousJoinNode.parent
                                                         and homogeneousJoinExpressionNode.start < homogeneousJoinNode.start
                                                         and (homogeneousJoinProductType! < 0 or homogeneousJoinExpressionNode.start > homogeneousJoinProductStart!)
@@ -2122,6 +2126,30 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
                                                     homogeneousJoinExpressionIndex => expressionIndexByAst[homogeneousJoinGlobalAst]
                                                     true => pathChanged!
                                                 }
+                                            # A terminal join supplies the complete flow initializer,
+                                            # so binding and each-role inference see its committed result.
+                                            homogeneousJoinNode.parent >= 0 -> if {
+                                                prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinNode.parent] => homogeneousJoinFlow
+                                                homogeneousJoinFlow.kind == 10
+                                                    and homogeneousJoinFlow.start + homogeneousJoinFlow.length == homogeneousJoinNode.start + homogeneousJoinNode.length
+                                                    -> if {
+                                                        homogeneousJoinRange.astStart + homogeneousJoinNode.parent => homogeneousJoinFlowGlobalAst
+                                                        ExpressionTypeId { sourceModule: homogeneousJoinSource!, astNode: homogeneousJoinNode.parent, typeId: homogeneousJoinResultType!, status: 0 } => homogeneousJoinFlowType
+                                                        expressionIndexByAst[homogeneousJoinFlowGlobalAst] => homogeneousJoinFlowExpression
+                                                        homogeneousJoinFlowExpression < 0 -> if {
+                                                            expressions -> len => homogeneousJoinNewFlowExpression
+                                                            expressions -> push(homogeneousJoinFlowType)
+                                                            homogeneousJoinNewFlowExpression => expressionIndexByAst[homogeneousJoinFlowGlobalAst]
+                                                            true => pathChanged!
+                                                        } else {
+                                                            expressions[homogeneousJoinFlowExpression].typeId != homogeneousJoinResultType!
+                                                                -> if {
+                                                                    homogeneousJoinFlowType => expressions[homogeneousJoinFlowExpression]
+                                                                    true => pathChanged!
+                                                                }
+                                                        }
+                                                    }
+                                            }
                                         }
                                 }
                         }

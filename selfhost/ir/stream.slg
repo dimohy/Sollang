@@ -41,7 +41,7 @@ public struct StreamPipeline {
 }
 
 public struct StreamJunctionInput {
-    public valueIr: Int
+    public productIr: Int
     public typeId: Int
     public ordinal: Int
 }
@@ -372,17 +372,28 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
             0 => joinInputCount!
             junctionNode.operand0 >= 0 and junctionNode.operand0 < (ir -> len)
                 -> if {
-                    ir[junctionNode.operand0].operand0 => joinInputIr!
-                    joinInputIr! >= 0 -> while {
-                        ir[joinInputIr!] => joinInput
-                        junctionInputs! -> push(StreamJunctionInput {
-                            valueIr: joinInputIr!
-                            typeId: joinInput.typeId
-                            ordinal: joinInputCount!
-                        })
-                        joinInputCount! + 1 => joinInputCount!
-                        joinInput.nextOperand => joinInputIr!
-                    }
+                    ir[junctionNode.operand0].typeId => joinProductType
+                    joinProductType >= 0 and joinProductType < (resolved.types -> len)
+                        and resolved.types[joinProductType].kind == 10
+                        -> if {
+                            joinInputCount! < resolved.types[joinProductType].length
+                                -> while {
+                                    -1 => joinInputType!
+                                    0 => joinFieldIndex!
+                                    joinFieldIndex! < (resolved.fields -> len) -> while {
+                                        resolved.fields[joinFieldIndex!] => joinField
+                                        joinField.ownerType == joinProductType and joinField.ordinal == joinInputCount!
+                                            -> if { joinField.fieldType => joinInputType! }
+                                        joinFieldIndex! + 1 => joinFieldIndex!
+                                    }
+                                    junctionInputs! -> push(StreamJunctionInput {
+                                        productIr: junctionNode.operand0
+                                        typeId: joinInputType!
+                                        ordinal: joinInputCount!
+                                    })
+                                    joinInputCount! + 1 => joinInputCount!
+                                }
+                        }
                 }
             0 => joinStatus!
             junctionNode.typeId >= 0 and junctionNode.typeId < (resolved.types -> len)

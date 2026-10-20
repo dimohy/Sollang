@@ -17559,6 +17559,7 @@ internal sealed partial class SemanticCompiler
             or TypedEmptyDictionaryExpression
             or BoxExpression
             or StructLiteralExpression
+            or ProductExpression
             or FieldAccessExpression { Source: TypeApplicationExpression }
             or CallExpression
             or TypeApplicationExpression

@@ -1,0 +1,26 @@
+import std.sequence
+
+events values: Range -> EventStream<Int> {
+    values -> defer => left
+    0..<0 -> defer => empty
+    (left, empty) -> merge
+}
+cold values: Range -> Stream<Int> { values -> defer }
+
+main {
+    1..2 -> events => first
+    10..11 -> cold => second
+    (first, second) => mergeInputs
+    mergeInputs -> merge => merged
+    0 => total!
+    merged -> each value { total! + value => total! }
+    total! -> println
+
+    1..2 -> events => left
+    10..11 -> cold => right
+    (left: left, right: right) => latestInputs
+    latestInputs -> latest => current
+    0 => last!
+    current -> each pair { pair.left + pair.right => last! }
+    last! -> println
+}

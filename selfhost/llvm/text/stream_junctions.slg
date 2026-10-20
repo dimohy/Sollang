@@ -729,6 +729,16 @@ emitStreamJunctionRuntimes context: ref emitterContext.EmitContext, state: ref C
         }
 }
 
+emitJunctionInputValue expressionIndex: Int, junctionIndex: Int, inputOrdinal: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.streamPlan.junctions[junctionIndex] => junction
+    context.streamPlan.junctionInputs[junction.inputStart + inputOrdinal] => input
+    "  %join$(expressionIndex)_source$(inputOrdinal) = extractvalue " -> print
+    context.ir[input.productIr] -> writeIrType(context, state)
+    " " -> print
+    input.productIr -> writeValue(ownerIndex, context, state)
+    ", $(input.ordinal)" -> println
+}
+
 emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.streamPlan.junctions[junctionIndex] => junction
     context.ir[expressionIndex] => expression
@@ -738,13 +748,13 @@ emitZipJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int, 
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
-        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
-        valueIndex -> writeValue(ownerIndex, context, state)
+        "%join$(expressionIndex)_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
@@ -767,10 +777,10 @@ emitMergeJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: Int
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
-        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
         "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
         "  store %sollang.stream " -> print
-        valueIndex -> writeValue(ownerIndex, context, state)
+        "%join$(expressionIndex)_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
@@ -799,10 +809,10 @@ emitLatestJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
-        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
         "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
         "  store %sollang.stream " -> print
-        valueIndex -> writeValue(ownerIndex, context, state)
+        "%join$(expressionIndex)_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
@@ -838,13 +848,13 @@ emitConcurrentJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
-        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
-        valueIndex -> writeValue(ownerIndex, context, state)
+        "%join$(expressionIndex)_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }
@@ -901,13 +911,13 @@ emitConcatJunctionValue expressionIndex: Int, junctionIndex: Int, ownerIndex: In
     0 => inputIndex!
     inputIndex! < junction.inputCount -> while {
         context.streamPlan.junctionInputs[junction.inputStart + inputIndex!] => input
-        input.valueIr -> producerValueIndex(context, state) => valueIndex
+        expressionIndex -> emitJunctionInputValue(junctionIndex, inputIndex!, ownerIndex, context, state)
         context.types[input.typeId] => inputType
         "%sollang.stream" => producerType!
         inputType.symbol == 4 -> if { "%sollang.event_stream" => producerType! }
         "  %join$(expressionIndex)_input$(inputIndex!) = getelementptr %sollang.join.$(expressionIndex), ptr %join$(expressionIndex)_context, i32 0, i32 $(inputIndex!)" -> println
         "  store $(producerType!) " -> print
-        valueIndex -> writeValue(ownerIndex, context, state)
+        "%join$(expressionIndex)_source$(inputIndex!)" -> print
         ", ptr %join$(expressionIndex)_input$(inputIndex!), align 8" -> println
         inputIndex! + 1 => inputIndex!
     }

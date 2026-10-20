@@ -1604,6 +1604,48 @@ public functionDeclarationIrs ir: ref [TypedIrNode; ~] -> [Int; ~] {
     functions!
 }
 
+finalizeStreamJoinValue nodes: mut [TypedIrNode; ~], joinIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Unit {
+    nodes[joinIndex] => join
+    join.parent < 0 -> if { return }
+    join.parent => bindingIndex!
+    nodes[join.parent] => carrier!
+    carrier!.kind == 9 and carrier!.opcode == -1 -> if {
+        prepared.package.ranges[join.sourceModule] => range
+        prepared.package.nodes[range.astStart + join.astNode] => joinAst
+        prepared.package.nodes[range.astStart + carrier!.astNode] => carrierAst
+        carrierAst.kind == 10 and joinAst.parent == carrier!.astNode
+            and carrierAst.start + carrierAst.length == joinAst.start + joinAst.length
+            -> unless { return }
+        # The typed terminal flow is an identity around its join result.
+        36 => carrier!.kind
+        joinIndex => carrier!.operand0
+        -1 => carrier!.operand1
+        join.typeOrigin => carrier!.typeOrigin
+        join.typeModule => carrier!.typeModule
+        join.typeSymbol => carrier!.typeSymbol
+        join.typeId => carrier!.typeId
+        join.typeKind => carrier!.typeKind
+        join.typeFlags => carrier!.typeFlags
+        carrier! => nodes[join.parent]
+        carrier!.parent => bindingIndex!
+    }
+    bindingIndex! >= 0 -> if {
+        nodes[bindingIndex!] => binding!
+        binding!.kind == 17
+            and (binding!.operand0 == join.operand0 or binding!.operand0 == join.parent)
+            -> if {
+                joinIndex => binding!.operand0
+                join.typeOrigin => binding!.typeOrigin
+                join.typeModule => binding!.typeModule
+                join.typeSymbol => binding!.typeSymbol
+                join.typeId => binding!.typeId
+                join.typeKind => binding!.typeKind
+                join.typeFlags => binding!.typeFlags
+                binding! => nodes[bindingIndex!]
+            }
+    }
+}
+
 public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
     ir -> functionDeclarationIrs => functionIrs
     [MoveEvent; ~] => events!
@@ -1675,6 +1717,11 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
                         movedValueIrs! -> push(site.operand0)
                     }
             }
+        # A join consumes its product of affine stream handles. Keep the same
+        # named-place move authority used for consuming calls and each terminals.
+        site.kind == 43 and site.operand0 >= 0
+            and (ir[site.operand0] -> ownedMoveArgument(ir, prepared, types))
+            -> if { movedValueIrs! -> push(site.operand0) }
         # A value-producing process intrinsic is materialized as kind 9 when
         # its Result immediately feeds `when`. Its declared move receiver is
         # therefore no longer visible to the ordinary kind-6 function scan.

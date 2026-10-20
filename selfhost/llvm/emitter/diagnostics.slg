@@ -8749,32 +8749,40 @@ emitConstantCollectionDiagnostics context: ref emitterContext.EmitContext -> Uni
     }
 }
 
+public isMouseEventsCall context: ref emitterContext.EmitContext, callIndex: Int -> Bool {
+    callIndex < 0 or callIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[callIndex] => call
+    call.kind != 6 or call.typeId < 0 or call.typeId >= (context.types -> len)
+        or call.targetModule < 0 or call.targetModule >= (context.ranges -> len)
+        or call.targetModule >= (context.modules -> len)
+        -> if { false -> return }
+    context.types[call.typeId] => resultType
+    resultType.kind != 7 or resultType.origin != 4 or resultType.symbol != 4
+        -> if { false -> return }
+    context.modules[call.targetModule] => ownerModule
+    (context.sources[ownerModule.sourceIndex] -> slice(ownerModule.pathStart, ownerModule.pathLength)) != "sys.input.mouse"
+        -> if { false -> return }
+    context.ranges[call.targetModule] => targetRange
+    call.symbol < 0 or call.symbol >= targetRange.symbolCount
+        -> if { false -> return }
+    context.symbols[targetRange.symbolStart + call.symbol] => target
+    target.kind != 31 or target.parent < 0 or target.parent >= targetRange.symbolCount
+        or target.nameToken < 0 or target.nameToken >= targetRange.tokenCount
+        -> if { false -> return }
+    context.symbols[targetRange.symbolStart + target.parent] => owner
+    owner.nameToken < 0 or owner.nameToken >= targetRange.tokenCount
+        -> if { false -> return }
+    (call.targetModule -> sourceTokenIs(target.nameToken, "events", context))
+        and (call.targetModule -> sourceTokenIs(owner.nameToken, "Source", context))
+}
+
 public usesMouseEventsRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesMouse!
     0 => callIndex!
     callIndex! < (context.ir -> len) and not usesMouse!
         -> while {
-            context.ir[callIndex!] => call
-            call.kind == 6 and call.typeId >= 0 and call.typeId < (context.types -> len) and call.targetModule >= 0 and call.targetModule < (context.ranges -> len) and call.symbol >= 0
-                -> if {
-                    context.types[call.typeId] => callType
-                    context.ranges[call.targetModule] => targetRange
-                    call.symbol < targetRange.symbolCount -> if {
-                        context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
-                        context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
-                        targetName.span.length == 6 => nameEqual!
-                        "events" => expectedName
-                        UIntSize(0) => nameByte!
-                        nameEqual! and nameByte! < targetName.span.length
-                            -> while {
-                                (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
-                                    -> if { false => nameEqual! }
-                                nameByte! + 1 => nameByte!
-                            }
-                        nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4
-                            -> if { true => usesMouse! }
-                    }
-                }
+            context -> isMouseEventsCall(callIndex!) -> if { true => usesMouse! }
             callIndex! + 1 => callIndex!
         }
     usesMouse!
