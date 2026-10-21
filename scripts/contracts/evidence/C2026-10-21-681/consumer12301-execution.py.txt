@@ -1,0 +1,51 @@
+"""One planned C681 consumer execution using existing producer, LLVM tools and auditor."""
+import hashlib, importlib.util, json, re, sys
+from pathlib import Path
+ROOT=Path.cwd(); sys.path.insert(0,str(ROOT/'scripts'))
+from verification_execution import VerificationExecution
+from verification_contract_lease import VerificationContractLease
+from completed_artifact_plan import initialize_output
+B=ROOT/'artifacts/scratch/resume-20261006-owner-continuation22'
+plan_path=B/'consumer12301-plan.json'; plan=json.loads(plan_path.read_text(encoding='utf-8-sig'))
+proof=ROOT/plan['producerProof']; parent=json.loads(proof.read_text(encoding='utf-8-sig'))
+sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest().upper()
+assert parent['inputsStable'] and parent['processesStopped'] and parent['reusableCheckedProducer']['buildExit']==0
+assert sha(proof)==plan['producerProofSha256'] and sha(plan['producerExe'])==plan['producerSha256']
+pins={**parent['inputHashes'],str(proof):sha(proof),str(plan_path):sha(plan_path),plan['producerExe']:plan['producerSha256'],str(Path(__file__).resolve()):sha(__file__)}
+stable=lambda:all(Path(k).is_file() and sha(k)==v for k,v in pins.items())
+assert stable()
+O=B/'consumer12301-execution'; initialize_output(ROOT,O); O.mkdir()
+r={'schemaVersion':1,'status':'running','scope':plan['scope'],'inputHashes':pins,'completed':0,'total':8,'cases':[],'producerBuildCount':0,'reusedProducerSha256':plan['producerSha256']}
+x=VerificationExecution(ROOT,O,r,stable,sha)
+libs=['-lws2_32','-lshell32','-lbcrypt','-lole32']; llvm=ROOT/'.tools/llvm-22.1.8/bin'
+spec=importlib.util.spec_from_file_location('entry_validator',ROOT/'scripts/verify-checked-package-emitter.py'); validator=importlib.util.module_from_spec(spec); spec.loader.exec_module(validator)
+changes=[('call ptr @malloc(','call ptr @audit_malloc('),('call ptr @sollang_alloc(','call ptr @audit_malloc('),('call ptr @realloc(','call ptr @audit_realloc('),('call void @free(','call void @audit_free('),('call void @sollang_free(','call void @audit_free('),('ptr @free,','ptr @audit_free,'),('ptr @free)','ptr @audit_free)'),('ptr @sollang_free,','ptr @audit_free,'),('ptr @sollang_free)','ptr @audit_free)'),('@sollang_start()','@slg_program_main()'),('define i32 @main()','define i32 @slg_program_main()'),('define dso_local i32 @main()','define i32 @slg_program_main()')]
+error=None
+with VerificationContractLease([Path(k) for k in pins]):
+ try:
+  for case in plan['cases']:
+   folder=O/case['id']; folder.mkdir(); row={'id':case['id'],'status':'running','passed':False,'expectedAllocations':case['expectedAllocations']}; r['cases'].append(row); x.save()
+   def run(command,label):
+    v=x.run([str(a) for a in command],folder/label,timeout=180)
+    if v.returncode!=0 or v.stderr.strip():raise ValueError(case['id']+':'+label+':'+str(v.returncode))
+    return v
+   assert case['programSha256'] if 'programSha256' in case else True
+   run([plan['producerExe'],case['programSource']],'emit')
+   text=(folder/'emit.stdout').read_text(encoding='utf-8-sig').replace('\r\n','\n'); ll=folder/'emitted.ll'; ll.write_bytes(text.encode('utf-8')); validator.validate_emitted_entrypoint(text,'windows')
+   run([llvm/'llvm-as.exe',ll,'-o',folder/'emitted.bc'],'assemble')
+   run([llvm/'clang.exe','-Wno-override-module',ll,'-O1','-o',folder/'native.exe',*libs],'native-link')
+   native=run([folder/'native.exe'],'native-run'); assert native.stdout.strip()==case['stdout']
+   audit=text
+   for source,target in changes:audit=audit.replace(source,target)
+   assert len(re.findall(r'^define (?:dso_local )?i32 @slg_program_main\(\)',audit,re.M))==1
+   audit+='\ndeclare ptr @audit_malloc(i64)\ndeclare ptr @audit_realloc(ptr,i64)\ndeclare void @audit_free(ptr)\n'
+   audited=folder/'audit.ll'; audited.write_text(audit,encoding='utf-8')
+   run([llvm/'clang.exe','-Wno-override-module',audited,ROOT/'tests/native-interop/owned_array_audit.c','-DEXPECTED_ALLOCATIONS='+str(case['expectedAllocations']),'-O1','-o',folder/'audit.exe',*libs],'audit-link')
+   observed=run([folder/'audit.exe'],'audit-run'); expected='\n'.join(p for p in [case['stdout'],'allocations='+str(case['expectedAllocations'])+',releases='+str(case['expectedAllocations'])] if p)
+   assert observed.stdout.strip()==expected
+   row.update(status='passed',passed=True,stdout=native.stdout.strip(),auditStdout=observed.stdout.strip(),llvmSha256=sha(ll),auditLlvmSha256=sha(audited)); r['completed']+=1; x.save(); print(case['id']+': PASS',flush=True)
+  r['status']='passed'
+ except BaseException as caught:error=caught
+ finally:x.finalize(error,cleanup=False)
+if error:raise error
+print(json.dumps({k:r[k] for k in ['status','completed','total','inputsStable','processesStopped']}))
