@@ -1,17 +1,27 @@
 [CmdletBinding()]
 param(
     [ValidateSet('preserved', 'baseline-failure')][string]$Expectation = 'preserved',
-    [ValidateSet('managed', 'selfhost')][string]$Authority = 'managed'
+    [ValidateSet('managed', 'selfhost', 'emitted')][string]$Authority = 'managed',
+    [string]$EmittedLlvmPath = '',
+    [string]$ProducerProof = '',
+    [string]$ExpectedCompilerSha256 = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'runtime-llvm-probe.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $root = Split-Path -Parent $PSScriptRoot
-$sourcePath = if ($Authority -eq 'managed') {
+$emittedRuntime = $null
+if ($Authority -eq 'emitted') {
+    $emittedRuntime = Resolve-VerificationEmittedRuntime -LlvmPath $EmittedLlvmPath -ProducerProof $ProducerProof -ExpectedCompilerSha256 $ExpectedCompilerSha256 -Target 'windows-x64' -RepositoryRoot $root
+} elseif ($EmittedLlvmPath -or $ProducerProof -or $ExpectedCompilerSha256) { throw 'ASSOCIATION_EMITTED_AUTHORITY_REQUIRED' }
+$sourcePath = if ($emittedRuntime) { $emittedRuntime.Path } elseif ($Authority -eq 'managed') {
     Join-Path $root 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Socket.cs'
 } else { Join-Path $root 'selfhost/llvm/emitter/socket_runtime.slg' }
 $harness = Join-Path $PSScriptRoot 'contracts/fixtures/socket-completion-association-failure.c'
 $inputs = @($sourcePath, $harness, $PSCommandPath, (Join-Path $PSScriptRoot 'runtime-llvm-probe.ps1'))
+if ($emittedRuntime) { $inputs += $emittedRuntime.InputPaths }
+$inputs += @((Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'))
 $hashes = [ordered]@{}
 foreach ($path in $inputs) { $hashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 $source = [IO.File]::ReadAllText($sourcePath).Replace("`r`n", "`n")

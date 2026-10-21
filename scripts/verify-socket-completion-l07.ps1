@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $compilerPath = if ([IO.Path]::IsPathRooted($Compiler)) { [IO.Path]::GetFullPath($Compiler) } else { [IO.Path]::GetFullPath((Join-Path $root $Compiler)) }
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) { [IO.Path]::GetFullPath($OutputDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory)) }
 $fixture = Join-Path $root 'scripts/probes/socket-completion/w07-task-cancel.slg'
@@ -17,7 +18,7 @@ $expectedPath = Join-Path $root 'scripts/probes/socket-completion/w07-task-cance
 $schemaPath = Join-Path $root 'scripts/contracts/socket-completion-l07-result.schema.json'
 $formatVerifier = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closureVerifier = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-$inputs = @($PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
+$inputs = @((Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'), (Join-Path $PSScriptRoot 'verification-process.ps1'), $PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
     (Join-Path $root 'stdlib/std/net/socket.slg'), (Join-Path $root 'stdlib/sys/runtime/socket.slg'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs'),
@@ -53,9 +54,9 @@ $irAssertions = [ordered]@{
 }
 
 try {
-    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'L07 format' -TimeoutMilliseconds 120000
+    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Compiler', $compilerPath, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'L07 format' -TimeoutMilliseconds 120000
     $formatExitCode = $format.ExitCode; if ($formatExitCode -ne 0) { Add-Failure 'L07_FORMAT' }
-    $compile = Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compilerPath, 'build', $fixture, '-o', $exe, '--target', 'linux-x64', '-O0', '--keep-temps') -WorkingDirectory $root -Description 'L07 compile' -TimeoutMilliseconds 120000
+    $compile = Invoke-VerificationCompilerBuild -Compiler $compilerPath -Source $fixture -Output $exe -Target 'linux-x64' -WorkingDirectory $root -Description 'L07 compile' -TimeoutMilliseconds 120000 -Distribution $Distribution
     $compileExitCode = $compile.ExitCode; $compileText = $compile.Stdout + "`n" + $compile.Stderr
     $compileDiagnosticsClean = [string]::IsNullOrWhiteSpace($compile.Stderr) -and -not [regex]::IsMatch($compileText, '(?im)^(warning|note|error)\b')
     if ($compileExitCode -ne 0 -or -not (Test-Path -LiteralPath $llvm -PathType Leaf)) { Add-Failure 'L07_COMPILE' }; if (-not $compileDiagnosticsClean) { Add-Failure 'L07_COMPILE_DIAGNOSTIC' }

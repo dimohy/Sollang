@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $compilerPath = if ([IO.Path]::IsPathRooted($Compiler)) { [IO.Path]::GetFullPath($Compiler) } else { [IO.Path]::GetFullPath((Join-Path $root $Compiler)) }
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) { [IO.Path]::GetFullPath($OutputDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory)) }
 $fixture = Join-Path $root 'scripts/probes/socket-completion/w04-partial-send.slg'
@@ -16,7 +17,7 @@ $expectedPath = Join-Path $root 'scripts/probes/socket-completion/w04-partial-se
 $schemaPath = Join-Path $root 'scripts/contracts/socket-completion-w04-result.schema.json'
 $formatVerifier = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closureVerifier = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-$inputs = @($PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
+$inputs = @((Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'), (Join-Path $PSScriptRoot 'verification-process.ps1'), $PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
     (Join-Path $root 'stdlib/std/net/socket.slg'), (Join-Path $root 'stdlib/sys/runtime/socket.slg'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.cs'), (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Socket.cs'), $compilerPath)
@@ -38,9 +39,9 @@ $formatExitCode=$null; $compileExitCode=$null; $compileDiagnosticsClean=$false; 
 $stdout=@(); $peerBytes=@(); $orphanProcessIds=@()
 $irAssertions=[ordered]@{sendCallCount=0;rangeOffsetApplied=$false;rangeLengthApplied=$false;payloadCopyFree=$false;dequeueOwnerTransferVerified=$false}
 try {
-    $format=Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile','-File',$formatVerifier,'-Check','-Source',$fixture) -WorkingDirectory $root -Description 'W04 format' -TimeoutMilliseconds 120000
+    $format=Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile','-File',$formatVerifier, '-Compiler', $compilerPath,'-Check','-Source',$fixture) -WorkingDirectory $root -Description 'W04 format' -TimeoutMilliseconds 120000
     $formatExitCode=$format.ExitCode; if($formatExitCode -ne 0){Add-Failure 'W04_FORMAT'}
-    $compile=Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compilerPath,'build',$fixture,'-o',$exe,'--target','windows-x64','--llvm',(Join-Path $root '.tools/llvm-22.1.8'),'-O0','--keep-temps') -WorkingDirectory $root -Description 'W04 compile' -TimeoutMilliseconds 120000
+    $compile=Invoke-VerificationCompilerBuild -Compiler $compilerPath -Source $fixture -Output $exe -Target 'windows-x64' -WorkingDirectory $root -Description 'W04 compile' -TimeoutMilliseconds 120000
     $compileExitCode=$compile.ExitCode; $compileText=$compile.Stdout+"`n"+$compile.Stderr
     $compileDiagnosticsClean=[string]::IsNullOrWhiteSpace($compile.Stderr) -and -not [regex]::IsMatch($compileText,'(?im)^(warning|note|error)\b')
     if($compileExitCode -ne 0 -or -not(Test-Path $llvm -PathType Leaf)){Add-Failure 'W04_COMPILE'}; if(-not $compileDiagnosticsClean){Add-Failure 'W04_COMPILE_DIAGNOSTIC'}

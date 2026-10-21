@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $compilerPath = if ([IO.Path]::IsPathRooted($Compiler)) { [IO.Path]::GetFullPath($Compiler) } else { [IO.Path]::GetFullPath((Join-Path $root $Compiler)) }
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) { [IO.Path]::GetFullPath($OutputDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory)) }
 $fixture = Join-Path $root 'scripts/probes/socket-completion/l02-pending-receive.slg'
@@ -18,7 +19,7 @@ $shimSource = Join-Path $root 'scripts/probes/socket-completion/l04-false-readin
 $schemaPath = Join-Path $root 'scripts/contracts/socket-completion-l04-result.schema.json'
 $formatVerifier = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closureVerifier = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-$inputs = @($PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath, $shimSource,
+$inputs = @((Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'), (Join-Path $PSScriptRoot 'verification-process.ps1'), $PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath, $shimSource,
     (Join-Path $root 'stdlib/std/net/socket.slg'), (Join-Path $root 'stdlib/sys/runtime/socket.slg'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs'),
@@ -46,9 +47,9 @@ $formatExitCode=$null; $compileExitCode=$null; $compileDiagnosticsClean=$false; 
 $stdout=@(); $stderr=''; $trace=@(); $orphanProcessIds=@()
 $irAssertions=[ordered]@{singleBlockingWaiter=$false;oneShotInterest=$false;wouldBlockRearms=$false;rearmDoesNotPublish=$false;terminalPublishOnce=$false;taskWakeHandoff=$false}
 try {
-    $format=Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile','-File',$formatVerifier,'-Check','-Source',$fixture) -WorkingDirectory $root -Description 'L04 format' -TimeoutMilliseconds 120000
+    $format=Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile','-File',$formatVerifier, '-Compiler', $compilerPath,'-Check','-Source',$fixture) -WorkingDirectory $root -Description 'L04 format' -TimeoutMilliseconds 120000
     $formatExitCode=$format.ExitCode;if($formatExitCode-ne0){Add-Failure 'L04_FORMAT'}
-    $compile=Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compilerPath,'build',$fixture,'-o',$exe,'--target','linux-x64','-O0','--keep-temps') -WorkingDirectory $root -Description 'L04 compile' -TimeoutMilliseconds 120000
+    $compile=Invoke-VerificationCompilerBuild -Compiler $compilerPath -Source $fixture -Output $exe -Target 'linux-x64' -WorkingDirectory $root -Description 'L04 compile' -TimeoutMilliseconds 120000 -Distribution $Distribution
     $compileExitCode=$compile.ExitCode;$compileText=$compile.Stdout+"`n"+$compile.Stderr;$compileDiagnosticsClean=[string]::IsNullOrWhiteSpace($compile.Stderr)-and-not[regex]::IsMatch($compileText,'(?im)^(warning|note|error)\b')
     if($compileExitCode-ne0-or-not(Test-Path $llvm -PathType Leaf)){Add-Failure 'L04_COMPILE'};if(-not$compileDiagnosticsClean){Add-Failure 'L04_COMPILE_DIAGNOSTIC'}
     if($compileExitCode-eq0-and(Test-Path $llvm -PathType Leaf)){

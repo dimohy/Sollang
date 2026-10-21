@@ -2,7 +2,10 @@
 param(
     [ValidateSet('preserved', 'baseline-failure')][string]$Expectation = 'preserved',
     [ValidateSet('send-flags', 'readiness', 'multipending', 'publication')][string]$ProbeSet = 'send-flags',
-    [ValidateSet('managed', 'selfhost')][string]$Authority = 'managed',
+    [ValidateSet('managed', 'selfhost', 'emitted')][string]$Authority = 'managed',
+    [string]$EmittedLlvmPath = '',
+    [string]$ProducerProof = '',
+    [string]$ExpectedCompilerSha256 = '',
     [string]$RuntimeSourceSnapshot = '',
     [string]$ExpectedRuntimeSourceSha256 = '',
     [string]$Distribution = 'Ubuntu'
@@ -10,12 +13,18 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 if ($ProbeSet -ne 'send-flags' -and $Expectation -ne 'preserved') { throw 'Readiness and multiple-operation cases require preserved completion semantics' }
-$sourcePath = if ($Authority -eq 'managed') {
+$emittedRuntime = $null
+if ($Authority -eq 'emitted') {
+    if ($RuntimeSourceSnapshot -or $ExpectedRuntimeSourceSha256) { throw 'LINUX_RUNTIME_SOURCE_AUTHORITIES_CONFLICT' }
+    $emittedRuntime = Resolve-VerificationEmittedRuntime -LlvmPath $EmittedLlvmPath -ProducerProof $ProducerProof -ExpectedCompilerSha256 $ExpectedCompilerSha256 -Target 'linux-x64' -RepositoryRoot $root
+} elseif ($EmittedLlvmPath -or $ProducerProof -or $ExpectedCompilerSha256) { throw 'LINUX_EMITTED_AUTHORITY_REQUIRED' }
+$sourcePath = if ($emittedRuntime) { $emittedRuntime.Path } elseif ($Authority -eq 'managed') {
     Join-Path $root 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.Socket.cs'
 } else { Join-Path $root 'selfhost/llvm/emitter/socket_runtime.slg' }
-$sourceVersion = 'current'
+$sourceVersion = if ($emittedRuntime) { 'native-emitted' } else { 'current' }
 if (-not [string]::IsNullOrWhiteSpace($RuntimeSourceSnapshot)) {
     $snapshot = (Resolve-Path -LiteralPath $RuntimeSourceSnapshot).Path
     $rootPrefix = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
@@ -42,6 +51,8 @@ $output = Join-Path $root ('artifacts/scratch/linux-completion-sigpipe-' + [guid
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $inputs = @($sourcePath, $harness, $PSCommandPath, (Join-Path $PSScriptRoot 'verification-process.ps1'))
 if ($ProbeSet -eq 'multipending') { $inputs += $commonHarness }
+if ($emittedRuntime) { $inputs += $emittedRuntime.InputPaths }
+$inputs += @((Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'))
 $hashes = [ordered]@{}
 foreach ($path in $inputs) { $hashes[$path] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
 function WslPath([string]$Path) {
