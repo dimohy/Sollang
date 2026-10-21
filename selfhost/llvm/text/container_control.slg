@@ -1183,45 +1183,30 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 valueTaskSize! + 1 => valueTaskSize!
                                                             }
                                                     }
-                                                valueNode.kind == 6 -> if {
-                                                    valueNode.operand0 => callArgumentTaskIndex!
-                                                    callArgumentTaskIndex! >= 0 -> while {
-                                                        callArgumentTaskIndex! + 1 => callArgumentTask
-                                                        valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(callArgumentTask) } else { callArgumentTask => valueTasks![valueTaskSize!] }
-                                                        valueTaskSize! + 1 => valueTaskSize!
-                                                        context.ir[callArgumentTaskIndex!].nextOperand => callArgumentTaskIndex!
-                                                    }
-                                                } else {
-                                                    valueNode.kind == 12 or valueNode.kind == 35 -> if {
-                                                        [Int; ~] => aggregateFieldTasks!
-                                                        valueNode.operand0 => aggregateFieldIndex!
-                                                        aggregateFieldIndex! >= 0 -> while {
-                                                            aggregateFieldTasks! -> push(aggregateFieldIndex! + 1)
-                                                            context.ir[aggregateFieldIndex!].nextOperand => aggregateFieldIndex!
+                                                # Linked children are written in source order. Reverse their
+                                                # task pushes so the LIFO evaluator executes the first child first.
+                                                valueNode.kind == 6 or valueNode.kind == 12 or valueNode.kind == 35 or valueNode.kind == 14
+                                                    -> if {
+                                                        [Int; ~] => linkedValueTasks!
+                                                        valueNode.operand0 => linkedValueIndex!
+                                                        linkedValueIndex! >= 0 -> while {
+                                                            linkedValueTasks! -> push(linkedValueIndex! + 1)
+                                                            context.ir[linkedValueIndex!].nextOperand => linkedValueIndex!
                                                         }
-                                                        aggregateFieldTasks! -> len => aggregateFieldCount!
-                                                        aggregateFieldCount! > 0 -> while {
-                                                            aggregateFieldCount! - 1 => aggregateFieldCount!
-                                                            aggregateFieldTasks![aggregateFieldCount!] => aggregateFieldTask
-                                                            valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(aggregateFieldTask) } else { aggregateFieldTask => valueTasks![valueTaskSize!] }
+                                                        linkedValueTasks! -> len => linkedValueCount!
+                                                        linkedValueCount! > 0 -> while {
+                                                            linkedValueCount! - 1 => linkedValueCount!
+                                                            linkedValueTasks![linkedValueCount!] => linkedValueTask
+                                                            valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(linkedValueTask) } else { linkedValueTask => valueTasks![valueTaskSize!] }
                                                             valueTaskSize! + 1 => valueTaskSize!
                                                         }
-                                                    } else { valueNode.kind == 14 -> if {
-                                                            valueNode.operand0 => arrayElementTaskIndex!
-                                                            arrayElementTaskIndex! >= 0 -> while {
-                                                                arrayElementTaskIndex! + 1 => arrayElementTask
-                                                                valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(arrayElementTask) } else { arrayElementTask => valueTasks![valueTaskSize!] }
-                                                                valueTaskSize! + 1 => valueTaskSize!
-                                                                context.ir[arrayElementTaskIndex!].nextOperand => arrayElementTaskIndex!
-                                                            }
-                                                        } else {
-                                                            valueNode.operand0 >= 0 -> if {
-                                                                valueNode.operand0 + 1 => firstValueTask
-                                                                valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(firstValueTask) } else { firstValueTask => valueTasks![valueTaskSize!] }
-                                                                valueTaskSize! + 1 => valueTaskSize!
-                                                            }
-                                                    } }
-                                                }
+                                                    } else {
+                                                        valueNode.operand0 >= 0 -> if {
+                                                            valueNode.operand0 + 1 => firstValueTask
+                                                            valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(firstValueTask) } else { firstValueTask => valueTasks![valueTaskSize!] }
+                                                            valueTaskSize! + 1 => valueTaskSize!
+                                                        }
+                                                    }
                                             }
                                     }
                                 } else {
