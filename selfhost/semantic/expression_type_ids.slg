@@ -45,6 +45,8 @@ public struct ResolvedCallArgument {
     # 3 a proven generic input shape mismatch.
     public status: Int
     public suppressNumericWarning: Bool
+    # Expected input type was available before this argument was inferred.
+    public contextualInput: Bool
     public genericParameterSymbol: Int
     public genericFirstActualTypeId: Int
     public genericActualTypeId: Int
@@ -2978,6 +2980,32 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
         }
         foundBranch! and allBranchesContextual! -> if { true => contextual! }
     }
+    (argument.kind == 20 or argument.kind == 21)
+        and expected.symbol >= 2 and expected.symbol <= 14
+        -> if {
+            -1 => leftAst!
+            -1 => rightAst!
+            0 => childAst!
+            childAst! < range.astCount -> while {
+                prepared.package.nodes[range.astStart + childAst!].parent == argumentAst
+                    -> if {
+                        leftAst! < 0 -> if { childAst! => leftAst! } else { childAst! => rightAst! }
+                    }
+                childAst! + 1 => childAst!
+            }
+            leftAst! >= 0 and rightAst! >= 0 -> if {
+                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, leftAst!, expectedTypeId) => leftContextual
+                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, rightAst!, expectedTypeId) => rightContextual
+                expressionByAst[range.astStart + leftAst!] => leftIndex
+                expressionByAst[range.astStart + rightAst!] => rightIndex
+                leftIndex >= 0 and rightIndex >= 0 -> if {
+                    types -> typeIds.materializedReadTypeId(expressions[leftIndex].typeId) => leftType
+                    types -> typeIds.materializedReadTypeId(expressions[rightIndex].typeId) => rightType
+                    leftType == expectedTypeId and rightType == expectedTypeId
+                        -> if { true => contextual! }
+                }
+            }
+        }
     contextual! -> if {
         expressionByAst[globalAst] => expressionIndex
         expressionIndex >= 0 -> if {
@@ -3181,6 +3209,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
             -1 => genericActual!
             -1 => mismatchExpected!
             -1 => mismatchActual!
+            false => contextualInput!
             templateType >= 0 and templateType < (resolved.types -> len)
                 -> if {
                     not resolved.types[templateType].containsParameter
@@ -3204,6 +3233,8 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 22
                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 37
                                 -> if {
+                                    expectedType! >= 0 and not resolved.types[expectedType!].containsParameter
+                                        -> if { true => contextualInput! }
                                     contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
                                     contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
                                 }
@@ -3271,6 +3302,7 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
                 actualTypeId: actualType!
                 status: status!
                 suppressNumericWarning: callNode.kind == 10 and binding.parameterOrdinal == 0
+                contextualInput: contextualInput!
                 genericParameterSymbol: genericParameter!
                 genericFirstActualTypeId: firstGenericActual!
                 genericActualTypeId: genericActual!

@@ -2834,7 +2834,12 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
         literal.sourceModule => source!
         literal.locationAst => location!
     }
-    argument.code > 0 and (package -> diagnosticOriginBefore(argument.sourceModule, argument.argumentAst, source!, location!))
+    selected! == 2 and argument.sourceModule == literal.sourceModule
+        and (argument.argumentAst == literal.locationAst
+        or (package -> declarationAncestor(argument.sourceModule, argument.argumentAst, literal.locationAst)))
+        => literalPrecedesArgumentContract
+    argument.code > 0 and not literalPrecedesArgumentContract
+        and (package -> diagnosticOriginBefore(argument.sourceModule, argument.argumentAst, source!, location!))
         -> if {
             3 => selected!
             argument.sourceModule => source!
@@ -2878,7 +2883,13 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
         }
     contextualAst => contextualOrigin!
     contextualOwnerAst >= 0 -> if { contextualOwnerAst => contextualOrigin! }
+    # Infer operands before admitting the enclosing arithmetic operation.
+    (contextualCode == 40 or contextualCode == 71) and selected! == 2
+        and literal.sourceModule == contextualSource
+        and (package -> declarationAncestor(contextualSource, contextualAst, literal.locationAst))
+        => contextualOperandLiteralFailure
     contextualSource >= 0 and contextualCode > 0
+        and not contextualOperandLiteralFailure
         and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
         -> if {
             package -> diagnosticOriginBefore(contextualSource, contextualOrigin!, source!, location!) => contextualEarlier
@@ -2891,7 +2902,7 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
                 }
         }
     # Argument contract validation follows inference of that argument.
-    contextualCode == 71 and contextualSource >= 0 and selected! == 3
+    (contextualCode == 40 or contextualCode == 71) and contextualSource >= 0 and selected! == 3
         and argument.sourceModule == contextualSource
         and (argument.argumentAst == contextualAst
         or (package -> declarationAncestor(contextualSource, argument.argumentAst, contextualAst)))
@@ -3114,6 +3125,21 @@ firstTextIntrinsicOperandDiagnostic prepared: ref semanticContext.SemanticSnapsh
     selected!
 }
 
+# Only arithmetic/control value edges inherit an integer argument context.
+# The shared value walk stops calls; comparison descendants keep their own types.
+integerArgumentContextContains package: ref analysis.PackageAnalysis, sourceModule: Int, argumentAst: Int, valueAst: Int -> Bool {
+    package.ranges[sourceModule] => range
+    valueAst => ancestor!
+    ancestor! >= 0 and ancestor! < range.astCount
+        -> while {
+            package.nodes[range.astStart + ancestor!] => node
+            node.kind == 18 or node.kind == 19 -> if { false -> return }
+            ancestor! == argumentAst -> if { true -> return }
+            node.parent => ancestor!
+        }
+    false
+}
+
 # Check committed binary contexts and every concrete generic instance before
 # collapsing shared source facts into the final diagnostics.
 public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~], pointerBitWidth: Int -> NumericCallLiteralDiagnostic {
@@ -3143,6 +3169,34 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
             }
             ast! + 1 => ast!
         }
+    }
+    # A failed operand cannot erase the expected type of another source literal.
+    resolved.callArguments -> each binding {
+        binding.contextualInput and binding.sourceModule >= 0 and binding.sourceModule < (prepared.package.ranges -> len)
+            and binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
+            -> if {
+                resolved.types[binding.expectedTypeId] => expected
+                expected.kind == 1 and expected.origin == 1 and expected.symbol >= 2 and expected.symbol <= 14
+                    -> if {
+                        prepared.package.ranges[binding.sourceModule] => range
+                        binding.argumentAst >= 0 and binding.argumentAst < range.astCount
+                            and (prepared.package.nodes[range.astStart + binding.argumentAst].kind == 20
+                            or prepared.package.nodes[range.astStart + binding.argumentAst].kind == 21
+                            or prepared.package.nodes[range.astStart + binding.argumentAst].kind == 10)
+                            -> if {
+                                prepared.package -> expressionTypeIds.contextualNumericValueAsts(firstChild!, nextChild!, range.astStart + binding.argumentAst, true) => values
+                                values -> each global {
+                                    prepared.package -> integerArgumentContextContains(binding.sourceModule, binding.argumentAst, global - range.astStart)
+                                        -> if {
+                                            prepared -> numericCallLiteralAt(binding.sourceModule, global - range.astStart, expected.symbol, pointerBitWidth) => candidate
+                                            candidate.code > 0 and candidate.code != 3
+                                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
+                                                -> if { candidate => selected! }
+                                        }
+                                }
+                            }
+                    }
+            }
     }
     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     # Imported calls acquire validated ABI context at library projection. Their
@@ -4839,6 +4893,52 @@ firstRepeatBlockDiagnostic prepared: ref semanticContext.SemanticSnapshot, resol
     selected!
 }
 
+# The call resolver owns whether an expected input was known before inference.
+# Reuse contextual value traversal, excluding comparison operands, which infer
+# independently even when their enclosing call expects an integer.
+contextualArithmeticArgumentDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], sourceAsts: ref [Int; ~] -> ExpressionOperandDiagnostic {
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
+    resolved.callArguments -> each binding {
+        binding.contextualInput and binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
+            and binding.sourceModule >= 0 and binding.sourceModule < (package.ranges -> len)
+            -> if {
+                resolved.types[binding.expectedTypeId] => expected
+                expected.kind == 1 and expected.origin == 1 and expected.symbol >= 2 and expected.symbol <= 14
+                    -> if {
+                        package.ranges[binding.sourceModule] => range
+                        binding.argumentAst >= 0 and binding.argumentAst < range.astCount
+                            and (prepared -> declarationBodyIsActive(resolved, binding.sourceModule, binding.argumentAst))
+                            -> if {
+                                package -> expressionTypeIds.contextualNumericValueAsts(firstChild, nextChild, range.astStart + binding.argumentAst, true) => values
+                                values -> each global {
+                                    package.nodes[global] => binary
+                                    binary.kind == 20 or binary.kind == 21 -> if {
+                                        package -> integerArgumentContextContains(binding.sourceModule, binding.argumentAst, global - range.astStart) => contextual
+                                        firstChild[global] => left
+                                        left >= 0 -> if { nextChild[left] } else { -1 } => right
+                                        contextual and left >= 0 and right >= 0 and nextChild[right] < 0
+                                            -> if {
+                                                resolved.types -> typeIds.materializedReadTypeId(typeByAst[left]) => leftType
+                                                resolved.types -> typeIds.materializedReadTypeId(typeByAst[right]) => rightType
+                                                leftType >= 0 and rightType >= 0
+                                                    and (leftType != binding.expectedTypeId or rightType != binding.expectedTypeId)
+                                                    -> if {
+                                                        leftType != binding.expectedTypeId -> if { left } else { right } => invalid
+                                                        package -> expressionDiagnosticOffset(sourceAsts, binding.sourceModule, invalid - range.astStart) => location
+                                                        ExpressionOperandDiagnostic { code: 40, sourceModule: binding.sourceModule, astNode: global - range.astStart, operandAst: invalid - range.astStart, operatorKind: -1, locationOffset: location, operandTypeSymbol: binary.operatorKind, operandTypeId: -1, firstTypeId: binding.expectedTypeId } => candidate
+                                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                                            -> if { candidate => selected! }
+                                                    }
+                                            }
+                                    }
+                                }
+                            }
+                    }
+            }
+    }
+    selected!
+}
+
 public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], mutableNames: ref [UnresolvedMutableNameDiagnostic; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
     # C# binds every declaration (including local declarations) before bodies.
     prepared -> effects.indexDeclaredEffects => declaredEffects
@@ -5021,6 +5121,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
         childSource! + 1 => childSource!
     }
     package -> contextualRecordDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, pointerBitWidth) => selected!
+    package -> contextualArithmeticArgumentDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, sourceAstByExpression) => arithmeticArgumentDiagnostic
+    arithmeticArgumentDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, arithmeticArgumentDiagnostic, selected!))
+        -> if { arithmeticArgumentDiagnostic => selected! }
     prepared -> firstRepeatBlockDiagnostic(resolved, ir) => repeatDiagnostic
     repeatDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, repeatDiagnostic, selected!))
         -> if { repeatDiagnostic => selected! }

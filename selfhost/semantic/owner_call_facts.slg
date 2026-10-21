@@ -152,7 +152,7 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
     }
     prepared -> ownerTypes.capturePreparedWithRoots(finalTypes, sourceModule, roots!, metadata) => owner
     owner.status != 0 -> if { owner.status -> failedEncoding -> return }
-    [UInt64(6002245308495514451), 1, 6, UInt64(owner.words -> len), UInt64(targets! -> len), UInt64(arguments! -> len); ~] => words!
+    [UInt64(6002245308495514451), 2, 6, UInt64(owner.words -> len), UInt64(targets! -> len), UInt64(arguments! -> len); ~] => words!
     owner.words -> each word { words! -> push(word) }
     targets! -> each target {
         prepared.package -> callable(target.targetSourceModule, target.functionSymbol)
@@ -174,7 +174,10 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
         words! -> push(UInt64(argument.argumentAst + 1))
         words! -> push(UInt64(argument.parameterOrdinal + 1))
         words! -> push(UInt64(argument.status))
-        argument.suppressNumericWarning -> if { words! -> push(1) } else { words! -> push(0) }
+        UInt64(0) => flags!
+        argument.suppressNumericWarning -> if { flags! + 1 => flags! }
+        argument.contextualInput -> if { flags! + 2 => flags! }
+        words! -> push(flags!)
         argument -> argumentTypes -> each typeId {
             typeId -> appendType(owner.recipeBySourceType, words!)
                 -> unless { 1 -> failedEncoding -> return }
@@ -192,7 +195,7 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
 
 public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref typeIds.SemanticTypeSet -> RestoredOwnerCalls {
     (words -> len) < 6 -> if { 1 -> failedRestoration -> return }
-    words[0] != 6002245308495514451 or words[1] != 1 or words[2] != UInt64(words -> len)
+    words[0] != 6002245308495514451 or words[1] != 2 or words[2] != UInt64(words -> len)
         or words[3] > UInt64((words -> len) - 6)
         -> if { 1 -> failedRestoration -> return }
     6 + Int(words[3]) => cursor!
@@ -234,7 +237,7 @@ public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, cu
         (words -> len) - cursor! < 17 -> if { 1 -> failedRestoration -> return }
         cursor! => start
         words[start] >= UInt64(range.astCount) or words[start + 1] > UInt64(range.astCount)
-            or words[start + 2] > 2147483647 or words[start + 3] > 3 or words[start + 4] > 1
+            or words[start + 2] > 2147483647 or words[start + 3] > 3 or words[start + 4] > 3
             -> if { 1 -> failedRestoration -> return }
         [Int; ~] => types!
         0..<6 -> each column {
@@ -280,7 +283,7 @@ public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, cu
             previous.callAst == Int(ast) and previous.parameterOrdinal == ordinal
                 -> if { 1 -> failedRestoration -> return }
         }
-        arguments! -> push(expressions.ResolvedCallArgument { sourceModule: owner.sourceModule, callAst: Int(ast), argumentAst: Int(words[start + 1]) - 1, targetSourceModule: function.sourceModule, functionSymbol: function.symbol, parameterSymbol: parameter.symbol, parameterOrdinal: ordinal, expectedTypeId: types![0], actualTypeId: types![1], status: Int(words[start + 3]), suppressNumericWarning: words[start + 4] == 1, genericParameterSymbol: generic.symbol, genericFirstActualTypeId: types![2], genericActualTypeId: types![3], mismatchExpectedTypeId: types![4], mismatchActualTypeId: types![5] })
+        arguments! -> push(expressions.ResolvedCallArgument { sourceModule: owner.sourceModule, callAst: Int(ast), argumentAst: Int(words[start + 1]) - 1, targetSourceModule: function.sourceModule, functionSymbol: function.symbol, parameterSymbol: parameter.symbol, parameterOrdinal: ordinal, expectedTypeId: types![0], actualTypeId: types![1], status: Int(words[start + 3]), suppressNumericWarning: words[start + 4] % 2 == 1, contextualInput: (words[start + 4] / 2) % 2 == 1, genericParameterSymbol: generic.symbol, genericFirstActualTypeId: types![2], genericActualTypeId: types![3], mismatchExpectedTypeId: types![4], mismatchActualTypeId: types![5] })
         generic.next => cursor!
         argumentIndex! + 1 => argumentIndex!
     }

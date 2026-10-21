@@ -3290,6 +3290,13 @@ Numeric rules:
   `UInt32` before binary arithmetic. Both operands are inferred before checking
   the left operand's arithmetic domain, then the right operand's type equality.
   An invalid left domain is diagnosed at that operand's expression location.
+  For a direct or additional argument with a known declared integer input type,
+  arithmetic operands instead receive that expected type recursively. Numeric
+  literals adopt it; independently typed operands retain their own type. An
+  incompatible operand reports the expected type at that operand. An operand
+  inference or literal-range failure precedes validation of its enclosing
+  arithmetic operation. A primary flow source is inferred before call argument
+  validation. A generic argument uses only context known before its inference.
 - `*`, `/`, and `%` bind tighter than `+` and `-`; operators are
   left-associative.
 - Integer bindings can be interpolated using invariant decimal display.

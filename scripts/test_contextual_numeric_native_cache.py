@@ -19,7 +19,7 @@ def envelope(words):
     return words + list(digest)
 
 
-def fixture(*, facts=(1, 0, 2, 1), source=SOURCE):
+def fixture(*, facts=(1, 0, 2, 1), source=SOURCE, call_schema=2):
     # Public recipe rows: unsigned builtin symbols 8 and 9, signedWord encoded.
     recipes = [6002245308444529748, 1, 0, 0, 27, 2, 0,
                1, 2, 0, 16, 0, 0, 0, 0, 0, 0,
@@ -27,7 +27,7 @@ def fixture(*, facts=(1, 0, 2, 1), source=SOURCE):
     owner = [6002245308478540870, 1, 0, len(source), len(recipes), 0, len(facts) // 2,
              *source, *recipes, *facts]
     owner[2] = len(owner)
-    calls = [6002245308495514451, 1, 6 + len(owner), len(owner), 0, 0, *owner]
+    calls = [6002245308495514451, call_schema, 6 + len(owner), len(owner), 0, 0, *owner]
     generation = envelope([6002245308512486734, 1, 0, 123, 1, 0, len(calls), 0,
                            *([0] * 32), *calls])
     return envelope([6002245308512486735, 1, 0, 1, 0, 1, 1, 0, 0,
@@ -48,6 +48,10 @@ class NativeNumericCacheTests(unittest.TestCase):
         self.assertEqual({value[3] for value in expressions.values()}, {16, 18})
         self.assertEqual(owner, "exact-source-main")
         self.assertEqual(bindings, {})
+
+    def test_legacy_call_schema_rejected(self):
+        with self.assertRaisesRegex(ValueError, "OWNER_CALLS_HEADER"):
+            self.inspect(fixture(call_schema=1))
 
     def test_corruption_rejected(self):
         words = fixture()

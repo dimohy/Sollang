@@ -160,7 +160,7 @@ def native_semantic_facts(output, source):
         if position + generation[6] != len(generation) - 32:
             raise ValueError("NATIVE_NUMERIC_GENERATION_BOUNDS")
         calls = generation[position:position + generation[6]]
-        if len(calls) < 6 or tuple(calls[:3]) != (6002245308495514451, 1, len(calls)):
+        if len(calls) < 6 or tuple(calls[:3]) != (6002245308495514451, 2, len(calls)):
             raise ValueError("NATIVE_NUMERIC_OWNER_CALLS_HEADER")
         owner = calls[6:6 + calls[3]]
         if len(owner) < 7 or tuple(owner[:3]) != (6002245308478540870, 1, len(owner)):

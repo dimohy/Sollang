@@ -87,6 +87,12 @@ Infer omitted signatures from complete value contracts. A stored field read
 uses its canonical declared type, including nested and readonly receivers.
 An inherent method counts as a consuming function scope for an inferred private
 helper; do not add signature annotations to bypass a missing consumer edge.
+A declared integer input supplies context recursively to arithmetic in a direct
+or additional argument. Preserve independently typed operands and report an
+invalid child literal before checking the enclosing operation. A primary flow
+source is inferred before its callee supplies argument context. Generic calls
+use only the expected types available before that argument is inferred; preserve
+this decision when restoring semantic owner facts from a cache.
 An integer-typed peer supplies context to an `if` or `when` numeric operand.
 Propagate that context through terminal arm values, keep independently typed
 values intact, and preserve the committed result type through generic cloning,

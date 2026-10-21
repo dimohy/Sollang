@@ -74,7 +74,7 @@ main {
     invalidType.status != 0 and (invalidType.owner.semantic.types -> len) == 0 => typeRejected
     typeRejected -> println
     encoded.words -> copyWords => badWarning!
-    2 => badWarning![argumentStart! + 4]
+    4 => badWarning![argumentStart! + 4]
     badWarning! -> facts.restore(current.package, current.semantic) => invalidWarning
     invalidWarning.status != 0 and (invalidWarning.arguments -> len) == 0 => warningRejected
     warningRejected -> println
@@ -107,5 +107,36 @@ main {
     encoded.words -> facts.restore(missing.package, missing.semantic) => missingFunction
     missingFunction.status != 0 and (missingFunction.owner.bindings -> len) == 0 => missingRejected
     missingRejected -> println
+
+    "take value: Int -> Int => value\ncombine first: Int, second: Int -> Int => first + second\nidentity<T> value: T -> T => value\nmain {\n    take(1 + 2) => first\n    3 + 0 -> take => second\n    3 + 0 -> combine(4 + 5) => third\n    identity(6 + 7) => fourth\n}\n" => contextualSource
+    [contextualSource,; ~] -> context.prepare -> expressions.resolveCallContext => contextual
+    0 => coldContexts!
+    contextual.types.callArguments -> each argument {
+        argument.contextualInput -> if { coldContexts! + 1 => coldContexts! }
+    }
+    (contextual.types.callArguments -> len) == 5 and coldContexts! == 2 => coldContextsValid
+    coldContextsValid -> println
+    contextual.prepared -> facts.capture(contextual.types, 0) => encodedContext
+    encodedContext.words -> facts.restore(contextual.prepared.package, contextual.prepared.semantic) => restoredContext
+    true => equalContexts!
+    restoredContext.arguments -> each argument {
+        false => matched!
+        contextual.types.callArguments -> each original {
+            original.contextualInput -> if { argument.contextualInput } else { not argument.contextualInput } => sameContext
+            original.callAst == argument.callAst and original.parameterOrdinal == argument.parameterOrdinal
+                and sameContext
+                -> if { true => matched! }
+        }
+        not matched! -> if { false => equalContexts! }
+    }
+    restoredContext.status == 0 and (restoredContext.arguments -> len) == 5 and equalContexts! => restoredContextsValid
+    restoredContextsValid -> println
+    encodedContext.status == 0 and encodedContext.words[1] == 2 => contextSchemaValid
+    contextSchemaValid -> println
+    encodedContext.words -> copyWords => legacyContext!
+    1 => legacyContext![1]
+    legacyContext! -> facts.restore(contextual.prepared.package, contextual.prepared.semantic) => legacyRestored
+    legacyRestored.status != 0 and (legacyRestored.arguments -> len) == 0 => legacyContextRejected
+    legacyContextRejected -> println
 
 }
