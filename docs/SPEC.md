@@ -4959,6 +4959,11 @@ storage or the original writer. Completion and cancellation therefore retain
 independent exactly-once close obligations. The shared file worker dispatches
 both reads and writes.
 
+For `readAtAsync` and `writeAtAsync`, evaluate the receiver and all arguments
+once in source order before submitting the new Task. An argument may await
+another Task and run the scheduler; the new file Task must remain unpublished
+until its argument values are available.
+
 `syncAsync: -> async Result<Unit, Text>` is a durability barrier. It waits for
 file data and metadata to reach the filesystem through `FlushFileBuffers` on
 Windows and `fsync` on Linux. The operation owns a duplicate writer handle and

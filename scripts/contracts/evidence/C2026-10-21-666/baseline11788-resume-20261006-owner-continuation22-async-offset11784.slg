@@ -1,0 +1,38 @@
+import sys.file as file
+import std.time as time
+
+valueOrZero result: Result<Option<UInt16>, Text> -> Int => result -> when {
+    Result<Option<UInt16>, Text>.Ok(option) => option -> when {
+        Option<UInt16>.Some(value) => Int(value)
+        Option<UInt16>.None => 0
+    }
+    Result<Option<UInt16>, Text>.Err(error) => -1
+}
+
+offset: -> async UInt64 uses Clock {
+    time.milliseconds(1) -> when {
+        Ok(delay) {
+            delay -> sleep => timer
+            timer -> await
+        }
+        Err(error) {}
+    }
+    3
+}
+
+main {
+    "artifacts/scratch/resume-20261006-owner-continuation22/async-offset11782.bin" => path
+    path -> file.openWriter
+    UInt16(513) -> file.write
+    true -> file.write
+    UInt16(1027) -> file.write
+    file.closeWriter()
+    offset() => offsetTask
+    file.openRead(path) -> when {
+        Result<file.File, Text>.Ok(reader) {
+            reader -> readAtAsync<UInt16>(offsetTask -> await) => pending
+            pending -> await -> valueOrZero -> println
+        }
+        Result<file.File, Text>.Err(error) => error -> println
+    }
+}

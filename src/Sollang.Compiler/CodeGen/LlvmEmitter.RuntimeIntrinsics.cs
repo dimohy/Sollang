@@ -322,6 +322,11 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"{function.Name} has an invalid asynchronous scalar specialization");
         }
 
+        // Argument evaluation may suspend and run the scheduler. Do it before
+        // publishing a file task whose control fields are not initialized yet.
+        var offset = file is null
+            ? null
+            : EmitMapInteger(offsetExpression!, BoundType.UInt64, "file_async_offset");
         var contextSize = AsyncContextSize(null, function.ReturnType);
         var context = NextTemp("file_async_context");
         EmitCall(context, "ptr", "sollang_alloc", $"i64 {contextSize}");
@@ -375,15 +380,11 @@ internal sealed partial class LlvmEmitter
                 handleAddress,
                 $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 17");
             EmitStore("i64", ownedHandle, handleAddress, 8);
-            var offset = EmitMapInteger(
-                offsetExpression!,
-                BoundType.UInt64,
-                "file_async_offset");
             var offsetAddress = NextTemp("file_async_offset_address");
             EmitAssign(
                 offsetAddress,
                 $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 18");
-            EmitStore("i64", offset, offsetAddress, 8);
+            EmitStore("i64", offset!, offsetAddress, 8);
             var explicitAddress = NextTemp("file_async_explicit_address");
             EmitAssign(
                 explicitAddress,
@@ -423,6 +424,7 @@ internal sealed partial class LlvmEmitter
         EnsureRuntimeType(value, scalarType, function.Name);
         var materialized = MaterializeAggregateValue(value);
 
+        var offset = EmitMapInteger(offsetExpression, BoundType.UInt64, "file_async_write_offset");
         var contextSize = AsyncContextSize(null, function.ReturnType);
         var context = NextTemp("file_async_write_context");
         EmitCall(context, "ptr", "sollang_alloc", $"i64 {contextSize}");
@@ -470,7 +472,6 @@ internal sealed partial class LlvmEmitter
         var handleAddress = NextTemp("file_async_write_owned_handle_address");
         EmitAssign(handleAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 17");
         EmitStore("i64", ownedHandle, handleAddress, 8);
-        var offset = EmitMapInteger(offsetExpression, BoundType.UInt64, "file_async_write_offset");
         var offsetAddress = NextTemp("file_async_write_offset_address");
         EmitAssign(offsetAddress, $"getelementptr %sollang.task_control, ptr {handle}, i32 0, i32 18");
         EmitStore("i64", offset, offsetAddress, 8);

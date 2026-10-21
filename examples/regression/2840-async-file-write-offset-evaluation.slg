@@ -1,0 +1,43 @@
+import sys.file as file
+import std.time as time
+
+valueOrZero result: Result<Option<UInt16>, Text> -> Int => result -> when {
+    Result<Option<UInt16>, Text>.Ok(option) => option -> when {
+        Option<UInt16>.Some(value) => Int(value)
+        Option<UInt16>.None => 0
+    }
+    Result<Option<UInt16>, Text>.Err(error) => -1
+}
+
+offset: -> async UInt64 uses Clock {
+    time.milliseconds(1) -> when {
+        Ok(delay) {
+            delay -> sleep => timer
+            timer -> await
+        }
+        Err(error) {}
+    }
+    3
+}
+
+
+operationSucceeded result: Result<Unit, Text> -> Bool => result -> when {
+    Result<Unit, Text>.Ok(done) => true
+    Result<Unit, Text>.Err(error) => false
+}
+
+main {
+    "artifacts/example-tests/2840-async-file-write-offset-evaluation.bin" => path
+    offset() => offsetTask
+    file.openWrite(path) -> when {
+        Result<file.FileWriter, Text>.Ok(writer) {
+            writer -> writeAtAsync(UInt16(2055), offsetTask -> await) => pending
+            pending -> await -> operationSucceeded -> println
+        }
+        Result<file.FileWriter, Text>.Err(error) => error -> println
+    }
+    file.openRead(path) -> when {
+        Result<file.File, Text>.Ok(reader) { reader -> readAt<UInt16>(3) -> valueOrZero -> println }
+        Result<file.File, Text>.Err(error) => error -> println
+    }
+}
