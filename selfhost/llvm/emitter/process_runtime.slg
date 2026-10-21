@@ -189,8 +189,9 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     fail:
       ret ptr null
     }
-    define internal ptr @sollang_process_build_windows_argv(ptr %records, i64 %count) {
+    define internal ptr @sollang_process_build_windows_argv(ptr %records, i64 %count, ptr %program_slot) {
     entry:
+      store ptr null, ptr %program_slot, align 8
       %slots = add i64 %count, 1
       %argv_bytes = mul i64 %slots, 8
       %argv = call ptr @malloc(i64 %argv_bytes)
@@ -217,8 +218,8 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       br i1 %valid, label %allocate_wide, label %cleanup
     allocate_wide:
       %chars_with_null = add i32 %chars, 1
-      %wide_bytes32 = mul i32 %chars_with_null, 2
-      %wide_bytes = zext i32 %wide_bytes32 to i64
+      %chars_with_null64 = zext i32 %chars_with_null to i64
+      %wide_bytes = mul i64 %chars_with_null64, 2
       %wide = call ptr @malloc(i64 %wide_bytes)
       %wide_ok = icmp ne ptr %wide, null
       br i1 %wide_ok, label %convert, label %cleanup
@@ -229,25 +230,30 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
     terminate_wide:
       %wide_end = getelementptr i16, ptr %wide, i32 %chars
       store i16 0, ptr %wide_end, align 2
-      %is_program = icmp eq i64 %index, 0
-      br i1 %is_program, label %store, label %quote
-    quote:
       %quoted = call ptr @sollang_process_quote_windows_arg(ptr %wide, i32 %chars)
-      call void @free(ptr %wide)
       %quoted_ok = icmp ne ptr %quoted, null
-      br i1 %quoted_ok, label %store_quoted, label %cleanup
-    store_quoted:
+      br i1 %quoted_ok, label %preserve_program, label %free_wide_error
+    preserve_program:
+      %is_program = icmp eq i64 %index, 0
+      br i1 %is_program, label %store_program, label %free_unquoted
+    store_program:
+      store ptr %wide, ptr %program_slot, align 8
+      br label %store
+    free_unquoted:
+      call void @free(ptr %wide)
       br label %store
     store:
-      %value = phi ptr [ %wide, %terminate_wide ], [ %quoted, %store_quoted ]
       %slot = getelementptr ptr, ptr %argv, i64 %index
-      store ptr %value, ptr %slot, align 8
+      store ptr %quoted, ptr %slot, align 8
       %next = add i64 %index, 1
       br label %loop
     free_wide_error:
       call void @free(ptr %wide)
       br label %cleanup
     cleanup:
+      %failed_program = load ptr, ptr %program_slot, align 8
+      call void @free(ptr %failed_program)
+      store ptr null, ptr %program_slot, align 8
       call void @sollang_process_dispose_argv(ptr %argv, i64 %index)
       ret ptr null
     terminate:
@@ -894,11 +900,11 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       %has_program = icmp ugt i64 %count, 0
       br i1 %has_program, label %build, label %error
     build:
-      %argv = call ptr @sollang_process_build_windows_argv(ptr %records, i64 %count)
+      %program_slot = alloca ptr, align 8
+      %argv = call ptr @sollang_process_build_windows_argv(ptr %records, i64 %count, ptr %program_slot)
       %built = icmp ne ptr %argv, null
       br i1 %built, label %spawn, label %error
     spawn:
-      %program_slot = getelementptr ptr, ptr %argv, i64 0
       %program = load ptr, ptr %program_slot, align 8
       br i1 %has_working_directory, label %working_directory_convert, label %spawn_ready
     working_directory_convert:
@@ -917,14 +923,17 @@ public emitWindowsProcessRuntime: -> Unit uses Console {
       %raw = call i64 @sollang_process_spawn_windows(ptr %program, ptr %argv, i64 %count, ptr %working_directory, ptr %environment, ptr %stdin_override, ptr %stdout_override, ptr %stderr_override)
       call void @free(ptr %environment)
       call void @free(ptr %working_directory)
+      call void @free(ptr %program)
       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
       %spawned = icmp ne i64 %raw, -1
       br i1 %spawned, label %read_process_id, label %error
     environment_error:
       call void @free(ptr %working_directory)
+      call void @free(ptr %program)
       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
       br label %error
     build_error:
+      call void @free(ptr %program)
       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
       br label %error
     read_process_id:
