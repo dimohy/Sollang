@@ -2890,6 +2890,20 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
                     contextualOrigin! => location!
                 }
         }
+    contextualSource >= 0 and (contextualCode == 47 or contextualCode == 32 or contextualCode == 48)
+        -> if {
+            -1 => selectedCallAst!
+            selected! == 3 and argument.sourceModule == contextualSource
+                -> if { argument.callAst => selectedCallAst! }
+            selected! == 9 and arity.sourceModule == contextualSource
+                -> if { arity.callAst => selectedCallAst! }
+            package -> capabilityDiagnosticPrecedes(contextualSource, contextualAst, source!, location!, selectedCallAst!)
+                -> if {
+                    11 => selected!
+                    contextualSource => source!
+                    contextualAst => location!
+                }
+        }
     ownedAst >= 0 -> if {
         package -> diagnosticOriginBefore(ownedSource, ownedAst, source!, location!) => ownedEarlier
         false => ownedSameBinding!
@@ -4088,6 +4102,25 @@ contextualRecordFieldPriority package: ref analysis.PackageAnalysis, fields: ref
         -> if { 1 } else { 0 }
 }
 
+# The flow source has already been inferred before its callee is checked.
+# Direct-call arguments and the selected callee's input contract are later.
+capabilityDiagnosticPrecedes package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int, otherSource: Int, otherAst: Int, otherCallAst: Int -> Bool {
+    otherSource < 0 -> if { true -> return }
+    sourceModule != otherSource -> if { sourceModule < otherSource -> return }
+    callAst == otherCallAst -> if { true -> return }
+    not (package -> declarationAncestor(sourceModule, callAst, otherAst))
+        -> if { package -> diagnosticOriginBefore(sourceModule, callAst, otherSource, otherAst) -> return }
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + callAst].kind == 10
+        -> if {
+            package -> semanticContext.indexExpressionSourceAsts => sourceAsts
+            sourceAsts[range.astStart + callAst] => sourceAst
+            sourceAst >= 0 and (package -> declarationAncestor(sourceModule, sourceAst, otherAst))
+                -> if { false -> return }
+        }
+    true
+}
+
 expressionDiagnosticPrecedes package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], candidate: ExpressionOperandDiagnostic, selected: ExpressionOperandDiagnostic -> Bool {
     selected.code == 0 -> if { true -> return }
     candidate.sourceModule != selected.sourceModule
@@ -4103,11 +4136,11 @@ expressionDiagnosticPrecedes package: ref analysis.PackageAnalysis, fields: ref 
     (candidate.code == 47 or candidate.code == 32 or candidate.code == 48)
         and (candidate.astNode == selected.astNode
         or (package -> declarationAncestor(candidate.sourceModule, candidate.astNode, selected.astNode)))
-        -> if { true -> return }
+        -> if { package -> capabilityDiagnosticPrecedes(candidate.sourceModule, candidate.astNode, selected.sourceModule, selected.astNode, -1) -> return }
     (selected.code == 47 or selected.code == 32 or selected.code == 48)
         and (candidate.astNode == selected.astNode
         or (package -> declarationAncestor(candidate.sourceModule, selected.astNode, candidate.astNode)))
-        -> if { false -> return }
+        -> if { not (package -> capabilityDiagnosticPrecedes(selected.sourceModule, selected.astNode, candidate.sourceModule, candidate.astNode, -1)) -> return }
     package -> contextualRecordFieldPriority(fields, candidate, selected) => fieldPriority
     fieldPriority >= 0 -> if { fieldPriority == 1 -> return }
     package -> fixedArrayElementPrecedesNested(candidate, selected)
@@ -4220,6 +4253,23 @@ public firstMutableRebindDiagnostic prepared: ref semanticContext.SemanticSnapsh
             }
     }
     selected!
+}
+
+# C# FlowExpression inherits its source expression's coordinate. Grouping
+# is transparent, while operators and product construction own their tokens.
+mainOnlyRuntimeDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceModule: Int, callAst: Int -> UIntSize {
+    package.ranges[sourceModule] => range
+    callAst => originAst!
+    package.nodes[range.astStart + originAst!].kind == 10
+        and sourceAsts[range.astStart + originAst!] >= 0
+        -> while { sourceAsts[range.astStart + originAst!] => originAst! }
+    package.nodes[range.astStart + originAst!] => origin
+    origin.kind == 36 and origin.operatorKind == grammar.tokenIdDot()
+        -> if { package -> ordinaryFieldDiagnosticOffset(sourceAsts, sourceModule, originAst!) -> return }
+    ((origin.kind >= 18 and origin.kind <= 25) or origin.kind == 36 or origin.kind == 41 or origin.kind == 82)
+        and origin.payloadToken >= 0
+        -> if { package.tokens[range.tokenStart + origin.payloadToken].span.start -> return }
+    origin.start
 }
 
 # Identifier-only member chains keep the primary coordinate; calls, indexes,
@@ -6180,7 +6230,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
     0 => effectCallIndex!
     effectCallIndex! < (prepared.calls -> len) -> while {
         prepared.calls[effectCallIndex!] => call
-        (call.status == 0 or call.status == 1) and call.sourceModule >= 0
+        (call.status == 0 or call.status == 1 or call.status == 3) and call.sourceModule >= 0
             and call.sourceModule < (package.ranges -> len)
             -> if {
                 package.ranges[call.sourceModule] => range
@@ -6189,7 +6239,18 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                         range.astStart + call.callAst => globalCall
                         prepared -> effects.missingCallEffect(declaredEffects, call) => requiredEffect
                         prepared -> effects.disallowedMainOnlyCall(declaredEffects, call) => mainOnly
-                        call.status == 1 and call.functionSymbol >= 0 and call.targetSourceModule >= 0 => privateAlias
+                        false => privateAlias!
+                        (call.status == 1 or call.status == 3) and call.functionSymbol >= 0
+                            and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
+                            -> if {
+                                package.ranges[call.targetSourceModule] => targetRange
+                                call.functionSymbol < targetRange.symbolCount
+                                    -> if {
+                                        package.symbols[targetRange.symbolStart + call.functionSymbol] => target
+                                        target.kind == 7 or target.kind == 31 or target.kind == 36 => privateAlias!
+                                    }
+                            }
+                        privateAlias! => privateAlias
                         (privateAlias or requiredEffect > 0 or mainOnly)
                             and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.callAst))
                             -> if {
@@ -6207,13 +6268,18 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                                 }
                                 pathAst! >= 0 -> if {
                                     package.nodes[range.astStart + pathAst!] => path
+                                    path.start => locationOffset!
+                                    mainOnly and not privateAlias and requiredEffect == 0
+                                        -> if {
+                                            package -> mainOnlyRuntimeDiagnosticOffset(sourceAstByExpression, call.sourceModule, call.callAst) => locationOffset!
+                                        }
                                     ExpressionOperandDiagnostic {
                                         code: privateAlias -> if { 47 } else { requiredEffect > 0 -> if { 32 } else { 48 } }
                                         sourceModule: call.sourceModule
                                         astNode: call.callAst
                                         operandAst: pathAst!
                                         operatorKind: effectCallIndex!
-                                        locationOffset: path.start
+                                        locationOffset: locationOffset!
                                         operandTypeSymbol: requiredEffect
                                         operandTypeId: -1
                                         firstTypeId: -1
