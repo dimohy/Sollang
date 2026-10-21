@@ -9862,15 +9862,7 @@ internal sealed partial class SemanticCompiler
             functions,
             bindings,
             allowReadIntCall, mutableBindings);
-        if (left == BoundType.CodePoint)
-        {
-            throw Error(leftExpression.Line, leftExpression.Column,
-                $"CodePoint does not support '{operatorText}'; convert it to UInt32 before arithmetic");
-        }
-        if (!IsNumericType(left) || (operatorText == "%" && !IsIntegerType(left)))
-        {
-            throw Error(leftExpression.Line, leftExpression.Column, $"left operand of '{operatorText}' must be a compatible numeric value");
-        }
+        ValidateNumericBinaryOperandDomain(left, leftExpression, operatorText);
 
         if (right != left)
         {
@@ -9881,6 +9873,20 @@ internal sealed partial class SemanticCompiler
         WarnRedundantNumericBinaryOperandTypes(leftExpression, rightExpression, left);
 
         return left;
+    }
+
+    private void ValidateNumericBinaryOperandDomain(BoundType type, Expression operand, string operatorText)
+    {
+        if (type == BoundType.CodePoint)
+        {
+            throw Error(operand.Line, operand.Column,
+                $"CodePoint does not support '{operatorText}'; convert it to UInt32 before arithmetic");
+        }
+        if (!IsNumericType(type) || (operatorText == "%" && !IsIntegerType(type)))
+        {
+            throw Error(operand.Line, operand.Column,
+                $"left operand of '{operatorText}' must be a compatible numeric value");
+        }
     }
 
     private static bool TryGetNumericBinaryOperands(
@@ -9922,6 +9928,7 @@ internal sealed partial class SemanticCompiler
                 invalid.Column,
                 $"operands of '{operatorText}' must have type {FormatType(expectedType)} in this context");
         }
+        ValidateNumericBinaryOperandDomain(expectedType, left, operatorText);
         return expectedType;
     }
 

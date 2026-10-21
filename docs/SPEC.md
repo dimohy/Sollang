@@ -4292,7 +4292,9 @@ sequences trap at the safe runtime boundary. Explicit `CodePoint(integer)`
 conversion performs the same range and surrogate checks; a floating-point
 source is rejected. Arithmetic is not
 defined directly on `CodePoint`; convert to `UInt32` first when numeric work is
-intentional. Equality and ordering comparisons remain available for lexer
+intentional. This restriction also applies when a declared function input
+supplies `CodePoint` as the expected type of an arithmetic argument.
+Equality and ordering comparisons remain available for lexer
 classification.
 
 `Text` also exposes explicit UTF-8 byte operations for lexer and source-map

@@ -93,6 +93,8 @@ invalid child literal before checking the enclosing operation. A primary flow
 source is inferred before its callee supplies argument context. Generic calls
 use only the expected types available before that argument is inferred; preserve
 this decision when restoring semantic owner facts from a cache.
+An expected `CodePoint` type does not enable arithmetic; convert operands to
+`UInt32` before performing numeric operations.
 An integer-typed peer supplies context to an `if` or `when` numeric operand.
 Propagate that context through terminal arm values, keep independently typed
 values intact, and preserve the committed result type through generic cloning,
