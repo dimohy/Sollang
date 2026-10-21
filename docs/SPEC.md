@@ -1544,6 +1544,10 @@ scope, while other functions must declare `async` before using `await`.
 Consumption applies to the complete flow, so `pending -> await -> decode`
 releases `pending` exactly once even though a later target transforms the
 awaited value. Lexical cleanup must not join or release that task again.
+A borrowed source used to create a later Task remains owned by its original
+scope: awaiting that derived Task does not consume the earlier source.
+Linear and tail awaits preserve the same per-suspension input and local-owner
+state as awaits inside control flow, for both resume and cancellation.
 Explicit `return` statements inside an `async` function are currently rejected
 before their values are lowered; use the supported final-value or tail-await
 form for its result.

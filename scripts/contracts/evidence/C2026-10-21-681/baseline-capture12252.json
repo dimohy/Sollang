@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-21T10:52:14.664091+00:00",
+  "status": "CSharp baseline reproduced; no source changes yet",
+  "compiler": "M12243",
+  "compilerDllSha256": "0C5F5899497DA36A76942493D4750334D1E91CE223C9111232CD1D7CE7A08610",
+  "compilerSourceSha256": "9C2451642319D28F511BBC15423DFF963D7B4DBE747FDE8A37C98251B7ED618A",
+  "cases": [
+    {
+      "id": "primary",
+      "nativeExit": 1,
+      "observedLeakBytes": 12,
+      "baselineLeakMatches": true,
+      "stdoutMatches": true,
+      "stdout": "parent-started\ncancelled\n",
+      "stderr": "\n=================================================================\n==1181==ERROR: LeakSanitizer: detected memory leaks\n\nDirect leak of 12 byte(s) in 1 object(s) allocated from:\n    #0 0x5c9b71583233 in malloc (/mnt/p/MyWorks/Sollang/artifacts/scratch/resume-20261006-owner-continuation22/async12250/primary-asan+0xc7233) (BuildId: fb2a5f90cfbbc92bbe9c15b62face0e49814474c)\n    #1 0x5c9b715c3235 in sollang_alloc primary.ll\n    #2 0x74b4a882a28a in __libc_start_main csu/../csu/libc-start.c:360:3\n    #3 0x5c9b714e83e4 in _start (/mnt/p/MyWorks/Sollang/artifacts/scratch/resume-20261006-owner-continuation22/async12250/primary-asan+0x2c3e4) (BuildId: fb2a5f90cfbbc92bbe9c15b62face0e49814474c)\n\nSUMMARY: AddressSanitizer: 12 byte(s) leaked in 1 allocation(s).\n",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "additional",
+      "nativeExit": 0,
+      "observedLeakBytes": 0,
+      "baselineLeakMatches": false,
+      "stdoutMatches": true,
+      "stdout": "parent-started\ncancelled\n",
+      "stderr": "",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    {
+      "id": "normal",
+      "compileExit": 0,
+      "compileStderr": "",
+      "nativeExit": 0,
+      "stdout": "parent-started\nresult=4\n",
+      "stderr": "",
+      "stdoutMatches": true
+    },
+    {
+      "id": "initial",
+      "compileExit": 0,
+      "compileStderr": "",
+      "nativeExit": 0,
+      "stdout": "cancelled\n",
+      "stderr": "",
+      "stdoutMatches": true
+    },
+    {
+      "id": "cfg",
+      "compileExit": 0,
+      "compileStderr": "",
+      "nativeExit": 0,
+      "stdout": "parent-started\ncancelled\n",
+      "stderr": "",
+      "stdoutMatches": true
+    },
+    {
+      "id": "local-box",
+      "compileExit": 1,
+      "compileStderr": "sollang: retained failed LLVM stage: P:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\async12251\\.l0.ll\r\nsollang: retained failed executable stage: P:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\async12251\\.e0.exe\r\nsollang: retained failed native work directory: P:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\async12251\\.w0\r\nsollang: clang.exe failed with exit code 1\r\nerror: invalid LLVM IR input: Instruction does not dominate all uses!\r\n  %heap9 = call ptr @sollang_alloc(i64 4)\r\n  call void @sollang_drop_1586(ptr %heap9)\r\n\r\n1 error generated.\r\n"
+    }
+  ],
+  "normativeExpectation": "Every valid case compiles cleanly and runs with exact stdout and zero leaked owned allocations. Baseline observations are not acceptance expectations.",
+  "confirmed": [
+    "primary: parent reached suspended tail-await then cancel; LeakSanitizer reports one12-byte allocation leak.",
+    "local-box: compiler fails LLVM dominance because start-only owner SSA is used in resumed cleanup."
+  ],
+  "controls": [
+    "normal tail primary completion, initial cancellation and CFG yield owner control all pass exact native output with zero sanitizer errors.",
+    "Additional-owned probe reports no leak; do not claim that variant reproduced a leak."
+  ],
+  "specReference": "docs/SPEC.md:1645..1647; every move-input suspension retains/drops exact owner",
+  "rootCause": "Tail/stateful alternate lowering bypasses CFG runtime ownership/spill shape. Tail cancel only cancels child and drops context, and tail resume retains compile-time locals from start block.",
+  "next": "Reuse ownership-aware CFG planning for every collected suspension in CSharp, verify focused baseline/controls then compare SLG source before edits."
+}

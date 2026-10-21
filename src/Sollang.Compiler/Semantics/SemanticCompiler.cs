@@ -17370,6 +17370,15 @@ internal sealed partial class SemanticCompiler
             return false;
         }
 
+        var firstTarget = flow.Targets[0];
+        if (firstTarget.Path.Count == 1
+            && firstTarget.Path[0] is "await" or "cancel"
+            && !_resolvedGenericCalls.ContainsKey(firstTarget)
+            && (functions is null || !TryGetFunction(firstTarget.Path, functions, out _)))
+        {
+            return true;
+        }
+
         var lastTarget = flow.Targets[^1];
         if (lastTarget.Path.Count != 1)
         {
@@ -17382,7 +17391,7 @@ internal sealed partial class SemanticCompiler
             return false;
         }
 
-        return lastTarget.Path[0] is "append" or "updated" or "await" or "cancel";
+        return lastTarget.Path[0] is "append" or "updated";
     }
 
     private string? GetMoveConsumingContainerSourceName(

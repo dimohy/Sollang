@@ -22,14 +22,6 @@ internal sealed partial class LlvmEmitter
         {
             var workerName = AsyncWorkerSymbol(function);
             var hasCfgSuspension = TryGetCfgSuspendPlan(function, out var cfgSuspendPlan);
-            BindingStatement? tailAwaitBinding = null;
-            Expression? tailAwaitExpression = null;
-            AsyncStateMachinePlan? statefulAwaitPlan = null;
-            var hasTailAwait = !hasCfgSuspension
-                && (TryGetTailAwaitBinding(function, out tailAwaitBinding)
-                    || TryGetTailAwaitExpression(function, out tailAwaitExpression));
-            var hasStatefulAwait = !hasCfgSuspension
-                && TryGetStatefulAwaitPlan(function, out statefulAwaitPlan);
             EmitFunctionLine($"define internal i1 @{workerName}(ptr %control) #0 {{");
             EmitLabel("entry");
             EmitStackFrameAllocations();
@@ -77,21 +69,6 @@ internal sealed partial class LlvmEmitter
             {
                 EmitCfgSuspendWorker(function, cfgSuspendPlan!, functionLocals);
             }
-            else if (hasStatefulAwait)
-            {
-                EmitStatefulAwaitWorker(function, statefulAwaitPlan!, functionLocals);
-            }
-            else if (hasTailAwait)
-            {
-                if (tailAwaitBinding is not null)
-                {
-                    EmitTailAwaitWorker(function, tailAwaitBinding, functionLocals);
-                }
-                else
-                {
-                    EmitTailAwaitExpressionWorker(function, tailAwaitExpression!, functionLocals);
-                }
-            }
             else
             {
                 EmitAsyncWorkerCompletion(function, functionLocals);
@@ -100,7 +77,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
 
             ClearLocalState();
-            EmitAsyncCancelFunction(function, hasTailAwait, statefulAwaitPlan, cfgSuspendPlan);
+            EmitAsyncCancelFunction(function, cfgSuspendPlan);
 
             ClearLocalState();
             EmitFunctionLine($"define internal %sollang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
@@ -186,8 +163,6 @@ internal sealed partial class LlvmEmitter
 
     private void EmitAsyncCancelFunction(
         BoundFunction function,
-        bool hasTailAwait,
-        AsyncStateMachinePlan? statefulPlan,
         AsyncCfgPlan? cfgPlan)
     {
         EmitFunctionLine($"define internal void @{AsyncCancelSymbol(function)}(ptr %control) #0 {{");
@@ -224,9 +199,7 @@ internal sealed partial class LlvmEmitter
             "getelementptr %sollang.task_control, ptr %control, i32 0, i32 5");
         var state = NextTemp("cancel_state");
         EmitLoad(state, "i32", stateSlot, 4);
-        var pendingStates = cfgPlan?.Points.Count
-            ?? statefulPlan?.Awaits.Count
-            ?? (hasTailAwait ? 1 : 0);
+        var pendingStates = cfgPlan?.Points.Count ?? 0;
         var stateLabels = Enumerable.Range(0, pendingStates + 1)
             .Select(index => NextLabel(index == 0 ? "cancel_initial" : "cancel_suspended"))
             .ToArray();
@@ -251,28 +224,17 @@ internal sealed partial class LlvmEmitter
         {
             EmitLabel(stateLabels[stateIndex]);
             _currentBlockLabel = stateLabels[stateIndex];
-            if (cfgPlan is not null)
+            var point = cfgPlan!.Points[stateIndex - 1];
+            if (point.OwnsPrimaryInput)
             {
-                var point = cfgPlan.Points[stateIndex - 1];
-                if (point.OwnsPrimaryInput)
-                {
-                    DropCancelledAsyncInput(function);
-                }
-                DropCancelledAsyncAdditionalInputs(function, point.OwnedAdditionalInputIndexes);
-                if (!point.IsYield)
-                {
-                    CancelStoredChild(function);
-                }
-                DropCancelledAsyncSpills(function, point.Spills);
+                DropCancelledAsyncInput(function);
             }
-            else
+            DropCancelledAsyncAdditionalInputs(function, point.OwnedAdditionalInputIndexes);
+            if (!point.IsYield)
             {
                 CancelStoredChild(function);
-                if (statefulPlan is not null)
-                {
-                    DropCancelledAsyncSpills(function, statefulPlan.Awaits[stateIndex - 1].Spills);
-                }
             }
+            DropCancelledAsyncSpills(function, point.Spills);
             EmitBranch(cleanupLabel);
         }
 
@@ -445,76 +407,6 @@ internal sealed partial class LlvmEmitter
         StoreAsyncResult(function, value);
         EmitMarkCurrentDiagnosticTerminal(2);
         EmitRet("i1", "true");
-    }
-
-    private void EmitStatefulAwaitWorker(
-        BoundFunction function,
-        AsyncStateMachinePlan plan,
-        LocalScope functionLocals)
-    {
-        var resumeBaseLocals = CaptureLocals();
-        var stateSlot = NextTemp("async_resume_state_slot");
-        EmitAssign(
-            stateSlot,
-            "getelementptr %sollang.task_control, ptr %control, i32 0, i32 5");
-        var state = NextTemp("async_resume_state");
-        EmitLoad(state, "i32", stateSlot, 4);
-        var stateLabels = Enumerable.Range(0, plan.Awaits.Count + 1)
-            .Select(index => NextLabel(index == 0 ? "async_state_start" : "async_state_resume"))
-            .ToArray();
-        var invalidLabel = NextLabel("async_state_invalid");
-        var switchCases = string.Join(" ", stateLabels.Select((label, index) =>
-            $"i32 {index}, label %{label}"));
-        EmitInstruction(
-            $"switch i32 {state}, label %{invalidLabel} [ {switchCases} ]");
-        _currentBlockTerminated = true;
-
-        EmitLabel(invalidLabel);
-        EmitTrap();
-
-        RuntimeTask? suspendedChild = null;
-        IReadOnlyList<RuntimeAsyncSpill> previousSpills = [];
-        var segmentStart = 0;
-        for (var awaitIndex = 0; awaitIndex < plan.Awaits.Count; awaitIndex++)
-        {
-            var awaitPoint = plan.Awaits[awaitIndex];
-            RestoreLocals(resumeBaseLocals);
-            EmitLabel(stateLabels[awaitIndex]);
-            if (awaitIndex > 0)
-            {
-                LoadAsyncSpills(function, previousSpills);
-                var resumedValue = EmitStoredChildAwait(function, suspendedChild!);
-                _locals.Add(plan.Awaits[awaitIndex - 1].ResultName, resumedValue);
-            }
-
-            EmitStatements(function.BlockBody
-                .Skip(segmentStart)
-                .Take(awaitPoint.StatementIndex - segmentStart)
-                .ToArray());
-            suspendedChild = ResolveLocal(awaitPoint.TaskName) as RuntimeTask
-                ?? throw new SollangException(
-                    $"await in async function '{function.Name}' did not produce Task<T>");
-            previousSpills = BuildRuntimeAsyncSpills(awaitPoint.Spills);
-            StoreAsyncSpills(function, previousSpills);
-            foreach (var spill in previousSpills)
-            {
-                RemoveLocal(spill.Name);
-            }
-            StoreSuspendedChild(function, suspendedChild);
-            RemoveLocal(awaitPoint.TaskName);
-            DropOwnedLocalsCreatedSince(resumeBaseLocals, transferredOwnerName: null);
-            EmitStore("i32", (awaitIndex + 1).ToString(CultureInfo.InvariantCulture), stateSlot, 4);
-            EmitRet("i1", "false");
-            segmentStart = awaitPoint.StatementIndex + 1;
-        }
-
-        RestoreLocals(resumeBaseLocals);
-        EmitLabel(stateLabels[^1]);
-        LoadAsyncSpills(function, previousSpills);
-        var finalAwaitValue = EmitStoredChildAwait(function, suspendedChild!);
-        _locals.Add(plan.Awaits[^1].ResultName, finalAwaitValue);
-        var remainingStatements = function.BlockBody.Skip(segmentStart).ToArray();
-        EmitAsyncWorkerCompletion(function, functionLocals, remainingStatements);
     }
 
     private void EmitCfgSuspendWorker(
@@ -1203,128 +1095,6 @@ internal sealed partial class LlvmEmitter
         };
     }
 
-    private void EmitTailAwaitWorker(
-        BoundFunction function,
-        BindingStatement tailAwaitBinding,
-        LocalScope functionLocals)
-    {
-        var stateSlot = NextTemp("async_resume_state_slot");
-        EmitAssign(
-            stateSlot,
-            "getelementptr %sollang.task_control, ptr %control, i32 0, i32 5");
-        var state = NextTemp("async_resume_state");
-        EmitLoad(state, "i32", stateSlot, 4);
-        var startLabel = NextLabel("async_state_start");
-        var resumeLabel = NextLabel("async_state_resume");
-        var invalidLabel = NextLabel("async_state_invalid");
-        EmitInstruction(
-            $"switch i32 {state}, label %{invalidLabel} [ i32 0, label %{startLabel} i32 1, label %{resumeLabel} ]");
-        _currentBlockTerminated = true;
-
-        EmitLabel(invalidLabel);
-        EmitTrap();
-
-        EmitLabel(startLabel);
-        EmitStatements(function.BlockBody);
-        var child = ResolveLocal(tailAwaitBinding.Name) as RuntimeTask
-            ?? throw new SollangException(
-                $"tail await in async function '{function.Name}' did not produce Task<T>");
-        EmitRecordCurrentDiagnosticSuspension(tailAwaitBinding, 1, child, taskExpression: null);
-        StoreSuspendedChild(function, child);
-        RemoveLocal(tailAwaitBinding.Name);
-        EmitStore("i32", "1", stateSlot, 4);
-        EmitRet("i1", "false");
-
-        EmitLabel(resumeLabel);
-        var childHandleAddress = AsyncContextField(
-            "%context", function.InputType, function.ReturnType, 7, "async_child_handle_address");
-        var childHandle = NextTemp("async_child_handle");
-        EmitLoad(childHandle, "ptr", childHandleAddress, 8);
-        var childContextAddress = AsyncContextField(
-            "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
-        var childContext = NextTemp("async_child_context");
-        EmitLoad(childContext, "ptr", childContextAddress, 8);
-        var resumedChild = child with
-        {
-            HandleName = childHandle,
-            ContextName = childContext,
-            DiagnosticHeaderName = child.DiagnosticHeaderName is null
-                ? null
-                : AsyncContextField(
-                    childContext, child.InputType, child.ResultType, 10, "async_tail_child_diagnostic_header")
-        };
-        var value = EmitAwaitTask(resumedChild);
-        EnsureRuntimeType(value, function.ReturnType, function.Name);
-        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
-        StoreAsyncResult(function, value);
-        EmitMarkCurrentDiagnosticTerminal(2);
-        EmitRet("i1", "true");
-    }
-
-    private void EmitTailAwaitExpressionWorker(
-        BoundFunction function,
-        Expression taskExpression,
-        LocalScope functionLocals)
-    {
-        var stateSlot = NextTemp("async_resume_state_slot");
-        EmitAssign(
-            stateSlot,
-            "getelementptr %sollang.task_control, ptr %control, i32 0, i32 5");
-        var state = NextTemp("async_resume_state");
-        EmitLoad(state, "i32", stateSlot, 4);
-        var startLabel = NextLabel("async_state_start");
-        var resumeLabel = NextLabel("async_state_resume");
-        var invalidLabel = NextLabel("async_state_invalid");
-        EmitInstruction(
-            $"switch i32 {state}, label %{invalidLabel} [ i32 0, label %{startLabel} i32 1, label %{resumeLabel} ]");
-        _currentBlockTerminated = true;
-
-        EmitLabel(invalidLabel);
-        EmitTrap();
-
-        EmitLabel(startLabel);
-        EmitStatements(function.BlockBody);
-        var child = EmitExpression(taskExpression) as RuntimeTask
-            ?? throw new SollangException(
-                $"tail await in async function '{function.Name}' did not produce Task<T>");
-        EmitRecordCurrentDiagnosticSuspension(function.Body!, 1, child, taskExpression);
-        StoreSuspendedChild(function, child);
-        if (taskExpression is NameExpression taskName)
-        {
-            RemoveLocal(taskName.Name);
-        }
-        else if (taskExpression is FieldAccessExpression)
-        {
-            ConsumeOwnedFieldProjection(taskExpression, child.Type);
-        }
-        EmitStore("i32", "1", stateSlot, 4);
-        EmitRet("i1", "false");
-
-        EmitLabel(resumeLabel);
-        var childHandleAddress = AsyncContextField(
-            "%context", function.InputType, function.ReturnType, 7, "async_child_handle_address");
-        var childHandle = NextTemp("async_child_handle");
-        EmitLoad(childHandle, "ptr", childHandleAddress, 8);
-        var childContextAddress = AsyncContextField(
-            "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
-        var childContext = NextTemp("async_child_context");
-        EmitLoad(childContext, "ptr", childContextAddress, 8);
-        var value = EmitAwaitTask(child with
-        {
-            HandleName = childHandle,
-            ContextName = childContext,
-            DiagnosticHeaderName = child.DiagnosticHeaderName is null
-                ? null
-                : AsyncContextField(
-                    childContext, child.InputType, child.ResultType, 10, "async_tail_child_diagnostic_header")
-        });
-        EnsureRuntimeType(value, function.ReturnType, function.Name);
-        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
-        StoreAsyncResult(function, value);
-        EmitMarkCurrentDiagnosticTerminal(2);
-        EmitRet("i1", "true");
-    }
-
     private void StoreAsyncResult(BoundFunction function, RuntimeValue value)
     {
         var result = MaterializeAsyncResult(value);
@@ -1351,12 +1121,15 @@ internal sealed partial class LlvmEmitter
     {
         plan = null;
         var candidates = new List<AsyncCfgCandidate>();
-        CollectCfgSuspensions(function.BlockBody, nested: false, candidates);
+        CollectCfgSuspensions(function.BlockBody, candidates);
         if (function.Body is not null)
         {
-            CollectCfgSuspensions(function.Body, nested: false, candidates);
+            CollectCfgSuspensions(function.Body, candidates);
         }
-        if (!candidates.Any(candidate => candidate.Nested || candidate.IsYield))
+        // Linear and tail awaits need the same per-suspension ownership and
+        // spill shape as nested awaits. A syntactic fast path cannot keep
+        // start-block SSA owners alive on a resumed or cancelled worker.
+        if (candidates.Count == 0)
         {
             return false;
         }
@@ -1373,7 +1146,6 @@ internal sealed partial class LlvmEmitter
 
     private static void CollectCfgSuspensions(
         IReadOnlyList<Statement> statements,
-        bool nested,
         List<AsyncCfgCandidate> candidates)
     {
         foreach (var statement in statements)
@@ -1383,43 +1155,43 @@ internal sealed partial class LlvmEmitter
                 case BindingStatement binding:
                     if (TryGetAwaitTaskName(binding, out _))
                     {
-                        candidates.Add(new AsyncCfgCandidate(binding, nested, IsYield: false));
+                        candidates.Add(new AsyncCfgCandidate(binding, IsYield: false));
                     }
                     else
                     {
-                        CollectCfgSuspensions(binding.Value, nested, candidates);
+                        CollectCfgSuspensions(binding.Value, candidates);
                     }
                     break;
                 case ExpressionStatement { Expression: NameExpression { Name: "yield" } } yield:
-                    candidates.Add(new AsyncCfgCandidate(yield, nested, IsYield: true));
+                    candidates.Add(new AsyncCfgCandidate(yield, IsYield: true));
                     break;
                 case ExpressionStatement expression:
                     if (TryGetAwaitTaskExpression(expression.Expression, out _))
                     {
-                        candidates.Add(new AsyncCfgCandidate(expression, nested, IsYield: false));
+                        candidates.Add(new AsyncCfgCandidate(expression, IsYield: false));
                     }
                     else
                     {
-                        CollectCfgSuspensions(expression.Expression, nested, candidates);
+                        CollectCfgSuspensions(expression.Expression, candidates);
                     }
                     break;
                 case BlockFunctionCallStatement block:
-                    CollectCfgSuspensions(block.Source, nested, candidates);
+                    CollectCfgSuspensions(block.Source, candidates);
                     foreach (var argument in block.Arguments ?? [])
                     {
-                        CollectCfgSuspensions(argument, nested, candidates);
+                        CollectCfgSuspensions(argument, candidates);
                     }
-                    CollectCfgSuspensions(block.Body, nested: true, candidates);
+                    CollectCfgSuspensions(block.Body, candidates);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
                     foreach (var block in pipeline.Calls)
                     {
-                        CollectCfgSuspensions(block.Source, nested, candidates);
+                        CollectCfgSuspensions(block.Source, candidates);
                         foreach (var argument in block.Arguments ?? [])
                         {
-                            CollectCfgSuspensions(argument, nested, candidates);
+                            CollectCfgSuspensions(argument, candidates);
                         }
-                        CollectCfgSuspensions(block.Body, nested: true, candidates);
+                        CollectCfgSuspensions(block.Body, candidates);
                     }
                     break;
             }
@@ -1428,62 +1200,61 @@ internal sealed partial class LlvmEmitter
 
     private static void CollectCfgSuspensions(
         Expression expression,
-        bool nested,
         List<AsyncCfgCandidate> candidates)
     {
         if (TryGetAwaitTaskExpression(expression, out _))
         {
-            candidates.Add(new AsyncCfgCandidate(expression, nested, IsYield: false));
+            candidates.Add(new AsyncCfgCandidate(expression, IsYield: false));
             return;
         }
 
         switch (expression)
         {
             case IfExpression conditional:
-                CollectCfgSuspensions(conditional.Then.Statements, nested: true, candidates);
+                CollectCfgSuspensions(conditional.Then.Statements, candidates);
                 if (conditional.Then.Value is not null)
                 {
-                    CollectCfgSuspensions(conditional.Then.Value, nested: true, candidates);
+                    CollectCfgSuspensions(conditional.Then.Value, candidates);
                 }
                 if (conditional.Else is not null)
                 {
-                    CollectCfgSuspensions(conditional.Else.Statements, nested: true, candidates);
+                    CollectCfgSuspensions(conditional.Else.Statements, candidates);
                     if (conditional.Else.Value is not null)
                     {
-                        CollectCfgSuspensions(conditional.Else.Value, nested: true, candidates);
+                        CollectCfgSuspensions(conditional.Else.Value, candidates);
                     }
                 }
                 break;
             case WhenExpression selection:
                 foreach (var arm in selection.Arms)
                 {
-                    CollectCfgSuspensions(arm.Body.Statements, nested: true, candidates);
+                    CollectCfgSuspensions(arm.Body.Statements, candidates);
                     if (arm.Body.Value is not null)
                     {
-                        CollectCfgSuspensions(arm.Body.Value, nested: true, candidates);
+                        CollectCfgSuspensions(arm.Body.Value, candidates);
                     }
                 }
-                CollectCfgSuspensions(selection.Else.Statements, nested: true, candidates);
+                CollectCfgSuspensions(selection.Else.Statements, candidates);
                 if (selection.Else.Value is not null)
                 {
-                    CollectCfgSuspensions(selection.Else.Value, nested: true, candidates);
+                    CollectCfgSuspensions(selection.Else.Value, candidates);
                 }
                 break;
             case EnumMatchExpression selection:
                 foreach (var arm in selection.Arms)
                 {
-                    CollectCfgSuspensions(arm.Body.Statements, nested: true, candidates);
+                    CollectCfgSuspensions(arm.Body.Statements, candidates);
                     if (arm.Body.Value is not null)
                     {
-                        CollectCfgSuspensions(arm.Body.Value, nested: true, candidates);
+                        CollectCfgSuspensions(arm.Body.Value, candidates);
                     }
                 }
                 if (selection.Else is not null)
                 {
-                    CollectCfgSuspensions(selection.Else.Statements, nested: true, candidates);
+                    CollectCfgSuspensions(selection.Else.Statements, candidates);
                     if (selection.Else.Value is not null)
                     {
-                        CollectCfgSuspensions(selection.Else.Value, nested: true, candidates);
+                        CollectCfgSuspensions(selection.Else.Value, candidates);
                     }
                 }
                 break;
@@ -1526,174 +1297,6 @@ internal sealed partial class LlvmEmitter
 
         taskExpression = null!;
         return false;
-    }
-
-    private static bool TryGetTailAwaitExpression(BoundFunction function, out Expression? taskExpression)
-    {
-        taskExpression = null;
-        if (function.Body is null
-            || !TryGetAwaitTaskExpression(function.Body, out var candidate))
-        {
-            return false;
-        }
-        taskExpression = candidate;
-        return true;
-    }
-
-    private bool TryGetTailAwaitBinding(
-        BoundFunction function,
-        out BindingStatement? binding)
-    {
-        binding = null;
-        if (function.InputType is { } inputType
-            && _program.Types.ContainsOwnedStorage(inputType))
-        {
-            return false;
-        }
-        if (function.BlockBody.Count != 1
-            || function.BlockBody[0] is not BindingStatement candidate
-            || candidate.IsMutable
-            || function.Body is not FlowExpression
-            {
-                Source: NameExpression source,
-                Targets.Count: 1
-            } flow
-            || !string.Equals(source.Name, candidate.Name, StringComparison.Ordinal)
-            || flow.Targets[0].Path.Count != 1
-            || !string.Equals(flow.Targets[0].Path[0], "await", StringComparison.Ordinal)
-            || flow.Targets[0].Arguments.Count != 0)
-        {
-            return false;
-        }
-
-        binding = candidate;
-        return true;
-    }
-
-    private bool TryGetStatefulAwaitPlan(
-        BoundFunction function,
-        out AsyncStateMachinePlan? plan)
-    {
-        plan = null;
-        if (function.InputType is { } inputType
-            && _program.Types.ContainsOwnedStorage(inputType))
-        {
-            return false;
-        }
-        if (!_program.FunctionBindings.TryGetValue(function, out var bindingTypes))
-        {
-            return false;
-        }
-
-        if (function.BlockBody.Any(statement =>
-            statement is not (BindingStatement or ExpressionStatement)))
-        {
-            return false;
-        }
-
-        var awaits = new List<(int Index, BindingStatement Binding, string TaskName)>();
-        for (var index = 0; index < function.BlockBody.Count; index++)
-        {
-            if (function.BlockBody[index] is not BindingStatement
-                {
-                    IsMutable: false,
-                    Value: FlowExpression
-                    {
-                        Source: NameExpression source,
-                        Targets.Count: 1
-                    } flow
-                } awaitBinding
-                || flow.Targets[0].Path.Count != 1
-                || !string.Equals(flow.Targets[0].Path[0], "await", StringComparison.Ordinal)
-                || flow.Targets[0].Arguments.Count != 0)
-            {
-                continue;
-            }
-
-            awaits.Add((index, awaitBinding, source.Name));
-        }
-        if (awaits.Count == 0)
-        {
-            return false;
-        }
-
-        var awaitPlans = new List<AsyncAwaitPoint>(awaits.Count);
-        foreach (var (index, awaitBinding, taskName) in awaits)
-        {
-            var priorBindings = function.BlockBody.Take(index).OfType<BindingStatement>();
-            var postStatements = function.BlockBody.Skip(index + 1).ToArray();
-            var spillPlans = new List<AsyncSpillPlan>();
-            foreach (var binding in priorBindings)
-            {
-                if (string.Equals(binding.Name, taskName, StringComparison.Ordinal)
-                    || !IsNameReferencedAfterAwait(binding.Name, postStatements, function.Body))
-                {
-                    continue;
-                }
-                if (!bindingTypes.TryGetValue(binding.Name, out var type)
-                    && !TryGetAsyncTaskBindingType(binding.Value, out type))
-                {
-                    return false;
-                }
-                if (!IsAsyncSpillType(type))
-                {
-                    return false;
-                }
-                if (binding.IsMutable && !IsAsyncMutableSpillType(type))
-                {
-                    return false;
-                }
-                spillPlans.Add(new AsyncSpillPlan(binding.Name, type, binding.IsMutable, []));
-            }
-
-            awaitPlans.Add(new AsyncAwaitPoint(
-                index,
-                awaitBinding.Name,
-                taskName,
-                spillPlans));
-        }
-
-        plan = new AsyncStateMachinePlan(awaitPlans);
-        return true;
-    }
-
-    private bool TryGetAsyncTaskBindingType(Expression expression, out BoundType taskType)
-    {
-        BoundFunction? function = null;
-        if (expression is CallExpression call)
-        {
-            _program.ResolvedGenericCalls.TryGetValue(call, out function);
-            if (function is null)
-            {
-                TryResolveFunction(call.Path, out function);
-            }
-        }
-        else if (expression is NameExpression name)
-        {
-            TryResolveFunction([name.Name], out function);
-        }
-        else if (expression is FlowExpression { Targets.Count: > 0 } flow)
-        {
-            TryResolveFunction(flow.Targets[^1].Path, out function);
-        }
-
-        if (function is not { IsAsync: true })
-        {
-            taskType = default;
-            return false;
-        }
-
-        taskType = _program.Types.GetOrAddTask(function.ReturnType);
-        return true;
-    }
-
-    private static bool IsNameReferencedAfterAwait(
-        string name,
-        IReadOnlyList<Statement> statements,
-        Expression? body)
-    {
-        return statements.Any(statement => StoragePlacementAnalyzer.ReferencesName(statement, name))
-            || (body is not null && StoragePlacementAnalyzer.ReferencesName(body, name));
     }
 
     private bool IsAsyncSpillType(BoundType type)
@@ -2347,8 +1950,6 @@ internal sealed partial class LlvmEmitter
     private static string AsyncCancelSymbol(BoundFunction function) =>
         SymbolForFunction(function)[1..] + "_async_cancel";
 
-    private sealed record AsyncStateMachinePlan(IReadOnlyList<AsyncAwaitPoint> Awaits);
-
     private sealed class AsyncCfgPlan
     {
         public AsyncCfgPlan(IReadOnlyList<AsyncCfgSuspendPoint> points)
@@ -2419,13 +2020,7 @@ internal sealed partial class LlvmEmitter
         _activeAsyncCfg is { } lowering
         && ReferenceEquals(lowering.Function, _currentFunction);
 
-    private sealed record AsyncAwaitPoint(
-        int StatementIndex,
-        string ResultName,
-        string TaskName,
-        IReadOnlyList<AsyncSpillPlan> Spills);
-
-    private sealed record AsyncCfgCandidate(object Site, bool Nested, bool IsYield);
+    private sealed record AsyncCfgCandidate(object Site, bool IsYield);
 
     private sealed record AsyncSpillPlan(
         string Name,

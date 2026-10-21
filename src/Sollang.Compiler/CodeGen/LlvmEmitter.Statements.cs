@@ -2731,7 +2731,7 @@ internal sealed partial class LlvmEmitter
         }
 
         var candidates = new List<AsyncCfgCandidate>();
-        CollectCfgSuspensions(statements, nested: true, candidates);
+        CollectCfgSuspensions(statements, candidates);
         if (candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site)))
         {
             return true;
@@ -2741,7 +2741,7 @@ internal sealed partial class LlvmEmitter
         if (_currentBlockInvocation is { } invocation)
         {
             candidates.Clear();
-            CollectCfgSuspensions(invocation.Body, nested: true, candidates);
+            CollectCfgSuspensions(invocation.Body, candidates);
             if (candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site)))
                 return true;
         }
@@ -2751,7 +2751,7 @@ internal sealed partial class LlvmEmitter
             if (sink is RuntimeStreamConsumer consumer)
             {
                 candidates.Clear();
-                CollectCfgSuspensions(consumer.Invocation.Body, nested: true, candidates);
+                CollectCfgSuspensions(consumer.Invocation.Body, candidates);
                 return candidates.Any(candidate => lowering.Plan.BySite.ContainsKey(candidate.Site));
             }
             sink = sink switch

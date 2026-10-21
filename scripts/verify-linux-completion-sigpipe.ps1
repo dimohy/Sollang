@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('preserved', 'baseline-failure')][string]$Expectation = 'preserved',
-    [ValidateSet('send-flags', 'readiness', 'multipending')][string]$ProbeSet = 'send-flags',
+    [ValidateSet('send-flags', 'readiness', 'multipending', 'publication')][string]$ProbeSet = 'send-flags',
     [ValidateSet('managed', 'selfhost')][string]$Authority = 'managed',
     [string]$RuntimeSourceSnapshot = '',
     [string]$ExpectedRuntimeSourceSha256 = '',
@@ -35,6 +35,8 @@ if (-not [string]::IsNullOrWhiteSpace($RuntimeSourceSnapshot)) {
 $commonHarness = Join-Path $PSScriptRoot 'contracts/fixtures/linux-completion-sigpipe.c'
 $harness = if ($ProbeSet -eq 'multipending') {
     Join-Path $PSScriptRoot 'contracts/fixtures/linux-completion-multipending.c'
+} elseif ($ProbeSet -eq 'publication') {
+    Join-Path $PSScriptRoot 'contracts/fixtures/linux-completion-publication.c'
 } else { $commonHarness }
 $output = Join-Path $root ('artifacts/scratch/linux-completion-sigpipe-' + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($output) | Out-Null
@@ -54,7 +56,7 @@ function Run([string]$Step, [string[]]$Arguments) {
     return $r
 }
 $record = [ordered]@{
-    schemaVersion=1; status='running'; expectation=$Expectation; probeSet=$ProbeSet; authority=$Authority; runtimeSourceVersion=$sourceVersion; completed=0; total=$(switch ($ProbeSet) {'readiness' {4} 'multipending' {7} default {3}})
+    schemaVersion=1; status='running'; expectation=$Expectation; probeSet=$ProbeSet; authority=$Authority; runtimeSourceVersion=$sourceVersion; completed=0; total=$(switch ($ProbeSet) {'readiness' {4} 'multipending' {7} 'publication' {4} default {3}})
     evidenceScope='Extracted production Linux LLVM; real closed AF_UNIX stream send; synthetic waiter readiness; default SIGPIPE in isolated child processes; not public TCP API or full compiler acceptance'
     inputHashes=$hashes; inputsStable=$false; processesStopped=$false
 }
@@ -78,7 +80,9 @@ try {
         $functions[$name] = $match.Value
     }
     $queue = [Collections.Generic.Queue[string]]::new()
-    foreach ($name in @('sollang_socket_result','sollang_socket_errno','sollang_socket_error_kind','sollang_platform_socket_send','sollang_platform_socket_completion_submit','sollang_socket_completion_waiter')) {
+    $roots = @('sollang_socket_result','sollang_socket_errno','sollang_socket_error_kind','sollang_platform_socket_send','sollang_platform_socket_completion_submit','sollang_socket_completion_waiter')
+    if ($ProbeSet -eq 'publication') { $roots += @('sollang_platform_socket_completion_create','sollang_platform_socket_completion_cancel','sollang_platform_socket_completion_dequeue') }
+    foreach ($name in $roots) {
         if (-not $functions.ContainsKey($name)) { throw "Missing production function: $name" }
         $queue.Enqueue($name)
     }
@@ -122,6 +126,53 @@ declare void @sollang_platform_io_signal_completion()
 declare void @llvm.trap()
 '@
     $llvm += "`n" + (($bodies -join "`n").Replace('@epoll_wait(', '@socket_probe_epoll_wait('))
+    if ($ProbeSet -eq 'publication') {
+        $record.evidenceScope = 'Extracted production LLVM with test-local external binding hooks for epoll scheduling, rearm failure, allocator tracking and mutex-init failure; real kernel recv/send and pthread synchronization; not full native compiler acceptance'
+        # Production state transitions and syscall arguments remain unmodified.
+        $llvm = $llvm.Replace('@epoll_ctl(', '@socket_probe_epoll_ctl(').Replace('@pthread_mutex_init(', '@socket_probe_mutex_init(')
+        $llvm = $llvm.Replace('@sollang_alloc(', '@socket_probe_alloc(').Replace('@malloc(', '@socket_probe_alloc(')
+        $llvm = $llvm.Replace('@sollang_free(', '@socket_probe_free(').Replace('@free(', '@socket_probe_free(')
+        $llvm += @'
+
+declare i64 @write(i32, ptr, i64)
+declare i32 @close(i32)
+declare i32 @eventfd(i32, i32)
+declare i32 @epoll_create1(i32)
+declare ptr @socket_probe_alloc(i64)
+declare void @socket_probe_free(ptr)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+
+define i32 @socket_probe_receive(ptr %state, ptr %buffer, ptr %code) {
+  %identity = ptrtoint ptr %state to i64
+  %r = call %sollang.socket_result @sollang_platform_socket_completion_submit(i64 %identity, i64 17, i64 31, i32 0, ptr %buffer, i64 1, i64 1, i64 0, i64 1, i32 0)
+  %kind = extractvalue %sollang.socket_result %r, 1
+  %error = extractvalue %sollang.socket_result %r, 2
+  store i32 %error, ptr %code
+  ret i32 %kind
+}
+define i32 @socket_probe_cancel(ptr %state) {
+  %identity = ptrtoint ptr %state to i64
+  %r = call %sollang.socket_result @sollang_platform_socket_completion_cancel(i64 %identity, i64 31)
+  %kind = extractvalue %sollang.socket_result %r, 1
+  ret i32 %kind
+}
+define i32 @socket_probe_dequeue(ptr %state, ptr %descriptor) {
+  %identity = ptrtoint ptr %state to i64
+  %r = call %sollang.socket_result @sollang_platform_socket_completion_dequeue(i64 %identity, i1 false, ptr %descriptor)
+  %kind = extractvalue %sollang.socket_result %r, 1
+  ret i32 %kind
+}
+define i32 @socket_probe_create(ptr %identity, ptr %code) {
+  %r = call %sollang.socket_result @sollang_platform_socket_completion_create(i64 1, i64 1, i64 1)
+  %value = extractvalue %sollang.socket_result %r, 0
+  %kind = extractvalue %sollang.socket_result %r, 1
+  %error = extractvalue %sollang.socket_result %r, 2
+  store i64 %value, ptr %identity
+  store i32 %error, ptr %code
+  ret i32 %kind
+}
+'@
+    }
     # The real waiter is a test entry point; only its linkage is exported.
     $llvm = $llvm.Replace('define internal ptr @sollang_socket_completion_waiter(', 'define ptr @sollang_socket_completion_waiter(')
     $llvm += @'

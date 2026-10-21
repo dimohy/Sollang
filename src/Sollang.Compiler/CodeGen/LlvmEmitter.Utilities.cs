@@ -1256,9 +1256,12 @@ internal sealed partial class LlvmEmitter
             return null;
         }
 
-        if (flow.Targets.Any(target =>
-                target.Path.Count == 1
-                && target.Path[0] is "await" or "cancel")
+        // await/cancel consume the value entering that target. Only a first
+        // target consumes this flow's source; a later target may consume a
+        // Task produced from a borrowed property such as an array's length.
+        var consumesSourceTask = flow.Targets[0].Path.Count == 1
+            && flow.Targets[0].Path[0] is "await" or "cancel";
+        if (consumesSourceTask
             && TryGetOwnedFieldProjection(flow.Source, out var projectedOwnerName, out _))
         {
             return projectedOwnerName;
@@ -1269,9 +1272,7 @@ internal sealed partial class LlvmEmitter
             return GetMoveConsumingContainerSourceName(flow.Source);
         }
 
-        if (flow.Targets.Any(target =>
-                target.Path.Count == 1
-                && target.Path[0] is "await" or "cancel"))
+        if (consumesSourceTask)
         {
             return name.Name;
         }

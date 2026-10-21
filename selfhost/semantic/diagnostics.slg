@@ -481,8 +481,11 @@ declarationIntrinsicOwnerConsumed prepared: ref semanticContext.SemanticSnapshot
     prepared.package.nodes[range.astStart + flowAst!] => firstFlow
     firstFlow.kind != 10 or firstFlow.start != name.start
         -> if { false -> return }
-    # Nested flow edges preserve the first source. The outer edge owns the
-    # final target, which is the C# consumption decision for the whole flow.
+    # A first await/cancel consumes this source. Later awaits consume the
+    # derived Task, while an earlier borrowed source stays owned by its scope.
+    prepared -> declarationFlowIntrinsicConsumesSource(sourceModule, flowAst!, true)
+        -> if { true -> return }
+    # Preserve the existing final append/updated transform decision.
     false => outermost!
     not outermost! -> while {
         prepared.package.nodes[range.astStart + flowAst!] => flow
@@ -492,7 +495,12 @@ declarationIntrinsicOwnerConsumed prepared: ref semanticContext.SemanticSnapshot
                 -> if { flow.parent => flowAst! } else { true => outermost! }
         }
     }
-    range.astStart + flowAst! => globalFlow
+    prepared -> declarationFlowIntrinsicConsumesSource(sourceModule, flowAst!, false)
+}
+
+declarationFlowIntrinsicConsumesSource prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, flowAst: Int, taskOnly: Bool -> Bool {
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + flowAst => globalFlow
     prepared.directFlowTargetPathByAst[globalFlow] => targetAst
     targetAst < 0 -> if { false -> return }
     prepared.package.nodes[range.astStart + targetAst] => target
@@ -510,7 +518,10 @@ declarationIntrinsicOwnerConsumed prepared: ref semanticContext.SemanticSnapshot
             -> if { false -> return }
     }
     prepared.package.tokens[range.tokenStart + target.payloadToken] => targetName
-    prepared.package.sources[sourceModule] -> slice(targetName.span.start, targetName.span.length) -> calls.moveConsumingIntrinsicTarget
+    prepared.package.sources[sourceModule] -> slice(targetName.span.start, targetName.span.length) => targetText
+    targetText == "await" or targetText == "cancel" => taskTarget
+    (taskOnly and taskTarget) or (not taskOnly and not taskTarget) => matchingTargetKind
+    matchingTargetKind and (targetText -> calls.moveConsumingIntrinsicTarget)
 }
 
 declarationNameConsumes prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~], sourceModule: Int, nameAst: Int, ownerSymbol: Int, typeByAst: ref [Int; ~] -> Bool {
