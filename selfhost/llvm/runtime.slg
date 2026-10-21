@@ -753,7 +753,9 @@ emitDirectoryNodes target: Int -> Unit uses Console {
     """ -> println
 }
 
-public emitWindows functions: RuntimeFunctionSymbols -> Unit uses Console {
+public emitWindows functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, declareIntegerWrite: Bool, declareIntegerSeek: Bool -> Unit uses Console {
+    functions -> emitLegacyIntegerRuntime(true)
+    emitWindowsLegacyIntegerRuntime(declareIntegerRead, declareIntegerWrite, declareIntegerSeek)
     """
     declare i32 @getchar()
     declare dllimport i32 @GetFileSizeEx(ptr, ptr)
@@ -855,16 +857,7 @@ public emitWindows functions: RuntimeFunctionSymbols -> Unit uses Console {
       ret i32 0
     }
 
-    ; Legacy sorted-Int demo intrinsics remain linkable in a stage-2 compiler.
-    ; They are not used by the compiler pipeline; the typed File API supersedes
-    ; them and will receive its target runtime in the following runtime slice.
     """ -> println
-    "define void @sollang_m$(functions.openIntWriterRef.module)_s$(functions.openIntWriterRef.symbol)(%sollang.text %arg) { ret void }" -> println
-    "define void @sollang_m$(functions.writeIntRef.module)_s$(functions.writeIntRef.symbol)(i32 %arg) { ret void }" -> println
-    "define void @sollang_m$(functions.closeIntWriterRef.module)_s$(functions.closeIntWriterRef.symbol)() { ret void }" -> println
-    "define void @sollang_m$(functions.openIntReaderRef.module)_s$(functions.openIntReaderRef.symbol)(%sollang.text %arg) { ret void }" -> println
-    "define i32 @sollang_m$(functions.closestIntRef.module)_s$(functions.closestIntRef.symbol)(i32 %arg) { ret i32 %arg }" -> println
-    "define void @sollang_m$(functions.closeIntReaderRef.module)_s$(functions.closeIntReaderRef.symbol)() { ret void }" -> println
     "define i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)() {" -> println
     """
     entry:
@@ -919,7 +912,9 @@ public emitWindows functions: RuntimeFunctionSymbols -> Unit uses Console {
     functions -> emitWindowsSecureRandom
 }
 
-public emitLinux functions: RuntimeFunctionSymbols -> Unit uses Console {
+public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, declareIntegerWrite: Bool, declareIntegerSeek: Bool, declareIntegerOpen: Bool, declareIntegerClose: Bool -> Unit uses Console {
+    functions -> emitLegacyIntegerRuntime(false)
+    emitLinuxLegacyIntegerRuntime(declareIntegerRead, declareIntegerWrite, declareIntegerSeek, declareIntegerOpen, declareIntegerClose)
     """
     declare i32 @getchar()
     declare i32 @clock_gettime(i32, ptr)
@@ -1016,12 +1011,6 @@ public emitLinux functions: RuntimeFunctionSymbols -> Unit uses Console {
       ret i32 0
     }
     """ -> println
-    "define void @sollang_m$(functions.openIntWriterRef.module)_s$(functions.openIntWriterRef.symbol)(%sollang.text %arg) { ret void }" -> println
-    "define void @sollang_m$(functions.writeIntRef.module)_s$(functions.writeIntRef.symbol)(i32 %arg) { ret void }" -> println
-    "define void @sollang_m$(functions.closeIntWriterRef.module)_s$(functions.closeIntWriterRef.symbol)() { ret void }" -> println
-    "define void @sollang_m$(functions.openIntReaderRef.module)_s$(functions.openIntReaderRef.symbol)(%sollang.text %arg) { ret void }" -> println
-    "define i32 @sollang_m$(functions.closestIntRef.module)_s$(functions.closestIntRef.symbol)(i32 %arg) { ret i32 %arg }" -> println
-    "define void @sollang_m$(functions.closeIntReaderRef.module)_s$(functions.closeIntReaderRef.symbol)() { ret void }" -> println
     "define i64 @sollang_m$(functions.nowMillisRef.module)_s$(functions.nowMillisRef.symbol)() {" -> println
     """
     entry:
@@ -2985,6 +2974,616 @@ public emitWasmOwnedFile: -> Unit uses Console {
 
     define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_length, ptr %destination, i64 %destination_length) {
     entry:
+      ret i32 0
+    }
+    """ -> println
+}
+
+# Sorted Int files retain the C# main-only buffered signed64 runtime contract.
+# Platform status remains explicit; a failure terminates the entry point with1.
+emitLegacyIntegerRuntime functions: RuntimeFunctionSymbols, windows: Bool -> Unit uses Console {
+    """
+    %sollang.legacy_int_result = type { i64, i32 }
+    @sollang_legacy_int_writer_buffer = internal global [8192 x i64] zeroinitializer
+    @sollang_legacy_int_writer_buffer_count = internal global i64 0
+    """ -> println
+    """
+    define internal i32 @sollang_legacy_int_copy_text_to_c_path(ptr %data, i64 %len, ptr %out) {
+    entry:
+      %too_long = icmp ugt i64 %len, 259
+      br i1 %too_long, label %fail, label %copy
+
+    copy:
+      %i = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+      %done = icmp eq i64 %i, %len
+      br i1 %done, label %nul, label %copy_body
+
+    copy_body:
+      %src = getelementptr i8, ptr %data, i64 %i
+      %ch = load i8, ptr %src, align 1
+      %dst = getelementptr i8, ptr %out, i64 %i
+      store i8 %ch, ptr %dst, align 1
+      %next = add i64 %i, 1
+      br label %copy
+
+    nul:
+      %nul_ptr = getelementptr i8, ptr %out, i64 %len
+      store i8 0, ptr %nul_ptr, align 1
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_open_write_i64_file(ptr %path, i64 %len) {
+    entry:
+      store i64 0, ptr @sollang_legacy_int_writer_buffer_count, align 8
+      %ok = call i32 @sollang_legacy_int_platform_open_write_file(ptr %path, i64 %len)
+      ret i32 %ok
+    }
+
+    define internal i32 @sollang_legacy_int_flush_i64_file() {
+    entry:
+      %count = load i64, ptr @sollang_legacy_int_writer_buffer_count, align 8
+      %empty = icmp eq i64 %count, 0
+      br i1 %empty, label %success, label %flush
+
+    flush:
+      %bytes = mul i64 %count, 8
+      %ok = call i32 @sollang_legacy_int_platform_write_file_bytes(ptr @sollang_legacy_int_writer_buffer, i64 %bytes)
+      %is_ok = icmp ne i32 %ok, 0
+      br i1 %is_ok, label %reset, label %fail
+
+    reset:
+      store i64 0, ptr @sollang_legacy_int_writer_buffer_count, align 8
+      br label %success
+
+    success:
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_write_i64_file(i64 %value) {
+    entry:
+      %count = load i64, ptr @sollang_legacy_int_writer_buffer_count, align 8
+      %slot = getelementptr inbounds [8192 x i64], ptr @sollang_legacy_int_writer_buffer, i64 0, i64 %count
+      store i64 %value, ptr %slot, align 8
+      %next = add i64 %count, 1
+      store i64 %next, ptr @sollang_legacy_int_writer_buffer_count, align 8
+      %full = icmp eq i64 %next, 8192
+      br i1 %full, label %flush, label %success
+
+    flush:
+      %ok = call i32 @sollang_legacy_int_flush_i64_file()
+      ret i32 %ok
+
+    success:
+      ret i32 1
+    }
+
+    define internal i32 @sollang_legacy_int_close_write_i64_file() {
+    entry:
+      %flush_ok = call i32 @sollang_legacy_int_flush_i64_file()
+      %flush_is_ok = icmp ne i32 %flush_ok, 0
+      br i1 %flush_is_ok, label %close, label %fail
+
+    close:
+      %close_ok = call i32 @sollang_legacy_int_platform_close_write_file()
+      ret i32 %close_ok
+
+    fail:
+      ret i32 0
+    }
+
+    define internal %sollang.legacy_int_result @sollang_legacy_int_closest_i64_file(i64 %target) {
+    entry:
+      %count_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_i64_file_count()
+      %count = extractvalue %sollang.legacy_int_result %count_result, 0
+      %count_ok = extractvalue %sollang.legacy_int_result %count_result, 1
+      %count_is_ok = icmp ne i32 %count_ok, 0
+      %has_values = icmp sgt i64 %count, 0
+      %can_search = and i1 %count_is_ok, %has_values
+      br i1 %can_search, label %search, label %fail
+
+    search:
+      br label %loop
+
+    loop:
+      %low = phi i64 [ 0, %search ], [ %next_low, %step ]
+      %high = phi i64 [ %count, %search ], [ %next_high, %step ]
+      %active = icmp slt i64 %low, %high
+      br i1 %active, label %probe, label %choose
+
+    probe:
+      %span = sub i64 %high, %low
+      %half = sdiv i64 %span, 2
+      %mid = add i64 %low, %half
+      %mid_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %mid)
+      %mid_value = extractvalue %sollang.legacy_int_result %mid_result, 0
+      %mid_ok = extractvalue %sollang.legacy_int_result %mid_result, 1
+      %mid_is_ok = icmp ne i32 %mid_ok, 0
+      br i1 %mid_is_ok, label %compare_mid, label %fail
+
+    compare_mid:
+      %less = icmp slt i64 %mid_value, %target
+      br i1 %less, label %move_low, label %move_high
+
+    move_low:
+      %low_plus = add i64 %mid, 1
+      br label %step
+
+    move_high:
+      br label %step
+
+    step:
+      %next_low = phi i64 [ %low_plus, %move_low ], [ %low, %move_high ]
+      %next_high = phi i64 [ %high, %move_low ], [ %mid, %move_high ]
+      br label %loop
+
+    choose:
+      %at_start = icmp eq i64 %low, 0
+      br i1 %at_start, label %read_low, label %check_end
+
+    check_end:
+      %at_end = icmp eq i64 %low, %count
+      br i1 %at_end, label %read_prev_only, label %read_pair
+
+    read_low:
+      %first_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 0)
+      ret %sollang.legacy_int_result %first_result
+
+    read_prev_only:
+      %last_index = sub i64 %count, 1
+      %last_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %last_index)
+      ret %sollang.legacy_int_result %last_result
+
+    read_pair:
+      %prev_index = sub i64 %low, 1
+      %prev_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %prev_index)
+      %next_result = call %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %low)
+      %prev_ok = extractvalue %sollang.legacy_int_result %prev_result, 1
+      %next_ok = extractvalue %sollang.legacy_int_result %next_result, 1
+      %prev_is_ok = icmp ne i32 %prev_ok, 0
+      %next_is_ok = icmp ne i32 %next_ok, 0
+      %both_ok = and i1 %prev_is_ok, %next_is_ok
+      br i1 %both_ok, label %compare_pair, label %fail
+
+    compare_pair:
+      %prev_value = extractvalue %sollang.legacy_int_result %prev_result, 0
+      %next_value = extractvalue %sollang.legacy_int_result %next_result, 0
+      %prev_diff = sub i64 %target, %prev_value
+      %next_diff = sub i64 %next_value, %target
+      %prefer_prev = icmp sle i64 %prev_diff, %next_diff
+      br i1 %prefer_prev, label %return_prev, label %return_next
+
+    return_prev:
+      ret %sollang.legacy_int_result %prev_result
+
+    return_next:
+      ret %sollang.legacy_int_result %next_result
+
+    fail:
+      %fail0 = insertvalue %sollang.legacy_int_result poison, i64 0, 0
+      %fail1 = insertvalue %sollang.legacy_int_result %fail0, i32 0, 1
+      ret %sollang.legacy_int_result %fail1
+    }
+    """ -> println
+    """
+    define internal void @sollang_legacy_int_require(i32 %status) {
+    entry:
+      %ok = icmp ne i32 %status, 0
+      br i1 %ok, label %done, label %failure
+    failure:
+    """ -> println
+    windows -> if { "  call void @ExitProcess(i32 1)" -> println } else { "  call void @exit(i32 1)" -> println }
+    """
+    unreachable
+    done:
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(functions.openIntWriterRef.module)_s$(functions.openIntWriterRef.symbol)(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      %ok = call i32 @sollang_legacy_int_open_write_i64_file(ptr %data, i64 %length)
+      call void @sollang_legacy_int_require(i32 %ok)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(functions.writeIntRef.module)_s$(functions.writeIntRef.symbol)(i32 %arg) {" -> println
+    """
+    entry:
+      %wide = sext i32 %arg to i64
+      %ok = call i32 @sollang_legacy_int_write_i64_file(i64 %wide)
+      call void @sollang_legacy_int_require(i32 %ok)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(functions.closeIntWriterRef.module)_s$(functions.closeIntWriterRef.symbol)() {" -> println
+    """
+    entry:
+      %ok = call i32 @sollang_legacy_int_close_write_i64_file()
+      call void @sollang_legacy_int_require(i32 %ok)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(functions.openIntReaderRef.module)_s$(functions.openIntReaderRef.symbol)(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      %ok = call i32 @sollang_legacy_int_platform_open_read_file(ptr %data, i64 %length)
+      call void @sollang_legacy_int_require(i32 %ok)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(functions.closeIntReaderRef.module)_s$(functions.closeIntReaderRef.symbol)() {" -> println
+    """
+    entry:
+      %ok = call i32 @sollang_legacy_int_platform_close_read_file()
+      call void @sollang_legacy_int_require(i32 %ok)
+      ret void
+    }
+    """ -> println
+    "define i32 @sollang_m$(functions.closestIntRef.module)_s$(functions.closestIntRef.symbol)(i32 %arg) {" -> println
+    """
+    entry:
+      %wide = sext i32 %arg to i64
+      %result = call %sollang.legacy_int_result @sollang_legacy_int_closest_i64_file(i64 %wide)
+      %status = extractvalue %sollang.legacy_int_result %result, 1
+      call void @sollang_legacy_int_require(i32 %status)
+      %value = extractvalue %sollang.legacy_int_result %result, 0
+      %narrow = trunc i64 %value to i32
+      ret i32 %narrow
+    }
+    """ -> println
+}
+
+emitWindowsLegacyIntegerRuntime declareRead: Bool, declareWrite: Bool, declareSeek: Bool -> Unit uses Console {
+    declareRead -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
+    declareWrite -> if { "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println }
+    declareSeek -> if { "declare dllimport i32 @SetFilePointerEx(ptr, i64, ptr, i32)" -> println }
+    """
+    @sollang_legacy_int_file_writer = internal global ptr null
+    @sollang_legacy_int_file_reader = internal global ptr null
+
+    define internal i32 @sollang_legacy_int_platform_open_write_file(ptr %path, i64 %len) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %copy_ok = call i32 @sollang_legacy_int_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+      %copy_is_ok = icmp ne i32 %copy_ok, 0
+      br i1 %copy_is_ok, label %open, label %fail
+
+    open:
+      %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 1073741824, i32 0, ptr null, i32 2, i32 128, ptr null)
+      %handle_int = ptrtoint ptr %handle to i64
+      %invalid = icmp eq i64 %handle_int, -1
+      br i1 %invalid, label %fail, label %success
+
+    success:
+      store ptr %handle, ptr @sollang_legacy_int_file_writer, align 8
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_write_file_bytes(ptr %data, i64 %len64) {
+    entry:
+      %handle = load ptr, ptr @sollang_legacy_int_file_writer, align 8
+      %has_handle = icmp ne ptr %handle, null
+      br i1 %has_handle, label %write, label %fail
+
+    write:
+      %written = alloca i32, align 4
+      %len = trunc i64 %len64 to i32
+      %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr %written, ptr null)
+      %written32 = load i32, ptr %written, align 4
+      %written64 = zext i32 %written32 to i64
+      %write_ok = icmp ne i32 %ok, 0
+      %full = icmp eq i64 %written64, %len64
+      %all_ok = and i1 %write_ok, %full
+      %result = zext i1 %all_ok to i32
+      ret i32 %result
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_close_write_file() {
+    entry:
+      %handle = load ptr, ptr @sollang_legacy_int_file_writer, align 8
+      %has_handle = icmp ne ptr %handle, null
+      br i1 %has_handle, label %close, label %fail
+
+    close:
+      %ok = call i32 @CloseHandle(ptr %handle)
+      %close_ok = icmp ne i32 %ok, 0
+      br i1 %close_ok, label %success, label %fail
+
+    success:
+      store ptr null, ptr @sollang_legacy_int_file_writer, align 8
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_open_read_file(ptr %path, i64 %len) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %copy_ok = call i32 @sollang_legacy_int_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+      %copy_is_ok = icmp ne i32 %copy_ok, 0
+      br i1 %copy_is_ok, label %open, label %fail
+
+    open:
+      %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 128, ptr null)
+      %handle_int = ptrtoint ptr %handle to i64
+      %invalid = icmp eq i64 %handle_int, -1
+      br i1 %invalid, label %fail, label %success
+
+    success:
+      store ptr %handle, ptr @sollang_legacy_int_file_reader, align 8
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal %sollang.legacy_int_result @sollang_legacy_int_platform_i64_file_count() {
+    entry:
+      %handle = load ptr, ptr @sollang_legacy_int_file_reader, align 8
+      %has_handle = icmp ne ptr %handle, null
+      br i1 %has_handle, label %size, label %fail
+
+    size:
+      %size_ptr = alloca i64, align 8
+      %ok = call i32 @GetFileSizeEx(ptr %handle, ptr %size_ptr)
+      %size_ok = icmp ne i32 %ok, 0
+      br i1 %size_ok, label %check, label %fail
+
+    check:
+      %bytes = load i64, ptr %size_ptr, align 8
+      %rem = urem i64 %bytes, 8
+      %aligned = icmp eq i64 %rem, 0
+      br i1 %aligned, label %success, label %fail
+
+    success:
+      %count = udiv i64 %bytes, 8
+      %ok0 = insertvalue %sollang.legacy_int_result poison, i64 %count, 0
+      %ok1 = insertvalue %sollang.legacy_int_result %ok0, i32 1, 1
+      ret %sollang.legacy_int_result %ok1
+
+    fail:
+      %fail0 = insertvalue %sollang.legacy_int_result poison, i64 0, 0
+      %fail1 = insertvalue %sollang.legacy_int_result %fail0, i32 0, 1
+      ret %sollang.legacy_int_result %fail1
+    }
+
+    define internal %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %index) {
+    entry:
+      %handle = load ptr, ptr @sollang_legacy_int_file_reader, align 8
+      %has_handle = icmp ne ptr %handle, null
+      br i1 %has_handle, label %seek, label %fail
+
+    seek:
+      %offset = mul i64 %index, 8
+      %seek_ok = call i32 @SetFilePointerEx(ptr %handle, i64 %offset, ptr null, i32 0)
+      %seek_is_ok = icmp ne i32 %seek_ok, 0
+      br i1 %seek_is_ok, label %read, label %fail
+
+    read:
+      %value_ptr = alloca i64, align 8
+      %read_bytes = alloca i32, align 4
+      %ok = call i32 @ReadFile(ptr %handle, ptr %value_ptr, i32 8, ptr %read_bytes, ptr null)
+      %read_ok = icmp ne i32 %ok, 0
+      %read_count = load i32, ptr %read_bytes, align 4
+      %read_full = icmp eq i32 %read_count, 8
+      %all_ok = and i1 %read_ok, %read_full
+      br i1 %all_ok, label %success, label %fail
+
+    success:
+      %value = load i64, ptr %value_ptr, align 8
+      %ok0 = insertvalue %sollang.legacy_int_result poison, i64 %value, 0
+      %ok1 = insertvalue %sollang.legacy_int_result %ok0, i32 1, 1
+      ret %sollang.legacy_int_result %ok1
+
+    fail:
+      %fail0 = insertvalue %sollang.legacy_int_result poison, i64 0, 0
+      %fail1 = insertvalue %sollang.legacy_int_result %fail0, i32 0, 1
+      ret %sollang.legacy_int_result %fail1
+    }
+
+    define internal i32 @sollang_legacy_int_platform_close_read_file() {
+    entry:
+      %handle = load ptr, ptr @sollang_legacy_int_file_reader, align 8
+      %has_handle = icmp ne ptr %handle, null
+      br i1 %has_handle, label %close, label %fail
+
+    close:
+      %ok = call i32 @CloseHandle(ptr %handle)
+      %close_ok = icmp ne i32 %ok, 0
+      br i1 %close_ok, label %success, label %fail
+
+    success:
+      store ptr null, ptr @sollang_legacy_int_file_reader, align 8
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+    """ -> println
+}
+
+emitLinuxLegacyIntegerRuntime declareRead: Bool, declareWrite: Bool, declareSeek: Bool, declareOpen: Bool, declareClose: Bool -> Unit uses Console {
+    declareRead -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+    declareWrite -> if { "declare i64 @write(i32, ptr, i64)" -> println }
+    declareSeek -> if { "declare i64 @lseek(i32, i64, i32)" -> println }
+    declareOpen -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+    declareClose -> if { "declare i32 @close(i32)" -> println }
+    """
+    @sollang_legacy_int_file_writer_fd = internal global i32 -1
+    @sollang_legacy_int_file_reader_fd = internal global i32 -1
+
+    define internal i32 @sollang_legacy_int_platform_open_write_file(ptr %path, i64 %len) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %copy_ok = call i32 @sollang_legacy_int_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+      %copy_is_ok = icmp ne i32 %copy_ok, 0
+      br i1 %copy_is_ok, label %open_file, label %fail
+
+    open_file:
+      %fd = call i32 @open(ptr %buf_ptr, i32 577, i32 420)
+      %ok = icmp sge i32 %fd, 0
+      br i1 %ok, label %success, label %fail
+
+    success:
+      store i32 %fd, ptr @sollang_legacy_int_file_writer_fd, align 4
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_write_file_bytes(ptr %data, i64 %len64) {
+    entry:
+      %fd = load i32, ptr @sollang_legacy_int_file_writer_fd, align 4
+      %has_fd = icmp sge i32 %fd, 0
+      br i1 %has_fd, label %write_file, label %fail
+
+    write_file:
+      %written = call i64 @write(i32 %fd, ptr %data, i64 %len64)
+      %ok1 = icmp sge i64 %written, 0
+      %ok2 = icmp eq i64 %written, %len64
+      %ok = and i1 %ok1, %ok2
+      %result = zext i1 %ok to i32
+      ret i32 %result
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_close_write_file() {
+    entry:
+      %fd = load i32, ptr @sollang_legacy_int_file_writer_fd, align 4
+      %has_fd = icmp sge i32 %fd, 0
+      br i1 %has_fd, label %close_file, label %fail
+
+    close_file:
+      %close_result = call i32 @close(i32 %fd)
+      %ok = icmp eq i32 %close_result, 0
+      br i1 %ok, label %success, label %fail
+
+    success:
+      store i32 -1, ptr @sollang_legacy_int_file_writer_fd, align 4
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal i32 @sollang_legacy_int_platform_open_read_file(ptr %path, i64 %len) {
+    entry:
+      %buf = alloca [260 x i8], align 1
+      %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+      %copy_ok = call i32 @sollang_legacy_int_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+      %copy_is_ok = icmp ne i32 %copy_ok, 0
+      br i1 %copy_is_ok, label %open_file, label %fail
+
+    open_file:
+      %fd = call i32 @open(ptr %buf_ptr, i32 0, i32 0)
+      %ok = icmp sge i32 %fd, 0
+      br i1 %ok, label %success, label %fail
+
+    success:
+      store i32 %fd, ptr @sollang_legacy_int_file_reader_fd, align 4
+      ret i32 1
+
+    fail:
+      ret i32 0
+    }
+
+    define internal %sollang.legacy_int_result @sollang_legacy_int_platform_i64_file_count() {
+    entry:
+      %fd = load i32, ptr @sollang_legacy_int_file_reader_fd, align 4
+      %has_fd = icmp sge i32 %fd, 0
+      br i1 %has_fd, label %size, label %fail
+
+    size:
+      %end = call i64 @lseek(i32 %fd, i64 0, i32 2)
+      %size_ok = icmp sge i64 %end, 0
+      br i1 %size_ok, label %check, label %fail
+
+    check:
+      %rem = urem i64 %end, 8
+      %aligned = icmp eq i64 %rem, 0
+      br i1 %aligned, label %success, label %fail
+
+    success:
+      %count = udiv i64 %end, 8
+      %ok0 = insertvalue %sollang.legacy_int_result poison, i64 %count, 0
+      %ok1 = insertvalue %sollang.legacy_int_result %ok0, i32 1, 1
+      ret %sollang.legacy_int_result %ok1
+
+    fail:
+      %fail0 = insertvalue %sollang.legacy_int_result poison, i64 0, 0
+      %fail1 = insertvalue %sollang.legacy_int_result %fail0, i32 0, 1
+      ret %sollang.legacy_int_result %fail1
+    }
+
+    define internal %sollang.legacy_int_result @sollang_legacy_int_platform_read_i64_at(i64 %index) {
+    entry:
+      %fd = load i32, ptr @sollang_legacy_int_file_reader_fd, align 4
+      %has_fd = icmp sge i32 %fd, 0
+      br i1 %has_fd, label %seek, label %fail
+
+    seek:
+      %offset = mul i64 %index, 8
+      %pos = call i64 @lseek(i32 %fd, i64 %offset, i32 0)
+      %seek_ok = icmp eq i64 %pos, %offset
+      br i1 %seek_ok, label %read_file, label %fail
+
+    read_file:
+      %value_ptr = alloca i64, align 8
+      %read_bytes = call i64 @read(i32 %fd, ptr %value_ptr, i64 8)
+      %read_ok = icmp eq i64 %read_bytes, 8
+      br i1 %read_ok, label %success, label %fail
+
+    success:
+      %value = load i64, ptr %value_ptr, align 8
+      %ok0 = insertvalue %sollang.legacy_int_result poison, i64 %value, 0
+      %ok1 = insertvalue %sollang.legacy_int_result %ok0, i32 1, 1
+      ret %sollang.legacy_int_result %ok1
+
+    fail:
+      %fail0 = insertvalue %sollang.legacy_int_result poison, i64 0, 0
+      %fail1 = insertvalue %sollang.legacy_int_result %fail0, i32 0, 1
+      ret %sollang.legacy_int_result %fail1
+    }
+
+    define internal i32 @sollang_legacy_int_platform_close_read_file() {
+    entry:
+      %fd = load i32, ptr @sollang_legacy_int_file_reader_fd, align 4
+      %has_fd = icmp sge i32 %fd, 0
+      br i1 %has_fd, label %close_file, label %fail
+
+    close_file:
+      %close_result = call i32 @close(i32 %fd)
+      %ok = icmp eq i32 %close_result, 0
+      br i1 %ok, label %success, label %fail
+
+    success:
+      store i32 -1, ptr @sollang_legacy_int_file_reader_fd, align 4
+      ret i32 1
+
+    fail:
       ret i32 0
     }
     """ -> println

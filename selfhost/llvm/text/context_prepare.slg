@@ -1240,7 +1240,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
     }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
-        runtimeSymbols -> llvmRuntime.emitWindows
+        runtimeSymbols -> llvmRuntime.emitWindows(not needsOwnedFileRuntime and not needsProcessCapture and not needsStandardInputSourceTextRuntime, not usesTextOutput and not capturesParallelOutput, not needsMappedBytesRuntime)
         needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitWindowsRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
     } else {
         needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneWindowsRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
@@ -1271,6 +1271,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesMappedBytesRuntime => needsMappedBytesRuntime
     context -> diagnostics.usesSocketRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketRuntime
     context -> diagnostics.usesSocketCompletionRuntimeWithReachability(state.frozenReachableFunctions) => needsSocketCompletionRuntime
     context -> diagnostics.usesDnsRuntimeWithReachability(state.frozenReachableFunctions) => needsDnsRuntime
@@ -1352,7 +1353,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
-        runtimeSymbols -> llvmRuntime.emitLinux
+        runtimeSymbols -> llvmRuntime.emitLinux(not (hasReadDeclaration or needsMouseEventsRuntime or needsProcessCapture or needsStandardInputSourceTextRuntime or needsIoCompletionRuntime), not (usesTextOutput or capturesParallelOutput or needsMouseEventsRuntime or needsIoCompletionRuntime), not (needsSourceTextRuntime or needsMappedBytesRuntime), not (needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime), not (hasCloseDeclaration or needsMouseEventsRuntime or needsProcessRuntime or needsOwnedFileRuntime or needsSourceTextRuntime or needsMappedBytesRuntime))
         needsAsyncRuntime -> if { runtimeSymbols -> asyncRuntime.emitLinuxRuntime(needsAsyncFileRuntime, needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
     } else {
         needsAsyncRuntime -> if { needsAsyncFileRuntime -> asyncRuntime.emitStandaloneLinuxRuntime(needsSocketCompletionRuntime, context -> usesReachableAsyncDiagnostics(state)) }
