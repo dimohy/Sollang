@@ -34,17 +34,21 @@ import sys.file as file
 import sys.runtime as runtime
 import sys.process as process
 
+# Entry and ordinary scheduling share the same resolved await identity used
+# by value emission. A blocking join remains observable without a resume point.
+isResolvedAwaitNode node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    node.kind == 5 and node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len) and node.astNode >= 0
+        -> if {
+            context.ranges[node.sourceModule] => range
+            node.astNode < range.astCount
+                -> if { context.awaitSourceByAst[range.astStart + node.astNode] -> return }
+        }
+    false
+}
+
 isAwaitSourceNode nodeIndex: Int, context: ref emitterContext.EmitContext -> Bool {
     nodeIndex >= 0 and nodeIndex < (context.ir -> len)
-        -> if {
-            context.ir[nodeIndex] => node
-            node.kind == 5 and node.sourceModule >= 0 and node.sourceModule < (context.ranges -> len) and node.astNode >= 0
-                -> if {
-                    context.ranges[node.sourceModule] => range
-                    node.astNode < range.astCount
-                        -> if { context.awaitSourceByAst[range.astStart + node.astNode] -> return }
-                }
-        }
+        -> if { context.ir[nodeIndex] -> isResolvedAwaitNode(context) -> return }
     false
 }
 

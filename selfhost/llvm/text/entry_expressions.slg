@@ -97,7 +97,7 @@ entryPartitionRecoveryEffectsReady nodeIndex: Int, routeIndex: Int, functionInde
     routeIndex < 0 -> if { true -> return }
     context.ir[nodeIndex] => node
     nodeIndex -> isMutablePlaceRead(functionIndex + 1, entryEnd, context, state) => capturesMutable
-    not (capturesMutable or (node -> isSchedulingValueCapture(context, state)) or node.kind == 6 or (node.kind == 17 and node.flags == 1) or node.kind == 24 or node.kind == 25 or (node -> isEntrySchedulingControl) or (node -> isSchedulingMutationIntrinsic))
+    not (capturesMutable or (node -> isSchedulingValueCapture(context, state)) or node.kind == 6 or (node.kind == 17 and node.flags == 1) or node.kind == 24 or node.kind == 25 or (node -> isEntrySchedulingControl) or (node -> isSchedulingMutationIntrinsic(context)))
         -> if { true -> return }
     true => ready!
     functionIndex + 1 => priorIndex!
@@ -106,7 +106,7 @@ entryPartitionRecoveryEffectsReady nodeIndex: Int, routeIndex: Int, functionInde
         not scheduled[priorIndex! - functionIndex - 1]
             and (priorIndex! -> plannedPartitionCallbackRoute(context, state)) == routeIndex
             and (prior -> sourceStart(context, state)) < (node -> sourceStart(context, state))
-            and (prior.kind == 6 or (prior.kind == 17 and prior.flags == 1) or prior.kind == 24 or prior.kind == 25 or (prior -> isEntrySchedulingControl) or (prior -> isSchedulingMutationIntrinsic))
+            and (prior.kind == 6 or (prior.kind == 17 and prior.flags == 1) or prior.kind == 24 or prior.kind == 25 or (prior -> isEntrySchedulingControl) or (prior -> isSchedulingMutationIntrinsic(context)))
             -> if {
                 NodeAncestorRequest { nodeIndex: nodeIndex, ownerIndex: priorIndex! } -> irDescendsFrom(context, state) => insidePrior
                 not insidePrior -> if { false => ready! }
@@ -169,7 +169,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
     functionIndex + 1 => entryEffectBarrierIndex!
     entryEffectBarrierIndex! < entryEnd -> while {
         context.ir[entryEffectBarrierIndex!] => entryEarlierEffect
-        (entryEarlierEffect -> isSchedulingValueCapture(context, state)) or (entryEarlierEffect -> typedIr.isConsoleRuntimeCall) or entryEarlierEffect.kind == 6 or (entryEarlierEffect -> isEntrySchedulingControl) or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or ((entryEarlierEffect -> isSchedulingMutationIntrinsic))
+        (entryEarlierEffect -> isSchedulingValueCapture(context, state)) or (entryEarlierEffect -> typedIr.isConsoleRuntimeCall) or entryEarlierEffect.kind == 6 or (entryEarlierEffect -> isEntrySchedulingControl) or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or ((entryEarlierEffect -> isSchedulingMutationIntrinsic(context)))
             -> if {
                 entryEarlierEffect.parent => entryEarlierParallelAncestor!
                 false => entryEarlierInsideParallelBranch!
@@ -702,7 +702,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                                             -> if {
                                                 entryMutableReadBarrierSearch! -> callMutatesBinding(entryMutableReadRoot!, functionIndex, context, state) => entryMutableReadBarrierMutatesBinding!
                                             }
-                                        not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch! - functionIndex - 1] and ((entryMutableReadBarrier -> isEntrySchedulingControl) or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 6 and entryMutableReadBarrierMutatesBinding!) or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or ((entryMutableReadBarrier -> isSchedulingMutationIntrinsic) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -256) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -253)) or (entryMutableReadBarrier.kind == 6 and (entryMutableReadBarrier -> typedIr.isSetMutationCall))) and (entryMutableReadBarrierSearch! -> entrySchedulingPrecedes(entryScheduleCandidate!, context, state))
+                                        not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch! - functionIndex - 1] and ((entryMutableReadBarrier -> isEntrySchedulingControl) or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 6 and entryMutableReadBarrierMutatesBinding!) or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or ((entryMutableReadBarrier -> isSchedulingMutationIntrinsic(context)) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -256) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -253)) or (entryMutableReadBarrier.kind == 6 and (entryMutableReadBarrier -> typedIr.isSetMutationCall))) and (entryMutableReadBarrierSearch! -> entrySchedulingPrecedes(entryScheduleCandidate!, context, state))
                                             -> if {
                                                 false => entryScheduleReady!
                                             }
@@ -710,7 +710,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                                     }
                                 }
                             }
-                        entryScheduleReady! and ((entryScheduleNode -> isSchedulingValueCapture(context, state)) or (entryScheduleNode -> typedIr.isConsoleRuntimeCall) or entryScheduleNode.kind == 6 or (entryScheduleNode -> isEntrySchedulingControl) or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or ((entryScheduleNode -> isSchedulingMutationIntrinsic) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -221) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -220) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -304) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -305) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -205) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -27)))
+                        entryScheduleReady! and ((entryScheduleNode -> isSchedulingValueCapture(context, state)) or (entryScheduleNode -> typedIr.isConsoleRuntimeCall) or entryScheduleNode.kind == 6 or (entryScheduleNode -> isEntrySchedulingControl) or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or ((entryScheduleNode -> isSchedulingMutationIntrinsic(context)) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -221) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -220) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -304) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -305) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -205) or (entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -27)))
                             -> if {
                                 true => entryRootEffect!
                                 entryScheduleCandidate! => entryEffectOrderingIndex!
@@ -728,7 +728,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                                                 entryEffectAncestor! => entryEffectOrderingIndex!
                                                 context.ir[entryEffectAncestor!].parent => entryEffectAncestor!
                                             } else {
-                                                (context.ir[entryEffectAncestor!] -> typedIr.isConsoleRuntimeCall) or (context.ir[entryEffectAncestor!].kind == 6 and not (context.ir[entryEffectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[entryEffectAncestor!] -> isEntrySchedulingControl) or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or ((context.ir[entryEffectAncestor!] -> isSchedulingMutationIntrinsic) or (context.ir[entryEffectAncestor!].kind == 9 and context.ir[entryEffectAncestor!].opcode == -205))
+                                                (context.ir[entryEffectAncestor!] -> typedIr.isConsoleRuntimeCall) or (context.ir[entryEffectAncestor!].kind == 6 and not (context.ir[entryEffectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[entryEffectAncestor!] -> isEntrySchedulingControl) or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or ((context.ir[entryEffectAncestor!] -> isSchedulingMutationIntrinsic(context)) or (context.ir[entryEffectAncestor!].kind == 9 and context.ir[entryEffectAncestor!].opcode == -205))
                                                     -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
                                             }
                                     }
@@ -754,7 +754,7 @@ planEntryExpressionOrder functionIndex: Int, entryEnd: Int, context: ref emitter
                                                         -> while {
                                                             context.ir[entryEarlierEffectAncestor!].kind == 19 or context.ir[entryEarlierEffectAncestor!].kind == 20
                                                                 -> if { true => entryEarlierInsideRegion! } else {
-                                                                    ((entryEarlierEffect -> isSchedulingValueCapture(context, state)) and (context.ir[entryEarlierEffectAncestor!] -> isSchedulingValueCapture(context, state))) or (context.ir[entryEarlierEffectAncestor!] -> typedIr.isConsoleRuntimeCall) or (context.ir[entryEarlierEffectAncestor!].kind == 6 and not (context.ir[entryEarlierEffectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[entryEarlierEffectAncestor!] -> isEntrySchedulingControl) or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or ((context.ir[entryEarlierEffectAncestor!] -> isSchedulingMutationIntrinsic))
+                                                                    ((entryEarlierEffect -> isSchedulingValueCapture(context, state)) and (context.ir[entryEarlierEffectAncestor!] -> isSchedulingValueCapture(context, state))) or (context.ir[entryEarlierEffectAncestor!] -> typedIr.isConsoleRuntimeCall) or (context.ir[entryEarlierEffectAncestor!].kind == 6 and not (context.ir[entryEarlierEffectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[entryEarlierEffectAncestor!] -> isEntrySchedulingControl) or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or ((context.ir[entryEarlierEffectAncestor!] -> isSchedulingMutationIntrinsic(context)))
                                                                         -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
                                                                 }
                                                         }

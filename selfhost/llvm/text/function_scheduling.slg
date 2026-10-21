@@ -228,16 +228,17 @@ needsIterationPredecessorCommit nodeIndex: Int, context: ref emitterContext.Emit
     false
 }
 
-isSchedulingMutationIntrinsic node: typedIr.TypedIrNode -> Bool {
-    node.kind == 44 or (node.kind == 9 and (node.opcode == -204 or node.opcode == -213
+isSchedulingMutationIntrinsic node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    (node -> isResolvedAwaitNode(context))
+        or ((node.kind == 6 or node.kind == 9) and (node.opcode -> typedIr.isFileRuntimeOpcode))
+        or node.kind == 44 or (node.kind == 9 and (node.opcode == -204 or node.opcode == -213
         or node.opcode == -223 or node.opcode == -303
         or node.opcode == -229 or node.opcode == -241 or node.opcode == -242
         or node.opcode == -246 or node.opcode == -247 or node.opcode == -250
         or node.opcode == -251 or node.opcode == -252 or node.opcode == -254
         or node.opcode == -255 or node.opcode == -257 or node.opcode == -271
         or node.opcode == -306 or node.opcode == -307
-        or (node.opcode <= -313 and node.opcode >= -318)
-        or (node.opcode -> typedIr.isAsyncFileOpcode) or node.opcode == -321))
+        or node.opcode == -321))
         or (node -> typedIr.isArrayExchangeIntrinsicCall)
         or (node -> typedIr.isOwnedContainerTransform)
         or ((node.kind == 6 or node.kind == 9) and (node.opcode -> typedIr.isRawArenaMutationOpcode))
@@ -349,25 +350,6 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                 schedulingSuspensionStatements! -> push(suspensionPoint.awaitIr -> schedulingStatementOwner(functionIndex, context))
             }
     }
-    # A blocking join is also a lexical boundary, including main and ordinary
-    # functions that have no coroutine suspend point. Resolve the authoritative
-    # await node and its owner instead of recognizing a name or adding spills.
-    expressionStart => joinIndex!
-    joinIndex! < functionEnd -> while {
-        (joinIndex! -> isAwaitSourceNode(context))
-            and not schedulingSuspensions![joinIndex! - expressionStart]
-            -> if {
-                context.ir[joinIndex!].parent => joinOwner!
-                joinOwner! >= 0 and context.ir[joinOwner!].kind != 0 and context.ir[joinOwner!].kind != 11
-                    -> while { context.ir[joinOwner!].parent => joinOwner! }
-                joinOwner! == functionIndex -> if {
-                    true => schedulingSuspensions![joinIndex! - expressionStart]
-                    schedulingSuspensionIndices! -> push(joinIndex!)
-                    schedulingSuspensionStatements! -> push(joinIndex! -> schedulingStatementOwner(functionIndex, context))
-                }
-            }
-        joinIndex! + 1 => joinIndex!
-    }
     # Control and logical containment are structural properties of the frozen
     # Typed IR. Compute them once; readiness revisits must not repeat the same
     # ancestor and condition scans for every scheduling pass.
@@ -447,7 +429,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
             or schedulingBarrier.kind == 24
             or schedulingBarrier.kind == 25
             or (schedulingBarrier.kind == 17 and schedulingBarrier.flags == 1)
-            or ((schedulingBarrier -> isSchedulingMutationIntrinsic) or (schedulingBarrier.kind == 9 and (schedulingBarrier.opcode == -205 or schedulingBarrier.opcode == -220 or schedulingBarrier.opcode == -221 or schedulingBarrier.opcode == -304 or schedulingBarrier.opcode == -305 or schedulingBarrier.opcode == -253 or schedulingBarrier.opcode == -256)))
+            or ((schedulingBarrier -> isSchedulingMutationIntrinsic(context)) or (schedulingBarrier.kind == 9 and (schedulingBarrier.opcode == -205 or schedulingBarrier.opcode == -220 or schedulingBarrier.opcode == -221 or schedulingBarrier.opcode == -304 or schedulingBarrier.opcode == -305 or schedulingBarrier.opcode == -253 or schedulingBarrier.opcode == -256)))
             -> if { schedulingBarrierIndices! -> push(schedulingBarrierIndex!) }
         schedulingBarrierIndex! + 1 => schedulingBarrierIndex!
     }
@@ -928,7 +910,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                                                     or mutableReadBarrier.kind == 25
                                                     or (mutableReadBarrier.kind == 6 and (mutableReadBarrierHasEffects or mutableReadBarrierMutatesBinding!))
                                                     or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)
-                                                    or ((mutableReadBarrier -> isSchedulingMutationIntrinsic) or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -253 or mutableReadBarrier.opcode == -256)))
+                                                    or ((mutableReadBarrier -> isSchedulingMutationIntrinsic(context)) or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -253 or mutableReadBarrier.opcode == -256)))
                                                     or (mutableReadBarrier.kind == 6 and (mutableReadBarrier -> typedIr.isSetMutationCall)))
                                                     and (mutableReadBarrier -> schedulingPrecedes(scheduleNode, context, state))
                                                     -> if {
@@ -942,7 +924,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                     # Checked indexing is observably ordered: moving its trap
                     # before an earlier control node can execute a source-level
                     # fallback that is unreachable after an early return.
-                    scheduleReady! and (schedulingSuspensions![scheduleCandidate! - expressionStart] or schedulingValueCaptures![scheduleCandidate! - expressionStart] or scheduleNode.kind == 6 or scheduleNode.kind == 15 or (scheduleNode -> isSchedulingControlEffect) or scheduleNode.kind == 23 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or ((scheduleNode -> isSchedulingMutationIntrinsic) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -27 or scheduleNode.opcode == -205 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -304 or scheduleNode.opcode == -305))))
+                    scheduleReady! and (schedulingSuspensions![scheduleCandidate! - expressionStart] or schedulingValueCaptures![scheduleCandidate! - expressionStart] or scheduleNode.kind == 6 or scheduleNode.kind == 15 or (scheduleNode -> isSchedulingControlEffect) or scheduleNode.kind == 23 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or ((scheduleNode -> isSchedulingMutationIntrinsic(context)) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -27 or scheduleNode.opcode == -205 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221 or scheduleNode.opcode == -304 or scheduleNode.opcode == -305))))
                         -> if {
                             true => rootEffect!
                             scheduleCandidate! => effectOrderingIndex!
@@ -963,7 +945,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                                             effectAncestor! => effectOrderingIndex!
                                             context.ir[effectAncestor!].parent => effectAncestor!
                                         } else {
-                                            (context.ir[effectAncestor!].kind == 6 and not (context.ir[effectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[effectAncestor!] -> isSchedulingControlEffect) or context.ir[effectAncestor!].kind == 23 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or ((context.ir[effectAncestor!] -> isSchedulingMutationIntrinsic) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -304 or context.ir[effectAncestor!].opcode == -305)))
+                                            (context.ir[effectAncestor!].kind == 6 and not (context.ir[effectAncestor!].opcode -> typedIr.isDirectIterationOpcode)) or (context.ir[effectAncestor!] -> isSchedulingControlEffect) or context.ir[effectAncestor!].kind == 23 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or ((context.ir[effectAncestor!] -> isSchedulingMutationIntrinsic(context)) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -220 or context.ir[effectAncestor!].opcode == -221 or context.ir[effectAncestor!].opcode == -304 or context.ir[effectAncestor!].opcode == -305)))
                                                 -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                                         }
                                 }
@@ -988,7 +970,7 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                                             # inside an earlier control can otherwise block a later
                                             # logical root forever even though that control already
                                             # owns and emits the bounds check.
-                                            not expressionScheduled![earlierEffectSearch - expressionStart] and (schedulingSuspensions![earlierEffectSearch - expressionStart] or schedulingValueCaptures![earlierEffectSearch - expressionStart] or earlierEffect.kind == 6 or (earlierEffect -> isSchedulingControlEffect) or earlierEffect.kind == 23 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect -> isSchedulingMutationIntrinsic)) and (earlierEffect -> schedulingPrecedes(context.ir[effectOrderingIndex!], context, state))
+                                            not expressionScheduled![earlierEffectSearch - expressionStart] and (schedulingSuspensions![earlierEffectSearch - expressionStart] or schedulingValueCaptures![earlierEffectSearch - expressionStart] or earlierEffect.kind == 6 or (earlierEffect -> isSchedulingControlEffect) or earlierEffect.kind == 23 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect -> isSchedulingMutationIntrinsic(context))) and (earlierEffect -> schedulingPrecedes(context.ir[effectOrderingIndex!], context, state))
                                                 -> if {
                                                     # A call producing an effect's source is its input,
                                                     # not a sibling ordered after that enclosing effect.
