@@ -92,6 +92,25 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
     contextualBinaryLiteralIndex! < (nodes -> len)
         -> while {
             nodes[contextualBinaryLiteralIndex!] => contextualBinary
+            # Subject ranges supply a declared argument context to both bounds,
+            # including a unary-minus carrier, just as the C# emitter does.
+            contextualBinary.kind == 31 and contextualBinary.parent >= 0
+                and contextualBinary.parent < (nodes -> len)
+                -> if {
+                    nodes[contextualBinary.parent] => rangeArm
+                    rangeArm.kind == 19 and rangeArm.operand0 == contextualBinaryLiteralIndex!
+                        and rangeArm.parent >= 0 and rangeArm.parent < (nodes -> len)
+                        -> if {
+                            nodes[rangeArm.parent] => rangeControl
+                            rangeControl.kind == 34 and rangeControl.operand0 >= 0
+                                and rangeControl.operand0 < (nodes -> len)
+                                -> if {
+                                    nodes[rangeControl.operand0] -> materializedReadPeer(frozenRecursiveSemanticTypes, recursiveTypeFlags) => rangeSubject
+                                    nodes -> sealNumericLiteralPeerContext(contextualBinary.operand0, rangeSubject)
+                                    nodes -> sealNumericLiteralPeerContext(contextualBinary.operand1, rangeSubject)
+                                }
+                        }
+                }
             (contextualBinary.opcode >= grammar.tokenIdPlus()
                 and contextualBinary.opcode <= grammar.tokenIdPercent())
                 => contextualBinaryArithmetic

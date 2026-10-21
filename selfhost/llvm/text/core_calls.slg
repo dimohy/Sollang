@@ -1318,16 +1318,6 @@ isStreamFunctionIr functionIr: Int, context: ref emitterContext.EmitContext, sta
         }
     stream!
 }
-isRangeFunctionIr functionIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
-    false => range!
-    context.ir[functionIr] => candidate
-    candidate.typeId >= 0 -> if {
-        context.types[candidate.typeId] => candidateType
-        candidateType.kind == 1 and candidateType.origin == 1 and candidateType.symbol == 25
-            -> if { true => range! }
-    }
-    range!
-}
 isRangeDeferCall callIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => deferCall!
     callIr >= 0 and callIr < (context.ir -> len)
@@ -2754,8 +2744,12 @@ comparisonReadIsFloat valueIndex: Int, context: ref emitterContext.EmitContext -
 }
 isComparisonReferenceName valueIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     context.ir[valueIndex] => value
-    value.kind == 5 and (value -> referenceValueTypeId(context, state)) >= 0
-        and value.parent >= 0 and (context.ir[value.parent] -> isValueComparison)
+    value.kind != 5 or (value -> referenceValueTypeId(context, state)) < 0
+        or value.parent < 0 or value.parent >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[value.parent] -> isValueComparison
+        -> if { true -> return }
+    value.parent -> isSubjectWhenRangeCondition(context.ir[value.parent].parent, context)
 }
 emitComparisonReferenceNameRead valueIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     valueIndex -> isComparisonReferenceName(context, state)
@@ -2772,6 +2766,20 @@ emitComparisonReferenceNameRead valueIndex: Int, ownerIndex: Int, whileIndex: In
 }
 writeComparisonOperandValue valueIndex: Int, ownerIndex: Int, whileIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[valueIndex] => value
+    # Subject-when arms reuse the value evaluated before their conditions.
+    # That value belongs to the outer flow, not to a loop's reload domain.
+    whileIndex >= 0 and whileIndex < (context.ir -> len)
+        and context.ir[whileIndex].kind == 19
+        and context.ir[whileIndex].parent >= 0
+        -> if {
+            context.ir[whileIndex].parent => subjectControlIndex
+            context.ir[subjectControlIndex].kind == 34
+                and context.ir[subjectControlIndex].operand0 == valueIndex
+                -> if {
+                    subjectControlIndex -> writeSubjectWhenValue(ownerIndex, context, state)
+                    return
+                }
+        }
     value -> isUserBlockScope -> if {
         valueIndex -> aggregateValueIndex(context, state) => resultIndex
         resultIndex != valueIndex -> if {
@@ -2801,6 +2809,23 @@ writeComparisonOperandValue valueIndex: Int, ownerIndex: Int, whileIndex: Int, c
                 } else { "%v$(valueIndex)" -> print }
             }
         }
+}
+writeSubjectWhenValue whenIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[whenIndex].operand0 => subjectIndex
+    (context.ir[subjectIndex] -> referenceValueTypeId(context, state)) >= 0
+        -> if { "%when$(whenIndex)_subject_read" -> print } else {
+            subjectIndex -> writeValue(ownerIndex, context, state)
+        }
+}
+
+writeSubjectWhenOperand whenIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[whenIndex].operand0 => subjectIndex
+    context.ir[subjectIndex] -> referenceValueTypeId(context, state) => readTypeId
+    readTypeId >= 0 -> if {
+        readTypeId -> writeAggregateFieldTypeId(context, state)
+        " " -> print
+        whenIndex -> writeSubjectWhenValue(ownerIndex, context, state)
+    } else { subjectIndex -> writeReadOperand(ownerIndex, context, state) }
 }
 emitComparisonTextProducer textIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[textIndex] => textNode
@@ -3009,17 +3034,21 @@ writeIntegerLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitC
 
 # Encode the destination width exactly, preserving signed zero and ties-to-even.
 writeFloatingLiteral node: typedIr.TypedIrNode, width: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    node -> sourceToken(context, state) => token
-    context.sources[node.sourceModule] -> slice(token.span.start, token.span.length) => literal
+    node.kind == 7 and node.opcode == grammar.tokenIdMinus() => negative
+    negative -> if { context.ir[node.operand0] } else { node } => literalNode
+    literalNode -> sourceToken(context, state) => token
+    context.sources[literalNode.sourceModule] -> slice(token.span.start, token.span.length) => literal
     literal -> floatingLiterals.encode(width) => encoding
     not encoding.valid -> if {
         "; sollang internal error: floating literal is not finite at its committed width" -> println
         process.exit(1)
     }
-    encoding -> floatingLiterals.write
+    negative -> if { encoding -> floatingLiterals.negate } else { encoding } -> floatingLiterals.write
 }
 
-writeNumericConversionOperand argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+# Value consumers use an existing reference read; place and call-ABI writers
+# retain the original pointer representation.
+writeReadOperand argumentIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[argumentIndex] => argument
     argument -> referenceValueTypeId(context, state) => readTypeId
     readTypeId >= 0 -> if {
@@ -3063,7 +3092,7 @@ emitBuiltinNumericConversion nodeIndex: Int, ownerIndex: Int, context: ref emitt
             } else { "add " -> print }
         }
     }
-    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
+    argumentIndex -> writeReadOperand(ownerIndex, context, state)
     targetWidth == inputWidth and not sourceIsFloat
         -> if {
             ", 0" -> println
@@ -3084,21 +3113,18 @@ emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitter
         -> if { 32 } else { 64 } => targetWidth
     argument.typeSymbol == 19 or argument.typeSymbol == 20
         -> if { 32 } else { 64 } => sourceWidth
-    argument.kind == 3 -> if {
-        # Integer-to-float conversion follows C#: parse at double width first.
-        sourceIsFloat -> if { sourceWidth } else { 64 } => literalWidth
-        literalWidth == targetWidth -> if { "freeze " -> print } else {
-            targetWidth < literalWidth -> if { "fptrunc " -> print } else { "fpext " -> print }
-        }
-        literalWidth == 32 -> if { "float " -> print } else { "double " -> print }
-        argument -> writeFloatingLiteral(literalWidth, context, state)
-        literalWidth != targetWidth -> if {
-            " to " -> print
+    argument.kind == 3 or (argument.kind == 7 and argument.opcode == grammar.tokenIdMinus()
+        and argument.operand0 >= 0 and argument.operand0 < (context.ir -> len)
+        and context.ir[argument.operand0].kind == 3) -> if {
+            # A direct literal takes the destination precision; computed operands
+            # retain their already rounded value through the casts below.
+            "freeze " -> print
             conversion -> writeIrType(context, state)
+            " " -> print
+            argument -> writeFloatingLiteral(targetWidth, context, state)
+            "" -> println
+            return
         }
-        "" -> println
-        return
-    }
     sourceIsFloat -> if {
         targetWidth == sourceWidth -> if { "freeze " -> print } else {
             targetWidth < sourceWidth -> if { "fptrunc " -> print } else { "fpext " -> print }
@@ -3107,7 +3133,7 @@ emitBuiltinFloatConversion nodeIndex: Int, ownerIndex: Int, context: ref emitter
         argument -> integerNodeSigned(context, state)
             -> if { "sitofp " -> print } else { "uitofp " -> print }
     }
-    argumentIndex -> writeNumericConversionOperand(ownerIndex, context, state)
+    argumentIndex -> writeReadOperand(ownerIndex, context, state)
     not sourceIsFloat or targetWidth != sourceWidth
         -> if {
             " to " -> print

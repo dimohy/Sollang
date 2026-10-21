@@ -1,5 +1,39 @@
 # Sollang session handoff
 
+## CURRENT USER HANDOFF — 2026-10-21 (checkpoint11488)
+
+User explicitly requested saving work for another session. Work is paused, not complete. Do not start builds/tests until the user resumes. This section supersedes all older checkpoints below. One agent only. Preserve the dirty worktree. No commit or push was requested or performed for this handoff. Do not edit/stage/delete `CODEX_RELOAD_HANDOFF_20261002.json`.
+
+### Start here
+
+1. Read AGENTS.md and docs/AI_SLG_BEST_PRACTICES.md; recall Slogs project entry `4f3e4b69-9a0d-4e46-a496-d1e5a0920196` and user-wide Korean terminology/reporting preferences separately.
+2. Read `artifacts/scratch/resume-20261006-owner-continuation22/session-handoff11488.json`, then actual result files referenced below. No whole-goal reset.
+3. Latest committed HEAD and local origin/v0.5 are `c435597bf4e7c2f0abbdc281eb17b1e6ff674355`; source commit `9a01541c432870a0a3f3e94f651e0abc53cb66f9`. Current uncommitted work includes source-inspection index, source-review11485 evidence, module-artifact-counts probe, and this handoff. Compiler implementation unchanged since the qualified batch.
+
+### Actual position
+
+- Stabilization closed363/649 (55.93%), candidate-fixed285, open1 C385. Last qualified focused batch C651/C652/C653:3/3 (100.00%), still candidates pending final gates.
+- Original0/14, source phase closure0/7, frozen execution0/2708, Stage2/Stage3 0/2 (all0.00%); frozen stdlib/runtime6/22 (27.27%). Required-platform full denominator unknown. No overall product percentage.
+- Physical source review180/211 (85.31%),31 remaining. Source-review11485 credited full LlvmEmitter.cs1098 lines and runtime_preamble.slg898 lines. module_artifact_types.slg1199 lines was fully read in previous context but is NOT yet credited; verify source pins and review evidence before advancing to181. These reads are not source7 closure.
+- Current producer M11442 `B/managed11442/bin/Sollang.Compiler.exe`; native V11466 `B/v11466/compiler-build01/compiler.exe`, where B is the scratch continuation directory above. Preserve reusable native products V9107/V11452/V11466. V11452 receipts and executable are V11466 birth inputs. V11409/V11423 were already retired; do not execute missing retired products.
+- Last qualification `scripts/contracts/evidence/C2026-10-21-651/qualification11477.json`; current-source proof originally357 inputs. Verify input fingerprints before reusing. Do not repeat passing batches absent changed dependencies or a new failure.
+
+### Immediate unfinished investigation (not a confirmed defect)
+
+- `scripts/probes/module-artifact-counts/overflow.slg` builds a valid empty typed-IR cache with real encodeExact, changes the inner typeWords field to2^32, recomputes canonical outer checksum, then calls public validateExact. Hypothesis: Int narrowing may incorrectly accept an oversized field. No compiler fix, no C654 registration, no confirmed SLG runtime result yet.
+- C# corresponding `IncrementalSemanticCache.CheckedCount(ulong)` rejects oversized values before narrowing. `B/count11486-csharp/result.json`:passed1/1, stable inputs and stopped processes; actual reflection output0,1,rejected,rejected,rejected.
+- `B/count11487-slg-baseline/result.json`:FAILED0/1, buildExit0, inputsStable=true, processesStopped=true. Failure is the probe's S001 warning at17:5: `UInt64(4294967296)` is already inferred; use `4294967296`. The harness rejected the warning BEFORE running probe.exe. Do not infer output0,0,0, or a compiler defect. Preserve raw failed output.
+- Old tool session64330 no longer exists. Actual result is terminal; no restart/kill needed. Process audit observed no compiler/probe/LLVM worker. Unrelated VS Code C# project-system dotnet BuildHost was left untouched.
+- Next: fix only the probe warning in source, format/check cheaply, then one fresh focused reproduction with existing M11442. Only if actually reproduced: compare C# guard with SLG validatePayload/module_artifact_types bounds, capture the root, and follow C# proof -> source decision comparison -> SLG change -> cheap grouped preflight -> one grouped native build -> focused pair. Do not preemptively start full compiler rebuild.
+
+### Remaining completion path and limits
+
+- Continue remaining31 physical files and C385 materialization decisions; review completion is not final phase closure. Historical registry11479 still fails on28 missing shaping evidence links, separate from runtime failures.
+- Once all units resolve, perform required fixed-source C#/SLG original14/source7/frozen2708/Stage2-3/stdlib22/platform gates. Preserve original expectations; justified equivalent-or-stronger oracle corrections are already authorized.
+- Prior report validator11483 had three policy/evidence failures, not a missing tool or compiler failure. Do not open a separate policy project. Read current Slogs schema before reporting; policies may have advanced.
+- Daybreak: user's screen showed Blue approved but account-security setup incomplete. Official guidance requires a compatible physical FIDO2 key for individual access. User chose to continue compiler work without setting it up. Do not repeat enrollment prompts or claim safeguards disabled. Exact platform flag cause is unknown; no bypass requested.
+- ArtifactLifecycle only removes verified, stable, stopped, owned generated products; retain sources/oracles/hashes/results/diagnostics and active consumers. Failed11487 is protected, not successful cleanup. Prior cleanup941358069 bytes remains recorded.
+
 ## CURRENT USER STOP CHECKPOINT — 2026-10-08
 
 Explicit user request: save a restart record for another session and stop. Observed UTC 2026-10-08T02:26:56.583061+00:00 (KST UTC+09:00). This checkpoint supersedes the historical 2026-10-05 checkpoint preserved below. The goal is paused, NOT completed. Do not start another build/test or resume until the user explicitly resumes. No subagents were used. Preserve the dirty worktree; no reset, revert, commit or push was performed for this pause.

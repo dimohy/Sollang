@@ -731,10 +731,19 @@ public indexOfHash hashes: [UInt64; ~], hash: UInt64 -> Int {
     hashes -> decodedHashIndex(hash)
 }
 
+signedFieldsFit words: [UInt64; ~], offset: Int -> Bool {
+    words[offset + 1] <= 4294967295 and words[offset + 2] <= 4294967295
+        and words[offset + 5] <= 4294967295 and words[offset + 10] <= 4294967295
+        and words[offset + 13] <= 4294967295
+}
+
 public validate words: [UInt64; ~], start: Int, count: Int -> Int {
     0 => status!
-    start < 0 or count < 0 or start + count * 14 > (words -> len)
+    start < 0 or count < 0 or start > (words -> len)
         -> if { 1 => status! }
+    status! == 0 -> if {
+        count > ((words -> len) - start) / 14 -> if { 1 => status! }
+    }
     UInt64(0) => previousHash!
     0 => recordIndex!
     status! == 0 and recordIndex! < count -> while {
@@ -749,6 +758,8 @@ public validate words: [UInt64; ~], start: Int, count: Int -> Int {
         words[offset + 6] == 0 and words[offset + 7] != 0
             -> if { 3 => status! }
         words[offset + 8] == 0 and words[offset + 9] != 0
+            -> if { 3 => status! }
+        status! == 0 and not (words -> signedFieldsFit(offset))
             -> if { 3 => status! }
         words[offset + 7] => firstReferenceHash
         words[offset + 9] => secondReferenceHash
@@ -769,18 +780,12 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
     9 => start
     0 => count!
     0 => status!
-    (words -> len) >= 6 -> if {
-        words[5] <= 9223372036854775807 -> if { Int(words[5]) => count! } else { 1 => status! }
+    (words -> len) >= start -> if {
+        words[5] <= UInt64(((words -> len) - start) / 14)
+            -> if { Int(words[5]) => count! } else { 1 => status! }
     } else { 1 => status! }
     [typeIds.SemanticType; ~] => types!
     [UInt64; ~] => hashes!
-    status! == 0 -> if { count! < 0 -> if { 1 => status! } }
-    status! == 0 -> if { start > (words -> len) -> if { 1 => status! } }
-    0 => availableWords!
-    status! == 0 -> if { (words -> len) - start => availableWords! }
-    0 => maximumCount!
-    status! == 0 -> if { availableWords! / 14 => maximumCount! }
-    status! == 0 -> if { count! > maximumCount! -> if { 1 => status! } }
     UInt64(0) => previousHash!
     0 => validationIndex!
     status! == 0 and validationIndex! < count! -> while {
@@ -795,6 +800,8 @@ public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> Dec
         words[validationOffset + 6] == 0 and words[validationOffset + 7] != 0
             -> if { 3 => status! }
         words[validationOffset + 8] == 0 and words[validationOffset + 9] != 0
+            -> if { 3 => status! }
+        status! == 0 and not (words -> signedFieldsFit(validationOffset))
             -> if { 3 => status! }
         words[validationOffset + 7] => firstValidationHash
         words[validationOffset + 9] => secondValidationHash

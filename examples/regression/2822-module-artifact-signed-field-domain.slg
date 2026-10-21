@@ -1,0 +1,33 @@
+namespace sollang.compiler.ir.module_artifact_types
+
+import sollang.compiler.semantic.modules as modules
+
+main {
+    [UInt64; ~] => words!
+    1..23 -> each { words! -> push(0) }
+    1 => words![5]
+    2 => words![10]
+    1 => words![14]
+    words! -> recordHashAt(9) => words![9]
+    words! -> validate(9, 1) -> println
+
+    [UInt64(4294967296), 8589934591, 18446744073709551615] => oversized
+    [1, 2, 5, 10, 13] => signedFields
+    0 => rejected!
+    oversized -> each value {
+        signedFields -> each field {
+            words![9 + field] => saved
+            value => words![9 + field]
+            words! -> recordHashAt(9) => words![9]
+            words! -> validate(9, 1) => validation
+            validation == 3 -> if { rejected! + 1 => rejected! }
+            saved => words![9 + field]
+        }
+    }
+    rejected! -> println
+    words! -> recordHashAt(9) => words![9]
+    words! -> decode([modules.ModuleIdentity; ~]) => restored
+    restored.status -> println
+    2147483647 -> signedWord -> signedValue -> println
+    -2147483648 -> signedWord -> signedValue -> println
+}

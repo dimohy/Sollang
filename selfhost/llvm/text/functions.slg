@@ -41,27 +41,39 @@ emitFoldRoleValue valueIndex: Int, ownerIndex: Int, context: ref emitterContext.
 emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[expressionIndex] => expression
     context.ir[expression.operand0] => foldSource
+    foldSource -> typeQueries.isRange(context) => isRangeFold
+    foldSource -> effectiveTypeId(context, state) => foldStorageTypeId
+    context.types -> typeIds.materializedReadTypeId(foldStorageTypeId) => foldReadTypeId
+    "  %fold$(expressionIndex)_source = " -> print
+    (foldSource -> referenceValueTypeId(context, state)) >= 0
+        and not (expression.operand0 -> referenceParameterValueIsMaterialized(functionIndex, context, state))
+        -> if {
+            "load " -> print
+            foldReadTypeId -> writeAggregateFieldTypeId(context, state)
+            ", ptr " -> print
+            expression.operand0 -> writeValue(functionIndex, context, state)
+            ", align $(context.typeAligns[foldReadTypeId])" -> println
+        } else {
+            "freeze " -> print
+            expression.operand0 -> writeReadOperand(functionIndex, context, state)
+            "" -> println
+        }
     "  %fold$(expressionIndex)_acc_slot = alloca i32, align 4" -> println
-    foldSource.kind == 31 -> if {
+    isRangeFold -> if {
+        "  %fold$(expressionIndex)_first = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 0" -> println
+        "  %fold$(expressionIndex)_last = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 1" -> println
         "  %fold$(expressionIndex)_item_slot = alloca i32, align 4" -> println
-        "  store i32 " -> print
-        foldSource.operand0 -> writeValue(functionIndex, context, state)
-        ", ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+        "  store i32 %fold$(expressionIndex)_first, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
     } else {
-        foldSource -> effectiveTypeId(context, state) => foldSourceTypeId
-        foldSourceTypeId >= 0 and (context.types[foldSourceTypeId].kind == 2 or context.types[foldSourceTypeId].kind == 4) => foldSourceIsView
+        context.types[foldReadTypeId].kind == 2 or context.types[foldReadTypeId].kind == 4 => foldSourceIsView
         "  %fold$(expressionIndex)_data = extractvalue " -> print
         foldSourceIsView
             -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
-        " " -> print
-        expression.operand0 -> writeValue(functionIndex, context, state)
-        ", 0" -> println
+        " %fold$(expressionIndex)_source, 0" -> println
         "  %fold$(expressionIndex)_length = extractvalue " -> print
         foldSourceIsView
             -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
-        " " -> print
-        expression.operand0 -> writeValue(functionIndex, context, state)
-        ", 1" -> println
+        " %fold$(expressionIndex)_source, 1" -> println
         "  %fold$(expressionIndex)_index_slot = alloca i64, align 8" -> println
         "  store i64 0, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
     }
@@ -70,14 +82,9 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
     "  br label %fold$(expressionIndex)_header" -> println
     "fold$(expressionIndex)_header:" -> println
-    foldSource.kind == 31 -> if {
+    isRangeFold -> if {
         "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
-        "  %fold$(expressionIndex)_done = icmp " -> print
-        foldSource.opcode == grammar.tokenIdRangeUntil()
-            -> if { "sge" -> print } else { "sgt" -> print }
-        " i32 %fold$(expressionIndex)_item, " -> print
-        foldSource.operand1 -> writeValue(functionIndex, context, state)
-        "" -> println
+        "  %fold$(expressionIndex)_done = icmp sgt i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
     } else {
         "  %fold$(expressionIndex)_index = load i64, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
         "  %fold$(expressionIndex)_done = icmp eq i64 %fold$(expressionIndex)_index, %fold$(expressionIndex)_length" -> println
@@ -85,7 +92,7 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     "  br i1 %fold$(expressionIndex)_done, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_body" -> println
     "fold$(expressionIndex)_body:" -> println
     "  %fold$(expressionIndex)_acc = load i32, ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
-    foldSource.kind != 31 -> if {
+    not isRangeFold -> if {
         "  %fold$(expressionIndex)_item_ptr = getelementptr i32, ptr %fold$(expressionIndex)_data, i64 %fold$(expressionIndex)_index" -> println
         "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_ptr, align 4" -> println
     }
@@ -105,15 +112,10 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
     "  store i32 " -> print
     foldBodyResult -> writeValue(functionIndex, context, state)
     ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
-    foldSource.kind == 31 -> if {
-        foldSource.opcode != grammar.tokenIdRangeUntil()
-            -> if {
-                "  %fold$(expressionIndex)_last = icmp sge i32 %fold$(expressionIndex)_item, " -> print
-                foldSource.operand1 -> writeValue(functionIndex, context, state)
-                "" -> println
-                "  br i1 %fold$(expressionIndex)_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
-                "fold$(expressionIndex)_advance:" -> println
-            }
+    isRangeFold -> if {
+        "  %fold$(expressionIndex)_at_last = icmp sge i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
+        "  br i1 %fold$(expressionIndex)_at_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
+        "fold$(expressionIndex)_advance:" -> println
         "  %fold$(expressionIndex)_next = add i32 %fold$(expressionIndex)_item, 1" -> println
         "  store i32 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
     } else {

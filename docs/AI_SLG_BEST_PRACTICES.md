@@ -96,6 +96,8 @@ Boolean-condition and subject-style `when` share the same all-arms-return
 termination rule. A nested selection that returns on every path produces no
 continuing value; enclosing control emission must preserve that termination
 rather than storing a result or creating a merge edge.
+Read a readonly integer subject through its canonical value type in both
+relational and range arms, preserving its width, signedness, and reference ABI.
 Keep distinct AST grammar identities disjoint. Registered expression kinds and
 their semantic consumers follow `scripts/contracts/ast-expression-kinds.json`;
 run `scripts/verify-ast-expression-kind-contract.py` before compiler generation.
@@ -1164,7 +1166,10 @@ An `each` role is checked using its iterable's element type, including inside
 `$name`; a nominal element without supported display behavior is rejected.
 Numeric conversions inside `$(expression)` accept numeric targets and operands,
 including `Float`/`Float32` and `Float64`/`Double`; `Bool(value)` is not a numeric
-conversion. Convert a floating-point intermediate to a supported integer
+conversion. A direct numeric literal takes the floating destination precision;
+an already computed operand keeps its committed rounding before conversion.
+Apply the same rule to decimal, exponent, and negated literals inside and
+outside interpolation. Convert a floating-point intermediate to a supported integer
 display type when interpolating it. Floating `+`, `-`, `*`, and `/` retain their
 operand type; `%` requires integers. A `Float32` result converted to `Int` still
 requires a numeric conversion despite both values having 32-bit storage.
@@ -1256,6 +1261,12 @@ Use subject-style `when` when one value is compared against variants, values,
 or ranges. Keep enum and protocol dispatch exhaustive; do not add a broad
 `else` merely to survive future variants.
 
+Range bounds may be names, member reads, or calls without extra grouping:
+`lower()..upper()` is a numeric condition, not an enum pattern. Evaluate the
+subject once; for each reached range arm, evaluate the lower bound and then
+the upper bound once, even when the lower comparison is false. Read borrowed
+scalar subjects and bounds as values while retaining their reference ABI.
+
 Do not translate three or more related tests into an `if`/`else` ladder. Flow
 the shared subject once so it is evaluated once and the decision reads as data:
 
@@ -1316,6 +1327,12 @@ interpolation.
 Integer ranges, fixed or growable integer arrays, and readonly `[Int]` views
 are valid fold inputs. Empty inputs return the initial accumulator; borrow a
 named array directly through a readonly parameter instead of cloning it.
+Use a named `Range`, a `Range` parameter, or a function returning `Range`
+directly. The source is evaluated once; do not rewrite it as literal endpoints
+or mutable loop state to work around input classification.
+Readonly range and integer-array references are valid fold sources, and a
+readonly `Range` reference can flow directly to `each`. Keep the borrow intact
+instead of cloning its storage or adding a conversion to obtain its value.
 
 An `each` role uses the element type of its source collection, including a
 collection returned by an imported function. Access record fields directly;

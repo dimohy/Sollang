@@ -1,0 +1,42 @@
+namespace sollang.compiler.ir.module_artifacts
+
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.ir.module_artifact_types as artifactTypes
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+
+main {
+    [typed.TypedIrNode; ~] => nodes
+    [Text; ~] => sources
+    [typeIds.SemanticType; ~] => types
+    nodes -> encodeExact(sources, types) => encoded
+    [UInt64; ~] => words!
+    encoded.words -> each word { words! -> push(word) }
+    words! -> validateExact => original
+    original.status -> println
+    Int(words![4]) => payload
+    [UInt64(2147483647), 2147483648, 4294967296, 18446744073709551615] => oversized
+    0 => rejected!
+    oversized -> each value {
+        3..6 -> each field {
+            value => words![payload + field]
+            words! -> checksum(6) => words![5]
+            words! -> validateExact => validation
+            validation.status == 11 -> if { rejected! + 1 => rejected! }
+            0 => words![payload + field]
+        }
+    }
+    rejected! -> println
+
+    [UInt64; ~] => typeWords!
+    1..9 -> each { typeWords! -> push(0) }
+    0 => rejectedTypes!
+    oversized -> each value {
+        value => typeWords![5]
+        typeWords! -> artifactTypes.decode([modules.ModuleIdentity; ~]) => decoded
+        decoded.status == 1 and (decoded.types -> len) == 0
+            -> if { rejectedTypes! + 1 => rejectedTypes! }
+    }
+    rejectedTypes! -> println
+    typeWords! -> artifactTypes.validate(0, 2147483647) -> println
+}

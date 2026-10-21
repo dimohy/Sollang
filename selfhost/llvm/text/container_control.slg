@@ -1149,6 +1149,7 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                 valueTask > 0 -> if {
                                     valueTask - 1 => valueNodeIndex
                                     context.ir[valueNodeIndex] => valueNode
+                                    valueNodeIndex -> isSubjectWhenRangeCondition(whileIndex, context) => subjectRangeCondition
                                     false => valueProvidedByEntry!
                                     0 => entryValueSearch!
                                     entryValueSearch! < (entryValueNodes! -> len) and not valueProvidedByEntry!
@@ -1162,10 +1163,10 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                         0 - valueNodeIndex - 1 => emitValueTask
                                         valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
                                         valueTaskSize! + 1 => valueTaskSize!
-                                        (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 14 or valueNode.kind == 15 or valueNode.kind == 18 or valueNode.kind == 12 or valueNode.kind == 26 or valueNode.kind == 27 or valueNode.kind == 35)
+                                        (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 14 or valueNode.kind == 15 or valueNode.kind == 18 or valueNode.kind == 12 or valueNode.kind == 26 or valueNode.kind == 27 or valueNode.kind == 35 or subjectRangeCondition)
                                             and not (valueNode.kind == 8 and (valueNode.opcode == -24 or valueNode.opcode == -25))
                                             -> if {
-                                                (valueNode.kind == 8 or valueNode.kind == 15 or ((valueNode.kind == 9 or valueNode.kind == 6) and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0
+                                                (valueNode.kind == 8 or valueNode.kind == 15 or subjectRangeCondition or ((valueNode.kind == 9 or valueNode.kind == 6) and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0
                                                     -> if {
                                                         valueNode.operand1 => secondValueIndex!
                                                         (valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -202
@@ -1226,6 +1227,8 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                 } else {
                                     0 - valueTask - 1 => valueNodeIndex
                                     context.ir[valueNodeIndex] => valueNode
+                                    valueNodeIndex -> isSubjectWhenRangeCondition(whileIndex, context)
+                                        -> if { valueNodeIndex -> emitSubjectWhenRangeCondition(whileIndex, ownerIndex, context, state) }
                                     valueNode -> isUserBlockScope -> if {
                                         valueNodeIndex -> emitRegion(emissionOrder, context, state)
                                     }

@@ -926,23 +926,10 @@ internal sealed partial class LlvmEmitter
             return true;
         }
         if (IsFloatType(targetType)
-            && TryGetIntegerLiteralText(expression.Arguments[0], out var floatingIntegerLiteral))
+            && TryGetNumericLiteralText(expression.Arguments[0], out var floatingLiteral))
         {
-            if (!double.TryParse(floatingIntegerLiteral, NumberStyles.Float, CultureInfo.InvariantCulture,
-                    out var literalValue)
-                || !double.IsFinite(literalValue))
-            {
-                throw new SollangException("numeric conversion floating-point literal is out of range");
-            }
-            var constant = literalValue.ToString("0.0################E+00", CultureInfo.InvariantCulture);
-            if (targetType == BoundType.Float64)
-            {
-                value = new RuntimeFloat(targetType, constant);
-                return true;
-            }
-            var truncated = NextTemp("numeric_convert");
-            EmitAssign(truncated, $"fptrunc double {constant} to float");
-            value = new RuntimeFloat(targetType, truncated);
+            value = new RuntimeFloat(targetType, FormatLlvmFloatingLiteral(
+                floatingLiteral, targetType, expression.Arguments[0].Line, expression.Arguments[0].Column));
             return true;
         }
         var source = EmitExpression(expression.Arguments[0]);

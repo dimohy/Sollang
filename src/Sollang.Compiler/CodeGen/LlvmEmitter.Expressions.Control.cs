@@ -91,26 +91,14 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitDivideExpression(DivideExpression expression)
     {
-        var left = EmitExpression(expression.Left);
-        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
-        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
-        {
-            right = EmitExpression(expression.Right);
-            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
-        }
+        var (left, right) = EmitBinaryOperands(expression.Left, expression.Right);
         var integerOp = IsSignedIntegerType(left.Type) ? "sdiv" : "udiv";
         return EmitNumericBinary(left, right, integerOp, "fdiv", "div");
     }
 
     private RuntimeValue EmitModuloExpression(ModuloExpression expression)
     {
-        var left = EmitExpression(expression.Left);
-        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
-        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
-        {
-            right = EmitExpression(expression.Right);
-            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
-        }
+        var (left, right) = EmitBinaryOperands(expression.Left, expression.Right);
         var integerOp = IsSignedIntegerType(left.Type) ? "srem" : "urem";
         return EmitNumericBinary(left, right, integerOp, "frem", "mod");
     }
@@ -139,13 +127,7 @@ internal sealed partial class LlvmEmitter
         string floatOperation,
         string prefix)
     {
-        var left = EmitExpression(leftExpression);
-        var right = EmitFunctionArgumentExpression(rightExpression, left.Type);
-        if (left.Type != right.Type && TryGetNumericLiteralText(leftExpression, out _))
-        {
-            right = EmitExpression(rightExpression);
-            left = EmitFunctionArgumentExpression(leftExpression, right.Type);
-        }
+        var (left, right) = EmitBinaryOperands(leftExpression, rightExpression);
         if (left.Type != right.Type)
         {
             throw new SollangException(
@@ -204,21 +186,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeBool EmitCompareExpression(CompareExpression expression)
     {
-        var left = EmitExpression(expression.Left);
-        if (left is RuntimeFormattedText or RuntimeTextChoice)
-        {
-            left = EmitTransientText(left);
-        }
-        var right = EmitFunctionArgumentExpression(expression.Right, left.Type);
-        if (right is RuntimeFormattedText or RuntimeTextChoice)
-        {
-            right = EmitTransientText(right);
-        }
-        if (left.Type != right.Type && TryGetNumericLiteralText(expression.Left, out _))
-        {
-            right = EmitExpression(expression.Right);
-            left = EmitFunctionArgumentExpression(expression.Left, right.Type);
-        }
+        var (left, right) = EmitBinaryOperands(expression.Left, expression.Right);
         if (left is RuntimeInt leftInt && right is RuntimeInt rightInt)
         {
             return EmitIntegerComparison(leftInt, expression.Operator, rightInt);
@@ -255,6 +223,29 @@ internal sealed partial class LlvmEmitter
             return new RuntimeBool(result);
         }
         throw new SollangException("comparison operands must have the same numeric runtime type");
+    }
+
+    private (RuntimeValue Left, RuntimeValue Right) EmitBinaryOperands(Expression leftExpression, Expression rightExpression)
+    {
+        // A numeric literal has no effects. Its single evaluated peer supplies
+        // the width before literal emission, including a nested numeric peer.
+        if (TryGetNumericLiteralText(leftExpression, out _))
+        {
+            var peer = EmitExpression(rightExpression);
+            return (EmitFunctionArgumentExpression(leftExpression, peer.Type), peer);
+        }
+
+        var left = EmitExpression(leftExpression);
+        if (left is RuntimeFormattedText or RuntimeTextChoice)
+        {
+            left = EmitTransientText(left);
+        }
+        var right = EmitFunctionArgumentExpression(rightExpression, left.Type);
+        if (right is RuntimeFormattedText or RuntimeTextChoice)
+        {
+            right = EmitTransientText(right);
+        }
+        return (left, right);
     }
 
     private RuntimeBool EmitIntegerComparison(RuntimeInt left, ComparisonOperator comparisonOperator, RuntimeInt right)
@@ -560,15 +551,19 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeInt EmitFoldExpression(FoldExpression expression)
     {
-        return expression.Source is RangeExpression range
+        var source = EmitExpression(expression.Source);
+        return source is RuntimeStruct { Type: BoundType.Range } range
             ? EmitRangeFoldExpression(expression, range)
-            : EmitArrayFoldExpression(expression);
+            : EmitArrayFoldExpression(expression, source);
     }
 
-    private RuntimeInt EmitRangeFoldExpression(FoldExpression expression, RangeExpression range)
+    private RuntimeInt EmitRangeFoldExpression(FoldExpression expression, RuntimeStruct range)
     {
-        var start = EmitIntExpression(range.Start);
-        var end = EmitIntExpression(range.End);
+        var llvmType = LlvmStructType(BoundType.Range);
+        var start = NextTemp("fold_range_start");
+        EmitAssign(start, $"extractvalue {llvmType} {range.ValueName}, 0");
+        var end = NextTemp("fold_range_end");
+        EmitAssign(end, $"extractvalue {llvmType} {range.ValueName}, 1");
         var initial = EmitIntExpression(expression.Initial);
         var bodyLabel = NextLabel("fold_body");
         var continueLabel = NextLabel("fold_continue");
@@ -577,13 +572,13 @@ internal sealed partial class LlvmEmitter
         var nextItem = NextTemp("fold_next");
         var initialDone = NextTemp("fold_done");
 
-        EmitCompare(initialDone, range.IsEndExclusive ? "sge" : "sgt", "i32", start.ValueName, end.ValueName);
+        EmitCompare(initialDone, "sgt", "i32", start, end);
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
         var item = NextTemp(expression.ItemName);
-        EmitPhi(item, "i32", (start.ValueName, entryLabel), (nextItem, continueLabel));
+        EmitPhi(item, "i32", (start, entryLabel), (nextItem, continueLabel));
 
         var nextAccumulator = NextTemp("fold_acc_next");
         var accumulator = NextTemp(expression.AccumulatorName);
@@ -608,7 +603,7 @@ internal sealed partial class LlvmEmitter
         var done = NextTemp("fold_done");
         // Inclusive iteration ends on the current last item, before a wrapped
         // next item could re-enter a range whose end is Int.MaxValue.
-        EmitCompare(done, "sge", "i32", range.IsEndExclusive ? nextItem : item, end.ValueName);
+        EmitCompare(done, "sge", "i32", item, end);
         EmitConditionalBranch(done, endLabel, bodyLabel);
 
         EmitLabel(endLabel);
@@ -618,9 +613,8 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(result);
     }
 
-    private RuntimeInt EmitArrayFoldExpression(FoldExpression expression)
+    private RuntimeInt EmitArrayFoldExpression(FoldExpression expression, RuntimeValue source)
     {
-        var source = EmitExpression(expression.Source);
         var (pointer, length, staticLength) = source switch
         {
             RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, null),

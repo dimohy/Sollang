@@ -596,6 +596,8 @@ Notes:
 - `value -> when { >= limit => value else => fallback }` is the subject-value
   shorthand for ordered comparisons against one value. The subject value is
   evaluated once.
+  A readonly integer reference is read as its integer value; relational and
+  range arms retain that value's width and signedness.
 - `value -> when { start..end => value else => fallback }` checks inclusive
   integer ranges against the subject value. Half-open `..<` uses the same
   subject-arm shape.
@@ -1042,6 +1044,15 @@ has no canonical left operand. Final Typed-IR projection repairs each arm from
 its explicit arm-to-control parentage rather than assuming every arm remains
 reachable from a sibling chain. The kind-59 AST child keeps enum patterns out
 of this binary normalization.
+
+Numeric subject range conditions accept expression bounds, including names,
+member reads, and calls, without additional grouping. A complete range
+condition takes precedence over an enum-pattern prefix. The subject is read
+once before arm selection. Each reached range arm evaluates its lower bound
+then its upper bound once before combining both comparisons; a false lower
+comparison does not suppress upper-bound effects. Reference-backed scalar
+subjects and bounds use their canonical scalar reads without changing the
+reference storage ABI.
 
 S014 is a blocking compiler-integrity diagnostic when a member-read node has no
 canonical base operand. A resolved field type alone is insufficient: ownership,
@@ -3539,6 +3550,11 @@ runtime range checks. An integer-shaped literal in an explicit integer
 conversion is checked and emitted at the destination width, even when it
 exceeds the default `Int` range. A computed same-width integer conversion
 checks its destination range and then preserves the original value.
+A numeric literal in an explicit floating-point conversion is encoded directly
+at the destination `Float32` or `Float64` precision, including decimal,
+exponent, and negated literals. Converting a computed floating-point value
+preserves the precision already committed to that operand before widening or
+narrowing it. These rules also apply inside interpolation expressions.
 An explicit numeric conversion accepts exactly one
 numeric operand. A nonnumeric operand is a semantic error, including when the
 conversion appears inside text interpolation; code generation does not decide
@@ -5437,6 +5453,17 @@ the loop executes zero times.
 } -> total
 ```
 
+Range inputs may be literals, named values, parameters, or function results.
+The source is evaluated once before iteration. All forms consume the same
+normalized inclusive pair of `Int` endpoints; a half-open range is normalized
+when its value is created. Iteration stops at the final item even when that
+endpoint is the maximum `Int`. Other concrete source types are rejected at the source
+expression location before code generation.
+A readonly range or integer-array reference is read as its canonical value
+before folding. Its storage remains borrowed; this introduces no ownership
+transfer or implicit collection clone. Direct range `each` likewise reads a
+readonly `Range` reference before iteration.
+
 The first expression after `fold` is the initial accumulator value. An empty
 array or range returns that initial value without evaluating the body. The first
 name is the accumulator binding inside the block and the second name is the
@@ -5790,6 +5817,13 @@ Unsupported output targets must fail at compile time with a clear diagnostic.
 They must not silently fall back to another backend.
 
 ## LLVM Lowering Direction
+
+Internal function symbols must preserve canonical function identity, including
+the distinction between namespace separators and identifier underscores.
+Replacing both with the same character is not a valid encoding. The managed
+emitter retains simple ASCII qualified names and uses a disjoint, complete
+UTF-8 hex encoding for other canonical names. Native-library symbol names
+remain governed by their explicit foreign-function declarations.
 
 Checked compilation admits syntax and library declarations before semantic
 lowering. A rejected function signature stops before call-context resolution

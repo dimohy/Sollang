@@ -1190,6 +1190,40 @@ emitBooleanWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             }
     }
 }
+isSubjectWhenRangeCondition rangeIndex: Int, armIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    rangeIndex < 0 or rangeIndex >= (context.ir -> len)
+        or armIndex < 0 or armIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[armIndex] => arm
+    context.ir[rangeIndex].kind == 31 and context.ir[rangeIndex].parent == armIndex
+        and arm.kind == 19 and arm.operand0 == rangeIndex
+        and arm.parent >= 0 and arm.parent < (context.ir -> len)
+        and context.ir[arm.parent].kind == 34
+}
+
+# The condition emitter schedules both bound expression trees before this leaf.
+# Combining their comparisons eagerly preserves source-order bound effects.
+emitSubjectWhenRangeCondition rangeIndex: Int, armIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[armIndex].parent => whenIndex
+    context.ir[rangeIndex] => range
+    context.ir[context.ir[whenIndex].operand0] -> integerNodeSigned(context, state) => signed
+    "  %while$(armIndex)_v$(rangeIndex)_lower = " -> print
+    signed -> if { "icmp sge " -> print } else { "icmp uge " -> print }
+    whenIndex -> writeSubjectWhenOperand(ownerIndex, context, state)
+    ", " -> print
+    range.operand0 -> writeComparisonOperandValue(ownerIndex, armIndex, context, state)
+    "" -> println
+    "  %while$(armIndex)_v$(rangeIndex)_upper = " -> print
+    range.opcode == grammar.tokenIdRangeUntil() -> if {
+        signed -> if { "icmp slt " -> print } else { "icmp ult " -> print }
+    } else { signed -> if { "icmp sle " -> print } else { "icmp ule " -> print } }
+    whenIndex -> writeSubjectWhenOperand(ownerIndex, context, state)
+    ", " -> print
+    range.operand1 -> writeComparisonOperandValue(ownerIndex, armIndex, context, state)
+    "" -> println
+    "  %while$(armIndex)_v$(rangeIndex) = and i1 %while$(armIndex)_v$(rangeIndex)_lower, %while$(armIndex)_v$(rangeIndex)_upper" -> println
+}
+
 emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[whenIndex] => subjectWhen
     context.ir[subjectWhen.operand0] => subject
@@ -1199,6 +1233,22 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             context.ir[whenOwner!].parent => whenOwner!
         }
     whenIndex -> controlValueUsed(whenOwner!, context, state) => whenValueUsed
+    subject -> referenceValueTypeId(context, state) => subjectReadTypeId
+    subjectReadTypeId >= 0 -> if {
+        "  %when$(whenIndex)_subject_read = " -> print
+        subjectWhen.operand0 -> referenceParameterValueIsMaterialized(whenOwner!, context, state)
+            -> if {
+                "freeze " -> print
+                subjectWhen.operand0 -> writeReadOperand(whenOwner!, context, state)
+                "" -> println
+            } else {
+                "load " -> print
+                subjectReadTypeId -> writeAggregateFieldTypeId(context, state)
+                ", ptr " -> print
+                whenOwner! -> writeForwardedReferenceValue(subjectWhen.operand0, context, state)
+                ", align $(context.typeAligns[subjectReadTypeId])" -> println
+            }
+    }
     false => whenHasArm!
     false => whenHasElse!
     true => whenAllArmsReturn!
@@ -1234,36 +1284,7 @@ emitSubjectWhen whenIndex: Int, emissionOrder: [Int], context: ref emitterContex
             arm -> sourceNode(context, state) => armSource
             (arm.kind == 19 and armSource.kind == 58) => conditionalArm
             conditionalArm -> if {
-                context.ir[arm.operand0] => condition
-                condition.kind == 31 -> if {
-                    context.ir[condition.operand0] => lowerBound
-                    subject -> integerNodeSigned(context, state) => subjectSigned
-                    "  %v$(whenIndex)_range$(armOrdinal!)_lower = " -> print
-                    subjectSigned -> if { "icmp sge " -> print } else { "icmp uge " -> print }
-                    subject -> writeIrType(context, state)
-                    " " -> print
-                    subjectWhen.operand0 -> writeValue(whenOwner!, context, state)
-                    ", " -> print
-                    condition.operand0 -> writeValue(whenOwner!, context, state)
-                    "" -> println
-                    "  %v$(whenIndex)_range$(armOrdinal!)_upper = " -> print
-                    condition.opcode == grammar.tokenIdRangeUntil()
-                        -> if {
-                            subjectSigned -> if { "icmp slt " -> print } else { "icmp ult " -> print }
-                        } else {
-                            subjectSigned -> if { "icmp sle " -> print } else { "icmp ule " -> print }
-                        }
-                    subject -> writeIrType(context, state)
-                    " " -> print
-                    subjectWhen.operand0 -> writeValue(whenOwner!, context, state)
-                    ", " -> print
-                    condition.operand1 -> writeValue(whenOwner!, context, state)
-                    "" -> println
-                    "  %v$(whenIndex)_range$(armOrdinal!) = and i1 %v$(whenIndex)_range$(armOrdinal!)_lower, %v$(whenIndex)_range$(armOrdinal!)_upper" -> println
-                    "  br i1 %v$(whenIndex)_range$(armOrdinal!), label %while$(armIndex!)_body, label %while$(armIndex!)_exit" -> println
-                } else {
-                    WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
-                }
+                WhileBranchRequest { whileIndex: armIndex!, ownerIndex: whenOwner!, conditionIndex: arm.operand0 } -> emitWhileBranch(emissionOrder, context, state)
                 "while$(armIndex!)_body:" -> println
                 armIndex! => emittedArmRegion!
                 arm.operand1 >= 0 and context.ir[arm.operand1].kind == 19

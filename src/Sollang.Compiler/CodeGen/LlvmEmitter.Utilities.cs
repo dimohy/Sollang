@@ -1849,8 +1849,14 @@ internal sealed partial class LlvmEmitter
 
     private static string SymbolForFunction(BoundFunction function)
     {
-        var baseSymbol = "sollang_fn_" + string.Concat(CanonicalFunctionName(function).Select(
-            static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        var canonicalName = CanonicalFunctionName(function);
+        // Keep existing simple qualified symbols, but encode the complete name
+        // when replacing punctuation would erase identifier boundaries. The $
+        // prefix cannot occur in the legacy alphabet; UTF-8 hex is injective.
+        var encodedName = canonicalName.All(static c => char.IsAsciiLetterOrDigit(c) || c == '.')
+            ? canonicalName.Replace('.', '_')
+            : "$" + Convert.ToHexString(Encoding.UTF8.GetBytes(canonicalName));
+        var baseSymbol = "sollang_fn_" + encodedName;
         var module = string.Concat(function.ModuleName.Select(
             static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
         var symbol = function.IsLocal

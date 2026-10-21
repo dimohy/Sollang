@@ -879,18 +879,9 @@ finalizeOrdinaryCanonicalCalls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~
             expressionIrStart => foldSourceSearch!
             foldSourceSearch! < expressionIrEnd -> while {
                 nodes[foldSourceSearch!] => foldSourceCandidate
-                false => foldSourceSupported!
-                foldSourceCandidate.kind == 31 -> if { true => foldSourceSupported! }
-                foldSourceCandidate.typeId >= 0 -> if {
-                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(foldSourceCandidate.typeId) => foldSourceCandidateValueType
-                    foldSourceCandidateValueType >= 0
-                        and (frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 2
-                        or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 3
-                        or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 4)
-                        -> if { true => foldSourceSupported! }
-                }
+                foldSourceCandidate -> foldSourceSupported(frozenRecursiveSemanticTypes) => supportedFoldSource
                 prepared.package.nodes[sourceRange.astStart + foldSourceCandidate.astNode].start => foldSourceCandidateStart
-                foldSourceSupported! and foldSourceCandidate.parent == foldIr!.parent and foldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + foldIr!.astNode].start and (foldSource! < 0 or foldSourceCandidateStart > foldSourceStart!)
+                supportedFoldSource and foldSourceCandidate.parent == foldIr!.parent and foldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + foldIr!.astNode].start and (foldSource! < 0 or foldSourceCandidateStart > foldSourceStart!)
                     -> if {
                         foldSourceSearch! => foldSource!
                         foldSourceCandidateStart => foldSourceStart!
@@ -1233,7 +1224,14 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                                     }
                             }
                     }
-                (matchCandidate.typeOrigin == 1 and ((matchCandidate.typeSymbol >= 2 and matchCandidate.typeSymbol <= 14) or (matchCandidate.typeSymbol >= 19 and matchCandidate.typeSymbol <= 22))) => matchCandidateInteger
+                (matchCandidate.typeOrigin == 1 and ((matchCandidate.typeSymbol >= 2 and matchCandidate.typeSymbol <= 14) or (matchCandidate.typeSymbol >= 19 and matchCandidate.typeSymbol <= 22))) => matchCandidateInteger!
+                frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(matchCandidate.typeId) => matchCandidateReadTypeId
+                matchCandidateReadTypeId >= 0 -> if {
+                    frozenRecursiveSemanticTypes[matchCandidateReadTypeId] => matchCandidateReadType
+                    matchCandidateReadType.kind == 1 and matchCandidateReadType.origin == 1
+                        and ((matchCandidateReadType.symbol >= 2 and matchCandidateReadType.symbol <= 14)
+                        or (matchCandidateReadType.symbol >= 19 and matchCandidateReadType.symbol <= 22)) => matchCandidateInteger!
+                }
                 matchUsesEnumPattern!
                     and matchCandidateBelongs!
                     and matchCandidateDistance! == 1
@@ -1251,7 +1249,7 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
                     and matchCandidateValueRank! > 0
                     and matchCandidatePatternCompatible!
                     and matchCandidateAst.start < matchControlNode.start
-                    and ((matchUsesEnumPattern! and matchCandidateEnum!) or (not matchUsesEnumPattern! and matchCandidateInteger))
+                    and ((matchUsesEnumPattern! and matchCandidateEnum!) or (not matchUsesEnumPattern! and matchCandidateInteger!))
                     -> if {
                         ((matchCandidateEnum! and matchSubjectEnum!) or (not matchCandidateEnum! and not matchSubjectEnum!)) => sameMatchSubjectClass
                         matchCandidateValueRank! > matchSubjectValueRank! => betterMatchSubjectRank

@@ -384,6 +384,9 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
     if not isinstance(format_sources, list) or any(not isinstance(p, str) for p in format_sources):
         raise ValueError("FORMAT_PREFLIGHT_INVALID_SOURCES")
     declared_sources = {p for case in cases for p in case_sources(case)}
+    # Runtime-loaded SLG inputs have the same declared, pinned and leased
+    # authority as build inputs; check their format before building a producer.
+    declared_sources.update(observed)
     format_paths = [(ROOT / p).resolve() for p in format_sources]
     if len(set(format_paths)) != len(format_paths) or any(p not in declared_sources for p in format_paths):
         raise ValueError("FORMAT_PREFLIGHT_UNDECLARED_SOURCE")

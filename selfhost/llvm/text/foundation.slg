@@ -1812,11 +1812,13 @@ writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolati
                 return
             }
     }
-    node.kind == 9 and (node.typeSymbol == 21 or node.typeSymbol == 22) and node.operand0 >= 0
+    node.kind == 9 and node.typeSymbol >= 19 and node.typeSymbol <= 22 and node.operand0 >= 0
         -> if {
-            node.operand0 -> interpolationIntegerLiteralSyntax(nodes, sourceModule, context)
+            node.operand0 -> interpolationNumericLiteralSyntax(nodes)
                 -> if {
-                    node.operand0 -> writeInterpolationFloatingIntegerLiteral(nodes, sourceModule, context)
+                    node.typeSymbol == 19 or node.typeSymbol == 20
+                        -> if { 32 } else { 64 } => width
+                    node.operand0 -> writeInterpolationFloatingLiteral(width, nodes, sourceModule, context)
                     return
                 }
         }
@@ -3577,8 +3579,10 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
             -> if { 32 => conversionTargetFloatWidth! }
         node.typeSymbol == 21 or node.typeSymbol == 22
             -> if { 64 => conversionTargetFloatWidth! }
+        conversionTargetFloatWidth! > 0 and (node.operand0 -> interpolationNumericLiteralSyntax(nodes)) => conversionLiteralToFloat
         conversionSourceIsFloat! and conversionTargetFloatWidth! > 0
             and conversionSourceFloatWidth! != conversionTargetFloatWidth!
+            and not conversionLiteralToFloat
             -> if {
                 "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
                 conversionSourceFloatWidth! > conversionTargetFloatWidth!
@@ -3590,15 +3594,8 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 conversionTargetFloatWidth! == 32 -> if { " to float" -> print } else { " to double" -> print }
                 "" -> println
             }
-        not conversionSourceIsFloat! and conversionSourceWidth > 0 and conversionTargetFloatWidth! == 32
-            and (node.operand0 -> interpolationIntegerLiteralSyntax(nodes, sourceModule, context))
-            -> if {
-                "  %v$(labelIndex)_expression$(nodeIndex) = fptrunc double " -> print
-                node.operand0 -> writeInterpolationFloatingIntegerLiteral(nodes, sourceModule, context)
-                " to float" -> println
-            }
         not conversionSourceIsFloat! and conversionSourceWidth > 0 and conversionTargetFloatWidth! > 0
-            and not (node.operand0 -> interpolationIntegerLiteralSyntax(nodes, sourceModule, context))
+            and not conversionLiteralToFloat
             -> if {
                 "  %v$(labelIndex)_expression$(nodeIndex) = " -> print
                 node.operand0 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
@@ -4587,8 +4584,8 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                     eachNode.operand0 -> writeValue(ownerIndex, context, state)
                     ", align 4" -> println
                 } else {
-                    "freeze { i32, i32 } " -> print
-                    eachNode.operand0 -> writeValue(ownerIndex, context, state)
+                    "freeze " -> print
+                    eachNode.operand0 -> writeReadOperand(ownerIndex, context, state)
                     "" -> println
                 }
             "  %each$(eachIndex)_first = extractvalue { i32, i32 } %each$(eachIndex)_range, 0" -> println

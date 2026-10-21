@@ -10797,7 +10797,7 @@ internal sealed partial class SemanticCompiler
                 allowPrintCall: false,
                 allowReadIntCall,
                 allowFlowBindingTarget: false);
-            if (!IsReadonlyIntViewCompatible(sourceType))
+            if (sourceType != BoundType.Range && !IsReadonlyIntViewCompatible(sourceType))
             {
                 throw Error(expression.Source.Line, expression.Source.Column, "fold expects a range or Int array input");
             }

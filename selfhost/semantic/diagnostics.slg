@@ -5021,6 +5021,32 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     astIndex! + 1 => astIndex!
                     continue
                 }
+            logical.kind == 64 and logical.parent >= 0
+                and package.nodes[range.astStart + logical.parent].kind == 10
+                -> if {
+                    sourceAstByExpression[range.astStart + logical.parent] => foldSourceAst
+                    foldSourceAst >= 0 and foldSourceAst < range.astCount
+                        -> if {
+                            resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![range.astStart + foldSourceAst]) => foldSourceTypeId
+                            foldSourceTypeId >= 0 and foldSourceTypeId < (resolved.types -> len)
+                                -> if {
+                                    resolved.types[foldSourceTypeId] => foldSourceType
+                                    foldSourceType.status == 0 and not foldSourceType.containsParameter
+                                        and not (resolved.types -> typeIds.foldInputTypeSupported(foldSourceTypeId))
+                                        -> if {
+                                            ExpressionOperandDiagnostic {
+                                                code: 70, sourceModule: sourceIndex!, astNode: astIndex!
+                                                operandAst: foldSourceAst, operatorKind: -1
+                                                locationOffset: package.nodes[range.astStart + foldSourceAst].start
+                                                operandTypeSymbol: foldSourceType.symbol
+                                                operandTypeId: foldSourceTypeId, firstTypeId: -1
+                                            } => candidate
+                                            package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                                -> if { candidate => selected! }
+                                        }
+                                }
+                        }
+                }
             false => bareYieldOwned!
             logical.kind == 16 and logical.payloadToken >= 0 and logical.payloadToken < range.tokenCount
                 and logical.parent >= 0
