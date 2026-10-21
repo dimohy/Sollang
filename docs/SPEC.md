@@ -2147,7 +2147,10 @@ registration identities rather than reserving any user `UInt64` key; the key is
 resolved from the owner table. `submit` returns either an immediate completion
 or a pending reactor owner. `dequeue` and `dequeueTerminal` move that owner into
 an affine Task which parks without polling until the platform completion source
-wakes it. On Linux, one dedicated waiter owns the blocking `epoll_wait`; a
+wakes it. The final selected intrinsic declaration determines its Task-producing
+identity, including after cross-fragment receiver or generic call resolution.
+Both await/cancel validation and runtime emission use that same identity; an
+earlier provisional call opcode cannot override the selected declaration. On Linux, one dedicated waiter owns the blocking `epoll_wait`; a
 direction-specific `EPOLLONESHOT` registration retries every eligible retained
 operation for that registration. Multiple operations may share a registration.
 After the bounded scan, the registration rearms the union of directions still

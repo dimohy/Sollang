@@ -1696,6 +1696,7 @@ normalizeResolvedDeclaredRuntime nodes: mut [TypedIrNode; ~], prepared: ref sema
 # ordinary user methods keep their existing call plan and opcode.
 public sealDeclaredRuntimeCalls nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
     nodes -> normalizeResolvedDeclaredRuntime(prepared)
+    nodes -> normalizeResolvedSocketRuntime(prepared)
 }
 
 resolvedProcessRuntimeOpcode call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
@@ -2128,7 +2129,7 @@ normalizeResolvedFileRuntime nodes: mut [TypedIrNode; ~], prepared: ref semantic
     }
 }
 
-normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
+normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
     # A logical namespace may span model and runtime source files. Recognize
     # the selected intrinsic declaration, never a user call's spelling.
     [Bool; ~] => socketSources!
@@ -2153,7 +2154,7 @@ normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semant
     0 => callIndex!
     callIndex! < (nodes -> len) -> while {
         nodes[callIndex!] => call!
-        (call!.kind == 6 or call!.kind == 9) and call!.opcode == -1
+        (call!.kind == 6 or call!.kind == 9)
             and call!.targetModule >= 0 and call!.targetModule < (socketSources! -> len)
             and socketSources![call!.targetModule]
             -> if {
@@ -2265,6 +2266,13 @@ normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semant
                                     source -> sourceMatches(name.span.start, name.span.length, "close")
                                         -> if { -270 => call!.opcode }
                                 }
+                                # Late receiver resolution can replace a stale ordinary
+                                # target or opcode. The selected intrinsic also owns
+                                # whether its producer is a Task, before await checks.
+                                (call!.opcode -> isSocketCompletionDequeueOpcode)
+                                    and (declaration.flags / 8) % 2 == 1
+                                    and (call!.flags / 8) % 2 == 0
+                                    -> if { call!.flags + 8 => call!.flags }
                                 call! => nodes[callIndex!]
                             }
                     }

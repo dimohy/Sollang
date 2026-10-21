@@ -1,0 +1,30 @@
+import std.io.async as asyncio
+import std.net.socket as socket
+
+main {
+    socket.completionReactor(socket.CompletionReactorOptions { registrations: 1, pendingOperations: 1, completionBatch: 1 }) -> when {
+        Err(_) { "create-error" -> println }
+        Ok(reactor) {
+            socket.CompletionSubmission.Pending(reactor) -> when {
+                socket.CompletionSubmission.Completed(completion) {
+                    Result<socket.SocketCompletion, socket.CompletionWaitFailure>.Ok(completion)
+                }
+                socket.CompletionSubmission.Pending(owner) {
+                    owner -> dequeue(asyncio.Cancellation { requested: true }) => pending
+                    pending -> await
+                }
+            } -> when {
+                Err(failure) {
+                    failure.reactor -> close
+                    "cancelled" -> println
+                }
+                Ok(completion) {
+                    completion.slot => slot
+                    slot -> intoBytes => bytes
+                    completion.reactor -> close
+                    "unexpected=$(bytes -> len)" -> println
+                }
+            }
+        }
+    }
+}
