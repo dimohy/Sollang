@@ -29,7 +29,7 @@ foreach ($path in $inputs) {
 $compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
 if ($compilerSha256 -cne $ExpectedCompilerSha256.ToUpperInvariant()) { throw "W04 compiler hash mismatch: expected=$ExpectedCompilerSha256 actual=$compilerSha256" }
 [IO.Directory]::CreateDirectory($output) | Out-Null
-$exe = Join-Path $output 'w04.exe'; $llvm = Join-Path $output 'w04.ll'; $bitcode = Join-Path $output 'w04.bc'; $resultPath = Join-Path $output 'result.json'
+$exe = Join-Path $output 'w04.exe'; $llvm = $exe + '.ll'; $bitcode = Join-Path $output 'w04.bc'; $resultPath = Join-Path $output 'result.json'
 foreach ($artifact in @($exe, $llvm, $bitcode, $resultPath)) { if (Test-Path -LiteralPath $artifact) { throw "W04 output already exists: $artifact" } }
 
 $failures = [Collections.Generic.List[string]]::new()

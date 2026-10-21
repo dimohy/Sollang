@@ -3305,17 +3305,23 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
       %association_slot = getelementptr i8, ptr %registration_entry, i64 24
       %association = load i64, ptr %association_slot, align 8
       %unassociated = icmp eq i64 %association, 0
-      br i1 %unassociated, label %associate, label %issue
-    associate:
       %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
       %socket = load i64, ptr %socket_slot, align 8
       %socket_handle = inttoptr i64 %socket to ptr
       %native_identity_base = add nuw i64 %registration_index, 1
       %native_identity_shifted = shl i64 %native_identity_base, 1
       %native_identity = or i64 %native_identity_shifted, 1
+      br i1 %unassociated, label %associate, label %inspect_completion_mode
+    inspect_completion_mode:
+      %configured = icmp ne i64 %association, 1
+      br i1 %configured, label %issue, label %set_completion_mode
+    associate:
       %associated_port = call ptr @CreateIoCompletionPort(ptr %socket_handle, ptr %port, i64 %native_identity, i32 0)
       %association_ok = icmp eq ptr %associated_port, %port
-      br i1 %association_ok, label %set_completion_mode, label %association_failure
+      br i1 %association_ok, label %retain_association, label %association_failure
+    retain_association:
+      store i64 1, ptr %association_slot, align 8
+      br label %set_completion_mode
     set_completion_mode:
       %completion_mode_set = call i32 @SetFileCompletionNotificationModes(ptr %socket_handle, i8 3)
       %completion_mode_ok = icmp ne i32 %completion_mode_set, 0
