@@ -1,0 +1,22 @@
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+
+different left: [UInt8], right: [UInt8] -> Bool {
+    false => changed!
+    0..<32 -> each index {
+        left[index] != right[index] -> if { true => changed! }
+    }
+    changed!
+}
+
+main {
+    "namespace stored.header\npublic accepts values: {Int: Int} -> Int => values -> len\nmain {}\n" => leftSource
+    "namespace stored.header\npublic accepts values: {Int: Bool} -> Int => values -> len\nmain {}\n" => rightSource
+    [leftSource,; ~] -> context.prepare => left
+    [rightSource,; ~] -> context.prepare => right
+    left -> fingerprints.capture => leftFingerprint
+    right -> fingerprints.capture => rightFingerprint
+    leftFingerprint.status == 0 -> println
+    rightFingerprint.status == 0 -> println
+    different(leftFingerprint.bytes, rightFingerprint.bytes) -> println
+}

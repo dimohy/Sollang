@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-21T03:06:47.331016+00:00",
+  "defectId": "C2026-10-21-662",
+  "sourceHashesBeforeSlgEdit": {
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs": "DD953FBB5A6DCE1ADC9387045D14CEDEC917E5D7ED93B104510C163A10A1D67F",
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs": "5DED2CBC94A27E537518FE33693C23AD389EDC0517AA420B90E554BFCC0A6716",
+    "selfhost/ir/typed/ordinary_function_finalize_phases.slg": "BF5D0EDF735BCAF691D49061CBA3DAF1E4EACC32B647A63576B50A7316D4B8F9",
+    "selfhost/ir/typed/resolved_context_normalize_phases.slg": "B8562D76FE05A78268625F342CC6CE38AE87D3AE2100716EE9D70D2AE99AA6E9",
+    "selfhost/llvm/text/control.slg": "2CEB7E1E89807167342E26C0308B4D81A0BD8877496A2E5E7ABA5C603909A5E0",
+    "selfhost/llvm/text/core_calls.slg": "9CCDEB72ECA8BBF9B160A2BBD2C85E58E1820C0D522D414243260ECDFB94153D",
+    "selfhost/llvm/text/ownership.slg": "E953D7C2B3FDF55429C0BB0ED7F8445CCF9FD81D29E770F26FEF92D8380637A4"
+  },
+  "csharpFirst": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11648-readonly-subject-baseline\\result.json",
+    "managedBuildAssemblyLinkRuntimePassed": true,
+    "runtimeStdout": "7\n8\n",
+    "sourceChangesRequired": false
+  },
+  "decisions": [
+    {
+      "concern": "Subject selection",
+      "csharp": "EmitWhenExpression uses EmitIntExpression; EmitNameExpression loads RuntimeReference. Canonical runtime read type supplies comparison subject without changing parameter reference ABI.",
+      "slg": "finalizeOrdinaryControls1227 checks raw legacy builtin projection only; late sibling recovery3156 inspects reference storage type directly. Both omit materializedReadTypeId. Use existing canonical read-type resolver at these two decisions, retain original source ownership/rank/sibling constraints and scalar admissibility."
+    },
+    {
+      "concern": "Range comparison emission",
+      "csharp": "EmitSubjectWhenCondition emits bounds at subject.Type and selects signedness from that read type; source subject evaluated once.",
+      "slg": "emitSubjectWhen1239-1260 selects canonical read signedness but wrote raw storage type. Use existing writeReadOperand to emit subject read type and value together; preserve existing scalar-aware writeValue for range bounds, reference parameter materialization and pointer ABI."
+    },
+    {
+      "concern": "Diagnostics",
+      "csharp": "Reference-to-integer subject is valid; invalid subject type remains semantic error.",
+      "slg": "S012/S013 and Typed IR invariant checks remain mandatory and unchanged. Repair canonical subject/arm edges, never suppress guard failure."
+    }
+  ],
+  "nativeBaseline": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11648-readonly-subject-baseline\\result.json",
+    "compiler": "V11596",
+    "diagnostic": "S012/S013 plus unresolved operand invariant; failed before LLVM"
+  },
+  "plannedSlgFiles": [
+    "selfhost/ir/typed/ordinary_function_finalize_phases.slg",
+    "selfhost/ir/typed/resolved_context_normalize_phases.slg",
+    "selfhost/llvm/text/control.slg"
+  ],
+  "nativeCompilerBuildBudget": 1,
+  "nativeCompilerBuildsUsed": 0,
+  "expectedOutputsWeakened": false,
+  "claimsFixed": false,
+  "claimsGoalComplete": false,
+  "additionalCsharpFocused": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11660-managed\\result.json",
+    "completed": 2,
+    "total": 2,
+    "scope": "readonly Int and signedLong range/UInt64 relational subjects with borrowed struct fields, exact7/8 outputs"
+  },
+  "residualObservation11669": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11666-slg-emission\\result.json",
+    "status": "failed0/17",
+    "sourceStableAndStopped": true,
+    "actualLlvm": "Relational arm emits icmp sge i32 %arg though %v118107 already loads i32 once; Range arm correctly consumes %v118120 after initial repair",
+    "sourceDecision": "writeComparisonOperandValue falls through to writeWhileValue because the shared subject name is parented by the outer flow, not a binary comparison. writeWhileValue correctly preserves parameter pointer ABI in its generic domain. Recognize the exact subject when arm/control.operand0 edge in comparison consumption and use existing scalar-aware writeValue; do not globally change while parameter ABI or introduce reevaluation.",
+    "additionalSourceHashes": {
+      "selfhost/llvm/text/container_control.slg": "7B6B89C68E4B91A3999010BF2C9454A7DD0FEA3C1CD1878F2BC425816A20FB51",
+      "selfhost/llvm/text/core_calls.slg": "9CCDEB72ECA8BBF9B160A2BBD2C85E58E1820C0D522D414243260ECDFB94153D",
+      "selfhost/llvm/text/function_expressions.slg": "294D62BBE19979071F9C7F200F2670AAAF22988B43BB038DD556FD43B44F9806"
+    },
+    "csharpDecision": "EmitWhenExpression evaluates subject once before ordered arm predicates; EmitSubjectWhenCondition uses that captured RuntimeInt for every arm"
+  },
+  "sharedSubjectReadDecision11676": {
+    "csharpWitness": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11675-managed\\result.json",
+    "csharpActual": "Bound readonly reference subject executes both relational and range arms with7/8",
+    "sourceInspection": "emitNamedPlaceRead358-459 materializes scalar reference parameters into %v, but ordinary bound references preserve their pointer representation. A subject read must therefore reuse a parameter value or load a bound-reference pointee once, then share that captured scalar across all arm predicates.",
+    "decision": "Emit one explicit canonical subject-read SSA in emitSubjectWhen: freeze existing materialized parameter read, otherwise load through writeForwardedReferenceValue. Shared subject value/operand writers feed both relational comparison and range emission. Keep generic while reload domain and reference ABI unchanged.",
+    "noAdditionalFullExecution": "First production attempt failed immediately at basic relational case; no new compiler build was started. Current later prerequistes stopped before this source delta; old successful preflights are retained but superseded."
+  }
+}

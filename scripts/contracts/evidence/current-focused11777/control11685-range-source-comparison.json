@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "defectId": "C2026-10-21-663",
+  "observedAtUtc": "2026-10-21T03:25:48.621792+00:00",
+  "sourceHashesBeforeSlgEdit": {
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs": "DD953FBB5A6DCE1ADC9387045D14CEDEC917E5D7ED93B104510C163A10A1D67F",
+    "syntax/sollang.grammar": "927D8505D99522D7A99BAD2F6B4C24085EC19DB74F6D0A9C5DB984F849D56AAA",
+    "selfhost/llvm/text/control.slg": "62850B7AA6640E2F5B56AE0074F28A0E609FE040A339B718D0CF8135654EB07C",
+    "selfhost/llvm/text/container_control.slg": "7B6B89C68E4B91A3999010BF2C9454A7DD0FEA3C1CD1878F2BC425816A20FB51",
+    "selfhost/llvm/text/core_calls.slg": "7FD9351C41653108B48A878913EC0D26D420FFEB355EDDF82CF6DD7AD462EC53"
+  },
+  "csharpFirst": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11683-range-baseline\\result.json",
+    "actualManagedPassed": true,
+    "stdout": "7\nlower\nupper\n7\nlower\nupper\n9\n",
+    "sourceChangesRequired": false
+  },
+  "decisions": [
+    "CSharp EmitSubjectWhenCondition evaluates lower and upper operands using subject.Type before combining comparisons with eager and; both computed bound calls execute in source order regardless of comparison truth.",
+    "Grammar SubjectWhenCondition accepts RangeExpression whose bounds are EqualityExpression, not only positive literals. Do not patch this by printing a minus sign or replacing the failing control with literal bounds.",
+    "SLG emitSubjectWhen special range branch writes operand values without scheduling their expression trees; ordinary condition leaf emission already owns a dependency-first value task stack and per-arm value cache.",
+    "Move subject range conditions into that existing condition emitter with an exact arm/control ownership predicate. Schedule both bound dependencies, then emit comparisons and an eager i1 and in the same leaf. Reuse the canonical captured subject from C662.",
+    "Recognize reference bound names only when their Range parent is that exact subject arm condition, so existing reference loads and operand writers apply. Preserve normal Range values and actual while reload domains."
+  ],
+  "expectedOutputsWeakened": false,
+  "nativeCompilerBuildBudget": 1,
+  "nativeCompilerBuildsUsed": 0,
+  "claimsFixed": false,
+  "claimsGoalComplete": false,
+  "residual11705": {
+    "record": "artifacts\\scratch\\resume-20261006-owner-continuation22\\control11703-slg-emission\\result.json",
+    "actual": "Bounds now scheduled, but unary negative literal remains i32 against i64 subject; assembly rejects. No runtime proof or native compiler build claimed.",
+    "csharpDecision": "LlvmEmitter.Expressions.Control.cs EmitSubjectWhenCondition calls EmitFunctionArgumentExpression(bound, subject.Type) for both lower and upper.",
+    "repairDecision": "Use existing sealNumericLiteralPeerContext in final sealResolvedContext for exact subject range parentage, materializing the subject read type without changing reference ABI; preserve computed bound identities.",
+    "beforeSealSha256": "18FE5FF88FF8AD7E12843D00C9C95F1BC546C5E4A2AA445EDE61028D16F5F40D"
+  }
+}
