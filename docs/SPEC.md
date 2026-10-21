@@ -2141,7 +2141,9 @@ an affine Task which parks without polling until the platform completion source
 wakes it. On Linux, one dedicated waiter owns the blocking `epoll_wait`; a
 direction-specific `EPOLLONESHOT` registration retries the retained operation,
 rearms only after `EAGAIN`, and publishes one terminal record before scheduling
-the parked Task. The dequeue transfers the exact retained buffer back into the
+the parked Task. Error and hangup readiness also retry the operation to obtain
+its native error or EOF. A peer write failure returns `SocketError` without
+terminating the process. The dequeue transfers the exact retained buffer back into the
 slot without copying. Canceling a parked completion Task consumes the Task, requests native
 cancellation for every active operation, and leaves the task control and retained
 owners alive until one terminal completion wins. The completion drain then joins

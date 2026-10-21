@@ -1549,7 +1549,8 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %direction = load i32, ptr %direction_slot, align 4
           %is_receive = icmp eq i32 %direction, 0
           %ready_bit = select i1 %is_receive, i32 1, i32 4
-          %ready_mask = and i32 %event_mask, %ready_bit
+          %readiness_mask = or i32 %ready_bit, 24
+          %ready_mask = and i32 %event_mask, %readiness_mask
           %is_ready = icmp ne i32 %ready_mask, 0
           br i1 %is_ready, label %issue, label %rearm
         issue:
@@ -1568,7 +1569,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %received = call i64 @recv(i32 %socket, ptr %data, i64 %range_length, i32 0)
           br label %classify
         issue_send:
-          %sent = call i64 @send(i32 %socket, ptr %data, i64 %range_length, i32 0)
+          %sent = call i64 @send(i32 %socket, ptr %data, i64 %range_length, i32 16384)
           br label %classify
         classify:
           %transferred = phi i64 [ %received, %issue_receive ], [ %sent, %issue_send ]
@@ -2103,7 +2104,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %received = call i64 @recv(i32 %registered_socket, ptr %data, i64 %range_length, i32 0)
           br label %classify_issue
         issue_send:
-          %sent = call i64 @send(i32 %registered_socket, ptr %data, i64 %range_length, i32 0)
+          %sent = call i64 @send(i32 %registered_socket, ptr %data, i64 %range_length, i32 16384)
           br label %classify_issue
         classify_issue:
           %transferred = phi i64 [ %received, %issue_receive ], [ %sent, %issue_send ]

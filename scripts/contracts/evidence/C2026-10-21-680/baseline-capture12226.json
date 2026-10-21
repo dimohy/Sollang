@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-21T10:01:01.393349+00:00",
+  "status": "CSharp-extracted-valid-later-operation-progress-failure",
+  "finding": "LINUX-COMPLETION-MULTI-PENDING-12203",
+  "baseline": "scripts/contracts/evidence/C2026-10-21-680/linux-completion-sigpipe-171facbfe1c242cbb8e6d3480e576df4/result.json",
+  "passed": 1,
+  "total": 2,
+  "failed": 1,
+  "inputContract": "Two registrations and two pending-operation capacity. Two distinct application keys. First operation is receive-not-ready; later operation is send-ready. Same-registration input is not prohibited by SPEC/capacity contract or intrinsic caller admission.",
+  "observed": "Different-registration control skips unrelated receive and completes later send with exact byte42. Same-registration receive hits direction-not-ready path, rearms receive and returns to wait; send remains Pending and peer receives no byte.",
+  "scope": "Actual CSharp LLVM waiter and kernel send, controlled write-ready event followed by stop observation. Not a measured public API timeout.",
+  "consumerEvidence": [
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs:240..275 passes registration and slot state without one-pending-perregistration restriction",
+    "stdlib/std/net/socket.slg:159..172 returns affine reactor from Pending and retains independent slots",
+    "scripts/contracts/socket-completion-reactor.json capacity and ownership allow2 slots and2 registrations without requiring distinct operation registrations"
+  ],
+  "requiredFix": "Preserve multiple-operation support. Scan all eligible pending operations for a ready registration, rearm combined remaining direction interests once, and audit submit/publication/cancel races. Do not reject second operations or synthesize readiness/error results.",
+  "next": "CSharp implementation and focused control expansion first, then source comparison and SLG, paired/current-native/public API validation.",
+  "claimsGoalComplete": false
+}
