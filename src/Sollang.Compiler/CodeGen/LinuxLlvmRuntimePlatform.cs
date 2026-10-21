@@ -114,12 +114,15 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare i64 @sysconf(i32)");
             functions.AppendLine("declare i64 @syscall(i64, ...)");
         }
-        if (UsesConcurrentStreamJoins)
+        if (UsesConcurrentStreamJoins || UsesSocketCompletion)
         {
             functions.AppendLine("declare i32 @pthread_mutex_init(ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_mutex_destroy(ptr)");
             functions.AppendLine("declare i32 @pthread_mutex_lock(ptr)");
             functions.AppendLine("declare i32 @pthread_mutex_unlock(ptr)");
+        }
+        if (UsesConcurrentStreamJoins)
+        {
             functions.AppendLine("declare i32 @pthread_cond_init(ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_cond_destroy(ptr)");
             functions.AppendLine("declare i32 @pthread_cond_wait(ptr, ptr)");

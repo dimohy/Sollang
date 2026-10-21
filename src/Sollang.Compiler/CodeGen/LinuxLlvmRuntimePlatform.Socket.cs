@@ -1450,6 +1450,235 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         """;
 
     private const string CompletionRuntime = """
+        define internal void @sollang_socket_completion_lock(ptr %state) #0 {
+        entry:
+          %mutex = getelementptr i8, ptr %state, i64 104
+          %status = call i32 @pthread_mutex_lock(ptr %mutex)
+          %ok = icmp eq i32 %status, 0
+          br i1 %ok, label %done, label %trap
+        done:
+          ret void
+        trap:
+          call void @llvm.trap()
+          unreachable
+        }
+
+        define internal void @sollang_socket_completion_unlock(ptr %state) #0 {
+        entry:
+          %mutex = getelementptr i8, ptr %state, i64 104
+          %status = call i32 @pthread_mutex_unlock(ptr %mutex)
+          %ok = icmp eq i32 %status, 0
+          br i1 %ok, label %done, label %trap
+        done:
+          ret void
+        trap:
+          call void @llvm.trap()
+          unreachable
+        }
+
+        define internal void @sollang_socket_completion_publish_locked(ptr %state, ptr %pending, i32 %status, i64 %transferred) #0 {
+        entry:
+          %status_slot = getelementptr i8, ptr %pending, i64 76
+          store i32 %status, ptr %status_slot, align 4
+          %transferred_slot = getelementptr i8, ptr %pending, i64 80
+          store i64 %transferred, ptr %transferred_slot, align 8
+          store atomic i64 2, ptr %pending release, align 8
+          %count_slot = getelementptr i8, ptr %state, i64 72
+          %remaining = atomicrmw sub ptr %count_slot, i64 1 acq_rel
+          %task_slot = getelementptr i8, ptr %state, i64 88
+          %task = atomicrmw xchg ptr %task_slot, ptr null acq_rel
+          %has_task = icmp ne ptr %task, null
+          br i1 %has_task, label %wake_task, label %signal
+        wake_task:
+          call void @sollang_io_push_completion(ptr %task)
+          br label %signal
+        signal:
+          call void @sollang_platform_io_signal_completion()
+          ret void
+        }
+
+        define internal i32 @sollang_socket_completion_rearm_locked(ptr %state, i64 %registration_index, i32 %extra_interest) #0 {
+        entry:
+          %epoll64 = load i64, ptr %state, align 8
+          %epoll = trunc i64 %epoll64 to i32
+          %registrations_slot = getelementptr i8, ptr %state, i64 16
+          %registrations = load ptr, ptr %registrations_slot, align 8
+          %pending_slot = getelementptr i8, ptr %state, i64 24
+          %pending_table = load ptr, ptr %pending_slot, align 8
+          %capacity_slot = getelementptr i8, ptr %state, i64 48
+          %capacity = load i64, ptr %capacity_slot, align 8
+          br label %scan
+        scan:
+          %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+          %interest = phi i32 [ %extra_interest, %entry ], [ %next_interest, %advance ]
+          %done = icmp uge i64 %index, %capacity
+          br i1 %done, label %check_interest, label %check
+        check:
+          %offset = mul nuw i64 %index, 128
+          %pending = getelementptr i8, ptr %pending_table, i64 %offset
+          %active = load atomic i64, ptr %pending acquire, align 8
+          %is_pending = icmp eq i64 %active, 1
+          %registration_slot = getelementptr i8, ptr %pending, i64 16
+          %registration = load i64, ptr %registration_slot, align 8
+          %same_registration = icmp eq i64 %registration, %registration_index
+          %matches = and i1 %is_pending, %same_registration
+          %direction_slot = getelementptr i8, ptr %pending, i64 24
+          %direction = load i32, ptr %direction_slot, align 4
+          %receive = icmp eq i32 %direction, 0
+          %direction_interest = select i1 %receive, i32 1, i32 4
+          %selected_interest = select i1 %matches, i32 %direction_interest, i32 0
+          %next_interest = or i32 %interest, %selected_interest
+          br label %advance
+        advance:
+          %next = add nuw i64 %index, 1
+          br label %scan
+        check_interest:
+          %has_interest = icmp ne i32 %interest, 0
+          br i1 %has_interest, label %rearm, label %success
+        rearm:
+          %registration_offset = mul nuw i64 %registration_index, 32
+          %registration_entry = getelementptr i8, ptr %registrations, i64 %registration_offset
+          %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
+          %socket64 = load i64, ptr %socket_slot, align 8
+          %socket = trunc i64 %socket64 to i32
+          %identity_slot = getelementptr i8, ptr %registration_entry, i64 24
+          %identity = load i64, ptr %identity_slot, align 8
+          %event = alloca [12 x i8], align 4
+          %mask = or i32 %interest, 1073741824
+          store i32 %mask, ptr %event, align 4
+          %data_slot = getelementptr i8, ptr %event, i64 4
+          store i64 %identity, ptr %data_slot, align 1
+          %status = call i32 @epoll_ctl(i32 %epoll, i32 3, i32 %socket, ptr %event)
+          %ok = icmp eq i32 %status, 0
+          br i1 %ok, label %success, label %failure
+        success:
+          ret i32 0
+        failure:
+          %error = call i32 @sollang_socket_errno()
+          ret i32 %error
+        }
+
+        define internal void @sollang_socket_completion_fail_registration_locked(ptr %state, i64 %registration_index, i32 %error) #0 {
+        entry:
+          %pending_slot = getelementptr i8, ptr %state, i64 24
+          %pending_table = load ptr, ptr %pending_slot, align 8
+          %capacity_slot = getelementptr i8, ptr %state, i64 48
+          %capacity = load i64, ptr %capacity_slot, align 8
+          br label %scan
+        scan:
+          %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+          %done = icmp uge i64 %index, %capacity
+          br i1 %done, label %finish, label %check
+        check:
+          %offset = mul nuw i64 %index, 128
+          %pending = getelementptr i8, ptr %pending_table, i64 %offset
+          %active = load atomic i64, ptr %pending acquire, align 8
+          %is_pending = icmp eq i64 %active, 1
+          %registration_slot = getelementptr i8, ptr %pending, i64 16
+          %registration = load i64, ptr %registration_slot, align 8
+          %same_registration = icmp eq i64 %registration, %registration_index
+          %matches = and i1 %is_pending, %same_registration
+          br i1 %matches, label %publish, label %advance
+        publish:
+          call void @sollang_socket_completion_publish_locked(ptr %state, ptr %pending, i32 %error, i64 0)
+          br label %advance
+        advance:
+          %next = add nuw i64 %index, 1
+          br label %scan
+        finish:
+          ret void
+        }
+
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_register_stream(i64 %identity, i64 %socket, i64 %key) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          %result = call %sollang.socket_result @sollang_platform_socket_completion_register_stream_locked(i64 %identity, i64 %socket, i64 %key)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret %sollang.socket_result %result
+        invalid:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_remove_stream(i64 %identity, i64 %key) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          %result = call %sollang.socket_result @sollang_platform_socket_completion_remove_stream_locked(i64 %identity, i64 %key)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret %sollang.socket_result %result
+        invalid:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_submit(i64 %identity, i64 %registration_key, i64 %application_key, i32 %direction, ptr %buffer, i64 %buffer_length, i64 %buffer_capacity, i64 %range_offset, i64 %range_length, i32 %slot_state) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          %result = call %sollang.socket_result @sollang_platform_socket_completion_submit_locked(i64 %identity, i64 %registration_key, i64 %application_key, i32 %direction, ptr %buffer, i64 %buffer_length, i64 %buffer_capacity, i64 %range_offset, i64 %range_length, i32 %slot_state)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret %sollang.socket_result %result
+        invalid:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_cancel(i64 %identity, i64 %application_key) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          %result = call %sollang.socket_result @sollang_platform_socket_completion_cancel_locked(i64 %identity, i64 %application_key)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret %sollang.socket_result %result
+        invalid:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        }
+
+        define internal %sollang.socket_result @sollang_platform_socket_completion_dequeue(i64 %identity, i1 %cancelled, ptr %descriptor) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          %result = call %sollang.socket_result @sollang_platform_socket_completion_dequeue_locked(i64 %identity, i1 %cancelled, ptr %descriptor)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret %sollang.socket_result %result
+        invalid:
+          %failure = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 1, i32 0)
+          ret %sollang.socket_result %failure
+        }
+
+        define internal void @sollang_platform_socket_completion_request_cancel_all(i64 %identity) #0 {
+        entry:
+          %valid = icmp ugt i64 %identity, 0
+          br i1 %valid, label %locked, label %invalid
+        locked:
+          %state = inttoptr i64 %identity to ptr
+          call void @sollang_socket_completion_lock(ptr %state)
+          call void @sollang_platform_socket_completion_request_cancel_all_locked(i64 %identity)
+          call void @sollang_socket_completion_unlock(ptr %state)
+          ret void
+        invalid:
+          ret void
+        }
+
         define internal ptr @sollang_socket_completion_waiter(ptr %state) #0 {
         entry:
           %epoll64 = load i64, ptr %state, align 8
@@ -1475,6 +1704,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %interrupted = icmp eq i32 %wait_error, 4
           br i1 %interrupted, label %wait, label %trap
         inspect:
+          call void @sollang_socket_completion_lock(ptr %state)
           %event_mask = load i32, ptr %completion_table, align 4
           %event_data_slot = getelementptr i8, ptr %completion_table, i64 4
           %event_data = load i64, ptr %event_data_slot, align 1
@@ -1484,7 +1714,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %stopping_slot = getelementptr i8, ptr %state, i64 96
           %stopping = load atomic i32, ptr %stopping_slot acquire, align 4
           %must_stop = icmp ne i32 %stopping, 0
-          br i1 %must_stop, label %done, label %drain_wakeup
+          br i1 %must_stop, label %done_locked, label %drain_wakeup
         drain_wakeup:
           %wakeup_value = alloca i64, align 8
           %wakeup_read = call i64 @read(i32 %wakeup, ptr %wakeup_value, i64 8)
@@ -1492,7 +1722,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         cancel_scan:
           %cancel_index = phi i64 [ 0, %drain_wakeup ], [ %cancel_next, %cancel_continue ]
           %cancel_done = icmp uge i64 %cancel_index, %pending_capacity
-          br i1 %cancel_done, label %wait, label %cancel_check
+          br i1 %cancel_done, label %unlock_wait, label %cancel_check
         cancel_check:
           %cancel_offset = mul nuw i64 %cancel_index, 128
           %cancel_entry = getelementptr i8, ptr %pending_table, i64 %cancel_offset
@@ -1504,22 +1734,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %cancel_terminal = and i1 %cancel_is_pending, %cancel_marked
           br i1 %cancel_terminal, label %publish_cancel, label %cancel_continue
         publish_cancel:
-          %cancel_status_slot = getelementptr i8, ptr %cancel_entry, i64 76
-          store i32 125, ptr %cancel_status_slot, align 4
-          %cancel_transferred_slot = getelementptr i8, ptr %cancel_entry, i64 80
-          store i64 0, ptr %cancel_transferred_slot, align 8
-          store atomic i64 2, ptr %cancel_entry release, align 8
-          %cancel_pending_count_slot = getelementptr i8, ptr %state, i64 72
-          %cancel_remaining = atomicrmw sub ptr %cancel_pending_count_slot, i64 1 acq_rel
-          %cancel_task_slot = getelementptr i8, ptr %state, i64 88
-          %cancel_task = atomicrmw xchg ptr %cancel_task_slot, ptr null acq_rel
-          %cancel_has_task = icmp ne ptr %cancel_task, null
-          br i1 %cancel_has_task, label %wake_cancel_task, label %signal_cancel
-        wake_cancel_task:
-          call void @sollang_io_push_completion(ptr %cancel_task)
-          br label %signal_cancel
-        signal_cancel:
-          call void @sollang_platform_io_signal_completion()
+          call void @sollang_socket_completion_publish_locked(ptr %state, ptr %cancel_entry, i32 125, i64 0)
           br label %cancel_continue
         cancel_continue:
           %cancel_next = add nuw i64 %cancel_index, 1
@@ -1533,7 +1748,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         pending_scan:
           %pending_index = phi i64 [ 0, %decode_registration ], [ %pending_next, %pending_continue ]
           %pending_done = icmp uge i64 %pending_index, %pending_capacity
-          br i1 %pending_done, label %wait, label %pending_check
+          br i1 %pending_done, label %rearm_registration, label %pending_check
         pending_check:
           %pending_offset = mul nuw i64 %pending_index, 128
           %pending_entry = getelementptr i8, ptr %pending_table, i64 %pending_offset
@@ -1552,7 +1767,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %readiness_mask = or i32 %ready_bit, 24
           %ready_mask = and i32 %event_mask, %readiness_mask
           %is_ready = icmp ne i32 %ready_mask, 0
-          br i1 %is_ready, label %issue, label %rearm
+          br i1 %is_ready, label %issue, label %pending_continue
         issue:
           %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
           %socket64 = load i64, ptr %socket_slot, align 8
@@ -1566,10 +1781,10 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %data = getelementptr i8, ptr %buffer, i64 %range_offset
           br i1 %is_receive, label %issue_receive, label %issue_send
         issue_receive:
-          %received = call i64 @recv(i32 %socket, ptr %data, i64 %range_length, i32 0)
+          %received = call i64 @recv(i32 %socket, ptr %data, i64 %range_length, i32 64)
           br label %classify
         issue_send:
-          %sent = call i64 @send(i32 %socket, ptr %data, i64 %range_length, i32 16384)
+          %sent = call i64 @send(i32 %socket, ptr %data, i64 %range_length, i32 16448)
           br label %classify
         classify:
           %transferred = phi i64 [ %received, %issue_receive ], [ %sent, %issue_send ]
@@ -1578,7 +1793,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         classify_failure:
           %completion_error = call i32 @sollang_socket_errno()
           %would_block = icmp eq i32 %completion_error, 11
-          br i1 %would_block, label %rearm, label %publish_failure
+          br i1 %would_block, label %pending_continue, label %publish_failure
         publish_success:
           br label %publish_terminal
         publish_failure:
@@ -1586,38 +1801,24 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         publish_terminal:
           %terminal_status = phi i32 [ 0, %publish_success ], [ %completion_error, %publish_failure ]
           %terminal_transferred = phi i64 [ %transferred, %publish_success ], [ 0, %publish_failure ]
-          %completion_status_slot = getelementptr i8, ptr %pending_entry, i64 76
-          store i32 %terminal_status, ptr %completion_status_slot, align 4
-          %transferred_slot = getelementptr i8, ptr %pending_entry, i64 80
-          store i64 %terminal_transferred, ptr %transferred_slot, align 8
-          store atomic i64 2, ptr %pending_entry release, align 8
-          %pending_count_slot = getelementptr i8, ptr %state, i64 72
-          %remaining = atomicrmw sub ptr %pending_count_slot, i64 1 acq_rel
-          %task_slot = getelementptr i8, ptr %state, i64 88
-          %task = atomicrmw xchg ptr %task_slot, ptr null acq_rel
-          %has_task = icmp ne ptr %task, null
-          br i1 %has_task, label %wake_task, label %signal
-        wake_task:
-          call void @sollang_io_push_completion(ptr %task)
-          br label %signal
-        signal:
-          call void @sollang_platform_io_signal_completion()
-          br label %wait
-        rearm:
-          %rearm_event = alloca [12 x i8], align 4
-          %rearm_mask = or i32 %ready_bit, 1073741824
-          store i32 %rearm_mask, ptr %rearm_event, align 4
-          %rearm_data_slot = getelementptr i8, ptr %rearm_event, i64 4
-          store i64 %event_data, ptr %rearm_data_slot, align 1
-          %rearm_socket_slot = getelementptr i8, ptr %registration_entry, i64 16
-          %rearm_socket64 = load i64, ptr %rearm_socket_slot, align 8
-          %rearm_socket = trunc i64 %rearm_socket64 to i32
-          %rearmed = call i32 @epoll_ctl(i32 %epoll, i32 3, i32 %rearm_socket, ptr %rearm_event)
-          %rearm_ok = icmp eq i32 %rearmed, 0
-          br i1 %rearm_ok, label %wait, label %trap
+          call void @sollang_socket_completion_publish_locked(ptr %state, ptr %pending_entry, i32 %terminal_status, i64 %terminal_transferred)
+          br label %pending_continue
+        rearm_registration:
+          %rearm_error = call i32 @sollang_socket_completion_rearm_locked(ptr %state, i64 %registration_index, i32 0)
+          %rearm_failed = icmp ne i32 %rearm_error, 0
+          br i1 %rearm_failed, label %fail_registration, label %unlock_wait
+        fail_registration:
+          call void @sollang_socket_completion_fail_registration_locked(ptr %state, i64 %registration_index, i32 %rearm_error)
+          br label %unlock_wait
         pending_continue:
           %pending_next = add nuw i64 %pending_index, 1
           br label %pending_scan
+        unlock_wait:
+          call void @sollang_socket_completion_unlock(ptr %state)
+          br label %wait
+        done_locked:
+          call void @sollang_socket_completion_unlock(ptr %state)
+          br label %done
         done:
           ret ptr null
         trap:
@@ -1762,7 +1963,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %wakeup_registration_ok = icmp eq i32 %wakeup_registered, 0
           br i1 %wakeup_registration_ok, label %allocate_state, label %wakeup_registration_failed
         allocate_state:
-          %state = call ptr @sollang_alloc(i64 104)
+          %state = call ptr @sollang_alloc(i64 144)
           %state_ok = icmp ne ptr %state, null
           br i1 %state_ok, label %allocate_registrations, label %state_allocation_failed
         allocate_registrations:
@@ -1811,9 +2012,23 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           store atomic ptr null, ptr %waiting_task_slot release, align 8
           %stopping_slot = getelementptr i8, ptr %state, i64 96
           store atomic i32 0, ptr %stopping_slot release, align 4
+          %mutex = getelementptr i8, ptr %state, i64 104
+          %mutex_result = call i32 @pthread_mutex_init(ptr %mutex, ptr null)
+          %mutex_ok = icmp eq i32 %mutex_result, 0
+          br i1 %mutex_ok, label %ready, label %mutex_initialization_failed
+        ready:
           %identity = ptrtoint ptr %state to i64
           %success = call %sollang.socket_result @sollang_socket_result(i64 %identity, i32 -1, i32 0)
           ret %sollang.socket_result %success
+        mutex_initialization_failed:
+          call void @sollang_free(ptr %completion_table)
+          call void @sollang_free(ptr %pending_table)
+          call void @sollang_free(ptr %registration_table)
+          call void @sollang_free(ptr %state)
+          %mutex_close_wakeup = call i32 @close(i32 %wakeup)
+          %mutex_close_epoll = call i32 @close(i32 %epoll)
+          %mutex_failure = call %sollang.socket_result @sollang_socket_result(i64 -1, i32 8, i32 %mutex_result)
+          ret %sollang.socket_result %mutex_failure
         completion_allocation_failed:
           call void @sollang_free(ptr %pending_table)
           br label %pending_allocation_failed
@@ -1851,7 +2066,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %invalid_result
         }
 
-        define internal %sollang.socket_result @sollang_platform_socket_completion_register_stream(i64 %identity, i64 %socket, i64 %key) #0 {
+        define internal %sollang.socket_result @sollang_platform_socket_completion_register_stream_locked(i64 %identity, i64 %socket, i64 %key) #0 {
         entry:
           %identity_ok = icmp ugt i64 %identity, 0
           %socket_ok = icmp sge i64 %socket, 0
@@ -1919,7 +2134,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %invalid_result
         }
 
-        define internal %sollang.socket_result @sollang_platform_socket_completion_remove_stream(i64 %identity, i64 %key) #0 {
+        define internal %sollang.socket_result @sollang_platform_socket_completion_remove_stream_locked(i64 %identity, i64 %key) #0 {
         entry:
           %valid = icmp ugt i64 %identity, 0
           br i1 %valid, label %load_state, label %not_found
@@ -1974,7 +2189,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %associated_result
         }
 
-        define internal %sollang.socket_result @sollang_platform_socket_completion_submit(i64 %identity, i64 %registration_key, i64 %application_key, i32 %direction, ptr %buffer, i64 %buffer_length, i64 %buffer_capacity, i64 %range_offset, i64 %range_length, i32 %slot_state) #0 {
+        define internal %sollang.socket_result @sollang_platform_socket_completion_submit_locked(i64 %identity, i64 %registration_key, i64 %application_key, i32 %direction, ptr %buffer, i64 %buffer_length, i64 %buffer_capacity, i64 %range_offset, i64 %range_length, i32 %slot_state) #0 {
         entry:
           %identity_ok = icmp ugt i64 %identity, 0
           %vacant = icmp eq i32 %slot_state, 0
@@ -2080,18 +2295,10 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           store i64 %native_identity, ptr %association_slot, align 8
           br label %issue
         rearm_epoll:
-          %rearm_socket_slot = getelementptr i8, ptr %registration_entry, i64 16
-          %rearm_socket64 = load i64, ptr %rearm_socket_slot, align 8
-          %rearm_socket = trunc i64 %rearm_socket64 to i32
-          %rearm_event = alloca [12 x i8], align 4
           %rearm_receive = icmp eq i32 %direction, 0
           %rearm_interest = select i1 %rearm_receive, i32 1, i32 4
-          %rearm_mask = or i32 %rearm_interest, 1073741824
-          store i32 %rearm_mask, ptr %rearm_event, align 4
-          %rearm_data = getelementptr i8, ptr %rearm_event, i64 4
-          store i64 %association, ptr %rearm_data, align 1
-          %rearm_status = call i32 @epoll_ctl(i32 %epoll, i32 3, i32 %rearm_socket, ptr %rearm_event)
-          %rearm_ok = icmp eq i32 %rearm_status, 0
+          %rearm_error = call i32 @sollang_socket_completion_rearm_locked(ptr %state, i64 %registration_index, i32 %rearm_interest)
+          %rearm_ok = icmp eq i32 %rearm_error, 0
           br i1 %rearm_ok, label %issue, label %association_failure
         issue:
           %registered_socket_slot = getelementptr i8, ptr %registration_entry, i64 16
@@ -2101,10 +2308,10 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %is_receive = icmp eq i32 %direction, 0
           br i1 %is_receive, label %issue_receive, label %issue_send
         issue_receive:
-          %received = call i64 @recv(i32 %registered_socket, ptr %data, i64 %range_length, i32 0)
+          %received = call i64 @recv(i32 %registered_socket, ptr %data, i64 %range_length, i32 64)
           br label %classify_issue
         issue_send:
-          %sent = call i64 @send(i32 %registered_socket, ptr %data, i64 %range_length, i32 16384)
+          %sent = call i64 @send(i32 %registered_socket, ptr %data, i64 %range_length, i32 16448)
           br label %classify_issue
         classify_issue:
           %transferred = phi i64 [ %received, %issue_receive ], [ %sent, %issue_send ]
@@ -2140,9 +2347,9 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           store i32 0, ptr %completion_status, align 4
           %transferred_slot = getelementptr i8, ptr %pending_entry, i64 80
           store i64 0, ptr %transferred_slot, align 8
-          store atomic i64 1, ptr %pending_entry release, align 8
           %pending_count_slot = getelementptr i8, ptr %state, i64 72
           %previous_pending_count = atomicrmw add ptr %pending_count_slot, i64 1 acq_rel
+          store atomic i64 1, ptr %pending_entry release, align 8
           %waiter_slot = getelementptr i8, ptr %state, i64 80
           %waiter = load i64, ptr %waiter_slot, align 8
           %waiter_started = icmp ne i64 %waiter, 0
@@ -2155,10 +2362,18 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %waiter_ok = icmp eq i32 %created, 0
           br i1 %waiter_ok, label %publish_pending_result, label %waiter_start_failure
         publish_pending_result:
+          %published_rearm_error = call i32 @sollang_socket_completion_rearm_locked(ptr %state, i64 %registration_index, i32 0)
+          %published_rearm_ok = icmp eq i32 %published_rearm_error, 0
+          br i1 %published_rearm_ok, label %pending_ready, label %published_rearm_failure
+        published_rearm_failure:
+          call void @sollang_socket_completion_fail_registration_locked(ptr %state, i64 %registration_index, i32 %published_rearm_error)
+          br label %pending_ready
+        pending_ready:
           %operation_identity = add nuw i64 %free_index, 1
           %pending_result = call %sollang.socket_result @sollang_socket_result(i64 %operation_identity, i32 -2, i32 0)
           ret %sollang.socket_result %pending_result
         waiter_start_failure:
+          store i64 0, ptr %waiter_slot, align 8
           store atomic i64 0, ptr %pending_entry release, align 8
           %waiter_count_rollback = atomicrmw sub ptr %pending_count_slot, i64 1 acq_rel
           store ptr null, ptr %buffer_slot, align 8
@@ -2187,7 +2402,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %invalid_result
         }
 
-        define internal %sollang.socket_result @sollang_platform_socket_completion_cancel(i64 %identity, i64 %application_key) #0 {
+        define internal %sollang.socket_result @sollang_platform_socket_completion_cancel_locked(i64 %identity, i64 %application_key) #0 {
         entry:
           %valid = icmp ugt i64 %identity, 0
           br i1 %valid, label %load_state, label %not_found
@@ -2245,7 +2460,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %not_found_result
         }
 
-        define internal %sollang.socket_result @sollang_platform_socket_completion_dequeue(i64 %identity, i1 %cancelled, ptr %descriptor) #0 {
+        define internal %sollang.socket_result @sollang_platform_socket_completion_dequeue_locked(i64 %identity, i1 %cancelled, ptr %descriptor) #0 {
         entry:
           %valid = icmp ugt i64 %identity, 0
           br i1 %valid, label %check_cancelled, label %invalid_argument
@@ -2351,7 +2566,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           ret %sollang.socket_result %invalid_result
         }
 
-        define internal void @sollang_platform_socket_completion_request_cancel_all(i64 %identity) #0 {
+        define internal void @sollang_platform_socket_completion_request_cancel_all_locked(i64 %identity) #0 {
         entry:
           %valid = icmp ugt i64 %identity, 0
           br i1 %valid, label %load_state, label %done
@@ -2423,6 +2638,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           call void @sollang_platform_io_wait_completion(i64 -1)
           br label %wait_pending_loop
         stop_waiter:
+          call void @sollang_socket_completion_lock(ptr %state)
           %waiting_task_slot = getelementptr i8, ptr %state, i64 88
           %waiting_task = load atomic ptr, ptr %waiting_task_slot acquire, align 8
           %waiting_task_clear = icmp eq ptr %waiting_task, null
@@ -2430,6 +2646,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         stop_waiter_ready:
           %stopping_slot = getelementptr i8, ptr %state, i64 96
           store atomic i32 1, ptr %stopping_slot release, align 4
+          call void @sollang_socket_completion_unlock(ptr %state)
           %waiter_slot = getelementptr i8, ptr %state, i64 80
           %waiter = load i64, ptr %waiter_slot, align 8
           %has_waiter = icmp ne i64 %waiter, 0
@@ -2502,6 +2719,11 @@ internal sealed partial class LinuxLlvmRuntimePlatform
         close_handles:
           %closed_wakeup = call i32 @close(i32 %wakeup)
           %closed_epoll = call i32 @close(i32 %epoll)
+          %mutex = getelementptr i8, ptr %state, i64 104
+          %mutex_destroyed = call i32 @pthread_mutex_destroy(ptr %mutex)
+          %mutex_destroy_ok = icmp eq i32 %mutex_destroyed, 0
+          br i1 %mutex_destroy_ok, label %release_allocations, label %close_trap
+        release_allocations:
           call void @sollang_free(ptr %completion_table)
           call void @sollang_free(ptr %pending_table)
           call void @sollang_free(ptr %registration_table)

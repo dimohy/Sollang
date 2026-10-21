@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-21T10:31:14.304297+00:00",
+  "decision": "reuse-existing-Linux-pthread-mutex-layout-for-bounded-reactor-metadata-critical-sections",
+  "reason": "A per-reactor mutex removes metadata ABA, publish/arm and cancel/dequeue races without introducing private generation tags or per-operation descriptors. Reuse the existing Linux stream-join40-byte pthread mutex ABI.",
+  "contract": [
+    "No mutex held across epoll_wait, Task wait or pthread_join.",
+    "Completion syscalls use per-call MSG_DONTWAIT; preserve MSG_NOSIGNAL.",
+    "All published table transitions are serialized; no one-operation-perregistration restriction.",
+    "Worker scans all matching ready operations and rearms union of remaining interests after scan.",
+    "After a post-publication rearm error, retained slots publish native error outcomes; never return the same buffer as submission failure."
+  ],
+  "claimsImplemented": false,
+  "next": "Implement CSharp only and run fixed C680 baseline plus expanded normal/error/cancel/publication controls before any SLG edit."
+}
