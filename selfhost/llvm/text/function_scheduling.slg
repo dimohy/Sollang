@@ -349,6 +349,25 @@ prepareFunctionExpressionOrder functionIndex: Int, functionEnd: Int, expressionS
                 schedulingSuspensionStatements! -> push(suspensionPoint.awaitIr -> schedulingStatementOwner(functionIndex, context))
             }
     }
+    # A blocking join is also a lexical boundary, including main and ordinary
+    # functions that have no coroutine suspend point. Resolve the authoritative
+    # await node and its owner instead of recognizing a name or adding spills.
+    expressionStart => joinIndex!
+    joinIndex! < functionEnd -> while {
+        (joinIndex! -> isAwaitSourceNode(context))
+            and not schedulingSuspensions![joinIndex! - expressionStart]
+            -> if {
+                context.ir[joinIndex!].parent => joinOwner!
+                joinOwner! >= 0 and context.ir[joinOwner!].kind != 0 and context.ir[joinOwner!].kind != 11
+                    -> while { context.ir[joinOwner!].parent => joinOwner! }
+                joinOwner! == functionIndex -> if {
+                    true => schedulingSuspensions![joinIndex! - expressionStart]
+                    schedulingSuspensionIndices! -> push(joinIndex!)
+                    schedulingSuspensionStatements! -> push(joinIndex! -> schedulingStatementOwner(functionIndex, context))
+                }
+            }
+        joinIndex! + 1 => joinIndex!
+    }
     # Control and logical containment are structural properties of the frozen
     # Typed IR. Compute them once; readiness revisits must not repeat the same
     # ancestor and condition scans for every scheduling pass.

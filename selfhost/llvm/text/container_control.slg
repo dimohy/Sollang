@@ -1275,19 +1275,29 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                     ", ptr %slot$(valueRoot), align " -> print
                                                     valueNode -> storageAlign(context, state) -> writeDecimalLine
                                                 } else {
-                                                    context.ir[valueBinding.operand0] => bindingOperand
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
-                                                    bindingOperand -> writeIrType(context, state)
-                                                    " " -> print
-                                                    bindingOperand.kind == 3 or bindingOperand.kind == 4
-                                                        -> if {
-                                                            bindingOperand -> sourceToken(context, state) => bindingToken
-                                                            bindingOperand.kind == 3 -> if { bindingOperand -> writeIntegerLiteral(context, state) } else { (context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == 116
-                                                                    -> if { "1" -> print } else { "0" -> print } }
-                                                        } else {
-                                                            valueBinding.operand0 -> writeValue(ownerIndex, context, state)
-                                                        }
-                                                    "" -> println
+                                                    valueBindingIndex! -> asyncFrameBindingRoot(ownerIndex, context, state) => asyncRoot
+                                                    asyncRoot >= 0 -> if {
+                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                                        valueNode -> writeIrType(context, state)
+                                                        ", ptr " -> print
+                                                        asyncRoot -> writeAsyncLocalAddress(context)
+                                                        ", align " -> print
+                                                        valueNode -> storageAlign(context, state) -> writeDecimalLine
+                                                    } else {
+                                                        context.ir[valueBinding.operand0] => bindingOperand
+                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
+                                                        bindingOperand -> writeIrType(context, state)
+                                                        " " -> print
+                                                        bindingOperand.kind == 3 or bindingOperand.kind == 4
+                                                            -> if {
+                                                                bindingOperand -> sourceToken(context, state) => bindingToken
+                                                                bindingOperand.kind == 3 -> if { bindingOperand -> writeIntegerLiteral(context, state) } else { (context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == 116
+                                                                        -> if { "1" -> print } else { "0" -> print } }
+                                                            } else {
+                                                                valueBinding.operand0 -> writeValue(ownerIndex, context, state)
+                                                            }
+                                                        "" -> println
+                                                    }
                                                 }
                                             }
                                         }
