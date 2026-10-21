@@ -5345,6 +5345,17 @@ emitExpressionSemanticPrefix context: ref emitterContext.EmitContext, diagnostic
 emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
     context -> numericCallLiteralOverridesUnary -> if { return }
     context.expressionOperandDiagnostic => diagnostic
+    diagnostic.code == 71 -> if {
+        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+        context -> emitExpressionSemanticPrefix(diagnostic, location)
+        diagnostic.operatorKind -> binaryArithmeticOperatorName => operatorName
+        diagnostic.operandTypeSymbol == 1 -> if {
+            "CodePoint does not support '$operatorName'; convert it to UInt32 before arithmetic" -> println
+        } else {
+            "left operand of '$operatorName' must be a compatible numeric value" -> println
+        }
+        return
+    }
     diagnostic.code == 70 -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
         context -> emitExpressionSemanticPrefix(diagnostic, location)

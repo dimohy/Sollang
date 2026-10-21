@@ -3284,9 +3284,12 @@ Numeric rules:
 - Constructor-like conversions such as `Int8(value)` and `Float32(value)` are
   explicit. Literal range failures are compile errors and runtime integer
   narrowing performs a bounds check.
-- Binary arithmetic requires equal operand types; Sollang does not silently widen,
-  narrow, or change signedness. `%` is integer-only and unary `-` rejects
-  unsigned values.
+- Binary arithmetic requires equal numeric operand types; Sollang does not
+  silently widen, narrow, or change signedness. `%` is integer-only and unary
+  `-` rejects unsigned values. `CodePoint` requires an explicit conversion to
+  `UInt32` before binary arithmetic. Both operands are inferred before checking
+  the left operand's arithmetic domain, then the right operand's type equality.
+  An invalid left domain is diagnosed at that operand's expression location.
 - `*`, `/`, and `%` bind tighter than `+` and `-`; operators are
   left-associative.
 - Integer bindings can be interpolated using invariant decimal display.

@@ -2879,7 +2879,7 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
     contextualAst => contextualOrigin!
     contextualOwnerAst >= 0 -> if { contextualOwnerAst => contextualOrigin! }
     contextualSource >= 0 and contextualCode > 0
-        and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43))
+        and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
         -> if {
             package -> diagnosticOriginBefore(contextualSource, contextualOrigin!, source!, location!) => contextualEarlier
             selected! == 4 and source! == contextualSource and location! == contextualOrigin! => sameContextualInitializer
@@ -2889,6 +2889,16 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
                     contextualSource => source!
                     contextualOrigin! => location!
                 }
+        }
+    # Argument contract validation follows inference of that argument.
+    contextualCode == 71 and contextualSource >= 0 and selected! == 3
+        and argument.sourceModule == contextualSource
+        and (argument.argumentAst == contextualAst
+        or (package -> declarationAncestor(contextualSource, argument.argumentAst, contextualAst)))
+        -> if {
+            11 => selected!
+            contextualSource => source!
+            contextualAst => location!
         }
     contextualSource >= 0 and (contextualCode == 47 or contextualCode == 32 or contextualCode == 48)
         -> if {
@@ -4257,7 +4267,7 @@ public firstMutableRebindDiagnostic prepared: ref semanticContext.SemanticSnapsh
 
 # C# FlowExpression inherits its source expression's coordinate. Grouping
 # is transparent, while operators and product construction own their tokens.
-mainOnlyRuntimeDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceModule: Int, callAst: Int -> UIntSize {
+expressionDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceModule: Int, callAst: Int -> UIntSize {
     package.ranges[sourceModule] => range
     callAst => originAst!
     package.nodes[range.astStart + originAst!].kind == 10
@@ -4270,6 +4280,37 @@ mainOnlyRuntimeDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAst
         and origin.payloadToken >= 0
         -> if { package.tokens[range.tokenStart + origin.payloadToken].span.start -> return }
     origin.start
+}
+
+# Ordinary and interpolation arithmetic share one type-domain decision.
+# Both operands must be resolved before domain admission, as in C# inference.
+ordinaryArithmeticDomainDiagnostic package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], types: ref [typeIds.SemanticType; ~], sourceModule: Int, binaryAst: Int, leftAst: Int, leftTypeId: Int, rightTypeId: Int -> ExpressionOperandDiagnostic {
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => diagnostic!
+    package.ranges[sourceModule] => range
+    leftAst >= 0 and leftAst < range.astCount
+        and leftTypeId >= 0 and leftTypeId < (types -> len)
+        and rightTypeId >= 0 and rightTypeId < (types -> len)
+        and not types[leftTypeId].containsParameter and not types[rightTypeId].containsParameter
+        -> if {
+            package.nodes[range.astStart + binaryAst].operatorKind => opcode
+            types -> expressionTypeIds.interpolationBinaryOperands(leftTypeId, rightTypeId, false, false) => operands
+            opcode -> expressionTypeIds.interpolationArithmeticDecision(operands) => decision
+            decision.code == 1 or decision.code == 2 -> if {
+                package -> expressionDiagnosticOffset(sourceAsts, sourceModule, leftAst) => location
+                ExpressionOperandDiagnostic {
+                    code: 71
+                    sourceModule: sourceModule
+                    astNode: binaryAst
+                    operandAst: leftAst
+                    operatorKind: opcode
+                    locationOffset: location
+                    operandTypeSymbol: decision.code
+                    operandTypeId: leftTypeId
+                    firstTypeId: rightTypeId
+                } => diagnostic!
+            }
+        }
+    diagnostic!
 }
 
 # Identifier-only member chains keep the primary coordinate; calls, indexes,
@@ -5044,6 +5085,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                         -> if {
                             resolved.types -> typeIds.materializedReadTypeId(ir[binary.operand0].typeId) => leftId
                             resolved.types -> typeIds.materializedReadTypeId(ir[binary.operand1].typeId) => rightId
+                            package -> ordinaryArithmeticDomainDiagnostic(sourceAstByExpression, resolved.types, binary.sourceModule, binary.astNode, ir[binary.operand0].astNode, leftId, rightId) => domainDiagnostic
+                            domainDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, domainDiagnostic, selected!))
+                                -> if { domainDiagnostic => selected! }
                             leftId >= 0 and rightId >= 0 and leftId != rightId
                                 and leftId < (resolved.types -> len) and rightId < (resolved.types -> len)
                                 and not resolved.types[leftId].containsParameter and not resolved.types[rightId].containsParameter => concreteOperands
@@ -6103,6 +6147,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                         -> if {
                             resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![leftGlobal]) => leftTypeId
                             resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![rightGlobal]) => rightTypeId
+                            package -> ordinaryArithmeticDomainDiagnostic(sourceAstByExpression, resolved.types, sourceIndex!, astIndex!, leftGlobal - range.astStart, leftTypeId, rightTypeId) => domainDiagnostic
+                            domainDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, domainDiagnostic, selected!))
+                                -> if { domainDiagnostic => selected! }
                             leftTypeId >= 0 and rightTypeId >= 0 and leftTypeId != rightTypeId
                                 -> if {
                                     resolved.types[leftTypeId] => leftType
@@ -6271,7 +6318,7 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                                     path.start => locationOffset!
                                     mainOnly and not privateAlias and requiredEffect == 0
                                         -> if {
-                                            package -> mainOnlyRuntimeDiagnosticOffset(sourceAstByExpression, call.sourceModule, call.callAst) => locationOffset!
+                                            package -> expressionDiagnosticOffset(sourceAstByExpression, call.sourceModule, call.callAst) => locationOffset!
                                         }
                                     ExpressionOperandDiagnostic {
                                         code: privateAlias -> if { 47 } else { requiredEffect > 0 -> if { 32 } else { 48 } }
