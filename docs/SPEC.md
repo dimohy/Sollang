@@ -1163,6 +1163,11 @@ permutation before function bindings are published; interpolation indexes and
 semantic type indexes retain their own identities. Repeating this ordering
 step leaves the arena unchanged.
 
+Late direct-await materialization updates every consuming value edge, including
+the terminal result edge of a function body. These consumers share one joined
+value; a function returning `T` must never select the pre-await `Task<T>` producer
+as its result merely because that producer retains the payload type metadata.
+
 Sequential diagnostic Typed IR and production function-parallel Typed IR must
 have identical ordered node inventories for the same prepared source set.
 Compiler verification compares both modes directly; the presence of an
