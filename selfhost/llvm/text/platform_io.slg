@@ -2274,26 +2274,54 @@ nominalFieldType ownerType: Int, ordinal: Int, context: ref emitterContext.EmitC
     fieldType!
 }
 
-emitAsyncFileReadCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitAsyncFileScalarCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     call.typeId < 0 or call.typeId >= (context.types -> len)
         -> if {
             "sollang compiler verification failure V008: async file call type outside canonical type bounds (call $(request.callIndex), type $(call.typeId))" -> runtime.eprintln
             return
         }
-    context.types[call.typeId].first => optionTypeId
-    optionTypeId < 0 or optionTypeId >= (context.types -> len)
+    call.opcode == typedIr.asyncFileWriteOpcode() => writing
+    -1 => scalarTypeId!
+    -1 => scalarValueIndex!
+    -1 => scalarOffsetIndex!
+    writing -> if {
+        call.operand0 < 0 or call.operand0 >= (context.ir -> len)
+            -> if {
+                "sollang compiler verification failure V008: async file writer receiver missing (call $(request.callIndex))" -> runtime.eprintln
+                return
+            }
+        call.operand0 => valueArgument!
+        context.ir[valueArgument!].nextOperand => offsetArgument!
+        offsetArgument! >= 0 and offsetArgument! < (context.ir -> len)
+            and context.ir[offsetArgument!].nextOperand >= 0
+                -> while {
+                offsetArgument! => valueArgument!
+                context.ir[offsetArgument!].nextOperand => offsetArgument!
+            }
+        valueArgument! == call.operand0 or offsetArgument! < 0 or offsetArgument! >= (context.ir -> len)
+            -> if {
+                "sollang compiler verification failure V008: async file writer scalar or offset missing (call $(request.callIndex))" -> runtime.eprintln
+                return
+            }
+        valueArgument! -> aggregateValueIndex(context, state) => scalarValueIndex!
+        offsetArgument! -> aggregateValueIndex(context, state) => scalarOffsetIndex!
+        context.ir[scalarValueIndex!] -> effectiveTypeId(context, state) => scalarTypeId!
+    } else {
+        context.types[call.typeId].first => optionTypeId
+        optionTypeId < 0 or optionTypeId >= (context.types -> len)
+            -> if {
+                "sollang compiler verification failure V008: async file option type missing (call $(request.callIndex), result $(call.typeId), option $optionTypeId)" -> runtime.eprintln
+                return
+            }
+        context.types[optionTypeId].first => scalarTypeId!
+    }
+    scalarTypeId! < 0 or scalarTypeId! >= (context.typeSizes -> len)
         -> if {
-            "sollang compiler verification failure V008: async file option type missing (call $(request.callIndex), result $(call.typeId), option $optionTypeId)" -> runtime.eprintln
+            "sollang compiler verification failure V008: async file scalar type missing (call $(request.callIndex), result $(call.typeId), scalar $(scalarTypeId!))" -> runtime.eprintln
             return
         }
-    context.types[optionTypeId].first => scalarTypeId
-    scalarTypeId < 0 or scalarTypeId >= (context.typeSizes -> len)
-        -> if {
-            "sollang compiler verification failure V008: async file scalar type missing (call $(request.callIndex), option $optionTypeId, scalar $scalarTypeId)" -> runtime.eprintln
-            return
-        }
-    context.typeSizes[scalarTypeId] => scalarSize
+    context.typeSizes[scalarTypeId!] => scalarSize
     context.typeSizes[call.typeId] => resultSize
     resultSize -> runtimeTaskContextSize(context, state) => allocationSize
     "  %v$(request.callIndex)_file_async_context = call ptr @malloc(i64 $allocationSize)" -> println
@@ -2314,7 +2342,17 @@ emitAsyncFileReadCall request: FileCallRequest, context: ref emitterContext.Emit
     "v$(request.callIndex)_file_async" -> emitRuntimeTaskDiagnosticContext("%v$(request.callIndex)_file_async_handle", "%v$(request.callIndex)_file_async_context", resultSize, request.ownerIndex, context, state)
     "  %v$(request.callIndex)_file_async_size_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 11" -> println
     "  store i32 $scalarSize, ptr %v$(request.callIndex)_file_async_size_slot, align 4" -> println
-    call.opcode == -320 -> if {
+    writing -> if {
+        "  %v$(request.callIndex)_file_async_data_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 13" -> println
+        "  store " -> print
+        scalarTypeId! -> writeSemanticTypeId(context, state)
+        " " -> print
+        scalarValueIndex! -> writeValue(request.ownerIndex, context, state)
+        ", ptr %v$(request.callIndex)_file_async_data_slot, align $(context.typeAligns[scalarTypeId!])" -> println
+        "  %v$(request.callIndex)_file_async_operation_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 20" -> println
+        "  store i32 1, ptr %v$(request.callIndex)_file_async_operation_slot, align 4" -> println
+    }
+    call.opcode == -320 or writing -> if {
         call.operand0 -> aggregateValueIndex(context, state) => receiverIndex
         receiverIndex < 0 or receiverIndex >= (context.ir -> len)
             -> if {
@@ -2322,27 +2360,39 @@ emitAsyncFileReadCall request: FileCallRequest, context: ref emitterContext.Emit
                 return
             }
         context.ir[receiverIndex] => receiver
-        receiver -> effectiveTypeId(context, state) => fileReaderTypeId
+        receiver -> effectiveTypeId(context, state) => receiverStoredTypeId
+        context.types -> typeIds.materializedReadTypeId(receiverStoredTypeId) => fileReaderTypeId
+        receiverStoredTypeId != fileReaderTypeId => borrowedReceiver
         not (fileReaderTypeId -> isOwnedFileType(context, state))
             -> if {
                 "sollang compiler verification failure V008: async file receiver is not the canonical File value (call $(request.callIndex), receiver $receiverIndex, type $fileReaderTypeId)" -> runtime.eprintln
                 return
             }
+        borrowedReceiver -> if {
+            "  %v$(request.callIndex)_file_async_receiver = load " -> print
+            fileReaderTypeId -> writeSemanticTypeId(context, state)
+            ", ptr " -> print
+            receiverIndex -> writeValue(request.ownerIndex, context, state)
+            ", align $(context.typeAligns[fileReaderTypeId])" -> println
+        }
         "  %v$(request.callIndex)_file_async_source_handle = extractvalue " -> print
         fileReaderTypeId -> writeSemanticTypeId(context, state)
         " " -> print
-        receiverIndex -> writeValue(request.ownerIndex, context, state)
+        borrowedReceiver -> if { "%v$(request.callIndex)_file_async_receiver" -> print } else {
+            receiverIndex -> writeValue(request.ownerIndex, context, state)
+        }
         ", 0" -> println
         "  %v$(request.callIndex)_file_async_owned_handle = call i64 @sollang_platform_duplicate_owned_file(i64 %v$(request.callIndex)_file_async_source_handle)" -> println
         "  %v$(request.callIndex)_file_async_handle_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 17" -> println
         "  store i64 %v$(request.callIndex)_file_async_owned_handle, ptr %v$(request.callIndex)_file_async_handle_slot, align 8" -> println
-        call.operand1 => offsetIndex
-        offsetIndex < 0 or offsetIndex >= (context.ir -> len)
+        call.operand1 => offsetIndex!
+        writing -> if { scalarOffsetIndex! => offsetIndex! }
+        offsetIndex! < 0 or offsetIndex! >= (context.ir -> len)
             -> if {
                 "sollang compiler verification failure V008: async file offset missing (call $(request.callIndex), ast $(call.astNode))" -> runtime.eprintln
                 return
             }
-        offsetIndex -> aggregateValueIndex(context, state) => offsetValue
+        offsetIndex! -> aggregateValueIndex(context, state) => offsetValue
         "  %v$(request.callIndex)_file_async_offset_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 18" -> println
         "  store i64 " -> print
         offsetValue -> writeValue(request.ownerIndex, context, state)
@@ -2351,7 +2401,7 @@ emitAsyncFileReadCall request: FileCallRequest, context: ref emitterContext.Emit
         "  store i32 1, ptr %v$(request.callIndex)_file_async_explicit_slot, align 4" -> println
     }
     "  %v$(request.callIndex)_file_async_result_completion_slot = getelementptr %sollang.task_control, ptr %v$(request.callIndex)_file_async_handle, i32 0, i32 22" -> println
-    context.ir[request.callIndex].opcode -> typedIr.isAsyncFileReadOpcode
+    context.ir[request.callIndex].opcode -> typedIr.isAsyncFileOpcode
         -> if {
             "  store ptr @sollang_task_result_complete_n$(request.callIndex), ptr %v$(request.callIndex)_file_async_result_completion_slot, align 8" -> println
         }
@@ -2503,8 +2553,8 @@ emitFileDurabilityCall request: WhileValueRequest, context: ref emitterContext.E
 
 emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
-    call.opcode -> typedIr.isAsyncFileReadOpcode -> if {
-        request -> emitAsyncFileReadCall(context, state)
+    call.opcode -> typedIr.isAsyncFileOpcode -> if {
+        request -> emitAsyncFileScalarCall(context, state)
         return
     }
     (call.opcode == -316 or call.opcode == -317 or call.opcode == -318)

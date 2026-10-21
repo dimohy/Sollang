@@ -81,6 +81,7 @@ public isFileRuntimeOpcode opcode: Int -> Bool {
         or (opcode <= -313 and opcode >= -318)
         or opcode == -319
         or opcode == -320
+        or opcode == asyncFileWriteOpcode()
 }
 
 public isFileResultOpcode opcode: Int -> Bool {
@@ -94,6 +95,10 @@ public isFileResultOpcode opcode: Int -> Bool {
 }
 
 public isAsyncFileReadOpcode opcode: Int -> Bool => opcode == -319 or opcode == -320
+
+public asyncFileWriteOpcode: -> Int => -346
+
+public isAsyncFileOpcode opcode: Int -> Bool => (opcode -> isAsyncFileReadOpcode) or opcode == asyncFileWriteOpcode()
 
 # Syntax shape, not provisional semantic availability, decides whether
 # operators exist in Typed IR. Both entry and ordinary-function lowering use
@@ -620,6 +625,8 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
         -> if { -321 => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "readAtAsync")
         -> if { -320 => opcode! }
+    request.source -> sourceMatches(request.token.span.start, request.token.span.length, "writeAtAsync")
+        -> if { asyncFileWriteOpcode() => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "readIntoAt")
         -> if { -304 => opcode! }
     request.source -> sourceMatches(request.token.span.start, request.token.span.length, "writeRangeAt")

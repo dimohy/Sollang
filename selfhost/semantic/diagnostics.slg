@@ -2326,6 +2326,7 @@ public struct RedundantNumericConversion {
 
 public struct NumericCallArgumentDiagnostic {
     # 5 identifies a concrete value passed to a generic box input.
+    # 6/7 identify async file writer arity/unsupported scalar diagnostics.
     public code: Int
     public sourceModule: Int
     public argumentAst: Int
@@ -3574,7 +3575,8 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
                 -> if {
                     package.nodes[range.astStart + targetAst] => target
                     package.sources[range.sourceModule] -> slice(target.start, target.length) => name
-                    name == "writeAt" -> if {
+                    name == "writeAt" or name == "writeAtAsync" -> if {
+                        name == "writeAtAsync" => asyncWrite
                         resolved.types -> typeIds.materializedReadTypeId(typeByAst![flowSources[globalCall]]) => receiverTypeId
                         receiverTypeId >= 0 and receiverTypeId < (resolved.types -> len)
                             -> if {
@@ -3592,6 +3594,14 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
                                             -> if {
                                                 calls.ModuleCallResolution { sourceModule: range.sourceModule, callAst: callAst!, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => intrinsic
                                                 package -> semanticContext.callArgumentAsts(intrinsic, flowSources) => arguments
+                                                asyncWrite and (arguments -> len) != 3 -> if {
+                                                    emptyNumericCallArgumentDiagnostic() => diagnostic!
+                                                    6 => diagnostic!.code
+                                                    range.sourceModule => diagnostic!.sourceModule
+                                                    targetAst => diagnostic!.argumentAst
+                                                    callAst! => diagnostic!.callAst
+                                                    diagnostic! -> return
+                                                }
                                                 (arguments -> len) == 3 -> if {
                                                     -1 => scalarType!
                                                     resolved.references -> each reference {
@@ -3602,6 +3612,27 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
                                                                     package.nodes[range.astStart + typeNode.parent] => parent
                                                                     typeNode.parent == callAst! or (parent.parent == callAst! and parent.start > call.start and (parent.kind == 11 or parent.kind == 77))
                                                                         -> if { reference.typeId => scalarType! }
+                                                                }
+                                                            }
+                                                    }
+                                                    asyncWrite -> if {
+                                                        scalarType! < 0 -> if {
+                                                            resolved.types -> typeIds.materializedReadTypeId(typeByAst![arguments[1]]) => scalarType!
+                                                        }
+                                                        scalarType! >= 0 and scalarType! < (resolved.types -> len)
+                                                            -> if {
+                                                                resolved.types[scalarType!] => scalar
+                                                                scalar.kind == 1 and scalar.origin == 1
+                                                                    and ((scalar.symbol >= 2 and scalar.symbol <= 14)
+                                                                    or (scalar.symbol >= 19 and scalar.symbol <= 23)) => supportedScalar
+                                                                not supportedScalar -> if {
+                                                                    emptyNumericCallArgumentDiagnostic() => diagnostic!
+                                                                    7 => diagnostic!.code
+                                                                    range.sourceModule => diagnostic!.sourceModule
+                                                                    arguments[1] - range.astStart => diagnostic!.argumentAst
+                                                                    callAst! => diagnostic!.callAst
+                                                                    scalarType! => diagnostic!.actualTypeId
+                                                                    diagnostic! -> return
                                                                 }
                                                             }
                                                     }

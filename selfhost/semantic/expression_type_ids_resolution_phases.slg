@@ -3499,7 +3499,8 @@ resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, t
                 -> if {
                     prepared.package.tokens[range.tokenStart + targetToken] => target
                     TextMatchRequest { source: source, start: target.span.start, length: target.span.length, expected: "writeAt" } -> textMatches => scalarWrite
-                    scalarWrite -> if {
+                    TextMatchRequest { source: source, start: target.span.start, length: target.span.length, expected: "writeAtAsync" } -> textMatches => scalarWriteAsync
+                    scalarWrite or scalarWriteAsync -> if {
                         expressionIndexByAst[flowSources[globalCall]] => receiverIndex
                         receiverIndex >= 0 -> if {
                             types -> typeIds.materializedReadTypeId(expressions[receiverIndex].typeId) => receiverTypeId
@@ -3546,7 +3547,7 @@ resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, t
 }
 
 resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: ref [Int; ~] -> Unit {
-    # readAt<T>/readAtAsync<T>/writeAt<T> are compiler-provided owned File members rather
+    # Scalar positional File members are compiler-provided capabilities rather
     # than declarations in sys.file. Materialize their canonical result types
     # here so enum matching and subsequent flow calls see the same types as the
     # reference compiler. Reuse the canonical final flow target, so an outer
@@ -3584,26 +3585,29 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
                             false => fileMemberReadAt!
                             false => fileMemberReadAtAsync!
                             false => fileMemberWriteAt!
+                            false => fileMemberWriteAtAsync!
                             fileMemberTargetToken >= 0 -> if {
                                 prepared.package.tokens[fileMemberRange.tokenStart + fileMemberTargetToken] => fileMemberTarget
                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "readAt" } -> textMatches => fileMemberReadAt!
                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "readAtAsync" } -> textMatches => fileMemberReadAtAsync!
                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "writeAt" } -> textMatches => fileMemberWriteAt!
+                                TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "writeAtAsync" } -> textMatches => fileMemberWriteAtAsync!
                             }
                             -1 => fileMemberResultType!
-                            fileMemberWriteAt! -> if {
-                                0 => fileWriteResultSearch!
-                                fileWriteResultSearch! < (types -> len) -> while {
-                                    types[fileWriteResultSearch!] => fileWriteResultCandidate
-                                    fileWriteResultCandidate.kind == 7 and fileWriteResultCandidate.origin == 4 and fileWriteResultCandidate.symbol == 1 and fileWriteResultCandidate.first == 0 and fileWriteResultCandidate.second == 1 and fileWriteResultCandidate.status == 0
-                                        -> if { fileWriteResultSearch! => fileMemberResultType! }
-                                    fileWriteResultSearch! + 1 => fileWriteResultSearch!
+                            fileMemberWriteAt! or fileMemberWriteAtAsync!
+                                -> if {
+                                    0 => fileWriteResultSearch!
+                                    fileWriteResultSearch! < (types -> len) -> while {
+                                        types[fileWriteResultSearch!] => fileWriteResultCandidate
+                                        fileWriteResultCandidate.kind == 7 and fileWriteResultCandidate.origin == 4 and fileWriteResultCandidate.symbol == 1 and fileWriteResultCandidate.first == 0 and fileWriteResultCandidate.second == 1 and fileWriteResultCandidate.status == 0
+                                            -> if { fileWriteResultSearch! => fileMemberResultType! }
+                                        fileWriteResultSearch! + 1 => fileWriteResultSearch!
+                                    }
+                                    fileMemberResultType! < 0 -> if {
+                                        types -> len => fileMemberResultType!
+                                        types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
+                                    }
                                 }
-                                fileMemberResultType! < 0 -> if {
-                                    types -> len => fileMemberResultType!
-                                    types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
-                                }
-                            }
                             (fileMemberReadAt! or fileMemberReadAtAsync!) and fileMemberTypeToken! >= 0
                                 -> if {
                                     prepared.package.tokens[fileMemberRange.tokenStart + fileMemberTypeToken!] => fileMemberTypeName

@@ -314,11 +314,53 @@ emitCompletedFileRead namePrefix: Text, awaited: typedIr.TypedIrNode, context: r
     " %$(namePrefix)_file_result, ptr %$(namePrefix)_task_context, align 8" -> println
 }
 
+# Scalar writes succeed only after the worker reports a full transfer.
+emitCompletedFileWrite namePrefix: Text, resultTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(namePrefix)_file_write_result_slot = alloca " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    ", align 8" -> println
+    "  store " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    " zeroinitializer, ptr %$(namePrefix)_file_write_result_slot, align 8" -> println
+    "  %$(namePrefix)_file_write_size_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 11" -> println
+    "  %$(namePrefix)_file_write_size = load i32, ptr %$(namePrefix)_file_write_size_slot, align 4" -> println
+    "  %$(namePrefix)_file_write_expected = zext i32 %$(namePrefix)_file_write_size to i64" -> println
+    "  %$(namePrefix)_file_write_count_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 14" -> println
+    "  %$(namePrefix)_file_write_count = load i64, ptr %$(namePrefix)_file_write_count_slot, align 8" -> println
+    "  %$(namePrefix)_file_write_ok_slot = getelementptr %sollang.task_control, ptr %$(namePrefix)_task_handle, i32 0, i32 15" -> println
+    "  %$(namePrefix)_file_write_ok_value = load i32, ptr %$(namePrefix)_file_write_ok_slot, align 4" -> println
+    "  %$(namePrefix)_file_write_ok = icmp ne i32 %$(namePrefix)_file_write_ok_value, 0" -> println
+    "  %$(namePrefix)_file_write_full = icmp eq i64 %$(namePrefix)_file_write_count, %$(namePrefix)_file_write_expected" -> println
+    "  %$(namePrefix)_file_write_success = and i1 %$(namePrefix)_file_write_ok, %$(namePrefix)_file_write_full" -> println
+    "  br i1 %$(namePrefix)_file_write_success, label %file_write_$(namePrefix)_merge, label %file_write_$(namePrefix)_error" -> println
+    "file_write_$(namePrefix)_error:" -> println
+    "  %$(namePrefix)_file_write_error_tag = getelementptr inbounds " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_write_result_slot, i32 0, i32 0" -> println
+    "  store i32 1, ptr %$(namePrefix)_file_write_error_tag, align 4" -> println
+    "  %$(namePrefix)_file_write_error_payload = getelementptr inbounds " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_write_result_slot, i32 0, i32 1" -> println
+    "  %$(namePrefix)_file_write_io0 = insertvalue %sollang.text poison, ptr @sollang_file_error_io, 0" -> println
+    "  %$(namePrefix)_file_write_io = insertvalue %sollang.text %$(namePrefix)_file_write_io0, i64 2, 1" -> println
+    "  store %sollang.text %$(namePrefix)_file_write_io, ptr %$(namePrefix)_file_write_error_payload, align 8" -> println
+    "  br label %file_write_$(namePrefix)_merge" -> println
+    "file_write_$(namePrefix)_merge:" -> println
+    "  %$(namePrefix)_file_write_result = load " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    ", ptr %$(namePrefix)_file_write_result_slot, align 8" -> println
+    "  store " -> print
+    resultTypeId -> writeSemanticTypeId(context, state)
+    " %$(namePrefix)_file_write_result, ptr %$(namePrefix)_task_context, align 8" -> println
+}
+
 # Both explicit await and scoped discard join before rebuilding runtime results.
 # Each cleanup edge supplies its own SSA prefix; result storage stays Task-owned.
 emitCompletedRuntimeTaskResult resultIndex: Int, producerIndex: Int, namePrefix: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[producerIndex].opcode -> typedIr.isAsyncFileReadOpcode
         -> if { namePrefix -> emitCompletedFileRead(context.ir[resultIndex], context, state) }
+    context.ir[producerIndex].opcode == typedIr.asyncFileWriteOpcode()
+        -> if { namePrefix -> emitCompletedFileWrite(context.ir[resultIndex].typeId, context, state) }
     context.ir[producerIndex].opcode -> typedIr.isSocketCompletionDequeueOpcode
         -> if { context.ir[resultIndex].typeId -> emitCompletedSocketDequeue(producerIndex, namePrefix, context, state) }
 }
@@ -342,7 +384,7 @@ emitRuntimeTaskResultCompletionFunctions context: ref emitterContext.EmitContext
     producerIndex! < (context.ir -> len) -> while {
         context.ir[producerIndex!] => producer
         (producer.kind == 6 or producer.kind == 9)
-            and ((producer.opcode -> typedIr.isAsyncFileReadOpcode) or (producer.opcode -> typedIr.isSocketCompletionDequeueOpcode))
+            and ((producer.opcode -> typedIr.isAsyncFileOpcode) or (producer.opcode -> typedIr.isSocketCompletionDequeueOpcode))
             and (producerIndex! -> irNodeReachable(context, state))
             -> if {
                 "define internal void @sollang_task_result_complete_n$(producerIndex!)(ptr %control) {" -> println
@@ -536,7 +578,7 @@ usesReachableAsyncFileRuntime context: ref emitterContext.EmitContext, state: re
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
         (node.kind == 6 or node.kind == 9)
-            and (node.opcode -> typedIr.isAsyncFileReadOpcode)
+            and (node.opcode -> typedIr.isAsyncFileOpcode)
             and (nodeIndex! -> irNodeReachable(context, state))
             -> if { true -> return }
         nodeIndex! + 1 => nodeIndex!
@@ -566,7 +608,7 @@ usesReachableAsyncRuntime context: ref emitterContext.EmitContext, state: ref Co
         ((node.kind == 0 and (node.flags / 8) % 2 == 1)
             or ((node.kind == 6 or node.kind == 9)
             and ((node.flags / 8) % 2 == 1 or node.opcode == -113
-            or (node.opcode -> typedIr.isAsyncFileReadOpcode))))
+            or (node.opcode -> typedIr.isAsyncFileOpcode))))
             and (nodeIndex! -> irNodeReachable(context, state))
             -> if { true -> return }
         nodeIndex! + 1 => nodeIndex!

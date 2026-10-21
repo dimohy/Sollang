@@ -5202,6 +5202,19 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
         -> if { return }
     context.numericCallArgumentDiagnostic => diagnostic
     diagnostic.code == 0 -> if { return }
+    diagnostic.code == 6 or diagnostic.code == 7 -> if {
+        context.ranges[diagnostic.sourceModule] => range
+        context.nodes[range.astStart + diagnostic.argumentAst] => argument
+        context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.argumentAst, argument.start)
+        diagnostic.code == 6 -> if {
+            "writeAtAsync expects a scalar value and one UInt64 byte offset" -> println
+        } else {
+            "writeAtAsync supports Bool, CodePoint, and numeric scalars; got " -> print
+            diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
+            println()
+        }
+        return
+    }
     diagnostic.code == 3 or diagnostic.code == 4 -> if {
         context.ranges[diagnostic.sourceModule] => range
         context.nodes[range.astStart + diagnostic.argumentAst] => argument
