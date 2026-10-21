@@ -54,7 +54,7 @@ function Run([string]$Step, [string[]]$Arguments) {
     return $r
 }
 $record = [ordered]@{
-    schemaVersion=1; status='running'; expectation=$Expectation; probeSet=$ProbeSet; authority=$Authority; runtimeSourceVersion=$sourceVersion; completed=0; total=$(switch ($ProbeSet) {'readiness' {4} 'multipending' {2} default {3}})
+    schemaVersion=1; status='running'; expectation=$Expectation; probeSet=$ProbeSet; authority=$Authority; runtimeSourceVersion=$sourceVersion; completed=0; total=$(switch ($ProbeSet) {'readiness' {4} 'multipending' {7} default {3}})
     evidenceScope='Extracted production Linux LLVM; real closed AF_UNIX stream send; synthetic waiter readiness; default SIGPIPE in isolated child processes; not public TCP API or full compiler acceptance'
     inputHashes=$hashes; inputsStable=$false; processesStopped=$false
 }
@@ -69,12 +69,32 @@ try {
         }
         $source = $regions -join "`n"
     }
-    $bodies = @()
-    foreach ($name in @('sollang_socket_result','sollang_socket_errno','sollang_socket_error_kind','sollang_platform_socket_send','sollang_platform_socket_completion_submit','sollang_socket_completion_waiter')) {
-        $matches = [regex]::Matches($source, "(?ms)^\s*define internal [^`n]+ @$name\([^`n]*\) #0 \{.*?^\s*\}")
-        if ($matches.Count -ne 1) { throw "Expected exactly one production function: $name" }
-        $bodies += $matches[0].Value.Replace(' #0 {',' {')
+    # Extract the transitive production helper closure, preserving the six roots.
+    # Old anchored source snapshots and the current split implementation share this path.
+    $functions = @{}
+    foreach ($match in [regex]::Matches($source, '(?ms)^\s*define internal [^\n]+ @([A-Za-z0-9_]+)\([^\n]*\) #0 \{.*?^\s*\}')) {
+        $name = $match.Groups[1].Value
+        if ($functions.ContainsKey($name)) { throw "Duplicate production function: $name" }
+        $functions[$name] = $match.Value
     }
+    $queue = [Collections.Generic.Queue[string]]::new()
+    foreach ($name in @('sollang_socket_result','sollang_socket_errno','sollang_socket_error_kind','sollang_platform_socket_send','sollang_platform_socket_completion_submit','sollang_socket_completion_waiter')) {
+        if (-not $functions.ContainsKey($name)) { throw "Missing production function: $name" }
+        $queue.Enqueue($name)
+    }
+    $visited = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $bodies = @()
+    while ($queue.Count -gt 0) {
+        $name = $queue.Dequeue()
+        if (-not $visited.Add($name)) { continue }
+        $body = $functions[$name]
+        $bodies += $body.Replace(' #0 {',' {')
+        foreach ($reference in [regex]::Matches($body, '@([A-Za-z0-9_]+)')) {
+            $callee = $reference.Groups[1].Value
+            if ($functions.ContainsKey($callee) -and -not $visited.Contains($callee)) { $queue.Enqueue($callee) }
+        }
+    }
+    $record.extractedProductionFunctions = @($visited | Sort-Object)
     $version = Run 'clang-version' @('/usr/bin/clang','--version')
     if ($version.ExitCode -ne 0 -or $version.Stdout -notmatch 'clang version 18\.1\.3') { throw 'Pinned Ubuntu clang18.1.3 unavailable' }
     $record.clangVersion = $version.Stdout.Trim()
@@ -92,6 +112,10 @@ declare i32 @fcntl(i32, i32, ...)
 declare i32 @epoll_ctl(i32, i32, i32, ptr)
 declare i32 @socket_probe_epoll_wait(i32, ptr, i32, i32)
 declare i32 @pthread_create(ptr, ptr, ptr, ptr)
+declare i32 @pthread_mutex_init(ptr, ptr)
+declare i32 @pthread_mutex_destroy(ptr)
+declare i32 @pthread_mutex_lock(ptr)
+declare i32 @pthread_mutex_unlock(ptr)
 declare i1 @sollang_platform_io_ensure_signal()
 declare void @sollang_io_push_completion(ptr)
 declare void @sollang_platform_io_signal_completion()

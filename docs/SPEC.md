@@ -2139,9 +2139,17 @@ resolved from the owner table. `submit` returns either an immediate completion
 or a pending reactor owner. `dequeue` and `dequeueTerminal` move that owner into
 an affine Task which parks without polling until the platform completion source
 wakes it. On Linux, one dedicated waiter owns the blocking `epoll_wait`; a
-direction-specific `EPOLLONESHOT` registration retries the retained operation,
-rearms only after `EAGAIN`, and publishes one terminal record before scheduling
-the parked Task. Error and hangup readiness also retry the operation to obtain
+direction-specific `EPOLLONESHOT` registration retries every eligible retained
+operation for that registration. Multiple operations may share a registration.
+After the bounded scan, the registration rearms the union of directions still
+pending; `EAGAIN` leaves that operation pending and does not prevent later
+operations from progressing. A reactor-local mutex serializes table changes and
+terminal publication, but is never held across `epoll_wait`, Task waiting, or
+waiter joining. Per-call nonblocking socket operations keep those critical
+sections bounded. Each operation publishes one terminal record before scheduling
+the parked Task. A native rearm failure after pending publication completes the
+retained operations with that native error and preserves their buffer ownership
+until dequeue or shutdown. Error and hangup readiness also retry the operation to obtain
 its native error or EOF. A peer write failure returns `SocketError` without
 terminating the process. The dequeue transfers the exact retained buffer back into the
 slot without copying. Canceling a parked completion Task consumes the Task, requests native

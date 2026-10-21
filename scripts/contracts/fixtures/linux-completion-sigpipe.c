@@ -1,5 +1,8 @@
 #include <errno.h>
 #include <signal.h>
+#include <pthread.h>
+
+_Static_assert(sizeof(pthread_mutex_t) == 40, "Linux x86_64 mutex ABI");
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,10 +57,10 @@ static int child_case(int which) {
         close(pair[0]);
         return kind == 8 && code == EPIPE ? 0 : 11;
     }
-    uint64_t state[13] = {0};
+    uint64_t state[18] = {0};
     uint64_t registration[4] = {1, 17, (uint64_t)pair[0], 3};
     uint64_t pending[16] = {0};
-    struct epoll_event completion = {0};
+    uint64_t completion[4] = {0};
     unsigned char payload = 42;
     int epoll = epoll_create1(EPOLL_CLOEXEC);
     if (epoll < 0) return 12;
@@ -70,6 +73,7 @@ static int child_case(int which) {
     state[4] = (uintptr_t)&completion;
     state[5] = state[6] = state[7] = state[8] = 1;
     state[10] = 1; /* Pre-existing waiter excludes thread creation. */
+    if (pthread_mutex_init((pthread_mutex_t *)(state + 13), NULL)) return 15;
     int ok;
     if (which == 1) {
         int32_t kind = socket_probe_submit(state, &code);
@@ -89,6 +93,7 @@ static int child_case(int which) {
             && pending[10] == 0 && state[9] == 0
             && signal_calls == 1 && wait_calls == 2;
     }
+    if (pthread_mutex_destroy((pthread_mutex_t *)(state + 13))) return 16;
     close(epoll);
     close(pair[0]);
     return ok && !unexpected_calls ? 0 : 14;

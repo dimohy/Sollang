@@ -56,12 +56,14 @@ try {
         $llvmAsExitCode = $assembled.ExitCode; if ($llvmAsExitCode -ne 0) { Add-Failure 'L08_LLVM_AS' }
         $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'L08 V004' -TimeoutMilliseconds 120000
         $closureExitCode = $closure.ExitCode; if ($closureExitCode -ne 0) { Add-Failure 'L08_V004' }
-        $ir = [IO.File]::ReadAllText($llvm); $create = Get-FunctionBody $ir 'sollang_platform_socket_completion_create'; $waiter = Get-FunctionBody $ir 'sollang_socket_completion_waiter'; $dequeue = Get-FunctionBody $ir 'sollang_platform_socket_completion_dequeue'
+        $ir = [IO.File]::ReadAllText($llvm); $create = Get-FunctionBody $ir 'sollang_platform_socket_completion_create'; $waiter = Get-FunctionBody $ir 'sollang_socket_completion_waiter'; $dequeue = Get-FunctionBody $ir 'sollang_platform_socket_completion_dequeue_locked'
         $irAssertions.batchCapacityStored = $create.Contains('store i64 %batch, ptr %batch_slot', [StringComparison]::Ordinal)
         $irAssertions.oneEventWaitBound = ([regex]::Matches($waiter, 'call i32 @epoll_wait\(')).Count -eq 1 -and $waiter.Contains('call i32 @epoll_wait(i32 %epoll, ptr %completion_table, i32 1, i32 -1)', [StringComparison]::Ordinal)
         $irAssertions.registrationScopedScan = $waiter.Contains('%registration_index = sub i64 %registration_base, 1', [StringComparison]::Ordinal) -and $waiter.Contains('%registration_matches = icmp eq i64 %pending_registration, %registration_index', [StringComparison]::Ordinal)
-        $irAssertions.oneShotRearm = $waiter.Contains('%rearm_mask = or i32 %ready_bit, 1073741824', [StringComparison]::Ordinal) -and $waiter.Contains('call i32 @epoll_ctl(i32 %epoll, i32 3, i32 %rearm_socket, ptr %rearm_event)', [StringComparison]::Ordinal)
-        $irAssertions.terminalReturnsToWait = $waiter.Contains('store atomic i64 2, ptr %pending_entry release', [StringComparison]::Ordinal) -and [regex]::IsMatch($waiter, '(?m)^signal:\r?\n\s+call void @sollang_platform_io_signal_completion\(\)\r?\n\s+br label %wait$')
+        $rearmHelper = Get-FunctionBody $ir 'sollang_socket_completion_rearm_locked'
+        $irAssertions.oneShotRearm = $waiter.Contains('call i32 @sollang_socket_completion_rearm_locked', [StringComparison]::Ordinal) -and $rearmHelper.Contains('%mask = or i32 %interest, 1073741824', [StringComparison]::Ordinal) -and $rearmHelper.Contains('call i32 @epoll_ctl(i32 %epoll, i32 3, i32 %socket, ptr %event)', [StringComparison]::Ordinal)
+        # Complete the bounded registration scan, then unlock before the next blocking wait.
+        $irAssertions.terminalReturnsToWait = [regex]::IsMatch($waiter, '(?ms)^publish_terminal:.*?call void @sollang_socket_completion_publish_locked[^\r\n]*\r?\n\s+br label %pending_continue') -and [regex]::IsMatch($waiter, '(?m)^unlock_wait:\r?\n\s+call void @sollang_socket_completion_unlock\(ptr %state\)\r?\n\s+br label %wait$')
         $irAssertions.dequeueOwnerTransferVerified = $dequeue.Contains('store ptr null, ptr %entry_buffer_slot', [StringComparison]::Ordinal) -and $dequeue.Contains('store atomic i64 0, ptr %pending_record release', [StringComparison]::Ordinal)
         $irAssertions.payloadCopyFree = ($waiter + $dequeue) -notmatch '@llvm\.(?:memcpy|memmove)'
         foreach ($entry in $irAssertions.GetEnumerator()) { if (-not $entry.Value) { Add-Failure ("L08_IR_" + $entry.Key.ToUpperInvariant()) } }

@@ -92,11 +92,11 @@ try {
         $llvmAsExitCode = $assembled.ExitCode; if ($llvmAsExitCode -ne 0) { Add-Failure 'L06_LLVM_AS' }
         $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'L06 V004' -TimeoutMilliseconds 120000
         $closureExitCode = $closure.ExitCode; if ($closureExitCode -ne 0) { Add-Failure 'L06_V004' }
-        $ir = [IO.File]::ReadAllText($llvm); $cancel = Get-FunctionBody $ir 'sollang_platform_socket_completion_cancel'; $waiter = Get-FunctionBody $ir 'sollang_socket_completion_waiter'; $dequeue = Get-FunctionBody $ir 'sollang_platform_socket_completion_dequeue'
+        $ir = [IO.File]::ReadAllText($llvm); $cancel = Get-FunctionBody $ir 'sollang_platform_socket_completion_cancel_locked'; $waiter = Get-FunctionBody $ir 'sollang_socket_completion_waiter'; $dequeue = Get-FunctionBody $ir 'sollang_platform_socket_completion_dequeue_locked'
         $irAssertions.cancelRequestRelease = $cancel.Contains('store atomic i32 1, ptr %cancel_requested release', [StringComparison]::Ordinal)
         $irAssertions.eventfdWake = $cancel.Contains('call i64 @write(i32 %wakeup, ptr %signal, i64 8)', [StringComparison]::Ordinal)
         $irAssertions.completionWinnerPreserved = $cancel.Contains('%is_terminal = icmp eq i64 %active, 2', [StringComparison]::Ordinal) -and $cancel.Contains('br i1 %is_terminal, label %success, label %not_found', [StringComparison]::Ordinal)
-        $irAssertions.cancellationPublishCount = ([regex]::Matches($waiter, 'store atomic i64 2, ptr %cancel_entry release')).Count
+        $irAssertions.cancellationPublishCount = ([regex]::Matches($waiter, 'call void @sollang_socket_completion_publish_locked\(ptr %state, ptr %cancel_entry, i32 125, i64 0\)')).Count
         $irAssertions.successfulCompletionWins = $dequeue.Contains('%terminal_cancelled = and i1 %cancel_requested_bool, %completion_failed', [StringComparison]::Ordinal)
         $irAssertions.dequeueOwnerTransferVerified = $dequeue.Contains('store ptr null, ptr %entry_buffer_slot', [StringComparison]::Ordinal) -and $dequeue.Contains('store atomic i64 0, ptr %pending_record release', [StringComparison]::Ordinal)
         $irAssertions.payloadCopyFree = ($waiter + $dequeue) -notmatch '@llvm\.(?:memcpy|memmove)'
