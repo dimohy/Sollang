@@ -32,6 +32,16 @@ import syntax.generated.slg as grammar
 # Entry-function scheduling and expression responsibilities extracted from emitCore.
 # Mutable stream/each arrays stay caller-owned and are borrowed by each work unit.
 
+# As in C# Range each, decide completion from the current item. The computed
+# next value is never selected after the last inclusive endpoint.
+emitEntryRangeAdvance terminal: Int, inner: Bool -> Unit uses Console {
+    inner -> if { "_inner" } else { "" } => suffix
+    "  %stream$(terminal)$(suffix)_current = load i32, ptr %stream$(terminal)$(suffix)_index_slot, align 4" -> println
+    "  %stream$(terminal)$(suffix)_last = icmp sge i32 %stream$(terminal)$(suffix)_current, %stream$(terminal)$(suffix)_end" -> println
+    "  %stream$(terminal)$(suffix)_next = add i32 %stream$(terminal)$(suffix)_current, 1" -> println
+    "  store i32 %stream$(terminal)$(suffix)_next, ptr %stream$(terminal)$(suffix)_index_slot, align 4" -> println
+}
+
 # Every branching/looping root can contain a visible mutation or effect. Use
 # the same control set for reads, effect owners and earlier-effect barriers.
 isEntrySchedulingControl node: typedIr.TypedIrNode -> Bool {
@@ -1068,14 +1078,15 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
                         "  store i32 " -> print
                         WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPipeline.source0 } -> writeWhileValue(context, state)
                         ", ptr %stream$(entryExpressionIndex)_index_slot, align 4" -> println
+                        "  %stream$(entryExpressionIndex)_end = add i32 " -> print
+                        WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPipeline.source1 } -> writeWhileValue(context, state)
+                        ", 0" -> println
                         "  br label %stream$(entryExpressionIndex)_header" -> println
                         "stream$(entryExpressionIndex)_header:" -> println
                         "  %stream$(entryExpressionIndex)_item = load i32, ptr %stream$(entryExpressionIndex)_index_slot, align 4" -> println
                         "  %stream$(entryExpressionIndex)_done = icmp " -> print
                         entryOpeningPipeline.flags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
-                        " i32 %stream$(entryExpressionIndex)_item, " -> print
-                        WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningPipeline.source1 } -> writeWhileValue(context, state)
-                        "" -> println
+                        " i32 %stream$(entryExpressionIndex)_item, %stream$(entryExpressionIndex)_end" -> println
                         "  br i1 %stream$(entryExpressionIndex)_done, label %stream$(entryExpressionIndex)_exit, label %stream$(entryExpressionIndex)_body" -> println
                         "stream$(entryExpressionIndex)_body:" -> println
                     } else {
@@ -1150,14 +1161,15 @@ emitEntryOpeningStreamExpression entryExpressionIndex: Int, functionIndex: Int, 
             "  store i32 " -> print
             WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningFlatMap.argument0 } -> writeWhileValue(context, state)
             ", ptr %stream$(entryExpressionIndex)_inner_index_slot, align 4" -> println
+            "  %stream$(entryExpressionIndex)_inner_end = add i32 " -> print
+            WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningFlatMap.argument1 } -> writeWhileValue(context, state)
+            ", 0" -> println
             "  br label %stream$(entryExpressionIndex)_inner_header" -> println
             "stream$(entryExpressionIndex)_inner_header:" -> println
             "  %stream$(entryExpressionIndex)_inner_item = load i32, ptr %stream$(entryExpressionIndex)_inner_index_slot, align 4" -> println
             "  %stream$(entryExpressionIndex)_inner_done = icmp " -> print
             entryOpeningFlatMap.rangeFlags % 2 == 1 -> if { "sge" -> print } else { "sgt" -> print }
-            " i32 %stream$(entryExpressionIndex)_inner_item, " -> print
-            WhileValueRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, nodeIndex: entryOpeningFlatMap.argument1 } -> writeWhileValue(context, state)
-            "" -> println
+            " i32 %stream$(entryExpressionIndex)_inner_item, %stream$(entryExpressionIndex)_inner_end" -> println
             "  br i1 %stream$(entryExpressionIndex)_inner_done, label %stream$(entryExpressionIndex)_" -> print
             entryOpeningAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
             ", label %stream$(entryExpressionIndex)_inner_body" -> println
@@ -2577,9 +2589,10 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                     runtimeDisplayTypeId! >= 0 and context.types[runtimeDisplayTypeId!].kind == 1 and context.types[runtimeDisplayTypeId!].origin == 1 and ((context.types[runtimeDisplayTypeId!].symbol -> integerWidth(context, state)) > 0 or context.types[runtimeDisplayTypeId!].symbol == 23)
                         -> if {
                             context.types[runtimeDisplayTypeId!].symbol -> integerWidth(context, state) => entryRuntimeIntegerWidth
+                            entryRuntimeIntegerWidth -> integerConsoleWidth(runtimeArgument -> integerNodeSigned(context, state)) => entryRuntimePrintWidth
                             context.types[runtimeDisplayTypeId!].symbol != 23
                                 and entryRuntimeIntegerWidth > 0
-                                and entryRuntimeIntegerWidth < 32
+                                and entryRuntimeIntegerWidth < entryRuntimePrintWidth
                                 and runtimeArgument.kind != 3 -> if {
                                     "  %v$(entryExpressionIndex)_runtime_integer = " -> print
                                     runtimeArgument -> integerNodeSigned(context, state)
@@ -2594,14 +2607,14 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                             entryRuntimeArgumentIndex! -> writeValue(functionIndex, context, state)
                                         }
                                     }
-                                    " to i32" -> println
+                                    " to i$(entryRuntimePrintWidth)" -> println
                                 }
                             context.types[runtimeDisplayTypeId!].symbol == 23
                                 -> if {
                                     entryExpression.symbol == -116 or entryExpression.symbol == -117
                                         -> if { "  call void @sollang_runtime_eprint_i1(i1 " -> print } else { "  call void @sollang_runtime_print_i1(i1 " -> print }
                                 } else {
-                                    (context.types[runtimeDisplayTypeId!].symbol -> integerWidth(context, state)) == 64
+                                    entryRuntimePrintWidth == 64
                                         -> if {
                                             entryExpression.symbol == -116 or entryExpression.symbol == -117
                                                 -> if { "  call void @sollang_runtime_eprint_i64(i64 " -> print } else { "  call void @sollang_runtime_print_i64(i64 " -> print }
@@ -2612,7 +2625,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                 }
                             context.types[runtimeDisplayTypeId!].symbol != 23
                                 and entryRuntimeIntegerWidth > 0
-                                and entryRuntimeIntegerWidth < 32
+                                and entryRuntimeIntegerWidth < entryRuntimePrintWidth
                                 and runtimeArgument.kind != 3 -> if {
                                     "%v$(entryExpressionIndex)_runtime_integer" -> print
                                 } else {
@@ -2626,7 +2639,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                         }
                                     }
                                 }
-                            context.types[runtimeDisplayTypeId!].symbol != 23 and (context.types[runtimeDisplayTypeId!].symbol -> integerWidth(context, state)) == 64
+                            context.types[runtimeDisplayTypeId!].symbol != 23 and entryRuntimePrintWidth == 64
                                 -> if {
                                     ", i1 " -> print
                                     runtimeArgument -> integerNodeSigned(context, state)
@@ -3735,6 +3748,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                     } else {
                         -1 => entryCloseTakeStage!
                         -1 => entryCloseFlatMapStage!
+                        -1 => entryCloseAfterEachStage!
                         entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
                         entryCloseStageSearch! < entryCloseStreamPipeline.stageStart + entryCloseStreamPipeline.stageCount
                             -> while {
@@ -3742,6 +3756,8 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                     -> if { entryCloseStageSearch! => entryCloseTakeStage! }
                                 context.streamPlan.stages[entryCloseStageSearch!].flags == 3
                                     -> if { entryCloseStageSearch! => entryCloseFlatMapStage! }
+                                context.streamPlan.stages[entryCloseStageSearch!].flags == 5 and context.streamPlan.stages[entryCloseStageSearch!].callbackRoot >= 0
+                                    -> if { entryCloseStageSearch! => entryCloseAfterEachStage! }
                                 entryCloseStageSearch! + 1 => entryCloseStageSearch!
                             }
                         entryStreamStops![entryActiveStreamSize! - 1] == 1
@@ -3756,44 +3772,40 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                 "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
                             } else {
                                 entryCloseFlatMapStage! >= 0 -> if {
-                                    "  %stream$(entryCloseStreamPipeline.terminalIr)_inner_current = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_inner_index_slot, align 4" -> println
-                                    "  %stream$(entryCloseStreamPipeline.terminalIr)_inner_next = add i32 %stream$(entryCloseStreamPipeline.terminalIr)_inner_current, 1" -> println
-                                    "  store i32 %stream$(entryCloseStreamPipeline.terminalIr)_inner_next, ptr %stream$(entryCloseStreamPipeline.terminalIr)_inner_index_slot, align 4" -> println
+                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
                                     entryCloseTakeStage! >= 0 -> if {
                                         context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
                                         "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
                                         "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
                                         WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
                                         "" -> println
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
-                                    } else {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
+                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
                                     }
+                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
+                                    entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
+                                    ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
                                     "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
                                     "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
                                     "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
                                     entryCloseStreamPipeline.status == 3 -> if {
                                         "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
                                     } else {
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_current = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_index_slot, align 4" -> println
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_next = add i32 %stream$(entryCloseStreamPipeline.terminalIr)_current, 1" -> println
-                                        "  store i32 %stream$(entryCloseStreamPipeline.terminalIr)_next, ptr %stream$(entryCloseStreamPipeline.terminalIr)_index_slot, align 4" -> println
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                        entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
                                     }
                                 } else {
-                                    "  %stream$(entryCloseStreamPipeline.terminalIr)_current = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_index_slot, align 4" -> println
-                                    "  %stream$(entryCloseStreamPipeline.terminalIr)_next = add i32 %stream$(entryCloseStreamPipeline.terminalIr)_current, 1" -> println
-                                    "  store i32 %stream$(entryCloseStreamPipeline.terminalIr)_next, ptr %stream$(entryCloseStreamPipeline.terminalIr)_index_slot, align 4" -> println
+                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
                                     entryCloseTakeStage! >= 0 -> if {
                                         context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
                                         "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
                                         "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
                                         WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
                                         "" -> println
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
-                                    } else {
-                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
                                     }
+                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
                                 }
                             }
                         "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
