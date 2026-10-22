@@ -522,7 +522,9 @@ regionPreviousStatementPending rootIndex: Int, localStart: Int, scheduled: ref [
     searching! -> while {
         not scheduled[member! - localStart] -> if { true -> return }
         -1 => child!
-        context.ir[member!].kind != 19 and context.ir[member!].kind != 20
+        context.ir[member!] => memberNode
+        memberNode.kind != 19 and memberNode.kind != 20
+            and not (memberNode.kind == 6 and (memberNode.opcode == -207 or memberNode.opcode == -209))
             -> if { projection.firstChildren[member! - localStart] => child! }
         child! >= 0 -> if { child! => member! } else {
             true => seekingSibling!
@@ -588,6 +590,10 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
         regionTaskKinds![regionTaskSize!] => regionTaskKind
         regionTaskNodes![regionTaskSize!] => regionTaskNode
         regionTaskKind == 0 -> if {
+            regionTaskNode -> parallelCallbackOwner(context) => regionCallbackOwner!
+            context.ir[regionTaskNode] => regionTask
+            regionTask.kind == 6 and (regionTask.opcode == -207 or regionTask.opcode == -209)
+                -> if { regionTaskNode => regionCallbackOwner! }
             regionLocalStart -> prepareRegionStatementProjection(regionLocalEnd, context) => statementProjection!
             # Root eligibility is fixed for this region task. Nested regions
             # select their own roots; candidate ancestry remains independent.
@@ -661,6 +667,12 @@ emitRegionState regionIndex: Int, emissionOrder: [Int], context: ref emitterCont
                                             true => localScheduled![localCandidateIndex! - regionLocalStart]
                                             true => localProgress!
                                         }
+                                }
+                            belongsToLocalRegion!
+                                and (localCandidateIndex! -> parallelCallbackOwner(context)) != regionCallbackOwner!
+                                -> if {
+                                    false => belongsToLocalRegion!
+                                    true => belongsToNestedRegion!
                                 }
                             belongsToLocalRegion! -> if {
                                 false => localIfCondition!

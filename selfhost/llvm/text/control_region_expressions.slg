@@ -1796,16 +1796,25 @@ emitRegionOperatorExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrd
                     regionParallelSource -> writeArrayElementType(context, state)
                     ", ptr %v$(regionNodeIndex)_input_ptr, align " -> print
                     regionParallelSource -> arrayElementAlign(context, state) -> writeDecimalLine
-                    CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
-                    context.ir[regionParallelBodyCall.operand0].nextOperand -> emitReferenceArgumentValues(regionNode.operand1, ownerIndex, 1, context, state)
-                    "  %v$(regionNodeIndex)_mapped = call " -> print
-                    regionParallelBodyCall -> writeIrType(context, state)
-                    " @sollang_m$(regionParallelBodyCall.targetModule)_s$(regionParallelBodyCall.symbol)(" -> print
-                    CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironment(context, state) => regionParallelCallHasCaptures
-                    regionParallelSource -> writeArrayElementType(context, state)
-                    " %v$(regionNodeIndex)_item" -> print
-                    context.ir[regionParallelBodyCall.operand0].nextOperand -> emitCallArgumentChain(regionNode.operand1, ownerIndex, 1, true, context, state)
-                    ")" -> println
+                    regionNodeIndex -> parallelHasDirectBodyCall(context, state)
+                        -> if {
+                            CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
+                            context.ir[regionParallelBodyCall.operand0].nextOperand -> emitReferenceArgumentValues(regionNode.operand1, ownerIndex, 1, context, state)
+                            "  %v$(regionNodeIndex)_mapped = call " -> print
+                            regionParallelBodyCall -> writeIrType(context, state)
+                            " @sollang_m$(regionParallelBodyCall.targetModule)_s$(regionParallelBodyCall.symbol)(" -> print
+                            CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: regionNodeIndex, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironment(context, state) => regionParallelCallHasCaptures
+                            regionParallelSource -> writeArrayElementType(context, state)
+                            " %v$(regionNodeIndex)_item" -> print
+                            context.ir[regionParallelBodyCall.operand0].nextOperand -> emitCallArgumentChain(regionNode.operand1, ownerIndex, 1, true, context, state)
+                            ")" -> println
+                        } else {
+                            regionNodeIndex -> emitStructuredParallelRoleValues(context, state)
+                            context.ir[regionNode.operand1].parent -> emitRegion(emissionOrder, context, state)
+                            "  %v$(regionNodeIndex)_mapped = freeze " -> print
+                            regionParallelBodyCall -> writeIrType(context, state)
+                            " %v$(regionNode.operand1)" -> println
+                        }
                     "  %v$(regionNodeIndex)_output_ptr = getelementptr " -> print
                     regionNode -> writeArrayElementType(context, state)
                     ", ptr %v$(regionNodeIndex)_data, i64 %v$(regionNodeIndex)_index" -> println
@@ -1891,7 +1900,7 @@ emitRegionCallExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrder: 
     regionNodeIndex -> emitCancelTaskValue(ownerIndex, context, state)
     regionNodeIndex -> emitDurationSleepTask(ownerIndex, context, state)
     regionNodeIndex -> emitDiagnosticSessionCall(ownerIndex, context, state)
-    (regionNode.kind == 6 or (regionNode -> typedIr.isConsoleRuntimeCall)) and not (regionNode -> isMappedBytesFlush(context)) and not (regionNode -> typedIr.isSetIntrinsicCall) and not (regionNode.opcode -> typedIr.isRawArenaOpcode) and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.opcode -> typedIr.isWorkerRuntimeOpcode) and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and not (regionNode -> typedIr.isArenaConstructorCall) and regionNode.opcode != -325 and regionNode.opcode != -324 and regionNode.opcode != -327 and regionNode.opcode != -326 and regionNode.opcode != -113 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and not (regionNode.opcode -> typedIr.isDirectIterationOpcode) and regionNode.opcode != -209 and not (regionNode.opcode -> typedIr.isProcessExecutionOpcode) and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != typedIr.pathAbsoluteOpcode() and regionNode.opcode != -222 and regionNode.opcode != -229 and regionNode.opcode != -230 and regionNode.opcode != -233 and regionNode.opcode != -235 and not (regionNode.opcode -> typedIr.isProcessProjectionOpcode) and (regionNode.opcode > -237 or regionNode.opcode < -240) and not (regionNode -> isSourceTextFileIntrinsic) and not (regionNode.opcode -> typedIr.isFileRuntimeOpcode) and not (regionNode.opcode -> typedIr.isSocketRuntimeOpcode) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex)
+    (regionNode.kind == 6 or (regionNode -> typedIr.isConsoleRuntimeCall)) and not (regionNode -> isMappedBytesFlush(context)) and not (regionNode -> typedIr.isSetIntrinsicCall) and not (regionNode.opcode -> typedIr.isRawArenaOpcode) and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.opcode -> typedIr.isWorkerRuntimeOpcode) and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and not (regionNode -> typedIr.isArenaConstructorCall) and regionNode.opcode != -325 and regionNode.opcode != -324 and regionNode.opcode != -327 and regionNode.opcode != -326 and regionNode.opcode != -113 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and not (regionNode.opcode -> typedIr.isDirectIterationOpcode) and regionNode.opcode != -209 and not (regionNode.opcode -> typedIr.isProcessExecutionOpcode) and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != typedIr.pathAbsoluteOpcode() and regionNode.opcode != -222 and regionNode.opcode != -229 and regionNode.opcode != -230 and regionNode.opcode != -233 and regionNode.opcode != -235 and not (regionNode.opcode -> typedIr.isProcessProjectionOpcode) and (regionNode.opcode > -237 or regionNode.opcode < -240) and not (regionNode -> isSourceTextFileIntrinsic) and not (regionNode.opcode -> typedIr.isFileRuntimeOpcode) and not (regionNode.opcode -> typedIr.isSocketRuntimeOpcode) and not (regionNodeIndex -> isDirectParallelBodyCall(context, state))
         -> if {
             regionNode.symbol == -101 or regionNode.symbol == -102 or regionNode.symbol == -116 or regionNode.symbol == -117
                 -> if {

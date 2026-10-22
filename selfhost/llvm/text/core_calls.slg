@@ -1898,10 +1898,72 @@ hasWorkerTransferArrayElement nodeIndex: Int, context: ref emitterContext.EmitCo
     elementTypeId >= 0 -> if { elementTypeId -> workerTransferType(context, state) => supported! }
     supported!
 }
+parallelHasDirectBodyCall expressionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[expressionIndex] => parallelExpression
+    parallelExpression.kind != 6
+        or (parallelExpression.opcode != -207 and parallelExpression.opcode != -209)
+        or parallelExpression.operand0 < 0 or parallelExpression.operand1 < 0
+        -> if { false -> return }
+    context.ir[parallelExpression.operand1] => bodyCall
+    bodyCall.kind != 6 or bodyCall.targetModule < 0 or bodyCall.symbol < 0
+        or bodyCall.operand0 < 0
+        -> if { false -> return }
+    (bodyCall.operand0 -> structuredParallelRoleOwner(context)) != expressionIndex
+        -> if { false -> return }
+    CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: bodyCall.targetModule, targetSymbol: bodyCall.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => targetIndex
+    targetIndex < 0 -> if { false -> return }
+    context.ir[targetIndex] => target
+    target.flags / 8 % 2 == 1 or target.operand1 < 0
+        or target.typeId != bodyCall.typeId
+        -> if { false -> return }
+    context.ir[target.operand1].typeId != context.ir[bodyCall.operand0].typeId
+        -> if { false -> return }
+    context.ir[bodyCall.operand0].nextOperand => argumentIndex!
+    argumentIndex! >= 0 -> while {
+        context.ir[argumentIndex!] => argument
+        argument.kind != 5
+            or (argumentIndex! -> structuredParallelRoleOwner(context)) == expressionIndex
+            -> if { false -> return }
+        argument.nextOperand => argumentIndex!
+    }
+    context.ranges[parallelExpression.sourceModule] => range
+    context.nodes[range.astStart + parallelExpression.astNode] => parallelAst
+    context.nodes[range.astStart + bodyCall.astNode] => bodyAst
+    bodyAst.parent != parallelExpression.astNode or bodyAst.flags / 524288 % 2 != 1
+        -> if { false -> return }
+    context.ir[parallelExpression.operand0].astNode => sourceAstIndex
+    false => bodyFound!
+    false => targetFound!
+    0 => childIndex!
+    childIndex! < range.astCount -> while {
+        context.nodes[range.astStart + childIndex!] => child
+        child.parent == parallelExpression.astNode and childIndex! != sourceAstIndex
+            -> if {
+                childIndex! == bodyCall.astNode -> if {
+                    true => bodyFound!
+                } else {
+                    child.kind == 16 and child.payloadToken == parallelAst.payloadToken
+                        and child.flags / 524288 % 2 != 1
+                        -> if { true => targetFound! } else { false -> return }
+                }
+            }
+        childIndex! + 1 => childIndex!
+    }
+    bodyFound! and targetFound!
+}
+
+isDirectParallelBodyCall expressionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[expressionIndex] => expression
+    expression.parent < 0 -> if { false -> return }
+    context.ir[expression.parent].operand1 != expressionIndex
+        -> if { false -> return }
+    expression.parent -> parallelHasDirectBodyCall(context, state)
+}
+
 parallelUsesComputePool expressionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     false => supported!
     context.ir[expressionIndex] => parallelExpression
-    context.supportsComputePool and parallelExpression.kind == 6 and (parallelExpression.opcode == -207 or parallelExpression.opcode == -209) and parallelExpression.operand1 >= 0
+    context.supportsComputePool and (expressionIndex -> parallelHasDirectBodyCall(context, state))
         -> if {
             context.ir[parallelExpression.operand1] => parallelCall
             CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: parallelCall.targetModule, targetSymbol: parallelCall.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelTarget
