@@ -204,6 +204,13 @@ struct SocketCallRequest {
     ownerIndex: Int
 }
 
+isDirectEachEmission nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[nodeIndex] => node
+    node.kind == 6 and (node.opcode -> typedIr.isDirectIterationOpcode)
+        and node.operand0 >= 0 and node.operand1 >= 0
+        and (nodeIndex -> plannedStreamPipeline(context, state)) < 0
+}
+
 # LLVM allocas execute each time control reaches them. Fixed-size result and
 # scratch slots therefore belong to the owning function entry, never to a loop
 # or branch body.
@@ -227,6 +234,17 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
             -> if { "control allocas owner $ownerIndex node $(nodeIndex!)" -> runtime.eprintln }
         context.ir[nodeIndex!] => node
         nodeIndex! -> emitDeferredTextCaptureAllocas(ownerIndex, context, state)
+        nodeIndex! -> isDirectEachEmission(context, state)
+            -> if {
+                not (nodeIndex! -> asyncIntIteratorIsPersistent(context, state))
+                    -> if {
+                        "  %each$(nodeIndex!)_index_slot = alloca i64, align 8" -> println
+                        (context.ir[node.operand0] -> typeQueries.isRange(context)) or node.opcode == typedIr.repeatOpcode()
+                            -> if {
+                                "  %each$(nodeIndex!)_limit_slot = alloca i64, align 8" -> println
+                            }
+                    }
+            }
         node.kind == 14 and (node -> isFixedArrayType) and not (nodeIndex! -> fixedArrayLiteralNeedsHeap(context, state))
             -> if {
                 0 => fixedArrayLength!
@@ -4653,10 +4671,6 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
         "  %each$(eachIndex)_limit = sext i32 " -> print
         eachRepeat -> if { "%each$(eachIndex)_count" -> print } else { "%each$(eachIndex)_last" -> print }
         " to i64" -> println
-        not persistentIntIterator -> if {
-            "  %each$(eachIndex)_index_slot = alloca i64, align 8" -> println
-            "  %each$(eachIndex)_limit_slot = alloca i64, align 8" -> println
-        }
         "  store i64 " -> print
         eachRepeat -> if { "1" -> print } else { "%each$(eachIndex)_start" -> print }
         ", ptr %each$(eachIndex)_index_slot, align 8" -> println
@@ -4718,7 +4732,6 @@ emitDirectEachStart eachIndex: Int, ownerIndex: Int, ownerStart: Int, ownerEnd: 
                 ", 1" -> println
             }
         }
-        "  %each$(eachIndex)_index_slot = alloca i64, align 8" -> println
         "  store i64 0, ptr %each$(eachIndex)_index_slot, align 8" -> println
         "  br label %each$(eachIndex)_header" -> println
         "each$(eachIndex)_header:" -> println
