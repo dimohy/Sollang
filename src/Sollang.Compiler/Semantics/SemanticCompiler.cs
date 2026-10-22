@@ -2374,6 +2374,30 @@ internal sealed partial class SemanticCompiler
             .ToDictionary(binding => binding.Key, binding => binding.Value, StringComparer.Ordinal);
     }
 
+    private void ValidateParallelResultType(
+        BlockFunctionCallStatement call,
+        BoundFunction function,
+        BoundType resultType)
+    {
+        if (!TypeContains(resultType, BoundType.SourceText)) return;
+
+        if (function.Kind == BoundFunctionKind.RuntimeTryParallel
+            && _types.TryGetResultTypes(resultType, out var payloads)
+            && IsSupportedPayload(payloads.Ok)
+            && IsSupportedPayload(payloads.Error))
+        {
+            return;
+        }
+
+        throw Error(
+            call.Line,
+            call.Column,
+            "parallel callback SourceText is supported only as a direct top-level tryParallel Result payload");
+
+        bool IsSupportedPayload(BoundType payload) =>
+            payload == BoundType.SourceText || !TypeContains(payload, BoundType.SourceText);
+    }
+
     private void ValidateParallelCapturedBindings(
         BlockFunctionCallStatement call,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -7181,6 +7205,11 @@ internal sealed partial class SemanticCompiler
                 specializedInputType: inputType,
                 explicitSecondaryType: parallelValueType,
                 explicitTertiaryType: parallelErrorType);
+        }
+        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
+            && function.BlockResultType is { } parallelAdmissionResultType)
+        {
+            ValidateParallelResultType(call, function, parallelAdmissionResultType);
         }
         if (function.Kind == BoundFunctionKind.UserBlock
             && function.GenericParameterName is not null
