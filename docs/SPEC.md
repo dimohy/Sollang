@@ -5824,6 +5824,9 @@ read(stdin_fd, ptr, len)
 Requirements:
 
 - Treat short writes as an output failure in the current runtime slice.
+- Preserve buffered stdout flush failures, including the final process flush,
+  in the process failure state. A later successful write or empty flush must
+  not erase an earlier output failure. Apply this rule on Windows as well.
 - Treat read failure, EOF, or invalid integer text as input failure.
 - Avoid heap allocation for static string literals.
 - Keep the ABI boundary explicit.

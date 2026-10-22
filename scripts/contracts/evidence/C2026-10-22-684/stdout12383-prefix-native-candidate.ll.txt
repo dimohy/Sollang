@@ -1,0 +1,162 @@
+target triple = "x86_64-pc-windows-msvc"
+@sollang_stdout_buffer = internal global [65536 x i8] zeroinitializer, align 16
+@sollang_stdout_buffer_count = internal global i64 0
+@sollang_stdout_line_buffered = internal global i1 false
+declare ptr @memcpy(ptr, ptr, i64)
+define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
+entry:
+  %count = load i64, ptr @sollang_stdout_buffer_count, align 8
+  %has_data = icmp ne i64 %count, 0
+  br i1 %has_data, label %write_buffer, label %empty
+
+write_buffer:
+  %buffer = getelementptr inbounds [65536 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
+  %written64 = call i64 @write(i32 1, ptr %buffer, i64 %count)
+  %written32 = trunc i64 %written64 to i32
+  store i32 %written32, ptr %written, align 4
+  store i64 0, ptr @sollang_stdout_buffer_count, align 8
+  %nonnegative = icmp sge i64 %written64, 0
+  %complete = icmp eq i64 %written64, %count
+  %ok = and i1 %nonnegative, %complete
+  %ok32 = zext i1 %ok to i32
+  ret i32 %ok32
+
+empty:
+  store i32 0, ptr %written, align 4
+  ret i32 1
+}
+define internal i32 @sollang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
+entry:
+  br label %write_prepare
+
+write_prepare:
+  %oversized = icmp ugt i64 %len64, 65536
+  br i1 %oversized, label %write_direct_prepare, label %buffer_prepare
+
+write_direct_prepare:
+  %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %direct_flush_ok = icmp ne i32 %flushed_direct, 0
+  br i1 %direct_flush_ok, label %write_direct, label %write_failure
+
+write_direct:
+  %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
+  %written32 = trunc i64 %written64 to i32
+  store i32 %written32, ptr %written, align 4
+  %direct_nonnegative = icmp sge i64 %written64, 0
+  %direct_complete = icmp eq i64 %written64, %len64
+  %direct_ok = and i1 %direct_nonnegative, %direct_complete
+  %direct_ok32 = zext i1 %direct_ok to i32
+  ret i32 %direct_ok32
+
+buffer_prepare:
+  %count = load i64, ptr @sollang_stdout_buffer_count, align 8
+  %combined = add i64 %count, %len64
+  %needs_flush = icmp ugt i64 %combined, 65536
+  br i1 %needs_flush, label %flush, label %append
+
+flush:
+  %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %buffer_flush_ok = icmp ne i32 %flushed, 0
+  br i1 %buffer_flush_ok, label %flushed_buffer, label %write_failure
+
+flushed_buffer:
+  br label %append
+
+append:
+  %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flushed_buffer ]
+  %destination = getelementptr inbounds [65536 x i8], ptr @sollang_stdout_buffer, i64 0, i64 %offset
+  %copied = call ptr @memcpy(ptr %destination, ptr %data, i64 %len64)
+  %next_count = add i64 %offset, %len64
+  store i64 %next_count, ptr @sollang_stdout_buffer_count, align 8
+  %appended32 = trunc i64 %len64 to i32
+  store i32 %appended32, ptr %written, align 4
+  %single_byte = icmp eq i64 %len64, 1
+  br i1 %single_byte, label %inspect_newline, label %done
+
+inspect_newline:
+  %byte = load i8, ptr %data, align 1
+  %newline = icmp eq i8 %byte, 10
+  %line_buffered = load i1, ptr @sollang_stdout_line_buffered, align 1
+  %flush_newline = and i1 %newline, %line_buffered
+  br i1 %flush_newline, label %flush_line, label %done
+
+flush_line:
+  %line_ok = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  ret i32 %line_ok
+
+write_failure:
+  store i32 0, ptr %written, align 4
+  ret i32 0
+
+done:
+  ret i32 1
+}
+define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
+entry:
+  %stdout = inttoptr i64 1 to ptr
+  %written = alloca i32, align 4
+  %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %flush_ok = icmp ne i32 %flushed, 0
+  br i1 %flush_ok, label %read_bytes, label %read_failure
+
+read_bytes:
+  %read64 = call i64 @read(i32 0, ptr %data, i64 %len64)
+  %read32 = trunc i64 %read64 to i32
+  store i32 %read32, ptr %read, align 4
+  %ok = icmp sge i64 %read64, 0
+  %ok32 = zext i1 %ok to i32
+  ret i32 %ok32
+
+read_failure:
+  store i32 0, ptr %read, align 4
+  ret i32 0
+}
+@stdout_probe_read_calls = internal global i32 0
+define i64 @read(i32 %fd, ptr %data, i64 %len) {
+entry:
+  %old = load i32, ptr @stdout_probe_read_calls
+  %next = add i32 %old, 1
+  store i32 %next, ptr @stdout_probe_read_calls
+  ret i64 %len
+}
+@stdout_probe_calls = internal global i32 0
+@stdout_probe_byte = private constant [1 x i8] c"x"
+define i64 @write(i32 %fd, ptr %data, i64 %len) {
+entry:
+  %old = load i32, ptr @stdout_probe_calls
+  %next = add i32 %old, 1
+  store i32 %next, ptr @stdout_probe_calls
+  %first = icmp eq i32 %old, 0
+  %result = select i1 %first, i64 -1, i64 %len
+  ret i64 %result
+}
+define i32 @main() {
+entry:
+  %written = alloca i32
+  store i64 65536, ptr @sollang_stdout_buffer_count
+  %small = call i32 @sollang_write(ptr inttoptr (i64 1 to ptr), ptr @stdout_probe_byte, i64 1, ptr %written)
+  %small_calls = load i32, ptr @stdout_probe_calls
+  %small_ok = icmp eq i32 %small, 0
+  %small_once = icmp eq i32 %small_calls, 1
+  store i32 0, ptr @stdout_probe_calls
+  store i64 1, ptr @sollang_stdout_buffer_count
+  %large = call i32 @sollang_write(ptr inttoptr (i64 1 to ptr), ptr @stdout_probe_byte, i64 65537, ptr %written)
+  %large_calls = load i32, ptr @stdout_probe_calls
+  %large_ok = icmp eq i32 %large, 0
+  %large_count_ok = icmp eq i32 %large_calls, 1
+  %small_pass = and i1 %small_ok, %small_once
+  %large_pass = and i1 %large_ok, %large_count_ok
+  %writes_ok = and i1 %small_pass, %large_pass
+  store i32 0, ptr @stdout_probe_calls
+  store i64 1, ptr @sollang_stdout_buffer_count
+  %input = call i32 @sollang_read_stdin(ptr null, ptr @stdout_probe_byte, i64 1, ptr %written)
+  %read_calls = load i32, ptr @stdout_probe_read_calls
+  %input_ok = icmp eq i32 %input, 0
+  %input_calls_ok = icmp eq i32 %read_calls, 0
+  %input_pass = and i1 %input_ok, %input_calls_ok
+  %all = and i1 %writes_ok, %input_pass
+  %exit = select i1 %all, i32 0, i32 1
+  ret i32 %exit
+}
+
+attributes #0 = { nounwind }

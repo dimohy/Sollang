@@ -2664,6 +2664,10 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             write_direct_prepare:
               %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              %direct_flush_ok = icmp ne i32 %flushed_direct, 0
+              br i1 %direct_flush_ok, label %write_direct, label %write_failure
+
+            write_direct:
               %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
               %written32 = trunc i64 %written64 to i32
               store i32 %written32, ptr %written, align 4
@@ -2681,10 +2685,14 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             flush:
               %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              %buffer_flush_ok = icmp ne i32 %flushed, 0
+              br i1 %buffer_flush_ok, label %flushed_buffer, label %write_failure
+
+            flushed_buffer:
               br label %append
 
             append:
-              %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flush ]
+              %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flushed_buffer ]
               %destination = getelementptr inbounds [65536 x i8], ptr @sollang_stdout_buffer, i64 0, i64 %offset
               %copied = call ptr @memcpy(ptr %destination, ptr %data, i64 %len64)
               %next_count = add i64 %offset, %len64
@@ -2705,6 +2713,10 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %line_ok = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
               ret i32 %line_ok
 
+            write_failure:
+              store i32 0, ptr %written, align 4
+              ret i32 0
+
             done:
               ret i32 1
             }
@@ -2714,12 +2726,20 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %stdout = inttoptr i64 1 to ptr
               %written = alloca i32, align 4
               %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              %flush_ok = icmp ne i32 %flushed, 0
+              br i1 %flush_ok, label %read_bytes, label %read_failure
+
+            read_bytes:
               %read64 = call i64 @read(i32 0, ptr %data, i64 %len64)
               %read32 = trunc i64 %read64 to i32
               store i32 %read32, ptr %read, align 4
               %ok = icmp sge i64 %read64, 0
               %ok32 = zext i1 %ok to i32
               ret i32 %ok32
+
+            read_failure:
+              store i32 0, ptr %read, align 4
+              ret i32 0
             }
 
             """);
@@ -3673,7 +3693,13 @@ internal sealed partial class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitExitHandles(StringBuilder functions)
     {
-        functions.AppendLine("  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)");
+        functions.AppendLine("""
+              %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              %stdout_flush_ok = icmp ne i32 %stdout_flushed, 0
+              %stdout_previous_ok = load i1, ptr %ok_state, align 1
+              %stdout_exit_ok = and i1 %stdout_previous_ok, %stdout_flush_ok
+              store i1 %stdout_exit_ok, ptr %ok_state, align 1
+            """);
     }
 
     public override void EmitProcessEntry(StringBuilder functions)
