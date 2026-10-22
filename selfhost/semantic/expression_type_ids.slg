@@ -3490,7 +3490,29 @@ completeResolvedCallContext initialPrepared: move semanticContext.SemanticSnapsh
     initialPrepared -> completeResolvedCallContextSeeded(initialTypes, seeds, externalResults)
 }
 
+callContextDecisionsEqual left: ref [calls.ModuleCallResolution; ~], right: ref [calls.ModuleCallResolution; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] => previous
+        right[index!] => current
+        previous.sourceModule != current.sourceModule or previous.callAst != current.callAst
+            or previous.origin != current.origin or previous.targetModule != current.targetModule
+            or previous.targetSourceModule != current.targetSourceModule
+            or previous.functionSymbol != current.functionSymbol or previous.status != current.status
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
 completeResolvedCallContextSeeded initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ResolvedCallContext {
+    initialPrepared -> refineResolvedCallContext(initialTypes, seeds, externalResults, false)
+}
+
+# Transfer each completed context into the next refinement. Owned analysis
+# tables are bound once; no owner rebinding or name-check bypass is needed.
+refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
     initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     [Int; ~] => receiverTypeByCallAst!
     initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
@@ -3522,6 +3544,7 @@ completeResolvedCallContextSeeded initialPrepared: move semanticContext.Semantic
     initialPrepared.resolvedImports,
     initialPrepared.qualified
     ) => resolvedCalls
+    not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
     initialPrepared => prepared!
     resolvedCalls => prepared!.calls
     prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
@@ -3531,7 +3554,10 @@ completeResolvedCallContextSeeded initialPrepared: move semanticContext.Semantic
     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
     prepared! -> semanticContext.freeze => finalPrepared
     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
-    ResolvedCallContext { prepared: finalPrepared, types: finalTypes }
+    committedTypes and not decisionsChanged -> if {
+        ResolvedCallContext { prepared: finalPrepared, types: finalTypes } -> return
+    }
+    finalPrepared -> refineResolvedCallContext(finalTypes, seeds, externalResults, true)
 }
 
 # Measurement-only entry: exposes a completed pair, never initial type facts.

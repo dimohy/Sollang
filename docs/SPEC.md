@@ -915,7 +915,9 @@ Initial binding rules:
 - Referencing a binding before declaration is a compile-time error.
 - Reusing the same name in the same scope is a compile-time error for now.
   A transfer that consumes the complete old binding may reuse its name for the
-  returned owner. Moving one owned field leaves its source binding live for
+  returned owner. Dependent receiver calls must finish semantic refinement before
+  this decision: selected callees, argument bindings, and ownership facts refer
+  to the same completed call context. Moving one owned field leaves its source binding live for
   sibling-field access and cleanup; the moved field cannot replace that binding
   under the same name.
   Transferring an owned field into an array or dictionary checks live borrowed
