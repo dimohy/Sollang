@@ -2281,6 +2281,26 @@ public numericLiteralContextByNode prepared: ref semanticContext.SemanticSnapsho
                                 }
                         }
                 }
+            binary.kind == 6 and ((binary.opcode == -202 and binary.argumentCount == 1)
+                or (binary.opcode == -203 and binary.argumentCount == 2))
+                -> if {
+                    types -> typeIds.builtinTypeId(13) => indexType
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    indexType >= 0 and sourceModule >= 0 -> if {
+                        [binary.operand1, binary.operand2] -> each argument {
+                            argument >= 0
+                                and (prepared.interpolations -> expressionTypeIds.interpolationNumericLiteral(argument))
+                                -> if {
+                                    prepared -> contextualNumericLiteralStatus(types, sourceModule, argument, indexType, pointerBitWidth) => status
+                                    InterpolationNumericLiteralContext { typeId: indexType, status: status } => contexts![argument]
+                                    prepared.interpolations[argument] => literal
+                                    literal.kind == 2 -> if {
+                                        InterpolationNumericLiteralContext { typeId: indexType, status: 1 } => contexts![literal.operand0]
+                                    }
+                                }
+                        }
+                    }
+                }
             nodeIndex! + 1 => nodeIndex!
         }
     contexts!

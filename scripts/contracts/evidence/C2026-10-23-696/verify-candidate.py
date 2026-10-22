@@ -37,9 +37,9 @@ def checked_byte_loads(llvm, expected_count):
 
 def verify():
     arrays.verify()
-    source = read(BASE / 'source12563-source/result.json')
-    runtime = read(BASE / 'source12564-runtime/result.json')
-    contract = read(BASE / 'source12563-contract.json')
+    source = read(BASE / 'source12570-source/result.json')
+    runtime = read(BASE / 'source12571-runtime/result.json')
+    contract = read(BASE / 'source12570-contract.json')
     managed = read(HERE / 'csharp12560.json')
     expected_counts = {'text-byte': 1, 'source-text-byte': 1, 'text-byte-contexts': 2,
                        'reference-text-byte': 2, 'computed-text-byte': 1}
@@ -49,7 +49,7 @@ def verify():
         assert hashlib.sha256((ROOT / expected['source']).read_bytes()).hexdigest().upper() == expected['sourceSha256']
         row = next(item for item in source['cases'] if item['id'] == case)
         assert row['status'] == 'passed' and row['assemblyExit'] == row['emissionExit'] == 0
-        llvm = (BASE / 'source12563-source' / case / 'emitted.ll').read_text(encoding='utf-8-sig')
+        llvm = (BASE / 'source12570-source' / case / 'emitted.ll').read_text(encoding='utf-8-sig')
         checked_byte_loads(llvm, expected_counts[case])
         if case == 'reference-text-byte':
             assert re.search(r'_source = load %sollang.text, ptr %arg', llvm)
@@ -58,7 +58,21 @@ def verify():
         assert run['passed'] and run['runExit'] == 0 and run['stdout'] == expected['stdout'] and run['stderr'] == ''
         declared = next(item for item in contract['cases'] if item['id'] == case)
         assert declared['stdout'] == expected['stdout']
+    boundary = 'text-byte-wide-literal'
+    declared = next(item for item in contract['cases'] if item['id'] == boundary)
+    assert declared['compileOnly'] and declared['runtimeRequired'] is False
+    row = next(item for item in source['cases'] if item['id'] == boundary)
+    assert row['status'] == 'passed' and row['assemblyExit'] == row['emissionExit'] == 0
+    llvm = (BASE / 'source12570-source' / boundary / 'emitted.ll').read_text(encoding='utf-8-sig')
+    checked_byte_loads(llvm, 1)
+    assert re.search(r'_index = add i64 0, 4294967296\n', llvm)
+    managed_boundary = (HERE / 'width12566/managed.llvm.txt').read_text(encoding='utf-8-sig')
+    assert 'icmp ult i64 4294967296, 3' in managed_boundary
+    assert runtime['runtimeSkipped'] == [{'id': boundary, 'status': 'skipped-not-tested',
+                                          'reason': 'Explicit compile-only UIntSize boundary; no invalid index executed.'}]
+    assert not any(item['id'] == boundary for item in runtime['cases'])
     print('C696 current source/runtime5 match CSharp5. Seven byte loads have checked predecessors; readonly carriers load canonical values and computed receivers define valid byte SSA. Native/final qualification remains separate.')
+    print('UIntSize2^32 compilation-only boundary retains i64 index and checked access; its runtime is explicitly skipped-not-tested.')
 
 
 if __name__ == '__main__':

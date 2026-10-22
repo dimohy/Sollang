@@ -45,11 +45,11 @@ def checked_array_loads(llvm, expected_count):
 
 
 def verify():
-    source = read(BASE / 'source12563-source/result.json')
-    runtime = read(BASE / 'source12564-runtime/result.json')
-    contract = read(BASE / 'source12563-contract.json')
+    source = read(BASE / 'source12570-source/result.json')
+    runtime = read(BASE / 'source12571-runtime/result.json')
+    contract = read(BASE / 'source12570-contract.json')
     assert source['status'] == runtime['status'] == 'passed'
-    assert source['completed'] == source['total'] == 13
+    assert source['completed'] == source['total'] == 14
     assert runtime['completed'] == runtime['total'] == 11
     stable(source)
     stable(runtime)
@@ -59,13 +59,13 @@ def verify():
     for case, expected_count in counts.items():
         row = next(item for item in source['cases'] if item['id'] == case)
         assert row['status'] == 'passed' and row['assemblyExit'] == row['emissionExit'] == 0
-        llvm_path = BASE / 'source12563-source' / case / 'emitted.ll'
+        llvm_path = BASE / 'source12570-source' / case / 'emitted.ll'
         assert sha(llvm_path) == row['emittedLlvmSha256']
         checked_array_loads(llvm_path.read_text(encoding='utf-8-sig'), expected_count)
         run = next(item for item in runtime['cases'] if item['id'] == case)
         expected = next(item for item in contract['cases'] if item['id'] == case)
         assert run['stdout'] == expected['stdout'] and run['stderr'] == ''
-    print('Current source13/13 and normal runtime11/11; all12 new interpolation array loads have a checked predecessor and terminal trap edge. Fresh native and final gates remain separate.')
+    print('Current source14/14 and normal runtime11/11; all12 new interpolation array loads have a checked predecessor and terminal trap edge. Fresh native and final gates remain separate.')
 
 
 if __name__ == '__main__':
