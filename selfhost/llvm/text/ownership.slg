@@ -2916,18 +2916,16 @@ emitStoredEnumPayloadDrop typeId: Int, name: Text, context: ref emitterContext.E
 
 emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[request.payloadTypeId] => payloadType
-    payloadType.kind == 3 -> if {
-        "  %enumdrop$(request.nameRoot)_payload = load %sollang.array.i32, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
-        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
-        "  %enumdrop$(request.nameRoot)_data = extractvalue %sollang.array.i32 %enumdrop$(request.nameRoot)_payload, 0" -> println
-        "  call void @free(ptr %enumdrop$(request.nameRoot)_data)" -> println
-    }
-    payloadType.kind == 5 -> if {
-        "  %enumdrop$(request.nameRoot)_payload = load %sollang.dict, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
-        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
-        "  %enumdrop$(request.nameRoot)_keys = extractvalue %sollang.dict %enumdrop$(request.nameRoot)_payload, 0" -> println
-        "  call void @free(ptr %enumdrop$(request.nameRoot)_keys)" -> println
-    }
+    payloadType.kind == 3 or payloadType.kind == 5 or payloadType.kind == 6
+        -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load " -> print
+            request.payloadTypeId -> writeSemanticTypeId(context, state)
+            ", ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            "  call void @sollang_drop_t$(request.payloadTypeId)(" -> print
+            request.payloadTypeId -> writeSemanticTypeId(context, state)
+            " %enumdrop$(request.nameRoot)_payload)" -> println
+        }
     payloadType.kind == 13 and context.typeTraits[request.payloadTypeId] % 2 == 1
         -> if {
             "  %enumdrop$(request.nameRoot)_payload = load " -> print
@@ -2938,11 +2936,6 @@ emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext
             request.payloadTypeId -> writeSemanticTypeId(context, state)
             " %enumdrop$(request.nameRoot)_payload)" -> println
         }
-    payloadType.kind == 6 -> if {
-        "  %enumdrop$(request.nameRoot)_payload = load ptr, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
-        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
-        "  call void @free(ptr %enumdrop$(request.nameRoot)_payload)" -> println
-    }
     payloadType.kind == 1 and payloadType.origin == 1 and payloadType.symbol == 24
         -> if {
             "  %enumdrop$(request.nameRoot)_payload = load %sollang.source_text, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print

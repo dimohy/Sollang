@@ -3391,6 +3391,76 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
         ", ptr %v$(request.callIndex)_directory_result_slot, align 8" -> println
     }
 }
+emitSequentialTryParallel request: SequentialTryParallelRequest, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[request.expressionIndex] => expression
+    context.ir[expression.operand0] => source
+    context.ir[expression.operand1] => callback
+    context.typeSizes[callback.typeId] => callbackStride
+    "  %v$(request.expressionIndex)_failure_limit_slot = alloca i64, align 8" -> println
+    "  store i64 %v$(request.expressionIndex)_length, ptr %v$(request.expressionIndex)_failure_limit_slot, align 8" -> println
+    "  %v$(request.expressionIndex)_index_slot = alloca i64, align 8" -> println
+    "  store i64 0, ptr %v$(request.expressionIndex)_index_slot, align 8" -> println
+    "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
+    "tryparallel$(request.expressionIndex)_sequential_header:" -> println
+    "  %v$(request.expressionIndex)_index = load i64, ptr %v$(request.expressionIndex)_index_slot, align 8" -> println
+    "  %v$(request.expressionIndex)_done = icmp eq i64 %v$(request.expressionIndex)_index, %v$(request.expressionIndex)_length" -> println
+    "  br i1 %v$(request.expressionIndex)_done, label %tryparallel$(request.expressionIndex)_sequential_collect, label %tryparallel$(request.expressionIndex)_sequential_body" -> println
+    "tryparallel$(request.expressionIndex)_sequential_body:" -> println
+    "  %v$(request.expressionIndex)_input_ptr = getelementptr " -> print
+    source -> writeArrayElementType(context, state)
+    ", ptr %v$(request.expressionIndex)_input, i64 %v$(request.expressionIndex)_index" -> println
+    "  %v$(request.expressionIndex)_item = load " -> print
+    source -> writeArrayElementType(context, state)
+    ", ptr %v$(request.expressionIndex)_input_ptr, align " -> print
+    source -> arrayElementAlign(context, state) -> writeDecimalLine
+    request.expressionIndex -> parallelHasDirectBodyCall(context, state)
+        -> if {
+            CallEnvironmentRequest { callerIndex: request.ownerIndex, callIndex: request.expressionIndex, targetModule: callback.targetModule, targetSymbol: callback.symbol, hasArgument: true } -> emitCallEnvironmentValues(context, state)
+            context.ir[callback.operand0].nextOperand -> emitReferenceArgumentValues(expression.operand1, request.ownerIndex, 1, context, state)
+            "  %v$(request.expressionIndex)_mapped = call " -> print
+            callback -> writeIrType(context, state)
+            " @sollang_m$(callback.targetModule)_s$(callback.symbol)(" -> print
+            CallEnvironmentRequest { callerIndex: request.ownerIndex, callIndex: request.expressionIndex, targetModule: callback.targetModule, targetSymbol: callback.symbol, hasArgument: true } -> emitCallEnvironment(context, state) => hasCaptures
+            source -> writeArrayElementType(context, state)
+            " %v$(request.expressionIndex)_item" -> print
+            context.ir[callback.operand0].nextOperand -> emitCallArgumentChain(expression.operand1, request.ownerIndex, 1, true, context, state)
+            ")" -> println
+        } else {
+            request.expressionIndex -> emitStructuredParallelRoleValues(context, state)
+            callback.parent -> emitRegion(emissionOrder, context, state)
+            "  %v$(request.expressionIndex)_mapped = freeze " -> print
+            callback -> writeIrType(context, state)
+            " %v$(expression.operand1)" -> println
+        }
+    "  %v$(request.expressionIndex)_result_offset = mul i64 %v$(request.expressionIndex)_index, " -> print
+    callbackStride -> writeDecimalLine
+    "  %v$(request.expressionIndex)_result_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_result_offset" -> println
+    "  store " -> print
+    callback -> writeIrType(context, state)
+    " %v$(request.expressionIndex)_mapped, ptr %v$(request.expressionIndex)_result_ptr, align " -> print
+    context.typeAligns[callback.typeId] -> writeDecimalLine
+    "  %v$(request.expressionIndex)_initialized_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_initialized, i64 %v$(request.expressionIndex)_index" -> println
+    "  store atomic i8 1, ptr %v$(request.expressionIndex)_initialized_ptr release, align 1" -> println
+    OwnedDropRequest { regionIndex: request.expressionIndex, beforeAst: -1, edgeIndex: request.expressionIndex * 10 + 7, transferredSymbol: -1 } -> emitOwnedDrops(emissionOrder, context, state)
+    "  %v$(request.expressionIndex)_mapped_tag = extractvalue " -> print
+    callback -> writeIrType(context, state)
+    " %v$(request.expressionIndex)_mapped, 0" -> println
+    "  %v$(request.expressionIndex)_mapped_error = icmp eq i32 %v$(request.expressionIndex)_mapped_tag, 1" -> println
+    "  br i1 %v$(request.expressionIndex)_mapped_error, label %tryparallel$(request.expressionIndex)_sequential_error, label %tryparallel$(request.expressionIndex)_sequential_next" -> println
+    "tryparallel$(request.expressionIndex)_sequential_error:" -> println
+    "  store atomic i64 %v$(request.expressionIndex)_index, ptr %v$(request.expressionIndex)_failure_limit_slot release, align 8" -> println
+    "  br label %tryparallel$(request.expressionIndex)_sequential_collect" -> println
+    "tryparallel$(request.expressionIndex)_sequential_next:" -> println
+    "  %v$(request.expressionIndex)_next = add i64 %v$(request.expressionIndex)_index, 1" -> println
+    "  store i64 %v$(request.expressionIndex)_next, ptr %v$(request.expressionIndex)_index_slot, align 8" -> println
+    "  br label %tryparallel$(request.expressionIndex)_sequential_header" -> println
+    "tryparallel$(request.expressionIndex)_sequential_collect:" -> println
+    source.kind == 14 -> if {
+        "  call void @free(ptr %v$(request.expressionIndex)_input)" -> println
+    }
+    TryParallelCollectRequest { expressionIndex: request.expressionIndex, outerTypeId: expression.typeId, callbackTypeId: callback.typeId } -> emitTryParallelCollect(context, state)
+}
+
 emitTryParallelCollect request: TryParallelCollectRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[request.callbackTypeId] => callbackResultType
     callbackResultType.first => okTypeId
