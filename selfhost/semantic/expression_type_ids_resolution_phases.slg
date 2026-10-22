@@ -3665,11 +3665,13 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
 
 }
 
-resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Unit {
+resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Bool {
     # A result-producing parallel role returns one value per source element.
     # Its result generic is selected by the block value rather than by the
     # ordinary input argument, so specialize the canonical result to [R; ~]
     # before binding and subsequent each-role propagation.
+    false => changed!
+    prepared.package -> indexUserBlockResultRoots => resultRoots
     0 => parallelSourceIndex!
     parallelSourceIndex! < (prepared.package.ranges -> len)
         -> while {
@@ -3686,6 +3688,7 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: 
                         collectionRoleKind == 3 => intrinsicTryParallel
                         collectionRoleKind == 2 or intrinsicTryParallel
                             -> if {
+                                resultRoots[parallelRange.astStart + parallelAstIndex!] => resultRoot
                                 -1 => parallelBlockExpression!
                                 UIntSize(0) => parallelBlockEnd!
                                 UIntSize(0) => parallelBlockLength!
@@ -3696,11 +3699,12 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: 
                                         parallelCandidate.sourceModule == parallelSourceIndex!
                                             -> if {
                                                 prepared.package.nodes[parallelRange.astStart + parallelCandidate.astNode] => parallelCandidateNode
-                                                parallelCandidateNode.parent => parallelAncestor!
+                                                parallelCandidate.astNode => parallelAncestor!
                                                 false => parallelBelongs!
                                                 parallelAncestor! >= 0 and not parallelBelongs!
                                                     -> while {
-                                                        parallelAncestor! == parallelAstIndex! -> if { true => parallelBelongs! } else { prepared.package.nodes[parallelRange.astStart + parallelAncestor!].parent => parallelAncestor! }
+                                                        parallelRange.astStart + parallelAncestor! == resultRoot
+                                                            -> if { true => parallelBelongs! } else { prepared.package.nodes[parallelRange.astStart + parallelAncestor!].parent => parallelAncestor! }
                                                     }
                                                 parallelCandidateNode.start + parallelCandidateNode.length => parallelCandidateEnd
                                                 # The direct block body and a value-control owner are
@@ -3708,7 +3712,8 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: 
                                                 # still be Unit before path resolution; specialize from the
                                                 # concrete terminal producer inside the region instead.
                                                 not ((parallelCandidateNode.parent == parallelAstIndex!
-                                                    and prepared.callIndexByAst[parallelRange.astStart + parallelCandidate.astNode] < 0)
+                                                    and prepared.callIndexByAst[parallelRange.astStart + parallelCandidate.astNode] < 0
+                                                    and parallelCandidateNode.flags / 524288 % 2 == 0)
                                                     or parallelCandidateNode.kind == 42)
                                                     and parallelBelongs!
                                                     and parallelCandidate.astNode != parallelAstIndex!
@@ -3800,8 +3805,11 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: 
                                         expressions -> len => parallelExpressionIndex
                                         expressions -> push(ExpressionTypeId { sourceModule: parallelSourceIndex!, astNode: parallelAstIndex!, typeId: parallelResultType!, status: 0 })
                                         parallelExpressionIndex => expressionIndexByAst[parallelGlobalAst]
+                                        true => changed!
                                     } else {
                                         expressions[parallelExistingExpression] => parallelExisting!
+                                        parallelExisting!.typeId != parallelResultType! or parallelExisting!.status != 0
+                                            -> if { true => changed! }
                                         parallelResultType! => parallelExisting!.typeId
                                         0 => parallelExisting!.status
                                         parallelExisting! => expressions[parallelExistingExpression]
@@ -3813,7 +3821,7 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: 
             }
             parallelSourceIndex! + 1 => parallelSourceIndex!
         }
-
+    changed!
 }
 
 # Field labels have source-owned identity after contextual nominal inference.
