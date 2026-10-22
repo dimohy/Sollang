@@ -9,6 +9,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
+. (Join-Path $PSScriptRoot 'verification-socket-completion-ir.ps1')
 $compilerPath = if ([IO.Path]::IsPathRooted($Compiler)) { [IO.Path]::GetFullPath($Compiler) } else { [IO.Path]::GetFullPath((Join-Path $root $Compiler)) }
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) { [IO.Path]::GetFullPath($OutputDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory)) }
 $fixture = Join-Path $root 'scripts/probes/socket-completion/w07-task-cancel.slg'
@@ -16,7 +18,7 @@ $expectedPath = Join-Path $root 'scripts/probes/socket-completion/w07-task-cance
 $schemaPath = Join-Path $root 'scripts/contracts/socket-completion-w07-result.schema.json'
 $formatVerifier = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closureVerifier = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-$inputs = @($PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
+$inputs = @((Join-Path $PSScriptRoot 'verification-socket-completion-ir.ps1'), (Join-Path $PSScriptRoot 'verification-process.ps1'), (Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'), $PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $expectedPath,
     (Join-Path $root 'stdlib/std/net/socket.slg'), (Join-Path $root 'stdlib/sys/runtime/socket.slg'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs'),
@@ -28,9 +30,13 @@ foreach ($path in $inputs) {
     $inputHashes[$relative] = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 }
 $compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
+$compilerKind = (Resolve-VerificationCompilerInvocation -Compiler $compilerPath).Kind
+$releaseDescriptor = Get-VerificationSocketReleaseCall -CompilerKind $compilerKind -Operand '%descriptor'
+$releaseBuffer = Get-VerificationSocketReleaseCall -CompilerKind $compilerKind -Operand '%completed_buffer'
+$releaseState = Get-VerificationSocketReleaseCall -CompilerKind $compilerKind -Operand '%state'
 if ($compilerSha256 -cne $ExpectedCompilerSha256.ToUpperInvariant()) { throw "W07 compiler hash mismatch: expected=$ExpectedCompilerSha256 actual=$compilerSha256" }
 [IO.Directory]::CreateDirectory($output) | Out-Null
-$exe = Join-Path $output 'w07.exe'; $llvm = Join-Path $output 'w07.ll'; $bitcode = Join-Path $output 'w07.bc'; $resultPath = Join-Path $output 'result.json'
+$exe = Join-Path $output 'w07.exe'; $llvm = $exe + '.ll'; $bitcode = Join-Path $output 'w07.bc'; $resultPath = Join-Path $output 'result.json'
 foreach ($artifact in @($exe, $llvm, $bitcode, $resultPath)) { if (Test-Path -LiteralPath $artifact) { throw "W07 output already exists: $artifact" } }
 
 $failures = [Collections.Generic.List[string]]::new()
@@ -45,38 +51,35 @@ $irAssertions = [ordered]@{
 }
 
 try {
-    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'W07 format' -TimeoutMilliseconds 120000
+    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Compiler', $compilerPath, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'W07 format' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'format.execution.json')
     $formatExitCode = $format.ExitCode; if ($formatExitCode -ne 0) { Add-Failure 'W07_FORMAT' }
-    $compile = Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compilerPath, 'build', $fixture, '-o', $exe, '--target', 'windows-x64', '--llvm', (Join-Path $root '.tools/llvm-22.1.8'), '-O0', '--keep-temps') -WorkingDirectory $root -Description 'W07 compile' -TimeoutMilliseconds 120000
+    $compile = Invoke-VerificationCompilerBuild -Compiler $compilerPath -Source $fixture -Output $exe -Target 'windows-x64' -WorkingDirectory $root -Description 'W07 compile' -TimeoutMilliseconds 120000
     $compileExitCode = $compile.ExitCode; $compileText = $compile.Stdout + "`n" + $compile.Stderr
     $compileDiagnosticsClean = [string]::IsNullOrWhiteSpace($compile.Stderr) -and -not [regex]::IsMatch($compileText, '(?im)^(warning|note|error)\b')
     if ($compileExitCode -ne 0 -or -not (Test-Path -LiteralPath $llvm -PathType Leaf)) { Add-Failure 'W07_COMPILE' }
     if (-not $compileDiagnosticsClean) { Add-Failure 'W07_COMPILE_DIAGNOSTIC' }
     if ($compileExitCode -eq 0 -and (Test-Path -LiteralPath $llvm -PathType Leaf)) {
-        $assembled = Invoke-VerificationProcessCapture -FilePath (Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe') -ArgumentList @($llvm, '-o', $bitcode) -WorkingDirectory $root -Description 'W07 llvm-as' -TimeoutMilliseconds 120000
+        $assembled = Invoke-VerificationProcessCapture -FilePath (Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe') -ArgumentList @($llvm, '-o', $bitcode) -WorkingDirectory $root -Description 'W07 llvm-as' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'llvm-as.execution.json')
         $llvmAsExitCode = $assembled.ExitCode; if ($llvmAsExitCode -ne 0) { Add-Failure 'W07_LLVM_AS' }
-        $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'W07 V004' -TimeoutMilliseconds 120000
+        $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'W07 V004' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'v004.execution.json')
         $closureExitCode = $closure.ExitCode; if ($closureExitCode -ne 0) { Add-Failure 'W07_V004' }
 
         $ir = [IO.File]::ReadAllText($llvm)
-        $worker = [regex]::Match($ir, 'define internal i1 @sollang_socket_completion_dequeue_task_worker\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $taskCancel = [regex]::Match($ir, 'define internal i1 @sollang_task_cancel\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $callback = [regex]::Match($ir, 'define internal void @sollang_socket_completion_dequeue_task_cancel\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $request = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_request_cancel_all\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $waiter = [regex]::Match($ir, 'define internal i32 @sollang_socket_completion_waiter\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $close = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_close\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
-        $dequeue = [regex]::Match($ir, 'define internal %sollang\.socket_result @sollang_platform_socket_completion_dequeue\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $worker = [regex]::Match($ir, 'define internal i1 @sollang_socket_completion_dequeue_task_worker\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $taskCancel = [regex]::Match($ir, 'define internal i1 @sollang_task_cancel\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $callback = [regex]::Match($ir, 'define internal void @sollang_socket_completion_dequeue_task_cancel\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $request = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_request_cancel_all\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $waiter = [regex]::Match($ir, 'define internal i32 @sollang_socket_completion_waiter\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $close = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_close\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $dequeue = [regex]::Match($ir, 'define internal %sollang\.socket_result @sollang_platform_socket_completion_dequeue\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
         $irAssertions.socketWaitingStatusDistinct = $worker.Success -and $worker.Groups['body'].Value.Contains('store i32 7, ptr %status_slot', [StringComparison]::Ordinal)
         if ($taskCancel.Success) {
             $body = $taskCancel.Groups['body'].Value
-            $start = $body.IndexOf('cancel_socket_completion:', [StringComparison]::Ordinal)
-            $end = $body.IndexOf('detach_child:', [StringComparison]::Ordinal)
-            $block = if ($start -ge 0 -and $end -gt $start) { $body.Substring($start, $end - $start) } else { '' }
-            $irAssertions.taskCancelRequestsWithoutFree = $block.Contains('store atomic i32 1, ptr %socket_cancel_phase_slot release', [StringComparison]::Ordinal) -and $block.Contains('call void %socket_cancel_fn(ptr %handle)', [StringComparison]::Ordinal) -and -not $block.Contains('call void @sollang_free(ptr %handle)', [StringComparison]::Ordinal)
+            $irAssertions.taskCancelRequestsWithoutFree = Test-VerificationSocketCancelRequest -Body $body
         }
         if ($callback.Success) {
             $body = $callback.Groups['body'].Value
-            $irAssertions.cancelCallbackTwoPhase = $body.Contains('br i1 %requesting, label %request, label %inspect_final', [StringComparison]::Ordinal) -and $body.Contains('call void @sollang_platform_socket_completion_request_cancel_all', [StringComparison]::Ordinal) -and $body.Contains('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal) -and $body.IndexOf('call void @sollang_free(ptr %descriptor)', [StringComparison]::Ordinal) -gt $body.IndexOf('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal)
+            $irAssertions.cancelCallbackTwoPhase = $body.Contains('br i1 %requesting, label %request, label %inspect_final', [StringComparison]::Ordinal) -and $body.Contains('call void @sollang_platform_socket_completion_request_cancel_all', [StringComparison]::Ordinal) -and $body.Contains('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal) -and $body.IndexOf($releaseDescriptor, [StringComparison]::Ordinal) -gt $body.IndexOf('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal)
         }
         if ($request.Success) {
             $body = $request.Groups['body'].Value
@@ -87,9 +90,9 @@ try {
         if ($close.Success) {
             $body = $close.Groups['body'].Value
             $joinIndex = $body.IndexOf('call i32 @WaitForSingleObject(ptr %waiter, i32 -1)', [StringComparison]::Ordinal)
-            $ownerFreeIndex = $body.IndexOf('call void @sollang_free(ptr %completed_buffer)', [StringComparison]::Ordinal)
-            $stateFreeIndex = $body.IndexOf('call void @sollang_free(ptr %state)', [StringComparison]::Ordinal)
-            $irAssertions.closeJoinsBeforeOwnerCleanup = $joinIndex -ge 0 -and $ownerFreeIndex -gt $joinIndex -and $stateFreeIndex -gt $ownerFreeIndex -and ([regex]::Matches($body, 'call void @sollang_free\(ptr %completed_buffer\)')).Count -eq 1
+            $ownerFreeIndex = $body.IndexOf($releaseBuffer, [StringComparison]::Ordinal)
+            $stateFreeIndex = $body.IndexOf($releaseState, [StringComparison]::Ordinal)
+            $irAssertions.closeJoinsBeforeOwnerCleanup = $joinIndex -ge 0 -and $ownerFreeIndex -gt $joinIndex -and $stateFreeIndex -gt $ownerFreeIndex -and ([regex]::Matches($body, [regex]::Escape($releaseBuffer))).Count -eq 1
         }
         $irAssertions.payloadCopyFree = $dequeue.Success -and $dequeue.Groups['body'].Value -notmatch '@llvm\.(memcpy|memmove)'
         foreach ($entry in $irAssertions.GetEnumerator()) { if (($entry.Value -is [bool]) -and -not $entry.Value) { Add-Failure ("W07_IR_" + $entry.Key.ToUpperInvariant()) } }
@@ -121,7 +124,7 @@ try {
             $process.Dispose()
         }
     }
-} catch { Add-Failure 'W07_RUNNER_EXCEPTION' }
+} catch { Add-Failure 'W07_RUNNER_EXCEPTION'; [IO.File]::WriteAllText((Join-Path $output 'runner-exception.txt'), $_.Exception.ToString(), [Text.UTF8Encoding]::new($false)) }
 
 $orphanProcessIds = @(Get-CimInstance Win32_Process | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and [IO.Path]::GetFullPath($_.ExecutablePath) -ceq $exe } | ForEach-Object { [int]$_.ProcessId })
 if ($orphanProcessIds.Count -ne 0) { Add-Failure 'W07_ORPHAN_PROCESS' }

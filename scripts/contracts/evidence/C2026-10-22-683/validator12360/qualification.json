@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-22T12:38:39.737181+00:00",
+  "scope": "Verification runner repairs only; no compiler production source changed after native12357 build",
+  "findings": [
+    {
+      "id": "W06-W07-COMPILER-INVOCATION",
+      "observation": "W06 invokes dotnet with a native exe; build exit -2147450749; zero runs then schema masks compile failure. W07 shares the same invocation.",
+      "repair": "Reuse explicit compiler-kind resolver/build helper, pin selected compiler for format, use actual exe.ll output, preserve execution diagnostics.",
+      "verification": "W06 CSharp/native and W07 CSharp/native all passed original exact runtime/LLVM checks."
+    },
+    {
+      "id": "L07-W07-IR-IDENTITY",
+      "observation": "Equivalent native LLVM omits task_cancel attribute #0, orders detach_child before socket cancellation, and uses platform free instead of managed instrumentation wrapper sollang_free. Native runtime already produced exact output and peer EOF.",
+      "sourceInspection": [
+        "src/Sollang.Compiler/CodeGen/LlvmRuntimePlatform.cs:1683",
+        "src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.Socket.cs:1901",
+        "selfhost/llvm/emitter/async_runtime.slg:407",
+        "selfhost/llvm/emitter/socket_runtime.slg:4203"
+      ],
+      "repair": "Read the actual cancellation basic block regardless of physical order, allow optional LLVM attribute group, bind deallocation call to explicit compiler kind; retain exact owner release count and join-before-free checks.",
+      "verification": "Shared matcher10 controls, CSharp/native L07 and CSharp/native W07; premature free and phase-after-callback are rejected."
+    },
+    {
+      "id": "MANAGED-LINUX-LLVM-PATH",
+      "observation": "L07 managed build fails because implicit user LLVM setting points to removed P-drive path.",
+      "repair": "Pass current repository pinned LLVM path for managed Linux as well as Windows; no global setting, environment fallback or junction.",
+      "verification": "L07 managed build/assembly/IR/exact runtime/peer EOF pass at W-drive."
+    }
+  ],
+  "failedExecutionsPreserved": [
+    "public12359-native/W06",
+    "public12359-native/L07",
+    "public12362-native/L07",
+    "public12362-native/W07",
+    "public12363-managed/L07"
+  ],
+  "orchestrationMistake": "A terminal CSharp W06 pass was followed by stale LASTEXITCODE; W07 resumed separately. W07 validator source was also changed during active execution; input-drift failure remains failed. All later validator edits occurred after process termination.",
+  "claimsCompilerProductionChange": false,
+  "claimsGoalComplete": false
+}

@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
+. (Join-Path $PSScriptRoot 'verification-compiler-build.ps1')
 $compilerPath = if ([IO.Path]::IsPathRooted($Compiler)) { [IO.Path]::GetFullPath($Compiler) } else { [IO.Path]::GetFullPath((Join-Path $root $Compiler)) }
 $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) { [IO.Path]::GetFullPath($OutputDirectory) } else { [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory)) }
 $fixture = Join-Path $root 'scripts/probes/socket-completion/w06-cancel-completion-race.slg'
@@ -17,7 +18,7 @@ $completionExpected = Join-Path $root 'scripts/probes/socket-completion/w06-comp
 $schemaPath = Join-Path $root 'scripts/contracts/socket-completion-w06-result.schema.json'
 $formatVerifier = Join-Path $root 'scripts/format-authoritative-slg.ps1'
 $closureVerifier = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-$inputs = @($PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $cancelExpected, $completionExpected,
+$inputs = @((Join-Path $PSScriptRoot 'verification-process.ps1'), (Join-Path $PSScriptRoot 'verification-compiler-build.ps1'), (Join-Path $PSScriptRoot 'contracts/verification-compiler-build.json'), $PSCommandPath, $schemaPath, $formatVerifier, $closureVerifier, $fixture, $cancelExpected, $completionExpected,
     (Join-Path $root 'stdlib/std/net/socket.slg'), (Join-Path $root 'stdlib/sys/runtime/socket.slg'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Socket.cs'),
     (Join-Path $root 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.Socket.cs'), $compilerPath)
@@ -30,7 +31,7 @@ foreach ($path in $inputs) {
 $compilerSha256 = (Get-FileHash -LiteralPath $compilerPath -Algorithm SHA256).Hash
 if ($compilerSha256 -cne $ExpectedCompilerSha256.ToUpperInvariant()) { throw "W06 compiler hash mismatch: expected=$ExpectedCompilerSha256 actual=$compilerSha256" }
 [IO.Directory]::CreateDirectory($output) | Out-Null
-$exe = Join-Path $output 'w06.exe'; $llvm = Join-Path $output 'w06.ll'; $bitcode = Join-Path $output 'w06.bc'; $resultPath = Join-Path $output 'result.json'
+$exe = Join-Path $output 'w06.exe'; $llvm = $exe + '.ll'; $bitcode = Join-Path $output 'w06.bc'; $resultPath = Join-Path $output 'result.json'
 foreach ($artifact in @($exe, $llvm, $bitcode, $resultPath)) { if (Test-Path -LiteralPath $artifact) { throw "W06 output already exists: $artifact" } }
 
 $failures = [Collections.Generic.List[string]]::new()
@@ -71,16 +72,16 @@ function Invoke-RaceRun([string]$Variant, [bool]$SendPeerByte, [string]$Expected
 }
 
 try {
-    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'W06 format' -TimeoutMilliseconds 120000
+    $format = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $formatVerifier, '-Compiler', $compilerPath, '-Check', '-Source', $fixture) -WorkingDirectory $root -Description 'W06 format' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'format.execution.json')
     $formatExitCode = $format.ExitCode; if ($formatExitCode -ne 0) { Add-Failure 'W06_FORMAT' }
-    $compile = Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compilerPath, 'build', $fixture, '-o', $exe, '--target', 'windows-x64', '--llvm', (Join-Path $root '.tools/llvm-22.1.8'), '-O0', '--keep-temps') -WorkingDirectory $root -Description 'W06 compile' -TimeoutMilliseconds 120000
+    $compile = Invoke-VerificationCompilerBuild -Compiler $compilerPath -Source $fixture -Output $exe -Target 'windows-x64' -WorkingDirectory $root -Description 'W06 compile' -TimeoutMilliseconds 120000
     $compileExitCode = $compile.ExitCode; $compileText = $compile.Stdout + "`n" + $compile.Stderr
     $compileDiagnosticsClean = [string]::IsNullOrWhiteSpace($compile.Stderr) -and -not [regex]::IsMatch($compileText, '(?im)^(warning|note|error)\b')
     if ($compileExitCode -ne 0 -or -not (Test-Path -LiteralPath $llvm -PathType Leaf)) { Add-Failure 'W06_COMPILE' }; if (-not $compileDiagnosticsClean) { Add-Failure 'W06_COMPILE_DIAGNOSTIC' }
     if ($compileExitCode -eq 0 -and (Test-Path -LiteralPath $llvm -PathType Leaf)) {
-        $assembled = Invoke-VerificationProcessCapture -FilePath (Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe') -ArgumentList @($llvm, '-o', $bitcode) -WorkingDirectory $root -Description 'W06 llvm-as' -TimeoutMilliseconds 120000
+        $assembled = Invoke-VerificationProcessCapture -FilePath (Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe') -ArgumentList @($llvm, '-o', $bitcode) -WorkingDirectory $root -Description 'W06 llvm-as' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'llvm-as.execution.json')
         $llvmAsExitCode = $assembled.ExitCode; if ($llvmAsExitCode -ne 0) { Add-Failure 'W06_LLVM_AS' }
-        $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'W06 V004' -TimeoutMilliseconds 120000
+        $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'W06 V004' -TimeoutMilliseconds 120000 -ExecutionRecordPath (Join-Path $output 'v004.execution.json')
         $closureExitCode = $closure.ExitCode; if ($closureExitCode -ne 0) { Add-Failure 'W06_V004' }
         $ir = [IO.File]::ReadAllText($llvm)
         $cancel = [regex]::Match($ir, 'define internal %sollang\.socket_result @sollang_platform_socket_completion_cancel\(.*?\) #0 \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
@@ -94,7 +95,7 @@ try {
         Invoke-RaceRun -Variant 'cancel-wins' -SendPeerByte $false -ExpectedPath $cancelExpected
         Invoke-RaceRun -Variant 'completion-wins' -SendPeerByte $true -ExpectedPath $completionExpected
     }
-} catch { Add-Failure 'W06_RUNNER_EXCEPTION' }
+} catch { Add-Failure 'W06_RUNNER_EXCEPTION'; [IO.File]::WriteAllText((Join-Path $output 'runner-exception.txt'), $_.Exception.ToString(), [Text.UTF8Encoding]::new($false)) }
 
 $orphanProcessIds = @(Get-CimInstance Win32_Process | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and [IO.Path]::GetFullPath($_.ExecutablePath) -ceq $exe } | ForEach-Object { [int]$_.ProcessId })
 if ($orphanProcessIds.Count -ne 0) { Add-Failure 'W06_ORPHAN_PROCESS' }

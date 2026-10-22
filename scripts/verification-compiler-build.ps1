@@ -98,7 +98,7 @@ function Invoke-VerificationCompilerBuild {
         } else {
             $record.mode = "$($invocation.Kind)-build"
             $arguments = @($invocation.Prefix) + @('build', $sourcePath, '-o', $outputPath, '--target', $Target, '-O0', '--keep-temps')
-            if ($Target -eq 'windows-x64') { $arguments += @('--llvm', (Join-Path $root '.tools/llvm-22.1.8')) }
+            $arguments += @('--llvm', (Join-Path $root '.tools/llvm-22.1.8'))
             if ($invocation.Kind -eq 'native') { $arguments += @('--stdlib', (Join-Path $root 'stdlib'), '--jobs', '4') }
             $result = Invoke-CompilerBuildStep 'build' $invocation.FilePath $arguments
         }
