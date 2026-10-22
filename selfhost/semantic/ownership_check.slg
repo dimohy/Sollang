@@ -158,6 +158,7 @@ public bodyDiagnosticActivity prepared: ref semanticContext.SemanticSnapshot, ty
 public aggregateTransferOverlapCode: -> Int { 47 }
 public diagnosticTrackTaskArgumentCode: -> Int { 48 }
 public taskOperationContractCode: -> Int { 51 }
+public parallelSourceTextResultCode: -> Int { 52 }
 public borrowedTextBlockEscapeCode: -> Int { 50 }
 
 public struct ReadonlyReferencePathStep {
@@ -440,6 +441,7 @@ public isBlockingDiagnostic diagnosticIndex: Int, diagnostics: ref [OwnershipDia
                     or diagnostic.code == aggregateTransferOverlapCode()
                     or diagnostic.code == diagnosticTrackTaskArgumentCode()
                     or diagnostic.code == taskOperationContractCode()
+                    or diagnostic.code == parallelSourceTextResultCode()
                     or diagnostic.code == borrowedTextReturnEscapeCode()
                     or diagnostic.code == borrowedTextReturnInferenceCode()
                     or diagnostic.code == functionReturnCompatibilityCode()
@@ -2798,15 +2800,97 @@ semanticTypeContainsOwnedStorageCached prepared: ref semanticContext.SemanticSna
 semanticTypeContainsReadonlyReference prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
     prepared -> semanticTypeContainsBorrowKind(types, typeId, 8)
 }
+semanticTypeIsSourceText prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    false => sourceText!
+    typeId >= 0 and typeId < (types -> len)
+        -> if {
+            types[typeId] => candidate
+            candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
+                -> if {
+                    true => sourceText!
+                } else {
+                    candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
+                        -> if {
+                            candidate.module => sourceModule!
+                            candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)
+                                -> if {
+                                    prepared.modules[candidate.module].sourceIndex => sourceModule!
+                                }
+                            false => fileNamespace!
+                            0 => moduleIndex!
+                            moduleIndex! < (prepared.modules -> len) -> while {
+                                prepared.modules[moduleIndex!] => identity
+                                identity.sourceIndex == sourceModule! -> if {
+                                    identity.pathLength == 8 => sameNamespace!
+                                    "sys.file" => expectedNamespace
+                                    UIntSize(0) => namespaceByte!
+                                    sameNamespace! and namespaceByte! < identity.pathLength
+                                        -> while {
+                                            (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
+                                                -> if {
+                                                    false => sameNamespace!
+                                                }
+                                            namespaceByte! + 1 => namespaceByte!
+                                        }
+                                    sameNamespace! -> if { true => fileNamespace! }
+                                }
+                                moduleIndex! + 1 => moduleIndex!
+                            }
+                            fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)
+                                -> if {
+                                    prepared.package.ranges[sourceModule!] => sourceRange
+                                    candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
+                                        -> if {
+                                            prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+                                            declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
+                                                -> if {
+                                                    prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
+                                                    name.span.length == 10 => sameName!
+                                                    "SourceText" => expectedName
+                                                    UIntSize(0) => nameByte!
+                                                    sameName! and nameByte! < name.span.length -> while {
+                                                        (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
+                                                            -> if {
+                                                                false => sameName!
+                                                            }
+                                                        nameByte! + 1 => nameByte!
+                                                    }
+                                                    sameName! -> if { true => sourceText! }
+                                                }
+                                        }
+                                }
+                        }
+                }
+        }
+    sourceText!
+}
+
+parallelResultSourceTextSupported prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], resultTypeId: Int, fallible: Bool -> Bool {
+    not (prepared -> semanticTypeContainsStorageKind(types, resultTypeId, 0, false, true))
+        -> if { true -> return }
+    not fallible or resultTypeId < 0 or resultTypeId >= (types -> len)
+        -> if { false -> return }
+    types[resultTypeId] => resultType
+    resultType.kind != 7 or resultType.origin != 4 or resultType.symbol != 1
+        or resultType.first < 0 or resultType.second < 0
+        -> if { false -> return }
+    [resultType.first, resultType.second] -> each payloadTypeId {
+        not (prepared -> semanticTypeIsSourceText(types, payloadTypeId))
+            and (prepared -> semanticTypeContainsStorageKind(types, payloadTypeId, 0, false, true))
+            -> if { false -> return }
+    }
+    true
+}
+
 semanticTypeContainsBorrowKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, borrowKind: Int -> Bool {
-    prepared -> semanticTypeContainsStorageKind(types, typeId, borrowKind, false)
+    prepared -> semanticTypeContainsStorageKind(types, typeId, borrowKind, false, false)
 }
 
 semanticTypeContainsByteStorage prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
-    prepared -> semanticTypeContainsStorageKind(types, typeId, 3, true)
+    prepared -> semanticTypeContainsStorageKind(types, typeId, 3, true, false)
 }
 
-semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, storageKind: Int, canonicalByteArrayOnly: Bool -> Bool {
+semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, storageKind: Int, canonicalByteArrayOnly: Bool, sourceTextOnly: Bool -> Bool {
     [Int; ~] => pending!
     [Int; ~] => visited!
     false => contains!
@@ -2825,7 +2909,8 @@ semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, 
                 -> if {
                     visited! -> push(currentTypeId)
                     types[currentTypeId] => currentType
-                    currentType.kind == storageKind
+                    ((not sourceTextOnly and currentType.kind == storageKind)
+                        or (sourceTextOnly and (prepared -> semanticTypeIsSourceText(types, currentTypeId))))
                         and (not canonicalByteArrayOnly or (types -> borrowedTextCanonicalByteArrayType(currentTypeId)))
                         -> if {
                             true => contains!
@@ -4431,68 +4516,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     # async ownership transfer (Send-like). Other affine runtime owners remain
     # rejected, including Arena, Arguments, and mapped byte views.
     parallelTypeIsSourceText typeId: Int -> Bool {
-        false => sourceText!
-        typeId >= 0 and typeId < (types -> len)
-            -> if {
-                types[typeId] => candidate
-                candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
-                    -> if {
-                        true => sourceText!
-                    } else {
-                        candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
-                            -> if {
-                                candidate.module => sourceModule!
-                                candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)
-                                    -> if {
-                                        prepared.modules[candidate.module].sourceIndex => sourceModule!
-                                    }
-                                false => fileNamespace!
-                                0 => moduleIndex!
-                                moduleIndex! < (prepared.modules -> len) -> while {
-                                    prepared.modules[moduleIndex!] => identity
-                                    identity.sourceIndex == sourceModule! -> if {
-                                        identity.pathLength == 8 => sameNamespace!
-                                        "sys.file" => expectedNamespace
-                                        UIntSize(0) => namespaceByte!
-                                        sameNamespace! and namespaceByte! < identity.pathLength
-                                            -> while {
-                                                (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
-                                                    -> if {
-                                                        false => sameNamespace!
-                                                    }
-                                                namespaceByte! + 1 => namespaceByte!
-                                            }
-                                        sameNamespace! -> if { true => fileNamespace! }
-                                    }
-                                    moduleIndex! + 1 => moduleIndex!
-                                }
-                                fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)
-                                    -> if {
-                                        prepared.package.ranges[sourceModule!] => sourceRange
-                                        candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
-                                            -> if {
-                                                prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
-                                                declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
-                                                    -> if {
-                                                        prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
-                                                        name.span.length == 10 => sameName!
-                                                        "SourceText" => expectedName
-                                                        UIntSize(0) => nameByte!
-                                                        sameName! and nameByte! < name.span.length -> while {
-                                                            (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
-                                                                -> if {
-                                                                    false => sameName!
-                                                                }
-                                                            nameByte! + 1 => nameByte!
-                                                        }
-                                                        sameName! -> if { true => sourceText! }
-                                                    }
-                                            }
-                                    }
-                            }
-                    }
-            }
-        sourceText!
+        prepared -> semanticTypeIsSourceText(types, typeId)
     }
     captureBindingIsParallelShareable bindingIndex: Int -> Bool {
         typed[bindingIndex] => binding
@@ -8870,6 +8894,24 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                 parallelNameByte! + 1 => parallelNameByte!
                             }
                         isParallel! -> if {
+                            parallelCall.operand1 >= 0 and parallelCall.operand1 < (typed -> len)
+                                and not (prepared -> parallelResultSourceTextSupported(types, typed[parallelCall.operand1].typeId, parallelCall.opcode == -209))
+                                -> if {
+                                    diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
+                                        code: parallelSourceTextResultCode()
+                                        sourceModule: parallelCall.sourceModule
+                                        functionSymbol: -1
+                                        expectedOrigin: -1
+                                        expectedModule: -1
+                                        expectedSymbol: -1
+                                        actualOrigin: parallelCall.astNode
+                                        actualModule: -1
+                                        actualSymbol: parallelIrIndex!
+                                        actualBuiltin: -1
+                                        readonlyReferencePath: -1
+                                        span: parallelName.span
+                                    })
+                                }
                             [Int; ~] => reportedMutableCaptures!
                             [Int; ~] => reportedNonSendableCaptures!
                             0 => captureUseIndex!
