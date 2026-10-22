@@ -45,27 +45,27 @@ def checked_array_loads(llvm, expected_count):
 
 
 def verify():
-    source = read(BASE / 'source12551-source/result.json')
-    runtime = read(BASE / 'source12552-runtime/result.json')
-    contract = read(BASE / 'source12551-contract.json')
+    source = read(BASE / 'source12563-source/result.json')
+    runtime = read(BASE / 'source12564-runtime/result.json')
+    contract = read(BASE / 'source12563-contract.json')
     assert source['status'] == runtime['status'] == 'passed'
-    assert source['completed'] == source['total'] == 43
-    assert runtime['completed'] == runtime['total'] == 37
+    assert source['completed'] == source['total'] == 13
+    assert runtime['completed'] == runtime['total'] == 11
     stable(source)
     stable(runtime)
     assert source['producerBuildCount'] == 1
-    assert sum(bool(row.get('admissionRejected')) for row in source['cases']) == 6
+    assert sum(bool(row.get('admissionRejected')) for row in source['cases']) == 2
     counts = {'interpolation-array-index': 6, 'interpolation-reference-index': 2, 'interpolation-index-order': 4}
     for case, expected_count in counts.items():
         row = next(item for item in source['cases'] if item['id'] == case)
         assert row['status'] == 'passed' and row['assemblyExit'] == row['emissionExit'] == 0
-        llvm_path = BASE / 'source12551-source' / case / 'emitted.ll'
+        llvm_path = BASE / 'source12563-source' / case / 'emitted.ll'
         assert sha(llvm_path) == row['emittedLlvmSha256']
         checked_array_loads(llvm_path.read_text(encoding='utf-8-sig'), expected_count)
         run = next(item for item in runtime['cases'] if item['id'] == case)
         expected = next(item for item in contract['cases'] if item['id'] == case)
         assert run['stdout'] == expected['stdout'] and run['stderr'] == ''
-    print('Source43/43 and normal runtime37/37; all12 new interpolation array loads have a checked predecessor and terminal trap edge. Fresh native and final gates remain separate.')
+    print('Current source13/13 and normal runtime11/11; all12 new interpolation array loads have a checked predecessor and terminal trap edge. Fresh native and final gates remain separate.')
 
 
 if __name__ == '__main__':

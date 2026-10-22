@@ -3345,6 +3345,15 @@ writeInterpolationCallTarget labelIndex: Int, nodeIndex: Int, functionIndex: Int
     "(" -> print
 }
 
+emitInterpolationIndexBounds labelIndex: Int, nodeIndex: Int, category: Text -> Unit uses Console {
+    "  %v$(labelIndex)_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex)_expression$(nodeIndex)_index, %v$(labelIndex)_expression$(nodeIndex)_length" -> println
+    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_valid, label %interpolation$(labelIndex)_$(category)$(nodeIndex)_invalid" -> println
+    "interpolation$(labelIndex)_$(category)$(nodeIndex)_invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "interpolation$(labelIndex)_$(category)$(nodeIndex)_valid:" -> println
+}
+
 emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, lexicalLoads: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     nodes[nodeIndex] => node
     node.kind == 16 -> if {
@@ -3908,16 +3917,43 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
 
         }
         node.opcode == -202 and node.operand1 >= 0 -> if {
-            base -> interpolationBindingIndex(sourceModule, ownerIndex, beforeIndex, context, state) => byteBaseBinding
-            byteBaseBinding >= 0 -> if {
+            node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => byteTypeId!
+            false => byteReference!
+            byteTypeId! >= 0 and context.types[byteTypeId!].kind == 8
+                -> if {
+                    context.types[byteTypeId!].first => byteTypeId!
+                    true => byteReference!
+                }
+            byteTypeId! >= 0 -> if {
+                byteReference! -> if {
+                    "  %v$(labelIndex)_expression$(nodeIndex)_source = load " -> print
+                    byteTypeId! -> writeSemanticTypeId(context, state)
+                    ", ptr " -> print
+                    labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                    ", align 8" -> println
+                }
                 "  %v$(labelIndex)_expression$(nodeIndex)_base = extractvalue " -> print
-                context.ir[byteBaseBinding] -> writeIrType(context, state)
+                byteTypeId! -> writeSemanticTypeId(context, state)
                 " " -> print
-                labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                byteReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                    labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                }
                 ", 0" -> println
-                "  %v$(labelIndex)_expression$(nodeIndex)_address = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_base, i64 " -> print
+                "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue " -> print
+                byteTypeId! -> writeSemanticTypeId(context, state)
+                " " -> print
+                byteReference! -> if { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print } else {
+                    labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                }
+                ", 1" -> println
+                node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => byteIndexWidth
+                "  %v$(labelIndex)_expression$(nodeIndex)_index = " -> print
+                byteIndexWidth < 64 -> if { "zext i$(byteIndexWidth) " -> print } else { "add i64 0, " -> print }
                 labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                byteIndexWidth < 64 -> if { " to i64" -> print }
                 "" -> println
+                labelIndex -> emitInterpolationIndexBounds(nodeIndex, "byte")
+                "  %v$(labelIndex)_expression$(nodeIndex)_address = getelementptr i8, ptr %v$(labelIndex)_expression$(nodeIndex)_base, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
                 "  %v$(labelIndex)_expression$(nodeIndex) = load i8, ptr %v$(labelIndex)_expression$(nodeIndex)_address, align 1" -> println
             }
         }
@@ -4051,12 +4087,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                     }
                     ", 1" -> println
-                    "  %v$(labelIndex)_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex)_expression$(nodeIndex)_index, %v$(labelIndex)_expression$(nodeIndex)_length" -> println
-                    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_array$(nodeIndex)_valid, label %interpolation$(labelIndex)_array$(nodeIndex)_invalid" -> println
-                    "interpolation$(labelIndex)_array$(nodeIndex)_invalid:" -> println
-                    "  call void @llvm.trap()" -> println
-                    "  unreachable" -> println
-                    "interpolation$(labelIndex)_array$(nodeIndex)_valid:" -> println
+                    labelIndex -> emitInterpolationIndexBounds(nodeIndex, "array")
                     "  %v$(labelIndex)_expression$(nodeIndex)_ptr = getelementptr " -> print
                     indexedElementTypeId -> writeSemanticTypeId(context, state)
                     ", ptr %v$(labelIndex)_expression$(nodeIndex)_data, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
