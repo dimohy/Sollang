@@ -47,7 +47,7 @@ $orphanProcessIds = @()
 $irAssertions = [ordered]@{
     socketWaitingStatusDistinct = $false; taskCancelRequestsWithoutFree = $false; cancelCallbackTwoPhase = $false
     cancelMarkerPrecedesNativeCancel = $false; completionWonRecognized = $false; terminalPublishCount = 0
-    closeJoinsBeforeOwnerCleanup = $false; payloadCopyFree = $false
+    closeJoinsBeforeOwnerCleanup = $false; payloadCopyFree = $false; waiterScratchInEntry = $false
 }
 
 try {
@@ -72,6 +72,7 @@ try {
         $waiter = [regex]::Match($ir, 'define internal i32 @sollang_socket_completion_waiter\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
         $close = [regex]::Match($ir, 'define internal void @sollang_platform_socket_completion_close\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
         $dequeue = [regex]::Match($ir, 'define internal %sollang\.socket_result @sollang_platform_socket_completion_dequeue\(.*?\)(?: #[0-9]+)? \{(?<body>.*?)\r?\n\}', [Text.RegularExpressions.RegexOptions]::Singleline)
+        $irAssertions.waiterScratchInEntry = $waiter.Success -and (Test-VerificationSocketWaiterScratch -Body $waiter.Groups['body'].Value -Platform windows)
         $irAssertions.socketWaitingStatusDistinct = $worker.Success -and $worker.Groups['body'].Value.Contains('store i32 7, ptr %status_slot', [StringComparison]::Ordinal)
         if ($taskCancel.Success) {
             $body = $taskCancel.Groups['body'].Value

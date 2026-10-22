@@ -1681,6 +1681,7 @@ internal sealed partial class LinuxLlvmRuntimePlatform
 
         define internal ptr @sollang_socket_completion_waiter(ptr %state) #0 {
         entry:
+          %wakeup_value = alloca i64, align 8
           %epoll64 = load i64, ptr %state, align 8
           %epoll = trunc i64 %epoll64 to i32
           %wakeup_slot = getelementptr i8, ptr %state, i64 8
@@ -1716,7 +1717,6 @@ internal sealed partial class LinuxLlvmRuntimePlatform
           %must_stop = icmp ne i32 %stopping, 0
           br i1 %must_stop, label %done_locked, label %drain_wakeup
         drain_wakeup:
-          %wakeup_value = alloca i64, align 8
           %wakeup_read = call i64 @read(i32 %wakeup, ptr %wakeup_value, i64 8)
           br label %cancel_scan
         cancel_scan:

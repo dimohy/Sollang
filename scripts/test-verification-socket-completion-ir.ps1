@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'verification-socket-completion-ir.ps1')
 $request = @'
 cancel_socket_completion:
@@ -24,4 +25,15 @@ try { Get-VerificationSocketCancelBlock -Body $other | Out-Null; throw 'CANCEL_M
 catch { if ($_.Exception.Message -cne 'SOCKET_CANCEL_BLOCK_MISSING') { throw } }
 if ((Get-VerificationSocketReleaseCall -CompilerKind managed -Operand '%descriptor') -cne 'call void @sollang_free(ptr %descriptor)' -or
     (Get-VerificationSocketReleaseCall -CompilerKind native -Operand '%descriptor') -cne 'call void @free(ptr %descriptor)') { throw 'CANCEL_ALLOCATOR_IDENTITY_CHANGED' }
-Write-Output 'Socket cancellation IR: 10 block-order, premature-free, missing-phase/callback, ordering and allocator controls passed.'
+foreach ($platform in @('windows', 'linux')) {
+    $slots = if ($platform -ceq 'windows') {
+        "  %removed = alloca i32, align 4`n  %completion_flags = alloca i32, align 4`n"
+    } else { "  %wakeup_value = alloca i64, align 8`n" }
+    $valid = "entry:`n$slots  br label %wait`nwait:`n  br label %wait`n"
+    if (-not (Test-VerificationSocketWaiterScratch -Body $valid -Platform $platform)) { throw 'WAITER_FIXED_SCRATCH_REJECTED' }
+    foreach ($invalid in @($valid.Replace($slots, '').Replace("wait:`n", "wait:`n$slots"),
+        $valid.Replace($slots, ''), $valid.Replace($slots, "$slots$slots"))) {
+        if (Test-VerificationSocketWaiterScratch -Body $invalid -Platform $platform) { throw 'WAITER_REPEATED_OR_MISSING_SCRATCH_ACCEPTED' }
+    }
+}
+Write-Output 'Socket IR: cancellation controls and Windows/Linux fixed scratch, repeated allocation, missing and duplicate storage controls passed.'

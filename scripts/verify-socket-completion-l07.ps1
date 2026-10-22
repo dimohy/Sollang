@@ -55,7 +55,7 @@ $orphanProcessIds = @()
 $irAssertions = [ordered]@{
     socketWaitingStatusDistinct = $false; taskCancelRequestsWithoutFree = $false; cancelCallbackTwoPhase = $false
     cancelAllReleaseAndWake = $false; cancellationPublishCount = 0; closeJoinsBeforeOwnerCleanup = $false
-    epollRegistrationRemovedByClose = $false; payloadCopyFree = $false
+    epollRegistrationRemovedByClose = $false; payloadCopyFree = $false; waiterScratchInEntry = $false
 }
 
 try {
@@ -71,6 +71,7 @@ try {
         $closure = Invoke-VerificationProcessCapture -FilePath 'pwsh' -ArgumentList @('-NoProfile', '-File', $closureVerifier, '-LlvmPath', $llvm) -WorkingDirectory $root -Description 'L07 V004' -TimeoutMilliseconds 120000
         $closureExitCode = $closure.ExitCode; if ($closureExitCode -ne 0) { Add-Failure 'L07_V004' }
         $ir = [IO.File]::ReadAllText($llvm); $worker = Get-FunctionBody $ir 'sollang_socket_completion_dequeue_task_worker'; $taskCancel = Get-FunctionBody $ir 'sollang_task_cancel'; $callback = Get-FunctionBody $ir 'sollang_socket_completion_dequeue_task_cancel'; $request = Get-FunctionBody $ir 'sollang_platform_socket_completion_request_cancel_all_locked'; $waiter = Get-FunctionBody $ir 'sollang_socket_completion_waiter'; $close = Get-FunctionBody $ir 'sollang_platform_socket_completion_close'; $dequeue = Get-FunctionBody $ir 'sollang_platform_socket_completion_dequeue_locked'
+        $irAssertions.waiterScratchInEntry = (Test-VerificationSocketWaiterScratch -Body $waiter -Platform linux)
         $irAssertions.socketWaitingStatusDistinct = $worker.Contains('store i32 7, ptr %status_slot', [StringComparison]::Ordinal)
         $irAssertions.taskCancelRequestsWithoutFree = Test-VerificationSocketCancelRequest -Body $taskCancel
         $irAssertions.cancelCallbackTwoPhase = $callback.Contains('br i1 %requesting, label %request, label %inspect_final', [StringComparison]::Ordinal) -and $callback.Contains('call void @sollang_platform_socket_completion_request_cancel_all', [StringComparison]::Ordinal) -and $callback.Contains('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal) -and $callback.IndexOf($releaseDescriptor, [StringComparison]::Ordinal) -gt $callback.IndexOf('call void @sollang_platform_socket_completion_close', [StringComparison]::Ordinal)

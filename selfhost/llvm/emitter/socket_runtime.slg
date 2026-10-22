@@ -2797,12 +2797,13 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
 
     define internal i32 @sollang_socket_completion_waiter(ptr %state) #0 {
     entry:
+      %removed = alloca i32, align 4
+      %completion_flags = alloca i32, align 4
       %port = load ptr, ptr %state, align 8
       %completion_table_slot = getelementptr i8, ptr %state, i64 24
       %completion_table = load ptr, ptr %completion_table_slot, align 8
       br label %wait
     wait:
-      %removed = alloca i32, align 4
       store i32 0, ptr %removed, align 4
       %waited = call i32 @GetQueuedCompletionStatusEx(ptr %port, ptr %completion_table, i32 1, ptr %removed, i32 -1, i32 0)
       %wait_ok = icmp ne i32 %waited, 0
@@ -2838,7 +2839,6 @@ public emitWindowsCompletionRuntime: -> Unit uses Console {
       %registration_entry = getelementptr i8, ptr %registration_table, i64 %registration_offset
       %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
       %socket = load i64, ptr %socket_slot, align 8
-      %completion_flags = alloca i32, align 4
       store i32 0, ptr %completion_flags, align 4
       %resolved = call i32 @WSAGetOverlappedResult(i64 %socket, ptr %overlapped, ptr %transferred_slot, i32 0, ptr %completion_flags)
       %resolved_failed = icmp eq i32 %resolved, 0
@@ -3983,6 +3983,7 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
 
     define internal ptr @sollang_socket_completion_waiter(ptr %state) #0 {
     entry:
+      %wakeup_value = alloca i64, align 8
       %epoll64 = load i64, ptr %state, align 8
       %epoll = trunc i64 %epoll64 to i32
       %wakeup_slot = getelementptr i8, ptr %state, i64 8
@@ -4018,7 +4019,6 @@ public emitLinuxCompletionRuntime: -> Unit uses Console {
       %must_stop = icmp ne i32 %stopping, 0
       br i1 %must_stop, label %done_locked, label %drain_wakeup
     drain_wakeup:
-      %wakeup_value = alloca i64, align 8
       %wakeup_read = call i64 @read(i32 %wakeup, ptr %wakeup_value, i64 8)
       br label %cancel_scan
     cancel_scan:

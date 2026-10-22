@@ -1460,12 +1460,13 @@ internal sealed partial class WindowsLlvmRuntimePlatform
     private const string CompletionRuntime = """
         define internal i32 @sollang_socket_completion_waiter(ptr %state) #0 {
         entry:
+          %removed = alloca i32, align 4
+          %completion_flags = alloca i32, align 4
           %port = load ptr, ptr %state, align 8
           %completion_table_slot = getelementptr i8, ptr %state, i64 24
           %completion_table = load ptr, ptr %completion_table_slot, align 8
           br label %wait
         wait:
-          %removed = alloca i32, align 4
           store i32 0, ptr %removed, align 4
           %waited = call i32 @GetQueuedCompletionStatusEx(ptr %port, ptr %completion_table, i32 1, ptr %removed, i32 -1, i32 0)
           %wait_ok = icmp ne i32 %waited, 0
@@ -1501,7 +1502,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform
           %registration_entry = getelementptr i8, ptr %registration_table, i64 %registration_offset
           %socket_slot = getelementptr i8, ptr %registration_entry, i64 16
           %socket = load i64, ptr %socket_slot, align 8
-          %completion_flags = alloca i32, align 4
           store i32 0, ptr %completion_flags, align 4
           %resolved = call i32 @WSAGetOverlappedResult(i64 %socket, ptr %overlapped, ptr %transferred_slot, i32 0, ptr %completion_flags)
           %resolved_failed = icmp eq i32 %resolved, 0
