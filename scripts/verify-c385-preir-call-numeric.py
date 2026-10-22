@@ -529,8 +529,9 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                 exe = folder / "probe.exe"
             command = [str(compiler), "build", *[str(path) for path in case_sources(case)], "-o", str(exe), "--target", "windows-x64", "--keep-temps"]
             command += build_options
+            command += ["--llvm", str(ROOT / ".tools/llvm-22.1.8")]
             if args.mode == "paired":
-                command += ["--llvm", str(ROOT / ".tools/llvm-22.1.8"), "--stdlib", str(ROOT / "stdlib")]
+                command += ["--stdlib", str(ROOT / "stdlib")]
             if group is not None:
                 producer = result["reusableCheckedProducer"]
                 if producer["buildCount"] == 0:
