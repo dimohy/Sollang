@@ -1,0 +1,225 @@
+%sollang.text = type { ptr, i64 }
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_io_failed = internal global i8 0
+
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal i1 @sollang_runtime_write_stdout(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  %complete = icmp eq i64 %written, %len
+  br i1 %complete, label %success, label %failure
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret i1 %ok
+}
+define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
+  %combined = and i1 %data_ok, %newline_ok
+  br label %done
+done:
+  %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+  ret i1 %ok
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
+  ret void
+}
+define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %remaining = sub i64 %len, %offset
+  %current = getelementptr i8, ptr %data, i64 %offset
+  %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+  %positive = icmp sgt i64 %count, 0
+  br i1 %positive, label %advance, label %failure
+advance:
+  %next = add i64 %offset, %count
+  %complete = icmp eq i64 %next, %len
+  br i1 %complete, label %success, label %write
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stderr(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_write_stderr(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+  ret void
+}
+define i32 @sollang_m131_s2(%sollang.text %arg) {
+entry:
+  %data = extractvalue %sollang.text %arg, 0
+  %length = extractvalue %sollang.text %arg, 1
+  %prompt_ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %length, i1 false)
+  br i1 %prompt_ok, label %read_bytes, label %prompt_failure
+read_bytes:
+  %buf = alloca [64 x i8], align 1
+  %len = call i64 @read(i32 0, ptr %buf, i64 64)
+  %read_ok = icmp sgt i64 %len, 0
+  br i1 %read_ok, label %prepare, label %fail
+prepare:
+  br label %skip
+
+skip:
+  %skip_idx = phi i64 [ 0, %prepare ], [ %skip_next, %skip_ws ]
+  %skip_has = icmp ult i64 %skip_idx, %len
+  br i1 %skip_has, label %skip_char, label %fail
+
+skip_char:
+  %skip_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %skip_idx
+  %skip_ch = load i8, ptr %skip_ptr, align 1
+  %skip_sp = icmp eq i8 %skip_ch, 32
+  %skip_tab = icmp eq i8 %skip_ch, 9
+  %skip_cr = icmp eq i8 %skip_ch, 13
+  %skip_lf = icmp eq i8 %skip_ch, 10
+  %skip_sp_tab = or i1 %skip_sp, %skip_tab
+  %skip_cr_lf = or i1 %skip_cr, %skip_lf
+  %skip_is_ws = or i1 %skip_sp_tab, %skip_cr_lf
+  br i1 %skip_is_ws, label %skip_ws, label %digit_entry
+
+skip_ws:
+  %skip_next = add i64 %skip_idx, 1
+  br label %skip
+
+digit_entry:
+  %first_ge = icmp uge i8 %skip_ch, 48
+  %first_le = icmp ule i8 %skip_ch, 57
+  %first_digit = and i1 %first_ge, %first_le
+  br i1 %first_digit, label %digits, label %fail
+
+digits:
+  %digit_idx = phi i64 [ %skip_idx, %digit_entry ], [ %digit_next, %digit_continue ]
+  %value = phi i64 [ 0, %digit_entry ], [ %value_next, %digit_continue ]
+  %digit_has = icmp ult i64 %digit_idx, %len
+  br i1 %digit_has, label %digit_char, label %success
+
+digit_char:
+  %digit_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %digit_idx
+  %digit_ch = load i8, ptr %digit_ptr, align 1
+  %digit_ge = icmp uge i8 %digit_ch, 48
+  %digit_le = icmp ule i8 %digit_ch, 57
+  %is_digit = and i1 %digit_ge, %digit_le
+  br i1 %is_digit, label %digit_continue, label %trail_entry
+
+digit_continue:
+  %digit64 = zext i8 %digit_ch to i64
+  %digit_value = sub i64 %digit64, 48
+  %value_x10 = mul i64 %value, 10
+  %value_next = add i64 %value_x10, %digit_value
+  %digit_next = add i64 %digit_idx, 1
+  br label %digits
+
+trail_entry:
+  br label %trail
+
+trail:
+  %trail_idx = phi i64 [ %digit_idx, %trail_entry ], [ %trail_next, %trail_ws ]
+  %trail_has = icmp ult i64 %trail_idx, %len
+  br i1 %trail_has, label %trail_char, label %success
+
+trail_char:
+  %trail_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %trail_idx
+  %trail_ch = load i8, ptr %trail_ptr, align 1
+  %trail_sp = icmp eq i8 %trail_ch, 32
+  %trail_tab = icmp eq i8 %trail_ch, 9
+  %trail_cr = icmp eq i8 %trail_ch, 13
+  %trail_lf = icmp eq i8 %trail_ch, 10
+  %trail_sp_tab = or i1 %trail_sp, %trail_tab
+  %trail_cr_lf = or i1 %trail_cr, %trail_lf
+  %trail_is_ws = or i1 %trail_sp_tab, %trail_cr_lf
+  br i1 %trail_is_ws, label %trail_ws, label %fail
+
+trail_ws:
+  %trail_next = add i64 %trail_idx, 1
+  br label %trail
+
+success:
+  %success_value = phi i64 [ %value, %digits ], [ %value, %trail ]
+  %result = trunc i64 %success_value to i32
+  ret i32 %result
+
+fail:
+  call void @probe_exit(i32 1)
+  unreachable
+prompt_failure:
+  ret i32 0
+}
+
+@probe_mode = global i1 true
+@probe_reads = global i32 0
+define i64 @write(i32 %fd, ptr %data, i64 %len) {
+ %fail = load i1, ptr @probe_mode
+ %count = select i1 %fail, i64 -1, i64 %len
+ ret i64 %count
+}
+declare void @llvm.trap()
+define internal void @probe_exit(i32 %status) {
+ call void @llvm.trap()
+ unreachable
+}
+define i64 @read(i32 %fd, ptr %data, i64 %capacity) {
+ %prior = load i32, ptr @probe_reads
+ %next = add i32 %prior, 1
+ store i32 %next, ptr @probe_reads
+ store i8 52, ptr %data
+ %second = getelementptr i8, ptr %data, i64 1
+ store i8 50, ptr %second
+ %third = getelementptr i8, ptr %data, i64 2
+ store i8 10, ptr %third
+ ret i64 3
+}
+define i32 @main() {
+ %prompt = insertvalue %sollang.text zeroinitializer, i64 1, 1
+ %failed_result = call i32 @sollang_m131_s2(%sollang.text %prompt)
+ %failed_reads = load i32, ptr @probe_reads
+ %not_read = icmp eq i32 %failed_reads, 0
+ %zero = icmp eq i32 %failed_result, 0
+ %failure_state = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %failed = icmp eq i8 %failure_state, 1
+ %failed_a = and i1 %not_read, %zero
+ %failed_pass = and i1 %failed_a, %failed
+ store i1 false, ptr @probe_mode
+ %healthy_result = call i32 @sollang_m131_s2(%sollang.text %prompt)
+ %healthy_reads = load i32, ptr @probe_reads
+ %read_three = icmp eq i32 %healthy_reads, 1
+ %forty_two = icmp eq i32 %healthy_result, 42
+ %retained_state = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %retained = icmp eq i8 %retained_state, 1
+ %healthy_a = and i1 %read_three, %forty_two
+ %healthy_pass = and i1 %healthy_a, %retained
+ %passed = and i1 %failed_pass, %healthy_pass
+ %exit = select i1 %passed, i32 0, i32 1
+ ret i32 %exit
+}

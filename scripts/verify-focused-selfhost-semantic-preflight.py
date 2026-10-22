@@ -53,6 +53,8 @@ def main():
     parser.add_argument("--manifest", type=Path, default=ROOT / "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt")
     parser.add_argument("--controls-only", action="store_true")
     parser.add_argument("--artifact-cleanup", choices=("execute", "plan-only"), default="execute")
+    parser.add_argument("--reusable-directory", type=Path, action="append",
+                        help="Explicit reusable compiler directories; validated by the artifact lifecycle contract.")
     parser.add_argument("--expected-managed-dll-sha256")
     parser.add_argument("--timeout-seconds", type=int, default=600)
     args = parser.parse_args()
@@ -98,14 +100,16 @@ def main():
             raise ValueError("SEMANTIC_PREFLIGHT_MANAGED_DLL_DRIFT")
         hashes = {str(path): sha(path) for path in inputs}
         output = args.output.resolve()
-        initialize_output(ROOT, output)
+        initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
         output.mkdir(parents=True, exist_ok=False)
         record = {"schemaVersion": 1, "status": "running", "scope": "controls-only" if args.controls_only else "focused-selfhost",
                   "inputHashes": hashes, "managedDllSha256": sha(dll), "tool": dotnet,
                   "codegenInvoked": False, "cases": [], "steps": [], "failureIds": [],
                   "productionSourcePaths": [str(path) for path in producer_paths],
                   "productionApiPath": "CompilerApp.LoadProgram -> SemanticCompiler.Compile(null)",
-                  "codegenPathGuard": "passed", "artifactCleanupMode": args.artifact_cleanup}
+                  "codegenPathGuard": "passed", "artifactCleanupMode": args.artifact_cleanup,
+                  "reusableCompilerDirectories": None if args.reusable_directory is None else
+                      [str(path.absolute()) for path in args.reusable_directory]}
         def save():
             write_json_atomic(output / "result.json", record)
         def stable():
@@ -193,7 +197,8 @@ def main():
                                       or ".sollang-cache" in path.parts)}
             save()
     if record["status"] == "passed" and record["inputsStable"] and record["processesStopped"]:
-        cleanup_output(ROOT, output, execute=args.artifact_cleanup == "execute")
+        cleanup_output(ROOT, output, execute=args.artifact_cleanup == "execute",
+                       reusable_directories=args.reusable_directory)
     print(json.dumps({key: record[key] for key in ("status", "completed", "total", "inputsStable", "failureIds")}))
     return 0 if record["status"] == "passed" else 1
 

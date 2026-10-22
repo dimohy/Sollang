@@ -195,7 +195,8 @@ def main():
                 proof_path.write_text(json.dumps(proof, indent=2) + "\n", encoding="utf-8")
                 raise SystemExit(1)
     try:
-        cleanup_output(ROOT, output, execute=True)
+        cleanup_output(ROOT, output, execute=True,
+                       reusable_directories=args.reusable_compiler_directory)
     except (OSError, ValueError, TypeError, subprocess.CalledProcessError) as error:
         proof.update(status="failed", completed=0, failureId="STDLIB_PREFLIGHT_POST_EXECUTION_LIFECYCLE_FAILURE",
             observedSemanticCompleted=1, observedSemanticTotal=1, failure=f"{type(error).__name__}: {error}")

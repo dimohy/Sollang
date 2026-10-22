@@ -916,7 +916,6 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
     functions -> emitLegacyIntegerRuntime(false)
     emitLinuxLegacyIntegerRuntime(declareIntegerRead, declareIntegerWrite, declareIntegerSeek, declareIntegerOpen, declareIntegerClose)
     """
-    declare i32 @getchar()
     declare i32 @clock_gettime(i32, ptr)
     @sollang_stage2_random_state = internal global i64 88172645463325252
     """ -> println
@@ -944,45 +943,98 @@ public emitLinux functions: RuntimeFunctionSymbols, declareIntegerRead: Bool, de
       %data = extractvalue %sollang.text %arg, 0
       %length = extractvalue %sollang.text %arg, 1
       %prompt_ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %length, i1 false)
-      %value_slot = alloca i32, align 4
-      %started_slot = alloca i1, align 1
-      %negative_slot = alloca i1, align 1
-      store i32 0, ptr %value_slot, align 4
-      store i1 false, ptr %started_slot, align 1
-      store i1 false, ptr %negative_slot, align 1
-      br i1 %prompt_ok, label %read, label %done
-    read:
-      %character = call i32 @getchar()
-      %eof = icmp eq i32 %character, -1
-      br i1 %eof, label %done, label %classify
-    classify:
-      %digit_low = icmp sge i32 %character, 48
-      %digit_high = icmp sle i32 %character, 57
-      %digit = and i1 %digit_low, %digit_high
-      br i1 %digit, label %append, label %non_digit
-    append:
-      %previous = load i32, ptr %value_slot, align 4
-      %scaled = mul i32 %previous, 10
-      %digit_value = sub i32 %character, 48
-      %updated = add i32 %scaled, %digit_value
-      store i32 %updated, ptr %value_slot, align 4
-      store i1 true, ptr %started_slot, align 1
-      br label %read
-    non_digit:
-      %started = load i1, ptr %started_slot, align 1
-      br i1 %started, label %done, label %prefix
-    prefix:
-      %minus = icmp eq i32 %character, 45
-      br i1 %minus, label %mark_negative, label %read
-    mark_negative:
-      store i1 true, ptr %negative_slot, align 1
-      br label %read
-    done:
-      %magnitude = load i32, ptr %value_slot, align 4
-      %negative = load i1, ptr %negative_slot, align 1
-      %negated = sub i32 0, %magnitude
-      %result = select i1 %negative, i32 %negated, i32 %magnitude
+      br i1 %prompt_ok, label %read_bytes, label %prompt_failure
+    read_bytes:
+      %buf = alloca [64 x i8], align 1
+      %len = call i64 @read(i32 0, ptr %buf, i64 64)
+      %read_ok = icmp sgt i64 %len, 0
+      br i1 %read_ok, label %prepare, label %fail
+    prepare:
+      br label %skip
+
+    skip:
+      %skip_idx = phi i64 [ 0, %prepare ], [ %skip_next, %skip_ws ]
+      %skip_has = icmp ult i64 %skip_idx, %len
+      br i1 %skip_has, label %skip_char, label %fail
+
+    skip_char:
+      %skip_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %skip_idx
+      %skip_ch = load i8, ptr %skip_ptr, align 1
+      %skip_sp = icmp eq i8 %skip_ch, 32
+      %skip_tab = icmp eq i8 %skip_ch, 9
+      %skip_cr = icmp eq i8 %skip_ch, 13
+      %skip_lf = icmp eq i8 %skip_ch, 10
+      %skip_sp_tab = or i1 %skip_sp, %skip_tab
+      %skip_cr_lf = or i1 %skip_cr, %skip_lf
+      %skip_is_ws = or i1 %skip_sp_tab, %skip_cr_lf
+      br i1 %skip_is_ws, label %skip_ws, label %digit_entry
+
+    skip_ws:
+      %skip_next = add i64 %skip_idx, 1
+      br label %skip
+
+    digit_entry:
+      %first_ge = icmp uge i8 %skip_ch, 48
+      %first_le = icmp ule i8 %skip_ch, 57
+      %first_digit = and i1 %first_ge, %first_le
+      br i1 %first_digit, label %digits, label %fail
+
+    digits:
+      %digit_idx = phi i64 [ %skip_idx, %digit_entry ], [ %digit_next, %digit_continue ]
+      %value = phi i64 [ 0, %digit_entry ], [ %value_next, %digit_continue ]
+      %digit_has = icmp ult i64 %digit_idx, %len
+      br i1 %digit_has, label %digit_char, label %success
+
+    digit_char:
+      %digit_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %digit_idx
+      %digit_ch = load i8, ptr %digit_ptr, align 1
+      %digit_ge = icmp uge i8 %digit_ch, 48
+      %digit_le = icmp ule i8 %digit_ch, 57
+      %is_digit = and i1 %digit_ge, %digit_le
+      br i1 %is_digit, label %digit_continue, label %trail_entry
+
+    digit_continue:
+      %digit64 = zext i8 %digit_ch to i64
+      %digit_value = sub i64 %digit64, 48
+      %value_x10 = mul i64 %value, 10
+      %value_next = add i64 %value_x10, %digit_value
+      %digit_next = add i64 %digit_idx, 1
+      br label %digits
+
+    trail_entry:
+      br label %trail
+
+    trail:
+      %trail_idx = phi i64 [ %digit_idx, %trail_entry ], [ %trail_next, %trail_ws ]
+      %trail_has = icmp ult i64 %trail_idx, %len
+      br i1 %trail_has, label %trail_char, label %success
+
+    trail_char:
+      %trail_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %trail_idx
+      %trail_ch = load i8, ptr %trail_ptr, align 1
+      %trail_sp = icmp eq i8 %trail_ch, 32
+      %trail_tab = icmp eq i8 %trail_ch, 9
+      %trail_cr = icmp eq i8 %trail_ch, 13
+      %trail_lf = icmp eq i8 %trail_ch, 10
+      %trail_sp_tab = or i1 %trail_sp, %trail_tab
+      %trail_cr_lf = or i1 %trail_cr, %trail_lf
+      %trail_is_ws = or i1 %trail_sp_tab, %trail_cr_lf
+      br i1 %trail_is_ws, label %trail_ws, label %fail
+
+    trail_ws:
+      %trail_next = add i64 %trail_idx, 1
+      br label %trail
+
+    success:
+      %success_value = phi i64 [ %value, %digits ], [ %value, %trail ]
+      %result = trunc i64 %success_value to i32
       ret i32 %result
+
+    fail:
+      call void @exit(i32 1)
+      unreachable
+    prompt_failure:
+      ret i32 0
     }
     """ -> println
     "define void @sollang_m$(functions.seedRandomRef.module)_s$(functions.seedRandomRef.symbol)(i32 %arg) {" -> println
