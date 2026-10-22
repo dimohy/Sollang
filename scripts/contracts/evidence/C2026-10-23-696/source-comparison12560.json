@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "observedAtUtc": "2026-10-22T22:19:12.057995+00:00",
+  "status": "compared-before-slg-edit",
+  "managedFirst": "csharp12560.json",
+  "scope": "Text and SourceText byte intrinsic inside interpolation: canonical receiver representation and checked byte access.",
+  "CSharp": "LlvmEmitter Flow handles canonical RuntimeText/RuntimeSourceText after reference normalization; evaluates UIntSize index once, compares ult i64 against length, emits terminal trap before byte load. Current focused5/5 normal outputs pass before SLG edit.",
+  "SLG": "emitInterpolationIntrinsic opcode-202 gates on interpolationBindingIndex. It extracts receiver field0 using binding raw type without loading ref values, omits current length/guard and assumes an i64 subscript. This skips computed Text receivers and attempts extractvalue ptr for readonly inputs. Existing transient/deferred and subtree callers delegate here.",
+  "actualBefore": "Three native normal cases pass but byte loads have no bounds checks. Readonly Text/SourceText fails LLVM extractvalue ptr; computed slice receiver fails undefined byte-result SSA. Both failed builds retained once; no failed executable run or repeat.",
+  "decision": "Normalize receiver through interpolationNodeTypeId; unwrap/load readonly references once, accept canonical computed receiver, extract data/current length from canonical Text/SourceText carrier. Normalize UIntSize index to i64 once and reuse a common trap-before-access helper shared with C695 arrays. Keep C695 ordinary outcomes and unchanged mapped/index/dictionary paths.",
+  "sourceHashesBefore": {
+    "src/Sollang.Compiler/CodeGen/LlvmEmitter.Flow.cs": "D0DEECA77AF202443CA6421805FAABB33C77F8B3148ED4877B11ACA65FA5A326",
+    "selfhost/llvm/text/foundation.slg": "9110429EF786E25E83B7A99BCAD77344301792DCCC468B12A91E4891BC732E92",
+    "selfhost/llvm/text/core_calls.slg": "D092A5CB17F68FCA5ECA9AA0D86899AD038FF7140F3D150CF5DDC859979A27C4"
+  },
+  "specification": "docs/SPEC.md:4324..4333 Text byte is bounds checked and takes UIntSize; reference and computed receivers retain canonical value semantics. No specification change.",
+  "claimsGoalComplete": false
+}
