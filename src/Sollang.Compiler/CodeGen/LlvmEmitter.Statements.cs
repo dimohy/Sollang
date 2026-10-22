@@ -2376,6 +2376,7 @@ internal sealed partial class LlvmEmitter
             var mapped = EmitExpression(callbackResult.Expression) as RuntimeEnum
                 ?? throw new SollangException("tryParallel callback must return Result<R, E>");
             EnsureRuntimeType(mapped, callbackResultType, "tryParallel callback");
+            var transferred = GetBlockResultTransferredOwnerName(callbackResult.Expression);
             var tag = NextTemp("try_parallel_tag");
             EmitAssign(tag, $"extractvalue {LlvmEnumType(mapped.Type)} {mapped.ValueName}, 0");
             var isError = NextTemp("try_parallel_is_error");
@@ -2400,13 +2401,13 @@ internal sealed partial class LlvmEmitter
                         successful);
                     break;
             }
-            DropOwnedLocalsCreatedSince(callbackLocals, transferredOwnerName: null);
+            DropOwnedLocalsCreatedSince(callbackLocals, transferred, callbackResult.Expression);
             EmitBranch(continueLabel);
 
             EmitLabel(errorLabel);
             _currentBlockLabel = errorLabel;
             var error = ExtractEnumPayload(mapped, callbackTypes.Error);
-            DropOwnedLocalsCreatedSince(callbackLocals, transferredOwnerName: null);
+            DropOwnedLocalsCreatedSince(callbackLocals, transferred, callbackResult.Expression);
             EmitDropTryParallelPrefix(outputPointer, callbackTypes.Ok, index);
             var outerDefinition = _program.Types.GetEnum(function.ReturnType);
             var errorVariant = outerDefinition.Variants.First(variant => variant.Name == "Err");
