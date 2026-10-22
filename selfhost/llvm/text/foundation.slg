@@ -4033,11 +4033,33 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     ", 0" -> println
                     node.operand1 -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexedSubscriptWidth!
                     indexedSubscriptWidth! <= 0 -> if { 32 => indexedSubscriptWidth! }
+                    "  %v$(labelIndex)_expression$(nodeIndex)_index = " -> print
+                    indexedSubscriptWidth! < 64 -> if {
+                        node.operand1 -> interpolationNodeSigned(nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                            -> if { "sext" -> print } else { "zext" -> print }
+                        " i$(indexedSubscriptWidth!) " -> print
+                    } else { "add i64 0, " -> print }
+                    labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                    indexedSubscriptWidth! < 64 -> if { " to i64" -> print }
+                    "" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue " -> print
+                    indexedContainerType.kind == 4 -> if { "{ ptr, i64 }" -> print } else { indexedContainerTypeId! -> writeSemanticTypeId(context, state) }
+                    " " -> print
+                    indexedReference! -> if {
+                        indexedContainerType.kind == 4 -> if { "%v$(labelIndex)_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print }
+                    } else {
+                        labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
+                    }
+                    ", 1" -> println
+                    "  %v$(labelIndex)_expression$(nodeIndex)_in_bounds = icmp ult i64 %v$(labelIndex)_expression$(nodeIndex)_index, %v$(labelIndex)_expression$(nodeIndex)_length" -> println
+                    "  br i1 %v$(labelIndex)_expression$(nodeIndex)_in_bounds, label %interpolation$(labelIndex)_array$(nodeIndex)_valid, label %interpolation$(labelIndex)_array$(nodeIndex)_invalid" -> println
+                    "interpolation$(labelIndex)_array$(nodeIndex)_invalid:" -> println
+                    "  call void @llvm.trap()" -> println
+                    "  unreachable" -> println
+                    "interpolation$(labelIndex)_array$(nodeIndex)_valid:" -> println
                     "  %v$(labelIndex)_expression$(nodeIndex)_ptr = getelementptr " -> print
                     indexedElementTypeId -> writeSemanticTypeId(context, state)
-                    ", ptr %v$(labelIndex)_expression$(nodeIndex)_data, i$(indexedSubscriptWidth!) " -> print
-                    labelIndex -> writeInterpolationValue(node.operand1, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
-                    "" -> println
+                    ", ptr %v$(labelIndex)_expression$(nodeIndex)_data, i64 %v$(labelIndex)_expression$(nodeIndex)_index" -> println
                     "  %v$(labelIndex)_expression$(nodeIndex) = load " -> print
                     indexedElementTypeId -> writeSemanticTypeId(context, state)
                     ", ptr %v$(labelIndex)_expression$(nodeIndex)_ptr, align " -> print
