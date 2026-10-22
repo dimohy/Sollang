@@ -53,7 +53,7 @@ def verify():
         checked_byte_loads(llvm, expected_counts[case])
         if case == 'reference-text-byte':
             assert re.search(r'_source = load %sollang.text, ptr %arg', llvm)
-            assert re.search(r'_source = load %sollang.mapped_bytes, ptr %arg', llvm)
+            assert re.search(r'_source = load %sollang.source_text, ptr %arg', llvm)
         run = next(item for item in runtime['cases'] if item['id'] == case)
         assert run['passed'] and run['runExit'] == 0 and run['stdout'] == expected['stdout'] and run['stderr'] == ''
         declared = next(item for item in contract['cases'] if item['id'] == case)
