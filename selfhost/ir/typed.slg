@@ -1653,6 +1653,22 @@ finalizeStreamJoinValue nodes: mut [TypedIrNode; ~], joinIndex: Int, prepared: r
     }
 }
 
+public moveOwnershipRegion nodeIndex: Int, ir: [TypedIrNode] -> Int {
+    nodeIndex => child!
+    ir[nodeIndex].parent => region!
+    region! >= 0 -> while {
+        ir[region!] => scope
+        scope.kind == 1 or scope.kind == 11 or scope.kind == 19 or scope.kind == 20
+            -> if { region! -> return }
+        scope.kind == 6 and (scope.opcode == -207 or scope.opcode == -209)
+            and child! != scope.operand0
+            -> if { region! -> return }
+        region! => child!
+        scope.parent => region!
+    }
+    -1
+}
+
 public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~] -> [MoveEvent; ~] {
     ir -> functionDeclarationIrs => functionIrs
     [MoveEvent; ~] => events!
@@ -1660,6 +1676,16 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
     siteIndex! < (ir -> len) -> while {
         ir[siteIndex!] => site
         [Int; ~] => movedValueIrs!
+        # A projected terminal value transfers into the callback result slot.
+        # Its owner retains every sibling field in the callback's lexical scope.
+        site.kind == 13 and site.parent >= 0
+            and (site -> ownedMoveArgument(ir, prepared, types))
+            -> if {
+                ir[site.parent] => callback
+                callback.kind == 6 and (callback.opcode == -207 or callback.opcode == -209)
+                    and callback.operand1 == siteIndex!
+                    -> if { movedValueIrs! -> push(siteIndex!) }
+            }
         site.kind == 5 and site.operand0 >= 0 and site.operand0 < (ir -> len)
             and (site -> typedNodeIsAwaitSource(prepared))
             and (ir[site.operand0] -> isTaskOwnerValue(ir, prepared))
@@ -1912,11 +1938,7 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
                                 ir[moveRoot.operand0].sourceModule => moveSourceModule!
                                 ir[moveRoot.operand0].symbol => moveSymbol!
                             }
-                        site.parent => moveRegion!
-                        moveRegion! >= 0 and ir[moveRegion!].kind != 1 and ir[moveRegion!].kind != 11 and ir[moveRegion!].kind != 19 and ir[moveRegion!].kind != 20
-                            -> while {
-                                ir[moveRegion!].parent => moveRegion!
-                            }
+                        siteIndex! -> moveOwnershipRegion(ir) => moveRegion
                         events! -> push(MoveEvent {
                             siteIr: siteIndex!
                             valueIr: movedValueIr
@@ -1924,7 +1946,7 @@ public movesFrom ir: [TypedIrNode; ~], prepared: ref semanticContext.SemanticSna
                             bindingIr: moveBindingIr!
                             sourceModule: moveSourceModule!
                             symbol: moveSymbol!
-                            regionIr: moveRegion!
+                            regionIr: moveRegion
                             memberIr: moveMemberIr!
                         })
                     }
