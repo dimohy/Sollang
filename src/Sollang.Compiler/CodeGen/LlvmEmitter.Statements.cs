@@ -2652,13 +2652,14 @@ internal sealed partial class LlvmEmitter
             var entryLabel = _currentBlockLabel;
             var loopLabel = NextLabel("try_parallel_drop_loop");
             var bodyLabel = NextLabel("try_parallel_drop_body");
+            var continueLabel = NextLabel("try_parallel_drop_continue");
             var endLabel = NextLabel("try_parallel_drop_end");
             var next = NextTemp("try_parallel_drop_next");
             EmitBranch(loopLabel);
             EmitLabel(loopLabel);
             _currentBlockLabel = loopLabel;
             var index = NextTemp("try_parallel_drop_i");
-            EmitPhi(index, "i64", ("0", entryLabel), (next, bodyLabel));
+            EmitPhi(index, "i64", ("0", entryLabel), (next, continueLabel));
             var inRange = NextTemp("try_parallel_drop_in_range");
             EmitCompare(inRange, "ult", "i64", index, length);
             EmitConditionalBranch(inRange, bodyLabel, endLabel);
@@ -2669,6 +2670,9 @@ internal sealed partial class LlvmEmitter
             var loaded = NextTemp("try_parallel_drop_value");
             EmitLoad(loaded, LlvmType(elementType), address, RuntimeAlignment(elementType));
             DropOwnedRuntimeValue(DematerializeAggregateValue(elementType, loaded));
+            EmitBranch(continueLabel);
+            EmitLabel(continueLabel);
+            _currentBlockLabel = continueLabel;
             EmitBinary(next, "add", "i64", index, "1");
             EmitBranch(loopLabel);
             EmitLabel(endLabel);
