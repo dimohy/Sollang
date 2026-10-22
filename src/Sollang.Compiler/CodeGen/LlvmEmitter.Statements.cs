@@ -2134,7 +2134,7 @@ internal sealed partial class LlvmEmitter
                     break;
             }
             var transferred = IsOwnedContainerRuntimeValue(mapped)
-                ? GetMoveConsumingContainerSourceName(callbackResult.Expression)
+                ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
                 : null;
             DropOwnedLocalsCreatedSince(callbackLocals, transferred, callbackResult.Expression);
         }
