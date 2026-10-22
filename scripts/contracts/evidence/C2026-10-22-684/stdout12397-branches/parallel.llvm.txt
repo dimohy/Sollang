@@ -1,0 +1,177 @@
+
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_io_failed = internal global i8 0
+
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal i1 @sollang_runtime_write_stdout(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  %complete = icmp eq i64 %written, %len
+  br i1 %complete, label %success, label %failure
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+@sollang_output_sink_tls = internal global i32 0
+@sollang_output_sink_tls_ready = internal global i1 false
+declare i32 @pthread_key_create(ptr, ptr)
+declare i32 @pthread_key_delete(i32)
+declare i32 @pthread_setspecific(i32, ptr)
+
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret void
+}
+define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
+  ret void
+}
+define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+entry:
+  %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
+  br i1 %tls_ready, label %read_sink, label %direct
+read_sink:
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
+  %sink = call ptr @pthread_getspecific(i32 %tls_index)
+  %capturing = icmp ne ptr %sink, null
+  br i1 %capturing, label %capture, label %direct
+capture:
+  call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  ret i1 true
+direct:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret i1 %ok
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  ret void
+}
+define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
+  %combined = and i1 %data_ok, %newline_ok
+  br label %done
+done:
+  %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+  ret i1 %ok
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
+  ret void
+}
+define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %remaining = sub i64 %len, %offset
+  %current = getelementptr i8, ptr %data, i64 %offset
+  %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+  %positive = icmp sgt i64 %count, 0
+  br i1 %positive, label %advance, label %failure
+advance:
+  %next = add i64 %offset, %count
+  %complete = icmp eq i64 %next, %len
+  br i1 %complete, label %success, label %write
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stderr(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_write_stderr(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+  ret void
+}
+
+@probe_mode = global i32 0
+@probe_calls = global i32 0
+@probe_captures = global i32 0
+@probe_failures = global i32 0
+define void @check(i1 %ok) {
+ %prior = load i32, ptr @probe_failures
+ %failed = xor i1 %ok, true
+ %count = zext i1 %failed to i32
+ %next = add i32 %prior, %count
+ store i32 %next, ptr @probe_failures
+ ret void
+}
+define i64 @write(i32 %fd, ptr %data, i64 %len) {
+entry:
+ %n = load i32, ptr @probe_calls
+ %next = add i32 %n, 1
+ store i32 %next, ptr @probe_calls
+ %mode = load i32, ptr @probe_mode
+ switch i32 %mode, label %full [ i32 1, label %failure i32 2, label %short i32 3, label %partial i32 4, label %stalled ]
+failure: ret i64 -1
+short: ret i64 1
+partial:
+ %first = icmp eq i32 %n, 0
+ %part = select i1 %first, i64 1, i64 %len
+ ret i64 %part
+stalled:
+ %first_zero = icmp eq i32 %n, 0
+ %stalled_part = select i1 %first_zero, i64 1, i64 0
+ ret i64 %stalled_part
+full: ret i64 %len
+}
+
+define ptr @pthread_getspecific(i32 %key) { ret ptr @probe_captures }
+define void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+ %previous = load i32, ptr @probe_captures
+ %next = add i32 %previous, 1
+ store i32 %next, ptr @probe_captures
+ ret void
+}
+define i32 @main() {
+ store i32 1, ptr @probe_mode
+ call void @sollang_memory_output_sink_write(ptr null, ptr null, i64 2)
+ %direct_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %direct_failed = icmp eq i8 %direct_flag, 1
+ call void @check(i1 %direct_failed)
+ store atomic i8 0, ptr @sollang_runtime_io_failed monotonic, align 1
+ store i32 0, ptr @probe_calls
+ store i1 true, ptr @sollang_output_sink_tls_ready
+ %ok = call i1 @sollang_runtime_append_stdout_checked(ptr null, i64 2)
+ %calls = load i32, ptr @probe_calls
+ %no_os = icmp eq i32 %calls, 0
+ %captures = load i32, ptr @probe_captures
+ %one_capture = icmp eq i32 %captures, 1
+ %capture_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %clean = icmp eq i8 %capture_flag, 0
+ %a = and i1 %ok, %no_os
+ %c = and i1 %one_capture, %clean
+ %passed = and i1 %a, %c
+ call void @check(i1 %passed)
+ %failures = load i32, ptr @probe_failures
+ ret i32 %failures
+}

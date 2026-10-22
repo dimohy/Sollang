@@ -1,0 +1,114 @@
+declare void @sollang_memory_output_sink_append(ptr, ptr, i64)
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_io_failed = internal global i8 0
+declare i64 @write(i32, ptr, i64)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal i1 @sollang_runtime_write_stdout(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  %complete = icmp eq i64 %written, %len
+  br i1 %complete, label %success, label %failure
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+@sollang_output_sink_tls = internal global i32 0
+@sollang_output_sink_tls_ready = internal global i1 false
+declare i32 @pthread_key_create(ptr, ptr)
+declare i32 @pthread_key_delete(i32)
+declare i32 @pthread_setspecific(i32, ptr)
+declare ptr @pthread_getspecific(i32)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret void
+}
+define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
+  ret void
+}
+define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+entry:
+  %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
+  br i1 %tls_ready, label %read_sink, label %direct
+read_sink:
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
+  %sink = call ptr @pthread_getspecific(i32 %tls_index)
+  %capturing = icmp ne ptr %sink, null
+  br i1 %capturing, label %capture, label %direct
+capture:
+  call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  ret i1 true
+direct:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret i1 %ok
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  ret void
+}
+define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
+  %combined = and i1 %data_ok, %newline_ok
+  br label %done
+done:
+  %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+  ret i1 %ok
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
+  ret void
+}
+define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %remaining = sub i64 %len, %offset
+  %current = getelementptr i8, ptr %data, i64 %offset
+  %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+  %positive = icmp sgt i64 %count, 0
+  br i1 %positive, label %advance, label %failure
+advance:
+  %next = add i64 %offset, %count
+  %complete = icmp eq i64 %next, %len
+  br i1 %complete, label %success, label %write
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stderr(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_write_stderr(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+  ret void
+}

@@ -118,7 +118,14 @@ emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState ->
                     "  call void @sollang_dispose_utf8_arguments()" -> println
                 }
             context -> diagnostics.usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
-            "  ret i32 0" -> println
+            context.pointerBitWidth != 32 and context.expectedPathStyle == 0 and (context -> diagnostics.usesTextRuntime)
+                -> if {
+                    "  %io_failed = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1" -> println
+                    "  %exit_code = zext i8 %io_failed to i32" -> println
+                    "  ret i32 %exit_code" -> println
+                } else {
+                    "  ret i32 0" -> println
+                }
             "}" -> println
             entryEnd! => functionIndex!
         } else {

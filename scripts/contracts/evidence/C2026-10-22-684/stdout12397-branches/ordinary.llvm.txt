@@ -1,0 +1,159 @@
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_io_failed = internal global i8 0
+
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal i1 @sollang_runtime_write_stdout(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  %complete = icmp eq i64 %written, %len
+  br i1 %complete, label %success, label %failure
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stdout(ptr %data, i64 %len)
+  ret i1 %ok
+}
+define internal i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %data_ok = call i1 @sollang_runtime_append_stdout_checked(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_append_stdout_checked(ptr @sollang_runtime_newline, i64 1)
+  %combined = and i1 %data_ok, %newline_ok
+  br label %done
+done:
+  %ok = phi i1 [ %data_ok, %entry ], [ %combined, %write_newline ]
+  ret i1 %ok
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_print_checked(ptr %data, i64 %len, i1 %newline)
+  ret void
+}
+define internal i1 @sollang_runtime_write_stderr(ptr %data, i64 %len) {
+entry:
+  %empty = icmp eq i64 %len, 0
+  br i1 %empty, label %success, label %write
+write:
+  %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %remaining = sub i64 %len, %offset
+  %current = getelementptr i8, ptr %data, i64 %offset
+  %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+  %positive = icmp sgt i64 %count, 0
+  br i1 %positive, label %advance, label %failure
+advance:
+  %next = add i64 %offset, %count
+  %complete = icmp eq i64 %next, %len
+  br i1 %complete, label %success, label %write
+failure:
+  store atomic i8 1, ptr @sollang_runtime_io_failed monotonic, align 1
+  ret i1 false
+success:
+  ret i1 true
+}
+define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %ok = call i1 @sollang_runtime_write_stderr(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i1 @sollang_runtime_write_stderr(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_eprintln(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 true)
+  ret void
+}
+
+@probe_mode = global i32 0
+@probe_calls = global i32 0
+@probe_captures = global i32 0
+@probe_failures = global i32 0
+define void @check(i1 %ok) {
+ %prior = load i32, ptr @probe_failures
+ %failed = xor i1 %ok, true
+ %count = zext i1 %failed to i32
+ %next = add i32 %prior, %count
+ store i32 %next, ptr @probe_failures
+ ret void
+}
+define i64 @write(i32 %fd, ptr %data, i64 %len) {
+entry:
+ %n = load i32, ptr @probe_calls
+ %next = add i32 %n, 1
+ store i32 %next, ptr @probe_calls
+ %mode = load i32, ptr @probe_mode
+ switch i32 %mode, label %full [ i32 1, label %failure i32 2, label %short i32 3, label %partial i32 4, label %stalled ]
+failure: ret i64 -1
+short: ret i64 1
+partial:
+ %first = icmp eq i32 %n, 0
+ %part = select i1 %first, i64 1, i64 %len
+ ret i64 %part
+stalled:
+ %first_zero = icmp eq i32 %n, 0
+ %stalled_part = select i1 %first_zero, i64 1, i64 0
+ ret i64 %stalled_part
+full: ret i64 %len
+}
+
+define i32 @main() {
+ store i32 2, ptr @probe_mode
+ %short_ok = call i1 @sollang_runtime_write_stdout(ptr null, i64 2)
+ %short_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %short_failed = icmp eq i8 %short_flag, 1
+ %short_false = xor i1 %short_ok, true
+ %short_pass = and i1 %short_false, %short_failed
+ call void @check(i1 %short_pass)
+ store i32 0, ptr @probe_mode
+ %later_ok = call i1 @sollang_runtime_write_stdout(ptr null, i64 2)
+ call void @sollang_runtime_flush_stdout()
+ %sticky_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %retained = icmp eq i8 %sticky_flag, 1
+ %sticky_pass = and i1 %later_ok, %retained
+ call void @check(i1 %sticky_pass)
+ store i32 1, ptr @probe_mode
+ store i32 0, ptr @probe_calls
+ %empty_ok = call i1 @sollang_runtime_write_stdout(ptr null, i64 0)
+ %empty_calls = load i32, ptr @probe_calls
+ %not_called = icmp eq i32 %empty_calls, 0
+ %empty_pass = and i1 %empty_ok, %not_called
+ call void @check(i1 %empty_pass)
+ store atomic i8 0, ptr @sollang_runtime_io_failed monotonic, align 1
+ store i32 0, ptr @probe_calls
+ store i32 3, ptr @probe_mode
+ %stderr_ok = call i1 @sollang_runtime_write_stderr(ptr null, i64 3)
+ %stderr_calls = load i32, ptr @probe_calls
+ %stderr_twice = icmp eq i32 %stderr_calls, 2
+ %stderr_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %stderr_clean = icmp eq i8 %stderr_flag, 0
+ %stderr_a = and i1 %stderr_ok, %stderr_twice
+ %stderr_pass = and i1 %stderr_a, %stderr_clean
+ call void @check(i1 %stderr_pass)
+ store i32 0, ptr @probe_calls
+ store i32 4, ptr @probe_mode
+ %zero_ok = call i1 @sollang_runtime_write_stderr(ptr null, i64 3)
+ %zero_false = xor i1 %zero_ok, true
+ %zero_flag = load atomic i8, ptr @sollang_runtime_io_failed monotonic, align 1
+ %zero_failed = icmp eq i8 %zero_flag, 1
+ %zero_calls = load i32, ptr @probe_calls
+ %zero_twice = icmp eq i32 %zero_calls, 2
+ %zero_a = and i1 %zero_false, %zero_failed
+ %zero_pass = and i1 %zero_a, %zero_twice
+ call void @check(i1 %zero_pass)
+ %failures = load i32, ptr @probe_failures
+ ret i32 %failures
+}
