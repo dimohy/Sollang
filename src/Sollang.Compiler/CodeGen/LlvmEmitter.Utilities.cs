@@ -704,7 +704,7 @@ internal sealed partial class LlvmEmitter
     {
         if (transferredExpression is null
             || !_program.Types.IsStruct(storedValue.Type)
-            || GetTransferredOwnedStructFieldName(
+            || GetTransferredOwnedStructFieldPath(
                 transferredExpression,
                 ownerName,
                 storedValue.Type) is not { } transferredFieldName)
@@ -1022,13 +1022,13 @@ internal sealed partial class LlvmEmitter
     private void DropOwnedStructFieldsExceptMoved(
         string ownerName,
         RuntimeStruct owner,
-        params string[] additionallyExcludedFieldNames)
+        params string[] additionallyExcludedFieldPaths)
     {
         var transferredPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
             ? movedFields.Select(static path => (IReadOnlyList<string>)path.Split('.')).ToList()
             : [];
-        transferredPaths.AddRange(additionallyExcludedFieldNames.Select(static field =>
-            (IReadOnlyList<string>)new[] { field }));
+        transferredPaths.AddRange(additionallyExcludedFieldPaths.Select(static path =>
+            (IReadOnlyList<string>)path.Split('.')));
         DropOwnedStructFieldsExceptTransferred(owner, transferredPaths);
     }
 
@@ -1401,22 +1401,28 @@ internal sealed partial class LlvmEmitter
         return null;
     }
 
-    private string? GetTransferredOwnedStructFieldName(
+    private string? GetTransferredOwnedStructFieldPath(
         Expression expression,
         string ownerName,
         BoundType ownerType)
     {
-        if (expression is FieldAccessExpression
-            {
-                Source: NameExpression fieldOwner,
-                FieldName: var fieldName
-            }
-            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
-            && _program.Types.GetStruct(ownerType).Fields.FirstOrDefault(field =>
-                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } field
-            && _program.Types.ContainsOwnedStorage(field.Type))
+        if (TryGetOwnedFieldProjection(expression, out var fieldOwner, out var fieldPath)
+            && string.Equals(fieldOwner, ownerName, StringComparison.Ordinal))
         {
-            return fieldName;
+            var projectedType = ownerType;
+            foreach (var fieldName in fieldPath)
+            {
+                if (!_program.Types.IsStruct(projectedType)
+                    || _program.Types.GetStruct(projectedType).Fields.FirstOrDefault(field =>
+                        string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } field)
+                {
+                    return null;
+                }
+                projectedType = field.Type;
+            }
+            return _program.Types.ContainsOwnedStorage(projectedType)
+                ? string.Join('.', fieldPath)
+                : null;
         }
 
         if (expression is CallExpression enumConstructor
@@ -1426,12 +1432,12 @@ internal sealed partial class LlvmEmitter
                 out var enumType)
             && _program.Types.IsEnum(enumType))
         {
-            return CommonTransferredFieldName(enumConstructor.Arguments, ownerName, ownerType);
+            return CommonTransferredFieldPath(enumConstructor.Arguments, ownerName, ownerType);
         }
 
         if (expression is StructLiteralExpression structure)
         {
-            return CommonTransferredFieldName(
+            return CommonTransferredFieldPath(
                 structure.Fields.Select(static initializer => initializer.Value),
                 ownerName,
                 ownerType);
@@ -1440,10 +1446,10 @@ internal sealed partial class LlvmEmitter
         if (expression is IfExpression conditional && conditional.Else is not null)
         {
             var thenField = conditional.Then.Value is { } thenValue
-                ? GetTransferredOwnedStructFieldName(thenValue, ownerName, ownerType)
+                ? GetTransferredOwnedStructFieldPath(thenValue, ownerName, ownerType)
                 : null;
             var elseField = conditional.Else.Value is { } elseValue
-                ? GetTransferredOwnedStructFieldName(elseValue, ownerName, ownerType)
+                ? GetTransferredOwnedStructFieldPath(elseValue, ownerName, ownerType)
                 : null;
             return thenField is not null
                 && string.Equals(thenField, elseField, StringComparison.Ordinal)
@@ -1461,7 +1467,7 @@ internal sealed partial class LlvmEmitter
                 return null;
             }
             var fields = branches.Select(branch =>
-                    GetTransferredOwnedStructFieldName(branch.Value!, ownerName, ownerType))
+                    GetTransferredOwnedStructFieldPath(branch.Value!, ownerName, ownerType))
                 .ToArray();
             return fields[0] is { } firstField
                 && fields.All(field => string.Equals(field, firstField, StringComparison.Ordinal))
@@ -1472,7 +1478,7 @@ internal sealed partial class LlvmEmitter
         return null;
     }
 
-    private string? CommonTransferredFieldName(
+    private string? CommonTransferredFieldPath(
         IEnumerable<Expression> expressions,
         string ownerName,
         BoundType ownerType)
@@ -1480,7 +1486,7 @@ internal sealed partial class LlvmEmitter
         string? common = null;
         foreach (var expression in expressions)
         {
-            var fieldName = GetTransferredOwnedStructFieldName(expression, ownerName, ownerType);
+            var fieldName = GetTransferredOwnedStructFieldPath(expression, ownerName, ownerType);
             if (fieldName is null)
             {
                 continue;
@@ -1533,16 +1539,8 @@ internal sealed partial class LlvmEmitter
 
         if (isResult
             && expression is FieldAccessExpression
-            {
-                Source: NameExpression fieldOwner,
-                FieldName: var fieldName
-            }
-            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
             && ownerType is { } knownOwnerType
-            && _program.Types.IsStruct(knownOwnerType)
-            && _program.Types.GetStruct(knownOwnerType).Fields.FirstOrDefault(
-                field => string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } transferredField
-            && _program.Types.ContainsOwnedStorage(transferredField.Type))
+            && GetTransferredOwnedStructFieldPath(expression, ownerName, knownOwnerType) is not null)
         {
             return true;
         }
