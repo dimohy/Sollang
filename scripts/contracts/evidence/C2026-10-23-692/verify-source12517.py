@@ -55,6 +55,8 @@ def verify():
             assert row['runStdout'].replace('\r\n', '\n') == expected['stdout'] and not row['runStderr']
         else:
             assert row['exit'] == 1 and row['stderr'].count('parallel callback SourceText is supported only as a direct top-level tryParallel Result payload') == 1
+            diagnostic = (BASE / 'source12511-source' / expected['id'] / 'emit.stdout').read_text(encoding='utf-8-sig')
+            assert diagnostic.strip() == row['stderr'].strip()
     for row in managed['cases']:
         expected = next(case for case in controls if case['id'] == row['id'])
         assert row['passed'] and row['runExit'] == expected['exit']
