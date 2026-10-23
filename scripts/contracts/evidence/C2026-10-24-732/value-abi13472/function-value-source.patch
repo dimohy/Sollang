@@ -1,0 +1,529 @@
+diff --git a/selfhost/llvm/text/call_arguments.slg b/selfhost/llvm/text/call_arguments.slg
+index 8f2988636..795dfd1ff 100644
+--- a/selfhost/llvm/text/call_arguments.slg
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -233,6 +233,10 @@ referenceRootHasAddress rootBinding: Int, ownerIndex: Int, context: ref emitterC
+             and ((root -> ownsType)
+             or (root.typeId >= 0 and context.types[root.typeId].kind == 8))
+             -> if { true => addressable! }
++        # A mutable bounded local stores a runtime descriptor. A readonly
++        # reference requires its current inline value, as in the C# emitter.
++        root.kind == 17 and root.typeId >= 0 and context.types[root.typeId].kind == 12
++            -> if { false => addressable! }
+     }
+     addressable!
+ }
+@@ -795,7 +799,21 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+         or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+         and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+         -> if {
+-            argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
++            callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
++            boundedArgumentTypeId >= 0 -> if {
++                argumentIndex -> aggregateValueIndex(context, state) => boundedValueIndex
++                argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
++                    -> if {
++                        "  %call$(callIndex)_arg$(ordinal)_bounded = load " -> print
++                        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
++                        ", ptr " -> print
++                        ownerIndex -> writeReferencePlaceValue(boundedValueIndex, context, state)
++                        ", align $(context.typeAligns[boundedArgumentTypeId])" -> println
++                    } else {
++                        "call$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(boundedValueIndex, ownerIndex, boundedArgumentTypeId, context, state)
++                    }
++            }
++            boundedArgumentTypeId < 0 and (argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state))
+                 -> if {
+                     argumentIndex -> aggregateValueIndex(context, state) => referenceValueIndex
+                     callIndex -> callTargetParameter(ordinal, context, state) => referenceParameterIndex
+@@ -853,6 +871,16 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+             context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
+         }
+ }
++callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    (context.ir[callIndex] -> targetsNativeFunction(context, state)) or context.ir[callIndex].flags / 8 % 2 == 1
++        -> if { -1 -> return }
++    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
++    parameterIndex < 0 -> if { -1 -> return }
++    context.ir[parameterIndex].flags / 2 % 2 == 1
++        -> if { -1 -> return }
++    context.ir[parameterIndex] -> boundedArrayValueTypeId(context, state)
++}
++
+ callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+     parameterIndex < 0 -> if { false -> return }
+@@ -861,6 +889,12 @@ callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterCo
+ }
+ 
+ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
++    boundedArgumentTypeId >= 0 -> if {
++        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
++        " %call$(callIndex)_arg$(ordinal)_bounded" -> print
++        return
++    }
+     ownerIndex => callOwnerIndex
+     argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal, context, state) => nativeArgumentHandled
+     not nativeArgumentHandled -> if {
+@@ -1685,6 +1719,13 @@ writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: In
+ }
+ writeCallResultPrefix callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.ir[callIndex] => call
++    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
++    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
++        -> if {
++            "  %call_bounded$(callIndex) = call " -> print
++            boundedResultTypeId -> writeValueAbiTypeId(context, state)
++            return
++        }
+     (call.flags / 8) % 2 == 1 -> if {
+         "  %v$(callIndex) = call %sollang.task" -> print
+     } else {
+@@ -1889,6 +1930,12 @@ emitCallTemporaryDrops callIndex: Int, whileIndex: Int, ownerIndex: Int, context
+ }
+ emitCallResultFinish callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     context.ir[callIndex] => call
++    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
++    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
++        -> if {
++            "v$(callIndex)" -> emitBoundedArrayHandle("%call_bounded$(callIndex)", boundedResultTypeId, context, state)
++            return
++        }
+     call -> targetsNativeTry(context, state) => nativeTryCall
+     nativeTryCall -> if {
+         call -> nativeTrySuccessTypeId(context, state) => nativeTrySuccessType
+diff --git a/selfhost/llvm/text/control_regions.slg b/selfhost/llvm/text/control_regions.slg
+index 3c0fa3ad3..0195d1a4c 100644
+--- a/selfhost/llvm/text/control_regions.slg
++++ b/selfhost/llvm/text/control_regions.slg
+@@ -266,28 +266,33 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                             -> if {
+                                 "  ret void" -> println
+                             } else {
++                                returnOwner -> boundedArrayValueTypeId(context, state) => boundedReturnTypeId
++                                boundedReturnTypeId >= 0 -> if {
++                                    "return_bounded$(regionNodeIndex)" -> emitBoundedArrayValue(returnedValueIndex!, ownerIndex!, boundedReturnTypeId, context, state)
++                                }
+                                 "  ret " -> print
+-                                returnOwner -> writeIrType(context, state)
++                                returnOwner -> writeFunctionValueAbiType(context, state)
+                                 " " -> print
+                                 context.ir[returnedValueIndex!] => returnedValue
+-                                promotedFixedReturn! -> if { "%return_fixed$(regionNodeIndex)" -> print } else {
+-                                    returnOwner.typeId >= 0 and context.types[returnOwner.typeId].kind == 8
+-                                        -> if {
+-                                            ownerIndex! -> writeReferencePlaceValue(returnedValueIndex!, context, state)
+-                                        } else {
+-                                            returnedValue.kind == 3 or returnedValue.kind == 4
+-                                                -> if {
+-                                                    returnedValue -> sourceToken(context, state) => returnValueToken
+-                                                    returnedValue.kind == 3 -> if { returnedValue -> writeIntegerLiteral(context, state) } else {
+-                                                        (context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == 116
+-                                                            -> if { "1" -> print } else { "0" -> print }
++                                boundedReturnTypeId >= 0 -> if { "%return_bounded$(regionNodeIndex)" -> print } else { promotedFixedReturn! -> if { "%return_fixed$(regionNodeIndex)" -> print } else {
++                                        returnOwner.typeId >= 0 and context.types[returnOwner.typeId].kind == 8
++                                            -> if {
++                                                ownerIndex! -> writeReferencePlaceValue(returnedValueIndex!, context, state)
++                                            } else {
++                                                returnedValue.kind == 3 or returnedValue.kind == 4
++                                                    -> if {
++                                                        returnedValue -> sourceToken(context, state) => returnValueToken
++                                                        returnedValue.kind == 3 -> if { returnedValue -> writeIntegerLiteral(context, state) } else {
++                                                            (context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == 116
++                                                                -> if { "1" -> print } else { "0" -> print }
++                                                        }
++                                                    } else {
++                                                        returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
++                                                            and not (returnedValueIndex! -> referenceParameterValueIsMaterialized(ownerIndex!, context, state))
++                                                            -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
+                                                     }
+-                                                } else {
+-                                                    returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol
+-                                                        and not (returnedValueIndex! -> referenceParameterValueIsMaterialized(ownerIndex!, context, state))
+-                                                        -> if { "%arg" -> print } else { "%v$(returnedValueIndex!)" -> print }
+-                                                }
+-                                        }
++                                            }
++                                    }
+                                 }
+                                 "" -> println
+                             }
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index 26dc26b0f..8b177ade2 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -2268,7 +2268,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex:
+                                 or (referenceNeedsTemporaryRoot and referenceRootBinding >= 0))
+                                 -> if {
+                                     "  %callref$(callIndex!)_arg$(ordinal!) = alloca " -> print
+-                                    referenceStorageType! -> writeAggregateFieldTypeId(context, state)
++                                    referenceStorageType! -> writeValueAbiTypeId(context, state)
+                                     ", align " -> print
+                                     referenceStorageType! -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
+                                 }
+@@ -2387,14 +2387,20 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
+                             -> if {
+                                 referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, -1, referenceNeedsTemporaryRoot, context, state) => emittedReferenceProjectionDepth!
+                             } else {
++                                context.types[referenceOwnerType].kind == 12 => boundedReferenceValue
++                                boundedReferenceValue -> if {
++                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(referenceArgumentIndex, ownerIndex, referenceOwnerType, context, state)
++                                }
+                                 "  store " -> print
+-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
++                                referenceOwnerType -> writeValueAbiTypeId(context, state)
+                                 " " -> print
+-                                referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
+-                                liveReferenceParameterOrdinal >= 0 -> if {
+-                                    "%v$(referenceArgumentIndex)" -> print
+-                                } else {
+-                                    referenceArgumentIndex -> writeValue(ownerIndex, context, state)
++                                boundedReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
++                                    referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
++                                    liveReferenceParameterOrdinal >= 0 -> if {
++                                        "%v$(referenceArgumentIndex)" -> print
++                                    } else {
++                                        referenceArgumentIndex -> writeValue(ownerIndex, context, state)
++                                    }
+                                 }
+                                 ", ptr %callref" -> print
+                                 callIndex -> writeDecimal
+@@ -2479,13 +2485,24 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
+                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
+                                     " %callref$(callIndex)_arg$(ordinal)_live1, i64 %callref$(callIndex)_arg$(ordinal)_live_capacity, 2" -> println
+                                 }
++                                context.types[referenceOwnerType].kind == 12 => boundedWhileReferenceValue
++                                boundedWhileReferenceValue -> if {
++                                    "  %callref$(callIndex)_arg$(ordinal)_handle = freeze %sollang.array.i32 " -> print
++                                    liveWhileReferenceOrdinal >= 0 -> if { "%callref$(callIndex)_arg$(ordinal)_live" -> print } else {
++                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                    }
++                                    "" -> println
++                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValueFromHandle("%callref$(callIndex)_arg$(ordinal)_handle", referenceOwnerType, context, state)
++                                }
+                                 "  store " -> print
+-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
++                                referenceOwnerType -> writeValueAbiTypeId(context, state)
+                                 " " -> print
+-                                liveWhileReferenceOrdinal >= 0 -> if {
+-                                    "%callref$(callIndex)_arg$(ordinal)_live" -> print
+-                                } else {
+-                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                boundedWhileReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
++                                    liveWhileReferenceOrdinal >= 0 -> if {
++                                        "%callref$(callIndex)_arg$(ordinal)_live" -> print
++                                    } else {
++                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
++                                    }
+                                 }
+                                 ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
+                                 referenceOwnerType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
+@@ -3516,11 +3533,13 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
+                         "%v$(nodeIndex)" -> print
+                     } else {
+                         value -> scalarReferenceValueTypeId(context, state) => referenceValueTypeId
+-                        referenceValueTypeId >= 0 -> if {
+-                            "%v$(nodeIndex)" -> print
+-                        } else {
+-                            parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
+-                        }
++                        value -> referenceValueTypeId(context, state) => referencedValueTypeId
++                        referenceValueTypeId >= 0 or (referencedValueTypeId >= 0 and context.types[referencedValueTypeId].kind == 12)
++                            -> if {
++                                "%v$(nodeIndex)" -> print
++                            } else {
++                                parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
++                            }
+                     }
+                 } else { "%v$(nodeIndex)" -> print }
+             }
+@@ -3611,6 +3630,16 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
+                     context.types[valueTypeId!].first => valueTypeId!
+                     true => readonlyReference!
+                 }
++            readonlyReference! and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 12
++                -> if {
++                    "  %v$(callIndex)" -> print
++                    resultWidth == 32 -> if { "_raw" -> print }
++                    " = load i64, ptr " -> print
++                    ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
++                    ", align 8" -> println
++                    resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
++                    return
++                }
+             -1 => mutableRoot!
+             not readonlyReference! and (base -> isDictionaryType)
+                 -> if {
+@@ -3681,6 +3710,19 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
+         "; sollang compiler error S044: capacity receiver resolves to scalar i$capacityReceiverIntegerWidth at ir $callIndex (receiver $(call.operand0), source $(call.sourceModule), ast $(call.astNode))" -> println
+     }
+     call -> integerNodeWidth(context, state) => resultWidth
++    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
++        -> if {
++            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
++        }
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12
++        -> if {
++            "  %v$(callIndex)" -> print
++            resultWidth == 32 -> if { "_raw" -> print }
++            " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
++            resultWidth == 32 -> if { callIndex -> emitCapacityIntNarrowing(-1) }
++            return
++        }
+     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
+     boundedTypeId >= 0 -> if {
+         "  %v$(callIndex)" -> print
+@@ -3747,6 +3789,31 @@ emitWhileCollectionSizeIntrinsic request: WhileValueRequest, context: ref emitte
+     context.ir[call.operand0] => base
+     call.opcode == -236 => capacity
+     call -> integerNodeWidth(context, state) => resultWidth
++    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
++    false => boundedArrayReference!
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
++        -> if {
++            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
++            true => boundedArrayReference!
++        }
++    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12 and (capacity or boundedArrayReference!)
++        -> if {
++            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
++            resultWidth == 32 -> if { "_raw" -> print }
++            capacity -> if {
++                " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
++            } else {
++                " = load i64, ptr " -> print
++                request.ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
++                ", align 8" -> println
++            }
++            resultWidth == 32 -> if {
++                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex) } else {
++                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
++                }
++            }
++            return
++        }
+     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
+     boundedTypeId >= 0 -> if {
+         capacity -> if {
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index e97124bc7..953e01129 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -365,6 +365,17 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
+                 "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println
+                 return
+             }
++            expression -> referenceValueTypeId(context, state) => boundedReferenceTypeId
++            boundedReferenceTypeId >= 0 and context.types[boundedReferenceTypeId].kind == 12
++                -> if {
++                    "  %bounded_ref$(expressionIndex) = load " -> print
++                    boundedReferenceTypeId -> writeValueAbiTypeId(context, state)
++                    ", ptr " -> print
++                    functionIndex -> writeForwardedReferenceValue(expressionIndex, context, state)
++                    ", align $(context.typeAligns[boundedReferenceTypeId])" -> println
++                    "v$(expressionIndex)" -> emitBoundedArrayHandle("%bounded_ref$(expressionIndex)", boundedReferenceTypeId, context, state)
++                    return
++                }
+             expressionIndex -> emitComparisonReferenceNameRead(functionIndex, -1, context, state)
+             expressionIndex -> isLocalReadonlyReferenceName(functionIndex, context, state)
+                 -> if {
+diff --git a/selfhost/llvm/text/function_returns.slg b/selfhost/llvm/text/function_returns.slg
+index b1e189065..e4c5fdda9 100644
+--- a/selfhost/llvm/text/function_returns.slg
++++ b/selfhost/llvm/text/function_returns.slg
+@@ -826,6 +826,15 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
+                         returnValueIndex -> emitFixedArrayReturnPromotion(functionIndex, function.typeId, functionIndex, context, state)
+                             => promotedFixedArrayReturn!
+                     }
++                function -> boundedArrayValueTypeId(context, state) => boundedReturnTypeId
++                boundedReturnTypeId >= 0 and function.flags / 8 % 2 == 0
++                    -> if {
++                        "return_bounded$(functionIndex)" -> emitBoundedArrayValue(returnValueIndex, functionIndex, boundedReturnTypeId, context, state)
++                        "  ret " -> print
++                        boundedReturnTypeId -> writeValueAbiTypeId(context, state)
++                        " %return_bounded$(functionIndex)" -> println
++                        return
++                    }
+                 function.flags / 8 % 2 == 1 -> if { "  %async_completed_result = freeze " -> print } else { "  ret " -> print }
+                 function -> writeIrType(context, state)
+                 " " -> print
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index 1b52f768a..09ecc9fd6 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -1201,7 +1201,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+     }
+     functionIndex -> functionCaptures(context, state) => currentFunctionCaptures
+     "define " -> print
+-    function.flags / 8 % 2 == 1 -> if { "i1" -> print } else { function -> writeIrType(context, state) }
++    function.flags / 8 % 2 == 1 -> if { "i1" -> print } else { function -> writeFunctionValueAbiType(context, state) }
+     " @sollang_m" -> print
+     function.sourceModule -> writeDecimal
+     "_s" -> print
+@@ -1225,8 +1225,10 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+                 parameter -> mutableBorrowUsesStructPointer(context)
+                     -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
+             } else {
+-                parameter -> writeIrType(context, state)
++                parameter -> writeFunctionValueAbiType(context, state)
+                 " %arg" -> print
++                (parameter -> boundedArrayValueTypeId(context, state)) >= 0
++                    -> if { "_bounded" -> print }
+             }
+             function.nextOperand >= 0 -> if { ", " -> print }
+         }
+@@ -1243,8 +1245,10 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+                             "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
+                         }
+                 } else {
+-                    additionalSignatureParameter -> writeIrType(context, state)
++                    additionalSignatureParameter -> writeFunctionValueAbiType(context, state)
+                     " %arg$(additionalSignatureParameterOrdinal!)" -> print
++                    (additionalSignatureParameter -> boundedArrayValueTypeId(context, state)) >= 0
++                        -> if { "_bounded" -> print }
+                 }
+             additionalSignatureParameter.nextOperand >= 0
+                 -> if { ", " -> print }
+@@ -1259,6 +1263,11 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+     functionIndex -> emitHoistedReferenceArgumentAllocas(functionIndex + 1, functionEnd!, context, state)
+     function.operand1 >= 0 -> if {
+         context.ir[function.operand1] => entryParameter
++        entryParameter -> boundedArrayValueTypeId(context, state) => boundedEntryParameterTypeId
++        boundedEntryParameterTypeId >= 0 and entryParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
++            -> if {
++                "arg" -> emitBoundedArrayHandle("%arg_bounded", boundedEntryParameterTypeId, context, state)
++            }
+         entryParameter.flags / 2 % 2 == 1 -> if {
+             entryParameter -> mutableBorrowUsesStructPointer(context)
+                 -> if {
+@@ -1306,6 +1315,11 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref
+     1 => entryAdditionalParameterOrdinal!
+     entryAdditionalParameterIndex! >= 0 -> while {
+         context.ir[entryAdditionalParameterIndex!] => entryAdditionalParameter
++        entryAdditionalParameter -> boundedArrayValueTypeId(context, state) => boundedAdditionalParameterTypeId
++        boundedAdditionalParameterTypeId >= 0 and entryAdditionalParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
++            -> if {
++                "arg$(entryAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(entryAdditionalParameterOrdinal!)_bounded", boundedAdditionalParameterTypeId, context, state)
++            }
+         entryAdditionalParameter.flags / 2 % 2 == 1 -> if {
+             entryAdditionalParameter -> mutableBorrowUsesStructPointer(context)
+                 -> if {
+diff --git a/selfhost/llvm/text/ownership.slg b/selfhost/llvm/text/ownership.slg
+index 146f0622a..e6de74582 100644
+--- a/selfhost/llvm/text/ownership.slg
++++ b/selfhost/llvm/text/ownership.slg
+@@ -3093,6 +3093,80 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
+     }
+     payloads!
+ }
++boundedArrayValueTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
++    node -> effectiveTypeId(context, state) => typeId
++    typeId >= 0 and context.types[typeId].kind == 12
++        -> if { typeId -> return }
++    -1
++}
++
++writeValueAbiTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    context.types[typeId].kind == 12
++        -> if { "%sollang.bounded_array.t$(typeId)" -> print } else {
++            typeId -> writeAggregateFieldTypeId(context, state)
++        }
++}
++
++writeFunctionValueAbiType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    node -> boundedArrayValueTypeId(context, state) => typeId
++    typeId >= 0
++        -> if { typeId -> writeValueAbiTypeId(context, state) } else { node -> writeIrType(context, state) }
++}
++
++writeBoundedArrayBackingType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    context.types[typeId] => arrayType
++    "[$(arrayType.length) x " -> print
++    arrayType.first -> writeValueAbiTypeId(context, state)
++    "]" -> print
++}
++
++# Match BuildBoundedArrayAggregate: materialize inline bytes at a value
++# boundary while collection expressions retain their local runtime handle.
++emitBoundedArrayValue prefix: Text, valueIndex: Int, ownerIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    context.ir[valueIndex].kind == 5 and (valueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state)) >= 0 => liveMutableRead
++    "  %$(prefix)_handle = freeze %sollang.array.i32 " -> print
++    liveMutableRead -> if { "%v$(valueIndex)" -> print } else { valueIndex -> writeValue(ownerIndex, context, state) }
++    "" -> println
++    prefix -> emitBoundedArrayValueFromHandle("%$(prefix)_handle", typeId, context, state)
++}
++
++emitBoundedArrayValueFromHandle prefix: Text, valueName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    "  %$(prefix)_data = extractvalue %sollang.array.i32 $valueName, 0" -> println
++    "  %$(prefix)_length = extractvalue %sollang.array.i32 $valueName, 1" -> println
++    "  %$(prefix)_elements = load " -> print
++    typeId -> writeBoundedArrayBackingType(context, state)
++    ", ptr %$(prefix)_data, align " -> print
++    context.types[typeId].first -> arrayElementStorageAlign(context, state) -> writeDecimalLine
++    "  %$(prefix)_0 = insertvalue " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    " poison, i64 %$(prefix)_length, 0" -> println
++    "  %$(prefix) = insertvalue " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    " %$(prefix)_0, " -> print
++    typeId -> writeBoundedArrayBackingType(context, state)
++    " %$(prefix)_elements, 1" -> println
++}
++
++# Match CreateRuntimeAggregateValue: storage belongs to this receiving frame,
++# so the handle never points at the returning function's expired stack.
++emitBoundedArrayHandle prefix: Text, valueName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    "  %$(prefix)_owner = alloca " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    ", align $(context.typeAligns[typeId])" -> println
++    "  store " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    " $valueName, ptr %$(prefix)_owner, align $(context.typeAligns[typeId])" -> println
++    "  %$(prefix)_data = getelementptr inbounds " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    ", ptr %$(prefix)_owner, i32 0, i32 1, i64 0" -> println
++    "  %$(prefix)_length = extractvalue " -> print
++    typeId -> writeValueAbiTypeId(context, state)
++    " $valueName, 0" -> println
++    "  %$(prefix)_0 = insertvalue %sollang.array.i32 poison, ptr %$(prefix)_data, 0" -> println
++    "  %$(prefix)_1 = insertvalue %sollang.array.i32 %$(prefix)_0, i64 %$(prefix)_length, 1" -> println
++    "  %$(prefix) = insertvalue %sollang.array.i32 %$(prefix)_1, i64 $(context.types[typeId].length), 2" -> println
++}
++
+ writeAggregateFieldTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     context.types[typeId].kind == 4 -> if { "{ ptr, i64 }" -> print } else { typeId -> writeSemanticTypeId(context, state) }
+ }
+@@ -3198,6 +3272,14 @@ isAsyncTaskValue node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
+ }
+ 
+ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    node.kind == 5 -> if {
++        node -> referenceValueTypeId(context, state) => referencedValueTypeId
++        referencedValueTypeId >= 0 and context.types[referencedValueTypeId].kind == 12
++            -> if {
++                "%sollang.array.i32" -> print
++                return
++            }
++    }
+     # The semantic result type names the joined payload, not a Task handle.
+     node -> isAsyncTaskValue(context) -> if {
+         "%sollang.task" -> print
+diff --git a/selfhost/llvm/text/runtime_preamble.slg b/selfhost/llvm/text/runtime_preamble.slg
+index 913e545cf..012d2055f 100644
+--- a/selfhost/llvm/text/runtime_preamble.slg
++++ b/selfhost/llvm/text/runtime_preamble.slg
+@@ -535,6 +535,12 @@ emitCoreRuntimePreamble dropTypeActive: [Int; ~], intrinsicRuntimeModule: Int, r
+                 bitSetTypeSearch! -> boundedDictionaryLayoutForType(context) => boundedLayout
+                 "%sollang.bounded_dictionary.t$(bitSetTypeSearch!) = type { i64, [$(boundedLayout.storageSize) x i8] }" -> println
+             }
++        bitSetType.kind == 12 and bitSetType.first >= 0 and context.typeLayoutStatuses[bitSetTypeSearch!] == 0
++            -> if {
++                "%sollang.bounded_array.t$(bitSetTypeSearch!) = type { i64, " -> print
++                bitSetTypeSearch! -> writeBoundedArrayBackingType(context, state)
++                " }" -> println
++            }
+         bitSetType.kind == 14 -> if {
+             "%sollang.bitset.t$(bitSetTypeSearch!) = type { [$((bitSetType.length + 63) / 64) x i64] }" -> println
+         }

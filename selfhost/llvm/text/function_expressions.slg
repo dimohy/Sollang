@@ -365,6 +365,17 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
                 "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println
                 return
             }
+            expression -> referenceValueTypeId(context, state) => boundedReferenceTypeId
+            boundedReferenceTypeId >= 0 and context.types[boundedReferenceTypeId].kind == 12
+                -> if {
+                    "  %bounded_ref$(expressionIndex) = load " -> print
+                    boundedReferenceTypeId -> writeValueAbiTypeId(context, state)
+                    ", ptr " -> print
+                    functionIndex -> writeForwardedReferenceValue(expressionIndex, context, state)
+                    ", align $(context.typeAligns[boundedReferenceTypeId])" -> println
+                    "v$(expressionIndex)" -> emitBoundedArrayHandle("%bounded_ref$(expressionIndex)", boundedReferenceTypeId, context, state)
+                    return
+                }
             expressionIndex -> emitComparisonReferenceNameRead(functionIndex, -1, context, state)
             expressionIndex -> isLocalReadonlyReferenceName(functionIndex, context, state)
                 -> if {

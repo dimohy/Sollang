@@ -2268,7 +2268,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                                 or (referenceNeedsTemporaryRoot and referenceRootBinding >= 0))
                                 -> if {
                                     "  %callref$(callIndex!)_arg$(ordinal!) = alloca " -> print
-                                    referenceStorageType! -> writeAggregateFieldTypeId(context, state)
+                                    referenceStorageType! -> writeValueAbiTypeId(context, state)
                                     ", align " -> print
                                     referenceStorageType! -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
                                 }
@@ -2387,14 +2387,20 @@ emitReferenceArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int,
                             -> if {
                                 referenceArgumentIndex -> emitMutableReferencePlace(referenceRootBinding, callIndex, ordinal, ownerIndex, -1, referenceNeedsTemporaryRoot, context, state) => emittedReferenceProjectionDepth!
                             } else {
+                                context.types[referenceOwnerType].kind == 12 => boundedReferenceValue
+                                boundedReferenceValue -> if {
+                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(referenceArgumentIndex, ownerIndex, referenceOwnerType, context, state)
+                                }
                                 "  store " -> print
-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
+                                referenceOwnerType -> writeValueAbiTypeId(context, state)
                                 " " -> print
-                                referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
-                                liveReferenceParameterOrdinal >= 0 -> if {
-                                    "%v$(referenceArgumentIndex)" -> print
-                                } else {
-                                    referenceArgumentIndex -> writeValue(ownerIndex, context, state)
+                                boundedReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
+                                    referenceArgumentIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => liveReferenceParameterOrdinal
+                                    liveReferenceParameterOrdinal >= 0 -> if {
+                                        "%v$(referenceArgumentIndex)" -> print
+                                    } else {
+                                        referenceArgumentIndex -> writeValue(ownerIndex, context, state)
+                                    }
                                 }
                                 ", ptr %callref" -> print
                                 callIndex -> writeDecimal
@@ -2479,13 +2485,24 @@ emitWhileReferenceArgumentValues argumentIndex: Int, callIndex: Int, whileIndex:
                                     referenceOwnerType -> writeAggregateFieldTypeId(context, state)
                                     " %callref$(callIndex)_arg$(ordinal)_live1, i64 %callref$(callIndex)_arg$(ordinal)_live_capacity, 2" -> println
                                 }
+                                context.types[referenceOwnerType].kind == 12 => boundedWhileReferenceValue
+                                boundedWhileReferenceValue -> if {
+                                    "  %callref$(callIndex)_arg$(ordinal)_handle = freeze %sollang.array.i32 " -> print
+                                    liveWhileReferenceOrdinal >= 0 -> if { "%callref$(callIndex)_arg$(ordinal)_live" -> print } else {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
+                                    }
+                                    "" -> println
+                                    "callref$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValueFromHandle("%callref$(callIndex)_arg$(ordinal)_handle", referenceOwnerType, context, state)
+                                }
                                 "  store " -> print
-                                referenceOwnerType -> writeAggregateFieldTypeId(context, state)
+                                referenceOwnerType -> writeValueAbiTypeId(context, state)
                                 " " -> print
-                                liveWhileReferenceOrdinal >= 0 -> if {
-                                    "%callref$(callIndex)_arg$(ordinal)_live" -> print
-                                } else {
-                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
+                                boundedWhileReferenceValue -> if { "%callref$(callIndex)_arg$(ordinal)_bounded" -> print } else {
+                                    liveWhileReferenceOrdinal >= 0 -> if {
+                                        "%callref$(callIndex)_arg$(ordinal)_live" -> print
+                                    } else {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: referenceArgumentIndex } -> writeWhileValue(context, state)
+                                    }
                                 }
                                 ", ptr %callref$(callIndex)_arg$(ordinal), align " -> print
                                 referenceOwnerType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
@@ -3516,11 +3533,13 @@ writeValue nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitCont
                         "%v$(nodeIndex)" -> print
                     } else {
                         value -> scalarReferenceValueTypeId(context, state) => referenceValueTypeId
-                        referenceValueTypeId >= 0 -> if {
-                            "%v$(nodeIndex)" -> print
-                        } else {
-                            parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
-                        }
+                        value -> referenceValueTypeId(context, state) => referencedValueTypeId
+                        referenceValueTypeId >= 0 or (referencedValueTypeId >= 0 and context.types[referencedValueTypeId].kind == 12)
+                            -> if {
+                                "%v$(nodeIndex)" -> print
+                            } else {
+                                parameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal!)" -> print }
+                            }
                     }
                 } else { "%v$(nodeIndex)" -> print }
             }
@@ -3611,6 +3630,16 @@ emitLengthIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterContext
                     context.types[valueTypeId!].first => valueTypeId!
                     true => readonlyReference!
                 }
+            readonlyReference! and valueTypeId! >= 0 and context.types[valueTypeId!].kind == 12
+                -> if {
+                    "  %v$(callIndex)" -> print
+                    resultWidth == 32 -> if { "_raw" -> print }
+                    " = load i64, ptr " -> print
+                    ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
+                    ", align 8" -> println
+                    resultWidth == 32 -> if { "  %v$(callIndex) = trunc i64 %v$(callIndex)_raw to i32" -> println }
+                    return
+                }
             -1 => mutableRoot!
             not readonlyReference! and (base -> isDictionaryType)
                 -> if {
@@ -3681,6 +3710,19 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         "; sollang compiler error S044: capacity receiver resolves to scalar i$capacityReceiverIntegerWidth at ir $callIndex (receiver $(call.operand0), source $(call.sourceModule), ast $(call.astNode))" -> println
     }
     call -> integerNodeWidth(context, state) => resultWidth
+    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
+    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
+        -> if {
+            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
+        }
+    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12
+        -> if {
+            "  %v$(callIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
+            resultWidth == 32 -> if { callIndex -> emitCapacityIntNarrowing(-1) }
+            return
+        }
     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
     boundedTypeId >= 0 -> if {
         "  %v$(callIndex)" -> print
@@ -3747,6 +3789,31 @@ emitWhileCollectionSizeIntrinsic request: WhileValueRequest, context: ref emitte
     context.ir[call.operand0] => base
     call.opcode == -236 => capacity
     call -> integerNodeWidth(context, state) => resultWidth
+    base -> effectiveTypeId(context, state) => boundedArrayTypeId!
+    false => boundedArrayReference!
+    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 8
+        -> if {
+            context.types[boundedArrayTypeId!].first => boundedArrayTypeId!
+            true => boundedArrayReference!
+        }
+    boundedArrayTypeId! >= 0 and context.types[boundedArrayTypeId!].kind == 12 and (capacity or boundedArrayReference!)
+        -> if {
+            "  %while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            resultWidth == 32 -> if { "_raw" -> print }
+            capacity -> if {
+                " = add i64 0, $(context.types[boundedArrayTypeId!].length)" -> println
+            } else {
+                " = load i64, ptr " -> print
+                request.ownerIndex -> writeForwardedReferenceValue(call.operand0, context, state)
+                ", align 8" -> println
+            }
+            resultWidth == 32 -> if {
+                capacity -> if { request.nodeIndex -> emitCapacityIntNarrowing(request.whileIndex) } else {
+                    "  %while$(request.whileIndex)_v$(request.nodeIndex) = trunc i64 %while$(request.whileIndex)_v$(request.nodeIndex)_raw to i32" -> println
+                }
+            }
+            return
+        }
     base -> boundedIntrinsicDictionaryTypeId(context, state) => boundedTypeId
     boundedTypeId >= 0 -> if {
         capacity -> if {

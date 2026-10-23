@@ -233,6 +233,10 @@ referenceRootHasAddress rootBinding: Int, ownerIndex: Int, context: ref emitterC
             and ((root -> ownsType)
             or (root.typeId >= 0 and context.types[root.typeId].kind == 8))
             -> if { true => addressable! }
+        # A mutable bounded local stores a runtime descriptor. A readonly
+        # reference requires its current inline value, as in the C# emitter.
+        root.kind == 17 and root.typeId >= 0 and context.types[root.typeId].kind == 12
+            -> if { false => addressable! }
     }
     addressable!
 }
@@ -795,7 +799,21 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
         or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
         and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
         -> if {
-            argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+            callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
+            boundedArgumentTypeId >= 0 -> if {
+                argumentIndex -> aggregateValueIndex(context, state) => boundedValueIndex
+                argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+                    -> if {
+                        "  %call$(callIndex)_arg$(ordinal)_bounded = load " -> print
+                        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
+                        ", ptr " -> print
+                        ownerIndex -> writeReferencePlaceValue(boundedValueIndex, context, state)
+                        ", align $(context.typeAligns[boundedArgumentTypeId])" -> println
+                    } else {
+                        "call$(callIndex)_arg$(ordinal)_bounded" -> emitBoundedArrayValue(boundedValueIndex, ownerIndex, boundedArgumentTypeId, context, state)
+                    }
+            }
+            boundedArgumentTypeId < 0 and (argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state))
                 -> if {
                     argumentIndex -> aggregateValueIndex(context, state) => referenceValueIndex
                     callIndex -> callTargetParameter(ordinal, context, state) => referenceParameterIndex
@@ -853,6 +871,16 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
             context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
         }
 }
+callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    (context.ir[callIndex] -> targetsNativeFunction(context, state)) or context.ir[callIndex].flags / 8 % 2 == 1
+        -> if { -1 -> return }
+    callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+    parameterIndex < 0 -> if { -1 -> return }
+    context.ir[parameterIndex].flags / 2 % 2 == 1
+        -> if { -1 -> return }
+    context.ir[parameterIndex] -> boundedArrayValueTypeId(context, state)
+}
+
 callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
     parameterIndex < 0 -> if { false -> return }
@@ -861,6 +889,12 @@ callArgumentIsMutableBorrow callIndex: Int, ordinal: Int, context: ref emitterCo
 }
 
 writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => boundedArgumentTypeId
+    boundedArgumentTypeId >= 0 -> if {
+        boundedArgumentTypeId -> writeValueAbiTypeId(context, state)
+        " %call$(callIndex)_arg$(ordinal)_bounded" -> print
+        return
+    }
     ownerIndex => callOwnerIndex
     argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal, context, state) => nativeArgumentHandled
     not nativeArgumentHandled -> if {
@@ -1685,6 +1719,13 @@ writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: In
 }
 writeCallResultPrefix callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[callIndex] => call
+    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
+    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
+        -> if {
+            "  %call_bounded$(callIndex) = call " -> print
+            boundedResultTypeId -> writeValueAbiTypeId(context, state)
+            return
+        }
     (call.flags / 8) % 2 == 1 -> if {
         "  %v$(callIndex) = call %sollang.task" -> print
     } else {
@@ -1889,6 +1930,12 @@ emitCallTemporaryDrops callIndex: Int, whileIndex: Int, ownerIndex: Int, context
 }
 emitCallResultFinish callIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[callIndex] => call
+    call -> boundedArrayValueTypeId(context, state) => boundedResultTypeId
+    boundedResultTypeId >= 0 and call.flags / 8 % 2 == 0 and not (call -> targetsNativeFunction(context, state))
+        -> if {
+            "v$(callIndex)" -> emitBoundedArrayHandle("%call_bounded$(callIndex)", boundedResultTypeId, context, state)
+            return
+        }
     call -> targetsNativeTry(context, state) => nativeTryCall
     nativeTryCall -> if {
         call -> nativeTrySuccessTypeId(context, state) => nativeTrySuccessType

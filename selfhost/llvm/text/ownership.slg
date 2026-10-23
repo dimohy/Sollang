@@ -3093,6 +3093,80 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
     }
     payloads!
 }
+boundedArrayValueTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node -> effectiveTypeId(context, state) => typeId
+    typeId >= 0 and context.types[typeId].kind == 12
+        -> if { typeId -> return }
+    -1
+}
+
+writeValueAbiTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.types[typeId].kind == 12
+        -> if { "%sollang.bounded_array.t$(typeId)" -> print } else {
+            typeId -> writeAggregateFieldTypeId(context, state)
+        }
+}
+
+writeFunctionValueAbiType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    node -> boundedArrayValueTypeId(context, state) => typeId
+    typeId >= 0
+        -> if { typeId -> writeValueAbiTypeId(context, state) } else { node -> writeIrType(context, state) }
+}
+
+writeBoundedArrayBackingType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.types[typeId] => arrayType
+    "[$(arrayType.length) x " -> print
+    arrayType.first -> writeValueAbiTypeId(context, state)
+    "]" -> print
+}
+
+# Match BuildBoundedArrayAggregate: materialize inline bytes at a value
+# boundary while collection expressions retain their local runtime handle.
+emitBoundedArrayValue prefix: Text, valueIndex: Int, ownerIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[valueIndex].kind == 5 and (valueIndex -> mutableBorrowParameterOrdinal(ownerIndex, context, state)) >= 0 => liveMutableRead
+    "  %$(prefix)_handle = freeze %sollang.array.i32 " -> print
+    liveMutableRead -> if { "%v$(valueIndex)" -> print } else { valueIndex -> writeValue(ownerIndex, context, state) }
+    "" -> println
+    prefix -> emitBoundedArrayValueFromHandle("%$(prefix)_handle", typeId, context, state)
+}
+
+emitBoundedArrayValueFromHandle prefix: Text, valueName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(prefix)_data = extractvalue %sollang.array.i32 $valueName, 0" -> println
+    "  %$(prefix)_length = extractvalue %sollang.array.i32 $valueName, 1" -> println
+    "  %$(prefix)_elements = load " -> print
+    typeId -> writeBoundedArrayBackingType(context, state)
+    ", ptr %$(prefix)_data, align " -> print
+    context.types[typeId].first -> arrayElementStorageAlign(context, state) -> writeDecimalLine
+    "  %$(prefix)_0 = insertvalue " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    " poison, i64 %$(prefix)_length, 0" -> println
+    "  %$(prefix) = insertvalue " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    " %$(prefix)_0, " -> print
+    typeId -> writeBoundedArrayBackingType(context, state)
+    " %$(prefix)_elements, 1" -> println
+}
+
+# Match CreateRuntimeAggregateValue: storage belongs to this receiving frame,
+# so the handle never points at the returning function's expired stack.
+emitBoundedArrayHandle prefix: Text, valueName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "  %$(prefix)_owner = alloca " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    ", align $(context.typeAligns[typeId])" -> println
+    "  store " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    " $valueName, ptr %$(prefix)_owner, align $(context.typeAligns[typeId])" -> println
+    "  %$(prefix)_data = getelementptr inbounds " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    ", ptr %$(prefix)_owner, i32 0, i32 1, i64 0" -> println
+    "  %$(prefix)_length = extractvalue " -> print
+    typeId -> writeValueAbiTypeId(context, state)
+    " $valueName, 0" -> println
+    "  %$(prefix)_0 = insertvalue %sollang.array.i32 poison, ptr %$(prefix)_data, 0" -> println
+    "  %$(prefix)_1 = insertvalue %sollang.array.i32 %$(prefix)_0, i64 %$(prefix)_length, 1" -> println
+    "  %$(prefix) = insertvalue %sollang.array.i32 %$(prefix)_1, i64 $(context.types[typeId].length), 2" -> println
+}
+
 writeAggregateFieldTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[typeId].kind == 4 -> if { "{ ptr, i64 }" -> print } else { typeId -> writeSemanticTypeId(context, state) }
 }
@@ -3198,6 +3272,14 @@ isAsyncTaskValue node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
 }
 
 writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    node.kind == 5 -> if {
+        node -> referenceValueTypeId(context, state) => referencedValueTypeId
+        referencedValueTypeId >= 0 and context.types[referencedValueTypeId].kind == 12
+            -> if {
+                "%sollang.array.i32" -> print
+                return
+            }
+    }
     # The semantic result type names the joined payload, not a Task handle.
     node -> isAsyncTaskValue(context) -> if {
         "%sollang.task" -> print

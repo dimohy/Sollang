@@ -1201,7 +1201,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     }
     functionIndex -> functionCaptures(context, state) => currentFunctionCaptures
     "define " -> print
-    function.flags / 8 % 2 == 1 -> if { "i1" -> print } else { function -> writeIrType(context, state) }
+    function.flags / 8 % 2 == 1 -> if { "i1" -> print } else { function -> writeFunctionValueAbiType(context, state) }
     " @sollang_m" -> print
     function.sourceModule -> writeDecimal
     "_s" -> print
@@ -1225,8 +1225,10 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                 parameter -> mutableBorrowUsesStructPointer(context)
                     -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
             } else {
-                parameter -> writeIrType(context, state)
+                parameter -> writeFunctionValueAbiType(context, state)
                 " %arg" -> print
+                (parameter -> boundedArrayValueTypeId(context, state)) >= 0
+                    -> if { "_bounded" -> print }
             }
             function.nextOperand >= 0 -> if { ", " -> print }
         }
@@ -1243,8 +1245,10 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                             "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
                         }
                 } else {
-                    additionalSignatureParameter -> writeIrType(context, state)
+                    additionalSignatureParameter -> writeFunctionValueAbiType(context, state)
                     " %arg$(additionalSignatureParameterOrdinal!)" -> print
+                    (additionalSignatureParameter -> boundedArrayValueTypeId(context, state)) >= 0
+                        -> if { "_bounded" -> print }
                 }
             additionalSignatureParameter.nextOperand >= 0
                 -> if { ", " -> print }
@@ -1259,6 +1263,11 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     functionIndex -> emitHoistedReferenceArgumentAllocas(functionIndex + 1, functionEnd!, context, state)
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => entryParameter
+        entryParameter -> boundedArrayValueTypeId(context, state) => boundedEntryParameterTypeId
+        boundedEntryParameterTypeId >= 0 and entryParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
+            -> if {
+                "arg" -> emitBoundedArrayHandle("%arg_bounded", boundedEntryParameterTypeId, context, state)
+            }
         entryParameter.flags / 2 % 2 == 1 -> if {
             entryParameter -> mutableBorrowUsesStructPointer(context)
                 -> if {
@@ -1306,6 +1315,11 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     1 => entryAdditionalParameterOrdinal!
     entryAdditionalParameterIndex! >= 0 -> while {
         context.ir[entryAdditionalParameterIndex!] => entryAdditionalParameter
+        entryAdditionalParameter -> boundedArrayValueTypeId(context, state) => boundedAdditionalParameterTypeId
+        boundedAdditionalParameterTypeId >= 0 and entryAdditionalParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
+            -> if {
+                "arg$(entryAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(entryAdditionalParameterOrdinal!)_bounded", boundedAdditionalParameterTypeId, context, state)
+            }
         entryAdditionalParameter.flags / 2 % 2 == 1 -> if {
             entryAdditionalParameter -> mutableBorrowUsesStructPointer(context)
                 -> if {
