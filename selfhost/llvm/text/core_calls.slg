@@ -1194,30 +1194,65 @@ streamPipelineOwnsCallback nodeIndex: Int, pipelineIndex: Int, context: ref emit
     owned!
 }
 
-# Returns the stream pipeline whose terminal or deferred callback owns a node.
-# Source subtrees stay in the enclosing region because they must be available
-# before the shared stream body opens its loop.
+streamPipelineOwnsNode nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    nodeIndex == pipeline.terminalIr -> if { true -> return }
+    nodeIndex -> streamPipelineOwnsCallback(pipelineIndex, context, state) => owned!
+    pipeline.stageStart => stageIndex!
+    stageIndex! < pipeline.stageStart + pipeline.stageCount and not owned!
+        -> while {
+            context.streamPlan.stages[stageIndex!].callIr == nodeIndex
+                -> if { true => owned! }
+            stageIndex! + 1 => stageIndex!
+        }
+    owned! and not (nodeIndex -> streamPipelineOwnsSource(pipelineIndex, context, state))
+}
+
+# Source subtrees must remain available before the stream body opens its loop.
 regionOwnedStreamPipeline nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => found!
     0 => pipelineIndex!
     pipelineIndex! < (context.streamPlan.pipelines -> len) and found! < 0
         -> while {
-            context.streamPlan.pipelines[pipelineIndex!] => pipeline
-            nodeIndex == pipeline.terminalIr -> if { pipelineIndex! => found! } else {
-                nodeIndex -> streamPipelineOwnsCallback(pipelineIndex!, context, state) => owned!
-                pipeline.stageStart => ownedStageIndex!
-                ownedStageIndex! < pipeline.stageStart + pipeline.stageCount and not owned!
-                    -> while {
-                        context.streamPlan.stages[ownedStageIndex!].callIr == nodeIndex
-                            -> if { true => owned! }
-                        ownedStageIndex! + 1 => ownedStageIndex!
-                    }
-                nodeIndex -> streamPipelineOwnsSource(pipelineIndex!, context, state) => insideSource
-                owned! and not insideSource -> if { pipelineIndex! => found! }
-            }
+            nodeIndex -> streamPipelineOwnsNode(pipelineIndex!, context, state)
+                -> if { pipelineIndex! => found! }
             pipelineIndex! + 1 => pipelineIndex!
         }
     found!
+}
+
+# A callback's nested region continues its already open pipeline. A distinct
+# pipeline declared inside that region still needs its own opening boundary.
+regionStartingStreamPipeline nodeIndex: Int, regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => pipelineIndex!
+    pipelineIndex! < (context.streamPlan.pipelines -> len)
+        -> while {
+            not (regionIndex -> streamPipelineOwnsCallback(pipelineIndex!, context, state))
+                and (nodeIndex -> streamPipelineOwnsNode(pipelineIndex!, context, state))
+                -> if { pipelineIndex! -> return }
+            pipelineIndex! + 1 => pipelineIndex!
+        }
+    -1
+}
+
+streamCallbackHasNestedRegion nodeIndex: Int, pipelineIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    nodeIndex => ancestor!
+    ancestor! >= 0 -> while {
+        ancestor! == pipeline.terminalIr -> if { false -> return }
+        pipeline.stageStart => stageIndex!
+        stageIndex! < pipeline.stageStart + pipeline.stageCount
+            -> while {
+                context.streamPlan.stages[stageIndex!].callIr == ancestor!
+                    -> if { false -> return }
+                stageIndex! + 1 => stageIndex!
+            }
+        context.ir[ancestor!] => node
+        node.kind == 19 or node.kind == 20 or node.kind == 33
+            -> if { true -> return }
+        node.parent => ancestor!
+    }
+    false
 }
 plannedStreamPipeline terminalIr: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     -1 => found!
@@ -1325,22 +1360,14 @@ isStreamTerminalRole pipelineIndex: Int, argumentIndex: Int, context: ref emitte
     argumentIndex < 0 -> if { false -> return }
     context.ir[argumentIndex] => argument
     argument.kind != 5 -> if { false -> return }
-    context.streamPlan.pipelines[pipelineIndex] => pipeline
-    context.ir[pipeline.terminalIr] => terminal
-    argument.sourceModule != terminal.sourceModule
-        -> if { false -> return }
-    context.ranges[terminal.sourceModule] => range
-    argument.symbol < 0 or argument.symbol >= range.symbolCount
-        -> if { false -> return }
-    context.symbols[range.symbolStart + argument.symbol] => role
-    role.kind == 35 and role.astNode == terminal.astNode
+    context -> emitterContext.isStreamTerminalRole(pipelineIndex, argument.sourceModule, argument.symbol)
 }
 
 streamCallbackInputValue pipelineIndex: Int, roleSymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.streamPlan.pipelines[pipelineIndex] => pipeline
     context.ir[pipeline.terminalIr].sourceModule => sourceModule
     context -> emitterContext.streamCallbackInput(pipelineIndex, sourceModule, roleSymbol) => input
-    input.valueIr
+    input.valueIr -> aggregateValueIndex(context, state)
 }
 
 streamCallbackRole pipelineIndex: Int, expressionIndex: Int, runtimeArgumentIndex: Int, roleSymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
@@ -2069,6 +2096,84 @@ emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitC
             }
         }
 }
+emitIntegerTextRootAllocas textIndex: Int, prefix: Text, ownerIndex: Int, lexicalIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    textIndex < 0 -> if { return }
+    context.ir[textIndex].kind != 2 -> if { return }
+    context.ir[textIndex] => textNode
+    textNode -> sourceInterpolations(context, state) => interpolations
+    textIndex -> interpolatedTextRoots(context, state) => roots
+    0 => ordinal!
+    ordinal! < (roots -> len) -> while {
+        roots[ordinal!] -> interpolationNodeIntegerWidth(interpolations,
+        textNode.sourceModule, ownerIndex, lexicalIndex, context, state) => width
+        width > 0 -> if {
+            "  %$(prefix)_root$(ordinal!)_buffer = alloca [21 x i8], align 1" -> println
+        }
+        ordinal! + 1 => ordinal!
+    }
+}
+
+emitTransientIntegerTextAllocas textIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    textIndex < 0 -> if { return }
+    textIndex -> isDeferredTextChoice(context, state)
+        -> if {
+            [Int; ~] => leaves!
+            textIndex -> appendDeferredTextChoiceLeaves(leaves!, context, state)
+            leaves! -> each leaf {
+                leaf -> emitIntegerTextRootAllocas("calltext$(callIndex)_arg$(ordinal)_leaf$(leaf)",
+                ownerIndex, leaf, context, state)
+            }
+        } else {
+            textIndex -> emitIntegerTextRootAllocas("calltext$(callIndex)_arg$(ordinal)",
+            ownerIndex, callIndex, context, state)
+        }
+}
+
+isEmittedTextArgument argumentIndex: Int, callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    argumentIndex >= 0
+        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+        or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+        and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+}
+
+emitFormattingCallAllocas callIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[callIndex] => call
+    (call.kind == 6 or call.kind == 9) and call.opcode == -229
+        and call.operand0 >= 0 and call.operand1 >= 0
+        -> if {
+            call.operand0 -> producerValueIndex(context, state) => textIndex
+            textIndex -> isDeferredTextChoice(context, state)
+                -> if {
+                    textIndex -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, 0, context, state)
+                } else {
+                    textIndex -> emitIntegerTextRootAllocas("materialize$(callIndex)",
+                    ownerIndex, callIndex, context, state)
+                }
+            return
+        }
+    call.kind == 8 and (call.opcode == grammar.tokenIdEqualEqual() or call.opcode == grammar.tokenIdBangEqual())
+        and (call.operand0 -> comparisonReadIsText(context))
+        and (call.operand1 -> comparisonReadIsText(context))
+        -> if {
+            call.operand0 -> transientTextOperandSource(callIndex, 0, context, state)
+                -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, 0, context, state)
+            call.operand1 -> transientTextOperandSource(callIndex, 1, context, state)
+                -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, 1, context, state)
+            return
+        }
+    call.kind == 6 or call.kind == 9 -> if {
+        call.operand0 => argumentIndex!
+        0 => ordinal!
+        argumentIndex! -> isEmittedTextArgument(callIndex, ordinal!, context, state)
+            -> while {
+                argumentIndex! -> transientTextOperandSource(callIndex, ordinal!, context, state)
+                    -> emitTransientIntegerTextAllocas(callIndex, ownerIndex, ordinal!, context, state)
+                context.ir[argumentIndex!].nextOperand => argumentIndex!
+                ordinal! + 1 => ordinal!
+            }
+    }
+}
+
 emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     startIndex => callIndex!
     callIndex! < endIndex -> while {
@@ -2232,6 +2337,7 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                 context.ir[interpolationArgumentIndex!].nextOperand => interpolationArgumentIndex!
             }
         }
+        callIndex! -> emitFormattingCallAllocas(ownerIndex, context, state)
         call.kind == 6
             and (call.opcode == -207 or call.opcode == -209)
             and call.operand1 >= 0
@@ -2699,7 +2805,6 @@ emitTransientTextLiteral textIndex: Int, callIndex: Int, ownerIndex: Int, prefix
                     }
                 } else {
                     integerWidth > 0 -> if {
-                        "  %$(prefix)_root$(rootOrdinal!)_buffer = alloca [21 x i8], align 1" -> println
                         integerWidth < 64 -> if {
                             "  %$(prefix)_root$(rootOrdinal!)_integer = " -> print
                             interpolationIndex -> interpolationNodeSigned(interpolations, textNode.sourceModule, ownerIndex, lexicalIndex, context, state)
@@ -2855,10 +2960,7 @@ emitDeferredTextComparisonOperands comparisonIndex: Int, ownerIndex: Int, contex
 }
 
 emitTransientTextArguments argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
-    argumentIndex >= 0
-        and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
-        or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
-        and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+    argumentIndex -> isEmittedTextArgument(callIndex, ordinal, context, state)
         -> if {
             argumentIndex -> emitTransientTextOperand(callIndex, ownerIndex, ordinal, context, state)
             context.ir[argumentIndex].nextOperand -> emitTransientTextArguments(callIndex, ownerIndex, ordinal + 1, context, state)

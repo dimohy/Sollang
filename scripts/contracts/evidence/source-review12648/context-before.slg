@@ -1,0 +1,411 @@
+namespace sollang.compiler.llvm.emitter.context
+
+import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
+import sollang.compiler.semantic.mutable_binding_warnings as mutableBindingWarnings
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.constant_collection_lowering as constantLowering
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.syntax as syntax
+public struct InitializerDiagnostic {
+    public code: Int
+    public sourceModule: Int
+    public astNode: Int
+    public fieldOrdinal: Int
+}
+
+public struct EmitContext {
+    public globalFunctionAliasDiagnostic: calls.GlobalFunctionAliasDiagnostic
+    public unusedMutableBindingWarnings: [mutableBindingWarnings.Warning; ~]
+    public initializerDiagnostics: [InitializerDiagnostic; ~]
+    public missingEnumVariants: [semanticDiagnostics.MissingEnumVariant; ~]
+    public nominalFieldMismatch: semanticDiagnostics.NominalFieldMismatchDiagnostic
+    public signatureTypeDiagnostic: semanticDiagnostics.SignatureTypeDiagnostic
+    public inferredInputConflict: semanticDiagnostics.InferredInputConflictDiagnostic
+    public bindingDeclarationDiagnostic: semanticDiagnostics.BindingDeclarationDiagnostic
+    public callOwnershipDiagnostic: semanticDiagnostics.CallOwnershipDiagnostic
+    public dictionaryKeyDiagnostic: semanticDiagnostics.DictionaryKeyDiagnostic
+    public ownedIndexReadDiagnostic: semanticDiagnostics.OwnedIndexReadDiagnostic
+    public firstDeclarationRootDiagnostic: Int
+    public firstOwnedBindingDiagnostic: Int
+    public callArityDiagnostic: semanticDiagnostics.CallArityDiagnostic
+    public unresolvedMutableNames: [semanticDiagnostics.UnresolvedMutableNameDiagnostic; ~]
+    public consumedBindingReads: [semanticDiagnostics.ConsumedBindingReadDiagnostic; ~]
+    public expressionOperandDiagnostic: semanticDiagnostics.ExpressionOperandDiagnostic
+    public numericCallLiteralDiagnostic: semanticDiagnostics.NumericCallLiteralDiagnostic
+    public numericCallArgumentDiagnostic: semanticDiagnostics.NumericCallArgumentDiagnostic
+    public redundantNumericConversions: [semanticDiagnostics.RedundantNumericConversion; ~]
+    public fixedLengthArrayWarnings: [fixedLengthArrays.FixedLengthArrayWarning; ~]
+    public interpolationNumericWarningByNode: [Int; ~]
+    public interpolationCallArgumentDiagnosticByNode: [interpolationInference.InterpolationCallArgumentDiagnostic; ~]
+    public memberFieldCollision: semanticDiagnostics.MemberFieldCollisionDiagnostic
+    public sources: [Text; ~]
+    public ranges: [analysis.SourceAnalysisRange; ~]
+    public nodes: [ast.AstNode; ~]
+    public constantLiterals: [constantLowering.Literal; ~]
+    public constantFailures: [constantLowering.Failure; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public symbols: [symbols.Symbol; ~]
+    public calls: [calls.ModuleCallResolution; ~]
+    public unsupportedNominalEnumFlowPathByAst: [Int; ~]
+    public finalCallResolvedByAst: [Bool; ~]
+    public awaitSourceByAst: [Bool; ~]
+    public libraries: libraryImports.LibraryCatalog
+    public libraryCalls: [libraryImports.LibraryFunctionResolution; ~]
+    public libraryCallDiagnostics: [libraryImports.LibraryCallDiagnostic; ~]
+    public interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+    public activeInterpolationBodyByNode: [Bool; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
+    public interpolationEnumConstructors: [expressionTypeIds.ResolvedEnumConstructorArgument; ~]
+    public interpolationEnumConstructorByNode: [Int; ~]
+    public interpolationArrayByNode: [expressionTypeIds.InterpolationArrayFact; ~]
+    public interpolationOwnedParameterCallByNode: [Bool; ~]
+    public interpolationPayloadTransfers: [typedIr.InterpolationPayloadTransfer; ~]
+    public enumPayloadStorageDiagnostics: [ownershipCheck.EnumPayloadStorageDiagnostic; ~]
+    public intrinsicFlowResultBuiltinByNode: [Int; ~]
+    public invalidIntrinsicFlowArityByNode: [Bool; ~]
+    public invalidTextIntrinsicArgumentByNode: [Int; ~]
+    public collectionMembershipDiagnosticByNode: [interpolationInference.CollectionMembershipDiagnostic; ~]
+    public unresolvedInterpolationBindingByNode: [Bool; ~]
+    public uninvokedAssociatedMemberByNode: [Bool; ~]
+    public missingLocalAssociatedMemberByNode: [Bool; ~]
+    public localEnumMemberDecisionByNode: [interpolationInference.LocalEnumMemberDecision; ~]
+    public uninvokedInterpolationFunctionByNode: [Bool; ~]
+    public unresolvedInterpolationCallByNode: [Bool; ~]
+    public semanticInterpolationCallTargets: [interpolationInference.SemanticInterpolationCallTarget; ~]
+    public importedInterpolationCallTargetByNode: [Int; ~]
+    public directCallExpectedArityByNode: [Int; ~]
+    public invalidArgumentsInterpolationIndexByNode: [Bool; ~]
+    public invalidMappedIndexByNode: [Bool; ~]
+    public invalidCollectionIndexExpectedTypeByNode: [Int; ~]
+    public interpolationContextualDiagnosticByNode: [expressionTypeIds.ContextualStructDiagnostic; ~]
+    public interpolationContextualFieldByNode: [Int; ~]
+    public interpolationIndexedTypeByNode: [Int; ~]
+    public interpolationMemberTypeByNode: [Int; ~]
+    public interpolationUnaryTypeByNode: [Int; ~]
+    public interpolationNumericLiteralContextByNode: [interpolationInference.InterpolationNumericLiteralContext; ~]
+    public interpolationBinaryTypeByNode: [Int; ~]
+    public interpolationFlowTypeByNode: [Int; ~]
+    public interpolationResultPropagationByNode: [interpolationInference.ResultPropagationDecision; ~]
+    public interpolationMemberFieldByNode: [Int; ~]
+    public interpolationPrivateFieldByNode: [Int; ~]
+    public interpolationMissingMemberOwnerTypeByNode: [Int; ~]
+    public interpolationOwnedIndexElementTypeByNode: [Int; ~]
+    public interpolationOwnedIndexContainerByNode: [Int; ~]
+    public invalidSignedUnaryByNode: [Bool; ~]
+    public invalidNotUnaryByNode: [Bool; ~]
+    public binaryArithmeticDiagnosticByNode: [interpolationInference.InterpolationBinaryArithmeticDiagnostic; ~]
+    public binaryComparisonDiagnosticByNode: [interpolationInference.InterpolationBinaryComparisonDiagnostic; ~]
+    public binaryLogicalDiagnosticByNode: [Int; ~]
+    public unsupportedIndexOwnerTypeByNode: [Int; ~]
+    public invalidDisplayTypeByNode: [Int; ~]
+    public invalidNumericConversionTypeByNode: [Int; ~]
+    public invalidCodePointFloatConversionByNode: [Bool; ~]
+    public invalidNumericConversionLiteralByNode: [Int; ~]
+    public invalidNumericConversionArityByNode: [Bool; ~]
+    public numericConversionResultTypeByNode: [Int; ~]
+    public ir: [typedIr.TypedIrNode; ~]
+    public genericCallPlans: [typedIr.GenericCallPlan; ~]
+    public genericBodies: typedIr.GenericBodyBindings
+    public streamPlan: streamIr.StreamPlan
+    public moves: [typedIr.MoveEvent; ~]
+    public nominal: [nominalTypes.NominalType; ~]
+    public composite: [compositeTypes.CompositeType; ~]
+    public modules: [modules.ModuleIdentity; ~]
+    public imports: [modules.ImportEdge; ~]
+    public resolvedImports: [moduleResolve.ResolvedImport; ~]
+    public types: [typeIds.SemanticType; ~]
+    public typeReferences: [typeIds.TypeReference; ~]
+    public typeTerms: [typeTerms.TypeTerm; ~]
+    public fields: [typeIds.NominalField; ~]
+    public typeSizes: [Int; ~]
+    public typeAligns: [Int; ~]
+    public typeLayoutStatuses: [Int; ~]
+    public typeTraits: [Int; ~]
+    public ownedStorageByType: [Bool; ~]
+    public pointerBitWidth: Int
+    public targetArchitecture: Int
+    public cpuDispatchPolicy: Int
+    public requiredCpuFeatures: UInt64
+    public allowedCpuFeatures: UInt64
+    public forbiddenCpuFeatures: UInt64
+    public supportsComputePool: Bool
+    public expectedPathStyle: Int
+    public usesConcurrentStreamJoins: Bool
+    public ownershipDiagnostics: [ownershipCheck.OwnershipDiagnostic; ~]
+    public readonlyReferencePaths: [ownershipCheck.ReadonlyReferenceLoan; ~]
+}
+
+public genericFunctionForCall context: ref EmitContext, callIndex: Int -> Int {
+    callIndex >= 0 and callIndex < (context.genericBodies.functionsByCall -> len)
+        -> if { context.genericBodies.functionsByCall[callIndex] } else { -1 }
+}
+
+public interpolationFunctionForOwner context: ref EmitContext, ownerFunction: Int, interpolationNode: Int -> Int {
+    interpolationNode < 0 -> if { -1 -> return }
+    context.genericBodies -> typedIr.genericInterpolationFunction(ownerFunction, interpolationNode) => contextualTarget
+    contextualTarget >= 0 -> if { contextualTarget -> return }
+    interpolationNode < (context.importedInterpolationCallTargetByNode -> len)
+        -> if { context.importedInterpolationCallTargetByNode[interpolationNode] } else { -1 }
+}
+
+public isGenericInstance context: ref EmitContext, functionIndex: Int -> Bool {
+    functionIndex >= 0 and functionIndex < (context.genericBodies.templatesByFunction -> len)
+        -> if { context.genericBodies.templatesByFunction[functionIndex] >= 0 } else { false }
+}
+
+# A projected callback feeds yield directly into emit; an observation or
+# predicate emits its retained input instead. Bool alone cannot distinguish them.
+public streamStageEmitsCallback context: ref EmitContext, stageIndex: Int -> Bool {
+    context.streamPlan.stages[stageIndex] => stage
+    stage.flags == 3 -> if { true -> return }
+    stage.targetModule < 0 or stage.targetSymbol < 0
+        -> if { false -> return }
+    context.ranges[stage.targetModule] => range
+    context.symbols[range.symbolStart + stage.targetSymbol].astNode => functionAst
+    0 => emitIndex!
+    emitIndex! < range.astCount -> while {
+        context.nodes[range.astStart + emitIndex!] => emitNode
+        emitNode.kind == 16 and emitNode.payloadToken >= 0 and emitNode.parent >= 0 and context.nodes[range.astStart + emitNode.parent].kind == 10
+            -> if {
+                context.tokens[range.tokenStart + emitNode.payloadToken] => token
+                context.sources[stage.targetModule] -> slice(token.span.start, token.span.length) => name
+                name == "emit" -> if {
+                    emitIndex! => owner!
+                    owner! >= 0 and owner! != functionAst -> while {
+                        context.nodes[range.astStart + owner!].parent => owner!
+                    }
+                    owner! == functionAst -> if {
+                        emitNode.parent => flowAst
+                        0 => yieldIndex!
+                        yieldIndex! < range.astCount -> while {
+                            context.nodes[range.astStart + yieldIndex!] => yieldNode
+                            yieldNode.kind == 16 and yieldNode.payloadToken >= 0 and yieldNode.parent >= 0 and context.nodes[range.astStart + yieldNode.parent].kind == 10
+                                -> if {
+                                    context.tokens[range.tokenStart + yieldNode.payloadToken] => yieldToken
+                                    context.sources[stage.targetModule] -> slice(yieldToken.span.start, yieldToken.span.length) => yieldName
+                                    yieldName == "yield" -> if {
+                                        yieldIndex! => ancestor!
+                                        ancestor! >= 0 and ancestor! != flowAst and ancestor! != functionAst
+                                            -> while {
+                                                context.nodes[range.astStart + ancestor!].parent => ancestor!
+                                            }
+                                        ancestor! == flowAst -> if { true -> return }
+                                    }
+                                }
+                            yieldIndex! + 1 => yieldIndex!
+                        }
+                    }
+                }
+            }
+        emitIndex! + 1 => emitIndex!
+    }
+    false
+}
+
+public streamStageCallbackReturnsUnit context: ref EmitContext, stageIndex: Int -> Bool {
+    context.streamPlan.stages[stageIndex] => stage
+    stage.targetModule < 0 or stage.targetModule >= (context.ranges -> len)
+        or stage.targetSymbol < 0 -> if { false -> return }
+    context.ranges[stage.targetModule] => range
+    stage.targetSymbol >= range.symbolCount -> if { false -> return }
+    context.symbols[range.symbolStart + stage.targetSymbol] => declaration
+    declaration.blockResultTypeNode < 0 -> if { true -> return }
+    context.typeReferences -> each reference {
+        reference.sourceModule == stage.targetModule
+            and reference.typeAst == declaration.blockResultTypeNode
+            and reference.status == 0 and reference.typeId >= 0
+            and reference.typeId < (context.types -> len)
+            -> if {
+                context.types[reference.typeId] => result
+                result.kind == 1 and result.origin == 1 and result.symbol == 0 => isUnit
+                isUnit -> return
+            }
+    }
+    false
+}
+
+# The callback's declared result decides whether its last operation is a value.
+# An observation may end in an Int/Bool assignment while still returning Unit.
+public streamStageCarriesCallbackResult context: ref EmitContext, stageIndex: Int, resultIndex: Int -> Bool {
+    context.streamPlan.stages[stageIndex] => stage
+    stage.flags == 3 -> if { true -> return }
+    context -> streamStageCallbackReturnsUnit(stageIndex)
+        -> if { false -> return }
+    resultIndex < 0 or resultIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[resultIndex] => result
+    result.typeId >= 0 and result.typeId == context.ir[stage.callIr].typeId
+        -> if {
+            result.typeOrigin != 1 or result.typeSymbol != 23
+                or (context -> streamStageEmitsCallback(stageIndex)) => carriesResult
+            carriesResult -> return
+        }
+    false
+}
+
+# Resolve the retained value from preceding value-producing stages. Slices and
+# observation callbacks retain the input; a callback's own result is downstream.
+public streamStageInputValue context: ref EmitContext, pipelineIndex: Int, stageIndex: Int -> Int {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    -1 => value!
+    pipeline.status == 3 -> if { pipeline.source0 => value! }
+    pipeline.stageStart => priorIndex!
+    priorIndex! < stageIndex -> while {
+        context.streamPlan.stages[priorIndex!] => prior
+        prior.callbackRoot >= 0 and prior.flags != 4 and prior.flags != 5
+            -> if {
+                context -> streamStageCarriesCallbackResult(priorIndex!, prior.callbackRoot)
+                    -> if { prior.callbackRoot => value! }
+            }
+        priorIndex! + 1 => priorIndex!
+    }
+    value!
+}
+
+
+public struct StreamCallbackInput {
+    public valueIr: Int
+    public typeId: Int
+    public kind: Int
+}
+
+# kind: 0 unresolved, 1 pipeline source, 2 flatMap inner, 3 prior callback value.
+public streamCallbackInput context: ref EmitContext, pipelineIndex: Int, sourceModule: Int, roleSymbol: Int -> StreamCallbackInput {
+    StreamCallbackInput { valueIr: -1, typeId: -1, kind: 0 } => missing
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    pipeline.stageStart => stageIndex!
+    stageIndex! < pipeline.stageStart + pipeline.stageCount
+        -> while {
+            context.streamPlan.stages[stageIndex!] => stage
+            context.ir[stage.callIr] => call
+            context.ranges[call.sourceModule] => range
+            sourceModule == call.sourceModule and roleSymbol >= 0 and roleSymbol < range.symbolCount
+                -> if {
+                    context.symbols[range.symbolStart + roleSymbol] => role
+                    role.kind == 35 and role.parent >= 0 -> if {
+                        context.symbols[range.symbolStart + role.parent] => scope
+                        scope.kind == 48 and scope.astNode == call.astNode
+                            -> if {
+                                -1 => firstRole!
+                                0 => symbolIndex!
+                                symbolIndex! < range.symbolCount and firstRole! < 0
+                                    -> while {
+                                        context.symbols[range.symbolStart + symbolIndex!] => candidate
+                                        candidate.kind == 35 and candidate.parent == role.parent
+                                            -> if { symbolIndex! => firstRole! }
+                                        symbolIndex! + 1 => symbolIndex!
+                                    }
+                                # Role symbols are visited in reverse binder order.
+                                stage.flags == 3 and roleSymbol == firstRole! => inner
+                                context -> streamStageInputValue(pipelineIndex, stageIndex!) => prior
+                                not inner and prior >= 0 -> if {
+                                    StreamCallbackInput { valueIr: prior, typeId: context.ir[prior].typeId, kind: 3 } -> return
+                                }
+                                inner or pipeline.status == 0 -> if {
+                                    0 => typeIndex!
+                                    typeIndex! < (context.types -> len) -> while {
+                                        context.types[typeIndex!] => valueType
+                                        valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 2
+                                            -> if {
+                                                1 => kind!
+                                                inner -> if { 2 => kind! }
+                                                StreamCallbackInput { valueIr: -1, typeId: typeIndex!, kind: kind! } -> return
+                                            }
+                                        typeIndex! + 1 => typeIndex!
+                                    }
+                                }
+                                missing -> return
+                            }
+                    }
+                }
+            stageIndex! + 1 => stageIndex!
+        }
+    missing
+}
+
+public isDirectEachRoleSymbol sourceModule: Int, symbolIndex: Int, context: ref EmitContext -> Bool {
+    false => matched!
+    sourceModule >= 0 and sourceModule < (context.ranges -> len)
+        -> if {
+            context.ranges[sourceModule] => roleRange
+            symbolIndex >= 0 and symbolIndex < roleRange.symbolCount
+                -> if {
+                    context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
+                    roleSymbol.kind == 35 and roleSymbol.parent >= 0 and roleSymbol.parent < roleRange.symbolCount
+                        -> if {
+                            context.symbols[roleRange.symbolStart + roleSymbol.parent] => roleOwner
+                            roleOwner.kind == 48 and roleOwner.astNode == roleSymbol.astNode and roleOwner.astNode >= 0
+                                -> if {
+                                    context.nodes[roleRange.astStart + roleOwner.astNode] => roleAst
+                                    roleAst.payloadToken >= 0 -> if {
+                                        context.tokens[roleRange.tokenStart + roleAst.payloadToken] => roleName
+                                        (roleName.span.length == 4
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 1)) == 97
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 2)) == 99
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 3)) == 104)
+                                            or (roleName.span.length == 6
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start)) == 114
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 1)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 2)) == 112
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 3)) == 101
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 4)) == 97
+                                            and (context.sources[sourceModule] -> byte(roleName.span.start + 5)) == 116)
+                                            -> if {
+                                                true => matched!
+                                            }
+                                    }
+                                }
+                        }
+                }
+        }
+    matched!
+}
+
+
+public directEachRoleSourceIr sourceModule: Int, symbolIndex: Int, context: ref EmitContext -> Int {
+    -1 => sourceIr!
+    sourceModule -> isDirectEachRoleSymbol(symbolIndex, context)
+        -> if {
+            context.ranges[sourceModule] => roleRange
+            context.symbols[roleRange.symbolStart + symbolIndex] => roleSymbol
+            0 => eachSearch!
+            eachSearch! < (context.ir -> len) and sourceIr! < 0
+                -> while {
+                    context.ir[eachSearch!] => eachCandidate
+                    eachCandidate.kind == 6 and (eachCandidate.opcode -> typedIr.isDirectIterationOpcode)
+                        and eachCandidate.sourceModule == sourceModule
+                        and eachCandidate.astNode == roleSymbol.astNode
+                        and eachCandidate.operand0 >= 0 -> if {
+                            false => plannedPipeline!
+                            0 => pipelineIndex!
+                            pipelineIndex! < (context.streamPlan.pipelines -> len) and not plannedPipeline!
+                                -> while {
+                                    context.streamPlan.pipelines[pipelineIndex!].terminalIr == eachSearch!
+                                        -> if { true => plannedPipeline! }
+                                    pipelineIndex! + 1 => pipelineIndex!
+                                }
+                            not plannedPipeline! -> if { eachCandidate.operand0 => sourceIr! }
+                        }
+                    eachSearch! + 1 => eachSearch!
+                }
+        }
+    sourceIr!
+}

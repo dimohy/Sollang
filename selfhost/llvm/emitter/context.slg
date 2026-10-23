@@ -286,6 +286,32 @@ public struct StreamCallbackInput {
     public kind: Int
 }
 
+public isStreamTerminalRole context: ref EmitContext, pipelineIndex: Int, sourceModule: Int, roleSymbol: Int -> Bool {
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    context.ir[pipeline.terminalIr] => terminal
+    sourceModule != terminal.sourceModule -> if { false -> return }
+    context.ranges[terminal.sourceModule] => range
+    roleSymbol < 0 or roleSymbol >= range.symbolCount
+        -> if { false -> return }
+    context.symbols[range.symbolStart + roleSymbol] => role
+    role.kind == 35 and role.astNode == terminal.astNode
+}
+
+streamRangeCallbackInput context: ref EmitContext, inner: Bool -> StreamCallbackInput {
+    0 => typeIndex!
+    typeIndex! < (context.types -> len) -> while {
+        context.types[typeIndex!] => valueType
+        valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 2
+            -> if {
+                1 => kind!
+                inner -> if { 2 => kind! }
+                StreamCallbackInput { valueIr: -1, typeId: typeIndex!, kind: kind! } -> return
+            }
+        typeIndex! + 1 => typeIndex!
+    }
+    StreamCallbackInput { valueIr: -1, typeId: -1, kind: 0 }
+}
+
 # kind: 0 unresolved, 1 pipeline source, 2 flatMap inner, 3 prior callback value.
 public streamCallbackInput context: ref EmitContext, pipelineIndex: Int, sourceModule: Int, roleSymbol: Int -> StreamCallbackInput {
     StreamCallbackInput { valueIr: -1, typeId: -1, kind: 0 } => missing
@@ -319,23 +345,24 @@ public streamCallbackInput context: ref EmitContext, pipelineIndex: Int, sourceM
                                     StreamCallbackInput { valueIr: prior, typeId: context.ir[prior].typeId, kind: 3 } -> return
                                 }
                                 inner or pipeline.status == 0 -> if {
-                                    0 => typeIndex!
-                                    typeIndex! < (context.types -> len) -> while {
-                                        context.types[typeIndex!] => valueType
-                                        valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 2
-                                            -> if {
-                                                1 => kind!
-                                                inner -> if { 2 => kind! }
-                                                StreamCallbackInput { valueIr: -1, typeId: typeIndex!, kind: kind! } -> return
-                                            }
-                                        typeIndex! + 1 => typeIndex!
-                                    }
+                                    context -> streamRangeCallbackInput(inner) -> return
                                 }
                                 missing -> return
                             }
                     }
                 }
             stageIndex! + 1 => stageIndex!
+        }
+    context -> isStreamTerminalRole(pipelineIndex, sourceModule, roleSymbol)
+        -> if {
+            context -> streamStageInputValue(pipelineIndex,
+            pipeline.stageStart + pipeline.stageCount) => prior
+            prior >= 0 -> if {
+                StreamCallbackInput { valueIr: prior, typeId: context.ir[prior].typeId, kind: 3 } -> return
+            }
+            pipeline.status == 0 -> if {
+                context -> streamRangeCallbackInput(false) -> return
+            }
         }
     missing
 }
