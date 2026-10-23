@@ -3045,20 +3045,23 @@ emitFileCall request: FileCallRequest, context: ref emitterContext.EmitContext, 
         ", ptr %v$(request.callIndex)_file_result_slot, align 8" -> println
     }
 }
-emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     call.opcode == typedIr.pathAbsoluteOpcode() => absolute
     request.callIndex -> callArgumentIndex(context, state) => argumentIndex!
     argumentIndex! -> aggregateValueIndex(context, state) => argumentIndex!
     context.ir[argumentIndex!] => pathValue
+    pathValue.typeId => pathTypeId!
+    pathValue -> referenceValueTypeId(context, state) => referencedPathTypeId
+    referencedPathTypeId >= 0 -> if { referencedPathTypeId => pathTypeId! }
     -1 => pathBytesType!
     -1 => pathStyleType!
     0 => pathFieldIndex!
     pathFieldIndex! < (context.fields -> len) -> while {
         context.fields[pathFieldIndex!] => pathField
-        pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 0
+        pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 0
             -> if { pathField.fieldType => pathBytesType! }
-        pathField.status == 0 and pathField.ownerType == pathValue.typeId and pathField.ordinal == 1
+        pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 1
             -> if { pathField.fieldType => pathStyleType! }
         pathFieldIndex! + 1 => pathFieldIndex!
     }
@@ -3078,13 +3081,9 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
         rawFieldSearch! + 1 => rawFieldSearch!
     }
     "  %v$(request.callIndex)_path_query_bytes = extractvalue " -> print
-    pathValue -> writeIrType(context, state)
+    argumentIndex! -> writeSocketReceiverType(context, state)
     " " -> print
-    pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-        -> if { "%arg" -> print } else {
-            "%v" -> print
-            argumentIndex! -> writeDecimal
-        }
+    argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
     ", 0" -> println
     "  %v$(request.callIndex)_path_query_data = extractvalue " -> print
     pathBytesType! -> writeSemanticTypeId(context, state)
@@ -3093,13 +3092,9 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     pathBytesType! -> writeSemanticTypeId(context, state)
     " %v$(request.callIndex)_path_query_bytes, 1" -> println
     "  %v$(request.callIndex)_path_query_style_value = extractvalue " -> print
-    pathValue -> writeIrType(context, state)
+    argumentIndex! -> writeSocketReceiverType(context, state)
     " " -> print
-    pathValue.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and pathValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-        -> if { "%arg" -> print } else {
-            "%v" -> print
-            argumentIndex! -> writeDecimal
-        }
+    argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
     ", 1" -> println
     "  %v$(request.callIndex)_path_query_style = extractvalue " -> print
     pathStyleType! -> writeSemanticTypeId(context, state)
@@ -3190,30 +3185,29 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     call -> writeIrType(context, state)
     ", ptr %v$(request.callIndex)_path_query_result_slot, align 8" -> println
 }
-emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     request.callIndex -> callArgumentIndex(context, state) => argumentIndex!
     argumentIndex! -> aggregateValueIndex(context, state) => argumentIndex!
     context.ir[argumentIndex!] => directoryPath
+    directoryPath.typeId => pathTypeId!
+    directoryPath -> referenceValueTypeId(context, state) => referencedPathTypeId
+    referencedPathTypeId >= 0 -> if { referencedPathTypeId => pathTypeId! }
     -1 => pathBytesType!
     -1 => pathStyleType!
     0 => pathFieldIndex!
     pathFieldIndex! < (context.fields -> len) -> while {
         context.fields[pathFieldIndex!] => pathField
-        pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0
+        pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 0
             -> if { pathField.fieldType => pathBytesType! }
-        pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1
+        pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 1
             -> if { pathField.fieldType => pathStyleType! }
         pathFieldIndex! + 1 => pathFieldIndex!
     }
     "  %v$(request.callIndex)_create_directory_path_bytes = extractvalue " -> print
-    directoryPath -> writeIrType(context, state)
+    argumentIndex! -> writeSocketReceiverType(context, state)
     " " -> print
-    directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-        -> if { "%arg" -> print } else {
-            "%v" -> print
-            argumentIndex! -> writeDecimal
-        }
+    argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
     ", 0" -> println
     "  %v$(request.callIndex)_create_directory_path_data = extractvalue " -> print
     pathBytesType! -> writeSemanticTypeId(context, state)
@@ -3222,13 +3216,9 @@ emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterConte
     pathBytesType! -> writeSemanticTypeId(context, state)
     " %v$(request.callIndex)_create_directory_path_bytes, 1" -> println
     "  %v$(request.callIndex)_create_directory_path_style_value = extractvalue " -> print
-    directoryPath -> writeIrType(context, state)
+    argumentIndex! -> writeSocketReceiverType(context, state)
     " " -> print
-    directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-        -> if { "%arg" -> print } else {
-            "%v" -> print
-            argumentIndex! -> writeDecimal
-        }
+    argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
     ", 1" -> println
     "  %v$(request.callIndex)_create_directory_path_style = extractvalue " -> print
     pathStyleType! -> writeSemanticTypeId(context, state)
@@ -3236,7 +3226,7 @@ emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterConte
     "  %v$(request.callIndex)_create_directory_status = call i32 @sollang_platform_create_directory(ptr %v$(request.callIndex)_create_directory_path_data, i64 %v$(request.callIndex)_create_directory_path_length, i32 %v$(request.callIndex)_create_directory_path_style)" -> println
     "  %v$(request.callIndex) = icmp sgt i32 %v$(request.callIndex)_create_directory_status, 0" -> println
 }
-emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[request.callIndex] => call
     call.opcode == typedIr.pathAbsoluteOpcode() -> if {
         request -> emitPathQueryCall(context, state)
@@ -3264,25 +3254,24 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
         request.callIndex -> callArgumentIndex(context, state) => argumentIndex!
         argumentIndex! -> aggregateValueIndex(context, state) => argumentIndex!
         context.ir[argumentIndex!] => directoryPath
+        directoryPath.typeId => pathTypeId!
+        directoryPath -> referenceValueTypeId(context, state) => referencedPathTypeId
+        referencedPathTypeId >= 0 -> if { referencedPathTypeId => pathTypeId! }
         -1 => pathBytesType!
         -1 => pathStyleType!
         0 => pathFieldIndex!
         pathFieldIndex! < (context.fields -> len) -> while {
             context.fields[pathFieldIndex!] => pathField
-            pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0
+            pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 0
                 -> if { pathField.fieldType => pathBytesType! }
-            pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1
+            pathField.status == 0 and pathField.ownerType == pathTypeId! and pathField.ordinal == 1
                 -> if { pathField.fieldType => pathStyleType! }
             pathFieldIndex! + 1 => pathFieldIndex!
         }
         "  %v$(request.callIndex)_directory_path_bytes = extractvalue " -> print
-        directoryPath -> writeIrType(context, state)
+        argumentIndex! -> writeSocketReceiverType(context, state)
         " " -> print
-        directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-            -> if { "%arg" -> print } else {
-                "%v" -> print
-                argumentIndex! -> writeDecimal
-            }
+        argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
         ", 0" -> println
         "  %v$(request.callIndex)_directory_path_data = extractvalue " -> print
         pathBytesType! -> writeSemanticTypeId(context, state)
@@ -3291,13 +3280,9 @@ emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
         pathBytesType! -> writeSemanticTypeId(context, state)
         " %v$(request.callIndex)_directory_path_bytes, 1" -> println
         "  %v$(request.callIndex)_directory_path_style_value = extractvalue " -> print
-        directoryPath -> writeIrType(context, state)
+        argumentIndex! -> writeSocketReceiverType(context, state)
         " " -> print
-        directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol
-            -> if { "%arg" -> print } else {
-                "%v" -> print
-                argumentIndex! -> writeDecimal
-            }
+        argumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
         ", 1" -> println
         "  %v$(request.callIndex)_directory_path_style = extractvalue " -> print
         pathStyleType! -> writeSemanticTypeId(context, state)
