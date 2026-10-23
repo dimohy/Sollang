@@ -1,0 +1,153 @@
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index d430b79c..1e7c2977 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -97,7 +97,56 @@ indexUserBlockResultRoots package: ref analysis.PackageAnalysis -> [Int; ~] {
+     roots!
+ }
+ 
+-resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: [typeIds.TypeReference], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], roots: ref [Int; ~] -> Bool {
++specializeUserBlockResult prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], firstArgumentByAst: ref [Int; ~], call: ref calls.ModuleCallResolution, callbackTypeId: Int -> Int {
++    prepared.package.ranges[call.sourceModule] => caller
++    prepared.package.ranges[call.targetSourceModule] => target
++    prepared.package.symbols[target.symbolStart + call.functionSymbol] => function
++    function.typeNode => returnTypeAst!
++    function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => returnTypeAst! }
++    returnTypeAst! < 0 or returnTypeAst! >= target.astCount
++        -> if { -1 -> return }
++    referenceIndexByTypeAst[target.astStart + returnTypeAst!] => returnReference
++    referenceIndexByTypeAst[target.astStart + function.blockResultTypeNode] => callbackReference
++    returnReference < 0 or callbackReference < 0 -> if { -1 -> return }
++    references[returnReference] => result
++    references[callbackReference] => callback
++    result.status != 0 or result.typeId < 0
++        or not types[result.typeId].containsParameter
++        or callback.status != 0 or callback.typeId < 0
++        -> if { -1 -> return }
++    [Int; ~] => templates!
++    [Int; ~] => actuals!
++    false => seeded!
++    firstArgumentByAst[caller.astStart + call.callAst] => bindingIndex!
++    bindingIndex! >= 0 and bindingIndex! < (argumentBindings -> len)
++        and argumentBindings[bindingIndex!].sourceModule == call.sourceModule
++        and argumentBindings[bindingIndex!].callAst == call.callAst
++        -> while {
++            argumentBindings[bindingIndex!] => binding
++            not seeded! -> if {
++                seedExplicitFlowGenericArguments(prepared, types, references,
++                referenceIndexByTypeAst, binding, templates!, actuals!)
++                true => seeded!
++            }
++            prepared.package -> typeIds.functionParameterTypeId(references,
++            referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => formal
++            expressionIndexByAst[caller.astStart + binding.argumentAst] => actual
++            formal >= 0 and actual >= 0 and expressions[actual].status == 0
++                and expressions[actual].typeId >= 0 -> if {
++                    templates! -> push(formal)
++                    actuals! -> push(expressions[actual].typeId)
++                }
++            bindingIndex! + 1 => bindingIndex!
++        }
++    templates! -> push(callback.typeId)
++    actuals! -> push(callbackTypeId)
++    types -> typeIds.specializeManyInto(templates!, actuals!, result.typeId) => specialized
++    specialized.status == 0 -> if { specialized.root } else { -1 }
++}
++
++# A provisional concrete result can precede completion of a control callback.
++# Reapply current constraints to the declaration, never to that stale result.
++resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], roots: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], firstArgumentByAst: ref [Int; ~] -> Bool {
+     false => changed!
+     prepared.calls -> each call {
+         call.status == 0 and call.targetSourceModule >= 0
+@@ -112,28 +161,23 @@ resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, type
+                     and resultIndex >= 0 and root >= 0 -> if {
+                         expressions[resultIndex] => result!
+                         expressionIndexByAst[root] => callbackIndex
+-                        result!.typeId >= 0 and types[result!.typeId].containsParameter
+-                            and callbackIndex >= 0 -> if {
+-                                expressions[callbackIndex] => callback
+-                                callback.status == 0 and callback.typeId >= 0
+-                                    and not types[callback.typeId].containsParameter
+-                                    -> if {
+-                                        references -> each formal {
+-                                            formal.sourceModule == call.targetSourceModule
+-                                                and formal.typeAst == function.blockResultTypeNode
+-                                                and formal.status == 0 -> if {
+-                                                    types -> typeIds.specializeInto(formal.typeId, callback.typeId, result!.typeId) => specialized
+-                                                    specialized.status == 0 and specialized.root != result!.typeId
+-                                                        -> if {
+-                                                            specialized.root => result!.typeId
+-                                                            0 => result!.status
+-                                                            result! => expressions[resultIndex]
+-                                                            true => changed!
+-                                                        }
+-                                                }
++                        callbackIndex >= 0 -> if {
++                            expressions[callbackIndex] => callback
++                            callback.status == 0 and callback.typeId >= 0
++                                and not types[callback.typeId].containsParameter
++                                -> if {
++                                    specializeUserBlockResult(prepared, types, references,
++                                    referenceIndexByTypeAst, expressions, expressionIndexByAst,
++                                    argumentBindings, firstArgumentByAst, call, callback.typeId) => specialized
++                                    specialized >= 0 and specialized != result!.typeId
++                                        -> if {
++                                            specialized => result!.typeId
++                                            0 => result!.status
++                                            result! => expressions[resultIndex]
++                                            true => changed!
+                                         }
+-                                    }
+-                            }
++                                }
++                        }
+                     }
+             }
+     }
+@@ -604,7 +648,7 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+     changed!
+ }
+ 
+-resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: [typeIds.TypeReference], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
++resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
+     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+     # An omitted input is constrained by its committed primary argument AST,
+@@ -809,12 +853,26 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSourceByAst
+     prepared.package -> indexContextualRecords => contextualRecords
+     prepared.package -> indexUserBlockResultRoots => userBlockResultRoots
++    [Int; ~] => firstUserBlockArgumentByAst!
++    prepared.package.nodes -> each node { firstUserBlockArgumentByAst! -> push(-1) }
++    0 => bindingIndex!
++    bindingIndex! < (argumentBindings -> len) -> while {
++        argumentBindings[bindingIndex!] => binding
++        prepared.package.ranges[binding.sourceModule].astStart + binding.callAst => ownerAst
++        firstUserBlockArgumentByAst![ownerAst] < 0
++            -> if { bindingIndex! => firstUserBlockArgumentByAst![ownerAst] }
++        bindingIndex! + 1 => bindingIndex!
++    }
+ 
+     prepared.package -> continuationFlags => continuationByAst
+     prepared -> indexInferredFunctionBodyValues => inferredFunctionBodyValues
+     true => pathChanged!
+     pathChanged! -> while {
+         false => pathChanged!
++        # Callback locals and member paths become concrete in these rounds.
++        # Publish the completed terminal type before consumers inherit it.
++        resolveParallelRoleTypes(prepared, types, expressions, expressionIndexByAst)
++            -> if { true => pathChanged! }
+         resolveContainerTransformTypes(prepared, types, expressions, expressionIndexByAst, flowSourceByAst)
+             -> if { true => pathChanged! }
+         # Late array and dictionary interning can grow the arena between rounds.
+@@ -902,7 +960,8 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                     }
+                 intrinsicSource! + 1 => intrinsicSource!
+             }
+-        prepared -> resolveUserBlockResultTypes(types, references, expressions, expressionIndexByAst, userBlockResultRoots)
++        prepared -> resolveUserBlockResultTypes(types, references, referenceIndexByTypeAst,
++        expressions, expressionIndexByAst, userBlockResultRoots, argumentBindings, firstUserBlockArgumentByAst!)
+             -> if { true => pathChanged! }
+ 
+         # Aggregate each branch in one expression sweep, then seed a

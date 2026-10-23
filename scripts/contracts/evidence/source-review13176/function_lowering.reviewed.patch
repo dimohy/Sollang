@@ -1,0 +1,57 @@
+diff --git a/selfhost/ir/typed/function_lowering.slg b/selfhost/ir/typed/function_lowering.slg
+index 2c74dd21..174e96b4 100644
+--- a/selfhost/ir/typed/function_lowering.slg
++++ b/selfhost/ir/typed/function_lowering.slg
+@@ -2650,7 +2650,6 @@ repairStructuredParallelCallbackRoots results: mut [TypedIrNode; ~], prepared: r
+                         and callbackCandidate.typeId >= 0
+                         and callbackCandidate.kind != 0
+                         and callbackCandidate.kind != 1
+-                        and callbackCandidate.kind != 5
+                         and callbackCandidate.kind != 10
+                         and callbackCandidate.kind != 11
+                         and callbackCandidate.kind != 17
+@@ -2701,7 +2700,6 @@ repairStructuredParallelCallbackRoots results: mut [TypedIrNode; ~], prepared: r
+                             results[callbackChildIndex!] => callbackChildCandidate
+                             callbackChildCandidate.parent == callbackRoot!
+                                 and callbackChildCandidate.typeId >= 0
+-                                and callbackChildCandidate.kind != 5
+                                 and callbackChildCandidate.kind != 10
+                                 and callbackChildCandidate.kind != 17
+                                 and callbackChildCandidate.kind != 19
+@@ -3416,13 +3414,14 @@ public repairDiscardedDirectAsyncAwaits results: mut [TypedIrNode; ~], prepared:
+ }
+ 
+ # Named Task flows already retain a kind-5 value node. Share one await node
+-# across all consumers so the task is joined and released exactly once.
++# across all consumers, including the function result region, so its result
++# edge receives the joined value and the task is released exactly once.
+ public repairDirectAsyncAwaitConsumers results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+     results -> len => originalNodeCount
+     0 => consumerIndex!
+     consumerIndex! < originalNodeCount -> while {
+         results[consumerIndex!] => consumer!
+-        (consumer!.kind == 17 or consumer!.kind == 6 or consumer!.kind == 9 or consumer!.kind == 27)
++        (consumer!.kind == 1 or consumer!.kind == 17 or consumer!.kind == 6 or consumer!.kind == 9 or consumer!.kind == 27)
+             and consumer!.operand0 >= 0
+             and consumer!.operand0 < originalNodeCount
+             -> if {
+@@ -3689,8 +3688,9 @@ appendAndReleaseFunctionResults results: mut [TypedIrNode; ~], functionResults:
+     }
+ }
+ 
+-# A trailing console consumer can be resolved before its value-producing `if`
+-# is lowered. In that provisional shape operand0 names the owner function.
++# A trailing console consumer can be resolved before its value-producing control
++# or fold is lowered. The fold is the completed value, rather than its input
++# range. In the provisional shape operand0 names the owner function or shell.
+ # Reconnect only a control value contained by the same source flow; unrelated
+ # controls in the function must never become implicit console arguments.
+ repairTrailingConsoleControlResults results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+@@ -3721,6 +3721,7 @@ repairTrailingConsoleControlResults results: mut [TypedIrNode; ~], prepared: ref
+                                 and candidate.parent == console!.operand0
+                                 and (candidate.kind == 18
+                                 or candidate.kind == 27
++                                or candidate.kind == 32
+                                 or candidate.kind == 33
+                                 or candidate.kind == 34)
+                                 and candidate.astNode >= 0

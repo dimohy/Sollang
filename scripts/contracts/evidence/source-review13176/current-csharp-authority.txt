@@ -1,0 +1,196 @@
+7114:    private void BindUserBlockFunctionCallCore(
+7115:        BlockFunctionCallStatement call,
+7116:        BoundFunction function,
+7117:        IReadOnlyDictionary<string, BoundFunction> functions,
+7118:        Dictionary<string, BoundType> bindings,
+7119:        HashSet<string> mutableBindings,
+7120:        string target,
+7121:        bool suppressResultBinding = false,
+7122:        BoundType? streamedInputType = null,
+7123:        BoundType? resolvedInputType = null)
+7124:    {
+7125:        if (!call.UsesDefaultItemName)
+7126:        {
+7127:            ValidateBindingName(call.ItemName, call.Line, call.Column);
+7128:        }
+7129:
+7130:        if (bindings.ContainsKey(call.ItemName))
+7131:        {
+7132:            throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
+7133:        }
+7134:
+7135:        var inputType = streamedInputType ?? resolvedInputType ?? InferExpression(
+7136:            call.Source,
+7137:            functions,
+7138:            bindings,
+7139:            allowPrintCall: false,
+7140:            allowReadIntCall: true,
+7141:            allowFlowBindingTarget: false,
+7142:            mutableBindings: mutableBindings);
+7143:        BoundType? alreadyBoundCallbackResultType = null;
+7144:        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel)
+7145:        {
+7146:            ValidateParallelCapturedBindings(call, functions, bindings, mutableBindings);
+7147:        }
+7148:        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
+7149:            && function.SpecializedType is null)
+7150:        {
+7151:            if (!_types.IsDynamicArray(inputType) && inputType != BoundType.DynamicIntArray)
+7152:            {
+7153:                throw Error(call.Source.Line, call.Source.Column, $"{target} expects a growable array");
+7154:            }
+7155:            if (call.Body.Count == 0 || call.Body[^1] is not ExpressionStatement parallelResult)
+7156:            {
+7157:                throw Error(call.Line, call.Column, $"{target} callback must end with a result expression");
+7158:            }
+7159:
+7160:            var parallelItemType = inputType == BoundType.DynamicIntArray
+7161:                ? BoundType.Int
+7162:                : _types.GetDynamicArray(inputType).ElementType;
+7163:            var parallelBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+7164:            {
+7165:                [call.ItemName] = parallelItemType
+7166:            };
+7167:            var parallelMutableBindings = new HashSet<string>(mutableBindings, StringComparer.Ordinal);
+7168:            BindStatements(
+7169:                call.Body.Take(call.Body.Count - 1).ToArray(),
+7170:                functions,
+7171:                parallelBindings,
+7172:                parallelMutableBindings,
+7173:                allowContainerBindings: true);
+7174:            var parallelResultType = InferExpression(
+7175:                parallelResult.Expression,
+7176:                functions,
+7177:                parallelBindings,
+7178:                allowPrintCall: false,
+7179:                allowReadIntCall: true,
+7180:                allowFlowBindingTarget: false,
+7181:                mutableBindings: parallelMutableBindings);
+7182:            BoundType parallelValueType;
+7183:            BoundType? parallelErrorType = null;
+7184:            if (function.Kind == BoundFunctionKind.RuntimeTryParallel)
+7185:            {
+7186:                if (!_types.TryGetResultTypes(parallelResultType, out var resultTypes))
+7187:                {
+7188:                    throw Error(
+7189:                        parallelResult.Expression.Line,
+7190:                        parallelResult.Expression.Column,
+7191:                        $"{target} callback must return Result<R, E>");
+7192:                }
+7193:                parallelValueType = resultTypes.Ok;
+7194:                parallelErrorType = resultTypes.Error;
+7195:            }
+7196:            else
+7197:            {
+7198:                parallelValueType = parallelResultType;
+7199:            }
+7200:            function = ResolveGenericSpecialization(
+
+10840:        }
+10841:
+10842:        var initialType = InferExpression(
+10843:            expression.Initial,
+10844:            functions,
+10845:            bindings,
+10846:            allowPrintCall: false,
+10847:            allowReadIntCall,
+10848:            allowFlowBindingTarget: false);
+10849:        if (initialType != BoundType.Int)
+10850:        {
+10851:            throw Error(expression.Initial.Line, expression.Initial.Column, "fold initial value must be an integer");
+10852:        }
+10853:
+10854:        var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+10855:        {
+10856:            [expression.AccumulatorName] = BoundType.Int,
+10857:            [expression.ItemName] = BoundType.Int
+10858:        };
+10859:        var bodyType = InferBlockBody(expression.Body, functions, bodyBindings, allowReadIntCall,
+10860:            mutableBindings: mutableBindings);
+10861:        if (bodyType != BoundType.Int)
+10862:        {
+10863:            throw Error(expression.Body.Line, expression.Body.Column, "fold body must return the next integer accumulator value");
+10864:        }
+10865:
+10866:        return BoundType.Int;
+10867:    }
+10868:
+10869:    private BoundType InferBlockBody(
+10870:        BlockBody body,
+10871:        IReadOnlyDictionary<string, BoundFunction> functions,
+10872:        IReadOnlyDictionary<string, BoundType> bindings,
+10873:        bool allowReadIntCall,
+10874:        string? allowedOwnedOuterResultName = null,
+10875:        IReadOnlySet<string>? mutableBindings = null,
+10876:        BoundType? expectedResultType = null,
+10877:        IReadOnlyDictionary<string, BoundType>? ownedResultOuterBindings = null)
+10878:    {
+10879:        using var loopBorrowArm = BeginLoopBorrowArm(body, bindings);
+10880:        var parentMutableDeclarationsByName = _currentMutableDeclarationsByName is null
+10881:            ? null
+10882:            : new Dictionary<string, MutableBindingDeclaration>(
+10883:                _currentMutableDeclarationsByName,
+10884:                StringComparer.Ordinal);
+10885:        try
+10886:        {
+10887:        var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal);
+10888:        var bodyMutableBindings = mutableBindings is null
+10889:            ? new HashSet<string>(StringComparer.Ordinal)
+10890:            : new HashSet<string>(mutableBindings, StringComparer.Ordinal);
+10891:        BindStatements(
+10892:            body.Statements,
+10893:            functions,
+10894:            bodyBindings,
+10895:            bodyMutableBindings,
+10896:            allowContainerBindings: true,
+10897:            borrowRegionResult: body.Value,
+10898:            shortenBorrowRegions: true,
+10899:            borrowRegionContinuation: _borrowedTextContinuationNames,
+10900:            retainMutableDeclarationScope: true);
+10901:        if (body.Value is null)
+10902:        {
+10903:            return BoundType.Unit;
+10904:        }
+10905:
+10906:        ExpireBorrowedTextOriginsBeforeStatement(
+10907:            [],
+10908:            0,
+10909:            body.Value,
+10910:            _borrowedTextContinuationNames,
+10911:            bodyBindings);
+10912:
+10913:        var resultType = expectedResultType is { } expected
+10914:            && IsIntegerType(expected)
+10915:            && (IsContextualNumericExpression(body.Value)
+10916:                || TryGetNumericBinaryOperands(body.Value, out _, out _, out _))
+10917:                ? InferContextualValue(
+10918:                    body.Value,
+10919:                    expected,
+10920:                    functions,
+10921:                    bodyBindings,
+10922:                    allowReadIntCall,
+10923:                    bodyMutableBindings)
+10924:                : InferExpression(
+10925:                    body.Value,
+10926:                    functions,
+10927:                    bodyBindings,
+10928:                    allowPrintCall: false,
+10929:                    allowReadIntCall,
+10930:                    allowFlowBindingTarget: false,
+10931:                    mutableBindings: bodyMutableBindings,
+10932:                    allowedOwnedOuterResultName: allowedOwnedOuterResultName);
+10933:        if (resultType == BoundType.StaticIntArray)
+
+12037:        switch (path)
+12038:        {
+12039:            case "await" when _types.TryGetTaskValue(currentType, out var awaitedType):
+12040:                if (!_currentFunctionIsAsync)
+12041:                {
+12042:                    throw Error(target.Line, target.Column, "await is only valid in async functions or main");
+12043:                }
+12044:                if (target.Arguments.Count != 0)
+12045:                {
+12046:                    throw Error(target.Line, target.Column, "await does not accept arguments");
+12047:                }
+12048:                result = new FlowResult(awaitedType, FlowEffect.None);
+12049:                return true;
