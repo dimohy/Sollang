@@ -1,0 +1,7 @@
+$ErrorActionPreference = 'Stop'
+& scripts/record-compiler-defect-shaping-receipt.ps1 `
+ -DefectId C2026-10-24-731 -Phase candidate `
+ -InputFingerprint '712D3C4D77ACC5A82551FB0D2550B53DCCC0DF3C896CF6ADA65363FE52552080' `
+ -FilePath (Get-Command python).Source `
+ -ArgumentList @('scripts/verify-c385-preir-call-numeric.py','--mode','paired','--output','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\arraylayout13400-candidate','--build','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\v13395\compiler-build01','--managed-proof','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\substitution13375-guards-managed\result.json','--managed-compiler','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\managed13239\compiler\Sollang.Compiler.exe','--artifact-cleanup','plan-only','--contract','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\substitution13375-guards-contract.json','--source-comparison','W:\MyWorks\Sollang\scripts\contracts\evidence\C2026-10-24-731\source-comparison13376.json','--reusable-compiler-directory','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\v12432\compiler-build01','--reusable-compiler-directory','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\v13347\compiler-build01','--reusable-compiler-directory','W:\MyWorks\Sollang\artifacts\scratch\resume-20261006-owner-continuation22\v13395\compiler-build01') `
+ -TimeoutMilliseconds 300000 -ExpectedExitCode 0
