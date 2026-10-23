@@ -1212,12 +1212,15 @@ resolveInterpolationArrayLiteral prepared: ref semanticContext.SemanticSnapshot,
     0 => typeChild!
     typeChild! < range.astCount -> while {
         prepared.package.nodes[range.astStart + typeChild!] => candidate
-        candidate.parent == array.valueAst and candidate.kind == 12
+        candidate.parent == array.valueAst and (candidate.kind == 12 or candidate.kind == 16)
             -> if {
-                referenceIndexByTypeAst[range.astStart + typeChild!] => referenceIndex
-                referenceIndex >= 0 and references[referenceIndex].status == 0
+                referenceIndexByTypeAst[range.astStart + typeChild!] => referenceIndex!
+                referenceIndex! < 0 -> if {
+                    referenceIndexByTypeAst[range.astStart + array.valueAst] => referenceIndex!
+                }
+                referenceIndex! >= 0 and references[referenceIndex!].status == 0
                     -> if {
-                        references[referenceIndex].typeId => elementTypeId!
+                        references[referenceIndex!].typeId => elementTypeId!
                         types[elementTypeId!].kind == 3 or types[elementTypeId!].kind == 12
                             -> if { types[elementTypeId!].first => elementTypeId! }
                         true => explicitElementType!
@@ -2899,7 +2902,8 @@ contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, r
     index.firstChild[globalAst] => child!
     child! >= 0 -> while {
         # Explicitly typed constructors retain their own element contract.
-        prepared.package.nodes[child!].kind == 12 -> if { false -> return }
+        prepared.package.nodes[child!].kind == 12 or prepared.package.nodes[child!].kind == 16
+            -> if { false -> return }
         index.nextChild[child!] => child!
     }
     expressionByAst[globalAst] => expressionIndex
@@ -2909,10 +2913,14 @@ contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, r
     resolved.types[actualType] => actual
     actual.kind != 3 and actual.kind != 4 and actual.kind != 12
         -> if { false -> return }
-    # Preserve the literal's storage and length while its parameter supplies the
-    # element type. Existing contextual-field logic checks each numeric element.
-    resolved.types -> internArrayLiteralType(actual.kind, expected.first, actual.length) => contextual
-    resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual, expectedByAst)
+    # An unannotated literal inherits the owning parameter's storage contract.
+    # Array diagnostics retain the original count and reject extent mismatches.
+    # A slice is a view and keeps the literal's own backing storage.
+    expectedTypeId => contextual!
+    expected.kind == 2 -> if {
+        resolved.types -> internArrayLiteralType(actual.kind, expected.first, actual.length) => contextual!
+    }
+    resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual!, expectedByAst)
 }
 
 contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {

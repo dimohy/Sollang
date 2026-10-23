@@ -4136,6 +4136,9 @@ contextualRecordFieldPriority package: ref analysis.PackageAnalysis, fields: ref
     selected.code < 33 or selected.code > 43 or candidate.sourceModule != selected.sourceModule
         -> if { -1 -> return }
     package.ranges[selected.sourceModule] => range
+    # Declaration-ordered field priority belongs only to record initializers.
+    package.nodes[range.astStart + selected.astNode].kind != 38
+        -> if { -1 -> return }
     candidate.astNode => valueAst!
     candidate.operandAst >= 0 and candidate.operandAst < range.astCount
         and (package -> semanticContext.declarationAncestor(selected.sourceModule, selected.astNode, candidate.operandAst))
@@ -4503,7 +4506,7 @@ contextualRecordDecision package: ref analysis.PackageAnalysis, sourceModule: In
     }
 }
 
-contextualRecordArrayDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int, sourceModule: Int, literalAst: Int, arrayGlobal: Int, ownerType: Int, field: Int, expectedArrayType: Int -> ExpressionOperandDiagnostic {
+contextualArrayDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int, sourceModule: Int, literalAst: Int, arrayGlobal: Int, ownerType: Int, field: Int, expectedArrayType: Int -> ExpressionOperandDiagnostic {
     package -> contextualRecordDecision(sourceModule, literalAst, arrayGlobal - package.ranges[sourceModule].astStart, 0, ownerType, field, -1) => valid
     package.nodes[arrayGlobal].kind != 37 -> if { valid -> return }
     resolved.types[expectedArrayType] => expectedArray
@@ -4590,6 +4593,42 @@ contextualRecordArrayDiagnostic package: ref analysis.PackageAnalysis, prepared:
             decision! -> return
         }
     valid
+}
+
+# A direct unannotated array literal inherits its parameter storage type.
+# Check its elements and original extent before that contextual type hides them.
+contextualArrayArgumentDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
+    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
+    resolved.callArguments -> each argument {
+        argument.status == 0 and argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
+            and argument.expectedTypeId >= 0 and argument.expectedTypeId < (resolved.types -> len)
+            -> if {
+                package.ranges[argument.sourceModule] => range
+                argument.argumentAst >= 0 and argument.argumentAst < range.astCount
+                    and (prepared -> declarationBodyIsActive(resolved, argument.sourceModule, argument.argumentAst))
+                    -> if {
+                        range.astStart + argument.argumentAst => globalAst
+                        resolved.types[argument.expectedTypeId] => expected
+                        package.nodes[globalAst].kind == 37 and not expected.containsParameter
+                            and (expected.kind == 3 or expected.kind == 4 or expected.kind == 12)
+                            -> if {
+                                false => annotated!
+                                firstChild[globalAst] => child!
+                                child! >= 0 -> while {
+                                    package.nodes[child!].kind == 12 or package.nodes[child!].kind == 16
+                                        -> if { true => annotated! }
+                                    nextChild[child!] => child!
+                                }
+                                not annotated! -> if {
+                                    package -> contextualArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, argument.sourceModule, argument.argumentAst, globalAst, -1, -1, argument.expectedTypeId) => candidate
+                                    candidate.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!))
+                                        -> if { candidate => selected! }
+                                }
+                            }
+                    }
+            }
+    }
+    selected!
 }
 
 # A committed contextual record owns its labels, not its field value reads.
@@ -4690,7 +4729,7 @@ contextualRecordDiagnostic package: ref analysis.PackageAnalysis, prepared: ref 
                         initializer! < (values! -> len) -> if {
                             values![initializer!] => value
                             resolved.fields[declared!].fieldType => expectedFieldType
-                            package -> contextualRecordArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, range.sourceModule, literalAst!, value, ownerType, declared!, expectedFieldType) => arrayDecision
+                            package -> contextualArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, range.sourceModule, literalAst!, value, ownerType, declared!, expectedFieldType) => arrayDecision
                             arrayDecision.code > 0 -> if { arrayDecision -> return }
                             resolved.types[expectedFieldType] => expectedNumeric
                             expectedNumeric.symbol -> typeIds.canonicalBuiltinSymbol => expectedSymbol
@@ -5148,6 +5187,9 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
         childSource! + 1 => childSource!
     }
     package -> contextualRecordDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, pointerBitWidth) => selected!
+    package -> contextualArrayArgumentDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, pointerBitWidth) => arrayArgumentDiagnostic
+    arrayArgumentDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, arrayArgumentDiagnostic, selected!))
+        -> if { arrayArgumentDiagnostic => selected! }
     package -> contextualArithmeticArgumentDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, sourceAstByExpression) => arithmeticArgumentDiagnostic
     arithmeticArgumentDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, arithmeticArgumentDiagnostic, selected!))
         -> if { arithmeticArgumentDiagnostic => selected! }
