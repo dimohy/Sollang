@@ -1180,7 +1180,10 @@ arrayLiteralUnsupportedElement types: ref [typeIds.SemanticType; ~], elementType
     types[elementTypeId] => element
     element.kind == 1 and element.origin == 1 and element.symbol == 0
         -> if { true -> return }
-    element.kind == 2 or element.kind == 4 or element.kind == 5 or element.kind == 12 or element.kind == 13
+    # Bounded inline owners are values in an ordinary literal. Explicit typed
+    # empties keep their separate constructor admission below.
+    element.kind == 2 or element.kind == 4 or element.kind == 5
+        or (dynamic and (element.kind == 12 or element.kind == 13))
         -> if { true -> return }
     element.kind == 3 and not dynamic
 }
@@ -1341,11 +1344,18 @@ resolveInterpolationArrayLiteral prepared: ref semanticContext.SemanticSnapshot,
         }
     elementTypeId! < 0 -> if { types -> typeIds.builtinTypeId(2) => elementTypeId! }
     nodeIndex => result!.diagnosticNode
-    types -> arrayLiteralUnsupportedElement(elementTypeId!, storage.dynamic)
-        -> if {
-            explicitElementType! and childCount! == 0 -> if { 11 } else { 3 } => result!.status
-            result! -> return
-        }
+    # Ordinary elements were checked in source order above. An empty contextual
+    # literal has no element to reject; only typed empty syntax validates its
+    # declared element here, as InferTypedEmptyArrayExpression does in C#.
+    explicitElementType! and childCount! == 0 -> if {
+        types[elementTypeId!].kind => elementKind
+        (types -> arrayLiteralUnsupportedElement(elementTypeId!, storage.dynamic))
+            or (not storage.dynamic and (elementKind == 12 or elementKind == 13))
+            -> if {
+                11 => result!.status
+                result! -> return
+            }
+    }
     elementTypeId! => result!.elementTypeId
     childCount! => result!.elementCount
     not storage.dynamic and not storage.bounded and storage.length >= 0

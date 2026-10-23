@@ -1,0 +1,54 @@
+diff --git a/selfhost/llvm/emitter/diagnostics.slg b/selfhost/llvm/emitter/diagnostics.slg
+index da7f5e556..da4236c1e 100644
+--- a/selfhost/llvm/emitter/diagnostics.slg
++++ b/selfhost/llvm/emitter/diagnostics.slg
+@@ -7841,7 +7841,17 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
+ }
+ 
+ invalidArrayElementLayout typeId: Int, context: ref emitterContext.EmitContext -> Bool {
+-    context.types -> typeIds.unsupportedArrayElementLayout(typeId)
++    # Declared fields and contextual literals can contain owning arrays. Their
++    # descriptors and inline values have layouts even where ordinary source
++    # signatures reject the same shape. Source admission owns that distinction.
++    typeId < 0 or typeId >= (context.types -> len)
++        -> if { false -> return }
++    context.types[typeId] => outer
++    (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)
++        and outer.first >= 0 and outer.first < (context.types -> len)
++        -> unless { false -> return }
++    context.types[outer.first] => element
++    element.kind == 1 and element.origin == 1 and element.symbol == 0
+ }
+ 
+ appendArrayElementLayoutType typeId: Int, used: mut [Bool; ~], pending: mut [Int; ~] -> Unit {
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 2c7c93c37..2d540d385 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -1514,7 +1514,7 @@ firstArrayLayoutFailure types: ref [typeIds.SemanticType; ~], typeId: Int, defin
+                             -> if { typeId => failure! }
+                     }
+             } else {
+-                types -> typeIds.unsupportedArrayElementLayout(typeId)
++                types -> typeIds.unsupportedArraySignatureElement(typeId)
+                     -> if { typeId => failure! }
+             }
+         }
+diff --git a/selfhost/semantic/type_ids.slg b/selfhost/semantic/type_ids.slg
+index c25608799..98b0f1874 100644
+--- a/selfhost/semantic/type_ids.slg
++++ b/selfhost/semantic/type_ids.slg
+@@ -156,9 +156,10 @@ public struct SemanticType {
+     public status: Int
+ }
+ 
+-# Source array constructors and the backend use the same direct element rule.
+-# Definition-time field constructors retain their separate admission policy.
+-public unsupportedArrayElementLayout types: ref [SemanticType; ~], typeId: Int -> Bool {
++# Ordinary signature annotations follow the managed ParseType element policy.
++# Field definitions and contextual values have separate admission rules; this
++# source restriction is not a backend representation invariant.
++public unsupportedArraySignatureElement types: ref [SemanticType; ~], typeId: Int -> Bool {
+     typeId < 0 or typeId >= (types -> len) -> if { false -> return }
+     types[typeId] => outer
+     (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)

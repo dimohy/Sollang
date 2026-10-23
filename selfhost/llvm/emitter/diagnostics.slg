@@ -7841,7 +7841,17 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
 }
 
 invalidArrayElementLayout typeId: Int, context: ref emitterContext.EmitContext -> Bool {
-    context.types -> typeIds.unsupportedArrayElementLayout(typeId)
+    # Declared fields and contextual literals can contain owning arrays. Their
+    # descriptors and inline values have layouts even where ordinary source
+    # signatures reject the same shape. Source admission owns that distinction.
+    typeId < 0 or typeId >= (context.types -> len)
+        -> if { false -> return }
+    context.types[typeId] => outer
+    (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)
+        and outer.first >= 0 and outer.first < (context.types -> len)
+        -> unless { false -> return }
+    context.types[outer.first] => element
+    element.kind == 1 and element.origin == 1 and element.symbol == 0
 }
 
 appendArrayElementLayoutType typeId: Int, used: mut [Bool; ~], pending: mut [Int; ~] -> Unit {
