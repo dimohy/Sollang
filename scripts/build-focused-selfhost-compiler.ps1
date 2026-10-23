@@ -241,7 +241,13 @@ try {
                 "Reused verified semantic preflight: $reusableSemanticPreflight`n", [Text.UTF8Encoding]::new($false))
             [IO.File]::WriteAllText((Join-Path $output 'semantic-preflight.stderr.txt'), '')
         } else {
-        & $semanticPython $semanticPreflight --compiler $seed --manifest $manifest --output (Join-Path $output 'semantic-preflight') --expected-managed-dll-sha256 (Get-FileHash -LiteralPath (Join-Path $managedDirectory 'Sollang.Compiler.dll') -Algorithm SHA256).Hash > (Join-Path $output 'semantic-preflight.stdout.txt') 2> (Join-Path $output 'semantic-preflight.stderr.txt')
+        $semanticPreflightArguments = @($semanticPreflight, '--compiler', $seed,
+            '--manifest', $manifest, '--output', (Join-Path $output 'semantic-preflight'),
+            '--expected-managed-dll-sha256', (Get-FileHash -LiteralPath (Join-Path $managedDirectory 'Sollang.Compiler.dll') -Algorithm SHA256).Hash)
+        foreach ($reusableDirectory in $protectedCompilerDirectories) {
+            $semanticPreflightArguments += @('--reusable-directory', $reusableDirectory)
+        }
+        & $semanticPython @semanticPreflightArguments > (Join-Path $output 'semantic-preflight.stdout.txt') 2> (Join-Path $output 'semantic-preflight.stderr.txt')
         $steps.semanticPreflight = $LASTEXITCODE
         if ($steps.semanticPreflight -ne 0) {
             $failureId = 'FOCUSED_SELFHOST_SEMANTIC_PREFLIGHT_FAILED'

@@ -5318,6 +5318,36 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                     astIndex! + 1 => astIndex!
                     continue
                 }
+            logical.kind == 56 -> if {
+                package -> expressionTypeIds.subjectWhenValueAst(sourceIndex!, astIndex!, typeIdByAst!) => enumSubjectAst
+                enumSubjectAst >= 0 and enumSubjectAst < range.astCount
+                    -> if {
+                        typeIdByAst![range.astStart + enumSubjectAst] => enumSubjectTypeId
+                        enumSubjectTypeId >= 0 and enumSubjectTypeId < (resolved.types -> len)
+                            -> if {
+                                # C# reads one reference layer from a bound name.
+                                # A call returning ref T remains a reference value,
+                                # so it cannot be used directly as an enum subject.
+                                resolved.types[enumSubjectTypeId].kind == 8
+                                    and package.nodes[range.astStart + enumSubjectAst].kind != 15
+                                    -> if {
+                                        ExpressionOperandDiagnostic {
+                                            code: 72
+                                            sourceModule: sourceIndex!
+                                            astNode: astIndex!
+                                            operandAst: enumSubjectAst
+                                            operatorKind: -1
+                                            locationOffset: package.nodes[range.astStart + enumSubjectAst].start
+                                            operandTypeSymbol: -1
+                                            operandTypeId: enumSubjectTypeId
+                                            firstTypeId: -1
+                                        } => candidate
+                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                            -> if { candidate => selected! }
+                                    }
+                            }
+                    }
+            }
             logical.kind == 64 and logical.parent >= 0
                 and package.nodes[range.astStart + logical.parent].kind == 10
                 -> if {
