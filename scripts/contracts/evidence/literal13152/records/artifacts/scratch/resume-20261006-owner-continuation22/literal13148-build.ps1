@@ -1,0 +1,4 @@
+$ErrorActionPreference='Stop'
+$r=(Get-Location).Path
+$b=Join-Path $r 'artifacts/scratch/resume-20261006-owner-continuation22'
+& (Join-Path $r 'scripts/build-focused-selfhost-compiler.ps1') -SeedCompiler (Join-Path $b 'managed13056/compiler/Sollang.Compiler.exe') -OutputDirectory (Join-Path $b 'v13149/compiler-build01') -Optimization O1 -Jobs 4 -FormatCompiler (Join-Path $b 'v12432/compiler-build01/compiler.exe') -ReusableCompilerDirectories @((Join-Path $b 'v13072/compiler-build01')) -ManagedProofRecord @((Join-Path $b 'literal13140-preflight/result.json'),(Join-Path $b 'literal13147-managed/result.json'),(Join-Path $b 'literal13144-source/result.json')) -SlgEmissionProofRecord @((Join-Path $b 'literal13145-runtime/result.json')) -StdlibSourceProofRecord (Join-Path $b 'literal13142-stdlib/result.json')
