@@ -620,7 +620,22 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
 additionalParameterOrdinal functionIndex: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.ir[functionIndex].nextOperand -> findAdditionalParameterOrdinal(symbol, 1, context, state)
 }
+isLocalReadonlyReferenceName valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    valueIndex < 0 or valueIndex >= (context.ir -> len)
+        or ownerIndex < 0 or ownerIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[valueIndex] => value
+    value.kind != 5 or (value -> referenceValueTypeId(context, state)) < 0
+        or value.operand0 < 0 or value.operand0 >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[value.operand0] => binding
+    binding.kind == 17 and binding.flags != 1
+        and not (valueIndex -> isAwaitSourceNode(context))
+        and (value.operand0 -> asyncFrameBindingRoot(ownerIndex, context, state)) < 0
+}
 referenceParameterValueIsMaterialized valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    valueIndex -> isLocalReadonlyReferenceName(ownerIndex, context, state)
+        -> if { true -> return }
     false => materialized!
     valueIndex >= 0
         and ownerIndex >= 0

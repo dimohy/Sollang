@@ -3592,10 +3592,12 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
     argument.status == 0 and argument.expectedTypeId >= 0
         and argument.expectedTypeId < (resolved.types -> len)
         -> unless { valid -> return }
-    # A default input reads through a readonly reference. Keep this distinct
-    # from mutable and consuming inputs, which retain their ownership checks.
+    # An ordinary name reads one readonly reference layer. Field and call
+    # expressions retain their declared reference type, as in CSharp inference.
+    # Mutable and consuming inputs keep their existing ownership checks.
     resolved.types[argument.actualTypeId] => actualType
     actualType.kind == 8
+        and package.nodes[package.ranges[argument.sourceModule].astStart + argument.argumentAst].kind == 15
         and (resolved.types -> typeIds.functionArgumentCompatible(actualType.first, argument.expectedTypeId))
         and argument.targetSourceModule >= 0 and argument.targetSourceModule < (package.ranges -> len)
         and argument.parameterSymbol >= 0
@@ -3618,8 +3620,22 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
     argument.argumentAst => diagnosticAst!
     argument.parameterOrdinal == 0 and argument.callAst >= 0
         -> if { argument.callAst => diagnosticAst! }
+    # Runtime primary-input diagnostics use the intrinsic path directly;
+    # ordinary declarations retain the quoted function-name diagnostic.
+    1 => mismatchCode!
+    actualType.kind == 8 and argument.parameterOrdinal == 0
+        and argument.targetSourceModule >= libraryStart
+        and argument.targetSourceModule < libraryStart + libraryCount
+        -> if {
+            package.ranges[argument.targetSourceModule] => targetRange
+            package.symbols[targetRange.symbolStart + argument.functionSymbol] => target
+            target.flags / 128 % 2 == 1 and target.astNode >= 0 and target.astNode < targetRange.astCount
+                and package.nodes[targetRange.astStart + target.astNode].cstRuleId != grammar.ruleIdNativeFunctionDeclaration()
+                -> if { 8 => mismatchCode! }
+        }
+    mismatchCode! == 8 -> if { argument.argumentAst => diagnosticAst! }
     NumericCallArgumentDiagnostic {
-        code: 1
+        code: mismatchCode!
         sourceModule: argument.sourceModule
         argumentAst: diagnosticAst!
         callAst: argument.callAst

@@ -1,0 +1,3630 @@
+; sollang cpu contract cpu1-d-r1-a3fe-f0
+target triple = "x86_64-pc-windows-msvc"
+
+%sollang.text = type { ptr, i64 }
+%sollang.source_text = type { ptr, i64, ptr, i64 }
+%sollang.int_slice = type { ptr, i64 }
+%sollang.mutable_container = type { ptr, ptr, ptr }
+%sollang.dynamic_int_array = type { ptr, i64, i64 }
+%sollang.int_dictionary = type { ptr, i64, i64 }
+%sollang.read_int_result = type { i64, i32 }
+%sollang.file_int_result = type { i64, i32 }
+%sollang.file_count_result = type { i64, i32 }
+%sollang.file_handle_result = type { i64, i32 }
+%sollang.socket_result = type { i64, i32, i32 }
+%sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
+%sollang.environment_result = type { ptr, i64, i1, i1 }
+%sollang.process_result = type { i32, i32 }
+%sollang.process_poll_result = type { i32, i32 }
+%sollang.process_spawn_result = type { i64, i64, i32 }
+%sollang.process_capture_result = type { i32, ptr, i64, i64, i1, ptr, i64, i64, i1, i32 }
+%sollang.process_environment_result = type { ptr, i64, i64, i1 }
+%sollang.task = type { ptr, ptr }
+%sollang.stream = type { ptr, ptr, ptr }
+%sollang.event_stream = type { ptr, ptr, ptr }
+%sollang.dyn = type { ptr, ptr }
+%sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32, ptr, ptr }%sollang.directory_result = type { ptr, i64, i64, i32 }
+%sollang.directory_node = type { ptr, i64, i8, [7 x i8] }
+%sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }
+%sollang.path_absolute_result = type { ptr, i64, i32 }
+%sollang.struct.27 = type { i64 }
+%sollang.struct.29 = type { i64 }
+%sollang.struct.30 = type { i64 }
+%sollang.struct.31 = type { i64 }
+%sollang.struct.32 = type { %sollang.dynamic_int_array, %sollang.text, i1, %sollang.dynamic_int_array, i1, %sollang.enum.1583, %sollang.enum.1584, %sollang.enum.1584 }
+%sollang.struct.33 = type { %sollang.text, %sollang.text }
+%sollang.struct.34 = type { %sollang.dynamic_int_array, %sollang.enum.35 }
+%sollang.struct.37 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.39 = type { %sollang.struct.34, %sollang.enum.38 }
+%sollang.struct.43 = type { i32, i32 }
+%sollang.struct.44 = type { i32, i32, i32, i32, %sollang.enum.45 }
+%sollang.struct.1024 = type { %sollang.enum.1449 }
+%sollang.struct.1025 = type {  }
+%sollang.struct.1026 = type { i32, i1 }
+%sollang.struct.1027 = type { i32, i32 }
+%sollang.struct.1028 = type { %sollang.enum.1455, i64 }
+%sollang.struct.1029 = type { i32, i32, i32, i32, i32 }
+%sollang.struct.1030 = type { %sollang.struct.1029 }
+%sollang.struct.1031 = type { i32, i32, i32 }
+%sollang.struct.1032 = type { %sollang.struct.1029, %sollang.enum.1453, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i32, i32, %sollang.dynamic_int_array, i32, i32, i32, i32, %sollang.dynamic_int_array, i1, %sollang.struct.1031, i32, %sollang.struct.1184, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i32, i32, %sollang.dynamic_int_array, i32, i32, %sollang.dynamic_int_array, i32, i1, %sollang.struct.1028 }
+%sollang.struct.1033 = type { i32, i32, i32, i32, i32, i32, i32, i32 }
+%sollang.struct.1034 = type { %sollang.struct.1033, %sollang.enum.1454, i32, i32, i32, i32, i32, i32, %sollang.struct.1184, %sollang.dynamic_int_array }
+%sollang.struct.1035 = type { i32 }
+%sollang.struct.1036 = type { %sollang.text, %sollang.text, i32, i64, i32, i32 }
+%sollang.struct.1037 = type { i64, %sollang.enum.2153, %sollang.enum.1456, %sollang.enum.1457, %sollang.enum.2153, i64, %sollang.enum.2154 }
+%sollang.struct.1038 = type { i64, i64, i64, i1 }
+%sollang.struct.1039 = type { i64, i64, i64 }
+%sollang.struct.1040 = type { i64 }
+%sollang.struct.1041 = type { %sollang.struct.1040, %sollang.enum.1460 }
+%sollang.struct.1042 = type { %sollang.enum.1487, i64 }
+%sollang.struct.1043 = type { i32, i32, i32, i32, i32 }
+%sollang.struct.1044 = type { %sollang.struct.1043 }
+%sollang.struct.1045 = type { i32, i32, i32, i32, i32, i32, i1 }
+%sollang.struct.1046 = type { i32, i32, i32, i32, i32, i32, %sollang.enum.1486, %sollang.struct.1102, %sollang.struct.1060, %sollang.struct.1079, i32, i1, i32, i32, i32, %sollang.dynamic_int_array, i1, %sollang.struct.1042 }
+%sollang.struct.1047 = type { i32, i32 }
+%sollang.struct.1048 = type { i32, i32 }
+%sollang.struct.1049 = type { i32, i32 }
+%sollang.struct.1050 = type { i1, i64 }
+%sollang.struct.1051 = type { %sollang.enum.1464, i64 }
+%sollang.struct.1052 = type { i32, i32, i32 }
+%sollang.struct.1053 = type { %sollang.struct.1071, i32, i32, i32, i32 }
+%sollang.struct.1054 = type { %sollang.dynamic_int_array, %sollang.struct.1098 }
+%sollang.struct.1055 = type { %sollang.struct.1071, %sollang.struct.1106, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i32, %sollang.enum.1461, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, %sollang.enum.1461 }
+%sollang.struct.1056 = type { %sollang.dynamic_int_array }
+%sollang.struct.1057 = type { i32, %sollang.struct.1098 }
+%sollang.struct.1058 = type { %sollang.enum.1477, i64 }
+%sollang.struct.1059 = type { i32, i32, i32, i32, i32, i32 }
+%sollang.struct.1060 = type { %sollang.struct.1089, %sollang.struct.1082, %sollang.struct.1110, i32, i32, i32 }
+%sollang.struct.1061 = type { %sollang.enum.1465, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, %sollang.enum.1488, i32, i32 }
+%sollang.struct.1062 = type { i32, i32, i32, i32, i32, %sollang.enum.1488, i32, i32 }
+%sollang.struct.1063 = type { %sollang.struct.1089, i32, i32, %sollang.enum.1468, i32, i32, i32, i32, %sollang.enum.1467, %sollang.enum.1467 }
+%sollang.struct.1064 = type { %sollang.struct.1060, %sollang.struct.1063, %sollang.enum.1470, i32, %sollang.dynamic_int_array, i32, i32, %sollang.dynamic_int_array }
+%sollang.struct.1065 = type { %sollang.dynamic_int_array, i32, i32, i32, %sollang.dynamic_int_array, i32 }
+%sollang.struct.1066 = type { %sollang.struct.1065, %sollang.struct.1084, %sollang.enum.1472, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i32 }
+%sollang.struct.1067 = type { %sollang.dynamic_int_array, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i32 }
+%sollang.struct.1068 = type { %sollang.struct.1067, %sollang.struct.1112, %sollang.enum.1474, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array }
+%sollang.struct.1069 = type { i32, i32, %sollang.enum.1467, %sollang.enum.1467 }
+%sollang.struct.1070 = type { i32, i32, %sollang.struct.1098 }
+%sollang.struct.1071 = type { %sollang.dynamic_int_array, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.struct.1098 }
+%sollang.struct.1072 = type { i32, %sollang.struct.1098 }
+%sollang.struct.1073 = type { %sollang.struct.1069, %sollang.struct.1098 }
+%sollang.struct.1074 = type { %sollang.enum.1487, i64 }
+%sollang.struct.1075 = type { i32, i32, i32 }
+%sollang.struct.1076 = type { %sollang.struct.1064, %sollang.struct.1092 }
+%sollang.struct.1077 = type { %sollang.struct.1066, %sollang.struct.1092 }
+%sollang.struct.1078 = type { %sollang.struct.1068, %sollang.struct.1092 }
+%sollang.struct.1079 = type { %sollang.struct.1060, %sollang.struct.1075, i32, %sollang.dynamic_int_array, %sollang.enum.1478 }
+%sollang.struct.1080 = type { %sollang.enum.1485, i64 }
+%sollang.struct.1081 = type { i32, i32, i32 }
+%sollang.struct.1082 = type { %sollang.struct.1089, i32, i32 }
+%sollang.struct.1083 = type { %sollang.dynamic_int_array, i32, %sollang.struct.1098 }
+%sollang.struct.1084 = type { %sollang.struct.1089, i32, i32, i32, %sollang.enum.1481, i32, i32, i32, %sollang.dynamic_int_array, %sollang.enum.1482 }
+%sollang.struct.1085 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1086 = type { i32, %sollang.struct.1098 }
+%sollang.struct.1087 = type { %sollang.enum.1494, i64 }
+%sollang.struct.1088 = type { i32, i32 }
+%sollang.struct.1089 = type { %sollang.struct.1096, i32 }
+%sollang.struct.1090 = type { %sollang.struct.1097, %sollang.struct.1098 }
+%sollang.struct.1091 = type { %sollang.enum.1489, i32 }
+%sollang.struct.1092 = type { %sollang.struct.1096, i32, i32, i32, %sollang.enum.1491, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.struct.1091, %sollang.dynamic_int_array, i32, i32, i32, %sollang.enum.1492, i32, i32, i32, i32, i32, i32, %sollang.enum.1492 }
+%sollang.struct.1093 = type { i32, %sollang.struct.1098 }
+%sollang.struct.1094 = type { %sollang.enum.1497, i64 }
+%sollang.struct.1095 = type { i32, i32 }
+%sollang.struct.1096 = type { i32, i32 }
+%sollang.struct.1097 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1098 = type { i32, i32 }
+%sollang.struct.1099 = type { i32, %sollang.struct.1098 }
+%sollang.struct.1100 = type { i32, i32 }
+%sollang.struct.1101 = type { i32 }
+%sollang.struct.1102 = type { i64, i32, i32 }
+%sollang.struct.1103 = type { i32, i32 }
+%sollang.struct.1104 = type { %sollang.enum.1499, i64 }
+%sollang.struct.1105 = type { i32 }
+%sollang.struct.1106 = type { i32 }
+%sollang.struct.1107 = type { i32, %sollang.enum.1498, i32 }
+%sollang.struct.1108 = type { %sollang.enum.1501, i64 }
+%sollang.struct.1109 = type { i32, i32, i32, i32 }
+%sollang.struct.1110 = type { %sollang.struct.1089, i32, i32, i32 }
+%sollang.struct.1111 = type { %sollang.dynamic_int_array, %sollang.struct.1098 }
+%sollang.struct.1112 = type { %sollang.struct.1089, i32, i32, i32, i32, i32, i32, i32, i32, %sollang.dynamic_int_array }
+%sollang.struct.1113 = type { %sollang.dynamic_int_array }
+%sollang.struct.1114 = type { %sollang.enum.1503, i64 }
+%sollang.struct.1115 = type { i32, i32 }
+%sollang.struct.1116 = type { %sollang.struct.1115 }
+%sollang.struct.1117 = type { i32, i32 }
+%sollang.struct.1118 = type { i32, i32, i32, i32, i1, i1, %sollang.struct.1124 }
+%sollang.struct.1119 = type { %sollang.struct.1116, i32, i32, i32, i32, i32, i32, %sollang.enum.1502, i32, i32, i32, i32, i32, i32, i32, i1, i32, i32, i32, i32, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.struct.1129, %sollang.struct.1129, %sollang.struct.1129, i32, i32, i32, i32, i32, i32, i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32, i1, %sollang.struct.1114, i1, i1 }
+%sollang.struct.1120 = type { %sollang.struct.1119 }
+%sollang.struct.1121 = type { i32, i32, i32 }
+%sollang.struct.1122 = type { i32, i32, i32, i32 }
+%sollang.struct.1123 = type { i32, i32 }
+%sollang.struct.1124 = type { i32, i32 }
+%sollang.struct.1125 = type { i32, i32 }
+%sollang.struct.1126 = type { i32, i32, i32 }
+%sollang.struct.1127 = type { i32, i32, i32 }
+%sollang.struct.1128 = type { i32, i32 }
+%sollang.struct.1129 = type { %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32 }
+%sollang.struct.1130 = type { %sollang.struct.1129, %sollang.struct.1129 }
+%sollang.struct.1131 = type { %sollang.struct.1123, i32, %sollang.dynamic_int_array }
+%sollang.struct.1132 = type { i32, %sollang.dynamic_int_array }
+%sollang.struct.1133 = type { i32 }
+%sollang.struct.1134 = type { i32 }
+%sollang.struct.1135 = type { i1, i32 }
+%sollang.struct.1136 = type { i1, i32 }
+%sollang.struct.1137 = type { i1, i32 }
+%sollang.struct.1138 = type { %sollang.enum.1505, i64 }
+%sollang.struct.1139 = type { %sollang.dynamic_int_array, %sollang.struct.1149, i1, %sollang.struct.1145, %sollang.struct.1145, %sollang.struct.1145, i1, i1, i1, i32, i32, i32 }
+%sollang.struct.1140 = type { i32, i32, i32, i32, i32 }
+%sollang.struct.1141 = type { i1 }
+%sollang.struct.1142 = type { %sollang.struct.1140, %sollang.struct.1141 }
+%sollang.struct.1143 = type { i32, i32, i32, i32, i1, i1, %sollang.struct.1186 }
+%sollang.struct.1144 = type { i32, i32, i32, i32, i32, i32, i32, i32, %sollang.enum.1504, i64, i32, i32, i32, i32, i32, i1, i64, i1, %sollang.struct.1186, i32, i32, i32, i32, i1, %sollang.dynamic_int_array, %sollang.struct.1149, i1, %sollang.struct.1145, %sollang.struct.1145, %sollang.struct.1145, i1, i1, i1, i32, i32, i32, %sollang.dynamic_int_array, i1, %sollang.struct.1138 }
+%sollang.struct.1145 = type { %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i32 }
+%sollang.struct.1146 = type { %sollang.struct.1145, i32 }
+%sollang.struct.1147 = type { i32 }
+%sollang.struct.1148 = type { i32, i32, i32 }
+%sollang.struct.1149 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1150 = type { %sollang.struct.1149, i32 }
+%sollang.struct.1151 = type { i32, i32 }
+%sollang.struct.1152 = type { %sollang.struct.1145, %sollang.struct.1145, %sollang.struct.1145, i1, i1, i1, i32, i32, i32, i32 }
+%sollang.struct.1153 = type { i32, i32, i32 }
+%sollang.struct.1154 = type { %sollang.dynamic_int_array, %sollang.struct.1145, %sollang.struct.1145, %sollang.struct.1145, i1, i1, i1, i32, i32, i32 }
+%sollang.struct.1155 = type { %sollang.dynamic_int_array }
+%sollang.struct.1156 = type { %sollang.int_slice }
+%sollang.struct.1157 = type { %sollang.dynamic_int_array, %sollang.int_slice }
+%sollang.struct.1158 = type { %sollang.struct.1155, %sollang.int_slice }
+%sollang.struct.1159 = type { %sollang.int_slice }
+%sollang.struct.1160 = type { %sollang.enum.1511 }
+%sollang.struct.1161 = type { %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1162 = type { %sollang.struct.1164, %sollang.struct.1164 }
+%sollang.struct.1163 = type { i8 }
+%sollang.struct.1164 = type { %sollang.int_slice, %sollang.int_slice, i32, i64 }
+%sollang.struct.1165 = type { %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1166 = type { %sollang.int_slice, %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1167 = type { %sollang.int_slice, %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1168 = type { %sollang.enum.1513, i64 }
+%sollang.struct.1169 = type { i32, i32 }
+%sollang.struct.1170 = type { i32, i32 }
+%sollang.struct.1171 = type { %sollang.enum.1514, %sollang.enum.1515 }
+%sollang.struct.1172 = type { %sollang.struct.1171, i32, i32, i64, i8, i8, i32 }
+%sollang.struct.1173 = type { %sollang.struct.1171, i32, i32, i64, i32, i32, i32, i32, i64, i64, i64, i64, i32, i1 }
+%sollang.struct.1174 = type { i32, i32, i64, i32, i32, i32, i32, i64, i64, i64, i64, i32, i1 }
+%sollang.struct.1175 = type { %sollang.enum.1517, i64 }
+%sollang.struct.1176 = type { %sollang.enum.1516, i64 }
+%sollang.struct.1177 = type { %sollang.enum.1516, i32, i32 }
+%sollang.struct.1178 = type { %sollang.enum.1518, i64 }
+%sollang.struct.1179 = type { i32, i32 }
+%sollang.struct.1180 = type { i32, i32 }
+%sollang.struct.1181 = type { i1 }
+%sollang.struct.1182 = type { %sollang.struct.1181, i32, i32, i64 }
+%sollang.struct.1183 = type { i32, i32, i64, i32, i64 }
+%sollang.struct.1184 = type { %sollang.enum.1519, i32 }
+%sollang.struct.1185 = type { i64 }
+%sollang.struct.1186 = type { i64, i64, i64, i64, i64, i64, i64, %sollang.int_slice, i32 }
+%sollang.struct.1187 = type { %sollang.enum.1520, i64 }
+%sollang.struct.1188 = type { i32, %sollang.enum.1522 }
+%sollang.struct.1189 = type { i32, i32 }
+%sollang.struct.1190 = type { %sollang.dynamic_int_array, i32, %sollang.dynamic_int_array, i32, i32 }
+%sollang.struct.1191 = type { %sollang.dynamic_int_array, i32, i32 }
+%sollang.struct.1192 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1193 = type { i1 }
+%sollang.struct.1194 = type { %sollang.struct.1191, %sollang.dynamic_int_array, i32, i1 }
+%sollang.struct.1195 = type { %sollang.struct.1191, %sollang.dynamic_int_array, %sollang.enum.1523 }
+%sollang.struct.1196 = type { %sollang.struct.1192, %sollang.dynamic_int_array, i32 }
+%sollang.struct.1197 = type { %sollang.struct.1192, %sollang.dynamic_int_array, %sollang.enum.1523 }
+%sollang.struct.1198 = type { %sollang.dynamic_int_array, i32, i32, i32, i1 }
+%sollang.struct.1199 = type { %sollang.struct.1198, %sollang.dynamic_int_array, i32, i1 }
+%sollang.struct.1200 = type { %sollang.struct.1198, %sollang.dynamic_int_array, %sollang.enum.1523 }
+%sollang.struct.1201 = type { %sollang.struct.1198, %sollang.dynamic_int_array, i32, i1 }
+%sollang.struct.1202 = type { %sollang.struct.1198, %sollang.dynamic_int_array, %sollang.enum.1523 }
+%sollang.struct.1203 = type { %sollang.struct.29, i64 }
+%sollang.struct.1204 = type { %sollang.struct.30, i64 }
+%sollang.struct.1205 = type { %sollang.struct.1203, %sollang.dynamic_int_array, i32, i1 }
+%sollang.struct.1206 = type { %sollang.struct.1203, %sollang.dynamic_int_array, %sollang.enum.1581 }
+%sollang.struct.1207 = type { %sollang.struct.1204, %sollang.dynamic_int_array, i32 }
+%sollang.struct.1208 = type { %sollang.struct.1204, %sollang.dynamic_int_array, %sollang.enum.1581 }
+%sollang.struct.1209 = type { %sollang.struct.1362, i64 }
+%sollang.struct.1210 = type { %sollang.struct.1355, %sollang.struct.1373 }
+%sollang.struct.1211 = type { %sollang.struct.1209, %sollang.dynamic_int_array, i64, i1 }
+%sollang.struct.1212 = type { %sollang.struct.1209, %sollang.dynamic_int_array, %sollang.struct.1373 }
+%sollang.struct.1213 = type { %sollang.struct.1209, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1214 = type { %sollang.struct.1209, %sollang.dynamic_int_array, %sollang.struct.1373 }
+%sollang.struct.1215 = type { %sollang.text, %sollang.text }
+%sollang.struct.1216 = type { %sollang.text }
+%sollang.struct.1217 = type { %sollang.enum.1524, %sollang.text }
+%sollang.struct.1218 = type { %sollang.enum.1524 }
+%sollang.struct.1219 = type { i8, i8, i8, i8 }
+%sollang.struct.1220 = type { %sollang.struct.1219, i16 }
+%sollang.struct.1221 = type { i16, i16, i16, i16, i16, i16, i16, i16 }
+%sollang.struct.1222 = type { %sollang.struct.1221, i16, i32, i32 }
+%sollang.struct.1223 = type { %sollang.enum.1543, i64 }
+%sollang.struct.1224 = type { %sollang.enum.1528, i32 }
+%sollang.struct.1225 = type { %sollang.enum.1527, i64, i64 }
+%sollang.struct.1226 = type { %sollang.enum.1535, i64 }
+%sollang.struct.1227 = type { i32, i32, i32, i32, i32 }
+%sollang.struct.1228 = type { i64, i64 }
+%sollang.struct.1229 = type { %sollang.struct.1228, %sollang.struct.1228 }
+%sollang.struct.1230 = type { %sollang.struct.1227 }
+%sollang.struct.1231 = type { %sollang.source_text, %sollang.struct.1228, %sollang.struct.1228, %sollang.enum.1529, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1232 = type { %sollang.source_text, %sollang.enum.1529, i32, %sollang.struct.1228, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1233 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1234 = type { i32, i32, i32, i32, i32 }
+%sollang.struct.1235 = type { %sollang.struct.1234 }
+%sollang.struct.1236 = type { %sollang.struct.1235, %sollang.text }
+%sollang.struct.1237 = type { %sollang.enum.1530, %sollang.struct.1234 }
+%sollang.struct.1238 = type { i64, i64, i1 }
+%sollang.struct.1239 = type { %sollang.struct.1234, %sollang.enum.1531, %sollang.enum.1532, i64, i64, i64, i64, %sollang.dynamic_int_array, i1, i64, i32 }
+%sollang.struct.1240 = type { i1, i64, i1, i1 }
+%sollang.struct.1241 = type { %sollang.enum.1526, %sollang.struct.1230, %sollang.struct.1235, i32, i32 }
+%sollang.struct.1242 = type { %sollang.struct.1355, %sollang.struct.1230, %sollang.struct.1235, i32, i32 }
+%sollang.struct.1243 = type { %sollang.struct.1355, %sollang.struct.1230, %sollang.struct.1235, i32, i32, %sollang.enum.1538, %sollang.enum.1537 }
+%sollang.struct.1244 = type { %sollang.struct.1355, %sollang.struct.1230, %sollang.struct.1235, i32, i32, %sollang.enum.1538, %sollang.enum.1537, %sollang.dynamic_int_array, %sollang.struct.1232, i64 }
+%sollang.struct.1245 = type { %sollang.struct.1355, %sollang.struct.1230, %sollang.struct.1235, i32, i32, %sollang.dynamic_int_array, i64, %sollang.dynamic_int_array, i64, %sollang.struct.1239, i1, i1, i1 }
+%sollang.struct.1246 = type { i32, i32, i32, i32 }
+%sollang.struct.1247 = type { %sollang.struct.1246 }
+%sollang.struct.1248 = type { %sollang.struct.1246, %sollang.dynamic_int_array, %sollang.text, i32, i32, i1, i1, i1, i64, %sollang.enum.1537, %sollang.enum.1538 }
+%sollang.struct.1249 = type { %sollang.dynamic_int_array, i64, %sollang.enum.1537, %sollang.enum.1538 }
+%sollang.struct.1250 = type { i32, i32, i32, i32 }
+%sollang.struct.1251 = type { %sollang.struct.1250 }
+%sollang.struct.1252 = type { %sollang.struct.1250, %sollang.dynamic_int_array, i32, i32, i1, i1, i1, i64, %sollang.enum.1540 }
+%sollang.struct.1253 = type { %sollang.dynamic_int_array, i64, %sollang.enum.1540, %sollang.enum.1539 }
+%sollang.struct.1254 = type { %sollang.struct.1352, %sollang.struct.1227 }
+%sollang.struct.1255 = type { %sollang.struct.1354, %sollang.struct.1230, i32 }
+%sollang.struct.1256 = type { %sollang.struct.1355, %sollang.struct.1230, i32, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1257 = type { %sollang.struct.1355, %sollang.struct.1230, i32, %sollang.dynamic_int_array, %sollang.struct.1231, i64, %sollang.dynamic_int_array, i64, i1 }
+%sollang.struct.1258 = type { %sollang.struct.1355, %sollang.struct.1230, i32, %sollang.dynamic_int_array, %sollang.struct.1231, i64, %sollang.dynamic_int_array, i64, %sollang.struct.1239 }
+%sollang.struct.1259 = type { %sollang.enum.1544, i64 }
+%sollang.struct.1260 = type { %sollang.int_slice }
+%sollang.struct.1261 = type { %sollang.struct.1356, %sollang.enum.1526, i1, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1262 = type { i64, i64, i64, i64 }
+%sollang.struct.1263 = type { i64, i64, i32, i32, i32, i64, %sollang.struct.1262 }
+%sollang.struct.1264 = type { %sollang.struct.1260, %sollang.enum.1526, %sollang.struct.1263, i1 }
+%sollang.struct.1265 = type { %sollang.dynamic_int_array, %sollang.enum.1526, %sollang.enum.1526, i1, i32, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.struct.1275, %sollang.struct.1275, i64, i64, i1, %sollang.int_slice, %sollang.dynamic_int_array, %sollang.int_slice, %sollang.dynamic_int_array, i1, i1, %sollang.dynamic_int_array, %sollang.struct.1328, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i64, i32, i64, i1, i1, %sollang.struct.1321, %sollang.struct.1303, %sollang.struct.1304, %sollang.struct.1332, %sollang.struct.1334, i64, i64, i64, i64, i64, i64, i8, i64, i64 }
+%sollang.struct.1266 = type { %sollang.struct.1331, i1, i1, i64 }
+%sollang.struct.1267 = type { %sollang.struct.1330, i1, i1, i64, i1, i64 }
+%sollang.struct.1268 = type { i64, %sollang.struct.1266, %sollang.struct.1267 }
+%sollang.struct.1269 = type { i64, %sollang.struct.1266 }
+%sollang.struct.1270 = type { i64, %sollang.struct.1267 }
+%sollang.struct.1271 = type { i64, i64 }
+%sollang.struct.1272 = type { i64, i8 }
+%sollang.struct.1273 = type { i64, i64, i64, i64, i64, i64, i64, i8, i64, i64 }
+%sollang.struct.1274 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1275 = type { i1, i32, %sollang.int_slice, %sollang.struct.1345 }
+%sollang.struct.1276 = type { i64, i1, %sollang.enum.1545 }
+%sollang.struct.1277 = type { i64, i1, %sollang.dynamic_int_array }
+%sollang.struct.1278 = type { i1, i1, i1, %sollang.struct.1332, %sollang.struct.1333 }
+%sollang.struct.1279 = type { i64, i8 }
+%sollang.struct.1280 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1281 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1282 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1283 = type { i64, %sollang.dynamic_int_array }
+%sollang.struct.1284 = type { %sollang.enum.1544, i64 }
+%sollang.struct.1285 = type { i64, %sollang.dynamic_int_array }
+%sollang.struct.1286 = type { i64, i64, i1, %sollang.dynamic_int_array }
+%sollang.struct.1287 = type { i64, i64, i64 }
+%sollang.struct.1288 = type { i64, i64 }
+%sollang.struct.1289 = type { %sollang.dynamic_int_array }
+%sollang.struct.1290 = type { i64, i64 }
+%sollang.struct.1291 = type { i1, i64 }
+%sollang.struct.1292 = type { i64, i64 }
+%sollang.struct.1293 = type { i1, i64 }
+%sollang.struct.1294 = type { i1, i64, i64, %sollang.dynamic_int_array }
+%sollang.struct.1295 = type { i64, i64, %sollang.dynamic_int_array, %sollang.int_slice }
+%sollang.struct.1296 = type { i64, i64 }
+%sollang.struct.1297 = type { i64, i64, i64, %sollang.dynamic_int_array }
+%sollang.struct.1298 = type { %sollang.enum.1545, i64 }
+%sollang.struct.1299 = type { i32, i64, i64, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1300 = type { i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i64, %sollang.dynamic_int_array }
+%sollang.struct.1301 = type { %sollang.dynamic_int_array, i64, %sollang.dynamic_int_array }
+%sollang.struct.1302 = type { %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1303 = type { i1, i64, i64, i64, i64 }
+%sollang.struct.1304 = type { i64, i64, i64, i64, i1 }
+%sollang.struct.1305 = type { %sollang.int_slice }
+%sollang.struct.1306 = type { %sollang.struct.1260, %sollang.int_slice, %sollang.struct.1305 }
+%sollang.struct.1307 = type { %sollang.struct.1305, %sollang.int_slice, %sollang.struct.1220, i64, %sollang.dynamic_int_array, %sollang.int_slice }
+%sollang.struct.1308 = type { %sollang.struct.1265, %sollang.struct.1268, %sollang.struct.1305 }
+%sollang.struct.1309 = type { %sollang.dynamic_int_array }
+%sollang.struct.1310 = type { %sollang.struct.1305, %sollang.struct.1268 }
+%sollang.struct.1311 = type { i32, i64, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1312 = type { i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i64, i64 }
+%sollang.struct.1313 = type { i32, i64, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1314 = type { i32, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i64, i64 }
+%sollang.struct.1315 = type { i1, i64, %sollang.dynamic_int_array }
+%sollang.struct.1316 = type { i8, i64, %sollang.dynamic_int_array }
+%sollang.struct.1317 = type { %sollang.struct.1326, %sollang.struct.1325 }
+%sollang.struct.1318 = type { i32, i64 }
+%sollang.struct.1319 = type { i64, i64, i64, i1, i1 }
+%sollang.struct.1320 = type { %sollang.struct.1303, %sollang.struct.1304, i64, i64, i64, i64 }
+%sollang.struct.1321 = type { %sollang.dynamic_int_array }
+%sollang.struct.1322 = type { %sollang.int_slice }
+%sollang.struct.1323 = type { %sollang.int_slice }
+%sollang.struct.1324 = type { %sollang.int_slice, %sollang.int_slice }
+%sollang.struct.1325 = type { %sollang.struct.1155 }
+%sollang.struct.1326 = type { %sollang.struct.1158, %sollang.int_slice }
+%sollang.struct.1327 = type { %sollang.struct.1330, i64 }
+%sollang.struct.1328 = type { %sollang.dynamic_int_array, i64 }
+%sollang.struct.1329 = type { i64, i64, %sollang.enum.1546, %sollang.enum.1547 }
+%sollang.struct.1330 = type { i64, i64, i64, i1, i64 }
+%sollang.struct.1331 = type { i64, i64, i1, i64 }
+%sollang.struct.1332 = type { i64, i64, i64, i64, i64 }
+%sollang.struct.1333 = type { i64, i64 }
+%sollang.struct.1334 = type { i1, i64, i64, i1, i1, i64, i64, i64, i64, i64, i64, i32, %sollang.dynamic_int_array, i32, i32, i32, i32, %sollang.dynamic_int_array, i32, i32, i32 }
+%sollang.struct.1335 = type { %sollang.dynamic_int_array }
+%sollang.struct.1336 = type { i16, %sollang.dynamic_int_array }
+%sollang.struct.1337 = type { %sollang.enum.1548, %sollang.struct.1344, %sollang.int_slice }
+%sollang.struct.1338 = type { i8, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1339 = type { i16, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1340 = type { %sollang.int_slice, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.int_slice, %sollang.dynamic_int_array }
+%sollang.struct.1341 = type { %sollang.int_slice, %sollang.dynamic_int_array, %sollang.int_slice }
+%sollang.struct.1342 = type { %sollang.dynamic_int_array, %sollang.dynamic_int_array }
+%sollang.struct.1343 = type { %sollang.enum.1549, %sollang.struct.1344 }
+%sollang.struct.1344 = type { %sollang.dynamic_int_array }
+%sollang.struct.1345 = type { %sollang.struct.1317 }
+%sollang.struct.1346 = type { i64, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1347 = type { i64 }
+%sollang.struct.1348 = type { i64, i64 }
+%sollang.struct.1349 = type { i32, %sollang.dynamic_int_array }
+%sollang.struct.1350 = type { %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array }
+%sollang.struct.1351 = type { i8, i64, i64, i64 }
+%sollang.struct.1352 = type { %sollang.enum.1526, i32, i1 }
+%sollang.struct.1353 = type { %sollang.enum.1526, i1 }
+%sollang.struct.1354 = type { i64 }
+%sollang.struct.1355 = type { i64 }
+%sollang.struct.1356 = type { i64 }
+%sollang.struct.1357 = type { ptr, i64, i64 }
+%sollang.struct.1358 = type { %sollang.dynamic_int_array }
+%sollang.struct.1359 = type { i64, %sollang.enum.1553, %sollang.enum.1552 }
+%sollang.struct.1360 = type { i64, i1, i1, i1 }
+%sollang.struct.1361 = type { i64, i64, i64 }
+%sollang.struct.1362 = type { i64 }
+%sollang.struct.1363 = type { i64, %sollang.enum.1554, %sollang.dynamic_int_array, i64, i64, %sollang.enum.1555, %sollang.enum.2178, %sollang.enum.2179, %sollang.enum.2153 }
+%sollang.struct.1364 = type { %sollang.struct.1362, %sollang.struct.1355, %sollang.struct.1373 }
+%sollang.struct.1365 = type { %sollang.struct.1362, %sollang.struct.1355 }
+%sollang.struct.1366 = type { %sollang.struct.1362, %sollang.struct.1373 }
+%sollang.struct.1367 = type { %sollang.struct.1362, %sollang.struct.1363 }
+%sollang.struct.1368 = type { %sollang.struct.1362, %sollang.struct.1363, %sollang.struct.1373 }
+%sollang.struct.1369 = type { %sollang.struct.1363, %sollang.struct.1373 }
+%sollang.struct.1370 = type { i64, %sollang.dynamic_int_array }
+%sollang.struct.1371 = type { %sollang.enum.1526, %sollang.dynamic_int_array, i1 }
+%sollang.struct.1372 = type { %sollang.enum.1526, i64, i1 }
+%sollang.struct.1373 = type { %sollang.enum.1558, i32 }
+%sollang.struct.1374 = type { %sollang.enum.1560, i64 }
+%sollang.struct.1375 = type { i32, i32, i32 }
+%sollang.struct.1376 = type { %sollang.enum.1559, i64, i64 }
+%sollang.struct.1377 = type { %sollang.enum.1559, i64, i1 }
+%sollang.struct.1378 = type { %sollang.source_text, i64, i64, i32, i1, %sollang.struct.1375, %sollang.struct.1377 }
+%sollang.struct.1379 = type { %sollang.enum.1562, i64, i32 }
+%sollang.struct.1380 = type { i32, i32, i32, i32 }
+%sollang.struct.1381 = type { i32, i32, i32, i32 }
+%sollang.struct.1382 = type { %sollang.enum.1561, i32 }
+%sollang.struct.1383 = type { i32, i32, i32, i1 }
+%sollang.struct.1384 = type { %sollang.source_text, i64, i64, i32, i32, i1, %sollang.struct.1382, %sollang.struct.1380 }
+%sollang.struct.1385 = type { %sollang.struct.1381, i32, i32, i32, i32 }
+%sollang.struct.1386 = type { i64, i64, i64, i32, i1, i1 }
+%sollang.struct.1387 = type { i32, i32, i32 }
+%sollang.struct.1388 = type { %sollang.enum.1563, i64, i64 }
+%sollang.struct.1389 = type { %sollang.source_text, i64, i32, i32 }
+%sollang.struct.1390 = type { %sollang.enum.1566, i64 }
+%sollang.struct.1391 = type { i32, i32, i32, i32 }
+%sollang.struct.1392 = type { %sollang.enum.1564, i64, i64, i64, i64, i32, i32 }
+%sollang.struct.1393 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1394 = type { %sollang.enum.1565, i64, i64, i1, %sollang.dynamic_int_array, %sollang.dynamic_int_array, %sollang.dynamic_int_array }
+%sollang.struct.1395 = type { %sollang.dynamic_int_array, i32 }
+%sollang.struct.1396 = type { %sollang.source_text, i64, i64, i8, i32, %sollang.struct.1391, %sollang.dynamic_int_array }
+%sollang.struct.1397 = type { %sollang.dynamic_int_array, i32, i32, i32, i8, %sollang.dynamic_int_array }
+%sollang.struct.1398 = type { i64, i64, i32 }
+%sollang.struct.1399 = type { i32, i32, i32, i32 }
+%sollang.struct.1400 = type { %sollang.enum.1567, i64, i64, i64 }
+%sollang.struct.1401 = type { i64, i64 }
+%sollang.struct.1402 = type { %sollang.source_text, i64, i64, i32, i32, i1, i1, i32, i32 }
+%sollang.struct.1403 = type { %sollang.enum.1568, i64, i64, i64, i1, %sollang.enum.1569, i64 }
+%sollang.struct.1404 = type { i8, i64 }
+%sollang.struct.1405 = type { i32 }
+%sollang.struct.1406 = type { i64, i64 }
+%sollang.struct.1407 = type { i64 }
+%sollang.struct.1408 = type { i64, i64, i64 }
+%sollang.struct.1409 = type { i8 }
+%sollang.struct.1410 = type { i8 }
+%sollang.struct.1411 = type { i64, i64 }
+%sollang.struct.1412 = type { i64 }
+%sollang.struct.1413 = type { %sollang.struct.1406 }
+%sollang.struct.1414 = type { %sollang.struct.1407 }
+%sollang.struct.1415 = type { i64 }
+%sollang.struct.1416 = type { %sollang.struct.27, %sollang.enum.1570, %sollang.struct.27 }
+%sollang.struct.1417 = type { %sollang.dynamic_int_array, %sollang.struct.27, i64, %sollang.enum.1571 }
+%sollang.struct.1418 = type { %sollang.struct.1417, %sollang.struct.1406, %sollang.struct.1406, i64 }
+%sollang.struct.1419 = type { %sollang.enum.1572 }
+%sollang.struct.1420 = type { %sollang.enum.1576, i64 }
+%sollang.struct.1421 = type { i64, i64, i1 }
+%sollang.struct.1422 = type { %sollang.struct.1421, %sollang.enum.1573, %sollang.enum.1574, %sollang.struct.1421 }
+%sollang.struct.1423 = type { %sollang.source_text, %sollang.struct.1421, %sollang.enum.1575, %sollang.struct.1421, %sollang.struct.1421, %sollang.struct.1421 }
+%sollang.struct.1424 = type { i1, i1, i1, i1, i1 }
+%sollang.struct.1425 = type { %sollang.enum.1577, i64 }
+%sollang.struct.1426 = type { i32, i32 }
+%sollang.struct.1427 = type { %sollang.enum.1578 }
+%sollang.struct.1428 = type { %sollang.enum.1580, i64 }
+%sollang.struct.1429 = type { %sollang.int_slice }
+%sollang.struct.1430 = type { i8 }
+%sollang.struct.1431 = type { %sollang.struct.1410, %sollang.struct.1163 }
+%sollang.struct.1432 = type { %sollang.struct.29, %sollang.dynamic_int_array, i64, i1 }
+%sollang.struct.1433 = type { %sollang.struct.29, %sollang.dynamic_int_array, %sollang.enum.1581 }
+%sollang.struct.1434 = type { %sollang.struct.30, %sollang.dynamic_int_array, i64 }
+%sollang.struct.1435 = type { %sollang.struct.30, %sollang.dynamic_int_array, %sollang.enum.1581 }
+%sollang.struct.1436 = type { %sollang.enum.1582, i32 }
+%sollang.struct.1437 = type { i32, %sollang.enum.46 }
+%sollang.struct.1438 = type { %sollang.dynamic_int_array, i8, i64, i64 }
+%sollang.struct.1439 = type { %sollang.struct.34, %sollang.enum.38, i64, i64 }
+%sollang.struct.1440 = type { %sollang.text, %sollang.text, i1 }
+%sollang.struct.1441 = type { i64, i64 }
+%sollang.struct.1442 = type { %sollang.struct.1443, %sollang.dynamic_int_array, %sollang.dynamic_int_array, i1, i1 }
+%sollang.struct.1443 = type { i32 }
+%sollang.struct.1444 = type { i32 }
+%sollang.struct.1445 = type { i64 }
+%sollang.struct.1446 = type { i64, %sollang.struct.1445, i32, i32 }
+%sollang.struct.1447 = type { i32, i32 }
+%sollang.struct.1448 = type { ptr }
+%sollang.enum.35 = type { i32, [0 x i64] }
+%sollang.enum.38 = type { i32, [0 x i64] }
+%sollang.enum.41 = type { i32, [4 x i64] }
+%sollang.enum.42 = type { i32, [3 x i64] }
+%sollang.enum.45 = type { i32, [0 x i64] }
+%sollang.enum.46 = type { i32, [0 x i64] }
+%sollang.enum.1449 = type { i32, [0 x i64] }
+%sollang.enum.1450 = type { i32, [0 x i64] }
+%sollang.enum.1451 = type { i32, [0 x i64] }
+%sollang.enum.1452 = type { i32, [0 x i64] }
+%sollang.enum.1453 = type { i32, [0 x i64] }
+%sollang.enum.1454 = type { i32, [0 x i64] }
+%sollang.enum.1455 = type { i32, [0 x i64] }
+%sollang.enum.1456 = type { i32, [0 x i64] }
+%sollang.enum.1457 = type { i32, [0 x i64] }
+%sollang.enum.1458 = type { i32, [0 x i64] }
+%sollang.enum.1459 = type { i32, [0 x i64] }
+%sollang.enum.1460 = type { i32, [0 x i64] }
+%sollang.enum.1461 = type { i32, [0 x i64] }
+%sollang.enum.1462 = type { i32, [1 x i64] }
+%sollang.enum.1463 = type { i32, [1 x i64] }
+%sollang.enum.1464 = type { i32, [0 x i64] }
+%sollang.enum.1465 = type { i32, [0 x i64] }
+%sollang.enum.1466 = type { i32, [5 x i64] }
+%sollang.enum.1467 = type { i32, [4 x i64] }
+%sollang.enum.1468 = type { i32, [0 x i64] }
+%sollang.enum.1469 = type { i32, [1 x i64] }
+%sollang.enum.1470 = type { i32, [0 x i64] }
+%sollang.enum.1471 = type { i32, [1 x i64] }
+%sollang.enum.1472 = type { i32, [0 x i64] }
+%sollang.enum.1473 = type { i32, [1 x i64] }
+%sollang.enum.1474 = type { i32, [0 x i64] }
+%sollang.enum.1475 = type { i32, [1 x i64] }
+%sollang.enum.1476 = type { i32, [1 x i64] }
+%sollang.enum.1477 = type { i32, [0 x i64] }
+%sollang.enum.1478 = type { i32, [66 x i64] }
+%sollang.enum.1479 = type { i32, [1 x i64] }
+%sollang.enum.1480 = type { i32, [1 x i64] }
+%sollang.enum.1481 = type { i32, [0 x i64] }
+%sollang.enum.1482 = type { i32, [4 x i64] }
+%sollang.enum.1483 = type { i32, [1 x i64] }
+%sollang.enum.1484 = type { i32, [1 x i64] }
+%sollang.enum.1485 = type { i32, [0 x i64] }
+%sollang.enum.1486 = type { i32, [0 x i64] }
+%sollang.enum.1487 = type { i32, [0 x i64] }
+%sollang.enum.1488 = type { i32, [0 x i64] }
+%sollang.enum.1489 = type { i32, [0 x i64] }
+%sollang.enum.1490 = type { i32, [1 x i64] }
+%sollang.enum.1491 = type { i32, [0 x i64] }
+%sollang.enum.1492 = type { i32, [4 x i64] }
+%sollang.enum.1493 = type { i32, [1 x i64] }
+%sollang.enum.1494 = type { i32, [0 x i64] }
+%sollang.enum.1495 = type { i32, [1 x i64] }
+%sollang.enum.1496 = type { i32, [1 x i64] }
+%sollang.enum.1497 = type { i32, [0 x i64] }
+%sollang.enum.1498 = type { i32, [0 x i64] }
+%sollang.enum.1499 = type { i32, [0 x i64] }
+%sollang.enum.1500 = type { i32, [1 x i64] }
+%sollang.enum.1501 = type { i32, [0 x i64] }
+%sollang.enum.1502 = type { i32, [0 x i64] }
+%sollang.enum.1503 = type { i32, [0 x i64] }
+%sollang.enum.1504 = type { i32, [0 x i64] }
+%sollang.enum.1505 = type { i32, [0 x i64] }
+%sollang.enum.1506 = type { i32, [0 x i64] }
+%sollang.enum.1507 = type { i32, [0 x i64] }
+%sollang.enum.1508 = type { i32, [0 x i64] }
+%sollang.enum.1509 = type { i32, [0 x i64] }
+%sollang.enum.1510 = type { i32, [3 x i64] }
+%sollang.enum.1511 = type { i32, [0 x i64] }
+%sollang.enum.1512 = type { i32, [0 x i64] }
+%sollang.enum.1513 = type { i32, [0 x i64] }
+%sollang.enum.1514 = type { i32, [0 x i64] }
+%sollang.enum.1515 = type { i32, [0 x i64] }
+%sollang.enum.1516 = type { i32, [0 x i64] }
+%sollang.enum.1517 = type { i32, [0 x i64] }
+%sollang.enum.1518 = type { i32, [0 x i64] }
+%sollang.enum.1519 = type { i32, [0 x i64] }
+%sollang.enum.1520 = type { i32, [0 x i64] }
+%sollang.enum.1521 = type { i32, [3 x i64] }
+%sollang.enum.1522 = type { i32, [0 x i64] }
+%sollang.enum.1523 = type { i32, [2 x i64] }
+%sollang.enum.1524 = type { i32, [0 x i64] }
+%sollang.enum.1525 = type { i32, [2 x i64] }
+%sollang.enum.1526 = type { i32, [4 x i64] }
+%sollang.enum.1527 = type { i32, [0 x i64] }
+%sollang.enum.1528 = type { i32, [0 x i64] }
+%sollang.enum.1529 = type { i32, [0 x i64] }
+%sollang.enum.1530 = type { i32, [1 x i64] }
+%sollang.enum.1531 = type { i32, [0 x i64] }
+%sollang.enum.1532 = type { i32, [0 x i64] }
+%sollang.enum.1533 = type { i32, [2 x i64] }
+%sollang.enum.1534 = type { i32, [7 x i64] }
+%sollang.enum.1535 = type { i32, [0 x i64] }
+%sollang.enum.1536 = type { i32, [2 x i64] }
+%sollang.enum.1537 = type { i32, [0 x i64] }
+%sollang.enum.1538 = type { i32, [0 x i64] }
+%sollang.enum.1539 = type { i32, [0 x i64] }
+%sollang.enum.1540 = type { i32, [0 x i64] }
+%sollang.enum.1541 = type { i32, [2 x i64] }
+%sollang.enum.1542 = type { i32, [8 x i64] }
+%sollang.enum.1543 = type { i32, [0 x i64] }
+%sollang.enum.1544 = type { i32, [0 x i64] }
+%sollang.enum.1545 = type { i32, [7 x i64] }
+%sollang.enum.1546 = type { i32, [0 x i64] }
+%sollang.enum.1547 = type { i32, [0 x i64] }
+%sollang.enum.1548 = type { i32, [0 x i64] }
+%sollang.enum.1549 = type { i32, [0 x i64] }
+%sollang.enum.1550 = type { i32, [0 x i64] }
+%sollang.enum.1551 = type { i32, [0 x i64] }
+%sollang.enum.1552 = type { i32, [0 x i64] }
+%sollang.enum.1553 = type { i32, [1 x i64] }
+%sollang.enum.1554 = type { i32, [0 x i64] }
+%sollang.enum.1555 = type { i32, [0 x i64] }
+%sollang.enum.1556 = type { i32, [16 x i64] }
+%sollang.enum.1557 = type { i32, [16 x i64] }
+%sollang.enum.1558 = type { i32, [0 x i64] }
+%sollang.enum.1559 = type { i32, [0 x i64] }
+%sollang.enum.1560 = type { i32, [0 x i64] }
+%sollang.enum.1561 = type { i32, [0 x i64] }
+%sollang.enum.1562 = type { i32, [0 x i64] }
+%sollang.enum.1563 = type { i32, [0 x i64] }
+%sollang.enum.1564 = type { i32, [0 x i64] }
+%sollang.enum.1565 = type { i32, [0 x i64] }
+%sollang.enum.1566 = type { i32, [0 x i64] }
+%sollang.enum.1567 = type { i32, [0 x i64] }
+%sollang.enum.1568 = type { i32, [0 x i64] }
+%sollang.enum.1569 = type { i32, [0 x i64] }
+%sollang.enum.1570 = type { i32, [0 x i64] }
+%sollang.enum.1571 = type { i32, [0 x i64] }
+%sollang.enum.1572 = type { i32, [0 x i64] }
+%sollang.enum.1573 = type { i32, [3 x i64] }
+%sollang.enum.1574 = type { i32, [1 x i64] }
+%sollang.enum.1575 = type { i32, [12 x i64] }
+%sollang.enum.1576 = type { i32, [0 x i64] }
+%sollang.enum.1577 = type { i32, [0 x i64] }
+%sollang.enum.1578 = type { i32, [0 x i64] }
+%sollang.enum.1579 = type { i32, [0 x i64] }
+%sollang.enum.1580 = type { i32, [0 x i64] }
+%sollang.enum.1581 = type { i32, [2 x i64] }
+%sollang.enum.1582 = type { i32, [0 x i64] }
+%sollang.enum.1583 = type { i32, [2 x i64] }
+%sollang.enum.1584 = type { i32, [2 x i64] }
+%sollang.enum.1585 = type { i32, [1 x i64] }
+%sollang.enum.2153 = type { i32, [1 x i64] }
+%sollang.enum.2154 = type { i32, [7 x i64] }
+%sollang.enum.2178 = type { i32, [1 x i64] }
+%sollang.enum.2179 = type { i32, [2 x i64] }
+%sollang.enum.2189 = type { i32, [2 x i64] }
+%sollang.enum.2192 = type { i32, [1 x i64] }
+%sollang.enum.2193 = type { i32, [1 x i64] }
+%sollang.enum.2194 = type { i32, [3 x i64] }
+%sollang.enum.2195 = type { i32, [44 x i64] }
+%sollang.enum.2196 = type { i32, [2 x i64] }
+%sollang.enum.2197 = type { i32, [13 x i64] }
+%sollang.enum.2198 = type { i32, [2 x i64] }
+%sollang.enum.2200 = type { i32, [1 x i64] }
+%sollang.enum.2203 = type { i32, [3 x i64] }
+%sollang.enum.2204 = type { i32, [3 x i64] }
+%sollang.enum.2205 = type { i32, [4 x i64] }
+%sollang.enum.2206 = type { i32, [105 x i64] }
+%sollang.enum.2207 = type { i32, [2 x i64] }
+%sollang.enum.2208 = type { i32, [3 x i64] }
+%sollang.enum.2209 = type { i32, [9 x i64] }
+%sollang.enum.2210 = type { i32, [26 x i64] }
+%sollang.enum.2211 = type { i32, [81 x i64] }
+%sollang.enum.2212 = type { i32, [2 x i64] }
+%sollang.enum.2215 = type { i32, [26 x i64] }
+%sollang.enum.2216 = type { i32, [4 x i64] }
+%sollang.enum.2217 = type { i32, [2 x i64] }
+%sollang.enum.2218 = type { i32, [2 x i64] }
+%sollang.enum.2219 = type { i32, [2 x i64] }
+%sollang.enum.2220 = type { i32, [50 x i64] }
+%sollang.enum.2221 = type { i32, [2 x i64] }
+%sollang.enum.2222 = type { i32, [3 x i64] }
+%sollang.enum.2223 = type { i32, [2 x i64] }
+%sollang.enum.2224 = type { i32, [2 x i64] }
+%sollang.enum.2226 = type { i32, [2 x i64] }
+%sollang.enum.2227 = type { i32, [2 x i64] }
+%sollang.enum.2229 = type { i32, [9 x i64] }
+%sollang.enum.2230 = type { i32, [24 x i64] }
+%sollang.enum.2231 = type { i32, [2 x i64] }
+%sollang.enum.2232 = type { i32, [12 x i64] }
+%sollang.enum.2233 = type { i32, [11 x i64] }
+%sollang.enum.2234 = type { i32, [2 x i64] }
+%sollang.enum.2235 = type { i32, [32 x i64] }
+%sollang.enum.2236 = type { i32, [34 x i64] }
+%sollang.enum.2237 = type { i32, [2 x i64] }
+%sollang.enum.2238 = type { i32, [9 x i64] }
+%sollang.enum.2239 = type { i32, [31 x i64] }
+%sollang.enum.2240 = type { i32, [2 x i64] }
+%sollang.enum.2241 = type { i32, [15 x i64] }
+%sollang.enum.2242 = type { i32, [34 x i64] }
+%sollang.enum.2243 = type { i32, [2 x i64] }
+%sollang.enum.2244 = type { i32, [2 x i64] }
+%sollang.enum.2245 = type { i32, [6 x i64] }
+%sollang.enum.2246 = type { i32, [2 x i64] }
+%sollang.enum.2247 = type { i32, [2 x i64] }
+%sollang.enum.2248 = type { i32, [2 x i64] }
+%sollang.enum.2250 = type { i32, [14 x i64] }
+%sollang.enum.2251 = type { i32, [9 x i64] }
+%sollang.enum.2252 = type { i32, [5 x i64] }
+%sollang.enum.2253 = type { i32, [5 x i64] }
+%sollang.enum.2254 = type { i32, [4 x i64] }
+%sollang.enum.2255 = type { i32, [2 x i64] }
+%sollang.enum.2257 = type { i32, [2 x i64] }
+%sollang.enum.2258 = type { i32, [2 x i64] }
+%sollang.enum.2259 = type { i32, [81 x i64] }
+%sollang.enum.2260 = type { i32, [3 x i64] }
+%sollang.enum.2261 = type { i32, [2 x i64] }
+%sollang.enum.2262 = type { i32, [3 x i64] }
+%sollang.enum.2263 = type { i32, [5 x i64] }
+%sollang.enum.2264 = type { i32, [2 x i64] }
+%sollang.enum.2265 = type { i32, [14 x i64] }
+%sollang.enum.2266 = type { i32, [2 x i64] }
+%sollang.enum.2267 = type { i32, [32 x i64] }
+%sollang.enum.2268 = type { i32, [4 x i64] }
+%sollang.enum.2269 = type { i32, [2 x i64] }
+%sollang.enum.2271 = type { i32, [5 x i64] }
+%sollang.enum.2272 = type { i32, [2 x i64] }
+%sollang.enum.2273 = type { i32, [2 x i64] }
+%sollang.enum.2274 = type { i32, [5 x i64] }
+%sollang.enum.2275 = type { i32, [2 x i64] }
+%sollang.enum.2276 = type { i32, [2 x i64] }
+%sollang.enum.2277 = type { i32, [32 x i64] }
+%sollang.enum.2278 = type { i32, [2 x i64] }
+%sollang.enum.2279 = type { i32, [4 x i64] }
+%sollang.enum.2281 = type { i32, [2 x i64] }
+%sollang.enum.2282 = type { i32, [2 x i64] }
+%sollang.enum.2283 = type { i32, [4 x i64] }
+%sollang.enum.2284 = type { i32, [2 x i64] }
+%sollang.enum.2285 = type { i32, [2 x i64] }
+%sollang.enum.2286 = type { i32, [2 x i64] }
+%sollang.enum.2287 = type { i32, [2 x i64] }
+%sollang.enum.2288 = type { i32, [2 x i64] }
+%sollang.enum.2289 = type { i32, [2 x i64] }
+%sollang.enum.2290 = type { i32, [3 x i64] }
+%sollang.enum.2291 = type { i32, [2 x i64] }
+%sollang.enum.2293 = type { i32, [3 x i64] }
+%sollang.enum.2294 = type { i32, [4 x i64] }
+%sollang.enum.2295 = type { i32, [9 x i64] }
+%sollang.enum.2296 = type { i32, [2 x i64] }
+%sollang.enum.2297 = type { i32, [32 x i64] }
+%sollang.enum.2298 = type { i32, [3 x i64] }
+%sollang.enum.2300 = type { i32, [5 x i64] }
+%sollang.enum.2301 = type { i32, [2 x i64] }
+%sollang.enum.2302 = type { i32, [2 x i64] }
+%sollang.enum.2303 = type { i32, [4 x i64] }
+%sollang.enum.2304 = type { i32, [4 x i64] }
+%sollang.enum.2305 = type { i32, [72 x i64] }
+%sollang.enum.2306 = type { i32, [2 x i64] }
+%sollang.enum.2307 = type { i32, [2 x i64] }
+%sollang.enum.2308 = type { i32, [3 x i64] }
+%sollang.enum.2309 = type { i32, [2 x i64] }
+%sollang.enum.2310 = type { i32, [13 x i64] }
+%sollang.enum.2311 = type { i32, [26 x i64] }
+%sollang.enum.2312 = type { i32, [5 x i64] }
+%sollang.enum.2313 = type { i32, [2 x i64] }
+%sollang.enum.2316 = type { i32, [2 x i64] }
+%sollang.enum.2317 = type { i32, [72 x i64] }
+%sollang.enum.2318 = type { i32, [3 x i64] }
+%sollang.enum.2319 = type { i32, [13 x i64] }
+%sollang.enum.2320 = type { i32, [70 x i64] }
+%sollang.enum.2321 = type { i32, [2 x i64] }
+%sollang.enum.2322 = type { i32, [3 x i64] }
+%sollang.enum.2323 = type { i32, [40 x i64] }
+%sollang.enum.2327 = type { i32, [10 x i64] }
+%sollang.enum.2328 = type { i32, [11 x i64] }
+%sollang.enum.2329 = type { i32, [2 x i64] }
+%sollang.enum.2330 = type { i32, [1 x i64] }
+%sollang.enum.2331 = type { i32, [5 x i64] }
+%sollang.enum.2332 = type { i32, [3 x i64] }
+%sollang.enum.2333 = type { i32, [3 x i64] }
+%sollang.enum.2334 = type { i32, [10 x i64] }
+%sollang.enum.2335 = type { i32, [33 x i64] }
+%sollang.enum.2336 = type { i32, [35 x i64] }
+%sollang.enum.2337 = type { i32, [1 x i64] }
+%sollang.enum.2339 = type { i32, [8 x i64] }
+%sollang.enum.2340 = type { i32, [2 x i64] }
+%sollang.enum.2341 = type { i32, [2 x i64] }
+%sollang.enum.2342 = type { i32, [1 x i64] }
+%sollang.enum.2343 = type { i32, [2 x i64] }
+%sollang.enum.2346 = type { i32, [3 x i64] }
+%sollang.enum.2348 = type { i32, [2 x i64] }
+%sollang.enum.2349 = type { i32, [2 x i64] }
+%sollang.enum.2350 = type { i32, [2 x i64] }
+%sollang.enum.2351 = type { i32, [5 x i64] }
+%sollang.enum.2352 = type { i32, [11 x i64] }
+%sollang.enum.2353 = type { i32, [9 x i64] }
+%sollang.enum.2355 = type { i32, [3 x i64] }
+%sollang.enum.2356 = type { i32, [2 x i64] }
+%sollang.enum.2357 = type { i32, [2 x i64] }
+%sollang.enum.2358 = type { i32, [2 x i64] }
+%sollang.enum.2359 = type { i32, [2 x i64] }
+%sollang.enum.2360 = type { i32, [2 x i64] }
+%sollang.enum.2361 = type { i32, [2 x i64] }
+%sollang.enum.2362 = type { i32, [2 x i64] }
+%sollang.enum.2363 = type { i32, [2 x i64] }
+%sollang.enum.2364 = type { i32, [3 x i64] }
+%sollang.enum.2365 = type { i32, [3 x i64] }
+%sollang.enum.2366 = type { i32, [4 x i64] }
+%sollang.enum.2367 = type { i32, [2 x i64] }
+%sollang.enum.2368 = type { i32, [4 x i64] }
+%sollang.enum.2369 = type { i32, [4 x i64] }
+%sollang.enum.2370 = type { i32, [2 x i64] }
+%sollang.enum.2371 = type { i32, [8 x i64] }
+%sollang.enum.2372 = type { i32, [2 x i64] }
+%sollang.enum.2373 = type { i32, [4 x i64] }
+%sollang.enum.2374 = type { i32, [3 x i64] }
+%sollang.enum.2375 = type { i32, [2 x i64] }
+%sollang.enum.2376 = type { i32, [2 x i64] }
+%sollang.enum.2377 = type { i32, [5 x i64] }
+%sollang.enum.2378 = type { i32, [10 x i64] }
+%sollang.enum.2379 = type { i32, [10 x i64] }
+%sollang.enum.2380 = type { i32, [11 x i64] }
+%sollang.enum.2381 = type { i32, [11 x i64] }
+%sollang.enum.2382 = type { i32, [7 x i64] }
+%sollang.enum.2383 = type { i32, [8 x i64] }
+%sollang.enum.2384 = type { i32, [7 x i64] }
+%sollang.enum.2385 = type { i32, [8 x i64] }
+%sollang.enum.2386 = type { i32, [2 x i64] }
+%sollang.enum.2387 = type { i32, [7 x i64] }
+%sollang.enum.2388 = type { i32, [7 x i64] }
+%sollang.enum.2389 = type { i32, [3 x i64] }
+%sollang.enum.2390 = type { i32, [3 x i64] }
+%sollang.enum.2391 = type { i32, [2 x i64] }
+%sollang.enum.2392 = type { i32, [2 x i64] }
+%sollang.enum.2394 = type { i32, [2 x i64] }
+%sollang.enum.2395 = type { i32, [4 x i64] }
+%sollang.enum.2396 = type { i32, [3 x i64] }
+%sollang.enum.2397 = type { i32, [3 x i64] }
+%sollang.enum.2398 = type { i32, [13 x i64] }
+%sollang.enum.2399 = type { i32, [12 x i64] }
+%sollang.enum.2400 = type { i32, [4 x i64] }
+%sollang.enum.2401 = type { i32, [2 x i64] }
+%sollang.enum.2402 = type { i32, [2 x i64] }
+%sollang.enum.2404 = type { i32, [2 x i64] }
+%sollang.enum.2405 = type { i32, [5 x i64] }
+%sollang.enum.2406 = type { i32, [3 x i64] }
+%sollang.enum.2407 = type { i32, [15 x i64] }
+%sollang.enum.2408 = type { i32, [3 x i64] }
+%sollang.enum.2409 = type { i32, [2 x i64] }
+%sollang.enum.2410 = type { i32, [3 x i64] }
+%sollang.enum.2415 = type { i32, [2 x i64] }
+%sollang.enum.2416 = type { i32, [3 x i64] }
+%sollang.enum.2417 = type { i32, [3 x i64] }
+%sollang.enum.2418 = type { i32, [15 x i64] }
+%sollang.enum.2419 = type { i32, [25 x i64] }
+%sollang.enum.2420 = type { i32, [7 x i64] }
+%sollang.enum.2421 = type { i32, [5 x i64] }
+%sollang.enum.2422 = type { i32, [9 x i64] }
+%sollang.enum.2423 = type { i32, [31 x i64] }
+%sollang.enum.2424 = type { i32, [3 x i64] }
+%sollang.enum.2425 = type { i32, [8 x i64] }
+%sollang.enum.2426 = type { i32, [2 x i64] }
+%sollang.enum.2427 = type { i32, [12 x i64] }
+%sollang.enum.2428 = type { i32, [6 x i64] }
+%sollang.enum.2429 = type { i32, [2 x i64] }
+%sollang.enum.2430 = type { i32, [9 x i64] }
+%sollang.enum.2431 = type { i32, [6 x i64] }
+%sollang.enum.2432 = type { i32, [3 x i64] }
+%sollang.enum.2433 = type { i32, [26 x i64] }
+%sollang.enum.2434 = type { i32, [4 x i64] }
+%sollang.enum.2435 = type { i32, [5 x i64] }
+%sollang.enum.2436 = type { i32, [8 x i64] }
+%sollang.enum.2437 = type { i32, [40 x i64] }
+%sollang.enum.2438 = type { i32, [9 x i64] }
+%sollang.enum.2439 = type { i32, [3 x i64] }
+%sollang.enum.2443 = type { i32, [2 x i64] }
+%sollang.enum.2444 = type { i32, [2 x i64] }
+%sollang.enum.2445 = type { i32, [9 x i64] }
+%sollang.enum.2446 = type { i32, [21 x i64] }
+%sollang.enum.2447 = type { i32, [2 x i64] }
+%sollang.enum.2448 = type { i32, [2 x i64] }
+%sollang.enum.2449 = type { i32, [4 x i64] }
+%sollang.enum.2450 = type { i32, [3 x i64] }
+%sollang.enum.2451 = type { i32, [9 x i64] }
+%sollang.enum.2452 = type { i32, [2 x i64] }
+%sollang.enum.2453 = type { i32, [5 x i64] }
+%sollang.enum.2454 = type { i32, [2 x i64] }
+%sollang.enum.2455 = type { i32, [14 x i64] }
+%sollang.enum.2457 = type { i32, [11 x i64] }
+%sollang.enum.2458 = type { i32, [16 x i64] }
+%sollang.enum.2459 = type { i32, [7 x i64] }
+%sollang.enum.2462 = type { i32, [7 x i64] }
+%sollang.enum.2463 = type { i32, [4 x i64] }
+%sollang.enum.2464 = type { i32, [6 x i64] }
+%sollang.enum.2465 = type { i32, [7 x i64] }
+%sollang.enum.2466 = type { i32, [6 x i64] }
+%sollang.enum.2467 = type { i32, [5 x i64] }
+%sollang.enum.2468 = type { i32, [2 x i64] }
+%sollang.enum.2469 = type { i32, [4 x i64] }
+%sollang.enum.2470 = type { i32, [10 x i64] }
+%sollang.enum.2471 = type { i32, [131 x i64] }
+%sollang.enum.2472 = type { i32, [2 x i64] }
+%sollang.enum.2473 = type { i32, [16 x i64] }
+%sollang.enum.2474 = type { i32, [7 x i64] }
+%sollang.enum.2475 = type { i32, [10 x i64] }
+%sollang.enum.2476 = type { i32, [5 x i64] }
+%sollang.enum.2478 = type { i32, [2 x i64] }
+%sollang.enum.2479 = type { i32, [17 x i64] }
+%sollang.enum.2481 = type { i32, [10 x i64] }
+%sollang.enum.2482 = type { i32, [5 x i64] }
+%sollang.enum.2483 = type { i32, [3 x i64] }
+%sollang.enum.2484 = type { i32, [8 x i64] }
+%sollang.enum.2485 = type { i32, [2 x i64] }
+%sollang.enum.2486 = type { i32, [4 x i64] }
+%sollang.enum.2487 = type { i32, [2 x i64] }
+%sollang.enum.2488 = type { i32, [9 x i64] }
+%sollang.enum.2489 = type { i32, [3 x i64] }
+%sollang.enum.2490 = type { i32, [7 x i64] }
+%sollang.enum.2491 = type { i32, [11 x i64] }
+%sollang.enum.2492 = type { i32, [7 x i64] }
+%sollang.enum.2496 = type { i32, [6 x i64] }
+%sollang.enum.2498 = type { i32, [11 x i64] }
+%sollang.enum.2499 = type { i32, [2 x i64] }
+%sollang.enum.2500 = type { i32, [18 x i64] }
+%sollang.enum.2501 = type { i32, [149 x i64] }
+%sollang.enum.2503 = type { i32, [3 x i64] }
+%sollang.enum.2504 = type { i32, [2 x i64] }
+%sollang.enum.2505 = type { i32, [2 x i64] }
+%sollang.enum.2507 = type { i32, [12 x i64] }
+%sollang.enum.2508 = type { i32, [9 x i64] }
+%sollang.enum.2509 = type { i32, [5 x i64] }
+%sollang.enum.2510 = type { i32, [5 x i64] }
+%sollang.enum.2511 = type { i32, [6 x i64] }
+%sollang.enum.2512 = type { i32, [6 x i64] }
+%sollang.enum.2513 = type { i32, [2 x i64] }
+%sollang.enum.2514 = type { i32, [14 x i64] }
+%sollang.enum.2515 = type { i32, [6 x i64] }
+%sollang.enum.2516 = type { i32, [6 x i64] }
+%sollang.enum.2517 = type { i32, [4 x i64] }
+%sollang.enum.2518 = type { i32, [5 x i64] }
+%sollang.enum.2519 = type { i32, [4 x i64] }
+%sollang.enum.2520 = type { i32, [21 x i64] }
+%sollang.enum.2521 = type { i32, [4 x i64] }
+%sollang.enum.2522 = type { i32, [5 x i64] }
+%sollang.enum.2523 = type { i32, [2 x i64] }
+%sollang.enum.2525 = type { i32, [3 x i64] }
+%sollang.enum.2526 = type { i32, [4 x i64] }
+%sollang.enum.2527 = type { i32, [2 x i64] }
+%sollang.enum.2528 = type { i32, [6 x i64] }
+%sollang.enum.2529 = type { i32, [5 x i64] }
+%sollang.enum.2530 = type { i32, [5 x i64] }
+%sollang.enum.2533 = type { i32, [16 x i64] }
+%sollang.enum.2534 = type { i32, [7 x i64] }
+%sollang.enum.2535 = type { i32, [6 x i64] }
+%sollang.enum.2536 = type { i32, [4 x i64] }
+%sollang.enum.2537 = type { i32, [5 x i64] }
+%sollang.enum.2538 = type { i32, [2 x i64] }
+%sollang.enum.2539 = type { i32, [2 x i64] }
+%sollang.enum.2540 = type { i32, [4 x i64] }
+%sollang.enum.2542 = type { i32, [9 x i64] }
+%sollang.enum.2543 = type { i32, [4 x i64] }
+%sollang.enum.2544 = type { i32, [3 x i64] }
+%sollang.enum.2545 = type { i32, [17 x i64] }
+%sollang.enum.2546 = type { i32, [2 x i64] }
+%sollang.enum.2547 = type { i32, [3 x i64] }
+%sollang.enum.2548 = type { i32, [12 x i64] }
+%sollang.enum.2549 = type { i32, [3 x i64] }
+%sollang.enum.2550 = type { i32, [4 x i64] }
+%sollang.enum.2551 = type { i32, [12 x i64] }
+%sollang.enum.2552 = type { i32, [4 x i64] }
+%sollang.enum.2553 = type { i32, [3 x i64] }
+%sollang.enum.2554 = type { i32, [3 x i64] }
+%sollang.enum.2555 = type { i32, [4 x i64] }
+%sollang.enum.2556 = type { i32, [2 x i64] }
+%sollang.enum.2557 = type { i32, [3 x i64] }
+%sollang.enum.2559 = type { i32, [6 x i64] }
+%sollang.enum.2560 = type { i32, [3 x i64] }
+%sollang.enum.2561 = type { i32, [2 x i64] }
+%sollang.enum.2562 = type { i32, [2 x i64] }
+%sollang.enum.2563 = type { i32, [2 x i64] }
+%sollang.enum.2564 = type { i32, [3 x i64] }
+%sollang.enum.2565 = type { i32, [2 x i64] }
+%sollang.enum.2566 = type { i32, [2 x i64] }
+%sollang.enum.2567 = type { i32, [12 x i64] }
+%sollang.enum.2568 = type { i32, [6 x i64] }
+%sollang.enum.2569 = type { i32, [3 x i64] }
+%sollang.enum.2570 = type { i32, [2 x i64] }
+%sollang.enum.2571 = type { i32, [8 x i64] }
+%sollang.enum.2573 = type { i32, [2 x i64] }
+%sollang.enum.2574 = type { i32, [4 x i64] }
+%sollang.enum.2577 = type { i32, [4 x i64] }
+%sollang.enum.2578 = type { i32, [4 x i64] }
+%sollang.enum.2579 = type { i32, [7 x i64] }
+%sollang.enum.2580 = type { i32, [4 x i64] }
+%sollang.enum.2582 = type { i32, [9 x i64] }
+%sollang.enum.2583 = type { i32, [2 x i64] }
+%sollang.enum.2584 = type { i32, [4 x i64] }
+%sollang.enum.2585 = type { i32, [1 x i64] }
+%sollang.enum.2586 = type { i32, [1 x i64] }
+%sollang.enum.2587 = type { i32, [2 x i64] }
+%sollang.enum.2588 = type { i32, [2 x i64] }
+%sollang.enum.2589 = type { i32, [2 x i64] }
+%sollang.enum.2590 = type { i32, [6 x i64] }
+%sollang.enum.2591 = type { i32, [1 x i64] }
+%sollang.enum.2592 = type { i32, [1 x i64] }
+%sollang.enum.2593 = type { i32, [1 x i64] }
+%sollang.enum.2594 = type { i32, [1 x i64] }
+%sollang.enum.2595 = type { i32, [11 x i64] }
+%sollang.enum.2596 = type { i32, [29 x i64] }
+%sollang.enum.2597 = type { i32, [12 x i64] }
+%sollang.enum.2598 = type { i32, [2 x i64] }
+%sollang.enum.2599 = type { i32, [3 x i64] }
+%sollang.enum.2600 = type { i32, [2 x i64] }
+%sollang.enum.2602 = type { i32, [2 x i64] }
+%sollang.enum.2603 = type { i32, [3 x i64] }
+%sollang.enum.2604 = type { i32, [2 x i64] }
+%sollang.enum.2605 = type { i32, [1 x i64] }
+%sollang.enum.2606 = type { i32, [1 x i64] }
+%sollang.enum.2608 = type { i32, [2 x i64] }
+%sollang.enum.2609 = type { i32, [2 x i64] }
+%sollang.enum.2610 = type { i32, [2 x i64] }
+%sollang.enum.2613 = type { i32, [2 x i64] }
+%sollang.enum.2614 = type { i32, [7 x i64] }
+%sollang.enum.2615 = type { i32, [4 x i64] }
+%sollang.enum.2616 = type { i32, [2 x i64] }
+%sollang.enum.2617 = type { i32, [2 x i64] }
+%sollang.enum.2619 = type { i32, [3 x i64] }
+%sollang.enum.2622 = type { i32, [6 x i64] }
+%sollang.enum.2623 = type { i32, [2 x i64] }
+%sollang.enum.2624 = type { i32, [3 x i64] }
+%sollang.enum.2625 = type { i32, [8 x i64] }
+%sollang.enum.2626 = type { i32, [2 x i64] }
+%sollang.enum.2627 = type { i32, [3 x i64] }
+%sollang.enum.2628 = type { i32, [1 x i64] }
+%sollang.enum.2629 = type { i32, [2 x i64] }
+%sollang.enum.2630 = type { i32, [2 x i64] }
+%sollang.enum.2632 = type { i32, [2 x i64] }
+%sollang.enum.2633 = type { i32, [4 x i64] }
+%sollang.enum.2634 = type { i32, [3 x i64] }
+%sollang.enum.2635 = type { i32, [18 x i64] }
+%sollang.enum.2636 = type { i32, [3 x i64] }
+%sollang.enum.2637 = type { i32, [16 x i64] }
+%sollang.enum.2638 = type { i32, [2 x i64] }
+%sollang.enum.2639 = type { i32, [2 x i64] }
+%sollang.enum.2640 = type { i32, [2 x i64] }
+%sollang.enum.2641 = type { i32, [2 x i64] }
+%sollang.enum.2643 = type { i32, [1 x i64] }
+%sollang.enum.2644 = type { i32, [2 x i64] }
+%sollang.enum.2645 = type { i32, [5 x i64] }
+%sollang.enum.2646 = type { i32, [2 x i64] }
+%sollang.enum.2647 = type { i32, [3 x i64] }
+%sollang.enum.2650 = type { i32, [2 x i64] }
+%sollang.enum.2651 = type { i32, [9 x i64] }
+%sollang.enum.2652 = type { i32, [7 x i64] }
+
+@sollang_file_writer = internal global ptr null
+@sollang_file_reader = internal global ptr null
+@sollang_argument_count_value = internal global i64 0
+@sollang_argument_records = internal global ptr null
+@sollang_environment_allocations = internal global ptr null
+@sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1
+@sollang_stdout_buffer = internal global [1048576 x i8] zeroinitializer, align 16
+@sollang_stdout_buffer_count = internal global i64 0
+@sollang_stdout_line_buffered = internal global i1 false
+@_fltused = global i32 0
+@sollang_random_state = internal global i64 88172645463393265
+@sollang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8
+@sollang_writer_buffer_count = internal global i64 0
+
+declare dllimport ptr @GetStdHandle(i32)
+declare dllimport i32 @GetConsoleMode(ptr, ptr)
+declare dllimport i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)
+declare dllimport i32 @GetOverlappedResult(ptr, ptr, ptr, i32)
+declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport i32 @CloseHandle(ptr)
+declare dllimport ptr @GetCurrentProcess()
+declare dllimport i32 @DuplicateHandle(ptr, ptr, ptr, ptr, i32, i32, i32)
+declare dllimport i32 @SetFilePointerEx(ptr, i64, ptr, i32)
+declare dllimport i32 @GetFileSizeEx(ptr, ptr)
+declare dllimport i32 @SetEndOfFile(ptr)
+declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
+declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
+declare dllimport i32 @UnmapViewOfFile(ptr)
+declare dllimport i32 @FlushViewOfFile(ptr, i64)
+declare dllimport i32 @FlushFileBuffers(ptr)
+declare dllimport i32 @MoveFileExA(ptr, ptr, i32)
+declare dllimport i32 @MoveFileExW(ptr, ptr, i32)
+declare dllimport i32 @DeleteFileA(ptr)
+declare dllimport i32 @DeleteFileW(ptr)
+declare dllimport ptr @GetProcessHeap()
+declare dllimport ptr @HeapAlloc(ptr, i32, i64)
+declare dllimport i32 @HeapFree(ptr, i32, ptr)
+declare dllimport i64 @GetTickCount64()
+declare dllimport void @GetSystemTimePreciseAsFileTime(ptr)
+declare dllimport void @Sleep(i32)
+declare dllimport ptr @GetCommandLineW()
+declare dllimport ptr @CommandLineToArgvW(ptr, ptr)
+declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)
+declare dllimport ptr @LocalFree(ptr)
+declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)
+declare dllimport i32 @GetLastError()
+declare dllimport void @SetLastError(i32)
+declare dllimport i32 @CreateDirectoryW(ptr, ptr)
+declare dllimport i32 @GetFileAttributesW(ptr)
+declare dllimport ptr @FindFirstFileW(ptr, ptr)
+declare dllimport i32 @FindNextFileW(ptr, ptr)
+declare dllimport i32 @FindClose(ptr)
+declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)
+declare dllimport i32 @GetFullPathNameW(ptr, i32, ptr, ptr)
+declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)
+define internal i32 @sollang_windows_utf8_path(ptr %data, i64 %length, ptr %wide, i32 %capacity) #0 {
+entry:
+  %positive = icmp ugt i64 %length, 0
+  %fits_i32 = icmp ule i64 %length, 2147483647
+  %length_valid = and i1 %positive, %fits_i32
+  br i1 %length_valid, label %check, label %failure
+check:
+  %index = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %done = icmp eq i64 %index, %length
+  br i1 %done, label %convert, label %inspect
+inspect:
+  %byte_ptr = getelementptr i8, ptr %data, i64 %index
+  %byte = load i8, ptr %byte_ptr, align 1
+  %nul = icmp eq i8 %byte, 0
+  br i1 %nul, label %failure, label %advance
+advance:
+  %next = add i64 %index, 1
+  br label %check
+convert:
+  %length32 = trunc i64 %length to i32
+  %room = sub i32 %capacity, 1
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length32, ptr %wide, i32 %room)
+  %converted_ok = icmp sgt i32 %converted, 0
+  br i1 %converted_ok, label %terminate, label %failure
+terminate:
+  %zero = getelementptr i16, ptr %wide, i32 %converted
+  store i16 0, ptr %zero, align 2
+  ret i32 1
+failure:
+  ret i32 0
+}
+
+declare void @llvm.trap()
+declare i64 @llvm.ctpop.i64(i64)
+declare i16 @llvm.cttz.i16(i16, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)
+declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)
+
+define internal void @sollang_drop_36(%sollang.dynamic_int_array %value) #0 {
+entry:
+  %drop_array_ptr0 = extractvalue %sollang.dynamic_int_array %value, 0
+  call void @sollang_free(ptr %drop_array_ptr0)
+  ret void
+}
+
+define internal void @sollang_drop_34(%sollang.struct.34 %value) #0 {
+entry:
+  %drop_field1 = extractvalue %sollang.struct.34 %value, 0
+  call void @sollang_drop_36(%sollang.dynamic_int_array %drop_field1)
+  ret void
+}
+
+define internal ptr @sollang_fn_borrowDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %it) #0 {
+entry:
+  ret ptr %it
+}
+
+define internal i1 @sollang_fn_createDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %it) #0 {
+entry:
+  %ref_value0 = load %sollang.struct.34, ptr %it, align 8
+  %create_directory_input_bytes1 = extractvalue %sollang.struct.34 %ref_value0, 0
+  %array_ptr2 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes1, 0
+  %array_len3 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes1, 1
+  %array_capacity4 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes1, 2
+  %create_directory_input_style5 = extractvalue %sollang.struct.34 %ref_value0, 1
+  %create_directory_input_style_tag6 = extractvalue %sollang.enum.35 %create_directory_input_style5, 0
+  %create_directory_status7 = call i32 @sollang_platform_create_directory(ptr %array_ptr2, i64 %array_len3, i32 %create_directory_input_style_tag6)
+  %create_directory_succeeded8 = icmp sgt i32 %create_directory_status7, 0
+  ret i1 %create_directory_succeeded8
+}
+
+@.slg.str.module.x7379732E70617468.0 = private unnamed_addr constant [52 x i8] c"sys.path.sys.path.fromText:bb_text_byte_bounds_fail4", align 1
+@.slg.str.module.x7379732E70617468.1 = private unnamed_addr constant [41 x i8] c"sys.path.sys.path.fromText:bb_alloc_fail9", align 1
+define internal %sollang.struct.34 @sollang_fn_sys_path_fromText(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, %sollang.text %it, %sollang.enum.35 %arg_0) #0 {
+entry:
+  %mutable_ptr_addr2 = alloca ptr, align 8
+  %mutable_len_addr3 = alloca i64, align 8
+  %mutable_capacity_addr4 = alloca i64, align 8
+  %mutable_scalar_slot5 = alloca i64, align 8
+  %trap_written14 = alloca i32, align 4
+  %trap_written27 = alloca i32, align 4
+  %param_text_ptr0 = extractvalue %sollang.text %it, 0
+  %param_text_len1 = extractvalue %sollang.text %it, 1
+  store ptr null, ptr %mutable_ptr_addr2, align 8
+  store i64 0, ptr %mutable_len_addr3, align 8
+  store i64 0, ptr %mutable_capacity_addr4, align 8
+  store i64 0, ptr %mutable_scalar_slot5, align 8
+  br label %bb_while_condition0
+bb_while_condition0:
+  %mutable_scalar6 = load i64, ptr %mutable_scalar_slot5, align 8
+  %cmp7 = icmp ult i64 %mutable_scalar6, %param_text_len1
+  br i1 %cmp7, label %bb_while_body1, label %bb_while_end2
+bb_while_body1:
+  %mutable_ptr8 = load ptr, ptr %mutable_ptr_addr2, align 8
+  %mutable_len9 = load i64, ptr %mutable_len_addr3, align 8
+  %mutable_capacity10 = load i64, ptr %mutable_capacity_addr4, align 8
+  %mutable_scalar11 = load i64, ptr %mutable_scalar_slot5, align 8
+  %text_byte_in_bounds12 = icmp ult i64 %mutable_scalar11, %param_text_len1
+  br i1 %text_byte_in_bounds12, label %bb_text_byte_bounds_ok3, label %bb_text_byte_bounds_fail4
+
+bb_text_byte_bounds_fail4:
+  %trap_stderr13 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr13, ptr @.slg.str.module.x7379732E70617468.0, i32 52, ptr %trap_written14, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_text_byte_bounds_ok3:
+  %text_byte_ptr15 = getelementptr i8, ptr %param_text_ptr0, i64 %mutable_scalar11
+  %text_byte16 = load i8, ptr %text_byte_ptr15, align 1
+  %generic_array_has_capacity17 = icmp ult i64 %mutable_len9, %mutable_capacity10
+  br i1 %generic_array_has_capacity17, label %bb_generic_array_push_append5, label %bb_generic_array_push_grow6
+
+bb_generic_array_push_append5:
+  %dynamic_inline_slot18 = getelementptr i8, ptr %mutable_ptr8, i64 %mutable_len9
+  store i8 %text_byte16, ptr %dynamic_inline_slot18, align 1
+  %generic_array_next_len19 = add i64 %mutable_len9, 1
+  br label %bb_generic_array_push_done7
+
+bb_generic_array_push_grow6:
+  %generic_array_empty20 = icmp eq i64 %mutable_capacity10, 0
+  %generic_array_doubled21 = mul i64 %mutable_capacity10, 2
+  %generic_array_new_capacity22 = select i1 %generic_array_empty20, i64 4, i64 %generic_array_doubled21
+  %generic_array_new_bytes23 = mul i64 %generic_array_new_capacity22, 1
+  %heap24 = call ptr @sollang_alloc(i64 %generic_array_new_bytes23)
+  %heap_ok25 = icmp ne ptr %heap24, null
+  br i1 %heap_ok25, label %bb_alloc_ok8, label %bb_alloc_fail9
+
+bb_alloc_fail9:
+  %trap_stderr26 = call ptr @GetStdHandle(i32 -12)
+  call i32 @WriteFile(ptr %trap_stderr26, ptr @.slg.str.module.x7379732E70617468.1, i32 41, ptr %trap_written27, ptr null)
+  call void @llvm.trap()
+  unreachable
+
+bb_alloc_ok8:
+  br label %bb_generic_array_copy10
+
+bb_generic_array_copy10:
+  %generic_array_copy_i29 = phi i64 [ 0, %bb_alloc_ok8 ], [ %generic_array_copy_next_i28, %bb_generic_array_copy_body11 ]
+  %generic_array_copy_active30 = icmp ult i64 %generic_array_copy_i29, %mutable_len9
+  br i1 %generic_array_copy_active30, label %bb_generic_array_copy_body11, label %bb_generic_array_copy_done12
+
+bb_generic_array_copy_body11:
+  %generic_array_copy_src31 = getelementptr i8, ptr %mutable_ptr8, i64 %generic_array_copy_i29
+  %generic_array_copy_dst32 = getelementptr i8, ptr %heap24, i64 %generic_array_copy_i29
+  %generic_array_copy_value33 = load i8, ptr %generic_array_copy_src31, align 1
+  store i8 %generic_array_copy_value33, ptr %generic_array_copy_dst32, align 1
+  %generic_array_copy_next_i28 = add i64 %generic_array_copy_i29, 1
+  br label %bb_generic_array_copy10
+
+bb_generic_array_copy_done12:
+  call void @sollang_free(ptr %mutable_ptr8)
+  %dynamic_inline_slot34 = getelementptr i8, ptr %heap24, i64 %mutable_len9
+  store i8 %text_byte16, ptr %dynamic_inline_slot34, align 1
+  %generic_array_next_len35 = add i64 %mutable_len9, 1
+  br label %bb_generic_array_push_done7
+
+bb_generic_array_push_done7:
+  %generic_array_ptr36 = phi ptr [ %mutable_ptr8, %bb_generic_array_push_append5 ], [ %heap24, %bb_generic_array_copy_done12 ]
+  %generic_array_len37 = phi i64 [ %generic_array_next_len19, %bb_generic_array_push_append5 ], [ %generic_array_next_len35, %bb_generic_array_copy_done12 ]
+  %generic_array_capacity38 = phi i64 [ %mutable_capacity10, %bb_generic_array_push_append5 ], [ %generic_array_new_capacity22, %bb_generic_array_copy_done12 ]
+  store ptr %generic_array_ptr36, ptr %mutable_ptr_addr2, align 8
+  store i64 %generic_array_len37, ptr %mutable_len_addr3, align 8
+  store i64 %generic_array_capacity38, ptr %mutable_capacity_addr4, align 8
+  %mutable_scalar39 = load i64, ptr %mutable_scalar_slot5, align 8
+  %add40 = add i64 %mutable_scalar39, 1
+  store i64 %add40, ptr %mutable_scalar_slot5, align 8
+  br label %bb_while_condition0
+bb_while_end2:
+  %mutable_ptr41 = load ptr, ptr %mutable_ptr_addr2, align 8
+  %mutable_len42 = load i64, ptr %mutable_len_addr3, align 8
+  %mutable_capacity43 = load i64, ptr %mutable_capacity_addr4, align 8
+  %generic_array_value44 = insertvalue %sollang.dynamic_int_array poison, ptr %mutable_ptr41, 0
+  %generic_array_value45 = insertvalue %sollang.dynamic_int_array %generic_array_value44, i64 %mutable_len42, 1
+  %generic_array_value46 = insertvalue %sollang.dynamic_int_array %generic_array_value45, i64 %mutable_capacity43, 2
+  %struct_init47 = insertvalue %sollang.struct.34 poison, %sollang.dynamic_int_array %generic_array_value46, 0
+  %struct_init48 = insertvalue %sollang.struct.34 %struct_init47, %sollang.enum.35 %arg_0, 1
+  ret %sollang.struct.34 %struct_init48
+}
+
+@.slg.str.suffix.0 = private unnamed_addr constant [1 x i8] c".", align 1
+@.slg.str.suffix.1 = private unnamed_addr constant [4 x i8] c"true", align 1
+@.slg.str.suffix.2 = private unnamed_addr constant [5 x i8] c"false", align 1
+@.slg.str.suffix.3 = private unnamed_addr constant [1 x i8] c"\0A", align 1
+@.slg.str.suffix.4 = private unnamed_addr constant [4 x i8] c"true", align 1
+@.slg.str.suffix.5 = private unnamed_addr constant [5 x i8] c"false", align 1
+@.slg.str.suffix.6 = private unnamed_addr constant [1 x i8] c"\0A", align 1
+@.slg.str.suffix.7 = private unnamed_addr constant [4 x i8] c"true", align 1
+@.slg.str.suffix.8 = private unnamed_addr constant [5 x i8] c"false", align 1
+@.slg.str.suffix.9 = private unnamed_addr constant [1 x i8] c"\0A", align 1
+@.slg.str.suffix.10 = private unnamed_addr constant [4 x i8] c"true", align 1
+@.slg.str.suffix.11 = private unnamed_addr constant [5 x i8] c"false", align 1
+@.slg.str.suffix.12 = private unnamed_addr constant [1 x i8] c"\0A", align 1
+define dso_local void @__chkstk() naked nounwind {
+entry:
+  call void asm sideeffect inteldialect "push rcx\0Apush rax\0Alea rcx, [rsp + 24]\0Acmp rax, 4096\0Ajb .Lsollang_chkstk_tail\0A.Lsollang_chkstk_loop:\0Asub rcx, 4096\0Atest byte ptr [rcx], 0\0Asub rax, 4096\0Acmp rax, 4096\0Ajae .Lsollang_chkstk_loop\0A.Lsollang_chkstk_tail:\0Asub rcx, rax\0Atest byte ptr [rcx], 0\0Apop rax\0Apop rcx\0Aret", "~{memory},~{flags}"()
+  unreachable
+}
+
+define internal i32 @sollang_write_stream_chunk(ptr %handle, ptr %data, i32 %len, ptr %written, i1 %is_console) #0 {
+entry:
+  %empty = icmp eq i32 %len, 0
+  br i1 %empty, label %success_empty, label %classify
+
+success_empty:
+  store i32 0, ptr %written, align 4
+  ret i32 1
+
+classify:
+  br i1 %is_console, label %console_prepare, label %redirected
+
+redirected:
+  br label %redirected_write
+
+redirected_write:
+  %redirected_offset = phi i32 [ 0, %redirected ], [ %redirected_next, %redirected_advance ]
+  %redirected_remaining = sub i32 %len, %redirected_offset
+  %redirected_offset64 = zext i32 %redirected_offset to i64
+  %redirected_data = getelementptr i8, ptr %data, i64 %redirected_offset64
+  store i32 0, ptr %written, align 4
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %redirected_data, i32 %redirected_remaining, ptr %written, ptr null)
+  %redirected_count = load i32, ptr %written, align 4
+  %redirected_succeeded = icmp ne i32 %redirected_ok, 0
+  %redirected_progress = icmp ugt i32 %redirected_count, 0
+  %redirected_bounded = icmp ule i32 %redirected_count, %redirected_remaining
+  %redirected_valid0 = and i1 %redirected_succeeded, %redirected_progress
+  %redirected_valid = and i1 %redirected_valid0, %redirected_bounded
+  br i1 %redirected_valid, label %redirected_advance, label %write_failed
+
+redirected_advance:
+  %redirected_next = add i32 %redirected_offset, %redirected_count
+  %redirected_complete = icmp eq i32 %redirected_next, %len
+  br i1 %redirected_complete, label %write_succeeded, label %redirected_write
+
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %wide_written = alloca i32, align 4
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+
+console_write:
+  %console_offset = phi i32 [ 0, %convert ], [ %console_next, %console_advance ]
+  %console_remaining = sub i32 %wide_chars, %console_offset
+  %console_offset64 = zext i32 %console_offset to i64
+  %console_data = getelementptr i16, ptr %wide, i64 %console_offset64
+  store i32 0, ptr %wide_written, align 4
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
+  %console_count = load i32, ptr %wide_written, align 4
+  %console_succeeded = icmp ne i32 %console_ok, 0
+  %console_progress = icmp ugt i32 %console_count, 0
+  %console_bounded = icmp ule i32 %console_count, %console_remaining
+  %console_valid0 = and i1 %console_succeeded, %console_progress
+  %console_valid = and i1 %console_valid0, %console_bounded
+  br i1 %console_valid, label %console_advance, label %console_write_failed
+
+console_advance:
+  %console_next = add i32 %console_offset, %console_count
+  %console_complete = icmp eq i32 %console_next, %wide_chars
+  br i1 %console_complete, label %console_write_succeeded, label %console_write
+
+console_write_succeeded:
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %write_succeeded
+
+console_write_failed:
+  %freed_after_write_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %write_failed
+
+write_succeeded:
+  store i32 %len, ptr %written, align 4
+  ret i32 1
+
+write_failed:
+  store i32 0, ptr %written, align 4
+  ret i32 0
+
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+
+conversion_failed:
+  store i32 0, ptr %written, align 4
+  ret i32 0
+}
+
+define internal i32 @sollang_write_stream(ptr %handle, ptr %data, i64 %len64, ptr %written, i1 %is_console) #0 {
+entry:
+  %empty = icmp eq i64 %len64, 0
+  br i1 %empty, label %success_empty, label %prepare
+
+success_empty:
+  store i32 0, ptr %written, align 4
+  ret i32 1
+
+prepare:
+  %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %remaining = sub i64 %len64, %offset
+  %current = getelementptr i8, ptr %data, i64 %offset
+  %more = icmp ugt i64 %remaining, 1048576
+  %proposed = select i1 %more, i64 1048576, i64 %remaining
+  %split_console = and i1 %more, %is_console
+  br i1 %split_console, label %trim_boundary, label %write
+
+trim_boundary:
+  %boundary = phi i64 [ 1048576, %prepare ], [ %previous, %trim_next ]
+  %boundary_ptr = getelementptr i8, ptr %current, i64 %boundary
+  %boundary_byte = load i8, ptr %boundary_ptr, align 1
+  %prefix = and i8 %boundary_byte, -64
+  %continuation = icmp eq i8 %prefix, -128
+  br i1 %continuation, label %trim_next, label %write
+
+trim_next:
+  %can_trim = icmp ugt i64 %boundary, 1048573
+  %previous = sub i64 %boundary, 1
+  br i1 %can_trim, label %trim_boundary, label %failure
+
+write:
+  %chunk64 = phi i64 [ %proposed, %prepare ], [ %boundary, %trim_boundary ]
+  %chunk32 = trunc i64 %chunk64 to i32
+  %ok = call i32 @sollang_write_stream_chunk(ptr %handle, ptr %current, i32 %chunk32, ptr %written, i1 %is_console)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %advance, label %failure
+
+advance:
+  %next = add i64 %offset, %chunk64
+  %complete = icmp eq i64 %next, %len64
+  br i1 %complete, label %success, label %prepare
+
+success:
+  ret i32 1
+
+failure:
+  store i32 0, ptr %written, align 4
+  ret i32 0
+}
+
+define internal i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %len, ptr %written) #0 {
+entry:
+  %is_console = load i1, ptr @sollang_stdout_line_buffered, align 1
+  %ok = call i32 @sollang_write_stream_chunk(ptr %stdout, ptr %data, i32 %len, ptr %written, i1 %is_console)
+  ret i32 %ok
+}
+
+define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
+entry:
+  %count64 = load i64, ptr @sollang_stdout_buffer_count, align 8
+  %has_data = icmp ne i64 %count64, 0
+  br i1 %has_data, label %write, label %empty
+
+write:
+  %count = trunc i64 %count64 to i32
+  %buffer = getelementptr inbounds [1048576 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
+  %ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %buffer, i32 %count, ptr %written)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %clear, label %failure
+
+clear:
+  store i64 0, ptr @sollang_stdout_buffer_count, align 8
+  ret i32 %ok
+
+failure:
+  call void @llvm.trap()
+  unreachable
+
+empty:
+  store i32 0, ptr %written, align 4
+  ret i32 1
+}
+
+define internal i32 @sollang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
+entry:
+  br label %write_prepare
+
+write_prepare:
+  %oversized = icmp ugt i64 %len64, 1048576
+  br i1 %oversized, label %write_direct_prepare, label %buffer_prepare
+
+write_direct_prepare:
+  %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %direct_console = load i1, ptr @sollang_stdout_line_buffered, align 1
+  %direct_ok = call i32 @sollang_write_stream(ptr %stdout, ptr %data, i64 %len64, ptr %written, i1 %direct_console)
+  %direct_succeeded = icmp ne i32 %direct_ok, 0
+  br i1 %direct_succeeded, label %write_direct_done, label %write_direct_failure
+
+write_direct_done:
+  ret i32 1
+
+write_direct_failure:
+  call void @llvm.trap()
+  unreachable
+
+buffer_prepare:
+  %count = load i64, ptr @sollang_stdout_buffer_count, align 8
+  %combined = add i64 %count, %len64
+  %needs_flush = icmp ugt i64 %combined, 1048576
+  br i1 %needs_flush, label %flush, label %append
+
+flush:
+  %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  br label %append
+
+append:
+  %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flush ]
+  %destination = getelementptr inbounds [1048576 x i8], ptr @sollang_stdout_buffer, i64 0, i64 %offset
+  %copied = call ptr @memcpy(ptr %destination, ptr %data, i64 %len64)
+  %next_count = add i64 %offset, %len64
+  store i64 %next_count, ptr @sollang_stdout_buffer_count, align 8
+  %written32 = trunc i64 %len64 to i32
+  store i32 %written32, ptr %written, align 4
+  %single_byte = icmp eq i64 %len64, 1
+  br i1 %single_byte, label %inspect_newline, label %done
+
+inspect_newline:
+  %byte = load i8, ptr %data, align 1
+  %newline = icmp eq i8 %byte, 10
+  %line_buffered = load i1, ptr @sollang_stdout_line_buffered, align 1
+  %flush_newline = and i1 %newline, %line_buffered
+  br i1 %flush_newline, label %flush_line, label %done
+
+flush_line:
+  %line_ok = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  ret i32 %line_ok
+
+done:
+  ret i32 1
+}
+
+define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
+entry:
+  %exceeds_dword = icmp ugt i64 %len64, 4294967295
+  %bounded_len = select i1 %exceeds_dword, i64 4294967295, i64 %len64
+  %len = trunc i64 %bounded_len to i32
+  %ok = call i32 @ReadFile(ptr %stdin, ptr %data, i32 %len, ptr %read, ptr null)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %success, label %inspect_error
+
+inspect_error:
+  %error = call i32 @GetLastError()
+  %broken_pipe = icmp eq i32 %error, 109
+  br i1 %broken_pipe, label %eof, label %failure
+
+eof:
+  store i32 0, ptr %read, align 4
+  ret i32 1
+
+success:
+  ret i32 1
+
+failure:
+  ret i32 0
+}
+
+define internal i32 @sollang_platform_create_exclusive_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i16], align 2
+  %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+  %fits = icmp ule i64 %len, 259
+  br i1 %fits, label %convert, label %fail
+convert:
+  %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+  %copied = icmp ne i32 %copy_ok, 0
+  br i1 %copied, label %create, label %fail
+
+create:
+  %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 1073741824, i32 0, ptr null, i32 1, i32 128, ptr null)
+  %handle_int = ptrtoint ptr %handle to i64
+  %invalid = icmp eq i64 %handle_int, -1
+  br i1 %invalid, label %create_failed, label %close
+
+close:
+  %closed = call i32 @CloseHandle(ptr %handle)
+  %close_ok = icmp ne i32 %closed, 0
+  %status = select i1 %close_ok, i32 1, i32 -1
+  ret i32 %status
+
+create_failed:
+  %error = call i32 @GetLastError()
+  %file_exists = icmp eq i32 %error, 80
+  %already_exists = icmp eq i32 %error, 183
+  %exists = or i1 %file_exists, %already_exists
+  %status_failed = select i1 %exists, i32 0, i32 -1
+  ret i32 %status_failed
+
+fail:
+  ret i32 -1
+}
+
+define internal i32 @sollang_platform_remove_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i16], align 2
+  %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+  %fits = icmp ule i64 %len, 259
+  br i1 %fits, label %convert, label %fail
+convert:
+  %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+  %copied = icmp ne i32 %copy_ok, 0
+  br i1 %copied, label %remove, label %fail
+
+remove:
+  %removed = call i32 @DeleteFileW(ptr %buf_ptr)
+  %success = icmp ne i32 %removed, 0
+  br i1 %success, label %removed_file, label %remove_failed
+
+removed_file:
+  ret i32 1
+
+remove_failed:
+  %error = call i32 @GetLastError()
+  %file_missing = icmp eq i32 %error, 2
+  %path_missing = icmp eq i32 %error, 3
+  %missing = or i1 %file_missing, %path_missing
+  %status = select i1 %missing, i32 0, i32 -1
+  ret i32 %status
+
+fail:
+  ret i32 -1
+}
+
+define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_len, ptr %destination, i64 %destination_len) #0 {
+entry:
+  %temporary_buf = alloca [260 x i16], align 2
+  %temporary_ptr = getelementptr inbounds [260 x i16], ptr %temporary_buf, i64 0, i64 0
+  %temporary_fits = icmp ule i64 %temporary_len, 259
+  br i1 %temporary_fits, label %convert_temporary, label %fail
+convert_temporary:
+  %temporary_ok = call i32 @sollang_windows_utf8_path(ptr %temporary, i64 %temporary_len, ptr %temporary_ptr, i32 260)
+  %temporary_valid = icmp ne i32 %temporary_ok, 0
+  br i1 %temporary_valid, label %copy_destination, label %fail
+
+copy_destination:
+  %destination_buf = alloca [260 x i16], align 2
+  %destination_ptr = getelementptr inbounds [260 x i16], ptr %destination_buf, i64 0, i64 0
+  %destination_fits = icmp ule i64 %destination_len, 259
+  br i1 %destination_fits, label %convert_destination, label %fail
+convert_destination:
+  %destination_ok = call i32 @sollang_windows_utf8_path(ptr %destination, i64 %destination_len, ptr %destination_ptr, i32 260)
+  %destination_valid = icmp ne i32 %destination_ok, 0
+  br i1 %destination_valid, label %replace, label %fail
+
+replace:
+  %result = call i32 @MoveFileExW(ptr %temporary_ptr, ptr %destination_ptr, i32 9)
+  ret i32 %result
+
+fail:
+  ret i32 0
+}
+
+define internal %sollang.file_handle_result @sollang_platform_open_owned_read_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i16], align 2
+  %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+  %fits = icmp ule i64 %len, 259
+  br i1 %fits, label %convert, label %fail
+convert:
+  %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+  %copy_is_ok = icmp ne i32 %copy_ok, 0
+  br i1 %copy_is_ok, label %open, label %fail
+
+open:
+  %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 1073741952, ptr null)
+  %handle_int = ptrtoint ptr %handle to i64
+  %invalid = icmp eq i64 %handle_int, -1
+  br i1 %invalid, label %fail, label %success
+
+success:
+  %ok0 = insertvalue %sollang.file_handle_result poison, i64 %handle_int, 0
+  %ok1 = insertvalue %sollang.file_handle_result %ok0, i32 1, 1
+  ret %sollang.file_handle_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_handle_result poison, i64 -1, 0
+  %fail1 = insertvalue %sollang.file_handle_result %fail0, i32 0, 1
+  ret %sollang.file_handle_result %fail1
+}
+
+define internal %sollang.file_handle_result @sollang_platform_open_owned_write_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i16], align 2
+  %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+  %fits = icmp ule i64 %len, 259
+  br i1 %fits, label %convert, label %fail
+convert:
+  %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buf_ptr, i32 260)
+  %copy_is_ok = icmp ne i32 %copy_ok, 0
+  br i1 %copy_is_ok, label %open, label %fail
+
+open:
+  %handle = call ptr @CreateFileW(ptr %buf_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 1073741952, ptr null)
+  %handle_int = ptrtoint ptr %handle to i64
+  %invalid = icmp eq i64 %handle_int, -1
+  br i1 %invalid, label %fail, label %success
+
+success:
+  %ok0 = insertvalue %sollang.file_handle_result poison, i64 %handle_int, 0
+  %ok1 = insertvalue %sollang.file_handle_result %ok0, i32 1, 1
+  ret %sollang.file_handle_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_handle_result poison, i64 -1, 0
+  %fail1 = insertvalue %sollang.file_handle_result %fail0, i32 0, 1
+  ret %sollang.file_handle_result %fail1
+}
+
+define internal i64 @sollang_platform_duplicate_owned_file(i64 %source_value) #0 {
+entry:
+  %source = inttoptr i64 %source_value to ptr
+  %process = call ptr @GetCurrentProcess()
+  %target_slot = alloca ptr, align 8
+  %ok = call i32 @DuplicateHandle(ptr %process, ptr %source, ptr %process, ptr %target_slot, i32 0, i32 0, i32 2)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %success, label %fail
+
+success:
+  %target = load ptr, ptr %target_slot, align 8
+  %target_value = ptrtoint ptr %target to i64
+  ret i64 %target_value
+
+fail:
+  ret i64 -1
+}
+
+define internal %sollang.file_count_result @sollang_platform_read_owned_file_at(i64 %handle_value, ptr %data, i64 %len64, i64 %offset) #0 {
+entry:
+  %valid_handle = icmp ne i64 %handle_value, -1
+  %valid_offset = icmp ule i64 %offset, 9223372036854775807
+  %fits = icmp ule i64 %len64, 4294967295
+  %ready0 = and i1 %valid_handle, %valid_offset
+  %ready = and i1 %ready0, %fits
+  br i1 %ready, label %read, label %fail
+
+read:
+  %handle = inttoptr i64 %handle_value to ptr
+  %overlapped = alloca [32 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %overlapped, i8 0, i64 32, i1 false)
+  %offset_low_slot = getelementptr i8, ptr %overlapped, i64 16
+  %offset_low = trunc i64 %offset to i32
+  store i32 %offset_low, ptr %offset_low_slot, align 4
+  %offset_high_slot = getelementptr i8, ptr %overlapped, i64 20
+  %offset_shifted = lshr i64 %offset, 32
+  %offset_high = trunc i64 %offset_shifted to i32
+  store i32 %offset_high, ptr %offset_high_slot, align 4
+  %count_slot = alloca i32, align 4
+  store i32 0, ptr %count_slot, align 4
+  %len = trunc i64 %len64 to i32
+  %started = call i32 @ReadFile(ptr %handle, ptr %data, i32 %len, ptr null, ptr %overlapped)
+  %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
+  %ok = icmp ne i32 %completed, 0
+  br i1 %ok, label %success, label %classify_failure
+
+classify_failure:
+  %error = call i32 @GetLastError()
+  %eof = icmp eq i32 %error, 38
+  br i1 %eof, label %success, label %fail
+
+success:
+  %count32 = load i32, ptr %count_slot, align 4
+  %count = zext i32 %count32 to i64
+  %ok0 = insertvalue %sollang.file_count_result poison, i64 %count, 0
+  %ok1 = insertvalue %sollang.file_count_result %ok0, i32 1, 1
+  ret %sollang.file_count_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_count_result %fail0, i32 0, 1
+  ret %sollang.file_count_result %fail1
+}
+
+define internal %sollang.file_count_result @sollang_platform_write_owned_file_at(i64 %handle_value, ptr %data, i64 %len64, i64 %offset) #0 {
+entry:
+  %valid_handle = icmp ne i64 %handle_value, -1
+  %valid_offset = icmp ule i64 %offset, 9223372036854775807
+  %fits = icmp ule i64 %len64, 4294967295
+  %ready0 = and i1 %valid_handle, %valid_offset
+  %ready = and i1 %ready0, %fits
+  br i1 %ready, label %write, label %fail
+
+write:
+  %handle = inttoptr i64 %handle_value to ptr
+  %overlapped = alloca [32 x i8], align 8
+  call void @llvm.memset.p0.i64(ptr %overlapped, i8 0, i64 32, i1 false)
+  %offset_low_slot = getelementptr i8, ptr %overlapped, i64 16
+  %offset_low = trunc i64 %offset to i32
+  store i32 %offset_low, ptr %offset_low_slot, align 4
+  %offset_high_slot = getelementptr i8, ptr %overlapped, i64 20
+  %offset_shifted = lshr i64 %offset, 32
+  %offset_high = trunc i64 %offset_shifted to i32
+  store i32 %offset_high, ptr %offset_high_slot, align 4
+  %count_slot = alloca i32, align 4
+  store i32 0, ptr %count_slot, align 4
+  %len = trunc i64 %len64 to i32
+  %started = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr null, ptr %overlapped)
+  %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
+  %ok = icmp ne i32 %completed, 0
+  br i1 %ok, label %success, label %fail
+
+success:
+  %count32 = load i32, ptr %count_slot, align 4
+  %count = zext i32 %count32 to i64
+  %ok0 = insertvalue %sollang.file_count_result poison, i64 %count, 0
+  %ok1 = insertvalue %sollang.file_count_result %ok0, i32 1, 1
+  ret %sollang.file_count_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_count_result %fail0, i32 0, 1
+  ret %sollang.file_count_result %fail1
+}
+
+define internal i32 @sollang_platform_sync_owned_file(i64 %handle_value) #0 {
+entry:
+  %valid = icmp ne i64 %handle_value, -1
+  br i1 %valid, label %sync, label %fail
+
+sync:
+  %handle = inttoptr i64 %handle_value to ptr
+  %ok = call i32 @FlushFileBuffers(ptr %handle)
+  ret i32 %ok
+
+fail:
+  ret i32 0
+}
+
+define internal void @sollang_platform_close_owned_file(i64 %handle_value) #0 {
+entry:
+  %valid = icmp ne i64 %handle_value, -1
+  br i1 %valid, label %close, label %done
+
+close:
+  %handle = inttoptr i64 %handle_value to ptr
+  %ignored = call i32 @CloseHandle(ptr %handle)
+  br label %done
+
+done:
+  ret void
+}
+
+define internal i32 @sollang_platform_open_write_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i8], align 1
+  %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+  %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+  %copy_is_ok = icmp ne i32 %copy_ok, 0
+  br i1 %copy_is_ok, label %open, label %fail
+
+open:
+  %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 1073741824, i32 0, ptr null, i32 2, i32 128, ptr null)
+  %handle_int = ptrtoint ptr %handle to i64
+  %invalid = icmp eq i64 %handle_int, -1
+  br i1 %invalid, label %fail, label %success
+
+success:
+  store ptr %handle, ptr @sollang_file_writer, align 8
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_platform_write_file_bytes(ptr %data, i64 %len64) #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_writer, align 8
+  %has_handle = icmp ne ptr %handle, null
+  br i1 %has_handle, label %write, label %fail
+
+write:
+  %written = alloca i32, align 4
+  %len = trunc i64 %len64 to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr %written, ptr null)
+  %written32 = load i32, ptr %written, align 4
+  %written64 = zext i32 %written32 to i64
+  %write_ok = icmp ne i32 %ok, 0
+  %full = icmp eq i64 %written64, %len64
+  %all_ok = and i1 %write_ok, %full
+  %result = zext i1 %all_ok to i32
+  ret i32 %result
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_platform_close_write_file() #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_writer, align 8
+  %has_handle = icmp ne ptr %handle, null
+  br i1 %has_handle, label %close, label %fail
+
+close:
+  %ok = call i32 @CloseHandle(ptr %handle)
+  %close_ok = icmp ne i32 %ok, 0
+  br i1 %close_ok, label %success, label %fail
+
+success:
+  store ptr null, ptr @sollang_file_writer, align 8
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_platform_open_read_file(ptr %path, i64 %len) #0 {
+entry:
+  %buf = alloca [260 x i8], align 1
+  %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+  %copy_ok = call i32 @sollang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+  %copy_is_ok = icmp ne i32 %copy_ok, 0
+  br i1 %copy_is_ok, label %open, label %fail
+
+open:
+  %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 -2147483648, i32 1, ptr null, i32 3, i32 128, ptr null)
+  %handle_int = ptrtoint ptr %handle to i64
+  %invalid = icmp eq i64 %handle_int, -1
+  br i1 %invalid, label %fail, label %success
+
+success:
+  store ptr %handle, ptr @sollang_file_reader, align 8
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal %sollang.file_count_result @sollang_platform_i64_file_count() #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_reader, align 8
+  %has_handle = icmp ne ptr %handle, null
+  br i1 %has_handle, label %size, label %fail
+
+size:
+  %size_ptr = alloca i64, align 8
+  %ok = call i32 @GetFileSizeEx(ptr %handle, ptr %size_ptr)
+  %size_ok = icmp ne i32 %ok, 0
+  br i1 %size_ok, label %check, label %fail
+
+check:
+  %bytes = load i64, ptr %size_ptr, align 8
+  %rem = urem i64 %bytes, 8
+  %aligned = icmp eq i64 %rem, 0
+  br i1 %aligned, label %success, label %fail
+
+success:
+  %count = udiv i64 %bytes, 8
+  %ok0 = insertvalue %sollang.file_count_result poison, i64 %count, 0
+  %ok1 = insertvalue %sollang.file_count_result %ok0, i32 1, 1
+  ret %sollang.file_count_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_count_result %fail0, i32 0, 1
+  ret %sollang.file_count_result %fail1
+}
+
+define internal %sollang.file_int_result @sollang_platform_read_i64_at(i64 %index) #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_reader, align 8
+  %has_handle = icmp ne ptr %handle, null
+  br i1 %has_handle, label %seek, label %fail
+
+seek:
+  %offset = mul i64 %index, 8
+  %seek_ok = call i32 @SetFilePointerEx(ptr %handle, i64 %offset, ptr null, i32 0)
+  %seek_is_ok = icmp ne i32 %seek_ok, 0
+  br i1 %seek_is_ok, label %read, label %fail
+
+read:
+  %value_ptr = alloca i64, align 8
+  %read_bytes = alloca i32, align 4
+  %ok = call i32 @ReadFile(ptr %handle, ptr %value_ptr, i32 8, ptr %read_bytes, ptr null)
+  %read_ok = icmp ne i32 %ok, 0
+  %read_count = load i32, ptr %read_bytes, align 4
+  %read_full = icmp eq i32 %read_count, 8
+  %all_ok = and i1 %read_ok, %read_full
+  br i1 %all_ok, label %success, label %fail
+
+success:
+  %value = load i64, ptr %value_ptr, align 8
+  %ok0 = insertvalue %sollang.file_int_result poison, i64 %value, 0
+  %ok1 = insertvalue %sollang.file_int_result %ok0, i32 1, 1
+  ret %sollang.file_int_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_int_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_int_result %fail0, i32 0, 1
+  ret %sollang.file_int_result %fail1
+}
+
+define internal %sollang.file_count_result @sollang_platform_read_file_bytes(ptr %data, i64 %len64) #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_reader, align 8
+  %has_handle = icmp ne ptr %handle, null
+  %fits = icmp ule i64 %len64, 4294967295
+  %ready = and i1 %has_handle, %fits
+  br i1 %ready, label %read, label %fail
+
+read:
+  %len = trunc i64 %len64 to i32
+  %count_ptr = alloca i32, align 4
+  %result = call i32 @ReadFile(ptr %handle, ptr %data, i32 %len, ptr %count_ptr, ptr null)
+  %ok = icmp ne i32 %result, 0
+  br i1 %ok, label %success, label %fail
+
+success:
+  %count32 = load i32, ptr %count_ptr, align 4
+  %count = zext i32 %count32 to i64
+  %ok0 = insertvalue %sollang.file_count_result poison, i64 %count, 0
+  %ok1 = insertvalue %sollang.file_count_result %ok0, i32 1, 1
+  ret %sollang.file_count_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_count_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_count_result %fail0, i32 0, 1
+  ret %sollang.file_count_result %fail1
+}
+
+define internal i32 @sollang_platform_close_read_file() #0 {
+entry:
+  %handle = load ptr, ptr @sollang_file_reader, align 8
+  %has_handle = icmp ne ptr %handle, null
+  br i1 %has_handle, label %close, label %fail
+
+close:
+  %ok = call i32 @CloseHandle(ptr %handle)
+  %close_ok = icmp ne i32 %ok, 0
+  br i1 %close_ok, label %success, label %fail
+
+success:
+  store ptr null, ptr @sollang_file_reader, align 8
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_directory_compare_nodes(ptr %left, ptr %right) #0 {
+entry:
+  %left_len_slot = getelementptr %sollang.directory_node, ptr %left, i32 0, i32 1
+  %left_len = load i64, ptr %left_len_slot, align 8
+  %right_len_slot = getelementptr %sollang.directory_node, ptr %right, i32 0, i32 1
+  %right_len = load i64, ptr %right_len_slot, align 8
+  %left_name = getelementptr i8, ptr %left, i64 24
+  %right_name = getelementptr i8, ptr %right, i64 24
+  %left_shorter = icmp ult i64 %left_len, %right_len
+  %minimum = select i1 %left_shorter, i64 %left_len, i64 %right_len
+  br label %compare
+
+compare:
+  %index = phi i64 [ 0, %entry ], [ %next, %equal_byte ]
+  %within = icmp ult i64 %index, %minimum
+  br i1 %within, label %compare_byte, label %compare_length
+
+compare_byte:
+  %left_ptr = getelementptr i8, ptr %left_name, i64 %index
+  %right_ptr = getelementptr i8, ptr %right_name, i64 %index
+  %left_byte = load i8, ptr %left_ptr, align 1
+  %right_byte = load i8, ptr %right_ptr, align 1
+  %same = icmp eq i8 %left_byte, %right_byte
+  br i1 %same, label %equal_byte, label %different_byte
+
+equal_byte:
+  %next = add i64 %index, 1
+  br label %compare
+
+different_byte:
+  %less = icmp ult i8 %left_byte, %right_byte
+  %byte_result = select i1 %less, i32 -1, i32 1
+  ret i32 %byte_result
+
+compare_length:
+  %same_length = icmp eq i64 %left_len, %right_len
+  br i1 %same_length, label %equal, label %different_length
+
+different_length:
+  %length_result = select i1 %left_shorter, i32 -1, i32 1
+  ret i32 %length_result
+
+equal:
+  ret i32 0
+}
+
+define internal ptr @sollang_directory_insert_sorted(ptr %head, ptr %node) #0 {
+entry:
+  %empty = icmp eq ptr %head, null
+  br i1 %empty, label %only, label %compare_head
+
+only:
+  %only_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  store ptr null, ptr %only_next, align 8
+  ret ptr %node
+
+compare_head:
+  %head_order = call i32 @sollang_directory_compare_nodes(ptr %node, ptr %head)
+  %before_head = icmp slt i32 %head_order, 0
+  br i1 %before_head, label %prepend, label %scan_start
+
+prepend:
+  %prepend_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  store ptr %head, ptr %prepend_next, align 8
+  ret ptr %node
+
+scan_start:
+  %head_next_slot = getelementptr %sollang.directory_node, ptr %head, i32 0, i32 0
+  %head_next = load ptr, ptr %head_next_slot, align 8
+  br label %scan
+
+scan:
+  %previous = phi ptr [ %head, %scan_start ], [ %current, %advance ]
+  %current = phi ptr [ %head_next, %scan_start ], [ %next, %advance ]
+  %at_end = icmp eq ptr %current, null
+  br i1 %at_end, label %append, label %compare_current
+
+compare_current:
+  %order = call i32 @sollang_directory_compare_nodes(ptr %node, ptr %current)
+  %before = icmp slt i32 %order, 0
+  br i1 %before, label %insert, label %advance
+
+advance:
+  %current_next_slot = getelementptr %sollang.directory_node, ptr %current, i32 0, i32 0
+  %next = load ptr, ptr %current_next_slot, align 8
+  br label %scan
+
+insert:
+  %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  store ptr %current, ptr %node_next, align 8
+  %previous_next = getelementptr %sollang.directory_node, ptr %previous, i32 0, i32 0
+  store ptr %node, ptr %previous_next, align 8
+  ret ptr %head
+
+append:
+  %append_node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  store ptr null, ptr %append_node_next, align 8
+  %append_previous_next = getelementptr %sollang.directory_node, ptr %previous, i32 0, i32 0
+  store ptr %node, ptr %append_previous_next, align 8
+  ret ptr %head
+}
+
+define internal void @sollang_directory_free_nodes(ptr %head) #0 {
+entry:
+  br label %loop
+
+loop:
+  %node = phi ptr [ %head, %entry ], [ %next, %body ]
+  %done = icmp eq ptr %node, null
+  br i1 %done, label %finish, label %body
+
+body:
+  %next_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  %next = load ptr, ptr %next_slot, align 8
+  call void @sollang_free(ptr %node)
+  br label %loop
+
+finish:
+  ret void
+}
+
+define internal ptr @sollang_directory_serialize(ptr %head, i64 %total) #0 {
+entry:
+  %empty = icmp eq i64 %total, 0
+  br i1 %empty, label %empty_result, label %allocate
+
+empty_result:
+  ret ptr null
+
+allocate:
+  %output = call ptr @sollang_alloc(i64 %total)
+  %allocated = icmp ne ptr %output, null
+  br i1 %allocated, label %loop, label %allocation_failed
+
+allocation_failed:
+  call void @sollang_directory_free_nodes(ptr %head)
+  ret ptr null
+
+loop:
+  %node = phi ptr [ %head, %allocate ], [ %next_node, %body ]
+  %offset = phi i64 [ 0, %allocate ], [ %next_offset, %body ]
+  %done = icmp eq ptr %node, null
+  br i1 %done, label %finish, label %body
+
+body:
+  %next_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  %next_node = load ptr, ptr %next_slot, align 8
+  %length_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
+  %length = load i64, ptr %length_slot, align 8
+  %kind_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
+  %kind = load i8, ptr %kind_slot, align 1
+  %record = getelementptr i8, ptr %output, i64 %offset
+  store i8 %kind, ptr %record, align 1
+  %length32 = trunc i64 %length to i32
+  %length0 = trunc i32 %length32 to i8
+  %length_shift1 = lshr i32 %length32, 8
+  %length1 = trunc i32 %length_shift1 to i8
+  %length_shift2 = lshr i32 %length32, 16
+  %length2 = trunc i32 %length_shift2 to i8
+  %length_shift3 = lshr i32 %length32, 24
+  %length3 = trunc i32 %length_shift3 to i8
+  %length_ptr0 = getelementptr i8, ptr %record, i64 1
+  %length_ptr1 = getelementptr i8, ptr %record, i64 2
+  %length_ptr2 = getelementptr i8, ptr %record, i64 3
+  %length_ptr3 = getelementptr i8, ptr %record, i64 4
+  store i8 %length0, ptr %length_ptr0, align 1
+  store i8 %length1, ptr %length_ptr1, align 1
+  store i8 %length2, ptr %length_ptr2, align 1
+  store i8 %length3, ptr %length_ptr3, align 1
+  %destination = getelementptr i8, ptr %record, i64 5
+  %source = getelementptr i8, ptr %node, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %source, i64 %length, i1 false)
+  %record_size = add i64 %length, 5
+  %next_offset = add i64 %offset, %record_size
+  call void @sollang_free(ptr %node)
+  br label %loop
+
+finish:
+  ret ptr %output
+}
+
+define internal %sollang.path_absolute_result @sollang_platform_absolute_path(ptr %path, i64 %len, i32 %style) #0 {
+entry:
+  %native_style = icmp eq i32 %style, 1
+  %nonempty = icmp ugt i64 %len, 0
+  %bounded = icmp ult i64 %len, 2147483647
+  %sized = and i1 %nonempty, %bounded
+  %valid = and i1 %native_style, %sized
+  br i1 %valid, label %scan, label %fail
+scan:
+  %scan_index = phi i64 [0, %entry], [%scan_next, %scan_step]
+  %only_spaces = phi i1 [true, %entry], [%remaining_spaces, %scan_step]
+  %byte_ptr = getelementptr i8, ptr %path, i64 %scan_index
+  %byte = load i8, ptr %byte_ptr, align 1
+  %nul = icmp eq i8 %byte, 0
+  br i1 %nul, label %fail, label %scan_step
+scan_step:
+  %space = icmp eq i8 %byte, 32
+  %remaining_spaces = and i1 %only_spaces, %space
+  %scan_next = add i64 %scan_index, 1
+  %scan_done = icmp eq i64 %scan_next, %len
+  br i1 %scan_done, label %validated, label %scan
+validated:
+  br i1 %remaining_spaces, label %fail, label %measure
+measure:
+  %len32 = trunc i64 %len to i32
+  %input_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr null, i32 0)
+  %input_valid = icmp sgt i32 %input_chars, 0
+  br i1 %input_valid, label %allocate_input, label %fail
+allocate_input:
+  %input_chars64 = zext i32 %input_chars to i64
+  %input_capacity = add i64 %input_chars64, 1
+  %input_bytes = mul i64 %input_capacity, 2
+  %input = call ptr @sollang_alloc(i64 %input_bytes)
+  %input_ok = icmp ne ptr %input, null
+  br i1 %input_ok, label %convert_input, label %fail
+convert_input:
+  %input_written = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr %input, i32 %input_chars)
+  %converted = icmp eq i32 %input_written, %input_chars
+  br i1 %converted, label %terminate_input, label %input_fail
+terminate_input:
+  %input_end = getelementptr i16, ptr %input, i64 %input_chars64
+  store i16 0, ptr %input_end, align 2
+  %has_prefix = icmp uge i64 %len, 4
+  br i1 %has_prefix, label %inspect_prefix, label %measure_absolute
+inspect_prefix:
+  %prefix0 = load i8, ptr %path, align 1
+  %prefix1_ptr = getelementptr i8, ptr %path, i64 1
+  %prefix2_ptr = getelementptr i8, ptr %path, i64 2
+  %prefix3_ptr = getelementptr i8, ptr %path, i64 3
+  %prefix1 = load i8, ptr %prefix1_ptr, align 1
+  %prefix2 = load i8, ptr %prefix2_ptr, align 1
+  %prefix3 = load i8, ptr %prefix3_ptr, align 1
+  %slash0 = icmp eq i8 %prefix0, 92
+  %slash1 = icmp eq i8 %prefix1, 92
+  %question1 = icmp eq i8 %prefix1, 63
+  %question2 = icmp eq i8 %prefix2, 63
+  %slash3 = icmp eq i8 %prefix3, 92
+  %extended_second = or i1 %slash1, %question1
+  %extended_front = and i1 %slash0, %extended_second
+  %extended_back = and i1 %question2, %slash3
+  %extended = and i1 %extended_front, %extended_back
+  br i1 %extended, label %preserve_extended, label %measure_absolute
+preserve_extended:
+  %preserved = call ptr @sollang_alloc(i64 %len)
+  %preserved_ok = icmp ne ptr %preserved, null
+  br i1 %preserved_ok, label %copy_extended, label %input_fail
+copy_extended:
+  call void @llvm.memcpy.p0.p0.i64(ptr %preserved, ptr %path, i64 %len, i1 false)
+  call void @sollang_free(ptr %input)
+  %extended_result0 = insertvalue %sollang.path_absolute_result poison, ptr %preserved, 0
+  %extended_result1 = insertvalue %sollang.path_absolute_result %extended_result0, i64 %len, 1
+  %extended_result2 = insertvalue %sollang.path_absolute_result %extended_result1, i32 1, 2
+  ret %sollang.path_absolute_result %extended_result2
+measure_absolute:
+  %needed = call i32 @GetFullPathNameW(ptr %input, i32 0, ptr null, ptr null)
+  %has_size = icmp ugt i32 %needed, 0
+  br i1 %has_size, label %allocate_absolute, label %input_fail
+allocate_absolute:
+  %needed64 = zext i32 %needed to i64
+  %absolute_bytes = mul i64 %needed64, 2
+  %absolute = call ptr @sollang_alloc(i64 %absolute_bytes)
+  %absolute_ok = icmp ne ptr %absolute, null
+  br i1 %absolute_ok, label %resolve, label %input_fail
+resolve:
+  %written = call i32 @GetFullPathNameW(ptr %input, i32 %needed, ptr %absolute, ptr null)
+  %resolved_nonempty = icmp ugt i32 %written, 0
+  %resolved_fits = icmp ult i32 %written, %needed
+  %resolved = and i1 %resolved_nonempty, %resolved_fits
+  call void @sollang_free(ptr %input)
+  br i1 %resolved, label %measure_output, label %absolute_fail
+measure_output:
+  %utf8_size = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %absolute, i32 %written, ptr null, i32 0, ptr null, ptr null)
+  %output_nonempty = icmp sgt i32 %utf8_size, 0
+  br i1 %output_nonempty, label %allocate_output, label %absolute_fail
+allocate_output:
+  %utf8_size64 = zext i32 %utf8_size to i64
+  %output = call ptr @sollang_alloc(i64 %utf8_size64)
+  %output_ok = icmp ne ptr %output, null
+  br i1 %output_ok, label %convert_output, label %absolute_fail
+convert_output:
+  %output_written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %absolute, i32 %written, ptr %output, i32 %utf8_size, ptr null, ptr null)
+  %output_complete = icmp eq i32 %output_written, %utf8_size
+  call void @sollang_free(ptr %absolute)
+  br i1 %output_complete, label %success, label %output_fail
+success:
+  %result0 = insertvalue %sollang.path_absolute_result poison, ptr %output, 0
+  %result1 = insertvalue %sollang.path_absolute_result %result0, i64 %utf8_size64, 1
+  %result2 = insertvalue %sollang.path_absolute_result %result1, i32 1, 2
+  ret %sollang.path_absolute_result %result2
+output_fail:
+  call void @sollang_free(ptr %output)
+  br label %fail
+absolute_fail:
+  call void @sollang_free(ptr %absolute)
+  br label %fail
+input_fail:
+  call void @sollang_free(ptr %input)
+  br label %fail
+fail:
+  ret %sollang.path_absolute_result zeroinitializer
+}
+define internal i32 @sollang_platform_create_directory(ptr %path, i64 %len, i32 %style) #0 {
+entry:
+  %style_ok = icmp eq i32 %style, 1
+  %length_ok = icmp ule i64 %len, 32766
+  %valid = and i1 %style_ok, %length_ok
+  br i1 %valid, label %prepare, label %fail
+
+prepare:
+  %capacity = add i64 %len, 1
+  %buffer_size = mul i64 %capacity, 2
+  %buffer = call ptr @sollang_alloc(i64 %buffer_size)
+  %buffer_ok = icmp ne ptr %buffer, null
+  br i1 %buffer_ok, label %convert, label %fail
+
+convert:
+  %capacity32 = trunc i64 %capacity to i32
+  %converted = call i32 @sollang_windows_utf8_path(ptr %path, i64 %len, ptr %buffer, i32 %capacity32)
+  %path_ok = icmp ne i32 %converted, 0
+  br i1 %path_ok, label %create, label %fail_free
+create:
+  %created = call i32 @CreateDirectoryW(ptr %buffer, ptr null)
+  %created_ok = icmp ne i32 %created, 0
+  br i1 %created_ok, label %success_free, label %inspect_existing
+
+inspect_existing:
+  %attributes = call i32 @GetFileAttributesW(ptr %buffer)
+  %attributes_valid = icmp ne i32 %attributes, -1
+  %directory_bits = and i32 %attributes, 16
+  %is_directory = icmp ne i32 %directory_bits, 0
+  %exists_as_directory = and i1 %attributes_valid, %is_directory
+  br i1 %exists_as_directory, label %success_free, label %fail_free
+
+success_free:
+  call void @sollang_free(ptr %buffer)
+  ret i32 1
+
+fail_free:
+  call void @sollang_free(ptr %buffer)
+  br label %fail
+
+fail:
+  ret i32 0
+}
+
+define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
+entry:
+  %style_ok = icmp eq i32 %style, 1
+  %length_ok = icmp ule i64 %len, 32764
+  %valid = and i1 %style_ok, %length_ok
+  br i1 %valid, label %prepare, label %fail
+
+prepare:
+  %buffer_size = add i64 %len, 3
+  %pattern = call ptr @sollang_alloc(i64 %buffer_size)
+  %pattern_ok = icmp ne ptr %pattern, null
+  br i1 %pattern_ok, label %copy_path, label %fail
+
+copy_path:
+  call void @llvm.memcpy.p0.p0.i64(ptr %pattern, ptr %path, i64 %len, i1 false)
+  %has_path = icmp ugt i64 %len, 0
+  br i1 %has_path, label %inspect_last, label %append_separator
+
+inspect_last:
+  %last_index = sub i64 %len, 1
+  %last_ptr = getelementptr i8, ptr %pattern, i64 %last_index
+  %last = load i8, ptr %last_ptr, align 1
+  %last_slash = icmp eq i8 %last, 47
+  %last_backslash = icmp eq i8 %last, 92
+  %has_separator = or i1 %last_slash, %last_backslash
+  br i1 %has_separator, label %append_star, label %append_separator
+
+append_separator:
+  %separator_ptr = getelementptr i8, ptr %pattern, i64 %len
+  store i8 92, ptr %separator_ptr, align 1
+  %separator_star_index = add i64 %len, 1
+  %separator_star_ptr = getelementptr i8, ptr %pattern, i64 %separator_star_index
+  store i8 42, ptr %separator_star_ptr, align 1
+  %separator_zero_index = add i64 %len, 2
+  %separator_zero_ptr = getelementptr i8, ptr %pattern, i64 %separator_zero_index
+  store i8 0, ptr %separator_zero_ptr, align 1
+  br label %open
+
+append_star:
+  %star_ptr = getelementptr i8, ptr %pattern, i64 %len
+  store i8 42, ptr %star_ptr, align 1
+  %star_zero_index = add i64 %len, 1
+  %star_zero_ptr = getelementptr i8, ptr %pattern, i64 %star_zero_index
+  store i8 0, ptr %star_zero_ptr, align 1
+  br label %open
+
+open:
+  %pattern_extra = phi i64 [ 2, %append_separator ], [ 1, %append_star ]
+  %pattern_capacity = add i64 %len, 3
+  %wide_bytes = mul i64 %pattern_capacity, 2
+  %wide_pattern = call ptr @sollang_alloc(i64 %wide_bytes)
+  %wide_ok = icmp ne ptr %wide_pattern, null
+  br i1 %wide_ok, label %convert_pattern, label %pattern_fail
+convert_pattern:
+  %actual_pattern_length = add i64 %len, %pattern_extra
+  %capacity32 = trunc i64 %pattern_capacity to i32
+  %converted = call i32 @sollang_windows_utf8_path(ptr %pattern, i64 %actual_pattern_length, ptr %wide_pattern, i32 %capacity32)
+  call void @sollang_free(ptr %pattern)
+  %converted_ok = icmp ne i32 %converted, 0
+  br i1 %converted_ok, label %open_wide, label %wide_fail
+open_wide:
+  %find_data = alloca [592 x i8], align 8
+  %utf8_name = alloca [1040 x i8], align 1
+  %handle = call ptr @FindFirstFileW(ptr %wide_pattern, ptr %find_data)
+  call void @sollang_free(ptr %wide_pattern)
+  %invalid = icmp eq ptr %handle, inttoptr (i64 -1 to ptr)
+  br i1 %invalid, label %fail, label %enumerate
+pattern_fail:
+  call void @sollang_free(ptr %pattern)
+  br label %fail
+wide_fail:
+  call void @sollang_free(ptr %wide_pattern)
+  br label %fail
+
+enumerate:
+  %head = phi ptr [ null, %open_wide ], [ %advanced_head, %advance ]
+  %count = phi i64 [ 0, %open_wide ], [ %advanced_count, %advance ]
+  %total = phi i64 [ 0, %open_wide ], [ %advanced_total, %advance ]
+  %name = getelementptr i8, ptr %find_data, i64 44
+  br label %name_length
+
+name_length:
+  %name_index = phi i64 [ 0, %enumerate ], [ %name_next, %name_continue ]
+  %name_slot = getelementptr i16, ptr %name, i64 %name_index
+  %name_unit = load i16, ptr %name_slot, align 2
+  %name_end = icmp eq i16 %name_unit, 0
+  %name_limit = icmp eq i64 %name_index, 259
+  %name_done = or i1 %name_end, %name_limit
+  br i1 %name_done, label %inspect_name, label %name_continue
+
+name_continue:
+  %name_next = add i64 %name_index, 1
+  br label %name_length
+
+inspect_name:
+  %first = load i16, ptr %name, align 2
+  %second_ptr = getelementptr i16, ptr %name, i64 1
+  %second = load i16, ptr %second_ptr, align 2
+  %length_one = icmp eq i64 %name_index, 1
+  %length_two = icmp eq i64 %name_index, 2
+  %first_dot = icmp eq i16 %first, 46
+  %second_dot = icmp eq i16 %second, 46
+  %dot = and i1 %length_one, %first_dot
+  %two_dots = and i1 %first_dot, %second_dot
+  %dotdot = and i1 %length_two, %two_dots
+  %special = or i1 %dot, %dotdot
+  br i1 %special, label %skip, label %convert_name
+convert_name:
+  %name_index32 = trunc i64 %name_index to i32
+  %utf8_length32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %name, i32 %name_index32, ptr %utf8_name, i32 1040, ptr null, ptr null)
+  %name_valid = icmp sgt i32 %utf8_length32, 0
+  br i1 %name_valid, label %allocate_node, label %conversion_failed
+
+allocate_node:
+  %utf8_length = zext i32 %utf8_length32 to i64
+  %node_size = add i64 %utf8_length, 24
+  %node = call ptr @sollang_alloc(i64 %node_size)
+  %node_ok = icmp ne ptr %node, null
+  br i1 %node_ok, label %initialize_node, label %allocation_failed
+
+initialize_node:
+  %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+  store ptr null, ptr %node_next, align 8
+  %node_length = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
+  store i64 %utf8_length, ptr %node_length, align 8
+  %attributes = load i32, ptr %find_data, align 4
+  %reparse_bits = and i32 %attributes, 1024
+  %is_reparse = icmp ne i32 %reparse_bits, 0
+  %directory_bits = and i32 %attributes, 16
+  %is_directory = icmp ne i32 %directory_bits, 0
+  %ordinary_kind = select i1 %is_directory, i8 1, i8 0
+  %kind = select i1 %is_reparse, i8 2, i8 %ordinary_kind
+  %node_kind = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
+  store i8 %kind, ptr %node_kind, align 1
+  %node_name = getelementptr i8, ptr %node, i64 24
+  call void @llvm.memcpy.p0.p0.i64(ptr %node_name, ptr %utf8_name, i64 %utf8_length, i1 false)
+  %inserted_head = call ptr @sollang_directory_insert_sorted(ptr %head, ptr %node)
+  %inserted_count = add i64 %count, 1
+  %record_size = add i64 %utf8_length, 5
+  %inserted_total = add i64 %total, %record_size
+  br label %advance
+
+skip:
+  br label %advance
+
+advance:
+  %advanced_head = phi ptr [ %head, %skip ], [ %inserted_head, %initialize_node ]
+  %advanced_count = phi i64 [ %count, %skip ], [ %inserted_count, %initialize_node ]
+  %advanced_total = phi i64 [ %total, %skip ], [ %inserted_total, %initialize_node ]
+  call void @SetLastError(i32 0)
+  %has_next_status = call i32 @FindNextFileW(ptr %handle, ptr %find_data)
+  %has_next = icmp ne i32 %has_next_status, 0
+  br i1 %has_next, label %enumerate, label %finish_enumeration
+
+finish_enumeration:
+  %last_error = call i32 @GetLastError()
+  %normal_end = icmp eq i32 %last_error, 18
+  br i1 %normal_end, label %close_success, label %enumeration_failed
+
+close_success:
+  %closed = call i32 @FindClose(ptr %handle)
+  %raw = call ptr @sollang_directory_serialize(ptr %advanced_head, i64 %advanced_total)
+  %has_payload = icmp ugt i64 %advanced_total, 0
+  %raw_missing = icmp eq ptr %raw, null
+  %serialization_failed = and i1 %has_payload, %raw_missing
+  br i1 %serialization_failed, label %fail, label %success
+
+success:
+  %success0 = insertvalue %sollang.directory_result poison, ptr %raw, 0
+  %success1 = insertvalue %sollang.directory_result %success0, i64 %advanced_total, 1
+  %success2 = insertvalue %sollang.directory_result %success1, i64 %advanced_count, 2
+  %success3 = insertvalue %sollang.directory_result %success2, i32 1, 3
+  ret %sollang.directory_result %success3
+
+allocation_failed:
+  call void @sollang_directory_free_nodes(ptr %head)
+  %allocation_closed = call i32 @FindClose(ptr %handle)
+  br label %fail
+conversion_failed:
+  call void @sollang_directory_free_nodes(ptr %head)
+  %conversion_closed = call i32 @FindClose(ptr %handle)
+  br label %fail
+
+enumeration_failed:
+  call void @sollang_directory_free_nodes(ptr %advanced_head)
+  %failure_closed = call i32 @FindClose(ptr %handle)
+  br label %fail
+
+fail:
+  %failure0 = insertvalue %sollang.directory_result poison, ptr null, 0
+  %failure1 = insertvalue %sollang.directory_result %failure0, i64 0, 1
+  %failure2 = insertvalue %sollang.directory_result %failure1, i64 0, 2
+  %failure3 = insertvalue %sollang.directory_result %failure2, i32 0, 3
+  ret %sollang.directory_result %failure3
+}
+
+define internal %sollang.path_query_result @sollang_platform_query_path(ptr %path, i64 %len, i32 %style) #0 {
+entry:
+  %style_ok = icmp eq i32 %style, 1
+  %len32 = trunc i64 %len to i32
+  %len_roundtrip = zext i32 %len32 to i64
+  %length_ok = icmp eq i64 %len_roundtrip, %len
+  %input_ok = and i1 %style_ok, %length_ok
+  br i1 %input_ok, label %measure_input, label %fail
+
+measure_input:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr null, i32 0)
+  %wide_ok = icmp sgt i32 %wide_chars, 0
+  br i1 %wide_ok, label %allocate_input, label %fail
+
+allocate_input:
+  %wide_chars64 = zext i32 %wide_chars to i64
+  %wide_with_zero = add i64 %wide_chars64, 1
+  %wide_bytes = mul i64 %wide_with_zero, 2
+  %wide_input = call ptr @sollang_alloc(i64 %wide_bytes)
+  %wide_input_ok = icmp ne ptr %wide_input, null
+  br i1 %wide_input_ok, label %convert_input, label %fail
+
+convert_input:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %path, i32 %len32, ptr %wide_input, i32 %wide_chars)
+  %converted_ok = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_ok, label %terminate_input, label %input_fail
+
+terminate_input:
+  %wide_zero = getelementptr i16, ptr %wide_input, i64 %wide_chars64
+  store i16 0, ptr %wide_zero, align 2
+  %handle = call ptr @CreateFileW(ptr %wide_input, i32 0, i32 7, ptr null, i32 3, i32 33554432, ptr null)
+  call void @sollang_free(ptr %wide_input)
+  %invalid_handle = inttoptr i64 -1 to ptr
+  %handle_ok = icmp ne ptr %handle, %invalid_handle
+  br i1 %handle_ok, label %measure_canonical, label %fail
+
+measure_canonical:
+  %canonical_chars = call i32 @GetFinalPathNameByHandleW(ptr %handle, ptr null, i32 0, i32 0)
+  %canonical_ok = icmp sgt i32 %canonical_chars, 0
+  br i1 %canonical_ok, label %allocate_canonical, label %handle_fail
+
+allocate_canonical:
+  %canonical_chars64 = zext i32 %canonical_chars to i64
+  %canonical_capacity = add i32 %canonical_chars, 1
+  %canonical_capacity64 = zext i32 %canonical_capacity to i64
+  %canonical_wide_bytes = mul i64 %canonical_capacity64, 2
+  %canonical_wide = call ptr @sollang_alloc(i64 %canonical_wide_bytes)
+  %canonical_wide_ok = icmp ne ptr %canonical_wide, null
+  br i1 %canonical_wide_ok, label %read_canonical, label %handle_fail
+
+read_canonical:
+  %canonical_written = call i32 @GetFinalPathNameByHandleW(ptr %handle, ptr %canonical_wide, i32 %canonical_capacity, i32 0)
+  %canonical_written_positive = icmp sgt i32 %canonical_written, 0
+  %canonical_written_fits = icmp ule i32 %canonical_written, %canonical_chars
+  %canonical_written_ok = and i1 %canonical_written_positive, %canonical_written_fits
+  br i1 %canonical_written_ok, label %metadata, label %canonical_wide_fail
+
+metadata:
+  %information = alloca [52 x i8], align 8
+  %information_status = call i32 @GetFileInformationByHandle(ptr %handle, ptr %information)
+  %information_ok = icmp ne i32 %information_status, 0
+  br i1 %information_ok, label %measure_utf8, label %canonical_wide_fail
+
+measure_utf8:
+  %utf8_bytes = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %canonical_wide, i32 %canonical_written, ptr null, i32 0, ptr null, ptr null)
+  %utf8_ok = icmp sgt i32 %utf8_bytes, 0
+  br i1 %utf8_ok, label %allocate_utf8, label %canonical_wide_fail
+
+allocate_utf8:
+  %utf8_bytes64 = zext i32 %utf8_bytes to i64
+  %canonical_utf8 = call ptr @sollang_alloc(i64 %utf8_bytes64)
+  %canonical_utf8_ok = icmp ne ptr %canonical_utf8, null
+  br i1 %canonical_utf8_ok, label %convert_canonical, label %canonical_wide_fail
+
+convert_canonical:
+  %utf8_written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %canonical_wide, i32 %canonical_written, ptr %canonical_utf8, i32 %utf8_bytes, ptr null, ptr null)
+  %utf8_written_ok = icmp eq i32 %utf8_written, %utf8_bytes
+  br i1 %utf8_written_ok, label %success, label %utf8_fail
+
+success:
+  %attributes = load i32, ptr %information, align 4
+  %directory_bits = and i32 %attributes, 16
+  %is_directory = icmp ne i32 %directory_bits, 0
+  %kind = select i1 %is_directory, i8 1, i8 0
+  %size_high_ptr = getelementptr i8, ptr %information, i64 32
+  %size_high32 = load i32, ptr %size_high_ptr, align 4
+  %size_low_ptr = getelementptr i8, ptr %information, i64 36
+  %size_low32 = load i32, ptr %size_low_ptr, align 4
+  %size_high = zext i32 %size_high32 to i64
+  %size_low = zext i32 %size_low32 to i64
+  %size_shifted = shl i64 %size_high, 32
+  %size = or i64 %size_shifted, %size_low
+  %time_low_ptr = getelementptr i8, ptr %information, i64 20
+  %time_low32 = load i32, ptr %time_low_ptr, align 4
+  %time_high_ptr = getelementptr i8, ptr %information, i64 24
+  %time_high32 = load i32, ptr %time_high_ptr, align 4
+  %time_low = zext i32 %time_low32 to i64
+  %time_high = zext i32 %time_high32 to i64
+  %time_shifted = shl i64 %time_high, 32
+  %file_time = or i64 %time_shifted, %time_low
+  %unix_ticks = sub i64 %file_time, 116444736000000000
+  %modified_nanos = mul i64 %unix_ticks, 100
+  call void @sollang_free(ptr %canonical_wide)
+  %closed = call i32 @CloseHandle(ptr %handle)
+  %result0 = insertvalue %sollang.path_query_result poison, ptr %canonical_utf8, 0
+  %result1 = insertvalue %sollang.path_query_result %result0, i64 %utf8_bytes64, 1
+  %result2 = insertvalue %sollang.path_query_result %result1, i8 %kind, 2
+  %result3 = insertvalue %sollang.path_query_result %result2, i64 %size, 3
+  %result4 = insertvalue %sollang.path_query_result %result3, i64 %modified_nanos, 4
+  %result5 = insertvalue %sollang.path_query_result %result4, i32 1, 5
+  ret %sollang.path_query_result %result5
+
+utf8_fail:
+  call void @sollang_free(ptr %canonical_utf8)
+  br label %canonical_wide_fail
+
+canonical_wide_fail:
+  call void @sollang_free(ptr %canonical_wide)
+  br label %handle_fail
+
+handle_fail:
+  %failed_closed = call i32 @CloseHandle(ptr %handle)
+  br label %fail
+
+input_fail:
+  call void @sollang_free(ptr %wide_input)
+  br label %fail
+
+fail:
+  %failure0 = insertvalue %sollang.path_query_result poison, ptr null, 0
+  %failure1 = insertvalue %sollang.path_query_result %failure0, i64 0, 1
+  %failure2 = insertvalue %sollang.path_query_result %failure1, i8 3, 2
+  %failure3 = insertvalue %sollang.path_query_result %failure2, i64 0, 3
+  %failure4 = insertvalue %sollang.path_query_result %failure3, i64 0, 4
+  %failure5 = insertvalue %sollang.path_query_result %failure4, i32 0, 5
+  ret %sollang.path_query_result %failure5
+}
+
+define internal %sollang.mapped_bytes @sollang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) #0 {
+entry:
+  %buf = alloca [260 x i16], align 2
+  %buf_ptr = getelementptr inbounds [260 x i16], ptr %buf, i64 0, i64 0
+  %copy_ok = call i32 @sollang_windows_utf8_path(ptr %path, i64 %path_len, ptr %buf_ptr, i32 260)
+  %path_ok = icmp ne i32 %copy_ok, 0
+  br i1 %path_ok, label %open, label %fail
+
+open:
+  %access = select i1 %writable, i32 -1073741824, i32 -2147483648
+  %creation = select i1 %writable, i32 4, i32 3
+  %file = call ptr @CreateFileW(ptr %buf_ptr, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+  %file_int = ptrtoint ptr %file to i64
+  %file_ok = icmp ne i64 %file_int, -1
+  br i1 %file_ok, label %resize_check, label %fail
+
+resize_check:
+  %has_requested_size = icmp ne i64 %requested_size, 0
+  %resize = and i1 %writable, %has_requested_size
+  br i1 %resize, label %resize_file, label %read_size
+
+resize_file:
+  %seek_ok = call i32 @SetFilePointerEx(ptr %file, i64 %requested_size, ptr null, i32 0)
+  %seek_valid = icmp ne i32 %seek_ok, 0
+  br i1 %seek_valid, label %resize_end, label %close_fail
+
+resize_end:
+  %end_ok = call i32 @SetEndOfFile(ptr %file)
+  %resize_valid = icmp ne i32 %end_ok, 0
+  br i1 %resize_valid, label %read_size, label %close_fail
+
+read_size:
+  %size_slot = alloca i64, align 8
+  %size_ok = call i32 @GetFileSizeEx(ptr %file, ptr %size_slot)
+  %size_valid = icmp ne i32 %size_ok, 0
+  br i1 %size_valid, label %bounds, label %close_fail
+
+bounds:
+  %file_size = load i64, ptr %size_slot, align 8
+  %offset_ok = icmp ule i64 %offset, %file_size
+  %remaining = sub i64 %file_size, %offset
+  %whole = icmp eq i64 %requested_len, 0
+  %view_len = select i1 %whole, i64 %remaining, i64 %requested_len
+  %len_nonzero = icmp ne i64 %view_len, 0
+  %len_ok = icmp ule i64 %view_len, %remaining
+  %bounds1 = and i1 %offset_ok, %len_nonzero
+  %bounds_ok = and i1 %bounds1, %len_ok
+  br i1 %bounds_ok, label %mapping, label %close_fail
+
+mapping:
+  %protect = select i1 %writable, i32 4, i32 2
+  %mapping_handle = call ptr @CreateFileMappingA(ptr %file, ptr null, i32 %protect, i32 0, i32 0, ptr null)
+  %mapping_ok = icmp ne ptr %mapping_handle, null
+  br i1 %mapping_ok, label %view, label %close_fail
+
+view:
+  %aligned = and i64 %offset, -65536
+  %delta = sub i64 %offset, %aligned
+  %mapped_len = add i64 %delta, %view_len
+  %high64 = lshr i64 %aligned, 32
+  %high = trunc i64 %high64 to i32
+  %low = trunc i64 %aligned to i32
+  %desired = select i1 %writable, i32 2, i32 4
+  %base = call ptr @MapViewOfFile(ptr %mapping_handle, i32 %desired, i32 %high, i32 %low, i64 %mapped_len)
+  %base_ok = icmp ne ptr %base, null
+  br i1 %base_ok, label %success, label %mapping_close_fail
+
+success:
+  %data = getelementptr i8, ptr %base, i64 %delta
+  %ignored_mapping = call i32 @CloseHandle(ptr %mapping_handle)
+  %ignored_file = call i32 @CloseHandle(ptr %file)
+  %r0 = insertvalue %sollang.mapped_bytes poison, ptr %data, 0
+  %r1 = insertvalue %sollang.mapped_bytes %r0, i64 %view_len, 1
+  %r2 = insertvalue %sollang.mapped_bytes %r1, ptr %base, 2
+  %r3 = insertvalue %sollang.mapped_bytes %r2, i64 %mapped_len, 3
+  %r4 = insertvalue %sollang.mapped_bytes %r3, i1 %writable, 4
+  ret %sollang.mapped_bytes %r4
+
+mapping_close_fail:
+  %ignored_mapping_fail = call i32 @CloseHandle(ptr %mapping_handle)
+  br label %close_fail
+
+close_fail:
+  %ignored_close = call i32 @CloseHandle(ptr %file)
+  br label %fail
+
+fail:
+  %f0 = insertvalue %sollang.mapped_bytes zeroinitializer, i1 %writable, 4
+  ret %sollang.mapped_bytes %f0
+}
+
+define internal i32 @sollang_mapped_flush(ptr %base, i64 %mapped_len) #0 {
+entry:
+  %ok = call i32 @FlushViewOfFile(ptr %base, i64 %mapped_len)
+  ret i32 %ok
+}
+
+define internal void @sollang_mapped_unmap(ptr %base, i64 %mapped_len) #0 {
+entry:
+  %ignored = call i32 @UnmapViewOfFile(ptr %base)
+  ret void
+}
+
+define internal i64 @sollang_now_millis() #0 {
+entry:
+  %millis = call i64 @GetTickCount64()
+  ret i64 %millis
+}
+
+define internal i64 @sollang_utc_now_millis() #0 {
+entry:
+  %filetime = alloca [2 x i32], align 4
+  call void @GetSystemTimePreciseAsFileTime(ptr %filetime)
+  %low_ptr = getelementptr inbounds [2 x i32], ptr %filetime, i64 0, i64 0
+  %high_ptr = getelementptr inbounds [2 x i32], ptr %filetime, i64 0, i64 1
+  %low32 = load i32, ptr %low_ptr, align 4
+  %high32 = load i32, ptr %high_ptr, align 4
+  %low = zext i32 %low32 to i64
+  %high = zext i32 %high32 to i64
+  %shifted = shl i64 %high, 32
+  %ticks = or i64 %shifted, %low
+  %unix_ticks = sub i64 %ticks, 116444736000000000
+  %millis = udiv i64 %unix_ticks, 10000
+  ret i64 %millis
+}
+
+define internal void @sollang_wait_millis(i64 %requested) #0 {
+entry:
+  %positive = icmp sgt i64 %requested, 0
+  br i1 %positive, label %clamp, label %done
+
+clamp:
+  %too_large = icmp ugt i64 %requested, 4294967294
+  %bounded = select i1 %too_large, i64 4294967294, i64 %requested
+  %millis = trunc i64 %bounded to i32
+  call void @Sleep(i32 %millis)
+  br label %done
+
+done:
+  ret void
+}
+
+define internal ptr @sollang_alloc(i64 %bytes) #0 {
+entry:
+  %heap = call ptr @GetProcessHeap()
+  %ptr = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %bytes)
+  ret ptr %ptr
+}
+
+define internal void @sollang_free(ptr %ptr) #0 {
+entry:
+  %is_null = icmp eq ptr %ptr, null
+  br i1 %is_null, label %done, label %free
+
+free:
+  %heap = call ptr @GetProcessHeap()
+  %ignored = call i32 @HeapFree(ptr %heap, i32 0, ptr %ptr)
+  br label %done
+
+done:
+  ret void
+}
+
+define dso_local ptr @memset(ptr %dest, i32 %value, i64 %count) #0 {
+entry:
+  %byte = trunc i32 %value to i8
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %active = icmp ult i64 %i, %count
+  br i1 %active, label %body, label %done
+
+body:
+  %slot = getelementptr i8, ptr %dest, i64 %i
+  store i8 %byte, ptr %slot, align 1
+  %next = add i64 %i, 1
+  br label %loop
+
+done:
+  ret ptr %dest
+}
+
+define dso_local ptr @memcpy(ptr %dest, ptr %source, i64 %count) #0 {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %body ]
+  %active = icmp ult i64 %i, %count
+  br i1 %active, label %body, label %done
+
+body:
+  %src_slot = getelementptr i8, ptr %source, i64 %i
+  %dst_slot = getelementptr i8, ptr %dest, i64 %i
+  %byte = load i8, ptr %src_slot, align 1
+  store i8 %byte, ptr %dst_slot, align 1
+  %next = add i64 %i, 1
+  br label %loop
+
+done:
+  ret ptr %dest
+}
+
+define dso_local ptr @memmove(ptr %dest, ptr %source, i64 %count) #0 {
+entry:
+  %same = icmp eq ptr %dest, %source
+  %empty = icmp eq i64 %count, 0
+  %done_early = or i1 %same, %empty
+  br i1 %done_early, label %done, label %choose_direction
+
+choose_direction:
+  %forward = icmp ult ptr %dest, %source
+  br i1 %forward, label %forward_loop, label %backward_loop
+
+forward_loop:
+  %forward_i = phi i64 [ 0, %choose_direction ], [ %forward_next, %forward_body ]
+  %forward_active = icmp ult i64 %forward_i, %count
+  br i1 %forward_active, label %forward_body, label %done
+
+forward_body:
+  %forward_src = getelementptr i8, ptr %source, i64 %forward_i
+  %forward_dst = getelementptr i8, ptr %dest, i64 %forward_i
+  %forward_byte = load i8, ptr %forward_src, align 1
+  store i8 %forward_byte, ptr %forward_dst, align 1
+  %forward_next = add i64 %forward_i, 1
+  br label %forward_loop
+
+backward_loop:
+  %backward_i = phi i64 [ %count, %choose_direction ], [ %backward_next, %backward_body ]
+  %backward_active = icmp ugt i64 %backward_i, 0
+  br i1 %backward_active, label %backward_body, label %done
+
+backward_body:
+  %backward_next = sub i64 %backward_i, 1
+  %backward_src = getelementptr i8, ptr %source, i64 %backward_next
+  %backward_dst = getelementptr i8, ptr %dest, i64 %backward_next
+  %backward_byte = load i8, ptr %backward_src, align 1
+  store i8 %backward_byte, ptr %backward_dst, align 1
+  br label %backward_loop
+
+done:
+  ret ptr %dest
+}
+
+define internal i64 @sollang_format_u64(ptr %dest, i64 %value) #0 {
+entry:
+  br label %count
+
+count:
+  %count_n = phi i64 [ %value, %entry ], [ %count_q, %count_more ]
+  %length = phi i64 [ 1, %entry ], [ %next_length, %count_more ]
+  %count_q = udiv i64 %count_n, 10
+  %count_done = icmp eq i64 %count_q, 0
+  br i1 %count_done, label %write_entry, label %count_more
+
+count_more:
+  %next_length = add i64 %length, 1
+  br label %count
+
+write_entry:
+  %last_index = sub i64 %length, 1
+  br label %write
+
+write:
+  %write_n = phi i64 [ %value, %write_entry ], [ %write_q, %write ]
+  %index = phi i64 [ %last_index, %write_entry ], [ %previous_index, %write ]
+  %digit = urem i64 %write_n, 10
+  %write_q = udiv i64 %write_n, 10
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  %slot = getelementptr i8, ptr %dest, i64 %index
+  store i8 %ascii, ptr %slot, align 1
+  %previous_index = sub i64 %index, 1
+  %write_done = icmp eq i64 %write_q, 0
+  br i1 %write_done, label %return, label %write
+
+return:
+  ret i64 %length
+}
+
+define internal i64 @sollang_format_i64(ptr %dest, i64 %value) #0 {
+entry:
+  %negative = icmp slt i64 %value, 0
+  br i1 %negative, label %negative_value, label %positive_value
+
+negative_value:
+  store i8 45, ptr %dest, align 1
+  %digits_dest = getelementptr i8, ptr %dest, i64 1
+  %magnitude = sub i64 0, %value
+  %negative_digits = call i64 @sollang_format_u64(ptr %digits_dest, i64 %magnitude)
+  %negative_length = add i64 %negative_digits, 1
+  ret i64 %negative_length
+
+positive_value:
+  %positive_length = call i64 @sollang_format_u64(ptr %dest, i64 %value)
+  ret i64 %positive_length
+}
+
+define internal i32 @sollang_write_u64(ptr %stdout, i64 %value, ptr %written) #0 {
+entry:
+  %buf = alloca [20 x i8], align 1
+  %end = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 20
+  br label %digits
+
+digits:
+  %n = phi i64 [ %value, %entry ], [ %q, %digits ]
+  %p = phi ptr [ %end, %entry ], [ %next, %digits ]
+  %digit = urem i64 %n, 10
+  %q = udiv i64 %n, 10
+  %next = getelementptr i8, ptr %p, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %next, align 1
+  %done = icmp eq i64 %q, 0
+  br i1 %done, label %write, label %digits
+
+write:
+  %start_int = ptrtoint ptr %next to i64
+  %end_int = ptrtoint ptr %end to i64
+  %len = sub i64 %end_int, %start_int
+  %ok = call i32 @sollang_write(ptr %stdout, ptr %next, i64 %len, ptr %written)
+  ret i32 %ok
+}
+
+define internal i32 @sollang_write_i64(ptr %stdout, i64 %value, ptr %written) #0 {
+entry:
+  %negative = icmp slt i64 %value, 0
+  br i1 %negative, label %write_sign, label %write_digits
+
+write_sign:
+  %sign = alloca i8, align 1
+  store i8 45, ptr %sign, align 1
+  %sign_ok = call i32 @sollang_write(ptr %stdout, ptr %sign, i64 1, ptr %written)
+  %magnitude = sub i64 0, %value
+  %digits_ok_negative = call i32 @sollang_write_u64(ptr %stdout, i64 %magnitude, ptr %written)
+  %negative_ok = and i32 %sign_ok, %digits_ok_negative
+  ret i32 %negative_ok
+
+write_digits:
+  %digits_ok = call i32 @sollang_write_u64(ptr %stdout, i64 %value, ptr %written)
+  ret i32 %digits_ok
+}
+
+define internal %sollang.read_int_result @sollang_read_i64(ptr %stdin, ptr %read) #0 {
+entry:
+  %buf = alloca [64 x i8], align 1
+  %ok = call i32 @sollang_read_stdin(ptr %stdin, ptr %buf, i64 64, ptr %read)
+  %read_ok = icmp ne i32 %ok, 0
+  br i1 %read_ok, label %prepare, label %fail
+
+prepare:
+  %read32 = load i32, ptr %read, align 4
+  %len = zext i32 %read32 to i64
+  br label %skip
+
+skip:
+  %skip_idx = phi i64 [ 0, %prepare ], [ %skip_next, %skip_ws ]
+  %skip_has = icmp ult i64 %skip_idx, %len
+  br i1 %skip_has, label %skip_char, label %fail
+
+skip_char:
+  %skip_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %skip_idx
+  %skip_ch = load i8, ptr %skip_ptr, align 1
+  %skip_sp = icmp eq i8 %skip_ch, 32
+  %skip_tab = icmp eq i8 %skip_ch, 9
+  %skip_cr = icmp eq i8 %skip_ch, 13
+  %skip_lf = icmp eq i8 %skip_ch, 10
+  %skip_sp_tab = or i1 %skip_sp, %skip_tab
+  %skip_cr_lf = or i1 %skip_cr, %skip_lf
+  %skip_is_ws = or i1 %skip_sp_tab, %skip_cr_lf
+  br i1 %skip_is_ws, label %skip_ws, label %digit_entry
+
+skip_ws:
+  %skip_next = add i64 %skip_idx, 1
+  br label %skip
+
+digit_entry:
+  %first_ge = icmp uge i8 %skip_ch, 48
+  %first_le = icmp ule i8 %skip_ch, 57
+  %first_digit = and i1 %first_ge, %first_le
+  br i1 %first_digit, label %digits, label %fail
+
+digits:
+  %digit_idx = phi i64 [ %skip_idx, %digit_entry ], [ %digit_next, %digit_continue ]
+  %value = phi i64 [ 0, %digit_entry ], [ %value_next, %digit_continue ]
+  %digit_has = icmp ult i64 %digit_idx, %len
+  br i1 %digit_has, label %digit_char, label %success
+
+digit_char:
+  %digit_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %digit_idx
+  %digit_ch = load i8, ptr %digit_ptr, align 1
+  %digit_ge = icmp uge i8 %digit_ch, 48
+  %digit_le = icmp ule i8 %digit_ch, 57
+  %is_digit = and i1 %digit_ge, %digit_le
+  br i1 %is_digit, label %digit_continue, label %trail_entry
+
+digit_continue:
+  %digit64 = zext i8 %digit_ch to i64
+  %digit_value = sub i64 %digit64, 48
+  %value_x10 = mul i64 %value, 10
+  %value_next = add i64 %value_x10, %digit_value
+  %digit_next = add i64 %digit_idx, 1
+  br label %digits
+
+trail_entry:
+  br label %trail
+
+trail:
+  %trail_idx = phi i64 [ %digit_idx, %trail_entry ], [ %trail_next, %trail_ws ]
+  %trail_has = icmp ult i64 %trail_idx, %len
+  br i1 %trail_has, label %trail_char, label %success
+
+trail_char:
+  %trail_ptr = getelementptr inbounds [64 x i8], ptr %buf, i64 0, i64 %trail_idx
+  %trail_ch = load i8, ptr %trail_ptr, align 1
+  %trail_sp = icmp eq i8 %trail_ch, 32
+  %trail_tab = icmp eq i8 %trail_ch, 9
+  %trail_cr = icmp eq i8 %trail_ch, 13
+  %trail_lf = icmp eq i8 %trail_ch, 10
+  %trail_sp_tab = or i1 %trail_sp, %trail_tab
+  %trail_cr_lf = or i1 %trail_cr, %trail_lf
+  %trail_is_ws = or i1 %trail_sp_tab, %trail_cr_lf
+  br i1 %trail_is_ws, label %trail_ws, label %fail
+
+trail_ws:
+  %trail_next = add i64 %trail_idx, 1
+  br label %trail
+
+success:
+  %success_value = phi i64 [ %value, %digits ], [ %value, %trail ]
+  %success0 = insertvalue %sollang.read_int_result poison, i64 %success_value, 0
+  %success1 = insertvalue %sollang.read_int_result %success0, i32 1, 1
+  ret %sollang.read_int_result %success1
+
+fail:
+  %fail0 = insertvalue %sollang.read_int_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.read_int_result %fail0, i32 0, 1
+  ret %sollang.read_int_result %fail1
+}
+
+define internal i32 @sollang_copy_text_to_c_path(ptr %data, i64 %len, ptr %out) #0 {
+entry:
+  %too_long = icmp ugt i64 %len, 259
+  br i1 %too_long, label %fail, label %copy
+
+copy:
+  %i = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+  %done = icmp eq i64 %i, %len
+  br i1 %done, label %nul, label %copy_body
+
+copy_body:
+  %src = getelementptr i8, ptr %data, i64 %i
+  %ch = load i8, ptr %src, align 1
+  %dst = getelementptr i8, ptr %out, i64 %i
+  store i8 %ch, ptr %dst, align 1
+  %next = add i64 %i, 1
+  br label %copy
+
+nul:
+  %nul_ptr = getelementptr i8, ptr %out, i64 %len
+  store i8 0, ptr %nul_ptr, align 1
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_file_path_has_no_nul(ptr %data, i64 %len) #0 {
+entry:
+  br label %check
+
+check:
+  %i = phi i64 [ 0, %entry ], [ %next, %advance ]
+  %done = icmp eq i64 %i, %len
+  br i1 %done, label %valid, label %read
+
+read:
+  %src = getelementptr i8, ptr %data, i64 %i
+  %ch = load i8, ptr %src, align 1
+  %is_nul = icmp eq i8 %ch, 0
+  br i1 %is_nul, label %invalid, label %advance
+
+advance:
+  %next = add i64 %i, 1
+  br label %check
+
+valid:
+  ret i32 1
+
+invalid:
+  ret i32 0
+}
+
+define internal i32 @sollang_seed_random(i64 %seed) #0 {
+entry:
+  store i64 %seed, ptr @sollang_random_state, align 8
+  ret i32 1
+}
+
+define internal %sollang.file_int_result @sollang_random_below(i64 %max) #0 {
+entry:
+  %valid = icmp sgt i64 %max, 0
+  br i1 %valid, label %next, label %fail
+
+next:
+  %state = load i64, ptr @sollang_random_state, align 8
+  %mul = mul i64 %state, 6364136223846793005
+  %new_state = add i64 %mul, 1442695040888963407
+  store i64 %new_state, ptr @sollang_random_state, align 8
+  %value = urem i64 %new_state, %max
+  %ok0 = insertvalue %sollang.file_int_result poison, i64 %value, 0
+  %ok1 = insertvalue %sollang.file_int_result %ok0, i32 1, 1
+  ret %sollang.file_int_result %ok1
+
+fail:
+  %fail0 = insertvalue %sollang.file_int_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_int_result %fail0, i32 0, 1
+  ret %sollang.file_int_result %fail1
+}
+
+define internal i32 @sollang_open_write_i64_file(ptr %path, i64 %len) #0 {
+entry:
+  store i64 0, ptr @sollang_writer_buffer_count, align 8
+  %ok = call i32 @sollang_platform_open_write_file(ptr %path, i64 %len)
+  ret i32 %ok
+}
+
+define internal i32 @sollang_flush_i64_file() #0 {
+entry:
+  %count = load i64, ptr @sollang_writer_buffer_count, align 8
+  %empty = icmp eq i64 %count, 0
+  br i1 %empty, label %success, label %flush
+
+flush:
+  %bytes = mul i64 %count, 8
+  %ok = call i32 @sollang_platform_write_file_bytes(ptr @sollang_writer_buffer, i64 %bytes)
+  %is_ok = icmp ne i32 %ok, 0
+  br i1 %is_ok, label %reset, label %fail
+
+reset:
+  store i64 0, ptr @sollang_writer_buffer_count, align 8
+  br label %success
+
+success:
+  ret i32 1
+
+fail:
+  ret i32 0
+}
+
+define internal i32 @sollang_write_i64_file(i64 %value) #0 {
+entry:
+  %count = load i64, ptr @sollang_writer_buffer_count, align 8
+  %slot = getelementptr inbounds [8192 x i64], ptr @sollang_writer_buffer, i64 0, i64 %count
+  store i64 %value, ptr %slot, align 8
+  %next = add i64 %count, 1
+  store i64 %next, ptr @sollang_writer_buffer_count, align 8
+  %full = icmp eq i64 %next, 8192
+  br i1 %full, label %flush, label %success
+
+flush:
+  %ok = call i32 @sollang_flush_i64_file()
+  ret i32 %ok
+
+success:
+  ret i32 1
+}
+
+define internal i32 @sollang_close_write_i64_file() #0 {
+entry:
+  %flush_ok = call i32 @sollang_flush_i64_file()
+  %flush_is_ok = icmp ne i32 %flush_ok, 0
+  br i1 %flush_is_ok, label %close, label %fail
+
+close:
+  %close_ok = call i32 @sollang_platform_close_write_file()
+  ret i32 %close_ok
+
+fail:
+  ret i32 0
+}
+
+define internal %sollang.file_int_result @sollang_closest_i64_file(i64 %target) #0 {
+entry:
+  %count_result = call %sollang.file_count_result @sollang_platform_i64_file_count()
+  %count = extractvalue %sollang.file_count_result %count_result, 0
+  %count_ok = extractvalue %sollang.file_count_result %count_result, 1
+  %count_is_ok = icmp ne i32 %count_ok, 0
+  %has_values = icmp sgt i64 %count, 0
+  %can_search = and i1 %count_is_ok, %has_values
+  br i1 %can_search, label %search, label %fail
+
+search:
+  br label %loop
+
+loop:
+  %low = phi i64 [ 0, %search ], [ %next_low, %step ]
+  %high = phi i64 [ %count, %search ], [ %next_high, %step ]
+  %active = icmp slt i64 %low, %high
+  br i1 %active, label %probe, label %choose
+
+probe:
+  %span = sub i64 %high, %low
+  %half = sdiv i64 %span, 2
+  %mid = add i64 %low, %half
+  %mid_result = call %sollang.file_int_result @sollang_platform_read_i64_at(i64 %mid)
+  %mid_value = extractvalue %sollang.file_int_result %mid_result, 0
+  %mid_ok = extractvalue %sollang.file_int_result %mid_result, 1
+  %mid_is_ok = icmp ne i32 %mid_ok, 0
+  br i1 %mid_is_ok, label %compare_mid, label %fail
+
+compare_mid:
+  %less = icmp slt i64 %mid_value, %target
+  br i1 %less, label %move_low, label %move_high
+
+move_low:
+  %low_plus = add i64 %mid, 1
+  br label %step
+
+move_high:
+  br label %step
+
+step:
+  %next_low = phi i64 [ %low_plus, %move_low ], [ %low, %move_high ]
+  %next_high = phi i64 [ %high, %move_low ], [ %mid, %move_high ]
+  br label %loop
+
+choose:
+  %at_start = icmp eq i64 %low, 0
+  br i1 %at_start, label %read_low, label %check_end
+
+check_end:
+  %at_end = icmp eq i64 %low, %count
+  br i1 %at_end, label %read_prev_only, label %read_pair
+
+read_low:
+  %first_result = call %sollang.file_int_result @sollang_platform_read_i64_at(i64 0)
+  ret %sollang.file_int_result %first_result
+
+read_prev_only:
+  %last_index = sub i64 %count, 1
+  %last_result = call %sollang.file_int_result @sollang_platform_read_i64_at(i64 %last_index)
+  ret %sollang.file_int_result %last_result
+
+read_pair:
+  %prev_index = sub i64 %low, 1
+  %prev_result = call %sollang.file_int_result @sollang_platform_read_i64_at(i64 %prev_index)
+  %next_result = call %sollang.file_int_result @sollang_platform_read_i64_at(i64 %low)
+  %prev_ok = extractvalue %sollang.file_int_result %prev_result, 1
+  %next_ok = extractvalue %sollang.file_int_result %next_result, 1
+  %prev_is_ok = icmp ne i32 %prev_ok, 0
+  %next_is_ok = icmp ne i32 %next_ok, 0
+  %both_ok = and i1 %prev_is_ok, %next_is_ok
+  br i1 %both_ok, label %compare_pair, label %fail
+
+compare_pair:
+  %prev_value = extractvalue %sollang.file_int_result %prev_result, 0
+  %next_value = extractvalue %sollang.file_int_result %next_result, 0
+  %prev_diff = sub i64 %target, %prev_value
+  %next_diff = sub i64 %next_value, %target
+  %prefer_prev = icmp sle i64 %prev_diff, %next_diff
+  br i1 %prefer_prev, label %return_prev, label %return_next
+
+return_prev:
+  ret %sollang.file_int_result %prev_result
+
+return_next:
+  ret %sollang.file_int_result %next_result
+
+fail:
+  %fail0 = insertvalue %sollang.file_int_result poison, i64 0, 0
+  %fail1 = insertvalue %sollang.file_int_result %fail0, i32 0, 1
+  ret %sollang.file_int_result %fail1
+}
+define internal i64 @sollang_utf8_decode(ptr %data, i64 %len, i64 %index) #0 {
+entry:
+  %has_first = icmp ult i64 %index, %len
+  br i1 %has_first, label %first, label %invalid
+
+first:
+  %p0 = getelementptr i8, ptr %data, i64 %index
+  %b0raw = load i8, ptr %p0, align 1
+  %b0 = zext i8 %b0raw to i32
+  %ascii = icmp ult i32 %b0, 128
+  br i1 %ascii, label %ascii_result, label %classify
+
+ascii_result:
+  %ascii_wide = zext i32 %b0 to i64
+  %ascii_packed = or i64 %ascii_wide, 4294967296
+  ret i64 %ascii_packed
+
+classify:
+  %is2lo = icmp uge i32 %b0, 194
+  %is2hi = icmp ule i32 %b0, 223
+  %is2 = and i1 %is2lo, %is2hi
+  %is3lo = icmp uge i32 %b0, 224
+  %is3hi = icmp ule i32 %b0, 239
+  %is3 = and i1 %is3lo, %is3hi
+  %is4lo = icmp uge i32 %b0, 240
+  %is4hi = icmp ule i32 %b0, 244
+  %is4 = and i1 %is4lo, %is4hi
+  br i1 %is2, label %decode2, label %check3
+
+check3:
+  br i1 %is3, label %decode3, label %check4
+
+check4:
+  br i1 %is4, label %decode4, label %invalid
+
+decode2:
+  %end2 = add i64 %index, 1
+  %has2 = icmp ult i64 %end2, %len
+  br i1 %has2, label %load2, label %invalid
+
+load2:
+  %p1_2 = getelementptr i8, ptr %data, i64 %end2
+  %b1_2raw = load i8, ptr %p1_2, align 1
+  %b1_2 = zext i8 %b1_2raw to i32
+  %c1_2lo = icmp uge i32 %b1_2, 128
+  %c1_2hi = icmp ule i32 %b1_2, 191
+  %c1_2 = and i1 %c1_2lo, %c1_2hi
+  br i1 %c1_2, label %result2, label %invalid
+
+result2:
+  %h2 = and i32 %b0, 31
+  %h2s = shl i32 %h2, 6
+  %l2 = and i32 %b1_2, 63
+  %cp2 = or i32 %h2s, %l2
+  %cp2wide = zext i32 %cp2 to i64
+  %packed2 = or i64 %cp2wide, 8589934592
+  ret i64 %packed2
+
+decode3:
+  %end3 = add i64 %index, 2
+  %has3 = icmp ult i64 %end3, %len
+  br i1 %has3, label %load3, label %invalid
+
+load3:
+  %i1_3 = add i64 %index, 1
+  %p1_3 = getelementptr i8, ptr %data, i64 %i1_3
+  %p2_3 = getelementptr i8, ptr %data, i64 %end3
+  %b1_3raw = load i8, ptr %p1_3, align 1
+  %b2_3raw = load i8, ptr %p2_3, align 1
+  %b1_3 = zext i8 %b1_3raw to i32
+  %b2_3 = zext i8 %b2_3raw to i32
+  %c1_3lo = icmp uge i32 %b1_3, 128
+  %c1_3hi = icmp ule i32 %b1_3, 191
+  %c1_3 = and i1 %c1_3lo, %c1_3hi
+  %c2_3lo = icmp uge i32 %b2_3, 128
+  %c2_3hi = icmp ule i32 %b2_3, 191
+  %c2_3 = and i1 %c2_3lo, %c2_3hi
+  %cont3 = and i1 %c1_3, %c2_3
+  br i1 %cont3, label %value3, label %invalid
+
+value3:
+  %h3 = and i32 %b0, 15
+  %h3s = shl i32 %h3, 12
+  %m3 = and i32 %b1_3, 63
+  %m3s = shl i32 %m3, 6
+  %hm3 = or i32 %h3s, %m3s
+  %l3 = and i32 %b2_3, 63
+  %cp3 = or i32 %hm3, %l3
+  %min3 = icmp uge i32 %cp3, 2048
+  %below_surrogate = icmp ult i32 %cp3, 55296
+  %above_surrogate = icmp ugt i32 %cp3, 57343
+  %not_surrogate = or i1 %below_surrogate, %above_surrogate
+  %valid3 = and i1 %min3, %not_surrogate
+  br i1 %valid3, label %result3, label %invalid
+
+result3:
+  %cp3wide = zext i32 %cp3 to i64
+  %packed3 = or i64 %cp3wide, 12884901888
+  ret i64 %packed3
+
+decode4:
+  %end4 = add i64 %index, 3
+  %has4 = icmp ult i64 %end4, %len
+  br i1 %has4, label %load4, label %invalid
+
+load4:
+  %i1_4 = add i64 %index, 1
+  %i2_4 = add i64 %index, 2
+  %p1_4 = getelementptr i8, ptr %data, i64 %i1_4
+  %p2_4 = getelementptr i8, ptr %data, i64 %i2_4
+  %p3_4 = getelementptr i8, ptr %data, i64 %end4
+  %b1_4raw = load i8, ptr %p1_4, align 1
+  %b2_4raw = load i8, ptr %p2_4, align 1
+  %b3_4raw = load i8, ptr %p3_4, align 1
+  %b1_4 = zext i8 %b1_4raw to i32
+  %b2_4 = zext i8 %b2_4raw to i32
+  %b3_4 = zext i8 %b3_4raw to i32
+  %c1_4lo = icmp uge i32 %b1_4, 128
+  %c1_4hi = icmp ule i32 %b1_4, 191
+  %c1_4 = and i1 %c1_4lo, %c1_4hi
+  %c2_4lo = icmp uge i32 %b2_4, 128
+  %c2_4hi = icmp ule i32 %b2_4, 191
+  %c2_4 = and i1 %c2_4lo, %c2_4hi
+  %c3_4lo = icmp uge i32 %b3_4, 128
+  %c3_4hi = icmp ule i32 %b3_4, 191
+  %c3_4 = and i1 %c3_4lo, %c3_4hi
+  %cont12_4 = and i1 %c1_4, %c2_4
+  %cont4 = and i1 %cont12_4, %c3_4
+  br i1 %cont4, label %value4, label %invalid
+
+value4:
+  %h4 = and i32 %b0, 7
+  %h4s = shl i32 %h4, 18
+  %m1_4 = and i32 %b1_4, 63
+  %m1_4s = shl i32 %m1_4, 12
+  %m2_4 = and i32 %b2_4, 63
+  %m2_4s = shl i32 %m2_4, 6
+  %hm1_4 = or i32 %h4s, %m1_4s
+  %hm2_4 = or i32 %hm1_4, %m2_4s
+  %l4 = and i32 %b3_4, 63
+  %cp4 = or i32 %hm2_4, %l4
+  %min4 = icmp uge i32 %cp4, 65536
+  %max4 = icmp ule i32 %cp4, 1114111
+  %valid4 = and i1 %min4, %max4
+  br i1 %valid4, label %result4, label %invalid
+
+result4:
+  %cp4wide = zext i32 %cp4 to i64
+  %packed4 = or i64 %cp4wide, 17179869184
+  ret i64 %packed4
+
+invalid:
+  ret i64 -1
+}
+
+define dso_local i32 @sollang_start() local_unnamed_addr {
+entry:
+  %written = alloca i32, align 4
+  %read = alloca i32, align 4
+  %ok_state = alloca i1, align 1
+  %enum_init_slot0 = alloca %sollang.enum.35, align 8
+  %ref_arg24 = alloca %sollang.struct.34, align 8
+  store i1 true, ptr %ok_state, align 1
+  %stdin = call ptr @GetStdHandle(i32 -10)
+  %stdout = call ptr @GetStdHandle(i32 -11)
+  %stdout_mode = alloca i32, align 4
+  %stdout_is_console_status = call i32 @GetConsoleMode(ptr %stdout, ptr %stdout_mode)
+  %stdout_is_console = icmp ne i32 %stdout_is_console_status, 0
+  store i1 %stdout_is_console, ptr @sollang_stdout_line_buffered, align 1
+  store %sollang.enum.35 zeroinitializer, ptr %enum_init_slot0, align 8
+  %enum_tag_addr1 = getelementptr inbounds %sollang.enum.35, ptr %enum_init_slot0, i32 0, i32 0
+  store i32 1, ptr %enum_tag_addr1, align 4
+  %enum_value2 = load %sollang.enum.35, ptr %enum_init_slot0, align 8
+  %text_value4 = insertvalue %sollang.text poison, ptr @.slg.str.suffix.0, 0
+  %text_value5 = insertvalue %sollang.text %text_value4, i64 1, 1
+  %struct_call3 = call %sollang.struct.34 @sollang_fn_sys_path_fromText(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, %sollang.text %text_value5, %sollang.enum.35 %enum_value2)
+  %create_directory_input_bytes6 = extractvalue %sollang.struct.34 %struct_call3, 0
+  %array_ptr7 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes6, 0
+  %array_len8 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes6, 1
+  %array_capacity9 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes6, 2
+  %create_directory_input_style10 = extractvalue %sollang.struct.34 %struct_call3, 1
+  %create_directory_input_style_tag11 = extractvalue %sollang.enum.35 %create_directory_input_style10, 0
+  %create_directory_status12 = call i32 @sollang_platform_create_directory(ptr %array_ptr7, i64 %array_len8, i32 %create_directory_input_style_tag11)
+  %create_directory_succeeded13 = icmp sgt i32 %create_directory_status12, 0
+  %format_bool_pointer14 = select i1 %create_directory_succeeded13, ptr @.slg.str.suffix.1, ptr @.slg.str.suffix.2
+  %format_bool_length15 = select i1 %create_directory_succeeded13, i64 4, i64 5
+  %write16 = call i32 @sollang_write(ptr %stdout, ptr %format_bool_pointer14, i64 %format_bool_length15, ptr %written)
+  %is_ok17 = icmp ne i32 %write16, 0
+  %previous_ok18 = load i1, ptr %ok_state, align 1
+  %ok19 = and i1 %previous_ok18, %is_ok17
+  store i1 %ok19, ptr %ok_state, align 1
+  %write20 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.3, i64 1, ptr %written)
+  %is_ok21 = icmp ne i32 %write20, 0
+  %previous_ok22 = load i1, ptr %ok_state, align 1
+  %ok23 = and i1 %previous_ok22, %is_ok21
+  store i1 %ok23, ptr %ok_state, align 1
+  store %sollang.struct.34 %struct_call3, ptr %ref_arg24, align 8
+  %call25 = call i1 @sollang_fn_createDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %ref_arg24)
+  %format_bool_pointer26 = select i1 %call25, ptr @.slg.str.suffix.4, ptr @.slg.str.suffix.5
+  %format_bool_length27 = select i1 %call25, i64 4, i64 5
+  %write28 = call i32 @sollang_write(ptr %stdout, ptr %format_bool_pointer26, i64 %format_bool_length27, ptr %written)
+  %is_ok29 = icmp ne i32 %write28, 0
+  %previous_ok30 = load i1, ptr %ok_state, align 1
+  %ok31 = and i1 %previous_ok30, %is_ok29
+  store i1 %ok31, ptr %ok_state, align 1
+  %write32 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.6, i64 1, ptr %written)
+  %is_ok33 = icmp ne i32 %write32, 0
+  %previous_ok34 = load i1, ptr %ok_state, align 1
+  %ok35 = and i1 %previous_ok34, %is_ok33
+  store i1 %ok35, ptr %ok_state, align 1
+  store %sollang.struct.34 %struct_call3, ptr %ref_arg24, align 8
+  %ref_call36 = call ptr @sollang_fn_borrowDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %ref_arg24)
+  %struct_init37 = insertvalue %sollang.struct.1448 poison, ptr %ref_call36, 0
+  %field38 = extractvalue %sollang.struct.1448 %struct_init37, 0
+  %call39 = call i1 @sollang_fn_createDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %field38)
+  %format_bool_pointer40 = select i1 %call39, ptr @.slg.str.suffix.7, ptr @.slg.str.suffix.8
+  %format_bool_length41 = select i1 %call39, i64 4, i64 5
+  %write42 = call i32 @sollang_write(ptr %stdout, ptr %format_bool_pointer40, i64 %format_bool_length41, ptr %written)
+  %is_ok43 = icmp ne i32 %write42, 0
+  %previous_ok44 = load i1, ptr %ok_state, align 1
+  %ok45 = and i1 %previous_ok44, %is_ok43
+  store i1 %ok45, ptr %ok_state, align 1
+  %write46 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.9, i64 1, ptr %written)
+  %is_ok47 = icmp ne i32 %write46, 0
+  %previous_ok48 = load i1, ptr %ok_state, align 1
+  %ok49 = and i1 %previous_ok48, %is_ok47
+  store i1 %ok49, ptr %ok_state, align 1
+  store %sollang.struct.34 %struct_call3, ptr %ref_arg24, align 8
+  %ref_call50 = call ptr @sollang_fn_borrowDirectory(ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state, ptr %ref_arg24)
+  %ref_value51 = load %sollang.struct.34, ptr %ref_call50, align 8
+  %create_directory_input_bytes52 = extractvalue %sollang.struct.34 %ref_value51, 0
+  %array_ptr53 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes52, 0
+  %array_len54 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes52, 1
+  %array_capacity55 = extractvalue %sollang.dynamic_int_array %create_directory_input_bytes52, 2
+  %create_directory_input_style56 = extractvalue %sollang.struct.34 %ref_value51, 1
+  %create_directory_input_style_tag57 = extractvalue %sollang.enum.35 %create_directory_input_style56, 0
+  %create_directory_status58 = call i32 @sollang_platform_create_directory(ptr %array_ptr53, i64 %array_len54, i32 %create_directory_input_style_tag57)
+  %create_directory_succeeded59 = icmp sgt i32 %create_directory_status58, 0
+  %format_bool_pointer60 = select i1 %create_directory_succeeded59, ptr @.slg.str.suffix.10, ptr @.slg.str.suffix.11
+  %format_bool_length61 = select i1 %create_directory_succeeded59, i64 4, i64 5
+  %write62 = call i32 @sollang_write(ptr %stdout, ptr %format_bool_pointer60, i64 %format_bool_length61, ptr %written)
+  %is_ok63 = icmp ne i32 %write62, 0
+  %previous_ok64 = load i1, ptr %ok_state, align 1
+  %ok65 = and i1 %previous_ok64, %is_ok63
+  store i1 %ok65, ptr %ok_state, align 1
+  %write66 = call i32 @sollang_write(ptr %stdout, ptr @.slg.str.suffix.12, i64 1, ptr %written)
+  %is_ok67 = icmp ne i32 %write66, 0
+  %previous_ok68 = load i1, ptr %ok_state, align 1
+  %ok69 = and i1 %previous_ok68, %is_ok67
+  store i1 %ok69, ptr %ok_state, align 1
+  call void @sollang_drop_34(%sollang.struct.34 %struct_call3)
+  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+  %final_ok70 = load i1, ptr %ok_state, align 1
+  %exit71 = select i1 %final_ok70, i32 0, i32 1
+  ret i32 %exit71
+}
+
+attributes #0 = { nounwind }

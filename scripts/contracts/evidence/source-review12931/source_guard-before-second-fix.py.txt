@@ -1,0 +1,31 @@
+"""Bind local reference name classification to the shared value load."""
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[4]
+
+
+def verify(arguments, expressions):
+    classifier = arguments.split('isLocalReadonlyReferenceName valueIndex:', 1)[1].split('referenceParameterValueIsMaterialized valueIndex:', 1)[0]
+    assert 'value.kind != 5 or (value -> referenceValueTypeId(context, state)) < 0' in classifier
+    assert 'binding.kind == 17 and binding.flags != 1' in classifier
+    assert '(value.operand0 -> asyncFrameBindingRoot(ownerIndex, context, state)) < 0' in classifier
+    materialized = arguments.split('referenceParameterValueIsMaterialized valueIndex:', 1)[1].split('writeReferencePlaceValue functionIndex:', 1)[0]
+    assert 'valueIndex -> isLocalReadonlyReferenceName(ownerIndex, context, state)' in materialized
+    named = expressions.split('emitNamedPlaceRead expressionIndex:', 1)[1].split('expression.operand0 -> asyncFrameBindingRoot', 1)[0]
+    assert 'expressionIndex -> isLocalReadonlyReferenceName(functionIndex, context, state)' in named
+    assert 'localValueTypeId -> writeAggregateFieldTypeId(context, state)' in named
+    assert 'functionIndex -> writeForwardedReferenceValue(expressionIndex, context, state)' in named
+    assert '"  %v$(expressionIndex) = load " -> print' in named
+
+
+if __name__ == '__main__':
+    arguments = (ROOT / 'selfhost/llvm/text/call_arguments.slg').read_text(encoding='utf-8-sig')
+    expressions = (ROOT / 'selfhost/llvm/text/function_expressions.slg').read_text(encoding='utf-8-sig')
+    verify(arguments, expressions)
+    stale = expressions.replace('"  %v$(expressionIndex) = load " -> print', '"  %v$(expressionIndex) = freeze " -> print', 1)
+    try:
+        verify(arguments, stale)
+    except AssertionError:
+        print('Shared local reference read passed; pointer-freeze mutation rejected.')
+    else:
+        raise AssertionError('POINTER_FREEZE_MUTATION_ACCEPTED')
