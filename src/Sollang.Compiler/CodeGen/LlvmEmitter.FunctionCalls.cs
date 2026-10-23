@@ -1954,6 +1954,11 @@ internal sealed partial class LlvmEmitter
             EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
             if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
             {
+                if (IsStaticArrayRuntimeValue(value, parameter.Type))
+                {
+                    parts.Add(BuildStaticArrayArgument(parameter.Type, value, function.Name));
+                    continue;
+                }
                 parts.Add(value switch
                 {
                     RuntimeMutableStructReference reference => $"ptr {reference.PointerAddress}",
@@ -2204,6 +2209,11 @@ internal sealed partial class LlvmEmitter
         return _program.Types.GetStaticArray(arrayType).ElementType;
     }
 
+    private bool IsStaticArrayRuntimeValue(RuntimeValue value, BoundType expectedType) =>
+        _program.Types.IsStaticArray(expectedType)
+        && _program.Types.IsStaticArray(value.Type)
+        && TryGetRuntimeArrayView(value) is not null;
+
     private RuntimeValue CreateMutableBorrowArgument(
         Expression argument,
         BoundType expectedType,
@@ -2244,7 +2254,7 @@ internal sealed partial class LlvmEmitter
         {
             return new RuntimeMutableStructReference(expectedType, bitSet.PointerName);
         }
-        if (value is RuntimeStaticInlineArray && _program.Types.IsStaticArray(expectedType))
+        if (IsStaticArrayRuntimeValue(value, expectedType))
         {
             return value;
         }
@@ -2542,10 +2552,9 @@ internal sealed partial class LlvmEmitter
 
         if (argument is not RuntimeMutableContainerReference reference)
         {
-            if (argument is RuntimeStaticInlineArray fixedArray
-                && _program.Types.IsStaticArray(type))
+            if (IsStaticArrayRuntimeValue(argument, type))
             {
-                _locals[name] = fixedArray;
+                _locals[name] = argument;
                 _mutableLocals.Add(name);
                 _borrowedMutableLocals.Add(name);
                 _borrowedOwnedLocals.Add(name);
