@@ -2609,13 +2609,16 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeIntSlice CreateRuntimeIntSlice(RuntimeValue value)
     {
-        return value switch
+        if (value is RuntimeStaticIntArray array)
         {
-            RuntimeIntSlice slice => slice,
-            RuntimeDynamicIntArray array => new RuntimeIntSlice(array.PointerName, array.LengthName),
-            RuntimeStaticIntArray array => CreateRuntimeIntSlice(array),
-            _ => throw new SollangException($"expected Int array view but received {value.Type}")
-        };
+            return CreateRuntimeIntSlice(array);
+        }
+        var view = TryGetRuntimeArrayView(value);
+        if (view is not { Element: var element } || element != BoundType.Int)
+        {
+            throw new SollangException($"expected Int array view but received {value.Type}");
+        }
+        return new RuntimeIntSlice(view.Value.Pointer, view.Value.Length);
     }
 
     private RuntimeIntSlice CreateRuntimeIntSlice(RuntimeStaticIntArray array)
