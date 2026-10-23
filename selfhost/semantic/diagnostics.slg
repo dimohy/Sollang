@@ -1484,6 +1484,123 @@ firstPreparedPrivateNominalDiagnostic prepared: ref semanticContext.SemanticSnap
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
+# Nominal declarations own recursion. Only structural constructor arguments
+# are visited here, in the same child-first order as the managed type parser.
+firstArrayLayoutFailure types: ref [typeIds.SemanticType; ~], typeId: Int, definition: Bool, failures: mut [Int; ~] -> Int {
+    typeId < 0 or typeId >= (types -> len) -> if { -1 -> return }
+    failures[typeId] != -2 -> if { failures[typeId] -> return }
+    types[typeId] => type
+    -1 => failure!
+    type.status == 0 and type.kind != 1 -> if {
+        type.kind == 2 or type.kind == 3 or type.kind == 4 or type.kind == 5
+            or type.kind == 6 or type.kind == 7 or type.kind == 8
+            or type.kind == 12 or type.kind == 13
+            -> if {
+                types -> firstArrayLayoutFailure(type.first, definition, failures) => failure!
+            }
+        failure! < 0 and (type.kind == 5 or type.kind == 7 or type.kind == 13)
+            -> if {
+                types -> firstArrayLayoutFailure(type.second, definition, failures) => failure!
+            }
+        failure! < 0 -> if {
+            definition -> if {
+                type.first >= 0 and type.first < (types -> len)
+                    -> if {
+                        types[type.first] => element
+                        type.kind == 2 and not (element.kind == 1 and element.origin == 1 and element.symbol == 2)
+                            -> if { typeId => failure! }
+                        (type.kind == 3 or type.kind == 4 or type.kind == 12)
+                            and element.kind == 1 and element.origin == 1 and element.symbol == 0
+                            -> if { typeId => failure! }
+                    }
+            } else {
+                types -> typeIds.unsupportedArrayElementLayout(typeId)
+                    -> if { typeId => failure! }
+            }
+        }
+    }
+    failure! => failures[typeId]
+    failure!
+}
+
+firstPreparedArraySignatureDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+    [Int; ~] => referenceByAst!
+    prepared.package.nodes -> each node { referenceByAst! -> push(-1) }
+    prepared.semantic.references -> each reference {
+        reference.status == 0 and reference.typeAst >= 0
+            -> if {
+                prepared.package.ranges[reference.sourceModule] => range
+                reference.typeId => referenceByAst![range.astStart + reference.typeAst]
+            }
+    }
+    [Int; ~] => signatureFailures!
+    [Int; ~] => definitionFailures!
+    prepared.semantic.types -> each type {
+        signatureFailures! -> push(-2)
+        definitionFailures! -> push(-2)
+    }
+    0 => phase!
+    phase! < 2 -> while {
+        prepared.package.ranges -> each range {
+            0 => symbolIndex!
+            symbolIndex! < range.symbolCount -> while {
+                prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+                symbol.kind == 26 => field
+                symbol.kind == 7 or symbol.kind == 31 => function
+                symbol.kind == 35 and symbol.parent >= 0
+                    and prepared.package.nodes[range.astStart + symbol.astNode].kind == 60
+                    and (prepared.package.symbols[range.symbolStart + symbol.parent].kind == 7
+                    or prepared.package.symbols[range.symbolStart + symbol.parent].kind == 31)
+                    => parameter
+                (phase! == 0 and field) or (phase! == 1 and (function or parameter))
+                    -> if {
+                        [symbol.typeNode, symbol.secondaryTypeNode, symbol.blockTypeNode, symbol.blockResultTypeNode] => roots
+                        roots -> each root {
+                            root >= 0 -> if {
+                                referenceByAst![range.astStart + root] => typeId
+                                typeId >= 0 and typeId < (prepared.semantic.types -> len)
+                                    -> if {
+                                        field -> if {
+                                            prepared.semantic.types -> firstArrayLayoutFailure(typeId, true, definitionFailures!)
+                                        } else {
+                                            prepared.semantic.types -> firstArrayLayoutFailure(typeId, false, signatureFailures!)
+                                        } => failure
+                                        0 => code!
+                                        root => typeAst!
+                                        failure >= 0 -> if {
+                                            field -> if { 21 => code! } else {
+                                                prepared.semantic.types[failure].kind => kind
+                                                kind == 2 -> if { 17 => code! }
+                                                kind == 3 -> if { 18 => code! }
+                                                kind == 4 -> if { 19 => code! }
+                                                kind == 12 -> if { 20 => code! }
+                                            }
+                                            prepared.semantic.references -> each reference {
+                                                reference.sourceModule == range.sourceModule and reference.typeId == failure
+                                                    and (prepared.package -> semanticContext.declarationAncestor(range.sourceModule, root, reference.typeAst))
+                                                    -> if { reference.typeAst => typeAst! }
+                                            }
+                                        } else {
+                                            prepared.semantic.types[typeId] => type
+                                            field and (type.kind == 2 or (type.kind == 1 and type.origin == 1 and type.symbol == 0))
+                                                -> if { 22 => code! }
+                                        }
+                                        code! > 0 -> if {
+                                            parameter -> if { symbol.parent } else { symbolIndex! } => owner
+                                            SignatureTypeDiagnostic { code: code!, sourceModule: range.sourceModule, functionSymbol: owner, typeAst: typeAst!, nameToken: symbol.nameToken, genericToken: -1 } -> return
+                                        }
+                                    }
+                            }
+                        }
+                    }
+                symbolIndex! + 1 => symbolIndex!
+            }
+        }
+        phase! + 1 => phase!
+    }
+    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+}
+
 public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
     prepared -> firstPreparedNominalSignatureDiagnostic => nominalDiagnostic
     # Import ambiguity is a path-resolution error before semantic admission.
@@ -1492,6 +1609,8 @@ public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.Semant
     layoutDiagnostic.code != 0 -> if { layoutDiagnostic -> return }
     prepared -> firstPreparedExplicitSignatureTypeDiagnostic => explicitDiagnostic
     explicitDiagnostic.code != 0 -> if { explicitDiagnostic -> return }
+    prepared -> firstPreparedArraySignatureDiagnostic => arrayDiagnostic
+    arrayDiagnostic.code != 0 -> if { arrayDiagnostic -> return }
     nominalDiagnostic.code != 0 -> if { nominalDiagnostic -> return }
     # Reject inaccessible nominal paths before an unresolved constructor can
     # enter typed IR. Existing declaration/signature errors keep their priority.

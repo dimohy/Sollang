@@ -1,5 +1,6 @@
 namespace sollang.compiler.llvm.emitter.diagnostics
 
+import sollang.compiler.ast as ast
 import sollang.compiler.ir.interpolation as interpolationIr
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.emitter.context as emitterContext
@@ -7840,34 +7841,7 @@ emitNominalInitializerDiagnostics context: ref emitterContext.EmitContext -> Uni
 }
 
 invalidArrayElementLayout typeId: Int, context: ref emitterContext.EmitContext -> Bool {
-    false => invalid!
-    typeId >= 0 and typeId < (context.types -> len)
-        -> if {
-            context.types[typeId] => outer
-            (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)
-                and outer.first >= 0
-                and outer.first < (context.types -> len)
-                -> if {
-                    context.types[outer.first] => element
-                    element.kind == 1 and element.origin == 1 and element.symbol == 0
-                        -> if { true => invalid! }
-                    element.kind == 2
-                        or element.kind == 3
-                        or element.kind == 4
-                        or element.kind == 5
-                        or element.kind == 12
-                        or element.kind == 13
-                        -> if {
-                            # Growable owners intentionally retain a growable child;
-                            # every other direct container nesting is rejected by
-                            # the managed semantic authority as an unsupported
-                            # inline element layout.
-                            not (outer.kind == 3 and element.kind == 3)
-                                -> if { true => invalid! }
-                        }
-                }
-        }
-    invalid!
+    context.types -> typeIds.unsupportedArrayElementLayout(typeId)
 }
 
 appendArrayElementLayoutType typeId: Int, used: mut [Bool; ~], pending: mut [Int; ~] -> Unit {
@@ -8685,8 +8659,41 @@ emitBindingDeclarationDiagnostic context: ref emitterContext.EmitContext -> Unit
     "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] binding '$name' already exists in this scope" -> println
 }
 
+public emitDeclaredTypeSpelling source: ref Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, annotation: ast.AstNode -> Unit uses Console {
+    false => space!
+    false => previousWord!
+    annotation.firstToken => cursor!
+    cursor! < annotation.firstToken + annotation.tokenCount
+        -> while {
+            tokens[tokenStart + cursor!] => token
+            token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                and token.kind != grammar.tokenIdNewLine() -> if {
+                    token.kind == grammar.tokenIdIdentifier() or token.kind == grammar.tokenIdNumber() => word
+                    space! or (previousWord! and word) -> if { " " -> print }
+                    source -> slice(token.span.start, token.span.length) -> print
+                    token.kind == grammar.tokenIdComma() or token.kind == grammar.tokenIdColon()
+                        or token.kind == grammar.tokenIdSemicolon() => space!
+                    word => previousWord!
+                }
+            cursor! + 1 => cursor!
+        }
+}
+
 public emitSignatureTypeDiagnosticForSource source: Text, moduleName: Text, name: syntax.SyntaxToken, genericName: Text, code: Int -> Unit uses Console {
     source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
+    code >= 17 and code <= 20 -> if {
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] " -> print
+        code == 17 -> if { "readonly array views require inline scalar or user-value elements" -> println }
+        code == 18 -> if { "growable array elements must have a supported inline value layout" -> println }
+        code == 19 -> if { "fixed array elements must be inline scalar or user values" -> println }
+        code == 20 -> if { "bounded array elements must be inline scalar or user values" -> println }
+        return
+    }
+    code == 22 -> if {
+        source -> slice(name.span.start, name.span.length) => fieldName
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName)'] struct field '$fieldName' must be an inline value type" -> println
+        return
+    }
     code == 15 or code == 16 -> if {
         code == 15 -> if { "generic move inputs are not implemented yet" } else {
             "generic local and impl functions are not implemented yet"

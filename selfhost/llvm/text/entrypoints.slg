@@ -690,6 +690,14 @@ emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Un
     identity.pathLength > 0 -> if {
         source -> slice(identity.pathStart, identity.pathLength) => moduleName!
     }
+    diagnostic.code == 21 -> if {
+        source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown type '" -> print
+        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+        source -> diagnostics.emitDeclaredTypeSpelling(rejection.prepared.package.tokens, range.tokenStart, annotation)
+        "'" -> println
+        return
+    }
     diagnostic.code == 14 -> if {
         rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
         source -> syntaxDiagnostics.sourceLocation(annotation.start) => location
