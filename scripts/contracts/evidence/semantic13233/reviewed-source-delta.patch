@@ -1,0 +1,2617 @@
+diff --git a/selfhost/llvm/emitter/diagnostics.slg b/selfhost/llvm/emitter/diagnostics.slg
+index cbec89d5..813add6c 100644
+--- a/selfhost/llvm/emitter/diagnostics.slg
++++ b/selfhost/llvm/emitter/diagnostics.slg
+@@ -2511,10 +2511,15 @@ public emitOwnershipDiagnostics context: ref emitterContext.EmitContext -> Unit
+             diagnostic.code == ownershipCheck.diagnosticTrackTaskArgumentCode()
+                 -> if {
+                     context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.actualOrigin, diagnostic.span.start)
+                     "DiagnosticSession.track<T> requires T to be Task<U>; the moved owner is not consumed on rejection" -> println
+                 }
++            diagnostic.code == ownershipCheck.parallelSourceTextResultCode()
++                -> if {
++                    context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.actualOrigin, diagnostic.span.start)
++                    "parallel callback SourceText is supported only as a direct top-level tryParallel Result payload" -> println
++                }
+             diagnostic.code == ownershipCheck.taskOperationContractCode()
+                 -> if {
+                     context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.actualOrigin, diagnostic.span.start)
+                     diagnostic.actualBuiltin == 3 -> if {
+                         "await is only valid in async functions or main" -> println
+@@ -5200,10 +5205,23 @@ numericCallArgumentDiagnosticCount context: ref emitterContext.EmitContext -> In
+ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Unit uses Console {
+     context.numericCallLiteralDiagnostic.code > 0
+         -> if { return }
+     context.numericCallArgumentDiagnostic => diagnostic
+     diagnostic.code == 0 -> if { return }
++    diagnostic.code == 6 or diagnostic.code == 7 -> if {
++        context.ranges[diagnostic.sourceModule] => range
++        context.nodes[range.astStart + diagnostic.argumentAst] => argument
++        context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.argumentAst, argument.start)
++        diagnostic.code == 6 -> if {
++            "writeAtAsync expects a scalar value and one UInt64 byte offset" -> println
++        } else {
++            "writeAtAsync supports Bool, CodePoint, and numeric scalars; got " -> print
++            diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
++            println()
++        }
++        return
++    }
+     diagnostic.code == 3 or diagnostic.code == 4 -> if {
+         context.ranges[diagnostic.sourceModule] => range
+         context.nodes[range.astStart + diagnostic.argumentAst] => argument
+         context -> emitInitializerSemanticPrefixAtOffset(diagnostic.sourceModule, diagnostic.argumentAst, argument.start)
+         diagnostic.code == 3 -> if { "file scalar value must be " -> print } else { "file offset must be " -> print }
+@@ -5254,21 +5272,42 @@ emitNumericCallArgumentDiagnostic context: ref emitterContext.EmitContext -> Uni
+                         context.sources[diagnostic.sourceModule] -> slice(callee.start, callee.length) => functionName!
+                     }
+                 calleeAst! + 1 => calleeAst!
+             }
+         }
+-    "function '" -> print
+-    diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
+-        and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
+-        and context.modules[diagnostic.targetSourceModule].pathLength > 0
++    -1 => directPathAst!
++    diagnostic.callAst >= 0 and context.nodes[sourceRange.astStart + diagnostic.callAst].kind == 11
+         -> if {
+-            context.modules[diagnostic.targetSourceModule] => targetIdentity
+-            declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
+-            "." -> print
+-            declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
+-        } else { functionName! -> print }
+-    "' " -> print
++            0 => childAst!
++            childAst! < sourceRange.astCount -> while {
++                context.nodes[sourceRange.astStart + childAst!] => child
++                child.parent == diagnostic.callAst and child.kind == 16
++                    -> if { childAst! => directPathAst! }
++                childAst! + 1 => childAst!
++            }
++        }
++    diagnostic.code != 8 -> if { "function '" -> print }
++    directPathAst! >= 0 -> if {
++        calls.ModuleCallResolution {
++            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++            origin: 0, targetModule: diagnostic.targetSourceModule,
++            targetSourceModule: diagnostic.targetSourceModule,
++            functionSymbol: diagnostic.functionSymbol, status: 0
++        } => call
++        context -> emitSemanticCallPathName(call, directPathAst!, false)
++    } else {
++        diagnostic.parameterOrdinal == 0 and diagnostic.callAst >= 0
++            and not modules.sameLogicalSource(context.sources, context.modules, diagnostic.sourceModule, diagnostic.targetSourceModule, context.tokens, context.ranges)
++            and context.modules[diagnostic.targetSourceModule].pathLength > 0
++            -> if {
++                context.modules[diagnostic.targetSourceModule] => targetIdentity
++                declarationSource -> slice(targetIdentity.pathStart, targetIdentity.pathLength) -> print
++                "." -> print
++                declarationSource -> slice(functionToken.span.start, functionToken.span.length) -> print
++            } else { functionName! -> print }
++    }
++    diagnostic.code == 8 -> if { " " -> print } else { "' " -> print }
+     diagnostic.parameterOrdinal > 0 -> if { "parameter '$parameterName' " -> print }
+     "expects " -> print
+     diagnostic.expectedTypeId -> emitBoxOperandTypeName(context)
+     " but received " -> print
+     diagnostic.actualTypeId -> emitBoxOperandTypeName(context)
+@@ -5309,10 +5348,33 @@ emitExpressionSemanticPrefix context: ref emitterContext.EmitContext, diagnostic
+ }
+ 
+ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
+     context -> numericCallLiteralOverridesUnary -> if { return }
+     context.expressionOperandDiagnostic => diagnostic
++    diagnostic.code == 72 -> if {
++        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
++        context -> emitExpressionSemanticPrefix(diagnostic, location)
++        "enum pattern matching expects an enum subject" -> println
++        return
++    }
++    diagnostic.code == 71 -> if {
++        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
++        context -> emitExpressionSemanticPrefix(diagnostic, location)
++        diagnostic.operatorKind -> binaryArithmeticOperatorName => operatorName
++        diagnostic.operandTypeSymbol == 1 -> if {
++            "CodePoint does not support '$operatorName'; convert it to UInt32 before arithmetic" -> println
++        } else {
++            "left operand of '$operatorName' must be a compatible numeric value" -> println
++        }
++        return
++    }
++    diagnostic.code == 70 -> if {
++        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
++        context -> emitExpressionSemanticPrefix(diagnostic, location)
++        "fold expects a range or Int array input" -> println
++        return
++    }
+     diagnostic.code >= 60 and diagnostic.code <= 67
+         -> if {
+             context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+             context -> emitExpressionSemanticPrefix(diagnostic, location)
+             diagnostic.operatorKind -> when {
+@@ -8281,15 +8343,47 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
+     diagnostic.nativePathStyle -> if {
+         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
+         "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] sys.path.nativeStyle does not accept arguments" -> println
+         return
+     }
++    diagnostic.runtimeRequest and diagnostic.targetPathAst >= 0
++        -> if {
++            directCall.start => offset!
++            directCall.kind == 10 -> if {
++                context.nodes[directRange.astStart + diagnostic.targetPathAst].start => offset!
++            }
++            context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(offset!) => location
++            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
++            directCall.kind == 10 -> if { "function '" -> print }
++            calls.ModuleCallResolution {
++                sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++                origin: 0, targetModule: diagnostic.targetSourceModule,
++                targetSourceModule: diagnostic.targetSourceModule,
++                functionSymbol: diagnostic.functionSymbol, status: 0
++            } => call
++            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
++            directCall.kind == 10 -> if {
++                "' expects $(diagnostic.expectedAdditionalArguments) additional argument(s)" -> println
++            } else { " expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println }
++            return
++        }
+     directCall.kind == 11 -> if {
+         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
+-        context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
+-        context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+-        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
++        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] function '" -> print
++        calls.ModuleCallResolution {
++            sourceModule: diagnostic.sourceModule, callAst: diagnostic.callAst,
++            origin: 0, targetModule: diagnostic.targetSourceModule,
++            targetSourceModule: diagnostic.targetSourceModule,
++            functionSymbol: diagnostic.functionSymbol, status: 0
++        } => call
++        diagnostic.targetPathAst >= 0 -> if {
++            context -> emitSemanticCallPathName(call, diagnostic.targetPathAst, false)
++        } else {
++            context.tokens[directRange.tokenStart + directCall.firstToken] => nameToken
++            context.sources[diagnostic.sourceModule] -> slice(nameToken.span.start, nameToken.span.length) -> print
++        }
++        "' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
+         return
+     }
+     context.ranges[diagnostic.targetSourceModule] => range
+     context.symbols[range.symbolStart + diagnostic.functionSymbol] => function
+     context.tokens[range.tokenStart + function.nameToken] => nameToken
+@@ -8694,35 +8788,43 @@ emitConstantCollectionDiagnostics context: ref emitterContext.EmitContext -> Uni
+         }
+         sourceIndex! + 1 => sourceIndex!
+     }
+ }
+ 
++public isMouseEventsCall context: ref emitterContext.EmitContext, callIndex: Int -> Bool {
++    callIndex < 0 or callIndex >= (context.ir -> len)
++        -> if { false -> return }
++    context.ir[callIndex] => call
++    call.kind != 6 or call.typeId < 0 or call.typeId >= (context.types -> len)
++        or call.targetModule < 0 or call.targetModule >= (context.ranges -> len)
++        or call.targetModule >= (context.modules -> len)
++        -> if { false -> return }
++    context.types[call.typeId] => resultType
++    resultType.kind != 7 or resultType.origin != 4 or resultType.symbol != 4
++        -> if { false -> return }
++    context.modules[call.targetModule] => ownerModule
++    (context.sources[ownerModule.sourceIndex] -> slice(ownerModule.pathStart, ownerModule.pathLength)) != "sys.input.mouse"
++        -> if { false -> return }
++    context.ranges[call.targetModule] => targetRange
++    call.symbol < 0 or call.symbol >= targetRange.symbolCount
++        -> if { false -> return }
++    context.symbols[targetRange.symbolStart + call.symbol] => target
++    target.kind != 31 or target.parent < 0 or target.parent >= targetRange.symbolCount
++        or target.nameToken < 0 or target.nameToken >= targetRange.tokenCount
++        -> if { false -> return }
++    context.symbols[targetRange.symbolStart + target.parent] => owner
++    owner.nameToken < 0 or owner.nameToken >= targetRange.tokenCount
++        -> if { false -> return }
++    (call.targetModule -> sourceTokenIs(target.nameToken, "events", context))
++        and (call.targetModule -> sourceTokenIs(owner.nameToken, "Source", context))
++}
++
+ public usesMouseEventsRuntime context: ref emitterContext.EmitContext -> Bool {
+     false => usesMouse!
+     0 => callIndex!
+     callIndex! < (context.ir -> len) and not usesMouse!
+         -> while {
+-            context.ir[callIndex!] => call
+-            call.kind == 6 and call.typeId >= 0 and call.typeId < (context.types -> len) and call.targetModule >= 0 and call.targetModule < (context.ranges -> len) and call.symbol >= 0
+-                -> if {
+-                    context.types[call.typeId] => callType
+-                    context.ranges[call.targetModule] => targetRange
+-                    call.symbol < targetRange.symbolCount -> if {
+-                        context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
+-                        context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
+-                        targetName.span.length == 6 => nameEqual!
+-                        "events" => expectedName
+-                        UIntSize(0) => nameByte!
+-                        nameEqual! and nameByte! < targetName.span.length
+-                            -> while {
+-                                (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
+-                                    -> if { false => nameEqual! }
+-                                nameByte! + 1 => nameByte!
+-                            }
+-                        nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4
+-                            -> if { true => usesMouse! }
+-                    }
+-                }
++            context -> isMouseEventsCall(callIndex!) -> if { true => usesMouse! }
+             callIndex! + 1 => callIndex!
+         }
+     usesMouse!
+ }
+diff --git a/selfhost/semantic/call_resolution_sources.slg b/selfhost/semantic/call_resolution_sources.slg
+index ec029b45..71406b94 100644
+--- a/selfhost/semantic/call_resolution_sources.slg
++++ b/selfhost/semantic/call_resolution_sources.slg
+@@ -4065,13 +4065,13 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
+             localCallNode.kind == 10 and importedIndex < 0
+                 -> if {
+                     sourceRange.astStart + local.callAst => scalarFileCall
+                     package.tokens[sourceRange.tokenStart + local.nameToken] => scalarFileToken
+                     source -> slice(scalarFileToken.span.start, scalarFileToken.span.length) => scalarFileName
+-                    scalarFileName == "readAt" or scalarFileName == "readAtAsync" or scalarFileName == "writeAt"
++                    scalarFileName == "readAt" or scalarFileName == "readAtAsync" or scalarFileName == "writeAt" or scalarFileName == "writeAtAsync"
+                         -> if {
+-                            compilerProvidedFileScalarReceiver(package, identities, resolvedTypes, receiverTypeByCallAst[scalarFileCall], scalarFileName == "writeAt")
++                            compilerProvidedFileScalarReceiver(package, identities, resolvedTypes, receiverTypeByCallAst[scalarFileCall], scalarFileName == "writeAt" or scalarFileName == "writeAtAsync")
+                                 -> if { 6 => resolvedStatus! }
+                         }
+                 }
+             local.callAst => resolvedCallAst!
+             resolvedStatus! == 0 and resolvedTargetSource! >= 0 and resolvedFunctionSymbol! >= 0
+diff --git a/selfhost/semantic/calls.slg b/selfhost/semantic/calls.slg
+index 64cbd4c6..cc8b4fbc 100644
+--- a/selfhost/semantic/calls.slg
++++ b/selfhost/semantic/calls.slg
+@@ -481,10 +481,36 @@ commitAnalyzedGlobalFunctionAliases resolutions: mut [ModuleCallResolution; ~],
+             }
+         callIndex! + 1 => callIndex!
+     }
+ }
+ 
++public isProcessAdditionalRuntimeIntrinsic package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Bool {
++    sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
++        or sourceModule < 0 or sourceModule >= (package.ranges -> len)
++        -> if { false -> return }
++    package.ranges[sourceModule] => range
++    functionSymbol < 0 or functionSymbol >= range.symbolCount
++        -> if { false -> return }
++    package.symbols[range.symbolStart + functionSymbol] => declaration
++    declaration.kind != 31 or declaration.parent < 0 or declaration.nameToken < 0
++        -> if { false -> return }
++    package.symbols[range.symbolStart + declaration.parent] => owner
++    owner.kind != 6 -> if { false -> return }
++    package -> typeIds.implOwnerTypeAst(sourceModule, owner.astNode) => ownerTypeAst
++    ownerTypeAst < 0 -> if { false -> return }
++    package.sources[sourceModule] -> slice(UIntSize(0), package.sources[sourceModule] -> len) => source
++    source -> modules.logicalNameIs(identities[sourceModule], range, package.tokens, "sys.process")
++        -> unless { false -> return }
++    package.nodes[range.astStart + ownerTypeAst] => receiver
++    source -> slice(receiver.start, receiver.length) => receiverName
++    receiverName != "Command" and receiverName != "sys.process.Command"
++        -> if { false -> return }
++    package.tokens[range.tokenStart + declaration.nameToken] => nameToken
++    source -> slice(nameToken.span.start, nameToken.span.length) => name
++    name == "collect" or name == "runToFile"
++}
++
+ public displayFunctionSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Int {
+     sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
+         or sourceModule < 0 or sourceModule >= (package.ranges -> len)
+         or functionSymbol < 0
+         -> if { -1 -> return }
+diff --git a/selfhost/semantic/diagnostics.slg b/selfhost/semantic/diagnostics.slg
+index 6111d2ea..6cb8677c 100644
+--- a/selfhost/semantic/diagnostics.slg
++++ b/selfhost/semantic/diagnostics.slg
+@@ -257,22 +257,24 @@ public struct BindingDeclarationDiagnostic {
+     public actualTypeId: Int
+ }
+ 
+ public struct CallArityDiagnostic {
+     public nativePathStyle: Bool
++    public runtimeRequest: Bool
+     public sourceModule: Int
+     public callAst: Int
++    public targetPathAst: Int
+     public targetSourceModule: Int
+     public functionSymbol: Int
+     public expectedAdditionalArguments: Int
+ }
+ 
+ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call: calls.ModuleCallResolution -> Int {
+     call.status == 0 and (prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol))
+         -> if { 0 -> return }
+     call.status != 0 or call.sourceModule < 0 or call.sourceModule >= (prepared.package.ranges -> len)
+-        or call.targetSourceModule != call.sourceModule
++        or call.targetSourceModule < 0 or call.targetSourceModule >= (prepared.package.ranges -> len)
+         -> if { -1 -> return }
+     prepared.package.ranges[call.sourceModule] => range
+     prepared.package.ranges[call.targetSourceModule] => targetRange
+     call.callAst < 0 or call.callAst >= range.astCount
+         or call.functionSymbol < 0 or call.functionSymbol >= targetRange.symbolCount
+@@ -285,12 +287,26 @@ directCallExpectedArguments prepared: ref semanticContext.SemanticSnapshot, call
+         prepared.package.nodes[range.astStart + node.parent] => parent
+         parent.kind == 10 and node.start > parent.start
+             -> if { -1 -> return }
+     }
+     prepared.package.tokens[range.tokenStart + node.firstToken].kind != grammar.tokenIdIdentifier()
+-        or prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind != grammar.tokenIdLeftParen()
+         -> if { -1 -> return }
++    # Qualified static calls include every input in parentheses. A dotted local
++    # receiver keeps the existing method-input path, which supplies self.
++    prepared.package.tokens[range.tokenStart + node.firstToken + 1].kind == grammar.tokenIdDot()
++        -> if {
++            0 => nameIndex!
++            nameIndex! < range.nameCount -> while {
++                prepared.package.names[range.nameStart + nameIndex!] => name
++                name.nameToken == node.firstToken and name.symbol >= 0
++                    -> if {
++                        prepared.package.symbols[range.symbolStart + name.symbol] => receiver
++                        receiver.kind == 9 or receiver.kind == 35 -> if { -1 -> return }
++                    }
++                nameIndex! + 1 => nameIndex!
++            }
++        }
+     prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+     function.kind != 7 and function.kind != 31 -> if { -1 -> return }
+     0 => childIndex!
+     childIndex! < targetRange.symbolCount -> while {
+         prepared.package.symbols[targetRange.symbolStart + childIndex!] => child
+@@ -333,12 +349,13 @@ directArityOwnsUnknownName prepared: ref semanticContext.SemanticSnapshot, resol
+         }
+     false
+ }
+ 
+ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> CallArityDiagnostic {
+-    CallArityDiagnostic { nativePathStyle: false, sourceModule: -1, callAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
++    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
++    prepared.package -> semanticContext.indexDirectFlowTargetPathsByAst => targetPaths
+     prepared.calls -> each call {
+         call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+             and call.targetSourceModule >= 0 and call.targetSourceModule < (prepared.package.ranges -> len)
+             and call.functionSymbol >= 0 and call.functionSymbol < prepared.package.ranges[call.targetSourceModule].symbolCount
+             -> if {
+@@ -365,14 +382,39 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot,
+                             and (prepared.package -> diagnosticOriginBefore(call.sourceModule, call.callAst, selected!.sourceModule, selected!.callAst))
+                             -> if {
+                                 expectedTotal! - 1 => expectedCount!
+                                 prepared.package.nodes[range.astStart + call.callAst].kind == 11
+                                     -> if { expectedTotal! => expectedCount! }
++                                targetPaths[range.astStart + call.callAst] => targetPath!
++                                prepared.package.nodes[range.astStart + call.callAst].kind == 10 and targetPath! < 0
++                                    -> if {
++                                        0 => childAst!
++                                        childAst! < range.astCount -> while {
++                                            prepared.package.nodes[range.astStart + childAst!] => child
++                                            child.parent == call.callAst
++                                                and range.astStart + childAst! != flowSources[range.astStart + call.callAst]
++                                                and (child.kind == 11 or child.kind == 48 or child.kind == 77)
++                                                -> if { targetPaths[range.astStart + childAst!] => targetPath! }
++                                            childAst! + 1 => childAst!
++                                        }
++                                    }
++                                prepared.package.nodes[range.astStart + call.callAst].kind == 11
++                                    -> if {
++                                        0 => childAst!
++                                        childAst! < range.astCount -> while {
++                                            prepared.package.nodes[range.astStart + childAst!] => child
++                                            child.parent == call.callAst and child.kind == 16
++                                                -> if { childAst! => targetPath! }
++                                            childAst! + 1 => childAst!
++                                        }
++                                    }
+                                 CallArityDiagnostic {
+                                     nativePathStyle: nativePathStyle
++                                    runtimeRequest: prepared.package -> calls.isProcessAdditionalRuntimeIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)
+                                     sourceModule: call.sourceModule
+                                     callAst: call.callAst
++                                    targetPathAst: targetPath!
+                                     targetSourceModule: call.targetSourceModule
+                                     functionSymbol: call.functionSymbol
+                                     expectedAdditionalArguments: expectedCount!
+                                 } => selected!
+                             }
+@@ -437,22 +479,30 @@ declarationIntrinsicOwnerConsumed prepared: ref semanticContext.SemanticSnapshot
+     name.parent => flowAst!
+     flowAst! < 0 -> if { false -> return }
+     prepared.package.nodes[range.astStart + flowAst!] => firstFlow
+     firstFlow.kind != 10 or firstFlow.start != name.start
+         -> if { false -> return }
+-    # Nested flow edges preserve the first source. The outer edge owns the
+-    # final target, which is the C# consumption decision for the whole flow.
++    # A first await/cancel consumes this source. Later awaits consume the
++    # derived Task, while an earlier borrowed source stays owned by its scope.
++    prepared -> declarationFlowIntrinsicConsumesSource(sourceModule, flowAst!, true)
++        -> if { true -> return }
++    # Preserve the existing final append/updated transform decision.
+     false => outermost!
+     not outermost! -> while {
+         prepared.package.nodes[range.astStart + flowAst!] => flow
+         flow.parent < 0 -> if { true => outermost! } else {
+             prepared.package.nodes[range.astStart + flow.parent] => parent
+             parent.kind == 10 and parent.start == name.start
+                 -> if { flow.parent => flowAst! } else { true => outermost! }
+         }
+     }
+-    range.astStart + flowAst! => globalFlow
++    prepared -> declarationFlowIntrinsicConsumesSource(sourceModule, flowAst!, false)
++}
++
++declarationFlowIntrinsicConsumesSource prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, flowAst: Int, taskOnly: Bool -> Bool {
++    prepared.package.ranges[sourceModule] => range
++    range.astStart + flowAst => globalFlow
+     prepared.directFlowTargetPathByAst[globalFlow] => targetAst
+     targetAst < 0 -> if { false -> return }
+     prepared.package.nodes[range.astStart + targetAst] => target
+     target.firstToken => targetToken!
+     targetToken! < target.firstToken + target.tokenCount
+@@ -466,11 +516,14 @@ declarationIntrinsicOwnerConsumed prepared: ref semanticContext.SemanticSnapshot
+     callIndex >= 0 -> if {
+         prepared.calls[callIndex].functionSymbol >= 0
+             -> if { false -> return }
+     }
+     prepared.package.tokens[range.tokenStart + target.payloadToken] => targetName
+-    prepared.package.sources[sourceModule] -> slice(targetName.span.start, targetName.span.length) -> calls.moveConsumingIntrinsicTarget
++    prepared.package.sources[sourceModule] -> slice(targetName.span.start, targetName.span.length) => targetText
++    targetText == "await" or targetText == "cancel" => taskTarget
++    (taskOnly and taskTarget) or (not taskOnly and not taskTarget) => matchingTargetKind
++    matchingTargetKind and (targetText -> calls.moveConsumingIntrinsicTarget)
+ }
+ 
+ declarationNameConsumes prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~], sourceModule: Int, nameAst: Int, ownerSymbol: Int, typeByAst: ref [Int; ~] -> Bool {
+     prepared -> declarationIntrinsicOwnerConsumed(sourceModule, nameAst)
+         -> if { true -> return }
+@@ -2282,10 +2335,11 @@ public struct RedundantNumericConversion {
+     public typeSymbol: Int
+ }
+ 
+ public struct NumericCallArgumentDiagnostic {
+     # 5 identifies a concrete value passed to a generic box input.
++    # 6/7 identify async file writer arity/unsupported scalar diagnostics.
+     public code: Int
+     public sourceModule: Int
+     public argumentAst: Int
+     public callAst: Int
+     public targetSourceModule: Int
+@@ -2789,11 +2843,16 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
+     literal.code > 0 -> if {
+         2 => selected!
+         literal.sourceModule => source!
+         literal.locationAst => location!
+     }
+-    argument.code > 0 and (package -> diagnosticOriginBefore(argument.sourceModule, argument.argumentAst, source!, location!))
++    selected! == 2 and argument.sourceModule == literal.sourceModule
++        and (argument.argumentAst == literal.locationAst
++        or (package -> declarationAncestor(argument.sourceModule, argument.argumentAst, literal.locationAst)))
++        => literalPrecedesArgumentContract
++    argument.code > 0 and not literalPrecedesArgumentContract
++        and (package -> diagnosticOriginBefore(argument.sourceModule, argument.argumentAst, source!, location!))
+         -> if {
+             3 => selected!
+             argument.sourceModule => source!
+             argument.argumentAst => location!
+         }
+@@ -2833,22 +2892,52 @@ public firstDeclarationRootDiagnosticWithOwnedBinding package: ref analysis.Pack
+             arity.sourceModule => source!
+             arity.callAst => location!
+         }
+     contextualAst => contextualOrigin!
+     contextualOwnerAst >= 0 -> if { contextualOwnerAst => contextualOrigin! }
++    # Infer operands before admitting the enclosing arithmetic operation.
++    (contextualCode == 40 or contextualCode == 71) and selected! == 2
++        and literal.sourceModule == contextualSource
++        and (package -> declarationAncestor(contextualSource, contextualAst, literal.locationAst))
++        => contextualOperandLiteralFailure
+     contextualSource >= 0 and contextualCode > 0
+-        and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43))
++        and not contextualOperandLiteralFailure
++        and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
+         -> if {
+             package -> diagnosticOriginBefore(contextualSource, contextualOrigin!, source!, location!) => contextualEarlier
+             selected! == 4 and source! == contextualSource and location! == contextualOrigin! => sameContextualInitializer
+             contextualEarlier or sameContextualInitializer
+                 -> if {
+                     11 => selected!
+                     contextualSource => source!
+                     contextualOrigin! => location!
+                 }
+         }
++    # Argument contract validation follows inference of that argument.
++    (contextualCode == 40 or contextualCode == 71) and contextualSource >= 0 and selected! == 3
++        and argument.sourceModule == contextualSource
++        and (argument.argumentAst == contextualAst
++        or (package -> declarationAncestor(contextualSource, argument.argumentAst, contextualAst)))
++        -> if {
++            11 => selected!
++            contextualSource => source!
++            contextualAst => location!
++        }
++    contextualSource >= 0 and (contextualCode == 47 or contextualCode == 32 or contextualCode == 48)
++        -> if {
++            -1 => selectedCallAst!
++            selected! == 3 and argument.sourceModule == contextualSource
++                -> if { argument.callAst => selectedCallAst! }
++            selected! == 9 and arity.sourceModule == contextualSource
++                -> if { arity.callAst => selectedCallAst! }
++            package -> capabilityDiagnosticPrecedes(contextualSource, contextualAst, source!, location!, selectedCallAst!)
++                -> if {
++                    11 => selected!
++                    contextualSource => source!
++                    contextualAst => location!
++                }
++        }
+     ownedAst >= 0 -> if {
+         package -> diagnosticOriginBefore(ownedSource, ownedAst, source!, location!) => ownedEarlier
+         false => ownedSameBinding!
+         source! >= 0 and source! == ownedSource -> if {
+             package -> diagnosticBindingOrigin(source!, location!) => selectedBinding
+@@ -3045,10 +3134,25 @@ firstTextIntrinsicOperandDiagnostic prepared: ref semanticContext.SemanticSnapsh
+             }
+     }
+     selected!
+ }
+ 
++# Only arithmetic/control value edges inherit an integer argument context.
++# The shared value walk stops calls; comparison descendants keep their own types.
++integerArgumentContextContains package: ref analysis.PackageAnalysis, sourceModule: Int, argumentAst: Int, valueAst: Int -> Bool {
++    package.ranges[sourceModule] => range
++    valueAst => ancestor!
++    ancestor! >= 0 and ancestor! < range.astCount
++        -> while {
++            package.nodes[range.astStart + ancestor!] => node
++            node.kind == 18 or node.kind == 19 -> if { false -> return }
++            ancestor! == argumentAst -> if { true -> return }
++            node.parent => ancestor!
++        }
++    false
++}
++
+ # Check committed binary contexts and every concrete generic instance before
+ # collapsing shared source facts into the final diagnostics.
+ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~], pointerBitWidth: Int -> NumericCallLiteralDiagnostic {
+     NumericCallLiteralDiagnostic { code: 0, sourceModule: -1, locationAst: -1, literalAst: -1, expectedSymbol: -1, negative: false } => selected!
+     # A binary peer also supplies context outside a generic clone. Reuse the
+@@ -3075,10 +3179,38 @@ public firstFinalNumericLiteralDiagnostic prepared: ref semanticContext.Semantic
+                 global => lastChild![owner]
+             }
+             ast! + 1 => ast!
+         }
+     }
++    # A failed operand cannot erase the expected type of another source literal.
++    resolved.callArguments -> each binding {
++        binding.contextualInput and binding.sourceModule >= 0 and binding.sourceModule < (prepared.package.ranges -> len)
++            and binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
++            -> if {
++                resolved.types[binding.expectedTypeId] => expected
++                expected.kind == 1 and expected.origin == 1 and expected.symbol >= 2 and expected.symbol <= 14
++                    -> if {
++                        prepared.package.ranges[binding.sourceModule] => range
++                        binding.argumentAst >= 0 and binding.argumentAst < range.astCount
++                            and (prepared.package.nodes[range.astStart + binding.argumentAst].kind == 20
++                            or prepared.package.nodes[range.astStart + binding.argumentAst].kind == 21
++                            or prepared.package.nodes[range.astStart + binding.argumentAst].kind == 10)
++                            -> if {
++                                prepared.package -> expressionTypeIds.contextualNumericValueAsts(firstChild!, nextChild!, range.astStart + binding.argumentAst, true) => values
++                                values -> each global {
++                                    prepared.package -> integerArgumentContextContains(binding.sourceModule, binding.argumentAst, global - range.astStart)
++                                        -> if {
++                                            prepared -> numericCallLiteralAt(binding.sourceModule, global - range.astStart, expected.symbol, pointerBitWidth) => candidate
++                                            candidate.code > 0 and candidate.code != 3
++                                                and (prepared.package -> diagnosticOriginBefore(candidate.sourceModule, candidate.locationAst, selected!.sourceModule, selected!.locationAst))
++                                                -> if { candidate => selected! }
++                                        }
++                                }
++                            }
++                    }
++            }
++    }
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+     # Imported calls acquire validated ABI context at library projection. Their
+     # virtual module identity distinguishes them from unresolved source calls.
+     # Share signed spelling/range checks with ordinary and specialized calls.
+     ir -> each call {
+@@ -3396,11 +3528,11 @@ emptyNumericCallArgumentDiagnostic: -> NumericCallArgumentDiagnostic => NumericC
+     genericParameterSymbol: -1
+     expectedTypeId: -1
+     actualTypeId: -1
+ }
+ 
+-numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
++numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, identities: ref [modules.ModuleIdentity; ~], libraryStart: Int, libraryCount: Int, argument: expressionTypeIds.ResolvedCallArgument -> NumericCallArgumentDiagnostic {
+     emptyNumericCallArgumentDiagnostic() => valid
+     argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
+         and argument.argumentAst >= 0
+         and argument.argumentAst < package.ranges[argument.sourceModule].astCount
+         and argument.actualTypeId >= 0 and argument.actualTypeId < (resolved.types -> len)
+@@ -3458,21 +3590,54 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
+             }
+         }
+     argument.status == 0 and argument.expectedTypeId >= 0
+         and argument.expectedTypeId < (resolved.types -> len)
+         -> unless { valid -> return }
+-    resolved.types[argument.expectedTypeId] => expectedType
+-    expectedType.kind == 1 and expectedType.origin == 1
+-        and ((expectedType.symbol >= 2 and expectedType.symbol <= 13)
+-        or (expectedType.symbol >= 19 and expectedType.symbol <= 22))
+-        and not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
++    # An ordinary name reads one readonly reference layer. Field and call
++    # expressions retain their declared reference type, as in CSharp inference.
++    # Mutable and consuming inputs keep their existing ownership checks.
++    resolved.types[argument.actualTypeId] => actualType
++    actualType.kind == 8
++        and package.nodes[package.ranges[argument.sourceModule].astStart + argument.argumentAst].kind == 15
++        and (resolved.types -> typeIds.functionArgumentCompatible(actualType.first, argument.expectedTypeId))
++        and argument.targetSourceModule >= 0 and argument.targetSourceModule < (package.ranges -> len)
++        and argument.parameterSymbol >= 0
++        and argument.parameterSymbol < package.ranges[argument.targetSourceModule].symbolCount
++        -> if {
++            package.ranges[argument.targetSourceModule] => parameterRange
++            package.symbols[parameterRange.symbolStart + argument.parameterSymbol] => parameter
++            parameter.flags % 2 == 0 and parameter.flags / 2 % 2 == 0
++                -> if { valid -> return }
++        }
++    # Console facades use the existing, provenance-aware formatter identity.
++    # Their displayable-value contract is not limited by the Text facade type.
++    package -> calls.displayFunctionSymbol(identities, argument.targetSourceModule, argument.functionSymbol, libraryStart, libraryCount) => display
++    display == -101 or display == -102 -> if { valid -> return }
++    # Every committed parameter uses the same compatibility contract. Restricting
++    # this diagnostic to numeric parameters lets invalid nominal/aggregate inputs
++    # reach runtime lowering, where their fields cannot be extracted safely.
++    not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
+         -> unless { valid -> return }
+     argument.argumentAst => diagnosticAst!
+     argument.parameterOrdinal == 0 and argument.callAst >= 0
+         -> if { argument.callAst => diagnosticAst! }
++    # Runtime primary-input diagnostics use the intrinsic path directly;
++    # ordinary declarations retain the quoted function-name diagnostic.
++    1 => mismatchCode!
++    actualType.kind == 8 and argument.parameterOrdinal == 0
++        and argument.targetSourceModule >= libraryStart
++        and argument.targetSourceModule < libraryStart + libraryCount
++        -> if {
++            package.ranges[argument.targetSourceModule] => targetRange
++            package.symbols[targetRange.symbolStart + argument.functionSymbol] => target
++            target.flags / 128 % 2 == 1 and target.astNode >= 0 and target.astNode < targetRange.astCount
++                and package.nodes[targetRange.astStart + target.astNode].cstRuleId != grammar.ruleIdNativeFunctionDeclaration()
++                -> if { 8 => mismatchCode! }
++        }
++    mismatchCode! == 8 -> if { argument.argumentAst => diagnosticAst! }
+     NumericCallArgumentDiagnostic {
+-        code: 1
++        code: mismatchCode!
+         sourceModule: argument.sourceModule
+         argumentAst: diagnosticAst!
+         callAst: argument.callAst
+         targetSourceModule: argument.targetSourceModule
+         functionSymbol: argument.functionSymbol
+@@ -3482,13 +3647,14 @@ numericCallArgumentMismatch package: ref analysis.PackageAnalysis, resolved: ref
+         expectedTypeId: argument.expectedTypeId
+         actualTypeId: argument.actualTypeId
+     }
+ }
+ 
+-public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> NumericCallArgumentDiagnostic {
++public firstNumericCallArgumentDiagnostic package: ref analysis.PackageAnalysis, resolved: ref expressionTypeIds.ExpressionTypeIdSet, libraryStart: Int, libraryCount: Int -> NumericCallArgumentDiagnostic {
++    package -> modules.identitiesAnalyzed => identities
+     resolved.callArguments -> each argument {
+-        package -> numericCallArgumentMismatch(resolved, argument) => diagnostic
++        package -> numericCallArgumentMismatch(resolved, identities, libraryStart, libraryCount, argument) => diagnostic
+         diagnostic.code > 0 -> if { diagnostic -> return }
+     }
+     package -> firstFileScalarArgumentDiagnostic(resolved)
+ }
+ 
+@@ -3512,11 +3678,12 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
+             targets[globalCall] => targetAst
+             call.kind == 10 and targetAst >= 0 and flowSources[globalCall] >= 0
+                 -> if {
+                     package.nodes[range.astStart + targetAst] => target
+                     package.sources[range.sourceModule] -> slice(target.start, target.length) => name
+-                    name == "writeAt" -> if {
++                    name == "writeAt" or name == "writeAtAsync" -> if {
++                        name == "writeAtAsync" => asyncWrite
+                         resolved.types -> typeIds.materializedReadTypeId(typeByAst![flowSources[globalCall]]) => receiverTypeId
+                         receiverTypeId >= 0 and receiverTypeId < (resolved.types -> len)
+                             -> if {
+                                 resolved.types[receiverTypeId] => receiver
+                                 receiver.kind == 1 and (receiver.origin == 0 or receiver.origin == 2)
+@@ -3530,10 +3697,18 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
+                                         package.sources[receiver.module] -> slice(token.span.start, token.span.length) => typeName
+                                         moduleName == "sys.file" and typeName == "FileWriter"
+                                             -> if {
+                                                 calls.ModuleCallResolution { sourceModule: range.sourceModule, callAst: callAst!, origin: 0, targetModule: -1, targetSourceModule: -1, functionSymbol: -1, status: 0 } => intrinsic
+                                                 package -> semanticContext.callArgumentAsts(intrinsic, flowSources) => arguments
++                                                asyncWrite and (arguments -> len) != 3 -> if {
++                                                    emptyNumericCallArgumentDiagnostic() => diagnostic!
++                                                    6 => diagnostic!.code
++                                                    range.sourceModule => diagnostic!.sourceModule
++                                                    targetAst => diagnostic!.argumentAst
++                                                    callAst! => diagnostic!.callAst
++                                                    diagnostic! -> return
++                                                }
+                                                 (arguments -> len) == 3 -> if {
+                                                     -1 => scalarType!
+                                                     resolved.references -> each reference {
+                                                         reference.sourceModule == range.sourceModule and reference.status == 0 and reference.typeAst >= 0
+                                                             -> if {
+@@ -3543,10 +3718,31 @@ firstFileScalarArgumentDiagnostic package: ref analysis.PackageAnalysis, resolve
+                                                                     typeNode.parent == callAst! or (parent.parent == callAst! and parent.start > call.start and (parent.kind == 11 or parent.kind == 77))
+                                                                         -> if { reference.typeId => scalarType! }
+                                                                 }
+                                                             }
+                                                     }
++                                                    asyncWrite -> if {
++                                                        scalarType! < 0 -> if {
++                                                            resolved.types -> typeIds.materializedReadTypeId(typeByAst![arguments[1]]) => scalarType!
++                                                        }
++                                                        scalarType! >= 0 and scalarType! < (resolved.types -> len)
++                                                            -> if {
++                                                                resolved.types[scalarType!] => scalar
++                                                                scalar.kind == 1 and scalar.origin == 1
++                                                                    and ((scalar.symbol >= 2 and scalar.symbol <= 14)
++                                                                    or (scalar.symbol >= 19 and scalar.symbol <= 23)) => supportedScalar
++                                                                not supportedScalar -> if {
++                                                                    emptyNumericCallArgumentDiagnostic() => diagnostic!
++                                                                    7 => diagnostic!.code
++                                                                    range.sourceModule => diagnostic!.sourceModule
++                                                                    arguments[1] - range.astStart => diagnostic!.argumentAst
++                                                                    callAst! => diagnostic!.callAst
++                                                                    scalarType! => diagnostic!.actualTypeId
++                                                                    diagnostic! -> return
++                                                                }
++                                                            }
++                                                    }
+                                                     1 => ordinal!
+                                                     ordinal! <= 2 -> while {
+                                                         arguments[ordinal!] => argumentGlobal
+                                                         package.nodes[argumentGlobal] => argument
+                                                         scalarType! => expected!
+@@ -3938,10 +4134,13 @@ fixedArrayElementPrecedesNested package: ref analysis.PackageAnalysis, arrayFail
+ # the ordinary expression comparator.
+ contextualRecordFieldPriority package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], candidate: ExpressionOperandDiagnostic, selected: ExpressionOperandDiagnostic -> Int {
+     selected.code < 33 or selected.code > 43 or candidate.sourceModule != selected.sourceModule
+         -> if { -1 -> return }
+     package.ranges[selected.sourceModule] => range
++    # Declaration-ordered field priority belongs only to record initializers.
++    package.nodes[range.astStart + selected.astNode].kind != 38
++        -> if { -1 -> return }
+     candidate.astNode => valueAst!
+     candidate.operandAst >= 0 and candidate.operandAst < range.astCount
+         and (package -> semanticContext.declarationAncestor(selected.sourceModule, selected.astNode, candidate.operandAst))
+         -> if { candidate.operandAst => valueAst! }
+     valueAst! < 0 or valueAst! >= range.astCount or valueAst! == selected.astNode
+@@ -3995,10 +4194,29 @@ contextualRecordFieldPriority package: ref analysis.PackageAnalysis, fields: ref
+         or (selected.code == 43 and (candidate.locationOffset < selected.locationOffset
+         or (package -> semanticContext.declarationAncestor(selected.sourceModule, selected.operandAst, valueAst!))))))
+         -> if { 1 } else { 0 }
+ }
+ 
++# The flow source has already been inferred before its callee is checked.
++# Direct-call arguments and the selected callee's input contract are later.
++capabilityDiagnosticPrecedes package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int, otherSource: Int, otherAst: Int, otherCallAst: Int -> Bool {
++    otherSource < 0 -> if { true -> return }
++    sourceModule != otherSource -> if { sourceModule < otherSource -> return }
++    callAst == otherCallAst -> if { true -> return }
++    not (package -> declarationAncestor(sourceModule, callAst, otherAst))
++        -> if { package -> diagnosticOriginBefore(sourceModule, callAst, otherSource, otherAst) -> return }
++    package.ranges[sourceModule] => range
++    package.nodes[range.astStart + callAst].kind == 10
++        -> if {
++            package -> semanticContext.indexExpressionSourceAsts => sourceAsts
++            sourceAsts[range.astStart + callAst] => sourceAst
++            sourceAst >= 0 and (package -> declarationAncestor(sourceModule, sourceAst, otherAst))
++                -> if { false -> return }
++        }
++    true
++}
++
+ expressionDiagnosticPrecedes package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], candidate: ExpressionOperandDiagnostic, selected: ExpressionOperandDiagnostic -> Bool {
+     selected.code == 0 -> if { true -> return }
+     candidate.sourceModule != selected.sourceModule
+         -> if {
+             candidate.sourceModule < selected.sourceModule -> return
+@@ -4010,15 +4228,15 @@ expressionDiagnosticPrecedes package: ref analysis.PackageAnalysis, fields: ref
+     candidate.astNode == selected.astNode and candidate.code == 32 and selected.code == 47
+         -> if { false -> return }
+     (candidate.code == 47 or candidate.code == 32 or candidate.code == 48)
+         and (candidate.astNode == selected.astNode
+         or (package -> declarationAncestor(candidate.sourceModule, candidate.astNode, selected.astNode)))
+-        -> if { true -> return }
++        -> if { package -> capabilityDiagnosticPrecedes(candidate.sourceModule, candidate.astNode, selected.sourceModule, selected.astNode, -1) -> return }
+     (selected.code == 47 or selected.code == 32 or selected.code == 48)
+         and (candidate.astNode == selected.astNode
+         or (package -> declarationAncestor(candidate.sourceModule, selected.astNode, candidate.astNode)))
+-        -> if { false -> return }
++        -> if { not (package -> capabilityDiagnosticPrecedes(selected.sourceModule, selected.astNode, candidate.sourceModule, candidate.astNode, -1)) -> return }
+     package -> contextualRecordFieldPriority(fields, candidate, selected) => fieldPriority
+     fieldPriority >= 0 -> if { fieldPriority == 1 -> return }
+     package -> fixedArrayElementPrecedesNested(candidate, selected)
+         -> if { true -> return }
+     package -> fixedArrayElementPrecedesNested(selected, candidate)
+@@ -4129,10 +4347,58 @@ public firstMutableRebindDiagnostic prepared: ref semanticContext.SemanticSnapsh
+             }
+     }
+     selected!
+ }
+ 
++# C# FlowExpression inherits its source expression's coordinate. Grouping
++# is transparent, while operators and product construction own their tokens.
++expressionDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceModule: Int, callAst: Int -> UIntSize {
++    package.ranges[sourceModule] => range
++    callAst => originAst!
++    package.nodes[range.astStart + originAst!].kind == 10
++        and sourceAsts[range.astStart + originAst!] >= 0
++        -> while { sourceAsts[range.astStart + originAst!] => originAst! }
++    package.nodes[range.astStart + originAst!] => origin
++    origin.kind == 36 and origin.operatorKind == grammar.tokenIdDot()
++        -> if { package -> ordinaryFieldDiagnosticOffset(sourceAsts, sourceModule, originAst!) -> return }
++    ((origin.kind >= 18 and origin.kind <= 25) or origin.kind == 36 or origin.kind == 41 or origin.kind == 82)
++        and origin.payloadToken >= 0
++        -> if { package.tokens[range.tokenStart + origin.payloadToken].span.start -> return }
++    origin.start
++}
++
++# Ordinary and interpolation arithmetic share one type-domain decision.
++# Both operands must be resolved before domain admission, as in C# inference.
++ordinaryArithmeticDomainDiagnostic package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], types: ref [typeIds.SemanticType; ~], sourceModule: Int, binaryAst: Int, leftAst: Int, leftTypeId: Int, rightTypeId: Int -> ExpressionOperandDiagnostic {
++    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => diagnostic!
++    package.ranges[sourceModule] => range
++    leftAst >= 0 and leftAst < range.astCount
++        and leftTypeId >= 0 and leftTypeId < (types -> len)
++        and rightTypeId >= 0 and rightTypeId < (types -> len)
++        and not types[leftTypeId].containsParameter and not types[rightTypeId].containsParameter
++        -> if {
++            package.nodes[range.astStart + binaryAst].operatorKind => opcode
++            types -> expressionTypeIds.interpolationBinaryOperands(leftTypeId, rightTypeId, false, false) => operands
++            opcode -> expressionTypeIds.interpolationArithmeticDecision(operands) => decision
++            decision.code == 1 or decision.code == 2 -> if {
++                package -> expressionDiagnosticOffset(sourceAsts, sourceModule, leftAst) => location
++                ExpressionOperandDiagnostic {
++                    code: 71
++                    sourceModule: sourceModule
++                    astNode: binaryAst
++                    operandAst: leftAst
++                    operatorKind: opcode
++                    locationOffset: location
++                    operandTypeSymbol: decision.code
++                    operandTypeId: leftTypeId
++                    firstTypeId: rightTypeId
++                } => diagnostic!
++            }
++        }
++    diagnostic!
++}
++
+ # Identifier-only member chains keep the primary coordinate; calls, indexes,
+ # parentheses and Bang keep the actual postfix dot, matching interpolation IR.
+ ordinaryFieldDiagnosticOffset package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceIndex: Int, fieldAst: Int -> UIntSize {
+     package.ranges[sourceIndex] => range
+     package.nodes[range.astStart + fieldAst] => operation
+@@ -4238,11 +4504,11 @@ contextualRecordDecision package: ref analysis.PackageAnalysis, sourceModule: In
+         locationOffset: package.nodes[range.astStart + locationAst].start,
+         operandTypeSymbol: -1, operandTypeId: ownerType, firstTypeId: actualType
+     }
+ }
+ 
+-contextualRecordArrayDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int, sourceModule: Int, literalAst: Int, arrayGlobal: Int, ownerType: Int, field: Int, expectedArrayType: Int -> ExpressionOperandDiagnostic {
++contextualArrayDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int, sourceModule: Int, literalAst: Int, arrayGlobal: Int, ownerType: Int, field: Int, expectedArrayType: Int -> ExpressionOperandDiagnostic {
+     package -> contextualRecordDecision(sourceModule, literalAst, arrayGlobal - package.ranges[sourceModule].astStart, 0, ownerType, field, -1) => valid
+     package.nodes[arrayGlobal].kind != 37 -> if { valid -> return }
+     resolved.types[expectedArrayType] => expectedArray
+     expectedArray.kind != 3 and expectedArray.kind != 4 and expectedArray.kind != 12
+         -> if { valid -> return }
+@@ -4327,10 +4593,46 @@ contextualRecordArrayDiagnostic package: ref analysis.PackageAnalysis, prepared:
+             decision! -> return
+         }
+     valid
+ }
+ 
++# A direct unannotated array literal inherits its parameter storage type.
++# Check its elements and original extent before that contextual type hides them.
++contextualArrayArgumentDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
++    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
++    resolved.callArguments -> each argument {
++        argument.status == 0 and argument.sourceModule >= 0 and argument.sourceModule < (package.ranges -> len)
++            and argument.expectedTypeId >= 0 and argument.expectedTypeId < (resolved.types -> len)
++            -> if {
++                package.ranges[argument.sourceModule] => range
++                argument.argumentAst >= 0 and argument.argumentAst < range.astCount
++                    and (prepared -> declarationBodyIsActive(resolved, argument.sourceModule, argument.argumentAst))
++                    -> if {
++                        range.astStart + argument.argumentAst => globalAst
++                        resolved.types[argument.expectedTypeId] => expected
++                        package.nodes[globalAst].kind == 37 and not expected.containsParameter
++                            and (expected.kind == 3 or expected.kind == 4 or expected.kind == 12)
++                            -> if {
++                                false => annotated!
++                                firstChild[globalAst] => child!
++                                child! >= 0 -> while {
++                                    package.nodes[child!].kind == 12 or package.nodes[child!].kind == 16
++                                        -> if { true => annotated! }
++                                    nextChild[child!] => child!
++                                }
++                                not annotated! -> if {
++                                    package -> contextualArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, argument.sourceModule, argument.argumentAst, globalAst, -1, -1, argument.expectedTypeId) => candidate
++                                    candidate.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!))
++                                        -> if { candidate => selected! }
++                                }
++                            }
++                    }
++            }
++    }
++    selected!
++}
++
+ # A committed contextual record owns its labels, not its field value reads.
+ # Match C# identifier/duplicate checks, declaration-ordered fields, then extras.
+ contextualRecordDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
+     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => valid
+     [Int; ~] => firstField!
+@@ -4425,11 +4727,11 @@ contextualRecordDiagnostic package: ref analysis.PackageAnalysis, prepared: ref
+                             decision -> return
+                         }
+                         initializer! < (values! -> len) -> if {
+                             values![initializer!] => value
+                             resolved.fields[declared!].fieldType => expectedFieldType
+-                            package -> contextualRecordArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, range.sourceModule, literalAst!, value, ownerType, declared!, expectedFieldType) => arrayDecision
++                            package -> contextualArrayDiagnostic(prepared, resolved, typeByAst, firstChild, nextChild, pointerBitWidth, range.sourceModule, literalAst!, value, ownerType, declared!, expectedFieldType) => arrayDecision
+                             arrayDecision.code > 0 -> if { arrayDecision -> return }
+                             resolved.types[expectedFieldType] => expectedNumeric
+                             expectedNumeric.symbol -> typeIds.canonicalBuiltinSymbol => expectedSymbol
+                             expectedNumeric.kind == 1 and expectedNumeric.origin == 1
+                                 and ((expectedSymbol >= 2 and expectedSymbol <= 4) or expectedSymbol == 6 or (expectedSymbol >= 8 and expectedSymbol <= 14))
+@@ -4655,10 +4957,56 @@ firstRepeatBlockDiagnostic prepared: ref semanticContext.SemanticSnapshot, resol
+             }
+     }
+     selected!
+ }
+ 
++# The call resolver owns whether an expected input was known before inference.
++# Reuse contextual value traversal, excluding comparison operands, which infer
++# independently even when their enclosing call expects an integer.
++contextualArithmeticArgumentDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, typeByAst: ref [Int; ~], firstChild: ref [Int; ~], nextChild: ref [Int; ~], sourceAsts: ref [Int; ~] -> ExpressionOperandDiagnostic {
++    ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => selected!
++    resolved.callArguments -> each binding {
++        binding.contextualInput and binding.expectedTypeId >= 0 and binding.expectedTypeId < (resolved.types -> len)
++            and binding.sourceModule >= 0 and binding.sourceModule < (package.ranges -> len)
++            -> if {
++                resolved.types[binding.expectedTypeId] => expected
++                expected.kind == 1 and expected.origin == 1 and expected.symbol >= 2 and expected.symbol <= 14
++                    -> if {
++                        package.ranges[binding.sourceModule] => range
++                        binding.argumentAst >= 0 and binding.argumentAst < range.astCount
++                            and (prepared -> declarationBodyIsActive(resolved, binding.sourceModule, binding.argumentAst))
++                            -> if {
++                                package -> expressionTypeIds.contextualNumericValueAsts(firstChild, nextChild, range.astStart + binding.argumentAst, true) => values
++                                values -> each global {
++                                    package.nodes[global] => binary
++                                    binary.kind == 20 or binary.kind == 21 -> if {
++                                        package -> integerArgumentContextContains(binding.sourceModule, binding.argumentAst, global - range.astStart) => contextual
++                                        firstChild[global] => left
++                                        left >= 0 -> if { nextChild[left] } else { -1 } => right
++                                        contextual and left >= 0 and right >= 0 and nextChild[right] < 0
++                                            -> if {
++                                                resolved.types -> typeIds.materializedReadTypeId(typeByAst[left]) => leftType
++                                                resolved.types -> typeIds.materializedReadTypeId(typeByAst[right]) => rightType
++                                                leftType >= 0 and rightType >= 0
++                                                    and (leftType != binding.expectedTypeId or rightType != binding.expectedTypeId)
++                                                    -> if {
++                                                        leftType != binding.expectedTypeId -> if { left } else { right } => invalid
++                                                        package -> expressionDiagnosticOffset(sourceAsts, binding.sourceModule, invalid - range.astStart) => location
++                                                        ExpressionOperandDiagnostic { code: 40, sourceModule: binding.sourceModule, astNode: global - range.astStart, operandAst: invalid - range.astStart, operatorKind: -1, locationOffset: location, operandTypeSymbol: binary.operatorKind, operandTypeId: -1, firstTypeId: binding.expectedTypeId } => candidate
++                                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                                            -> if { candidate => selected! }
++                                                    }
++                                            }
++                                    }
++                                }
++                            }
++                    }
++            }
++    }
++    selected!
++}
++
+ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], mutableNames: ref [UnresolvedMutableNameDiagnostic; ~], pointerBitWidth: Int -> ExpressionOperandDiagnostic {
+     # C# binds every declaration (including local declarations) before bodies.
+     prepared -> effects.indexDeclaredEffects => declaredEffects
+     prepared -> firstFunctionNameDiagnostic(declaredEffects) => functionNameDiagnostic
+     -1 => reservedFunction!
+@@ -4837,10 +5185,16 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+             childAst! + 1 => childAst!
+         }
+         childSource! + 1 => childSource!
+     }
+     package -> contextualRecordDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, pointerBitWidth) => selected!
++    package -> contextualArrayArgumentDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, pointerBitWidth) => arrayArgumentDiagnostic
++    arrayArgumentDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, arrayArgumentDiagnostic, selected!))
++        -> if { arrayArgumentDiagnostic => selected! }
++    package -> contextualArithmeticArgumentDiagnostic(prepared, resolved, typeIdByAst!, firstChildByAst!, nextChildByAst!, sourceAstByExpression) => arithmeticArgumentDiagnostic
++    arithmeticArgumentDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, arithmeticArgumentDiagnostic, selected!))
++        -> if { arithmeticArgumentDiagnostic => selected! }
+     prepared -> firstRepeatBlockDiagnostic(resolved, ir) => repeatDiagnostic
+     repeatDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, repeatDiagnostic, selected!))
+         -> if { repeatDiagnostic => selected! }
+     prepared -> firstTextIntrinsicOperandDiagnostic(resolved, ir, firstChildByAst!, nextChildByAst!) => textDiagnostic
+     textDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, textDiagnostic, selected!))
+@@ -4901,10 +5255,13 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                     package.nodes[range.astStart + binary.astNode] => syntaxBinary
+                     syntaxBinary.kind == 20 or syntaxBinary.kind == 21
+                         -> if {
+                             resolved.types -> typeIds.materializedReadTypeId(ir[binary.operand0].typeId) => leftId
+                             resolved.types -> typeIds.materializedReadTypeId(ir[binary.operand1].typeId) => rightId
++                            package -> ordinaryArithmeticDomainDiagnostic(sourceAstByExpression, resolved.types, binary.sourceModule, binary.astNode, ir[binary.operand0].astNode, leftId, rightId) => domainDiagnostic
++                            domainDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, domainDiagnostic, selected!))
++                                -> if { domainDiagnostic => selected! }
+                             leftId >= 0 and rightId >= 0 and leftId != rightId
+                                 and leftId < (resolved.types -> len) and rightId < (resolved.types -> len)
+                                 and not resolved.types[leftId].containsParameter and not resolved.types[rightId].containsParameter => concreteOperands
+                             concreteOperands -> if {
+                                 resolved.types[leftId] => left
+@@ -4959,10 +5316,66 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+             not (prepared -> declarationBodyIsActive(resolved, sourceIndex!, astIndex!))
+                 -> if {
+                     astIndex! + 1 => astIndex!
+                     continue
+                 }
++            logical.kind == 56 -> if {
++                package -> expressionTypeIds.subjectWhenValueAst(sourceIndex!, astIndex!, typeIdByAst!) => enumSubjectAst
++                enumSubjectAst >= 0 and enumSubjectAst < range.astCount
++                    -> if {
++                        typeIdByAst![range.astStart + enumSubjectAst] => enumSubjectTypeId
++                        enumSubjectTypeId >= 0 and enumSubjectTypeId < (resolved.types -> len)
++                            -> if {
++                                # C# reads one reference layer from a bound name.
++                                # A call returning ref T remains a reference value,
++                                # so it cannot be used directly as an enum subject.
++                                resolved.types[enumSubjectTypeId].kind == 8
++                                    and package.nodes[range.astStart + enumSubjectAst].kind != 15
++                                    -> if {
++                                        ExpressionOperandDiagnostic {
++                                            code: 72
++                                            sourceModule: sourceIndex!
++                                            astNode: astIndex!
++                                            operandAst: enumSubjectAst
++                                            operatorKind: -1
++                                            locationOffset: package.nodes[range.astStart + enumSubjectAst].start
++                                            operandTypeSymbol: -1
++                                            operandTypeId: enumSubjectTypeId
++                                            firstTypeId: -1
++                                        } => candidate
++                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                            -> if { candidate => selected! }
++                                    }
++                            }
++                    }
++            }
++            logical.kind == 64 and logical.parent >= 0
++                and package.nodes[range.astStart + logical.parent].kind == 10
++                -> if {
++                    sourceAstByExpression[range.astStart + logical.parent] => foldSourceAst
++                    foldSourceAst >= 0 and foldSourceAst < range.astCount
++                        -> if {
++                            resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![range.astStart + foldSourceAst]) => foldSourceTypeId
++                            foldSourceTypeId >= 0 and foldSourceTypeId < (resolved.types -> len)
++                                -> if {
++                                    resolved.types[foldSourceTypeId] => foldSourceType
++                                    foldSourceType.status == 0 and not foldSourceType.containsParameter
++                                        and not (resolved.types -> typeIds.foldInputTypeSupported(foldSourceTypeId))
++                                        -> if {
++                                            ExpressionOperandDiagnostic {
++                                                code: 70, sourceModule: sourceIndex!, astNode: astIndex!
++                                                operandAst: foldSourceAst, operatorKind: -1
++                                                locationOffset: package.nodes[range.astStart + foldSourceAst].start
++                                                operandTypeSymbol: foldSourceType.symbol
++                                                operandTypeId: foldSourceTypeId, firstTypeId: -1
++                                            } => candidate
++                                            package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                                -> if { candidate => selected! }
++                                        }
++                                }
++                        }
++                }
+             false => bareYieldOwned!
+             logical.kind == 16 and logical.payloadToken >= 0 and logical.payloadToken < range.tokenCount
+                 and logical.parent >= 0
+                 and (package.nodes[range.astStart + logical.parent].kind == 10
+                 or package.nodes[range.astStart + logical.parent].kind == 77)
+@@ -5934,10 +6347,13 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                     nextChildByAst![leftGlobal] => rightGlobal
+                     rightGlobal >= 0 and nextChildByAst![rightGlobal] < 0
+                         -> if {
+                             resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![leftGlobal]) => leftTypeId
+                             resolved.types -> typeIds.materializedReadTypeId(typeIdByAst![rightGlobal]) => rightTypeId
++                            package -> ordinaryArithmeticDomainDiagnostic(sourceAstByExpression, resolved.types, sourceIndex!, astIndex!, leftGlobal - range.astStart, leftTypeId, rightTypeId) => domainDiagnostic
++                            domainDiagnostic.code > 0 and (package -> expressionDiagnosticPrecedes(resolved.fields, domainDiagnostic, selected!))
++                                -> if { domainDiagnostic => selected! }
+                             leftTypeId >= 0 and rightTypeId >= 0 and leftTypeId != rightTypeId
+                                 -> if {
+                                     resolved.types[leftTypeId] => leftType
+                                     leftType.kind == 1 and leftType.origin == 1
+                                         and ((leftType.symbol >= 2 and leftType.symbol <= 13)
+@@ -6061,20 +6477,31 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+ 
+     # Check the committed callee against all seven closed caller capabilities.
+     0 => effectCallIndex!
+     effectCallIndex! < (prepared.calls -> len) -> while {
+         prepared.calls[effectCallIndex!] => call
+-        (call.status == 0 or call.status == 1) and call.sourceModule >= 0
++        (call.status == 0 or call.status == 1 or call.status == 3) and call.sourceModule >= 0
+             and call.sourceModule < (package.ranges -> len)
+             -> if {
+                 package.ranges[call.sourceModule] => range
+                 call.callAst >= 0 and call.callAst < range.astCount
+                     -> if {
+                         range.astStart + call.callAst => globalCall
+                         prepared -> effects.missingCallEffect(declaredEffects, call) => requiredEffect
+                         prepared -> effects.disallowedMainOnlyCall(declaredEffects, call) => mainOnly
+-                        call.status == 1 and call.functionSymbol >= 0 and call.targetSourceModule >= 0 => privateAlias
++                        false => privateAlias!
++                        (call.status == 1 or call.status == 3) and call.functionSymbol >= 0
++                            and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
++                            -> if {
++                                package.ranges[call.targetSourceModule] => targetRange
++                                call.functionSymbol < targetRange.symbolCount
++                                    -> if {
++                                        package.symbols[targetRange.symbolStart + call.functionSymbol] => target
++                                        target.kind == 7 or target.kind == 31 or target.kind == 36 => privateAlias!
++                                    }
++                            }
++                        privateAlias! => privateAlias
+                         (privateAlias or requiredEffect > 0 or mainOnly)
+                             and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.callAst))
+                             -> if {
+                                 -1 => pathAst!
+                                 package.nodes[globalCall].kind == 10 -> if {
+@@ -6088,17 +6515,22 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
+                                         nextChildByAst![child!] => child!
+                                     }
+                                 }
+                                 pathAst! >= 0 -> if {
+                                     package.nodes[range.astStart + pathAst!] => path
++                                    path.start => locationOffset!
++                                    mainOnly and not privateAlias and requiredEffect == 0
++                                        -> if {
++                                            package -> expressionDiagnosticOffset(sourceAstByExpression, call.sourceModule, call.callAst) => locationOffset!
++                                        }
+                                     ExpressionOperandDiagnostic {
+                                         code: privateAlias -> if { 47 } else { requiredEffect > 0 -> if { 32 } else { 48 } }
+                                         sourceModule: call.sourceModule
+                                         astNode: call.callAst
+                                         operandAst: pathAst!
+                                         operatorKind: effectCallIndex!
+-                                        locationOffset: path.start
++                                        locationOffset: locationOffset!
+                                         operandTypeSymbol: requiredEffect
+                                         operandTypeId: -1
+                                         firstTypeId: -1
+                                     } => candidate
+                                     package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+diff --git a/selfhost/semantic/expression_type_ids.slg b/selfhost/semantic/expression_type_ids.slg
+index 366aa3cd..da831dfc 100644
+--- a/selfhost/semantic/expression_type_ids.slg
++++ b/selfhost/semantic/expression_type_ids.slg
+@@ -43,10 +43,12 @@ public struct ResolvedCallArgument {
+     public actualTypeId: Int
+     # 0 resolved, 1 unresolved, 2 conflicting generic inference,
+     # 3 a proven generic input shape mismatch.
+     public status: Int
+     public suppressNumericWarning: Bool
++    # Expected input type was available before this argument was inferred.
++    public contextualInput: Bool
+     public genericParameterSymbol: Int
+     public genericFirstActualTypeId: Int
+     public genericActualTypeId: Int
+     public mismatchExpectedTypeId: Int
+     public mismatchActualTypeId: Int
+@@ -1208,16 +1210,19 @@ resolveInterpolationArrayLiteral prepared: ref semanticContext.SemanticSnapshot,
+     # Explicit typed empty syntax takes precedence over contextual element type.
+     false => explicitElementType!
+     0 => typeChild!
+     typeChild! < range.astCount -> while {
+         prepared.package.nodes[range.astStart + typeChild!] => candidate
+-        candidate.parent == array.valueAst and candidate.kind == 12
++        candidate.parent == array.valueAst and (candidate.kind == 12 or candidate.kind == 16)
+             -> if {
+-                referenceIndexByTypeAst[range.astStart + typeChild!] => referenceIndex
+-                referenceIndex >= 0 and references[referenceIndex].status == 0
++                referenceIndexByTypeAst[range.astStart + typeChild!] => referenceIndex!
++                referenceIndex! < 0 -> if {
++                    referenceIndexByTypeAst[range.astStart + array.valueAst] => referenceIndex!
++                }
++                referenceIndex! >= 0 and references[referenceIndex!].status == 0
+                     -> if {
+-                        references[referenceIndex].typeId => elementTypeId!
++                        references[referenceIndex!].typeId => elementTypeId!
+                         types[elementTypeId!].kind == 3 or types[elementTypeId!].kind == 12
+                             -> if { types[elementTypeId!].first => elementTypeId! }
+                         true => explicitElementType!
+                     }
+             }
+@@ -2136,31 +2141,31 @@ resolveContextCoreSeeded prepared: semanticContext.SemanticSnapshot, seeds: ref
+     resolveStructuralProductTypes(prepared, types!, fields!, expressions!, expressionIndexByAst!, productSources!, productAsts!) => initialProductTypesChanged
+     resolveFlowCallTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, seeds.ownerBySource) => flowTargetTokenByAst
+     resolveQualifiedValueWrapperTypes(prepared, types!, expressions!, expressionIndexByAst!, externalResults) => initialWrapperChanged
+     resolveResultPropagationPayloadTypes(prepared, types!, expressions!, expressionIndexByAst!) => initialPropagationChanged
+     resolveFileMemberTypes(prepared, types!, expressions!, expressionIndexByAst!, flowTargetTokenByAst)
+-    resolveParallelRoleTypes(prepared, types!, expressions!, expressionIndexByAst!)
++    resolveParallelRoleTypes(prepared, types!, expressions!, expressionIndexByAst!) => initialParallelChanged
+     resolveContextualNumericLiteralTypes(prepared, types!, expressions!, expressionIndexByAst!) => initialContextualChanged
+     resolveArithmeticExpressionTypes(prepared, types!, expressions!, expressionIndexByAst!) => initialArithmeticChanged
+ 
+     [Int; ~] => streamRoleTypeBySymbol!
+     prepared.package.symbols -> each roleSymbol { streamRoleTypeBySymbol! -> push(-1) }
+     [Int; ~] => patternBindingTypeBySymbol!
+     prepared.package.symbols -> each patternSymbol { patternBindingTypeBySymbol! -> push(-1) }
+     [Int; ~] => expectedContextByAst!
+     prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
+-    resolvePaths(prepared, types!, references!, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
++    resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
+ 
+     # Imported calls become typed during path resolution. Commit their Result
+     # payloads before inferred bindings, members and arithmetic consume them.
+     true => propagationPathsChanged!
+     propagationPathsChanged! -> while {
+         resolveQualifiedValueWrapperTypes(prepared, types!, expressions!, expressionIndexByAst!, externalResults) => wrapperChanged
+         resolveResultPropagationPayloadTypes(prepared, types!, expressions!, expressionIndexByAst!) => payloadChanged
+         wrapperChanged or payloadChanged => propagationPathsChanged!
+         propagationPathsChanged! -> if {
+-            resolvePaths(prepared, types!, references!, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
++            resolvePaths(prepared, types!, references!, referenceIndexByTypeAst!, blockAndFlowArgumentBindings, fields!, expressions!, expressionIndexByAst!, flowTargetTokenByAst, productSources!, productAsts!, streamRoleTypeBySymbol!, patternBindingTypeBySymbol!, expectedContextByAst!)
+         }
+     }
+ 
+     resolveFileScalarArgumentTypes(prepared, types!, references!, expressions!, expressionIndexByAst!, referenceIndexByTypeAst!, flowTargetTokenByAst)
+ 
+@@ -2881,10 +2886,45 @@ replaceCallArgument arguments: mut [ResolvedCallArgument; ~], index: Int, argume
+ 
+ contextualizeNumericCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+     contextualizeNumericCallArgumentArena(prepared, resolved.types, resolved.expressions, expressionByAst, sourceModule, argumentAst, expectedTypeId)
+ }
+ 
++contextualizeArrayCallArgument prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, expressionByAst: mut [Int; ~], index: ref ContextualRecordIndex, expectedByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
++    expectedTypeId < 0 or expectedTypeId >= (resolved.types -> len)
++        -> if { false -> return }
++    resolved.types[expectedTypeId] => expected
++    expected.kind != 2 and expected.kind != 3 and expected.kind != 4 and expected.kind != 12
++        -> if { false -> return }
++    expected.first < 0 or expected.first >= (resolved.types -> len)
++        -> if { false -> return }
++    prepared.package.ranges[sourceModule] => range
++    range.astStart + argumentAst => globalAst
++    prepared.package.nodes[globalAst].kind != 37 -> if { false -> return }
++    index.firstChild[globalAst] => child!
++    child! >= 0 -> while {
++        # Explicitly typed constructors retain their own element contract.
++        prepared.package.nodes[child!].kind == 12 or prepared.package.nodes[child!].kind == 16
++            -> if { false -> return }
++        index.nextChild[child!] => child!
++    }
++    expressionByAst[globalAst] => expressionIndex
++    expressionIndex < 0 -> if { false -> return }
++    resolved.expressions[expressionIndex].typeId => actualType
++    actualType < 0 -> if { false -> return }
++    resolved.types[actualType] => actual
++    actual.kind != 3 and actual.kind != 4 and actual.kind != 12
++        -> if { false -> return }
++    # An unannotated literal inherits the owning parameter's storage contract.
++    # Array diagnostics retain the original count and reject extent mismatches.
++    # A slice is a view and keeps the literal's own backing storage.
++    expectedTypeId => contextual!
++    expected.kind == 2 -> if {
++        resolved.types -> internArrayLiteralType(actual.kind, expected.first, actual.length) => contextual!
++    }
++    resolveContextualRecordFieldValue(prepared.package, resolved.types, resolved.expressions, expressionByAst, index, sourceModule, globalAst, contextual!, expectedByAst)
++}
++
+ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int -> Bool {
+     expectedTypeId < 0 or expectedTypeId >= (types -> len)
+         -> if { false -> return }
+     types[expectedTypeId] => expected
+     not (expected.kind == 1 and expected.origin == 1
+@@ -2946,10 +2986,36 @@ contextualizeNumericCallArgumentArena prepared: ref semanticContext.SemanticSnap
+                 }
+             controlAst! + 1 => controlAst!
+         }
+         foundBranch! and allBranchesContextual! -> if { true => contextual! }
+     }
++    (argument.kind == 20 or argument.kind == 21)
++        and expected.symbol >= 2 and expected.symbol <= 14
++        -> if {
++            -1 => leftAst!
++            -1 => rightAst!
++            0 => childAst!
++            childAst! < range.astCount -> while {
++                prepared.package.nodes[range.astStart + childAst!].parent == argumentAst
++                    -> if {
++                        leftAst! < 0 -> if { childAst! => leftAst! } else { childAst! => rightAst! }
++                    }
++                childAst! + 1 => childAst!
++            }
++            leftAst! >= 0 and rightAst! >= 0 -> if {
++                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, leftAst!, expectedTypeId) => leftContextual
++                contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, sourceModule, rightAst!, expectedTypeId) => rightContextual
++                expressionByAst[range.astStart + leftAst!] => leftIndex
++                expressionByAst[range.astStart + rightAst!] => rightIndex
++                leftIndex >= 0 and rightIndex >= 0 -> if {
++                    types -> typeIds.materializedReadTypeId(expressions[leftIndex].typeId) => leftType
++                    types -> typeIds.materializedReadTypeId(expressions[rightIndex].typeId) => rightType
++                    leftType == expectedTypeId and rightType == expectedTypeId
++                        -> if { true => contextual! }
++                }
++            }
++        }
+     contextual! -> if {
+         expressionByAst[globalAst] => expressionIndex
+         expressionIndex >= 0 -> if {
+             expressions[expressionIndex] => expression!
+             expectedTypeId => expression!.typeId
+@@ -3089,10 +3155,13 @@ resolveSemanticCallArgumentBindings prepared: ref semanticContext.SemanticSnapsh
+     resolveSemanticCallArgumentBindingsSeeded(prepared, resolved, bindings, seeds)
+ }
+ 
+ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.SemanticSnapshot, resolved: mut ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~], seeds: ref CallContextSeeds -> Unit {
+     seeds.arguments -> each argument { resolved.callArguments -> push(argument) }
++    prepared.package -> indexContextualRecords => contextualIndex
++    [Int; ~] => expectedContextByAst!
++    prepared.package.nodes -> each node { expectedContextByAst! -> push(-1) }
+     prepared -> indexExplicitFlowTypeByCallAst(resolved.references, resolved.referenceIndexByTypeAst) => explicitTypeByCallAst
+     [Int; ~] => expressionByAst!
+     prepared.package.nodes -> each node { expressionByAst! -> push(-1) }
+     0 => expressionIndex!
+     expressionIndex! < (resolved.expressions -> len)
+@@ -3146,10 +3215,11 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+             -1 => genericParameter!
+             -1 => firstGenericActual!
+             -1 => genericActual!
+             -1 => mismatchExpected!
+             -1 => mismatchActual!
++            false => contextualInput!
+             templateType >= 0 and templateType < (resolved.types -> len)
+                 -> if {
+                     not resolved.types[templateType].containsParameter
+                         -> if {
+                             templateType => expectedType!
+@@ -3167,12 +3237,16 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                         or (callNode.kind == 10 and not resolved.types[templateType].containsParameter)
+                         -> if {
+                             callNode.kind != 10 or binding.parameterOrdinal > 0
+                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 14
+                                 or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 22
++                                or prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind == 37
+                                 -> if {
++                                    expectedType! >= 0 and not resolved.types[expectedType!].containsParameter
++                                        -> if { true => contextualInput! }
+                                     contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextual
++                                    contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, binding.sourceModule, binding.argumentAst, expectedType!) => contextualArray
+                                 }
+                         }
+                     expressionByAst![sourceRange.astStart + binding.argumentAst] => argumentIndex
+                     argumentIndex >= 0 -> if {
+                         resolved.expressions[argumentIndex] => argument
+@@ -3234,10 +3308,11 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                 parameterOrdinal: binding.parameterOrdinal
+                 expectedTypeId: expectedType!
+                 actualTypeId: actualType!
+                 status: status!
+                 suppressNumericWarning: callNode.kind == 10 and binding.parameterOrdinal == 0
++                contextualInput: contextualInput!
+                 genericParameterSymbol: genericParameter!
+                 genericFirstActualTypeId: firstGenericActual!
+                 genericActualTypeId: genericActual!
+                 mismatchExpectedTypeId: mismatchExpected!
+                 mismatchActualTypeId: mismatchActual!
+@@ -3261,10 +3336,16 @@ resolveSemanticCallArgumentBindingsSeeded prepared: ref semanticContext.Semantic
+                                         finalSpecialization.root => fact!.expectedTypeId
+                                         fact!.actualTypeId >= 0 -> if { 0 => fact!.status }
+                                         callNode.kind != 10 -> if {
+                                             contextualizeNumericCallArgument(prepared, resolved, expressionByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextual
+                                             contextual -> if { fact!.expectedTypeId => fact!.actualTypeId }
++                                            contextualizeArrayCallArgument(prepared, resolved, expressionByAst!, contextualIndex, expectedContextByAst!, fact!.sourceModule, fact!.argumentAst, fact!.expectedTypeId) => contextualArray
++                                            contextualArray -> if {
++                                                prepared.package.ranges[fact!.sourceModule] => argumentRange
++                                                expressionByAst![argumentRange.astStart + fact!.argumentAst] => argumentExpression
++                                                resolved.expressions[argumentExpression].typeId => fact!.actualTypeId
++                                            }
+                                         }
+                                         resolved.callArguments -> replaceCallArgument(priorIndex, fact!)
+                                     }
+                             }
+                     }
+@@ -3415,11 +3496,33 @@ completeResolvedCallContext initialPrepared: move semanticContext.SemanticSnapsh
+     emptyCallContextSeeds() => seeds
+     [ExpressionTypeId; ~] => externalResults
+     initialPrepared -> completeResolvedCallContextSeeded(initialTypes, seeds, externalResults)
+ }
+ 
++callContextDecisionsEqual left: ref [calls.ModuleCallResolution; ~], right: ref [calls.ModuleCallResolution; ~] -> Bool {
++    (left -> len) != (right -> len) -> if { false -> return }
++    0 => index!
++    index! < (left -> len) -> while {
++        left[index!] => previous
++        right[index!] => current
++        previous.sourceModule != current.sourceModule or previous.callAst != current.callAst
++            or previous.origin != current.origin or previous.targetModule != current.targetModule
++            or previous.targetSourceModule != current.targetSourceModule
++            or previous.functionSymbol != current.functionSymbol or previous.status != current.status
++            -> if { false -> return }
++        index! + 1 => index!
++    }
++    true
++}
++
+ completeResolvedCallContextSeeded initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ResolvedCallContext {
++    initialPrepared -> refineResolvedCallContext(initialTypes, seeds, externalResults, false)
++}
++
++# Transfer each completed context into the next refinement. Owned analysis
++# tables are bound once; no owner rebinding or name-check bypass is needed.
++refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
+     initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+     [Int; ~] => receiverTypeByCallAst!
+     initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+     initialTypes.expressions -> each expression {
+         initialPrepared.package.ranges[expression.sourceModule] => range
+@@ -3447,20 +3550,24 @@ completeResolvedCallContextSeeded initialPrepared: move semanticContext.Semantic
+     initialPrepared.modules,
+     initialPrepared.imports,
+     initialPrepared.resolvedImports,
+     initialPrepared.qualified
+     ) => resolvedCalls
++    not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+     initialPrepared => prepared!
+     resolvedCalls => prepared!.calls
+     prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
+     prepared!.package -> semanticContext.indexCallResultMembersByAst(prepared!.calls) => prepared!.callResultMemberByAst
+     prepared!.package -> semanticContext.resolveCallArgumentBindings(prepared!.calls) => finalBindings
+     prepared!.package -> semanticContext.indexDeclaredMoveArgumentBindingsByAst(finalBindings) => prepared!.declaredMoveArgumentByAst
+     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+     prepared! -> semanticContext.freeze => finalPrepared
+     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
+-    ResolvedCallContext { prepared: finalPrepared, types: finalTypes }
++    committedTypes and not decisionsChanged -> if {
++        ResolvedCallContext { prepared: finalPrepared, types: finalTypes } -> return
++    }
++    finalPrepared -> refineResolvedCallContext(finalTypes, seeds, externalResults, true)
+ }
+ 
+ # Measurement-only entry: exposes a completed pair, never initial type facts.
+ public profileResolveCallContext initialPrepared: move semanticContext.SemanticSnapshot -> Result<ProfiledCallContext, time.Error> uses Clock {
+     time.monotonicClock() => clock
+diff --git a/selfhost/semantic/expression_type_ids_paths.slg b/selfhost/semantic/expression_type_ids_paths.slg
+index a32a9026..1e7c2977 100644
+--- a/selfhost/semantic/expression_type_ids_paths.slg
++++ b/selfhost/semantic/expression_type_ids_paths.slg
+@@ -95,11 +95,60 @@ indexUserBlockResultRoots package: ref analysis.PackageAnalysis -> [Int; ~] {
+         }
+     }
+     roots!
+ }
+ 
+-resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: [typeIds.TypeReference], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], roots: ref [Int; ~] -> Bool {
++specializeUserBlockResult prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: ref [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], firstArgumentByAst: ref [Int; ~], call: ref calls.ModuleCallResolution, callbackTypeId: Int -> Int {
++    prepared.package.ranges[call.sourceModule] => caller
++    prepared.package.ranges[call.targetSourceModule] => target
++    prepared.package.symbols[target.symbolStart + call.functionSymbol] => function
++    function.typeNode => returnTypeAst!
++    function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => returnTypeAst! }
++    returnTypeAst! < 0 or returnTypeAst! >= target.astCount
++        -> if { -1 -> return }
++    referenceIndexByTypeAst[target.astStart + returnTypeAst!] => returnReference
++    referenceIndexByTypeAst[target.astStart + function.blockResultTypeNode] => callbackReference
++    returnReference < 0 or callbackReference < 0 -> if { -1 -> return }
++    references[returnReference] => result
++    references[callbackReference] => callback
++    result.status != 0 or result.typeId < 0
++        or not types[result.typeId].containsParameter
++        or callback.status != 0 or callback.typeId < 0
++        -> if { -1 -> return }
++    [Int; ~] => templates!
++    [Int; ~] => actuals!
++    false => seeded!
++    firstArgumentByAst[caller.astStart + call.callAst] => bindingIndex!
++    bindingIndex! >= 0 and bindingIndex! < (argumentBindings -> len)
++        and argumentBindings[bindingIndex!].sourceModule == call.sourceModule
++        and argumentBindings[bindingIndex!].callAst == call.callAst
++        -> while {
++            argumentBindings[bindingIndex!] => binding
++            not seeded! -> if {
++                seedExplicitFlowGenericArguments(prepared, types, references,
++                referenceIndexByTypeAst, binding, templates!, actuals!)
++                true => seeded!
++            }
++            prepared.package -> typeIds.functionParameterTypeId(references,
++            referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => formal
++            expressionIndexByAst[caller.astStart + binding.argumentAst] => actual
++            formal >= 0 and actual >= 0 and expressions[actual].status == 0
++                and expressions[actual].typeId >= 0 -> if {
++                    templates! -> push(formal)
++                    actuals! -> push(expressions[actual].typeId)
++                }
++            bindingIndex! + 1 => bindingIndex!
++        }
++    templates! -> push(callback.typeId)
++    actuals! -> push(callbackTypeId)
++    types -> typeIds.specializeManyInto(templates!, actuals!, result.typeId) => specialized
++    specialized.status == 0 -> if { specialized.root } else { -1 }
++}
++
++# A provisional concrete result can precede completion of a control callback.
++# Reapply current constraints to the declaration, never to that stale result.
++resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: ref [Int; ~], roots: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], firstArgumentByAst: ref [Int; ~] -> Bool {
+     false => changed!
+     prepared.calls -> each call {
+         call.status == 0 and call.targetSourceModule >= 0
+             -> if {
+                 prepared.package.ranges[call.sourceModule] => caller
+@@ -110,32 +159,27 @@ resolveUserBlockResultTypes prepared: ref semanticContext.SemanticSnapshot, type
+                 roots[globalCall] => root
+                 function.blockTypeNode >= 0 and function.blockResultTypeNode >= 0
+                     and resultIndex >= 0 and root >= 0 -> if {
+                         expressions[resultIndex] => result!
+                         expressionIndexByAst[root] => callbackIndex
+-                        result!.typeId >= 0 and types[result!.typeId].containsParameter
+-                            and callbackIndex >= 0 -> if {
+-                                expressions[callbackIndex] => callback
+-                                callback.status == 0 and callback.typeId >= 0
+-                                    and not types[callback.typeId].containsParameter
+-                                    -> if {
+-                                        references -> each formal {
+-                                            formal.sourceModule == call.targetSourceModule
+-                                                and formal.typeAst == function.blockResultTypeNode
+-                                                and formal.status == 0 -> if {
+-                                                    types -> typeIds.specializeInto(formal.typeId, callback.typeId, result!.typeId) => specialized
+-                                                    specialized.status == 0 and specialized.root != result!.typeId
+-                                                        -> if {
+-                                                            specialized.root => result!.typeId
+-                                                            0 => result!.status
+-                                                            result! => expressions[resultIndex]
+-                                                            true => changed!
+-                                                        }
+-                                                }
++                        callbackIndex >= 0 -> if {
++                            expressions[callbackIndex] => callback
++                            callback.status == 0 and callback.typeId >= 0
++                                and not types[callback.typeId].containsParameter
++                                -> if {
++                                    specializeUserBlockResult(prepared, types, references,
++                                    referenceIndexByTypeAst, expressions, expressionIndexByAst,
++                                    argumentBindings, firstArgumentByAst, call, callback.typeId) => specialized
++                                    specialized >= 0 and specialized != result!.typeId
++                                        -> if {
++                                            specialized => result!.typeId
++                                            0 => result!.status
++                                            result! => expressions[resultIndex]
++                                            true => changed!
+                                         }
+-                                    }
+-                            }
++                                }
++                        }
+                     }
+             }
+     }
+     changed!
+ }
+@@ -602,11 +646,11 @@ resolvePatternPayloadTypes prepared: ref semanticContext.SemanticSnapshot, types
+             sourceIndex! + 1 => sourceIndex!
+         }
+     changed!
+ }
+ 
+-resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: [typeIds.TypeReference], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
++resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], argumentBindings: ref [semanticContext.CallArgumentBinding; ~], fields: mut [typeIds.NominalField; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: [Int], productSources: [Int], productAsts: [Int], streamRoleTypeBySymbol: mut [Int; ~], patternBindingTypeBySymbol: mut [Int; ~], expectedContextByAst: mut [Int; ~] -> Unit {
+     prepared.package -> semanticContext.indexMutableBindingOwners => mutableOwners
+     prepared.package -> semanticContext.indexBindingValueAsts => bindingValues
+     # An omitted input is constrained by its committed primary argument AST,
+     # never by an already-typed expression nested inside that argument.
+     prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => signatureArgumentBindings
+@@ -807,16 +851,30 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+     # intrinsic results from that source before selecting a branch's final
+     # expression; an intrinsic argument is not the flow's result.
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSourceByAst
+     prepared.package -> indexContextualRecords => contextualRecords
+     prepared.package -> indexUserBlockResultRoots => userBlockResultRoots
++    [Int; ~] => firstUserBlockArgumentByAst!
++    prepared.package.nodes -> each node { firstUserBlockArgumentByAst! -> push(-1) }
++    0 => bindingIndex!
++    bindingIndex! < (argumentBindings -> len) -> while {
++        argumentBindings[bindingIndex!] => binding
++        prepared.package.ranges[binding.sourceModule].astStart + binding.callAst => ownerAst
++        firstUserBlockArgumentByAst![ownerAst] < 0
++            -> if { bindingIndex! => firstUserBlockArgumentByAst![ownerAst] }
++        bindingIndex! + 1 => bindingIndex!
++    }
+ 
+     prepared.package -> continuationFlags => continuationByAst
+     prepared -> indexInferredFunctionBodyValues => inferredFunctionBodyValues
+     true => pathChanged!
+     pathChanged! -> while {
+         false => pathChanged!
++        # Callback locals and member paths become concrete in these rounds.
++        # Publish the completed terminal type before consumers inherit it.
++        resolveParallelRoleTypes(prepared, types, expressions, expressionIndexByAst)
++            -> if { true => pathChanged! }
+         resolveContainerTransformTypes(prepared, types, expressions, expressionIndexByAst, flowSourceByAst)
+             -> if { true => pathChanged! }
+         # Late array and dictionary interning can grow the arena between rounds.
+         synchronizeFieldIndex(types, fields, firstFieldByOwnerType!, lastFieldByOwnerType!, nextFieldByField!)
+         resolveContextualRecordTypes(prepared, types, fields, expressions, expressionIndexByAst, flowSourceByAst, contextualRecords, firstFieldByOwnerType!, nextFieldByField!, bindingValues, mutableOwners, references, expectedContextByAst)
+@@ -900,11 +958,12 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                             }
+                         intrinsicAst! + 1 => intrinsicAst!
+                     }
+                 intrinsicSource! + 1 => intrinsicSource!
+             }
+-        prepared -> resolveUserBlockResultTypes(types, references, expressions, expressionIndexByAst, userBlockResultRoots)
++        prepared -> resolveUserBlockResultTypes(types, references, referenceIndexByTypeAst,
++        expressions, expressionIndexByAst, userBlockResultRoots, argumentBindings, firstUserBlockArgumentByAst!)
+             -> if { true => pathChanged! }
+ 
+         # Aggregate each branch in one expression sweep, then seed a
+         # value-producing if and its enclosing flow from the common result.
+         0 => controlBranchReset!
+@@ -1785,11 +1844,15 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                         -> while {
+                                             expressions[homogeneousJoinExpressionSearch!] => homogeneousJoinExpressionCandidate
+                                             homogeneousJoinExpressionCandidate.sourceModule == homogeneousJoinSource!
+                                                 -> if {
+                                                     prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinExpressionCandidate.astNode] => homogeneousJoinExpressionNode
+-                                                    homogeneousJoinExpressionNode.kind == 71
++                                                    (homogeneousJoinExpressionNode.kind == 71
++                                                        or (homogeneousJoinExpressionCandidate.status == 0
++                                                        and homogeneousJoinExpressionCandidate.typeId >= 0
++                                                        and homogeneousJoinExpressionCandidate.typeId < (types -> len)
++                                                        and types[homogeneousJoinExpressionCandidate.typeId].kind == 10))
+                                                         and homogeneousJoinExpressionNode.parent == homogeneousJoinNode.parent
+                                                         and homogeneousJoinExpressionNode.start < homogeneousJoinNode.start
+                                                         and (homogeneousJoinProductType! < 0 or homogeneousJoinExpressionNode.start > homogeneousJoinProductStart!)
+                                                         -> if {
+                                                             homogeneousJoinExpressionCandidate.typeId => homogeneousJoinProductType!
+@@ -2120,10 +2183,34 @@ resolvePaths prepared: semanticContext.SemanticSnapshot, types: mut [typeIds.Sem
+                                                     expressions -> len => homogeneousJoinExpressionIndex
+                                                     expressions -> push(homogeneousJoinExactType)
+                                                     homogeneousJoinExpressionIndex => expressionIndexByAst[homogeneousJoinGlobalAst]
+                                                     true => pathChanged!
+                                                 }
++                                            # A terminal join supplies the complete flow initializer,
++                                            # so binding and each-role inference see its committed result.
++                                            homogeneousJoinNode.parent >= 0 -> if {
++                                                prepared.package.nodes[homogeneousJoinRange.astStart + homogeneousJoinNode.parent] => homogeneousJoinFlow
++                                                homogeneousJoinFlow.kind == 10
++                                                    and homogeneousJoinFlow.start + homogeneousJoinFlow.length == homogeneousJoinNode.start + homogeneousJoinNode.length
++                                                    -> if {
++                                                        homogeneousJoinRange.astStart + homogeneousJoinNode.parent => homogeneousJoinFlowGlobalAst
++                                                        ExpressionTypeId { sourceModule: homogeneousJoinSource!, astNode: homogeneousJoinNode.parent, typeId: homogeneousJoinResultType!, status: 0 } => homogeneousJoinFlowType
++                                                        expressionIndexByAst[homogeneousJoinFlowGlobalAst] => homogeneousJoinFlowExpression
++                                                        homogeneousJoinFlowExpression < 0 -> if {
++                                                            expressions -> len => homogeneousJoinNewFlowExpression
++                                                            expressions -> push(homogeneousJoinFlowType)
++                                                            homogeneousJoinNewFlowExpression => expressionIndexByAst[homogeneousJoinFlowGlobalAst]
++                                                            true => pathChanged!
++                                                        } else {
++                                                            expressions[homogeneousJoinFlowExpression].typeId != homogeneousJoinResultType!
++                                                                -> if {
++                                                                    homogeneousJoinFlowType => expressions[homogeneousJoinFlowExpression]
++                                                                    true => pathChanged!
++                                                                }
++                                                        }
++                                                    }
++                                            }
+                                         }
+                                 }
+                         }
+                         homogeneousJoinAst! + 1 => homogeneousJoinAst!
+                     }
+diff --git a/selfhost/semantic/expression_type_ids_resolution_phases.slg b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+index b15c30a6..caea7fee 100644
+--- a/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -3497,11 +3497,12 @@ resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, t
+             flowTargetTokenByAst[globalCall] => targetToken
+             call.kind == 10 and targetToken >= 0 and flowSources[globalCall] >= 0
+                 -> if {
+                     prepared.package.tokens[range.tokenStart + targetToken] => target
+                     TextMatchRequest { source: source, start: target.span.start, length: target.span.length, expected: "writeAt" } -> textMatches => scalarWrite
+-                    scalarWrite -> if {
++                    TextMatchRequest { source: source, start: target.span.start, length: target.span.length, expected: "writeAtAsync" } -> textMatches => scalarWriteAsync
++                    scalarWrite or scalarWriteAsync -> if {
+                         expressionIndexByAst[flowSources[globalCall]] => receiverIndex
+                         receiverIndex >= 0 -> if {
+                             types -> typeIds.materializedReadTypeId(expressions[receiverIndex].typeId) => receiverTypeId
+                             receiverTypeId >= 0 and receiverTypeId < (types -> len)
+                                 -> if {
+@@ -3544,11 +3545,11 @@ resolveFileScalarArgumentTypes prepared: ref semanticContext.SemanticSnapshot, t
+         }
+     }
+ }
+ 
+ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowTargetTokenByAst: ref [Int; ~] -> Unit {
+-    # readAt<T>/readAtAsync<T>/writeAt<T> are compiler-provided owned File members rather
++    # Scalar positional File members are compiler-provided capabilities rather
+     # than declarations in sys.file. Materialize their canonical result types
+     # here so enum matching and subsequent flow calls see the same types as the
+     # reference compiler. Reuse the canonical final flow target, so an outer
+     # `readAt<T>(...) -> helper` keeps the helper's return type.
+     0 => fileMemberSourceIndex!
+@@ -3582,70 +3583,42 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
+                                     fileMemberTokenIndex! + 1 => fileMemberTokenIndex!
+                                 }
+                             false => fileMemberReadAt!
+                             false => fileMemberReadAtAsync!
+                             false => fileMemberWriteAt!
++                            false => fileMemberWriteAtAsync!
+                             fileMemberTargetToken >= 0 -> if {
+                                 prepared.package.tokens[fileMemberRange.tokenStart + fileMemberTargetToken] => fileMemberTarget
+                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "readAt" } -> textMatches => fileMemberReadAt!
+                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "readAtAsync" } -> textMatches => fileMemberReadAtAsync!
+                                 TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "writeAt" } -> textMatches => fileMemberWriteAt!
++                                TextMatchRequest { source: fileMemberSource, start: fileMemberTarget.span.start, length: fileMemberTarget.span.length, expected: "writeAtAsync" } -> textMatches => fileMemberWriteAtAsync!
+                             }
+                             -1 => fileMemberResultType!
+-                            fileMemberWriteAt! -> if {
+-                                0 => fileWriteResultSearch!
+-                                fileWriteResultSearch! < (types -> len) -> while {
+-                                    types[fileWriteResultSearch!] => fileWriteResultCandidate
+-                                    fileWriteResultCandidate.kind == 7 and fileWriteResultCandidate.origin == 4 and fileWriteResultCandidate.symbol == 1 and fileWriteResultCandidate.first == 0 and fileWriteResultCandidate.second == 1 and fileWriteResultCandidate.status == 0
+-                                        -> if { fileWriteResultSearch! => fileMemberResultType! }
+-                                    fileWriteResultSearch! + 1 => fileWriteResultSearch!
+-                                }
+-                                fileMemberResultType! < 0 -> if {
+-                                    types -> len => fileMemberResultType!
+-                                    types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
++                            fileMemberWriteAt! or fileMemberWriteAtAsync!
++                                -> if {
++                                    0 => fileWriteResultSearch!
++                                    fileWriteResultSearch! < (types -> len) -> while {
++                                        types[fileWriteResultSearch!] => fileWriteResultCandidate
++                                        fileWriteResultCandidate.kind == 7 and fileWriteResultCandidate.origin == 4 and fileWriteResultCandidate.symbol == 1 and fileWriteResultCandidate.first == 0 and fileWriteResultCandidate.second == 1 and fileWriteResultCandidate.status == 0
++                                            -> if { fileWriteResultSearch! => fileMemberResultType! }
++                                        fileWriteResultSearch! + 1 => fileWriteResultSearch!
++                                    }
++                                    fileMemberResultType! < 0 -> if {
++                                        types -> len => fileMemberResultType!
++                                        types -> push(typeIds.SemanticType { kind: 7, origin: 4, module: -1, symbol: 1, first: 0, second: 1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
++                                    }
+                                 }
+-                            }
+                             (fileMemberReadAt! or fileMemberReadAtAsync!) and fileMemberTypeToken! >= 0
+                                 -> if {
+                                     prepared.package.tokens[fileMemberRange.tokenStart + fileMemberTypeToken!] => fileMemberTypeName
++                                    fileMemberSource -> slice(fileMemberTypeName.span.start, fileMemberTypeName.span.length)
++                                        -> typeIds.builtinSymbolByName => fileMemberScalarSymbol
+                                     -1 => fileMemberScalarType!
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Int" } -> textMatches
+-                                        -> if { 2 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "UInt8" } -> textMatches
+-                                        -> if { 8 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "UInt16" } -> textMatches
+-                                        -> if { 9 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "UInt32" } -> textMatches
+-                                        -> if { 10 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "UInt64" } -> textMatches
+-                                        -> if { 11 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Long" } -> textMatches
+-                                        -> if { 7 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Int8" } -> textMatches
+-                                        -> if { 3 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Int16" } -> textMatches
+-                                        -> if { 4 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Int32" } -> textMatches
+-                                        -> if { 5 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Int64" } -> textMatches
+-                                        -> if { 6 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Size" } -> textMatches
+-                                        -> if { 12 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "UIntSize" } -> textMatches
+-                                        -> if { 13 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "CodePoint" } -> textMatches
+-                                        -> if { 14 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Float" } -> textMatches
+-                                        -> if { 19 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Float32" } -> textMatches
+-                                        -> if { 20 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Float64" } -> textMatches
+-                                        -> if { 21 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Double" } -> textMatches
+-                                        -> if { 22 => fileMemberScalarType! }
+-                                    TextMatchRequest { source: fileMemberSource, start: fileMemberTypeName.span.start, length: fileMemberTypeName.span.length, expected: "Bool" } -> textMatches
+-                                        -> if { 23 => fileMemberScalarType! }
++                                    (fileMemberScalarSymbol >= 2 and fileMemberScalarSymbol <= 14)
++                                        or (fileMemberScalarSymbol >= 19 and fileMemberScalarSymbol <= 23)
++                                        -> if { types -> typeIds.builtinTypeId(fileMemberScalarSymbol) => fileMemberScalarType! }
+                                     fileMemberScalarType! >= 0 -> if {
+                                         -1 => fileMemberOptionType!
+                                         0 => fileOptionSearch!
+                                         fileOptionSearch! < (types -> len) -> while {
+                                             types[fileOptionSearch!] => fileOptionCandidate
+@@ -3690,15 +3663,17 @@ resolveFileMemberTypes prepared: ref semanticContext.SemanticSnapshot, types: mu
+             fileMemberSourceIndex! + 1 => fileMemberSourceIndex!
+         }
+ 
+ }
+ 
+-resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Unit {
++resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~] -> Bool {
+     # A result-producing parallel role returns one value per source element.
+     # Its result generic is selected by the block value rather than by the
+     # ordinary input argument, so specialize the canonical result to [R; ~]
+     # before binding and subsequent each-role propagation.
++    false => changed!
++    prepared.package -> indexUserBlockResultRoots => resultRoots
+     0 => parallelSourceIndex!
+     parallelSourceIndex! < (prepared.package.ranges -> len)
+         -> while {
+             prepared.package.ranges[parallelSourceIndex!] => parallelRange
+             prepared.package.sources[parallelSourceIndex!] -> len => parallelSourceLength
+@@ -3711,33 +3686,36 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                         prepared.package.tokens[parallelRange.tokenStart + parallelAst.payloadToken] => parallelName
+                         prepared -> intrinsicCollectionRoleKind(parallelSourceIndex!, parallelAstIndex!) => collectionRoleKind
+                         collectionRoleKind == 3 => intrinsicTryParallel
+                         collectionRoleKind == 2 or intrinsicTryParallel
+                             -> if {
++                                resultRoots[parallelRange.astStart + parallelAstIndex!] => resultRoot
+                                 -1 => parallelBlockExpression!
+                                 UIntSize(0) => parallelBlockEnd!
+                                 UIntSize(0) => parallelBlockLength!
+                                 0 => parallelExpressionSearch!
+                                 parallelExpressionSearch! < (expressions -> len)
+                                     -> while {
+                                         expressions[parallelExpressionSearch!] => parallelCandidate
+                                         parallelCandidate.sourceModule == parallelSourceIndex!
+                                             -> if {
+                                                 prepared.package.nodes[parallelRange.astStart + parallelCandidate.astNode] => parallelCandidateNode
+-                                                parallelCandidateNode.parent => parallelAncestor!
++                                                parallelCandidate.astNode => parallelAncestor!
+                                                 false => parallelBelongs!
+                                                 parallelAncestor! >= 0 and not parallelBelongs!
+                                                     -> while {
+-                                                        parallelAncestor! == parallelAstIndex! -> if { true => parallelBelongs! } else { prepared.package.nodes[parallelRange.astStart + parallelAncestor!].parent => parallelAncestor! }
++                                                        parallelRange.astStart + parallelAncestor! == resultRoot
++                                                            -> if { true => parallelBelongs! } else { prepared.package.nodes[parallelRange.astStart + parallelAncestor!].parent => parallelAncestor! }
+                                                     }
+                                                 parallelCandidateNode.start + parallelCandidateNode.length => parallelCandidateEnd
+                                                 # The direct block body and a value-control owner are
+                                                 # transparent result regions. Their provisional types can
+                                                 # still be Unit before path resolution; specialize from the
+                                                 # concrete terminal producer inside the region instead.
+                                                 not ((parallelCandidateNode.parent == parallelAstIndex!
+-                                                    and prepared.callIndexByAst[parallelRange.astStart + parallelCandidate.astNode] < 0)
++                                                    and prepared.callIndexByAst[parallelRange.astStart + parallelCandidate.astNode] < 0
++                                                    and parallelCandidateNode.flags / 524288 % 2 == 0)
+                                                     or parallelCandidateNode.kind == 42)
+                                                     and parallelBelongs!
+                                                     and parallelCandidate.astNode != parallelAstIndex!
+                                                     and parallelCandidateNode.start >= parallelName.span.start + parallelName.span.length
+                                                     and (parallelBlockExpression! < 0
+@@ -3825,12 +3803,15 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                                     expressionIndexByAst[parallelGlobalAst] => parallelExistingExpression
+                                     parallelExistingExpression < 0 -> if {
+                                         expressions -> len => parallelExpressionIndex
+                                         expressions -> push(ExpressionTypeId { sourceModule: parallelSourceIndex!, astNode: parallelAstIndex!, typeId: parallelResultType!, status: 0 })
+                                         parallelExpressionIndex => expressionIndexByAst[parallelGlobalAst]
++                                        true => changed!
+                                     } else {
+                                         expressions[parallelExistingExpression] => parallelExisting!
++                                        parallelExisting!.typeId != parallelResultType! or parallelExisting!.status != 0
++                                            -> if { true => changed! }
+                                         parallelResultType! => parallelExisting!.typeId
+                                         0 => parallelExisting!.status
+                                         parallelExisting! => expressions[parallelExistingExpression]
+                                     }
+                                 }
+@@ -3838,11 +3819,11 @@ resolveParallelRoleTypes prepared: ref semanticContext.SemanticSnapshot, types:
+                     }
+                 parallelAstIndex! + 1 => parallelAstIndex!
+             }
+             parallelSourceIndex! + 1 => parallelSourceIndex!
+         }
+-
++    changed!
+ }
+ 
+ # Field labels have source-owned identity after contextual nominal inference.
+ # This table is shared by read diagnostics and both typed IR lowering paths.
+ public indexContextualRecordLabels package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], expressions: ref [ExpressionTypeId; ~] -> [Bool; ~] {
+diff --git a/selfhost/semantic/interpolation_inference.slg b/selfhost/semantic/interpolation_inference.slg
+index 6ad7b6de..c4891189 100644
+--- a/selfhost/semantic/interpolation_inference.slg
++++ b/selfhost/semantic/interpolation_inference.slg
+@@ -2279,10 +2279,30 @@ public numericLiteralContextByNode prepared: ref semanticContext.SemanticSnapsho
+                                         }
+                                     }
+                                 }
+                         }
+                 }
++            binary.kind == 6 and ((binary.opcode == -202 and binary.argumentCount == 1)
++                or (binary.opcode == -203 and binary.argumentCount == 2))
++                -> if {
++                    types -> typeIds.builtinTypeId(13) => indexType
++                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
++                    indexType >= 0 and sourceModule >= 0 -> if {
++                        [binary.operand1, binary.operand2] -> each argument {
++                            argument >= 0
++                                and (prepared.interpolations -> expressionTypeIds.interpolationNumericLiteral(argument))
++                                -> if {
++                                    prepared -> contextualNumericLiteralStatus(types, sourceModule, argument, indexType, pointerBitWidth) => status
++                                    InterpolationNumericLiteralContext { typeId: indexType, status: status } => contexts![argument]
++                                    prepared.interpolations[argument] => literal
++                                    literal.kind == 2 -> if {
++                                        InterpolationNumericLiteralContext { typeId: indexType, status: 1 } => contexts![literal.operand0]
++                                    }
++                                }
++                        }
++                    }
++                }
+             nodeIndex! + 1 => nodeIndex!
+         }
+     contexts!
+ }
+ 
+diff --git a/selfhost/semantic/owner_call_facts.slg b/selfhost/semantic/owner_call_facts.slg
+index 0ae853a2..6e7eb58c 100644
+--- a/selfhost/semantic/owner_call_facts.slg
++++ b/selfhost/semantic/owner_call_facts.slg
+@@ -150,11 +150,11 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
+             }
+         }
+     }
+     prepared -> ownerTypes.capturePreparedWithRoots(finalTypes, sourceModule, roots!, metadata) => owner
+     owner.status != 0 -> if { owner.status -> failedEncoding -> return }
+-    [UInt64(6002245308495514451), 1, 6, UInt64(owner.words -> len), UInt64(targets! -> len), UInt64(arguments! -> len); ~] => words!
++    [UInt64(6002245308495514451), 2, 6, UInt64(owner.words -> len), UInt64(targets! -> len), UInt64(arguments! -> len); ~] => words!
+     owner.words -> each word { words! -> push(word) }
+     targets! -> each target {
+         prepared.package -> callable(target.targetSourceModule, target.functionSymbol)
+             -> unless { 1 -> failedEncoding -> return }
+         target.origin < 0 or target.origin > 2 or target.status < 0 or target.status > 5
+@@ -172,11 +172,14 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
+             -> if { 1 -> failedEncoding -> return }
+         words! -> push(UInt64(argument.callAst))
+         words! -> push(UInt64(argument.argumentAst + 1))
+         words! -> push(UInt64(argument.parameterOrdinal + 1))
+         words! -> push(UInt64(argument.status))
+-        argument.suppressNumericWarning -> if { words! -> push(1) } else { words! -> push(0) }
++        UInt64(0) => flags!
++        argument.suppressNumericWarning -> if { flags! + 1 => flags! }
++        argument.contextualInput -> if { flags! + 2 => flags! }
++        words! -> push(flags!)
+         argument -> argumentTypes -> each typeId {
+             typeId -> appendType(owner.recipeBySourceType, words!)
+                 -> unless { 1 -> failedEncoding -> return }
+         }
+         prepared -> appendReference(argument.targetSourceModule, argument.functionSymbol, words!)
+@@ -190,11 +193,11 @@ public capturePrepared prepared: ref context.SemanticSnapshot, finalTypes: ref e
+     EncodedOwnerCalls { words: words!, status: 0 }
+ }
+ 
+ public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref typeIds.SemanticTypeSet -> RestoredOwnerCalls {
+     (words -> len) < 6 -> if { 1 -> failedRestoration -> return }
+-    words[0] != 6002245308495514451 or words[1] != 1 or words[2] != UInt64(words -> len)
++    words[0] != 6002245308495514451 or words[1] != 2 or words[2] != UInt64(words -> len)
+         or words[3] > UInt64((words -> len) - 6)
+         -> if { 1 -> failedRestoration -> return }
+     6 + Int(words[3]) => cursor!
+     words[4] > UInt64(((words -> len) - cursor!) / 5)
+         or words[5] > UInt64(((words -> len) - cursor!) / 17)
+@@ -232,11 +235,11 @@ public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, cu
+     0 => argumentIndex!
+     argumentIndex! < Int(words[5]) -> while {
+         (words -> len) - cursor! < 17 -> if { 1 -> failedRestoration -> return }
+         cursor! => start
+         words[start] >= UInt64(range.astCount) or words[start + 1] > UInt64(range.astCount)
+-            or words[start + 2] > 2147483647 or words[start + 3] > 3 or words[start + 4] > 1
++            or words[start + 2] > 2147483647 or words[start + 3] > 3 or words[start + 4] > 3
+             -> if { 1 -> failedRestoration -> return }
+         [Int; ~] => types!
+         0..<6 -> each column {
+             words[start + 5 + column] -> readType(owner.recipeTypes) => typeId
+             typeId < -1 -> if { 1 -> failedRestoration -> return }
+@@ -278,11 +281,11 @@ public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, cu
+         }
+         arguments! -> each previous {
+             previous.callAst == Int(ast) and previous.parameterOrdinal == ordinal
+                 -> if { 1 -> failedRestoration -> return }
+         }
+-        arguments! -> push(expressions.ResolvedCallArgument { sourceModule: owner.sourceModule, callAst: Int(ast), argumentAst: Int(words[start + 1]) - 1, targetSourceModule: function.sourceModule, functionSymbol: function.symbol, parameterSymbol: parameter.symbol, parameterOrdinal: ordinal, expectedTypeId: types![0], actualTypeId: types![1], status: Int(words[start + 3]), suppressNumericWarning: words[start + 4] == 1, genericParameterSymbol: generic.symbol, genericFirstActualTypeId: types![2], genericActualTypeId: types![3], mismatchExpectedTypeId: types![4], mismatchActualTypeId: types![5] })
++        arguments! -> push(expressions.ResolvedCallArgument { sourceModule: owner.sourceModule, callAst: Int(ast), argumentAst: Int(words[start + 1]) - 1, targetSourceModule: function.sourceModule, functionSymbol: function.symbol, parameterSymbol: parameter.symbol, parameterOrdinal: ordinal, expectedTypeId: types![0], actualTypeId: types![1], status: Int(words[start + 3]), suppressNumericWarning: words[start + 4] % 2 == 1, contextualInput: (words[start + 4] / 2) % 2 == 1, genericParameterSymbol: generic.symbol, genericFirstActualTypeId: types![2], genericActualTypeId: types![3], mismatchExpectedTypeId: types![4], mismatchActualTypeId: types![5] })
+         generic.next => cursor!
+         argumentIndex! + 1 => argumentIndex!
+     }
+     cursor! != (words -> len) -> if { 1 -> failedRestoration -> return }
+     RestoredOwnerCalls { owner: owner, calls: targets!, arguments: arguments!, status: 0 }
+diff --git a/selfhost/semantic/ownership_check.slg b/selfhost/semantic/ownership_check.slg
+index d043bac2..6447e064 100644
+--- a/selfhost/semantic/ownership_check.slg
++++ b/selfhost/semantic/ownership_check.slg
+@@ -156,10 +156,11 @@ public bodyDiagnosticActivity prepared: ref semanticContext.SemanticSnapshot, ty
+ }
+ 
+ public aggregateTransferOverlapCode: -> Int { 47 }
+ public diagnosticTrackTaskArgumentCode: -> Int { 48 }
+ public taskOperationContractCode: -> Int { 51 }
++public parallelSourceTextResultCode: -> Int { 52 }
+ public borrowedTextBlockEscapeCode: -> Int { 50 }
+ 
+ public struct ReadonlyReferencePathStep {
+     # 0 named field, 1 canonical unlabeled product field,
+     # 2 intrinsic enum payload (ordinal 0 Some, 1 Ok, 2 Err).
+@@ -438,10 +439,11 @@ public isBlockingDiagnostic diagnosticIndex: Int, diagnostics: ref [OwnershipDia
+                     or (diagnostic.code >= 31 and diagnostic.code <= 40)
+                     or diagnostic.code == 41 or diagnostic.code == 42
+                     or diagnostic.code == aggregateTransferOverlapCode()
+                     or diagnostic.code == diagnosticTrackTaskArgumentCode()
+                     or diagnostic.code == taskOperationContractCode()
++                    or diagnostic.code == parallelSourceTextResultCode()
+                     or diagnostic.code == borrowedTextReturnEscapeCode()
+                     or diagnostic.code == borrowedTextReturnInferenceCode()
+                     or diagnostic.code == functionReturnCompatibilityCode()
+                     or diagnostic.code == deferredFunctionReturnCode()
+                     or diagnostic.code == localArraySliceReturnCode()
+@@ -2796,19 +2798,101 @@ semanticTypeContainsOwnedStorageCached prepared: ref semanticContext.SemanticSna
+ }
+ 
+ semanticTypeContainsReadonlyReference prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+     prepared -> semanticTypeContainsBorrowKind(types, typeId, 8)
+ }
++semanticTypeIsSourceText prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
++    false => sourceText!
++    typeId >= 0 and typeId < (types -> len)
++        -> if {
++            types[typeId] => candidate
++            candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
++                -> if {
++                    true => sourceText!
++                } else {
++                    candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
++                        -> if {
++                            candidate.module => sourceModule!
++                            candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)
++                                -> if {
++                                    prepared.modules[candidate.module].sourceIndex => sourceModule!
++                                }
++                            false => fileNamespace!
++                            0 => moduleIndex!
++                            moduleIndex! < (prepared.modules -> len) -> while {
++                                prepared.modules[moduleIndex!] => identity
++                                identity.sourceIndex == sourceModule! -> if {
++                                    identity.pathLength == 8 => sameNamespace!
++                                    "sys.file" => expectedNamespace
++                                    UIntSize(0) => namespaceByte!
++                                    sameNamespace! and namespaceByte! < identity.pathLength
++                                        -> while {
++                                            (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
++                                                -> if {
++                                                    false => sameNamespace!
++                                                }
++                                            namespaceByte! + 1 => namespaceByte!
++                                        }
++                                    sameNamespace! -> if { true => fileNamespace! }
++                                }
++                                moduleIndex! + 1 => moduleIndex!
++                            }
++                            fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)
++                                -> if {
++                                    prepared.package.ranges[sourceModule!] => sourceRange
++                                    candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
++                                        -> if {
++                                            prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
++                                            declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
++                                                -> if {
++                                                    prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
++                                                    name.span.length == 10 => sameName!
++                                                    "SourceText" => expectedName
++                                                    UIntSize(0) => nameByte!
++                                                    sameName! and nameByte! < name.span.length -> while {
++                                                        (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
++                                                            -> if {
++                                                                false => sameName!
++                                                            }
++                                                        nameByte! + 1 => nameByte!
++                                                    }
++                                                    sameName! -> if { true => sourceText! }
++                                                }
++                                        }
++                                }
++                        }
++                }
++        }
++    sourceText!
++}
++
++parallelResultSourceTextSupported prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], resultTypeId: Int, fallible: Bool -> Bool {
++    not (prepared -> semanticTypeContainsStorageKind(types, resultTypeId, 0, false, true))
++        -> if { true -> return }
++    not fallible or resultTypeId < 0 or resultTypeId >= (types -> len)
++        -> if { false -> return }
++    types[resultTypeId] => resultType
++    resultType.kind != 7 or resultType.origin != 4 or resultType.symbol != 1
++        or resultType.first < 0 or resultType.second < 0
++        -> if { false -> return }
++    [resultType.first, resultType.second] -> each payloadTypeId {
++        not (prepared -> semanticTypeIsSourceText(types, payloadTypeId))
++            and (prepared -> semanticTypeContainsStorageKind(types, payloadTypeId, 0, false, true))
++            -> if { false -> return }
++    }
++    true
++}
++
+ semanticTypeContainsBorrowKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, borrowKind: Int -> Bool {
+-    prepared -> semanticTypeContainsStorageKind(types, typeId, borrowKind, false)
++    prepared -> semanticTypeContainsStorageKind(types, typeId, borrowKind, false, false)
+ }
+ 
+ semanticTypeContainsByteStorage prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+-    prepared -> semanticTypeContainsStorageKind(types, typeId, 3, true)
++    prepared -> semanticTypeContainsStorageKind(types, typeId, 3, true, false)
+ }
+ 
+-semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, storageKind: Int, canonicalByteArrayOnly: Bool -> Bool {
++semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, storageKind: Int, canonicalByteArrayOnly: Bool, sourceTextOnly: Bool -> Bool {
+     [Int; ~] => pending!
+     [Int; ~] => visited!
+     false => contains!
+     typeId >= 0 -> if { pending! -> push(typeId) }
+     0 => pendingIndex!
+@@ -2823,11 +2907,12 @@ semanticTypeContainsStorageKind prepared: ref semanticContext.SemanticSnapshot,
+             }
+             not seen! and currentTypeId >= 0 and currentTypeId < (types -> len)
+                 -> if {
+                     visited! -> push(currentTypeId)
+                     types[currentTypeId] => currentType
+-                    currentType.kind == storageKind
++                    ((not sourceTextOnly and currentType.kind == storageKind)
++                        or (sourceTextOnly and (prepared -> semanticTypeIsSourceText(types, currentTypeId))))
+                         and (not canonicalByteArrayOnly or (types -> borrowedTextCanonicalByteArrayType(currentTypeId)))
+                         -> if {
+                             true => contains!
+                         } else {
+                             currentType.kind == 1 -> if {
+@@ -4429,72 +4514,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+     # Structured parallel callbacks borrow captures and join before the parent
+     # resumes. SourceText is an immutable shared view here (Sync-like), not an
+     # async ownership transfer (Send-like). Other affine runtime owners remain
+     # rejected, including Arena, Arguments, and mapped byte views.
+     parallelTypeIsSourceText typeId: Int -> Bool {
+-        false => sourceText!
+-        typeId >= 0 and typeId < (types -> len)
+-            -> if {
+-                types[typeId] => candidate
+-                candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24
+-                    -> if {
+-                        true => sourceText!
+-                    } else {
+-                        candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
+-                            -> if {
+-                                candidate.module => sourceModule!
+-                                candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)
+-                                    -> if {
+-                                        prepared.modules[candidate.module].sourceIndex => sourceModule!
+-                                    }
+-                                false => fileNamespace!
+-                                0 => moduleIndex!
+-                                moduleIndex! < (prepared.modules -> len) -> while {
+-                                    prepared.modules[moduleIndex!] => identity
+-                                    identity.sourceIndex == sourceModule! -> if {
+-                                        identity.pathLength == 8 => sameNamespace!
+-                                        "sys.file" => expectedNamespace
+-                                        UIntSize(0) => namespaceByte!
+-                                        sameNamespace! and namespaceByte! < identity.pathLength
+-                                            -> while {
+-                                                (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!))
+-                                                    -> if {
+-                                                        false => sameNamespace!
+-                                                    }
+-                                                namespaceByte! + 1 => namespaceByte!
+-                                            }
+-                                        sameNamespace! -> if { true => fileNamespace! }
+-                                    }
+-                                    moduleIndex! + 1 => moduleIndex!
+-                                }
+-                                fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)
+-                                    -> if {
+-                                        prepared.package.ranges[sourceModule!] => sourceRange
+-                                        candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
+-                                            -> if {
+-                                                prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+-                                                declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0
+-                                                    -> if {
+-                                                        prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
+-                                                        name.span.length == 10 => sameName!
+-                                                        "SourceText" => expectedName
+-                                                        UIntSize(0) => nameByte!
+-                                                        sameName! and nameByte! < name.span.length -> while {
+-                                                            (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!))
+-                                                                -> if {
+-                                                                    false => sameName!
+-                                                                }
+-                                                            nameByte! + 1 => nameByte!
+-                                                        }
+-                                                        sameName! -> if { true => sourceText! }
+-                                                    }
+-                                            }
+-                                    }
+-                            }
+-                    }
+-            }
+-        sourceText!
++        prepared -> semanticTypeIsSourceText(types, typeId)
+     }
+     captureBindingIsParallelShareable bindingIndex: Int -> Bool {
+         typed[bindingIndex] => binding
+         [Int; ~] => pendingTypes!
+         [Int; ~] => visitedTypes!
+@@ -5473,10 +5497,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+             and moveEvent.siteIr < (typed -> len)
+             -> if {
+                 typed[moveEvent.siteIr] => moveSite
+                 moveSite.kind == 6
+                     or moveSite.kind == 9
++                    or moveSite.kind == 43
+                     or moveSite.kind == 17
+                     or moveSite.kind == 24
+                     or moveSite.kind == 25
+                     or (moveSite.kind == 5
+                     and moveSite.typeKind == 4
+@@ -8867,10 +8892,28 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
+                                 (prepared.package.sources[parallelCall.sourceModule] -> byte(parallelName.span.start + parallelNameByte!)) != (parallelText -> byte(parallelNameByte!))
+                                     -> if { false => isParallel! }
+                                 parallelNameByte! + 1 => parallelNameByte!
+                             }
+                         isParallel! -> if {
++                            parallelCall.operand1 >= 0 and parallelCall.operand1 < (typed -> len)
++                                and not (prepared -> parallelResultSourceTextSupported(types, typed[parallelCall.operand1].typeId, parallelCall.opcode == -209))
++                                -> if {
++                                    diagnostics! -> appendBodyDiagnostic(parallelIrIndex!, OwnershipDiagnostic {
++                                        code: parallelSourceTextResultCode()
++                                        sourceModule: parallelCall.sourceModule
++                                        functionSymbol: -1
++                                        expectedOrigin: -1
++                                        expectedModule: -1
++                                        expectedSymbol: -1
++                                        actualOrigin: parallelCall.astNode
++                                        actualModule: -1
++                                        actualSymbol: parallelIrIndex!
++                                        actualBuiltin: -1
++                                        readonlyReferencePath: -1
++                                        span: parallelName.span
++                                    })
++                                }
+                             [Int; ~] => reportedMutableCaptures!
+                             [Int; ~] => reportedNonSendableCaptures!
+                             0 => captureUseIndex!
+                             captureUseIndex! < (typed -> len) -> while {
+                                 typed[captureUseIndex!] => captureUse
+diff --git a/selfhost/semantic/type_ids.slg b/selfhost/semantic/type_ids.slg
+index 2702b3e4..fdd46a76 100644
+--- a/selfhost/semantic/type_ids.slg
++++ b/selfhost/semantic/type_ids.slg
+@@ -151,10 +151,26 @@ public struct SemanticType {
+     public lengthHash: UInt64
+     public containsParameter: Bool
+     public status: Int
+ }
+ 
++public foldInputTypeSupported types: ref [SemanticType; ~], typeId: Int -> Bool {
++    types -> materializedReadTypeId(typeId) => valueTypeId
++    valueTypeId < 0 or valueTypeId >= (types -> len)
++        -> if { false -> return }
++    types[valueTypeId] => valueType
++    valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 25
++        -> if { true -> return }
++    (valueType.kind == 2 or valueType.kind == 3 or valueType.kind == 4)
++        and valueType.first >= 0 and valueType.first < (types -> len)
++        -> if {
++            types[valueType.first] => element
++            element.kind == 1 and element.origin == 1 and element.symbol == 2 -> return
++        }
++    false
++}
++
+ public struct DynTraitResolution {
+     public targetSource: Int
+     public targetSymbol: Int
+     # 0 resolved, 2 missing, 3 internal to another module, 4 ambiguous.
+     public status: Int
+diff --git a/src/Sollang.Compiler/Semantics/BoundProgram.cs b/src/Sollang.Compiler/Semantics/BoundProgram.cs
+index 5ffa8f4c..62d69d5f 100644
+--- a/src/Sollang.Compiler/Semantics/BoundProgram.cs
++++ b/src/Sollang.Compiler/Semantics/BoundProgram.cs
+@@ -998,11 +998,11 @@ internal sealed partial class TypeDefinitionTable
+     {
+         foreach (var (id, shape) in definitions)
+         {
+             var heapDictionaryType = GetOrAddDictionary(shape.KeyType, shape.ValueType);
+             var layout = _dictionaries[heapDictionaryType];
+-            var minimumBuckets = checked((shape.MaxEntries * 8 + 6) / 7);
++            var minimumBuckets = checked((int)(((long)shape.MaxEntries * 8 + 6) / 7));
+             var bucketCapacity = 16;
+             while (bucketCapacity < minimumBuckets)
+             {
+                 bucketCapacity = checked(bucketCapacity * 2);
+             }
+@@ -1095,11 +1095,11 @@ internal sealed partial class TypeDefinitionTable
+             return existing;
+         }
+ 
+         var heapDictionaryType = GetOrAddDictionary(keyType, valueType);
+         var layout = _dictionaries[heapDictionaryType];
+-        var minimumBuckets = checked((maxEntries * 8 + 6) / 7);
++        var minimumBuckets = checked((int)(((long)maxEntries * 8 + 6) / 7));
+         var bucketCapacity = 16;
+         while (bucketCapacity < minimumBuckets)
+         {
+             bucketCapacity = checked(bucketCapacity * 2);
+         }
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+index 726623d6..577c994e 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -2372,10 +2372,34 @@ internal sealed partial class SemanticCompiler
+         return candidates
+             .Where(binding => referenced.Contains(binding.Key))
+             .ToDictionary(binding => binding.Key, binding => binding.Value, StringComparer.Ordinal);
+     }
+ 
++    private void ValidateParallelResultType(
++        BlockFunctionCallStatement call,
++        BoundFunction function,
++        BoundType resultType)
++    {
++        if (!TypeContains(resultType, BoundType.SourceText)) return;
++
++        if (function.Kind == BoundFunctionKind.RuntimeTryParallel
++            && _types.TryGetResultTypes(resultType, out var payloads)
++            && IsSupportedPayload(payloads.Ok)
++            && IsSupportedPayload(payloads.Error))
++        {
++            return;
++        }
++
++        throw Error(
++            call.Line,
++            call.Column,
++            "parallel callback SourceText is supported only as a direct top-level tryParallel Result payload");
++
++        bool IsSupportedPayload(BoundType payload) =>
++            payload == BoundType.SourceText || !TypeContains(payload, BoundType.SourceText);
++    }
++
+     private void ValidateParallelCapturedBindings(
+         BlockFunctionCallStatement call,
+         IReadOnlyDictionary<string, BoundFunction> functions,
+         IReadOnlyDictionary<string, BoundType> bindings,
+         IReadOnlySet<string> mutableBindings)
+@@ -7180,10 +7204,15 @@ internal sealed partial class SemanticCompiler
+                 call,
+                 specializedInputType: inputType,
+                 explicitSecondaryType: parallelValueType,
+                 explicitTertiaryType: parallelErrorType);
+         }
++        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
++            && function.BlockResultType is { } parallelAdmissionResultType)
++        {
++            ValidateParallelResultType(call, function, parallelAdmissionResultType);
++        }
+         if (function.Kind == BoundFunctionKind.UserBlock
+             && function.GenericParameterName is not null
+             && function.SpecializedType is null
+             && function.SpecializedValue is null)
+         {
+@@ -9860,19 +9889,11 @@ internal sealed partial class SemanticCompiler
+             leftExpression,
+             rightExpression,
+             functions,
+             bindings,
+             allowReadIntCall, mutableBindings);
+-        if (left == BoundType.CodePoint)
+-        {
+-            throw Error(leftExpression.Line, leftExpression.Column,
+-                $"CodePoint does not support '{operatorText}'; convert it to UInt32 before arithmetic");
+-        }
+-        if (!IsNumericType(left) || (operatorText == "%" && !IsIntegerType(left)))
+-        {
+-            throw Error(leftExpression.Line, leftExpression.Column, $"left operand of '{operatorText}' must be a compatible numeric value");
+-        }
++        ValidateNumericBinaryOperandDomain(left, leftExpression, operatorText);
+ 
+         if (right != left)
+         {
+             throw Error(rightExpression.Line, rightExpression.Column,
+                 $"operands of '{operatorText}' must have the same numeric type; left is {FormatType(left)}, right is {FormatType(right)}");
+@@ -9881,10 +9902,24 @@ internal sealed partial class SemanticCompiler
+         WarnRedundantNumericBinaryOperandTypes(leftExpression, rightExpression, left);
+ 
+         return left;
+     }
+ 
++    private void ValidateNumericBinaryOperandDomain(BoundType type, Expression operand, string operatorText)
++    {
++        if (type == BoundType.CodePoint)
++        {
++            throw Error(operand.Line, operand.Column,
++                $"CodePoint does not support '{operatorText}'; convert it to UInt32 before arithmetic");
++        }
++        if (!IsNumericType(type) || (operatorText == "%" && !IsIntegerType(type)))
++        {
++            throw Error(operand.Line, operand.Column,
++                $"left operand of '{operatorText}' must be a compatible numeric value");
++        }
++    }
++
+     private static bool TryGetNumericBinaryOperands(
+         Expression expression,
+         out Expression left,
+         out Expression right,
+         out string operatorText,
+@@ -9920,10 +9955,11 @@ internal sealed partial class SemanticCompiler
+             throw Error(
+                 invalid.Line,
+                 invalid.Column,
+                 $"operands of '{operatorText}' must have type {FormatType(expectedType)} in this context");
+         }
++        ValidateNumericBinaryOperandDomain(expectedType, left, operatorText);
+         return expectedType;
+     }
+ 
+     private BoundType InferCompareExpression(
+         CompareExpression expression,
+@@ -10795,11 +10831,11 @@ internal sealed partial class SemanticCompiler
+                 functions,
+                 bindings,
+                 allowPrintCall: false,
+                 allowReadIntCall,
+                 allowFlowBindingTarget: false);
+-            if (!IsReadonlyIntViewCompatible(sourceType))
++            if (sourceType != BoundType.Range && !IsReadonlyIntViewCompatible(sourceType))
+             {
+                 throw Error(expression.Source.Line, expression.Source.Column, "fold expects a range or Int array input");
+             }
+         }
+ 
+@@ -11381,10 +11417,20 @@ internal sealed partial class SemanticCompiler
+                         MarkFixedLengthCandidateRequiresGrowable(
+                             expression.Source,
+                             function.InputType,
+                             currentType);
+                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
++                        ValidateAdditionalFunctionArguments(
++                            function,
++                            target.Arguments,
++                            functions,
++                            bindings,
++                            allowReadIntCall,
++                            mutableBindings,
++                            path,
++                            target.Line,
++                            target.Column);
+                         _resolvedGenericCalls[target] = function;
+                         currentType = function.ReturnType;
+                         continue;
+                     case BoundFunctionKind.RuntimeMouseEvents:
+                         EnsureRuntimeIntrinsicAllowed(
+@@ -11785,10 +11831,15 @@ internal sealed partial class SemanticCompiler
+         bool isLast,
+         out FlowResult result)
+     {
+         result = new FlowResult(BoundType.Unit, FlowEffect.None);
+ 
++        if ((path is "len" or "capacity") && _types.IsReference(currentType))
++        {
++            currentType = _types.GetReference(currentType).ElementType;
++        }
++
+         if (IsFileWriterType(currentType) && path == "syncAsync")
+         {
+             if (target.TypeArgument is not null
+                 || target.CompileTimeValueArgument is not null
+                 || target.Arguments.Count != 0)
+@@ -13009,18 +13060,32 @@ internal sealed partial class SemanticCompiler
+             case BoundFunctionKind.RuntimeProcessIdValue:
+             case BoundFunctionKind.RuntimeSyncFile:
+             case BoundFunctionKind.RuntimeAtomicReplaceFile:
+             case BoundFunctionKind.RuntimeCreateExclusiveFile:
+             case BoundFunctionKind.RuntimeRemoveFile:
+-                if (expression.Arguments.Count != 1)
++                var processRequestArgumentCount = 1 + (function.AdditionalParameters?.Count ?? 0);
++                if (expression.Arguments.Count != processRequestArgumentCount)
+                 {
+-                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
++                    throw Error(expression.Line, expression.Column,
++                        processRequestArgumentCount == 1
++                            ? $"{path} expects exactly one request"
++                            : $"{path} expects {processRequestArgumentCount} argument(s)");
+                 }
+                 var argvType = InferExpression(
+                     expression.Arguments[0], functions, bindings,
+                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
++                ValidateAdditionalFunctionArguments(
++                    function,
++                    expression.Arguments.Skip(1).ToArray(),
++                    functions,
++                    bindings,
++                    allowReadIntCall,
++                    mutableBindings,
++                    path,
++                    expression.Line,
++                    expression.Column);
+                 _resolvedGenericCalls[expression] = function;
+                 return function.ReturnType;
+             case BoundFunctionKind.RuntimeReadDirectory:
+             case BoundFunctionKind.RuntimeCreateDirectory:
+             case BoundFunctionKind.RuntimePathQuery:
+@@ -14756,16 +14821,18 @@ internal sealed partial class SemanticCompiler
+         IReadOnlyList<Expression> arguments,
+         IReadOnlyDictionary<string, BoundFunction> functions,
+         IReadOnlyDictionary<string, BoundType> bindings,
+         bool allowReadIntCall,
+         IReadOnlySet<string>? mutableBindings,
+-        string path)
++        string path,
++        int? callLine = null,
++        int? callColumn = null)
+     {
+         var parameters = function.AdditionalParameters ?? [];
+         if (arguments.Count != parameters.Count)
+         {
+-            throw Error(function.Line, function.Column,
++            throw Error(callLine ?? function.Line, callColumn ?? function.Column,
+                 $"function '{path}' expects {parameters.Count} additional argument(s)");
+         }
+ 
+         for (var index = 0; index < parameters.Count; index++)
+         {
+@@ -17335,10 +17402,19 @@ internal sealed partial class SemanticCompiler
+         if (expression is not FlowExpression flow || flow.Targets.Count == 0)
+         {
+             return false;
+         }
+ 
++        var firstTarget = flow.Targets[0];
++        if (firstTarget.Path.Count == 1
++            && firstTarget.Path[0] is "await" or "cancel"
++            && !_resolvedGenericCalls.ContainsKey(firstTarget)
++            && (functions is null || !TryGetFunction(firstTarget.Path, functions, out _)))
++        {
++            return true;
++        }
++
+         var lastTarget = flow.Targets[^1];
+         if (lastTarget.Path.Count != 1)
+         {
+             return false;
+         }
+@@ -17347,11 +17423,11 @@ internal sealed partial class SemanticCompiler
+             || (functions is not null && TryGetFunction(lastTarget.Path, functions, out _)))
+         {
+             return false;
+         }
+ 
+-        return lastTarget.Path[0] is "append" or "updated" or "await" or "cancel";
++        return lastTarget.Path[0] is "append" or "updated";
+     }
+ 
+     private string? GetMoveConsumingContainerSourceName(
+         Expression expression,
+         IReadOnlyDictionary<string, BoundFunction>? functions = null)
+@@ -17531,10 +17607,11 @@ internal sealed partial class SemanticCompiler
+             or TypedEmptyArrayExpression
+             or DictionaryLiteralExpression
+             or TypedEmptyDictionaryExpression
+             or BoxExpression
+             or StructLiteralExpression
++            or ProductExpression
+             or FieldAccessExpression { Source: TypeApplicationExpression }
+             or CallExpression
+             or TypeApplicationExpression
+             or FlowExpression
+             or StreamJoinExpression
