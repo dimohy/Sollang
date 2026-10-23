@@ -1915,31 +1915,28 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
             }
             entryArrayLength! => entryArrayOperandCount
             entryExpression -> arrayLiteralLength(entryArrayOperandCount, context) => entryArrayLength!
-            entryArrayLength! => entryArrayCapacity!
-            entryExpression.opcode >= 1_000_000 -> if {
-                entryExpression.opcode - 1_000_000 => entryArrayCapacity!
-            }
-            entryArrayCapacity! * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
+            entryExpression -> arrayLiteralCapacity(entryArrayLength!, context) => entryArrayCapacity
+            entryArrayCapacity * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
             (not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
                 -> if {
-                    entryExpression.typeKind == 12 -> if {
-                        entryExpression.opcode * (entryExpression -> arrayElementSize(context, state)) => entryBoundedArrayByteLength
-                        "  %v$(entryExpressionIndex)_data = alloca [$entryBoundedArrayByteLength x i8], align " -> print
-                        entryExpression -> arrayElementAlign(context, state) -> writeDecimalLine
-                    } else {
-                        entryArrayByteLength == 0 -> if {
-                            entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
-                            emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
-                                -> if {
-                                    (emptyCallParameter >= 0 -> if {
-                                        context.ir[emptyCallParameter] -> arrayElementSize(context, state)
-                                    } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
-                                } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                    entryExpression.typeId >= 0 and context.types[entryExpression.typeId].kind == 12
+                        -> if {
+                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 }
+                                -> emitArrayStackBacking(entryArrayByteLength, entryExpression -> arrayElementAlign(context, state))
                         } else {
-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
+                            entryArrayByteLength == 0 -> if {
+                                entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+                                emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
+                                    -> if {
+                                        (emptyCallParameter >= 0 -> if {
+                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+                                        } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
+                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
+                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                            } else {
+                                ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
+                            }
                         }
-                    }
                 }
             entryExpression.operand0 => entryArrayElementIndex!
             0 => entryArrayElementPosition!
@@ -1959,8 +1956,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                     entryArrayOperandCount > 1 -> if { entryArrayElement.nextOperand => entryArrayElementIndex! }
                     entryArrayElementPosition! + 1 => entryArrayElementPosition!
                 }
-            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, (entryExpression.typeKind == 12
-                -> if { entryExpression.opcode } else { entryArrayCapacity! }), (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
+            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, entryArrayCapacity, (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
         }
     entryExpression -> isEmptyBoundedDictionaryLiteral(context)
         -> if { entryExpressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }

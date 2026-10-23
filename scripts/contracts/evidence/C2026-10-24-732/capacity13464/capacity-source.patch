@@ -1,0 +1,244 @@
+diff --git a/selfhost/llvm/text/control_region_expressions.slg b/selfhost/llvm/text/control_region_expressions.slg
+index be87fcad6..b52dc1f9b 100644
+--- a/selfhost/llvm/text/control_region_expressions.slg
++++ b/selfhost/llvm/text/control_region_expressions.slg
+@@ -1005,21 +1005,12 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
+                 regionArrayOperandCount! + 1 => regionArrayOperandCount!
+                 context.ir[regionArrayCountIndex!].nextOperand => regionArrayCountIndex!
+             }
+-            regionArrayOperandCount! => regionArrayLength!
+-            regionNode.typeId >= 0
+-                and context.types[regionNode.typeId].kind == 4
+-                and context.types[regionNode.typeId].length >= 0
+-                -> if {
+-                    context.types[regionNode.typeId].length => regionArrayLength!
+-                }
+-            regionArrayLength! => regionArrayCapacity!
+-            regionNode.opcode >= 1_000_000 -> if {
+-                regionNode.opcode - 1_000_000 => regionArrayCapacity!
+-            }
+-            regionArrayCapacity! * (regionNode -> arrayElementSize(context, state)) => regionArrayByteLength
++            regionNode -> arrayLiteralLength(regionArrayOperandCount!, context) => regionArrayLength
++            regionNode -> arrayLiteralCapacity(regionArrayLength, context) => regionArrayCapacity
++            regionArrayCapacity * (regionNode -> arrayElementSize(context, state)) => regionArrayByteLength
+             regionNodeIndex -> staticReadonlyArrayReturnFunction(context) => staticFunction
+             staticFunction >= 0 -> if {
+-                "  %v$(regionNodeIndex)_data = getelementptr [$(regionArrayLength!) x " -> print
++                "  %v$(regionNodeIndex)_data = getelementptr [$(regionArrayLength) x " -> print
+                 regionNode -> writeArrayElementType(context, state)
+                 "], ptr " -> print
+                 staticFunction -> writeStaticReadonlyArraySymbol(regionNodeIndex, context)
+@@ -1027,22 +1018,26 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
+             } else {
+                 (not (regionNode -> isFixedArrayType)) or (regionNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                     -> if {
+-                        regionArrayByteLength == 0 -> if {
+-                            regionNodeIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+-                            emptyCallParameter >= 0 or (regionNode -> isFixedArrayType)
+-                                -> if {
+-                                    (emptyCallParameter >= 0 -> if {
+-                                        context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+-                                    } else { regionNode -> arrayElementSize(context, state) }) => emptyRegionFixedStorageBytes
+-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes)
+-                                } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+-                        } else {
+-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength)
+-                        }
++                        regionNode.typeId >= 0 and context.types[regionNode.typeId].kind == 12
++                            -> if {
++                                ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 }
++                                    -> emitArrayStackBacking(regionArrayByteLength, regionNode -> arrayElementAlign(context, state))
++                            } else { regionArrayByteLength == 0 -> if {
++                                    regionNodeIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
++                                    emptyCallParameter >= 0 or (regionNode -> isFixedArrayType)
++                                        -> if {
++                                            (emptyCallParameter >= 0 -> if {
++                                                context.ir[emptyCallParameter] -> arrayElementSize(context, state)
++                                            } else { regionNode -> arrayElementSize(context, state) }) => emptyRegionFixedStorageBytes
++                                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes)
++                                        } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
++                                } else {
++                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength)
++                            } }
+                     }
+                 regionNode.operand0 => regionArrayElementIndex!
+                 0 => regionArrayElementPosition!
+-                regionArrayElementIndex! >= 0 and regionArrayElementPosition! < regionArrayLength!
++                regionArrayElementIndex! >= 0 and regionArrayElementPosition! < regionArrayLength
+                     -> while {
+                         context.ir[regionArrayElementIndex!] => regionArrayElement
+                         ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(regionArrayElementPosition!, regionNode -> arrayElementTypeId(context, state), regionNode.typeSymbol, context, state)
+@@ -1052,7 +1047,7 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
+                         regionArrayElementPosition! + 1 => regionArrayElementPosition!
+                     }
+             }
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayStorageCarrier(regionArrayLength!, regionArrayCapacity!, (regionNode -> isFixedArrayType) or (regionNode -> isSliceArrayType) or regionContextualSlice!)
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayStorageCarrier(regionArrayLength, regionArrayCapacity, (regionNode -> isFixedArrayType) or (regionNode -> isSliceArrayType) or regionContextualSlice!)
+             regionNodeIndex -> emitAggregatePartialMoveCleanup(ownerIndex, context, state)
+         }
+     regionNode.kind == 14 and regionNode.operand0 < 0 and not (regionNode -> isDynamicArrayType) and not (regionNode -> isFixedArrayType) and not (regionNode -> isSliceArrayType) and not regionContextualSlice!
+diff --git a/selfhost/llvm/text/entry_expressions.slg b/selfhost/llvm/text/entry_expressions.slg
+index 5e933c263..5b5806cc2 100644
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -1915,31 +1915,28 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+             }
+             entryArrayLength! => entryArrayOperandCount
+             entryExpression -> arrayLiteralLength(entryArrayOperandCount, context) => entryArrayLength!
+-            entryArrayLength! => entryArrayCapacity!
+-            entryExpression.opcode >= 1_000_000 -> if {
+-                entryExpression.opcode - 1_000_000 => entryArrayCapacity!
+-            }
+-            entryArrayCapacity! * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
++            entryExpression -> arrayLiteralCapacity(entryArrayLength!, context) => entryArrayCapacity
++            entryArrayCapacity * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
+             (not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                 -> if {
+-                    entryExpression.typeKind == 12 -> if {
+-                        entryExpression.opcode * (entryExpression -> arrayElementSize(context, state)) => entryBoundedArrayByteLength
+-                        "  %v$(entryExpressionIndex)_data = alloca [$entryBoundedArrayByteLength x i8], align " -> print
+-                        entryExpression -> arrayElementAlign(context, state) -> writeDecimalLine
+-                    } else {
+-                        entryArrayByteLength == 0 -> if {
+-                            entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+-                            emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
+-                                -> if {
+-                                    (emptyCallParameter >= 0 -> if {
+-                                        context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+-                                    } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
+-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
+-                                } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
++                    entryExpression.typeId >= 0 and context.types[entryExpression.typeId].kind == 12
++                        -> if {
++                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 }
++                                -> emitArrayStackBacking(entryArrayByteLength, entryExpression -> arrayElementAlign(context, state))
+                         } else {
+-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
++                            entryArrayByteLength == 0 -> if {
++                                entryExpressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
++                                emptyCallParameter >= 0 or (entryExpression -> isFixedArrayType)
++                                    -> if {
++                                        (emptyCallParameter >= 0 -> if {
++                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
++                                        } else { entryExpression -> arrayElementSize(context, state) }) => emptyEntryFixedStorageBytes
++                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyEntryFixedStorageBytes)
++                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
++                            } else {
++                                ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(entryArrayByteLength)
++                            }
+                         }
+-                    }
+                 }
+             entryExpression.operand0 => entryArrayElementIndex!
+             0 => entryArrayElementPosition!
+@@ -1959,8 +1956,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
+                     entryArrayOperandCount > 1 -> if { entryArrayElement.nextOperand => entryArrayElementIndex! }
+                     entryArrayElementPosition! + 1 => entryArrayElementPosition!
+                 }
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, (entryExpression.typeKind == 12
+-                -> if { entryExpression.opcode } else { entryArrayCapacity! }), (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(entryArrayLength!, entryArrayCapacity, (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
+         }
+     entryExpression -> isEmptyBoundedDictionaryLiteral(context)
+         -> if { entryExpressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }
+diff --git a/selfhost/llvm/text/foundation.slg b/selfhost/llvm/text/foundation.slg
+index 5d4244fe9..c10d54514 100644
+--- a/selfhost/llvm/text/foundation.slg
++++ b/selfhost/llvm/text/foundation.slg
+@@ -4472,6 +4472,17 @@ public layoutOf request: TypeLayoutRequest -> TypeLayout {
+ }
+ 
+ # Logical repeat length is independent of declared storage capacity.
++arrayLiteralCapacity node: typedIr.TypedIrNode, length: Int, context: ref emitterContext.EmitContext -> Int {
++    # Context can retarget an unannotated literal to a bounded field or return.
++    # Its committed type owns capacity; the syntax opcode still describes the
++    # original literal and may be -1.
++    node.typeId >= 0 and node.typeId < (context.types -> len)
++        and context.types[node.typeId].kind == 12
++        -> if { context.types[node.typeId].length -> return }
++    node.opcode >= 1_000_000 -> if { node.opcode - 1_000_000 -> return }
++    length
++}
++
+ arrayLiteralLength node: typedIr.TypedIrNode, operandCount: Int, context: ref emitterContext.EmitContext -> Int {
+     # A typed empty capacity hint reserves backing without creating elements.
+     node.opcode >= 1_000_000 and operandCount == 0
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index 57794a77a..e97124bc7 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -1271,11 +1271,8 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
+                 context.ir[arrayCountIndex!].nextOperand => arrayCountIndex!
+             }
+             expression -> arrayLiteralLength(arrayOperandCount!, context) => arrayLength
+-            arrayLength => arrayCapacity!
+-            expression.opcode >= 1_000_000 -> if {
+-                expression.opcode - 1_000_000 => arrayCapacity!
+-            }
+-            arrayCapacity! * (expression -> arrayElementSize(context, state)) => arrayByteLength
++            expression -> arrayLiteralCapacity(arrayLength, context) => arrayCapacity
++            arrayCapacity * (expression -> arrayElementSize(context, state)) => arrayByteLength
+             (expressionIndex -> staticReadonlyArrayReturnFunction(context)) == functionIndex
+                 -> if {
+                     "  %v$(expressionIndex)_data = getelementptr [$(arrayLength) x " -> print
+@@ -1286,18 +1283,22 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
+                 } else {
+                     (not (expression -> isFixedArrayType)) or (expressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                         -> if {
+-                            arrayByteLength == 0 -> if {
+-                                expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+-                                emptyCallParameter >= 0 or (expression -> isFixedArrayType)
+-                                    -> if {
+-                                        (emptyCallParameter >= 0 -> if {
+-                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+-                                        } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
+-                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
+-                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+-                            } else {
+-                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
+-                            }
++                            expression.typeId >= 0 and context.types[expression.typeId].kind == 12
++                                -> if {
++                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 }
++                                        -> emitArrayStackBacking(arrayByteLength, expression -> arrayElementAlign(context, state))
++                                } else { arrayByteLength == 0 -> if {
++                                        expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
++                                        emptyCallParameter >= 0 or (expression -> isFixedArrayType)
++                                            -> if {
++                                                (emptyCallParameter >= 0 -> if {
++                                                    context.ir[emptyCallParameter] -> arrayElementSize(context, state)
++                                                } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
++                                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
++                                            } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
++                                    } else {
++                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
++                                } }
+                         }
+                     expression.operand0 => arrayElementIndex!
+                     0 => arrayElementPosition!
+@@ -1323,7 +1324,7 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
+                             arrayElementPosition! + 1 => arrayElementPosition!
+                         }
+                 }
+-            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity!, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
++            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
+             expressionIndex -> emitAggregatePartialMoveCleanup(functionIndex, context, state)
+         }
+     expression.kind == 14 and expression.operand0 < 0 and not (expression -> isDynamicArrayType) and not (expression -> isFixedArrayType) and not (expression -> isSliceArrayType) and not expressionContextualSlice!
+diff --git a/selfhost/llvm/text/platform_io.slg b/selfhost/llvm/text/platform_io.slg
+index 3b58be12c..dbb81d30c 100644
+--- a/selfhost/llvm/text/platform_io.slg
++++ b/selfhost/llvm/text/platform_io.slg
+@@ -46,6 +46,12 @@ writeArrayStorageIdentity identity: ArrayStorageIdentity, suffix: Text -> Unit u
+     } else { "%v$(identity.resultIndex)$suffix" -> print }
+ }
+ 
++emitArrayStackBacking identity: ArrayStorageIdentity, byteLength: Int, alignment: Int -> Unit uses Console {
++    "  " -> print
++    identity -> writeArrayStorageIdentity("_data")
++    " = alloca [$byteLength x i8], align $alignment" -> println
++}
++
+ emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int -> Unit uses Console {
+     "  " -> print
+     identity -> writeArrayStorageIdentity("_data")

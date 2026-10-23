@@ -1271,11 +1271,8 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                 context.ir[arrayCountIndex!].nextOperand => arrayCountIndex!
             }
             expression -> arrayLiteralLength(arrayOperandCount!, context) => arrayLength
-            arrayLength => arrayCapacity!
-            expression.opcode >= 1_000_000 -> if {
-                expression.opcode - 1_000_000 => arrayCapacity!
-            }
-            arrayCapacity! * (expression -> arrayElementSize(context, state)) => arrayByteLength
+            expression -> arrayLiteralCapacity(arrayLength, context) => arrayCapacity
+            arrayCapacity * (expression -> arrayElementSize(context, state)) => arrayByteLength
             (expressionIndex -> staticReadonlyArrayReturnFunction(context)) == functionIndex
                 -> if {
                     "  %v$(expressionIndex)_data = getelementptr [$(arrayLength) x " -> print
@@ -1286,18 +1283,22 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                 } else {
                     (not (expression -> isFixedArrayType)) or (expressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
                         -> if {
-                            arrayByteLength == 0 -> if {
-                                expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
-                                emptyCallParameter >= 0 or (expression -> isFixedArrayType)
-                                    -> if {
-                                        (emptyCallParameter >= 0 -> if {
-                                            context.ir[emptyCallParameter] -> arrayElementSize(context, state)
-                                        } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
-                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
-                                    } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
-                            } else {
-                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
-                            }
+                            expression.typeId >= 0 and context.types[expression.typeId].kind == 12
+                                -> if {
+                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 }
+                                        -> emitArrayStackBacking(arrayByteLength, expression -> arrayElementAlign(context, state))
+                                } else { arrayByteLength == 0 -> if {
+                                        expressionIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+                                        emptyCallParameter >= 0 or (expression -> isFixedArrayType)
+                                            -> if {
+                                                (emptyCallParameter >= 0 -> if {
+                                                    context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+                                                } else { expression -> arrayElementSize(context, state) }) => emptyFixedStorageBytes
+                                                ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyFixedStorageBytes)
+                                            } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                                    } else {
+                                        ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayHeapBacking(arrayByteLength)
+                                } }
                         }
                     expression.operand0 => arrayElementIndex!
                     0 => arrayElementPosition!
@@ -1323,7 +1324,7 @@ emitFunctionArrayExpressions expressionIndex: Int, functionIndex: Int, functionE
                             arrayElementPosition! + 1 => arrayElementPosition!
                         }
                 }
-            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity!, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
+            ArrayStorageIdentity { resultDomain: 0, resultIndex: expressionIndex, labelIndex: -1 } -> emitArrayStorageCarrier(arrayLength, arrayCapacity, (expression -> isFixedArrayType) or (expression -> isSliceArrayType) or expressionContextualSlice!)
             expressionIndex -> emitAggregatePartialMoveCleanup(functionIndex, context, state)
         }
     expression.kind == 14 and expression.operand0 < 0 and not (expression -> isDynamicArrayType) and not (expression -> isFixedArrayType) and not (expression -> isSliceArrayType) and not expressionContextualSlice!

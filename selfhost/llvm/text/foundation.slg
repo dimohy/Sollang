@@ -4472,6 +4472,17 @@ public layoutOf request: TypeLayoutRequest -> TypeLayout {
 }
 
 # Logical repeat length is independent of declared storage capacity.
+arrayLiteralCapacity node: typedIr.TypedIrNode, length: Int, context: ref emitterContext.EmitContext -> Int {
+    # Context can retarget an unannotated literal to a bounded field or return.
+    # Its committed type owns capacity; the syntax opcode still describes the
+    # original literal and may be -1.
+    node.typeId >= 0 and node.typeId < (context.types -> len)
+        and context.types[node.typeId].kind == 12
+        -> if { context.types[node.typeId].length -> return }
+    node.opcode >= 1_000_000 -> if { node.opcode - 1_000_000 -> return }
+    length
+}
+
 arrayLiteralLength node: typedIr.TypedIrNode, operandCount: Int, context: ref emitterContext.EmitContext -> Int {
     # A typed empty capacity hint reserves backing without creating elements.
     node.opcode >= 1_000_000 and operandCount == 0

@@ -1005,21 +1005,12 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 regionArrayOperandCount! + 1 => regionArrayOperandCount!
                 context.ir[regionArrayCountIndex!].nextOperand => regionArrayCountIndex!
             }
-            regionArrayOperandCount! => regionArrayLength!
-            regionNode.typeId >= 0
-                and context.types[regionNode.typeId].kind == 4
-                and context.types[regionNode.typeId].length >= 0
-                -> if {
-                    context.types[regionNode.typeId].length => regionArrayLength!
-                }
-            regionArrayLength! => regionArrayCapacity!
-            regionNode.opcode >= 1_000_000 -> if {
-                regionNode.opcode - 1_000_000 => regionArrayCapacity!
-            }
-            regionArrayCapacity! * (regionNode -> arrayElementSize(context, state)) => regionArrayByteLength
+            regionNode -> arrayLiteralLength(regionArrayOperandCount!, context) => regionArrayLength
+            regionNode -> arrayLiteralCapacity(regionArrayLength, context) => regionArrayCapacity
+            regionArrayCapacity * (regionNode -> arrayElementSize(context, state)) => regionArrayByteLength
             regionNodeIndex -> staticReadonlyArrayReturnFunction(context) => staticFunction
             staticFunction >= 0 -> if {
-                "  %v$(regionNodeIndex)_data = getelementptr [$(regionArrayLength!) x " -> print
+                "  %v$(regionNodeIndex)_data = getelementptr [$(regionArrayLength) x " -> print
                 regionNode -> writeArrayElementType(context, state)
                 "], ptr " -> print
                 staticFunction -> writeStaticReadonlyArraySymbol(regionNodeIndex, context)
@@ -1027,22 +1018,26 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
             } else {
                 (not (regionNode -> isFixedArrayType)) or (regionNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
                     -> if {
-                        regionArrayByteLength == 0 -> if {
-                            regionNodeIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
-                            emptyCallParameter >= 0 or (regionNode -> isFixedArrayType)
-                                -> if {
-                                    (emptyCallParameter >= 0 -> if {
-                                        context.ir[emptyCallParameter] -> arrayElementSize(context, state)
-                                    } else { regionNode -> arrayElementSize(context, state) }) => emptyRegionFixedStorageBytes
-                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes)
-                                } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
-                        } else {
-                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength)
-                        }
+                        regionNode.typeId >= 0 and context.types[regionNode.typeId].kind == 12
+                            -> if {
+                                ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 }
+                                    -> emitArrayStackBacking(regionArrayByteLength, regionNode -> arrayElementAlign(context, state))
+                            } else { regionArrayByteLength == 0 -> if {
+                                    regionNodeIndex -> freshEmptyArrayCallParameter(context, state) => emptyCallParameter
+                                    emptyCallParameter >= 0 or (regionNode -> isFixedArrayType)
+                                        -> if {
+                                            (emptyCallParameter >= 0 -> if {
+                                                context.ir[emptyCallParameter] -> arrayElementSize(context, state)
+                                            } else { regionNode -> arrayElementSize(context, state) }) => emptyRegionFixedStorageBytes
+                                            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(emptyRegionFixedStorageBytes)
+                                        } else { ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(0) }
+                                } else {
+                                    ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayHeapBacking(regionArrayByteLength)
+                            } }
                     }
                 regionNode.operand0 => regionArrayElementIndex!
                 0 => regionArrayElementPosition!
-                regionArrayElementIndex! >= 0 and regionArrayElementPosition! < regionArrayLength!
+                regionArrayElementIndex! >= 0 and regionArrayElementPosition! < regionArrayLength
                     -> while {
                         context.ir[regionArrayElementIndex!] => regionArrayElement
                         ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(regionArrayElementPosition!, regionNode -> arrayElementTypeId(context, state), regionNode.typeSymbol, context, state)
@@ -1052,7 +1047,7 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                         regionArrayElementPosition! + 1 => regionArrayElementPosition!
                     }
             }
-            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayStorageCarrier(regionArrayLength!, regionArrayCapacity!, (regionNode -> isFixedArrayType) or (regionNode -> isSliceArrayType) or regionContextualSlice!)
+            ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayStorageCarrier(regionArrayLength, regionArrayCapacity, (regionNode -> isFixedArrayType) or (regionNode -> isSliceArrayType) or regionContextualSlice!)
             regionNodeIndex -> emitAggregatePartialMoveCleanup(ownerIndex, context, state)
         }
     regionNode.kind == 14 and regionNode.operand0 < 0 and not (regionNode -> isDynamicArrayType) and not (regionNode -> isFixedArrayType) and not (regionNode -> isSliceArrayType) and not regionContextualSlice!
