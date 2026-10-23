@@ -1,0 +1,7 @@
+The C385 focused runner now accepts repeatable `--reusable-compiler-directory` arguments and passes them through the existing artifact lifecycle validator at startup and cleanup. The lifecycle policy, reparse checks and maximum of three reusable products are unchanged.
+
+Actual validation: the current managed compiler passed all 27 original mutable-admission cases (14 positive, 13 negative); inputs were stable and processes stopped. Two actual negative CLI calls retained the reparse-point and four-root rejection boundaries. The existing harness build-options suite passed 4 tests. `manifest.json` maps the 120 archived original files to their byte hashes. Raw process output and unchanged source fixtures are retained; binaries remain in scratch for pending consumers.
+
+The forward exact-outcome file preserves current raw output after checking the original declared expectations. It is preparation for future native comparison, not a paired result or completion of the semantic phase. Runtime newline normalization in the legacy focused harness is distinguished from the raw output records.
+
+Changing this verification helper also changes a transitive hash dependency of the full stdlib preflight producer. Its older whole-input proof must be refreshed before a later compiler build that requires it; no old proof is declared current here. Compiler production sources and binary contents were not changed by this runner configuration update.

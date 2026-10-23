@@ -317,6 +317,8 @@ def main():
     parser.add_argument("--format-compiler", type=Path,
                         help="Explicit native formatter for contract formatCheckSources; no implicit fallback")
     parser.add_argument("--artifact-cleanup", choices=("execute", "plan-only"), default="execute")
+    parser.add_argument("--reusable-compiler-directory", type=Path, action="append",
+                        help="Explicit retained compiler roots, validated by the existing lifecycle policy; omit to use policy defaults")
     parser.add_argument('--diagnostics-plan', type=Path,
                         help='Explicit bounded slow-step investigation plan; hard timeout remains 180 seconds')
     parser.add_argument("--contract", type=Path,
@@ -453,7 +455,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
     binary_pins = {}
     binary_lease = None
     output = args.output.resolve()
-    initialize_output(ROOT, output)
+    initialize_output(ROOT, output, reusable_directories=args.reusable_compiler_directory)
     output.mkdir(parents=True, exist_ok=False)
     result = {"schemaVersion": 1, "status": "running", "mode": args.mode,
               "completed": 0, "total": len(cases), "inputHashes": hashes, "cases": [], "processes": [],
@@ -668,7 +670,8 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             binary_lease.__exit__(None, None, None)
         if result["status"] == "passed" and result["inputsStable"] and result["processesStopped"]:
             assert_output_shutdown(ROOT, output)
-            cleanup_output(ROOT, output, execute=args.artifact_cleanup == "execute")
+            cleanup_output(ROOT, output, execute=args.artifact_cleanup == "execute",
+                           reusable_directories=args.reusable_compiler_directory)
 
 
 if __name__ == "__main__":
