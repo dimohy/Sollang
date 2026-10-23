@@ -449,6 +449,13 @@ internal sealed partial class LlvmEmitter
     {
         result = new RuntimeFlowResult(null, null, _mainOk);
 
+        if ((path is "len" or "capacity")
+            && current is RuntimeReference reference
+            && !_program.ResolvedGenericCalls.ContainsKey(target))
+        {
+            current = LoadReference(reference);
+        }
+
         if (_program.ContainerIntrinsics.TryGetValue(target, out var intrinsic))
         {
             result = intrinsic switch

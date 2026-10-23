@@ -11833,6 +11833,11 @@ internal sealed partial class SemanticCompiler
     {
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
 
+        if ((path is "len" or "capacity") && _types.IsReference(currentType))
+        {
+            currentType = _types.GetReference(currentType).ElementType;
+        }
+
         if (IsFileWriterType(currentType) && path == "syncAsync")
         {
             if (target.TypeArgument is not null

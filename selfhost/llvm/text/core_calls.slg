@@ -3714,11 +3714,14 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
                 context.types[valueTypeId!].first => valueTypeId!
                 true => readonlyReference!
             }
-        call.operand0 -> mutableStorageRoot(context, state) => mutableRoot
-        mutableRoot >= 0 -> if {
+        -1 => mutableRoot!
+        not readonlyReference! -> if {
+            call.operand0 -> mutableStorageRoot(context, state) => mutableRoot!
+        }
+        mutableRoot! >= 0 -> if {
             "  %v$(callIndex)_capacity_source = load " -> print
             readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
-            ", ptr %slot$(mutableRoot), align 8" -> println
+            ", ptr %slot$(mutableRoot!), align 8" -> println
         }
         readonlyReference! -> if {
             "  %v$(callIndex)_capacity_source = load " -> print
@@ -3732,7 +3735,7 @@ emitCapacityIntrinsic callIndex: Int, ownerIndex: Int, context: ref emitterConte
         " = extractvalue " -> print
         readonlyReference! -> if { valueTypeId! -> writeSemanticTypeId(context, state) } else { base -> writeIrType(context, state) }
         " " -> print
-        mutableRoot >= 0 or readonlyReference! -> if { "%v$(callIndex)_capacity_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
+        mutableRoot! >= 0 or readonlyReference! -> if { "%v$(callIndex)_capacity_source" -> print } else { call.operand0 -> writeValue(ownerIndex, context, state) }
         ", " -> print
         "2" -> println
         resultWidth == 32 -> if { callIndex -> emitCapacityIntNarrowing(-1) }
