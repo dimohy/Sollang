@@ -1000,7 +1000,7 @@ internal sealed partial class TypeDefinitionTable
         {
             var heapDictionaryType = GetOrAddDictionary(shape.KeyType, shape.ValueType);
             var layout = _dictionaries[heapDictionaryType];
-            var minimumBuckets = checked((shape.MaxEntries * 8 + 6) / 7);
+            var minimumBuckets = checked((int)(((long)shape.MaxEntries * 8 + 6) / 7));
             var bucketCapacity = 16;
             while (bucketCapacity < minimumBuckets)
             {
@@ -1097,7 +1097,7 @@ internal sealed partial class TypeDefinitionTable
 
         var heapDictionaryType = GetOrAddDictionary(keyType, valueType);
         var layout = _dictionaries[heapDictionaryType];
-        var minimumBuckets = checked((maxEntries * 8 + 6) / 7);
+        var minimumBuckets = checked((int)(((long)maxEntries * 8 + 6) / 7));
         var bucketCapacity = 16;
         while (bucketCapacity < minimumBuckets)
         {

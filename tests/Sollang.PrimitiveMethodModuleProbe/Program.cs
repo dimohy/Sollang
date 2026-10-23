@@ -1,6 +1,9 @@
 using System.Collections;
 using System.Reflection;
 
+if (args.Length == 3 && args[0] == "--bounded-dictionary-layout")
+    return BoundedDictionaryLayoutProbe.Run(args[1], args[2]);
+
 if (args.Length >= 2 && args[0] == "--drop-reachability")
     return DropReachabilityProbe.Run(args[1], args.Skip(2).ToArray());
 

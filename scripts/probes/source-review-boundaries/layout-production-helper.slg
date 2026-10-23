@@ -1,0 +1,58 @@
+struct DictionaryEntryLayout {
+    valueOffset: Int
+    stride: Int
+    align: Int
+}
+
+dictionaryEntryLayout keySize: Int, keyAlign: Int, valueSize: Int, valueAlign: Int -> DictionaryEntryLayout {
+    keyAlign => align!
+    valueAlign > align! -> if { valueAlign => align! }
+    ((keySize + valueAlign - 1) / valueAlign) * valueAlign => valueOffset
+    ((valueOffset + valueSize + align! - 1) / align!) * align! => stride
+    DictionaryEntryLayout { valueOffset: valueOffset, stride: stride, align: align! }
+}
+
+struct BoundedDictionaryLayout {
+    bucketCapacity: Int
+    entriesOffset: Int
+    entryStride: Int
+    valueOffset: Int
+    keyAlign: Int
+    valueAlign: Int
+    storageSize: Int
+    size: Int
+    align: Int
+}
+
+boundedDictionaryLayout capacity: Int, keySize: Int, keyAlign: Int, valueSize: Int, valueAlign: Int -> BoundedDictionaryLayout {
+    Int((UInt64(capacity) * 8 + 6) / 7) => minimumBuckets
+    16 => bucketCapacity!
+    bucketCapacity! < minimumBuckets -> while { bucketCapacity! * 2 => bucketCapacity! }
+    keySize -> dictionaryEntryLayout(keyAlign, valueSize, valueAlign) => entryLayout
+    8 => align!
+    entryLayout.align > align! -> if { entryLayout.align => align! }
+    ((bucketCapacity! + 16 + entryLayout.align - 1) / entryLayout.align) * entryLayout.align => entriesOffset
+    ((entriesOffset + bucketCapacity! * entryLayout.stride + align! - 1) / align!) * align! => storageSize
+    ((8 + storageSize + align! - 1) / align!) * align! => size
+    BoundedDictionaryLayout {
+        bucketCapacity: bucketCapacity!
+        entriesOffset: entriesOffset
+        entryStride: entryLayout.stride
+        valueOffset: entryLayout.valueOffset
+        keyAlign: keyAlign
+        valueAlign: valueAlign
+        storageSize: storageSize
+        size: size
+        align: align!
+    }
+}
+
+describe capacity: Int -> Unit uses Console {
+    capacity -> boundedDictionaryLayout(1, 1, 1, 1) => layout
+    "$capacity:$(layout.bucketCapacity),$(layout.entriesOffset),$(layout.storageSize),$(layout.size)" -> println
+}
+main {
+    8 -> describe
+    268435455 -> describe
+    268435456 -> describe
+}

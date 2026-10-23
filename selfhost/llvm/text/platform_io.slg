@@ -1870,20 +1870,23 @@ emitSocketResultCall request: SocketCallRequest, context: ref emitterContext.Emi
         }
     call.opcode == -299 -> if {
         context.ir[secondArgumentIndex!] => socketBuffers
-        context.types[socketBuffers.typeId].first => socketBufferType
+        socketBuffers.typeId => socketBuffersType!
+        socketBuffers -> referenceValueTypeId(context, state) => referencedBuffersType
+        referencedBuffersType >= 0 -> if { referencedBuffersType => socketBuffersType! }
+        context.types[socketBuffersType!].first => socketBufferType
         context.typeSizes[socketBufferType] => socketBufferStride
         socketBufferType -> nativeAbiFieldOffset(0, context, state) => socketBytesOffset
         socketBufferType -> nativeAbiFieldOffset(1, context, state) => socketOffsetOffset
         socketBufferType -> nativeAbiFieldOffset(2, context, state) => socketLengthOffset
         "  %v$(request.callIndex)_socket_buffers_data = extractvalue " -> print
-        socketBuffers -> writeIrType(context, state)
+        secondArgumentIndex! -> writeSocketReceiverType(context, state)
         " " -> print
-        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        secondArgumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
         ", 0" -> println
         "  %v$(request.callIndex)_socket_buffers_length = extractvalue " -> print
-        socketBuffers -> writeIrType(context, state)
+        secondArgumentIndex! -> writeSocketReceiverType(context, state)
         " " -> print
-        secondArgumentIndex! -> writeValue(request.ownerIndex, context, state)
+        secondArgumentIndex! -> writeSocketReceiverValue(request.ownerIndex, context, state)
         ", 1" -> println
         "  %v$(request.callIndex)_socket_raw = call %sollang.socket_result @sollang_platform_socket_send_vectored(i64 %v$(request.callIndex)_socket_handle, ptr %v$(request.callIndex)_socket_buffers_data, i64 %v$(request.callIndex)_socket_buffers_length, i64 $socketBufferStride, i64 $socketBytesOffset, i64 $socketOffsetOffset, i64 $socketLengthOffset)" -> println
     }
