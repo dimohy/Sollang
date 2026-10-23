@@ -2317,9 +2317,37 @@ internal sealed partial class LlvmEmitter
                 definition.FixedLength ?? 0);
         }
 
+        if (_program.Types.IsBoundedArray(expectedType))
+        {
+            var definition = _program.Types.GetBoundedArray(expectedType);
+            var llvmType = LlvmBoundedArrayType(expectedType);
+            var lengthAddress = NextTemp("mut_field_len_addr");
+            EmitAssign(
+                lengthAddress,
+                $"getelementptr inbounds {llvmType}, ptr {place.PointerName}, i32 0, i32 0");
+            var pointer = NextTemp("mut_field_data");
+            EmitAssign(
+                pointer,
+                $"getelementptr inbounds {llvmType}, ptr {place.PointerName}, i32 0, i32 1, i64 0");
+
+            // The borrow ABI uses addresses of descriptor components. Bounded
+            // values store their length and elements inline, so only the data
+            // pointer and constant capacity need temporary descriptor slots.
+            var pointerAddress = NextTemp("mut_field_ptr_addr");
+            EmitAlloca(pointerAddress, "ptr", 8);
+            EmitStore("ptr", pointer, pointerAddress, 8);
+            var capacityAddress = NextTemp("mut_field_cap_addr");
+            EmitAlloca(capacityAddress, "i64", 8);
+            EmitStore("i64", definition.Capacity.ToString(CultureInfo.InvariantCulture), capacityAddress, 8);
+            return new RuntimeMutableContainerReference(
+                expectedType,
+                pointerAddress,
+                lengthAddress,
+                capacityAddress);
+        }
+
         if (expectedType is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
             || _program.Types.IsDynamicArray(expectedType)
-            || _program.Types.IsBoundedArray(expectedType)
             || _program.Types.IsDictionary(expectedType))
         {
             var llvmType = LlvmType(expectedType);

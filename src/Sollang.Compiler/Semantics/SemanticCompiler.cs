@@ -5196,7 +5196,8 @@ internal sealed partial class SemanticCompiler
                                 "owned containers can only be bound in a scope where the compiler can insert deterministic drops");
                         }
 
-                        if (!IsContainerCreationExpression(binding.Value)
+                        if (_types.ContainsOwnedStorage(valueType)
+                            && !IsContainerCreationExpression(binding.Value)
                             && movedSourceName is null
                             && movedFieldOwnerName is null
                             && !copiesFixedStorageBinding)
