@@ -3044,7 +3044,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               unreachable
             }
 
-            define internal i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %len, ptr %written) #0 {
+            define internal i32 @sollang_write_stream_chunk(ptr %handle, ptr %data, i32 %len, ptr %written, i1 %is_console) #0 {
             entry:
               %empty = icmp eq i32 %len, 0
               br i1 %empty, label %success_empty, label %classify
@@ -3054,7 +3054,6 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 1
 
             classify:
-              %is_console = load i1, ptr @sollang_stdout_line_buffered, align 1
               br i1 %is_console, label %console_prepare, label %redirected
 
             redirected:
@@ -3066,7 +3065,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %redirected_offset64 = zext i32 %redirected_offset to i64
               %redirected_data = getelementptr i8, ptr %data, i64 %redirected_offset64
               store i32 0, ptr %written, align 4
-              %redirected_ok = call i32 @WriteFile(ptr %stdout, ptr %redirected_data, i32 %redirected_remaining, ptr %written, ptr null)
+              %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %redirected_data, i32 %redirected_remaining, ptr %written, ptr null)
               %redirected_count = load i32, ptr %written, align 4
               %redirected_succeeded = icmp ne i32 %redirected_ok, 0
               %redirected_progress = icmp ugt i32 %redirected_count, 0
@@ -3105,7 +3104,7 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %console_offset64 = zext i32 %console_offset to i64
               %console_data = getelementptr i16, ptr %wide, i64 %console_offset64
               store i32 0, ptr %wide_written, align 4
-              %console_ok = call i32 @WriteConsoleW(ptr %stdout, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
+              %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
               %console_count = load i32, ptr %wide_written, align 4
               %console_succeeded = icmp ne i32 %console_ok, 0
               %console_progress = icmp ugt i32 %console_count, 0
@@ -3144,6 +3143,64 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 0
             }
 
+            define internal i32 @sollang_write_stream(ptr %handle, ptr %data, i64 %len64, ptr %written, i1 %is_console) #0 {
+            entry:
+              %empty = icmp eq i64 %len64, 0
+              br i1 %empty, label %success_empty, label %prepare
+
+            success_empty:
+              store i32 0, ptr %written, align 4
+              ret i32 1
+
+            prepare:
+              %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+              %remaining = sub i64 %len64, %offset
+              %current = getelementptr i8, ptr %data, i64 %offset
+              %more = icmp ugt i64 %remaining, 1048576
+              %proposed = select i1 %more, i64 1048576, i64 %remaining
+              %split_console = and i1 %more, %is_console
+              br i1 %split_console, label %trim_boundary, label %write
+
+            trim_boundary:
+              %boundary = phi i64 [ 1048576, %prepare ], [ %previous, %trim_next ]
+              %boundary_ptr = getelementptr i8, ptr %current, i64 %boundary
+              %boundary_byte = load i8, ptr %boundary_ptr, align 1
+              %prefix = and i8 %boundary_byte, -64
+              %continuation = icmp eq i8 %prefix, -128
+              br i1 %continuation, label %trim_next, label %write
+
+            trim_next:
+              %can_trim = icmp ugt i64 %boundary, 1048573
+              %previous = sub i64 %boundary, 1
+              br i1 %can_trim, label %trim_boundary, label %failure
+
+            write:
+              %chunk64 = phi i64 [ %proposed, %prepare ], [ %boundary, %trim_boundary ]
+              %chunk32 = trunc i64 %chunk64 to i32
+              %ok = call i32 @sollang_write_stream_chunk(ptr %handle, ptr %current, i32 %chunk32, ptr %written, i1 %is_console)
+              %succeeded = icmp ne i32 %ok, 0
+              br i1 %succeeded, label %advance, label %failure
+
+            advance:
+              %next = add i64 %offset, %chunk64
+              %complete = icmp eq i64 %next, %len64
+              br i1 %complete, label %success, label %prepare
+
+            success:
+              ret i32 1
+
+            failure:
+              store i32 0, ptr %written, align 4
+              ret i32 0
+            }
+
+            define internal i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %len, ptr %written) #0 {
+            entry:
+              %is_console = load i1, ptr @sollang_stdout_line_buffered, align 1
+              %ok = call i32 @sollang_write_stream_chunk(ptr %stdout, ptr %data, i32 %len, ptr %written, i1 %is_console)
+              ret i32 %ok
+            }
+
             """);
 
         if (UsesStandardError)
@@ -3152,71 +3209,19 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             define internal i32 @sollang_write_stderr(ptr %data, i64 %len64, ptr %written) #0 {
             entry:
               %empty = icmp eq i64 %len64, 0
-              br i1 %empty, label %success_empty, label %check_length
+              br i1 %empty, label %success_empty, label %prepare
 
             success_empty:
               store i32 0, ptr %written, align 4
               ret i32 1
 
-            check_length:
-              %fits = icmp ule i64 %len64, 2147483647
-              br i1 %fits, label %prepare, label %failure
-
             prepare:
-              %len = trunc i64 %len64 to i32
               %stderr = call ptr @GetStdHandle(i32 -12)
               %mode = alloca i32, align 4
               %console_status = call i32 @GetConsoleMode(ptr %stderr, ptr %mode)
               %is_console = icmp ne i32 %console_status, 0
-              br i1 %is_console, label %console_prepare, label %redirected
-
-            redirected:
-              %redirected_ok = call i32 @WriteFile(ptr %stderr, ptr %data, i32 %len, ptr %written, ptr null)
-              %redirected_succeeded = icmp ne i32 %redirected_ok, 0
-              %redirected_written = load i32, ptr %written, align 4
-              %redirected_complete = icmp eq i32 %redirected_written, %len
-              %redirected_result = and i1 %redirected_succeeded, %redirected_complete
-              %redirected_result32 = zext i1 %redirected_result to i32
-              ret i32 %redirected_result32
-
-            console_prepare:
-              %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
-              %valid_utf8 = icmp sgt i32 %wide_chars, 0
-              br i1 %valid_utf8, label %allocate, label %failure
-
-            allocate:
-              %wide_bytes32 = shl i32 %wide_chars, 1
-              %wide_bytes = zext i32 %wide_bytes32 to i64
-              %heap = call ptr @GetProcessHeap()
-              %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
-              %allocated = icmp ne ptr %wide, null
-              br i1 %allocated, label %convert, label %failure
-
-            convert:
-              %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
-              %converted_all = icmp eq i32 %converted, %wide_chars
-              br i1 %converted_all, label %console_write, label %conversion_free
-
-            console_write:
-              %wide_written = alloca i32, align 4
-              %console_ok = call i32 @WriteConsoleW(ptr %stderr, ptr %wide, i32 %wide_chars, ptr %wide_written, ptr null)
-              %wide_count = load i32, ptr %wide_written, align 4
-              %console_succeeded = icmp ne i32 %console_ok, 0
-              %console_complete = icmp eq i32 %wide_count, %wide_chars
-              %console_result = and i1 %console_succeeded, %console_complete
-              %console_result32 = zext i1 %console_result to i32
-              %reported_written = select i1 %console_result, i32 %len, i32 0
-              store i32 %reported_written, ptr %written, align 4
-              %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
-              ret i32 %console_result32
-
-            conversion_free:
-              %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
-              br label %failure
-
-            failure:
-              store i32 0, ptr %written, align 4
-              ret i32 0
+              %ok = call i32 @sollang_write_stream(ptr %stderr, ptr %data, i64 %len64, ptr %written, i1 %is_console)
+              ret i32 %ok
             }
 
             """);
@@ -3289,8 +3294,8 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             write_direct_prepare:
               %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
-              %direct_len = trunc i64 %len64 to i32
-              %direct_ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %direct_len, ptr %written)
+              %direct_console = load i1, ptr @sollang_stdout_line_buffered, align 1
+              %direct_ok = call i32 @sollang_write_stream(ptr %stdout, ptr %data, i64 %len64, ptr %written, i1 %direct_console)
               %direct_succeeded = icmp ne i32 %direct_ok, 0
               br i1 %direct_succeeded, label %write_direct_done, label %write_direct_failure
 

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "CSharpVerifiedBeforeSlgEdit": true,
+  "CSharp": [
+    55,
+    55
+  ],
+  "CSharpReferences": [
+    "output12840-managed-helper/result.json",
+    "output12841-console/result.json",
+    "output12837-managed/normal.json"
+  ],
+  "sourceAuthority": "docs/SPEC.md eprint writes supplied Text bytes without switching streams; print/println likewise retain the supplied length and platform line policy.",
+  "differences": [
+    "CSharp direct stdout truncates to i32. SLG both normal and parallel-direct stdout paths and eprint also truncate.",
+    "CSharp stderr imposes Int32 length ceiling and accepts only a single complete write. SLG stderr already reuses a loop but its length is truncated before the loop.",
+    "CSharp stdout has a per-call written pointer and cached console mode; SLG uses a single global count and queries console mode per helper.",
+    "SLG computes buffered count+len before checking the buffer limit; CSharp excludes oversized input first."
+  ],
+  "decision": [
+    "Share identical generated write_stream_chunk and write_stream bodies. Keep length and offset64 and cap each chunk to1MiB.",
+    "Only console chunks retreat at most3 UTF8 continuation bytes at a split. Redirected bytes are unrestricted; preserve invalid UTF8 failure on console.",
+    "Retain positive/bounded partial-write checks and heap cleanup through shared chunk helper, with a private per-call count pointer.",
+    "Use existing stream choice and newline wrappers. Route both SLG direct-output branches and stderr through a full-width wrapper.",
+    "Use len<=bufferAvailable in the SLG buffered predicate, so wrapped count+len cannot admit an oversized copy."
+  ],
+  "contractNotes": [
+    "Private UInt32 written slot reports the most recent bounded chunk; public output callers inspect success, not that slot as an aggregate UInt64 length.",
+    "Captured memory output already carries the full UInt64 byte length; its old diagnostic UInt32 truncation does not truncate the captured bytes. No change to this path.",
+    "Console test uses actual Windows UTF8 conversion and heap APIs with simulated full/partial console writes; no interactive-console or huge real IO claim."
+  ],
+  "remainingGates": [
+    "SLG full-source/runtime55 and fresh native55",
+    "Existing parallel output callback controls and source route checks for both capture variants",
+    "All original final whole, Stage, stdlib/runtime, platform/performance gates"
+  ]
+}

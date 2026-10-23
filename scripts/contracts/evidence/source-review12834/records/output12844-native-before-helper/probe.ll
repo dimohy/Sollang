@@ -1,0 +1,184 @@
+@sollang_stdout_line_buffered = global i1 false
+@sollang_stdout_buffer_count = global i64 0
+@sollang_stdout_buffer = global [1048576 x i8] zeroinitializer
+declare i32 @probe_WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @probe_WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @probe_MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @probe_GetProcessHeap()
+declare ptr @probe_HeapAlloc(ptr, i32, i64)
+declare i32 @probe_HeapFree(ptr, i32, ptr)
+declare ptr @probe_GetStdHandle(i32)
+declare i32 @probe_GetConsoleMode(ptr, ptr)
+declare ptr @memcpy(ptr, ptr, i64)
+declare void @llvm.trap()
+@sollang_runtime_stdout_written = global i32 0
+@sollang_runtime_stdout_count = global i64 0
+@sollang_runtime_stdout_buffer = global [1048576 x i8] zeroinitializer
+@sollang_runtime_error_newline = constant [2 x i8] c"\0D\0A"
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %empty = icmp eq i32 %len, 0
+  br i1 %empty, label %write_succeeded, label %classify
+classify:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @probe_GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  br label %redirected_write
+redirected_write:
+  %redirected_offset = phi i32 [ 0, %redirected ], [ %redirected_next, %redirected_advance ]
+  %redirected_remaining = sub i32 %len, %redirected_offset
+  %redirected_offset64 = zext i32 %redirected_offset to i64
+  %redirected_data = getelementptr i8, ptr %data, i64 %redirected_offset64
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  %redirected_ok = call i32 @probe_WriteFile(ptr %handle, ptr %redirected_data, i32 %redirected_remaining, ptr @sollang_runtime_stdout_written, ptr null)
+  %redirected_count = load i32, ptr @sollang_runtime_stdout_written, align 4
+  %redirected_succeeded = icmp ne i32 %redirected_ok, 0
+  %redirected_progress = icmp ugt i32 %redirected_count, 0
+  %redirected_bounded = icmp ule i32 %redirected_count, %redirected_remaining
+  %redirected_valid0 = and i1 %redirected_succeeded, %redirected_progress
+  %redirected_valid = and i1 %redirected_valid0, %redirected_bounded
+  br i1 %redirected_valid, label %redirected_advance, label %write_failed
+redirected_advance:
+  %redirected_next = add i32 %redirected_offset, %redirected_count
+  %redirected_complete = icmp eq i32 %redirected_next, %len
+  br i1 %redirected_complete, label %write_succeeded, label %redirected_write
+console_prepare:
+  %wide_chars = call i32 @probe_MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @probe_GetProcessHeap()
+  %wide = call ptr @probe_HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %wide_written = alloca i32, align 4
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @probe_MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_offset = phi i32 [ 0, %convert ], [ %console_next, %console_advance ]
+  %console_remaining = sub i32 %wide_chars, %console_offset
+  %console_offset64 = zext i32 %console_offset to i64
+  %console_data = getelementptr i16, ptr %wide, i64 %console_offset64
+  store i32 0, ptr %wide_written, align 4
+  %console_ok = call i32 @probe_WriteConsoleW(ptr %handle, ptr %console_data, i32 %console_remaining, ptr %wide_written, ptr null)
+  %console_count = load i32, ptr %wide_written, align 4
+  %console_succeeded = icmp ne i32 %console_ok, 0
+  %console_progress = icmp ugt i32 %console_count, 0
+  %console_bounded = icmp ule i32 %console_count, %console_remaining
+  %console_valid0 = and i1 %console_succeeded, %console_progress
+  %console_valid = and i1 %console_valid0, %console_bounded
+  br i1 %console_valid, label %console_advance, label %console_write_failed
+console_advance:
+  %console_next = add i32 %console_offset, %console_count
+  %console_complete = icmp eq i32 %console_next, %wide_chars
+  br i1 %console_complete, label %console_write_succeeded, label %console_write
+console_write_succeeded:
+  %freed = call i32 @probe_HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %write_succeeded
+console_write_failed:
+  %freed_after_write_failure = call i32 @probe_HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %write_failed
+write_succeeded:
+  store i32 %len, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 1
+write_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+conversion_free:
+  %freed_after_failure = call i32 @probe_HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @probe_GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %clear, label %failure
+clear:
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+failure:
+  call void @llvm.trap()
+  unreachable
+done:
+  ret void
+}
+
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @probe_GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  %succeeded = icmp ne i32 %ok, 0
+  br i1 %succeeded, label %direct_done, label %direct_failure
+direct_done:
+  ret void
+direct_failure:
+  call void @llvm.trap()
+  unreachable
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+
+define internal void @sollang_runtime_eprint(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %handle = call ptr @probe_GetStdHandle(i32 -12)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_error_newline, i32 2)
+  br label %done
+done:
+  ret void
+}
+define i32 @exercise_stdout(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 1
+}
+define i32 @exercise_stderr(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 false)
+  ret i32 1
+}
+define i32 @exercise_stderr_status(ptr %data, i64 %len) {
+entry:
+  %written = alloca i32
+  %count = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr inttoptr (i64 12 to ptr), ptr %data, i32 %count)
+  ret i32 %ok
+}

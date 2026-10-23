@@ -1,0 +1,186 @@
+"""Observe exact emitted Windows output helpers with non-dereferencing APIs.
+
+Large lengths are arithmetic/transfer observations only. The backing buffer is
+one MiB; the substituted API never reads unbacked portions of a large view.
+"""
+from pathlib import Path
+import hashlib
+import json
+import re
+import sys
+
+sys.dont_write_bytecode = True
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from verification_execution import VerificationExecution
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
+
+
+def main():
+    source, output = Path(sys.argv[1]), Path(sys.argv[2])
+    backend = sys.argv[3] if len(sys.argv) > 3 else 'managed'
+    assert backend in ('managed', 'selfhost')
+    text = source.read_text(encoding='utf-8-sig')
+    names = ['sollang_write_stdout_bytes', 'sollang_flush_stdout', 'sollang_write', 'sollang_write_stderr']
+    append_name = 'sollang_runtime_append_stdout_direct' if 'define internal void @sollang_runtime_append_stdout_direct(' in text else 'sollang_runtime_append_stdout'
+    if backend == 'selfhost':
+        names = ['sollang_runtime_write_stdout_bytes', 'sollang_runtime_flush_stdout', append_name, 'sollang_runtime_eprint']
+        if '@sollang_runtime_write_stdout_all(' in text:
+            names.insert(0, 'sollang_runtime_write_stdout_all')
+    if '@sollang_write_stream_chunk(' in text:
+        names = ['sollang_write_stream_chunk', 'sollang_write_stream'] + names
+    functions = []
+    for name in names:
+        found = re.search(r'^define internal (?:i32|void) @' + name + r'\([^\n]+\{\r?\n.*?^}', text, re.M | re.S)
+        assert found, name
+        functions.append(found.group().replace(' #0 {', ' {'))
+    original = '\n\n'.join(functions)
+    substituted = original
+    for name in ['WriteFile', 'WriteConsoleW', 'MultiByteToWideChar', 'GetProcessHeap', 'HeapAlloc', 'HeapFree', 'GetStdHandle', 'GetConsoleMode']:
+        substituted = substituted.replace('@' + name + '(', '@probe_' + name + '(')
+    header = '''@sollang_stdout_line_buffered = global i1 false
+@sollang_stdout_buffer_count = global i64 0
+@sollang_stdout_buffer = global [1048576 x i8] zeroinitializer
+declare i32 @probe_WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @probe_WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @probe_MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @probe_GetProcessHeap()
+declare ptr @probe_HeapAlloc(ptr, i32, i64)
+declare i32 @probe_HeapFree(ptr, i32, ptr)
+declare ptr @probe_GetStdHandle(i32)
+declare i32 @probe_GetConsoleMode(ptr, ptr)
+declare ptr @memcpy(ptr, ptr, i64)
+declare void @llvm.trap()
+'''
+    if backend == 'selfhost':
+        header += '''@sollang_runtime_stdout_written = global i32 0
+@sollang_runtime_stdout_count = global i64 0
+@sollang_runtime_stdout_buffer = global [1048576 x i8] zeroinitializer
+@sollang_runtime_error_newline = constant [2 x i8] c"\\0D\\0A"
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+'''
+    wrapper = '''define i32 @exercise_stdout(ptr %data, i64 %len) {
+entry:
+  %written = alloca i32
+  %ok = call i32 @sollang_write(ptr inttoptr (i64 11 to ptr), ptr %data, i64 %len, ptr %written)
+  %flushed = call i32 @sollang_flush_stdout(ptr inttoptr (i64 11 to ptr), ptr %written)
+  %result = and i32 %ok, %flushed
+  ret i32 %result
+}
+define i32 @exercise_stderr(ptr %data, i64 %len) {
+entry:
+  %written = alloca i32
+  %ok = call i32 @sollang_write_stderr(ptr %data, i64 %len, ptr %written)
+  ret i32 %ok
+}
+'''
+    if backend == 'managed':
+        wrapper += '''define i32 @exercise_stderr_status(ptr %data, i64 %len) {
+entry:
+  %ok = call i32 @exercise_stderr(ptr %data, i64 %len)
+  ret i32 %ok
+}
+'''
+    else:
+        wrapper = '''define i32 @exercise_stdout(ptr %data, i64 %len) {
+entry:
+  call void @APPEND(ptr %data, i64 %len)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 1
+}
+define i32 @exercise_stderr(ptr %data, i64 %len) {
+entry:
+  call void @sollang_runtime_eprint(ptr %data, i64 %len, i1 false)
+  ret i32 1
+}
+define i32 @exercise_stderr_status(ptr %data, i64 %len) {
+entry:
+  %written = alloca i32
+  STATUS
+  ret i32 %ok
+}
+'''.replace('APPEND', append_name)
+        status = '%ok = call i32 @sollang_write_stream(ptr inttoptr (i64 12 to ptr), ptr %data, i64 %len, ptr %written, i1 false)' if '@sollang_write_stream(' in text else '%count = trunc i64 %len to i32\n  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr inttoptr (i64 12 to ptr), ptr %data, i32 %count)'
+        wrapper = wrapper.replace('STATUS', status)
+    output.mkdir(parents=True, exist_ok=False)
+    (output / 'production-helpers.ll.txt').write_text(original, encoding='utf-8')
+    llvm = output / 'probe.ll'
+    llvm.write_text(header + substituted + '\n' + wrapper, encoding='utf-8')
+    harness = output / 'api-substitutes.c'
+    harness.write_text('''#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+static uint64_t observed;
+static uintptr_t next;
+static uint32_t mode, bad_pointer;
+static unsigned char buffer[1048580];
+int32_t probe_WriteFile(void *handle, void *data, uint32_t count, uint32_t *written, void *overlapped) {
+    if (observed && (uintptr_t)data != next) bad_pointer = 1;
+    if (mode == 2) { *written = 0; return 0; }
+    if (mode == 3) { *written = 0; return 1; }
+    if (mode == 4) { *written = count + 1; return 1; }
+    *written = mode == 1 && count > 65537 ? 65537 : count;
+    observed += *written;
+    next = (uintptr_t)data + *written;
+    return 1;
+}
+int32_t probe_WriteConsoleW(void *h, void *d, uint32_t n, uint32_t *w, void *r) { return 0; }
+int32_t probe_MultiByteToWideChar(uint32_t cp, uint32_t flags, void *data, int32_t n, void *wide, int32_t room) { return 0; }
+void *probe_GetProcessHeap(void) { return 0; }
+void *probe_HeapAlloc(void *h, uint32_t flags, uint64_t bytes) { return 0; }
+int32_t probe_HeapFree(void *h, uint32_t flags, void *data) { return 1; }
+void *probe_GetStdHandle(int32_t kind) { return (void *)(uintptr_t)(kind == -12 ? 12 : 11); }
+int32_t probe_GetConsoleMode(void *h, void *mode) { return 0; }
+extern int32_t exercise_stdout(void *, uint64_t);
+extern int32_t exercise_stderr(void *, uint64_t);
+extern int32_t exercise_stderr_status(void *, uint64_t);
+int main(void) {
+    const uint64_t lengths[] = {0, 1, 1048576, 1048577, 2147483648ULL, 4294967296ULL, 4294967297ULL};
+    for (mode=0; mode<=1; ++mode) {
+        for (unsigned stream=0; stream<2; ++stream) {
+            for (unsigned i=0; i<sizeof(lengths)/sizeof(lengths[0]); ++i) {
+                observed = 0; next = 0; bad_pointer = 0;
+                int32_t ok = stream ? exercise_stderr(buffer, lengths[i]) : exercise_stdout(buffer, lengths[i]);
+                printf("%u:%u:%llu:%d:%llu:%u\\n", mode, stream, (unsigned long long)lengths[i], ok, (unsigned long long)observed, bad_pointer);
+            }
+        }
+    }
+    for (mode=2; mode<=4; ++mode) {
+        observed = 0; next = 0; bad_pointer = 0;
+        int32_t ok = exercise_stderr_status(buffer, 4096);
+        printf("failure%u:%d\\n", mode, ok);
+    }
+    return 0;
+}
+''', encoding='utf-8')
+    clang = ROOT / '.tools/llvm-22.1.8/bin/clang.exe'
+    inputs = [source, Path(__file__), clang, llvm, harness, ROOT / 'scripts/verification_execution.py']
+    pins = {str(p.resolve()): sha(p) for p in inputs}
+    record = {'schemaVersion': 1, 'status': 'running', 'backend': backend, 'scope': 'Emitted production stdout/stderr helper arithmetic and full/partial writes; shared internal status helper error controls use non-dereferencing API substitutes. No huge physical IO', 'inputHashes': pins, 'completed': 0, 'total': 31, 'claimsGoalComplete': False}
+    execution = VerificationExecution(ROOT, output, record, lambda: all(sha(p) == digest for p, digest in pins.items()), sha)
+    error = None
+    try:
+        exe = output / 'probe.exe'
+        build = execution.run([str(clang), '-O0', '-Wno-override-module', str(llvm), str(harness), '-o', str(exe)], output / 'build', timeout=30)
+        assert build.returncode == 0 and not build.stderr.strip(), build.stderr
+        run = execution.run([str(exe)], output / 'run', timeout=10)
+        lengths = [0, 1, 1048576, 1048577, 2147483648, 4294967296, 4294967297]
+        expected = [f'{mode}:{stream}:{n}:1:{n}:0' for mode in range(2) for stream in range(2) for n in lengths] + [f'failure{mode}:0' for mode in range(2, 5)]
+        actual = run.stdout.replace('\r\n', '\n').splitlines()
+        record.update(actual=actual, expected=expected, runExit=run.returncode, completed=sum(a == b for a, b in zip(actual, expected)))
+        assert run.returncode == 0 and not run.stderr.strip() and actual == expected, 'OUTPUT_WIDTH_OR_PROGRESS_ORACLE_FAILED'
+        record['status'] = 'passed'
+    except BaseException as exc:
+        error = exc
+    finally:
+        execution.finalize(error, cleanup=False)
+    print(json.dumps({key: record.get(key) for key in ['status', 'completed', 'total', 'inputsStable', 'processesStopped', 'failure']}))
+    if record['status'] != 'passed':
+        raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()
