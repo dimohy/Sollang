@@ -1,0 +1,10 @@
+from pathlib import Path
+import sys,json,hashlib
+sys.dont_write_bytecode=True;r=Path.cwd();sys.path.insert(0,str(r/'scripts'));from verification_execution import VerificationExecution
+b=r/'artifacts/scratch/resume-20261006-owner-continuation22';o=b/'environment12873-managed-normal';o.mkdir(exist_ok=False);exe=b/'environment12870-managed/environment.exe';buildpath=exe.with_suffix('.exe.compiler-build.json');read=lambda p:json.loads(p.read_text(encoding='utf-8-sig'));sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest().upper();build=read(buildpath);assert build['status']=='passed' and build['inputsStable'] and build['processesStopped'];assert build['llvmSha256']==sha(exe.with_suffix('.exe.ll'))
+wrapper=r/'scripts/probes/run-environment-fixture.py';settings=r/'examples/regression/expected/84-process-environment.env.txt';expected=r/'examples/regression/expected/84-process-environment.stdout.txt';inputs=[Path(__file__),exe,buildpath,wrapper,settings,expected];pins=dict(build['inputHashes']);pins.update({str(p):sha(p) for p in inputs});d={'schemaVersion':1,'status':'running','backend':'managed','scope':'Existing84 process-environment fixture, child-only synthetic values, exact project LF output; no user environment values printed.','inputHashes':pins,'completed':0,'total':1,'cases':[],'claimsGoalComplete':False};x=VerificationExecution(r,o,d,lambda:all(sha(p)==digest for p,digest in pins.items()),sha);error=None
+try:
+ a=x.run([sys.executable,'-X','utf8',str(wrapper),str(exe),str(settings)],o/'normal',timeout=10);assert a.returncode==0 and not a.stderr.strip();want=expected.read_text(encoding='utf-8-sig').encode();assert (o/'normal.stdout').read_bytes()==want;d.update(status='passed',completed=1,cases=[{'id':'environment84','status':'passed','passed':True,'runExit':a.returncode,'stdout':a.stdout,'stderr':a.stderr}])
+except BaseException as exc:error=exc
+finally:x.finalize(error,cleanup=False)
+print(json.dumps({k:d.get(k) for k in ['status','completed','total','inputsStable','processesStopped','failure']}))

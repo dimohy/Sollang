@@ -1501,10 +1501,14 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) #0 {
             entry:
               %empty = icmp eq i64 %name_len, 0
-              br i1 %empty, label %missing, label %validate
+              br i1 %empty, label %missing, label %check_length
+
+            check_length:
+              %name_fits_i32 = icmp ule i64 %name_len, 2147483647
+              br i1 %name_fits_i32, label %validate, label %error
 
             validate:
-              %vi = phi i64 [ 0, %entry ], [ %vnext, %valid_byte ]
+              %vi = phi i64 [ 0, %check_length ], [ %vnext, %valid_byte ]
               %validated = icmp eq i64 %vi, %name_len
               br i1 %validated, label %key_size, label %check_byte
 
@@ -1548,8 +1552,16 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             zero_result:
               call void @sollang_free(ptr %wide_key)
-              %not_found = icmp eq i32 %last_error, 203
-              br i1 %not_found, label %missing, label %empty_present
+              br label %classify_zero
+
+            classify_zero:
+              %zero_error = phi i32 [ %last_error, %zero_result ], [ %value_error, %free_wide_empty ]
+              %not_found = icmp eq i32 %zero_error, 203
+              br i1 %not_found, label %missing, label %check_empty_value
+
+            check_empty_value:
+              %empty_succeeded = icmp eq i32 %zero_error, 0
+              br i1 %empty_succeeded, label %empty_present, label %error
 
             empty_present:
               %empty_ptr = getelementptr inbounds [1 x i8], ptr @sollang_environment_empty, i64 0, i64 0
@@ -1566,14 +1578,16 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %wide_value_ok, label %value_read, label %free_key_error
 
             value_read:
+              call void @SetLastError(i32 0)
               %value_chars = call i32 @GetEnvironmentVariableW(ptr %wide_key, ptr %wide_value, i32 %required)
+              %value_error = call i32 @GetLastError()
               call void @sollang_free(ptr %wide_key)
               %value_empty = icmp eq i32 %value_chars, 0
               br i1 %value_empty, label %free_wide_empty, label %value_read_check
 
             free_wide_empty:
               call void @sollang_free(ptr %wide_value)
-              br label %empty_present
+              br label %classify_zero
 
             value_read_check:
               %value_read_ok = icmp ult i32 %value_chars, %required
