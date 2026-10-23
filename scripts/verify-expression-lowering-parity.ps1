@@ -140,6 +140,25 @@ function Get-SchedulingFunctionText {
     return $functionMatches[0].Value
 }
 
+function Test-StreamOwnershipBoundary {
+    param([string]$Source, [string]$ClassifierName)
+    $classifier = Get-SchedulingFunctionText $Source $ClassifierName
+    if ($classifier -eq '') { return $false }
+    $delegation = [regex]::Matches($classifier,
+        'nodeIndex\s*->\s*(?<predicate>\w+)\(pipelineIndex!,\s*context,\s*state\)\s*->\s*if\s*\{\s*pipelineIndex!\s*=>\s*found!\s*\}')
+    if ($delegation.Count -ne 1) { return $false }
+    $predicate = Get-SchedulingFunctionText $Source $delegation[0].Groups['predicate'].Value
+    if ($predicate -eq '' -or $predicate -notmatch 'pipeline\.stageStart\s*=>\s*stageIndex!' -or
+        $predicate -notmatch 'pipeline\.stageStart\s*\+\s*pipeline\.stageCount' -or
+        $predicate -notmatch '\.callIr\s*==\s*nodeIndex\s*->\s*if\s*\{\s*true\s*=>\s*owned!\s*\}') { return $false }
+    $sourceExclusion = [regex]::Match($predicate,
+        'owned!\s+and\s+not\s+\(nodeIndex\s*->\s*(?<predicate>\w+)\(pipelineIndex,\s*context,\s*state\)\)')
+    if (-not $sourceExclusion.Success) { return $false }
+    $sources = Get-SchedulingFunctionText $Source $sourceExclusion.Groups['predicate'].Value
+    return ($sources -ne '' -and $sources -match 'ownerIndex:\s*pipeline\.source0' -and
+        $sources -match 'ownerIndex:\s*pipeline\.source1' -and $sources -match '->\s*irDescendsFrom\(')
+}
+
 function Test-StreamSchedulingBoundary {
     param([string]$EntrySource, [string]$RegionSource, $Scheduling)
     $body = Get-SchedulingFunctionText $EntrySource $Scheduling.sharedBodyEmitter
@@ -198,14 +217,41 @@ emitRegionStreamPipeline plan: Plan -> Unit {
         }
     }
     Write-Host "[expression lowering parity] scheduling boundary controls PASS $($controls.Count)/$($controls.Count)."
+    $classifierName = [string]$contract.nestedStreamScheduling.ownershipClassifier
+    $classifierText = Get-SchedulingFunctionText $coreCalls $classifierName
+    $predicateName = [regex]::Match($classifierText, 'nodeIndex\s*->\s*(\w+)\(pipelineIndex!,').Groups[1].Value
+    $predicateText = Get-SchedulingFunctionText $coreCalls $predicateName
+    $sourceName = [regex]::Match($predicateText, 'owned!\s+and\s+not\s+\(nodeIndex\s*->\s*(\w+)\(').Groups[1].Value
+    $sourceText = Get-SchedulingFunctionText $coreCalls $sourceName
+    if (-not $predicateName -or -not $sourceName -or -not $predicateText -or -not $sourceText) {
+        throw 'Stream ownership self-tests require the actual classifier/delegate/source chain'
+    }
+    $ownershipControls = @(
+        @{ source = $coreCalls; expected = $true },
+        @{ source = $coreCalls.Replace($predicateName, 'renamedOwnershipPredicate'); expected = $true },
+        @{ source = $coreCalls.Replace($predicateText, '') + "`n" + $predicateText; expected = $true },
+        @{ source = $coreCalls.Replace("$classifierName nodeIndex:", 'removedClassifier nodeIndex:'); expected = $false },
+        @{ source = $coreCalls.Replace($classifierText, $classifierText.Replace("-> $predicateName(", '-> missingOwnershipPredicate(')); expected = $false },
+        @{ source = $coreCalls.Replace($predicateText, $predicateText.Replace('.callIr == nodeIndex', '.callIr != nodeIndex')); expected = $false },
+        @{ source = $coreCalls.Replace($predicateText, $predicateText.Replace('true => owned!', 'false => owned!')); expected = $false },
+        @{ source = $coreCalls.Replace($predicateText, $predicateText.Replace('owned! and not', 'owned! or not')); expected = $false },
+        @{ source = $coreCalls + "`n" + $predicateText; expected = $false },
+        @{ source = $coreCalls.Replace($sourceText, $sourceText.Replace('pipeline.source0', 'pipeline.terminalIr')); expected = $false },
+        @{ source = $coreCalls.Replace($predicateText, $predicateText.Replace('pipeline.stageCount', '1')); expected = $false }
+    )
+    foreach ($control in $ownershipControls) {
+        if ((Test-StreamOwnershipBoundary $control.source $classifierName) -ne $control.expected) {
+            throw 'Stream ownership delegation self-test failed'
+        }
+    }
+    Write-Host "[expression lowering parity] ownership delegation controls PASS $($ownershipControls.Count)/$($ownershipControls.Count)."
 }
 
 $streamOwnershipClassifier = [string]$contract.nestedStreamScheduling.ownershipClassifier
 if (-not (Test-StreamSchedulingBoundary $entryExpressions $controlRegions $contract.nestedStreamScheduling)) {
     throw 'Nested streams must share ordered emission without body redispatch or mutable-slot reallocation'
 }
-if ([regex]::Matches($coreCalls, "(?m)^$([regex]::Escape($streamOwnershipClassifier))\s").Count -ne 1 -or
-    $coreCalls -notmatch '(?s)regionOwnedStreamPipeline.*?\.callIr == nodeIndex') {
+if (-not (Test-StreamOwnershipBoundary $coreCalls $streamOwnershipClassifier)) {
     throw 'Nested stream ownership must suppress already-fused stage calls from outer region emission'
 }
 if ([string]$contract.nestedStreamScheduling.controlRegionFixture -notin @($contract.focusedFixtures) -or

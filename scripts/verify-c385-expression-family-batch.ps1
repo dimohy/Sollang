@@ -6,6 +6,7 @@ param(
     [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')][string]$ExpectedSelfhostCompilerSha256 = '',
     [string]$OutputDirectory = '',
     [string]$RuntimeEvidencePath = '',
+    [ValidateRange(1, 64)][int]$BuildJobs = 4,
     [switch]$ValidateContractOnly
 )
 
@@ -135,7 +136,7 @@ function Verify-Native([string]$Compiler, [string]$CompilerLabel, $Fixture, [str
     $record = New-RunRecord
     $prefix = Join-Path $Output "$($Fixture.id).$CompilerLabel"
     $exe = "$prefix.exe"; $ll = "$exe.ll"; $compileOut="$prefix.compile.stdout"; $compileErr="$prefix.compile.stderr"
-    $args = @('build',(Repo $Fixture.source),'-o',$exe,'--target','windows-x64','--llvm',$LlvmRoot,'-O1','--keep-temps')
+    $args = @('build',(Repo $Fixture.source),'-o',$exe,'--target','windows-x64','--llvm',$LlvmRoot,'-O1','--keep-temps','--jobs',[string]$BuildJobs)
     if ($CompilerLabel -ceq 'selfhost') { $args += @('--stdlib',(Repo 'stdlib')) }
     $invocation = CompilerInvocation $Compiler $args
     $record.compileExit = Invoke-RawProcess $invocation.File $invocation.Args "C385 $CompilerLabel $($Fixture.id) compile" $compileOut $compileErr
@@ -288,8 +289,15 @@ try {
         if ($ast.ExitCode -ne 0 -or $ast.Stderr.Length -ne 0) { throw "C385 $($fixture.id) AST failed" }
         $seq = Run $selfhost @('typed-ir-nodes',$source) "C385 $($fixture.id) sequential Typed IR"
         $par = Run $selfhost @('typed-ir-nodes-parallel',$source) "C385 $($fixture.id) parallel Typed IR"
+        foreach ($snapshot in @(@{name='ast';run=$ast},@{name='typed-sequential';run=$seq},@{name='typed-parallel';run=$par})) {
+            [IO.File]::WriteAllText((Join-Path $output "$($fixture.id).$($snapshot.name).stdout.txt"), $snapshot.run.Stdout, [Text.UTF8Encoding]::new($false))
+            [IO.File]::WriteAllText((Join-Path $output "$($fixture.id).$($snapshot.name).stderr.txt"), $snapshot.run.Stderr, [Text.UTF8Encoding]::new($false))
+        }
         if ($seq.ExitCode -ne 0 -or $par.ExitCode -ne 0 -or $seq.Stderr.Length -ne 0 -or $par.Stderr.Length -ne 0 -or $seq.Stdout -cne $par.Stdout) { throw "C385 $($fixture.id) Typed IR identity failed" }
-        $astNodes=@();foreach($line in $ast.Stdout.Replace("`r`n","`n")-split"`n"){if($line-match'^ast source \d+ node (?<id>\d+) kind (?<kind>\d+) parent (?<parent>-?\d+) start (?<start>\d+) length (?<length>\d+)'){$astNodes += [pscustomobject]@{id=[int]$Matches.id;kind=[int]$Matches.kind;parent=[int]$Matches.parent;start=[int]$Matches.start;length=[int]$Matches.length}}}
+        $astNodes=@();foreach($line in $ast.Stdout.Replace("`r`n","`n")-split"`n"){if($line-match'^ast source (?<source>\d+) node (?<id>\d+) kind (?<kind>\d+) parent (?<parent>-?\d+) start (?<start>\d+) length (?<length>\d+)'){$astNodes += [pscustomobject]@{source=[int]$Matches.source;id=[int]$Matches.id;kind=[int]$Matches.kind;parent=[int]$Matches.parent;start=[int]$Matches.start;length=[int]$Matches.length}}}
+        # Both inspection commands receive exactly this one physical source.
+        # Never qualify an equal local AST index from another source module.
+        if ($astNodes.Count -eq 0 -or (@($astNodes.source | Sort-Object -Unique) -join ',') -cne '0') { throw 'C385_AST_SOURCE_IDENTITY_INVALID' }
         $irNodes=@();foreach($line in $seq.Stdout.Replace("`r`n","`n")-split"`n"){if($line-match'^node \d+ kind (?<kind>\d+) parent -?\d+ source (?<source>-?\d+) ast (?<ast>-?\d+)'){$irNodes += [pscustomobject]@{kind=[int]$Matches.kind;source=[int]$Matches.source;ast=[int]$Matches.ast}}}
         $sourceBytes=[IO.File]::ReadAllBytes($source)
         foreach($probe in $fixture.probes){
@@ -305,7 +313,7 @@ try {
             })
             if ($candidates.Count -eq 0) { throw "C385 AST span missing: $($probe.family)" }
             $selected = Select-CanonicalProbeAst $candidates $probe.family
-            if (@($irNodes | Where-Object { $_.ast -eq $selected.id -and $_.kind -in @($probe.typedIrKinds) }).Count -eq 0) { throw "C385 Typed IR kind missing: $($probe.family)" }
+            if (@($irNodes | Where-Object { $_.source -eq 0 -and $_.ast -eq $selected.id -and $_.kind -in @($probe.typedIrKinds) }).Count -eq 0) { throw "C385 Typed IR kind missing: $($probe.family)" }
             $typed.sourceSpanChecks++
         }
     }
