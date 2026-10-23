@@ -1,0 +1,152 @@
+namespace Sollang.Compiler.CodeGen;
+internal sealed partial class LlvmEmitter {
+    private abstract record RuntimeValue(BoundType Type);
+    private sealed record RuntimeReference(BoundType ReferenceType, BoundType ElementType, string PointerName)
+        : RuntimeValue(ReferenceType);
+    private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
+    private sealed record RuntimeInlineSlice(
+        BoundType SliceType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName)
+        : RuntimeValue(SliceType);
+    private sealed record RuntimeStaticIntArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Stack,
+        BoundType? ArrayType = null)
+        : RuntimeValue(ArrayType ?? BoundType.StaticIntArray);
+    private sealed record RuntimeStaticTextArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap,
+        BoundType? ArrayType = null)
+        : RuntimeValue(ArrayType ?? BoundType.StaticTextArray);
+    private sealed record RuntimeStaticInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        int Length,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+    private sealed record RuntimeDynamicIntArray(
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(BoundType.DynamicIntArray);
+    private sealed record RuntimeDynamicInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+    private enum RuntimeContainerStorage
+    {
+        Heap,
+        Stack
+    }
+    private static (string Pointer, string Length, BoundType Element)? TryGetRuntimeArrayView(RuntimeValue value) =>
+        value switch
+        {
+            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, BoundType.Int),
+            RuntimeInlineSlice slice => (slice.PointerName, slice.LengthName, slice.ElementType),
+            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
+            RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.Text),
+            RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, BoundType.Int),
+            RuntimeDynamicInlineArray array => (array.PointerName, array.LengthName, array.ElementType),
+            _ => null
+        };
+    private RuntimeValue CreateRuntimeSlice(BoundType sliceType, RuntimeValue value)
+    {
+        if (sliceType == BoundType.IntSlice)
+        {
+            return CreateRuntimeIntSlice(value);
+        }
+        var elementType = _program.Types.GetSliceElement(sliceType);
+        var (pointer, length, actualElement) = TryGetRuntimeArrayView(value)
+            ?? throw new SollangException("readonly array view requires an array value");
+        if (actualElement != elementType)
+        {
+            throw new SollangException("readonly array view element type mismatch");
+        }
+        return new RuntimeInlineSlice(sliceType, elementType, pointer, length);
+    }
+    private string BuildReadonlySliceArgument(
+        BoundType expectedType,
+        RuntimeValue argument,
+        string functionName)
+    {
+        var expectedElement = _program.Types.GetSliceElement(expectedType);
+        var (pointer, length, actualElement) = TryGetRuntimeArrayView(argument)
+            ?? throw new SollangException(
+                $"function '{functionName}' expects a readonly array view but received {argument.Type}");
+        if (actualElement != expectedElement)
+        {
+            throw new SollangException(
+                $"function '{functionName}' expects [{expectedElement}] but received an array of {actualElement}");
+        }
+        return BuildIntSliceArgument(pointer, length);
+    }
+    private void EnsureFunctionArgumentRuntimeType(RuntimeValue value, BoundType expected, string path)
+    {
+        if (_program.Types.IsReference(expected)
+            && value is RuntimeReference reference
+            && (reference.Type == expected
+                || SemanticStableIdentity.Type(_program.Types, reference.ElementType)
+                    == SemanticStableIdentity.Type(
+                        _program.Types,
+                        _program.Types.GetReference(expected).ElementType)))
+        {
+            return;
+        }
+        if (expected == BoundType.IntSlice
+            && value.Type is BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray)
+        {
+            return;
+        }
+        if (_program.Types.IsSlice(expected))
+        {
+            var expectedElement = _program.Types.GetSliceElement(expected);
+            var actualElement = TryGetRuntimeArrayView(value)?.Element;
+            if (actualElement == expectedElement)
+            {
+                return;
+            }
+        }
+
+        if (expected == BoundType.IntDictionaryView
+            && value.Type is BoundType.IntDictionaryView or BoundType.IntDictionary)
+        {
+            return;
+        }
+
+        EnsureRuntimeType(value, expected, path);
+    }
+    private void EnsureRuntimeType(RuntimeValue value, BoundType expected, string path)
+    {
+        if (value.Type != expected)
+        {
+            var expectedIdentity = SemanticStableIdentity.Type(_program.Types, expected);
+            var actualIdentity = SemanticStableIdentity.Type(_program.Types, value.Type);
+            throw new SollangException(
+                $"function '{path}' expects {expectedIdentity} ({expected}) "
+                + $"but received {actualIdentity} ({value.Type})");
+        }
+    }
+    private string BuildIntSliceArgument(string pointer, string length)
+    {
+        var aggregate0 = NextTemp("slice_arg");
+        EmitAssign(aggregate0, $"insertvalue %sollang.int_slice poison, ptr {pointer}, 0");
+        var aggregate1 = NextTemp("slice_arg");
+        EmitAssign(aggregate1, $"insertvalue %sollang.int_slice {aggregate0}, i64 {length}, 1");
+        return $"%sollang.int_slice {aggregate1}";
+    }
+}

@@ -377,6 +377,10 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             raise ValueError(f"EMISSION_PREFLIGHT_INVALID_CONTRACT: {case['id']}")
         if case.get("emittedLlvm") and (case["exit"] != 0 or case["stderr"]):
             raise ValueError(f"EMISSION_PREFLIGHT_REQUIRES_SUCCESS: {case['id']}")
+        if not isinstance(case.get("requireNoLlvm", False), bool):
+            raise ValueError(f"NO_LLVM_EXPECTATION_INVALID: {case['id']}")
+        if case.get("requireNoLlvm") and (case["exit"] != 1 or group is not None):
+            raise ValueError(f"NO_LLVM_REQUIRES_DIRECT_SEMANTIC_REJECTION: {case['id']}")
         if "expectedAllocations" in case and (
                 type(case["expectedAllocations"]) is not int or case["expectedAllocations"] < 0
                 or not case.get("emittedLlvm")):
@@ -559,6 +563,12 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                 row["buildExit"] = run(command, folder / "build")
                 row["buildStderr"] = read(folder / "build.stderr").strip()
             passed = row["buildExit"] == case["exit"] and row["buildStderr"] == case["stderr"]
+            if case.get("requireNoLlvm"):
+                row["unexpectedLlvmOutputs"] = sorted(
+                    str(path.relative_to(folder)) for path in folder.rglob("*")
+                    if path.is_file() and ".ll" in path.suffixes)
+                row["rejectedBeforeLlvm"] = row["buildExit"] == 1 and not row["unexpectedLlvmOutputs"]
+                passed = passed and row["rejectedBeforeLlvm"]
             if passed and row["buildExit"] == 0 and (group is None or (
                     producer["status"] == "built" and row["producerSha256"])):
                 row["runExit"] = run([str(exe), *case["runArguments"]] if group is not None else [str(exe)], folder / "run")

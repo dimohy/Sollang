@@ -130,7 +130,7 @@ $project = @"
 $projectPath = Join-Path $output 'GenericTypeContexts.csproj'
 [IO.File]::WriteAllText($projectPath, $project)
 $fixture = Join-Path $repo 'scripts/contracts/fixtures/1719-generic-readonly-slice-context.slg'
-$actual = (& dotnet run --project $projectPath --configuration Release -- $compiler $fixture 2>&1) -join "`n"
+$actual = (& dotnet run --disable-build-servers --project $projectPath --configuration Release -- $compiler $fixture 2>&1) -join "`n"
 $exitCode = $LASTEXITCODE
 [IO.File]::WriteAllText((Join-Path $output 'run.log'), $actual)
 $passed = [regex]::Matches($actual, '(?m)^PASS [A-Za-z0-9-]+\r?$').Count
