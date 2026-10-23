@@ -23,6 +23,7 @@ public struct ArrayStorageSyntax {
 # negated once. Folded arithmetic, aliases and owning storage suffixes do not
 # acquire static lifetime. Balanced parentheses preserve the element shape,
 # like transparent grouping in the C# AST. Shared by return checking and backing.
+# Validated character tokens are integer literals, matching C# NumberExpression.
 public staticReadonlyArrayLiteral tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> Bool {
     node.kind != 37 -> if { false -> return }
     0 => state!
@@ -43,7 +44,8 @@ public staticReadonlyArrayLiteral tokens: ref [syntax.SyntaxToken; ~], tokenStar
                             kind == grammar.tokenIdRightBracket() and groupingDepth! == 0
                                 -> if { 4 => state! } else {
                                     kind == grammar.tokenIdMinus() -> if { 2 => state! } else {
-                                        kind != grammar.tokenIdNumber() -> if { false -> return }
+                                        kind != grammar.tokenIdNumber() and kind != grammar.tokenIdCharacter()
+                                            -> if { false -> return }
                                         3 => state!
                                     }
                                 }
@@ -53,7 +55,8 @@ public staticReadonlyArrayLiteral tokens: ref [syntax.SyntaxToken; ~], tokenStar
                             kind == grammar.tokenIdLeftParen() -> if {
                                 groupingDepth! + 1 => groupingDepth!
                             } else {
-                                kind != grammar.tokenIdNumber() -> if { false -> return }
+                                kind != grammar.tokenIdNumber() and kind != grammar.tokenIdCharacter()
+                                    -> if { false -> return }
                                 3 => state!
                             }
                         } else {
