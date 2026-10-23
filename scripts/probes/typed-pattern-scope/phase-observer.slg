@@ -1,0 +1,43 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sys.process as process
+
+main {
+    process.arguments() => arguments
+    (arguments -> len) != 2 -> if { process.exit(1) }
+    [Text; ~] => paths!
+    paths! -> push(arguments[1])
+    paths! -> semanticContext.prepareFiles => initialPrepared!
+    0 => initialPrepared!.standardLibrarySourceCount
+    initialPrepared! -> freeze => initialPrepared
+    initialPrepared -> expressionTypeIds.resolveCallContext => resolved
+    resolved.prepared => prepared
+    resolved.types => types
+    prepared.package.ranges[0] => range
+    0 => astIndex!
+    astIndex! < range.astCount -> while {
+        prepared.package.nodes[range.astStart + astIndex!] => node
+        "ast $(astIndex!) $(node.kind) $(node.parent) $(node.start)" -> println
+        astIndex! + 1 => astIndex!
+    }
+    types.expressions -> each expression {
+        expression.sourceModule == 0 and expression.typeId >= 0
+            -> if {
+            types.types[expression.typeId] => type
+            "semantic $(expression.astNode) $(expression.typeId) $(type.kind) $(type.origin) $(type.module) $(type.symbol)" -> println
+        }
+    }
+    [0, 3] -> each phase {
+        prepared -> typedIr.profileResolvedContext(types, phase) => ir
+        0 => index!
+        index! < (ir -> len) -> while {
+            ir[index!] => node
+            node.sourceModule == 0 -> if {
+                "ir $phase $(index!) $(node.astNode) $(node.kind) $(node.typeId) $(node.typeKind) $(node.typeOrigin) $(node.typeModule) $(node.typeSymbol) $(node.operand0) $(node.operand1) $(node.opcode)" -> println
+            }
+            index! + 1 => index!
+        }
+    }
+    "observed-phases=2" -> println
+}
