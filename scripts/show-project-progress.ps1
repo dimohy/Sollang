@@ -206,6 +206,8 @@ $progress = [ordered]@{
         timeoutPercent = Get-Percent $focusedTimeout $focusedTotal
     }
     stages = [ordered]@{
+        scope = 'historical-stabilization'
+        evidenceReference = 'scripts/contracts/stabilization-progress.json#/stageGates'
         total = $stageTotal
         complete = $stageComplete
         completePercent = Get-Percent $stageComplete $stageTotal
@@ -520,6 +522,8 @@ if ($null -ne $activeGoal) {
             openDelta = $compilerOpen - $baselineCompiler.open
         }
         stages = [ordered]@{
+            scope = 'current-goal'
+            evidenceReference = 'scripts/contracts/active-goal-progress.json#/stageGates'
             complete = $activeStageComplete
             total = $activeStages.Count
             completePercent = Get-Percent $activeStageComplete $activeStages.Count

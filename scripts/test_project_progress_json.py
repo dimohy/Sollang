@@ -44,6 +44,14 @@ class ProjectProgressJsonTests(unittest.TestCase):
         self.assertEqual(report["currentGoal"]["stdlib"]["total"], len(stdlib["contracts"]))
         self.assertEqual(report["currentGoal"]["stdlib"]["complete"],
                          sum(row["status"] == "complete" for row in stdlib["contracts"]))
+        historical = json.loads((ROOT / "scripts/contracts/stabilization-progress.json").read_text(encoding="utf-8-sig"))
+        self.assertEqual(report["stages"]["scope"], "historical-stabilization")
+        self.assertEqual(report["stages"]["complete"],
+                         sum(row["status"] == "complete" for row in historical["stageGates"]))
+        self.assertEqual(report["currentGoal"]["stages"]["scope"], "current-goal")
+        self.assertEqual(report["currentGoal"]["stages"]["gates"], goal["stageGates"])
+        self.assertEqual(report["currentGoal"]["stages"]["complete"],
+                         sum(row["status"] == "complete" for row in goal["stageGates"]))
 
     def test_previous_depth_rejects_deep_evidence_instead_of_silently_clipping(self):
         fixture = {"evidence": {"processes": [{"nested": {"a": {"b": {"c": {
