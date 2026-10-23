@@ -1,0 +1,100 @@
+diff --git a/selfhost/llvm/text/call_arguments.slg b/selfhost/llvm/text/call_arguments.slg
+index b6601f4d..8f298863 100644
+--- a/selfhost/llvm/text/call_arguments.slg
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -618,11 +618,26 @@ emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: In
+     }
+ }
+ additionalParameterOrdinal functionIndex: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+     context.ir[functionIndex].nextOperand -> findAdditionalParameterOrdinal(symbol, 1, context, state)
+ }
++isLocalReadonlyReferenceName valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    valueIndex < 0 or valueIndex >= (context.ir -> len)
++        or ownerIndex < 0 or ownerIndex >= (context.ir -> len)
++        -> if { false -> return }
++    context.ir[valueIndex] => value
++    value.kind != 5 or (value -> referenceValueTypeId(context, state)) < 0
++        or value.operand0 < 0 or value.operand0 >= (context.ir -> len)
++        -> if { false -> return }
++    context.ir[value.operand0] => binding
++    binding.kind == 17 and binding.flags != 1
++        and not (valueIndex -> isAwaitSourceNode(context))
++        and (value.operand0 -> asyncFrameBindingRoot(ownerIndex, context, state)) < 0
++}
+ referenceParameterValueIsMaterialized valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
++    valueIndex -> isLocalReadonlyReferenceName(ownerIndex, context, state)
++        -> if { true -> return }
+     false => materialized!
+     valueIndex >= 0
+         and ownerIndex >= 0
+         and ownerIndex < (context.ir -> len)
+         -> if {
+@@ -763,10 +778,19 @@ callArgumentNeedsSliceProjection argumentIndex: Int, callIndex: Int, ordinal: In
+             and context.types[parameter.typeId].kind == 2
+             -> if { true => needsProjection! }
+     }
+     needsProjection!
+ }
++# Reference reads already have a loaded aggregate from emitExpression. The
++# generic value writer preserves their pointer ABI for other consumers.
++writeCallSliceProjectionValue valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
++    (context.ir[valueIndex] -> referenceValueTypeId(context, state)) >= 0
++        -> if { "%v$(valueIndex)" -> print } else {
++            valueIndex -> writeValue(ownerIndex, context, state)
++        }
++}
++
+ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+     argumentIndex >= 0
+         and ((callIndex -> callTargetParameter(ordinal, context, state)) >= 0
+         or (not (callIndex -> callHasResolvedFunctionTarget(context, state))
+         and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)))
+@@ -808,16 +832,22 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+                         "  %call$(callIndex)_arg$(ordinal)_slice_storage = alloca " -> print
+                         sliceValueTypeId -> writeSemanticTypeId(context, state)
+                         ", align $(context.typeAligns[sliceValueTypeId])" -> println
+                         "  store " -> print
+                         sliceValueTypeId -> writeSemanticTypeId(context, state)
+-                        " %v$(sliceValueIndex), ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
++                        " " -> print
++                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
++                        ", ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
+                         "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                         "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
+                     } else {
+-                        "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 0" -> println
+-                        "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 %v$(sliceValueIndex), 1" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
++                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
++                        ", 0" -> println
++                        "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
++                        sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
++                        ", 1" -> println
+                         "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
+                         "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                     }
+                 }
+             context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
+@@ -932,11 +962,21 @@ writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal:
+                                                         callOwnerIndex -> writeForwardedReferenceValue(argumentValueIndex, context, state)
+                                                     } else {
+                                                         liveMutableParameterOrdinal >= 0 -> if {
+                                                             "%v$(argumentValueIndex)" -> print
+                                                         } else {
+-                                                            primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
++                                                            false => sliceReferenceArgument!
++                                                            argumentParameterIndex >= 0
++                                                                and context.ir[argumentParameterIndex].typeId >= 0
++                                                                and context.types[context.ir[argumentParameterIndex].typeId].kind == 2
++                                                                and (argument -> referenceValueTypeId(context, state)) >= 0
++                                                                -> if { true => sliceReferenceArgument! }
++                                                            sliceReferenceArgument! -> if {
++                                                                argumentValueIndex -> writeCallSliceProjectionValue(callOwnerIndex, context, state)
++                                                            } else {
++                                                                primaryParameterArgument! -> if { "%arg" -> print } else { "%v$(argumentValueIndex)" -> print }
++                                                            }
+                                                         }
+                                                     }
+                                                 }
+                                             }
+                                         }

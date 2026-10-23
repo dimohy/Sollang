@@ -1,0 +1,26 @@
+diff --git a/selfhost/llvm/text/function_expressions.slg b/selfhost/llvm/text/function_expressions.slg
+index 6e60506e..57794a77 100644
+--- a/selfhost/llvm/text/function_expressions.slg
++++ b/selfhost/llvm/text/function_expressions.slg
+@@ -364,10 +364,21 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
+             roleIterator >= 0 -> if {
+                 "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println
+                 return
+             }
+             expressionIndex -> emitComparisonReferenceNameRead(functionIndex, -1, context, state)
++            expressionIndex -> isLocalReadonlyReferenceName(functionIndex, context, state)
++                -> if {
++                    expression -> referenceValueTypeId(context, state) => localValueTypeId
++                    "  %v$(expressionIndex) = load " -> print
++                    localValueTypeId -> writeAggregateFieldTypeId(context, state)
++                    ", ptr " -> print
++                    functionIndex -> writeForwardedReferenceValue(expressionIndex, context, state)
++                    ", align " -> print
++                    context.typeAligns[localValueTypeId] -> writeDecimalLine
++                    return
++                }
+             expression.operand0 -> asyncFrameBindingRoot(functionIndex, context, state) => asyncRoot
+             asyncRoot >= 0 -> if {
+                 "  %v$(expressionIndex) = load " -> print
+                 expression -> writeIrType(context, state)
+                 ", ptr " -> print

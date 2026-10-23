@@ -1,0 +1,136 @@
+diff --git a/selfhost/llvm/text/control_regions.slg b/selfhost/llvm/text/control_regions.slg
+index b5ca7c23..3c0fa3ad 100644
+--- a/selfhost/llvm/text/control_regions.slg
++++ b/selfhost/llvm/text/control_regions.slg
+@@ -47,11 +47,18 @@ emitRegionStreamPipeline pipelineIndex: Int, ownerIndex: Int, ownerEnd: Int, reg
+     [Int; ~] => streamOrder!
+     streamOrder! -> push(pipeline.terminalIr)
+     regionOrder -> each candidateIndex {
+         candidateIndex != pipeline.terminalIr -> if {
+             candidateIndex -> streamPipelineOwnsCallback(pipelineIndex, context, state) => callbackOwned
+-            callbackOwned -> if { streamOrder! -> push(candidateIndex) }
++            callbackOwned and not (candidateIndex -> streamCallbackHasNestedRegion(pipelineIndex, context))
++                -> if {
++                    false => scheduled!
++                    streamOrder! -> each existing {
++                        existing == candidateIndex -> if { true => scheduled! }
++                    }
++                    not scheduled! -> if { streamOrder! -> push(candidateIndex) }
++                }
+         }
+     }
+     [Bool; ~] => scheduled
+     BodySchedulePlan {
+         functionIndex: ownerIndex
+@@ -91,12 +98,21 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+         }
+     0 => regionOrderIndex!
+     regionOrderIndex! < (regionOrder -> len) -> while {
+         regionOrder[regionOrderIndex!] => regionNodeIndex
+         context.ir[regionNodeIndex] => regionNode
+-        regionEventKinds[regionOrderIndex!] => regionEventKind
+-        regionEventKind == 1 -> if {
++        regionEventKinds[regionOrderIndex!] => regionEventKind!
++        regionNodeIndex -> regionStartingStreamPipeline(regionIndex, context, state) => eventStreamPipeline
++        eventStreamPipeline >= 0 -> if {
++            not regionTerminated! and not emittedStreamPipelines![eventStreamPipeline]
++                -> if {
++                    eventStreamPipeline -> emitRegionStreamPipeline(ownerIndex!, regionLocalEnd, regionOrder, context, state)
++                    true => emittedStreamPipelines![eventStreamPipeline]
++                }
++            0 => regionEventKind!
++        }
++        regionEventKind! == 1 -> if {
+             not regionTerminated! -> if {
+                 regionNode.kind == 23 -> if {
+                     false => promotedFixedReturn!
+                     -1 => returnedSymbol!
+                     -1 => returnedValueIndex!
+@@ -320,11 +336,11 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                 }
+                 regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23
+                     -> if {
+                         -1 => regionStreamPipeline!
+                         ownerIndex! >= 0 -> if {
+-                            regionNodeIndex -> regionOwnedStreamPipeline(context, state) => regionStreamPipeline!
++                            regionNodeIndex -> regionStartingStreamPipeline(regionIndex, context, state) => regionStreamPipeline!
+                         }
+                         regionStreamPipeline! >= 0 -> if {
+                             not emittedStreamPipelines![regionStreamPipeline!]
+                                 -> if {
+                                     regionStreamPipeline! -> emitRegionStreamPipeline(ownerIndex!, regionLocalEnd, regionOrder, context, state)
+@@ -354,11 +370,11 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                                 -> if { true => regionTerminated! }
+                         }
+                     }
+             }
+         }
+-        regionEventKind == 2 -> if {
++        regionEventKind! == 2 -> if {
+             not regionTerminated! -> if {
+                 true => ifActive[regionNodeIndex - regionLocalStart]
+                 false => nestedIfValueUsed!
+                 regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedIfValueUsed!
+                 regionNode.operand0 -> aggregateValueIndex(context, state) => nestedConditionIndex
+@@ -384,11 +400,11 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                 }
+                 "if$(regionNodeIndex)_then:" -> println
+                 false => regionTerminated!
+             }
+         }
+-        regionEventKind == 3 -> if {
++        regionEventKind! == 3 -> if {
+             ifActive[regionNodeIndex - regionLocalStart]
+                 -> if {
+                     not regionTerminated! -> if {
+                         false => nestedThenValueUsed!
+                         regionNodeIndex -> controlValueUsed(ownerIndex!, context, state) => nestedThenValueUsed!
+@@ -403,11 +419,11 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                     }
+                     "if$(regionNodeIndex)_else:" -> println
+                     false => regionTerminated!
+                 }
+         }
+-        regionEventKind == 4 -> if {
++        regionEventKind! == 4 -> if {
+             ifActive[regionNodeIndex - regionLocalStart]
+                 -> if {
+                     regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge[regionNodeIndex - regionLocalStart] }
+                     not regionTerminated! -> if {
+                         regionNode.nextOperand >= 0 -> if {
+@@ -439,31 +455,31 @@ emitRegionOrderState regionIndex: Int, emissionOrder: [Int], regionEventKinds: r
+                                     regionNode -> storageAlign(context, state) -> writeDecimalLine
+                                 }
+                         }
+                 }
+         }
+-        regionEventKind == 9 and not regionTerminated!
++        regionEventKind! == 9 and not regionTerminated!
+             -> if {
+                 OwnedDropRequest { regionIndex: regionNodeIndex, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+             }
+-        regionEventKind == 6 -> if {
++        regionEventKind! == 6 -> if {
+             not regionTerminated! -> if {
+                 true => loopActive[regionNodeIndex - regionLocalStart]
+                 "  br label %while$(regionNodeIndex)_header" -> println
+                 "while$(regionNodeIndex)_header:" -> println
+                 false => regionTerminated!
+             }
+         }
+-        regionEventKind == 7 -> if {
++        regionEventKind! == 7 -> if {
+             loopActive[regionNodeIndex - regionLocalStart]
+                 -> if {
+                     WhileBranchRequest { whileIndex: regionNodeIndex, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch(emissionOrder, context, state)
+                     "while$(regionNodeIndex)_body:" -> println
+                     false => regionTerminated!
+                 }
+         }
+-        regionEventKind == 8 -> if {
++        regionEventKind! == 8 -> if {
+             loopActive[regionNodeIndex - regionLocalStart]
+                 -> if {
+                     not regionTerminated! -> if {
+                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+                         "  br label %while$(regionNodeIndex)_header" -> println

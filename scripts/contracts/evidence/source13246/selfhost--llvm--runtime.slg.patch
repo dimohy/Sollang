@@ -1,0 +1,19 @@
+diff --git a/selfhost/llvm/runtime.slg b/selfhost/llvm/runtime.slg
+index 3ac5b9b6..eee18283 100644
+--- a/selfhost/llvm/runtime.slg
++++ b/selfhost/llvm/runtime.slg
+@@ -1756,11 +1756,13 @@ public emitWindowsSourceText: -> Unit uses Console {
+ public emitWindowsStandardInputSourceText: -> Unit uses Console {
+     """
+     define internal i64 @sollang_runtime_read_standard_input_chunk(ptr %data, i64 %capacity) {
+     entry:
+       %handle = call ptr @GetStdHandle(i32 -10)
+-      %capacity32 = trunc i64 %capacity to i32
++      %exceeds_dword = icmp ugt i64 %capacity, 4294967295
++      %bounded_capacity = select i1 %exceeds_dword, i64 4294967295, i64 %capacity
++      %capacity32 = trunc i64 %bounded_capacity to i32
+       %read_slot = alloca i32, align 4
+       %ok = call i32 @ReadFile(ptr %handle, ptr %data, i32 %capacity32, ptr %read_slot, ptr null)
+       %succeeded = icmp ne i32 %ok, 0
+       br i1 %succeeded, label %success, label %inspect_error
+     inspect_error:

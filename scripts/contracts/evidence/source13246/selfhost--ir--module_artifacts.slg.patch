@@ -1,0 +1,44 @@
+diff --git a/selfhost/ir/module_artifacts.slg b/selfhost/ir/module_artifacts.slg
+index 4f44d359..1d253cc8 100644
+--- a/selfhost/ir/module_artifacts.slg
++++ b/selfhost/ir/module_artifacts.slg
+@@ -462,10 +462,19 @@ validatePayload words: [UInt64; ~] -> ArtifactValidation {
+             -> if { 5 => status! }
+         words -> checksum(9) => actualChecksum
+         status! == 0 and words[8] != actualChecksum
+             -> if { 6 => status! }
+         status! == 0 -> if {
++            # Serialized counts stay wide until the backing words bound them.
++            wordLength - 9 => availableWords
++            words[3] > UInt64(availableWords / 3)
++                or words[4] > UInt64(availableWords / 25)
++                or words[5] > UInt64(availableWords / 14)
++                or words[6] > UInt64(availableWords)
++                -> if {
++                    ArtifactValidation { status: 11, moduleCount: 0, nodeCount: 0, typeCount: 0 } -> return
++                }
+             Int(words[3]) => moduleCount!
+             Int(words[4]) => nodeCount!
+             Int(words[5]) => typeCount!
+             Int(words[6]) => typeWords
+             typeCount! < 0 or typeWords != typeCount! * 14 or 9 + typeWords > wordLength
+@@ -478,12 +487,18 @@ validatePayload words: [UInt64; ~] -> ArtifactValidation {
+             0 => decodedModules!
+             0 => decodedNodes!
+             UInt64(0) => previousModuleHash!
+             status! == 0 and decodedModules! < moduleCount!
+                 -> while {
+-                    index! + 3 <= wordLength -> if {
++                    index! <= wordLength - 3 -> if {
+                         words[index!] => currentModuleHash
++                        wordLength - index! - 3 => availablePayloadWords
++                        words[index! + 1] > UInt64(availablePayloadWords / 25)
++                            or words[index! + 2] > UInt64(availablePayloadWords)
++                            -> if {
++                                ArtifactValidation { status: 8, moduleCount: moduleCount!, nodeCount: nodeCount!, typeCount: typeCount! } -> return
++                            }
+                         Int(words[index! + 1]) => currentNodeCount
+                         Int(words[index! + 2]) => payloadWords
+                         decodedModules! == 0 or currentModuleHash > previousModuleHash!
+                             -> if {
+                                 currentNodeCount >= 0 and payloadWords == currentNodeCount * 25

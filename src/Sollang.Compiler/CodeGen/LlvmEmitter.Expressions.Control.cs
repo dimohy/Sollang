@@ -615,13 +615,8 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeInt EmitArrayFoldExpression(FoldExpression expression, RuntimeValue source)
     {
-        var (pointer, length, staticLength) = source switch
-        {
-            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, null),
-            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, (int?)array.AllocatedLength),
-            RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, null),
-            _ => throw new SollangException("fold expects a range or Int array input")
-        };
+        var slice = CreateRuntimeIntSlice(source);
+        var length = slice.LengthName;
 
         var initial = EmitIntExpression(expression.Initial);
         var bodyLabel = NextLabel("array_fold_body");
@@ -643,19 +638,7 @@ internal sealed partial class LlvmEmitter
         var accumulator = NextTemp(expression.AccumulatorName);
         EmitPhi(accumulator, "i32", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
 
-        RuntimeInt item;
-        if (staticLength is { } allocatedLength)
-        {
-            item = EmitStaticArrayLoad(new RuntimeStaticIntArray(pointer, length, allocatedLength), index);
-        }
-        else if (source is RuntimeIntSlice)
-        {
-            item = EmitIntSliceLoad(new RuntimeIntSlice(pointer, length), index);
-        }
-        else
-        {
-            item = EmitDynamicArrayLoad(new RuntimeDynamicIntArray(pointer, length, length), index);
-        }
+        var item = EmitIntSliceLoad(slice, index);
 
         var outerLocals = CaptureLocals();
         _locals[expression.AccumulatorName] = new RuntimeInt(accumulator);
@@ -1208,6 +1191,7 @@ internal sealed partial class LlvmEmitter
         {
             RuntimeArguments => new RuntimeArguments(EmitScalarPhi(prefix, "i64", incoming)),
             RuntimeMappedBytes mapped => EmitMappedBytesPhi(prefix, mapped, incoming),
+            RuntimeSourceText => EmitSourceTextPhi(prefix, incoming),
             RuntimeInt integer => new RuntimeInt(integer.Type, EmitScalarPhi(prefix, LlvmType(integer.Type), incoming)),
             RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
@@ -1452,6 +1436,29 @@ internal sealed partial class LlvmEmitter
             DataPointerName = data, LengthName = length,
             BasePointerName = basePointer, MappedLengthName = mappedLength
         };
+    }
+
+    private RuntimeSourceText EmitSourceTextPhi(
+        string prefix,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (incoming.Any(item => item.Value is not RuntimeSourceText))
+        {
+            throw new SollangException("SourceText phi inputs disagree on runtime shape");
+        }
+        var data = NextTemp(prefix + "_data");
+        EmitPhi(data, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeSourceText)value).DataPointerName));
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming,
+            static value => ((RuntimeSourceText)value).LengthName));
+        var basePointer = NextTemp(prefix + "_base");
+        EmitPhi(basePointer, "ptr", FormatPhiIncoming(incoming,
+            static value => ((RuntimeSourceText)value).BasePointerName));
+        var mappedLength = NextTemp(prefix + "_mapped_len");
+        EmitPhi(mappedLength, "i64", FormatPhiIncoming(incoming,
+            static value => ((RuntimeSourceText)value).MappedLengthName));
+        return new RuntimeSourceText(data, length, basePointer, mappedLength);
     }
 
     private RuntimeText EmitTextPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)

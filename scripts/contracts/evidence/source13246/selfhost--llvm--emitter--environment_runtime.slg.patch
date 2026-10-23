@@ -1,0 +1,108 @@
+diff --git a/selfhost/llvm/emitter/environment_runtime.slg b/selfhost/llvm/emitter/environment_runtime.slg
+index 78294441..e904937e 100644
+--- a/selfhost/llvm/emitter/environment_runtime.slg
++++ b/selfhost/llvm/emitter/environment_runtime.slg
+@@ -8,33 +8,46 @@ public emitWindowsRuntime: -> Unit uses Console {
+     """
+     @sollang_environment_allocations = internal global ptr null
+     @sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1
+     define internal i1 @sollang_track_environment_allocation(ptr %allocation) {
+     entry:
+-      %node = call ptr @malloc(i64 16)
+-      %ok = icmp ne ptr %node, null
+-      br i1 %ok, label %store, label %fail
++    %node = call ptr @malloc(i64 16)
++    %ok = icmp ne ptr %node, null
++    br i1 %ok, label %store, label %fail
+ 
+     store:
+-      store ptr %allocation, ptr %node, align 8
+-      %next_slot = getelementptr i8, ptr %node, i64 8
+-      %head = load ptr, ptr @sollang_environment_allocations, align 8
+-      store ptr %head, ptr %next_slot, align 8
+-      store ptr %node, ptr @sollang_environment_allocations, align 8
+-      ret i1 true
++    store ptr %allocation, ptr %node, align 8
++    %next_slot = getelementptr i8, ptr %node, i64 8
++    %initial_head = load atomic ptr, ptr @sollang_environment_allocations acquire, align 8
++    br label %publish
++
++    publish:
++    %head = phi ptr [ %initial_head, %store ], [ %observed_head, %publish ]
++    store ptr %head, ptr %next_slot, align 8
++    %exchange = cmpxchg ptr @sollang_environment_allocations, ptr %head, ptr %node acq_rel acquire, align 8
++    %observed_head = extractvalue { ptr, i1 } %exchange, 0
++    %published = extractvalue { ptr, i1 } %exchange, 1
++    br i1 %published, label %done, label %publish
++
++    done:
++    ret i1 true
+ 
+     fail:
+-      ret i1 false
++    ret i1 false
+     }
+ 
+     define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) {
+     entry:
+       %empty = icmp eq i64 %name_len, 0
+-      br i1 %empty, label %missing, label %validate
++      br i1 %empty, label %missing, label %check_length
++
++    check_length:
++      %name_fits_i32 = icmp ule i64 %name_len, 2147483647
++      br i1 %name_fits_i32, label %validate, label %error
+ 
+     validate:
+-      %vi = phi i64 [ 0, %entry ], [ %vnext, %valid_byte ]
++      %vi = phi i64 [ 0, %check_length ], [ %vnext, %valid_byte ]
+       %validated = icmp eq i64 %vi, %name_len
+       br i1 %validated, label %key_size, label %check_byte
+ 
+     check_byte:
+       %name_byte_ptr = getelementptr i8, ptr %name, i64 %vi
+@@ -74,12 +87,20 @@ public emitWindowsRuntime: -> Unit uses Console {
+       %has_size = icmp ne i32 %required, 0
+       br i1 %has_size, label %value_alloc, label %zero_result
+ 
+     zero_result:
+       call void @free(ptr %wide_key)
+-      %not_found = icmp eq i32 %last_error, 203
+-      br i1 %not_found, label %missing, label %empty_present
++      br label %classify_zero
++
++    classify_zero:
++      %zero_error = phi i32 [ %last_error, %zero_result ], [ %value_error, %free_wide_empty ]
++      %not_found = icmp eq i32 %zero_error, 203
++      br i1 %not_found, label %missing, label %check_empty_value
++
++    check_empty_value:
++      %empty_succeeded = icmp eq i32 %zero_error, 0
++      br i1 %empty_succeeded, label %empty_present, label %error
+ 
+     empty_present:
+       %empty_ptr = getelementptr inbounds [1 x i8], ptr @sollang_environment_empty, i64 0, i64 0
+       %e0 = insertvalue %sollang.environment_result zeroinitializer, ptr %empty_ptr, 0
+       %e1 = insertvalue %sollang.environment_result %e0, i1 true, 2
+@@ -92,18 +113,20 @@ public emitWindowsRuntime: -> Unit uses Console {
+       %wide_value = call ptr @malloc(i64 %wide_bytes)
+       %wide_value_ok = icmp ne ptr %wide_value, null
+       br i1 %wide_value_ok, label %value_read, label %free_key_error
+ 
+     value_read:
++      call void @SetLastError(i32 0)
+       %value_chars = call i32 @GetEnvironmentVariableW(ptr %wide_key, ptr %wide_value, i32 %required)
++      %value_error = call i32 @GetLastError()
+       call void @free(ptr %wide_key)
+       %value_empty = icmp eq i32 %value_chars, 0
+       br i1 %value_empty, label %free_wide_empty, label %value_read_check
+ 
+     free_wide_empty:
+       call void @free(ptr %wide_value)
+-      br label %empty_present
++      br label %classify_zero
+ 
+     value_read_check:
+       %value_read_ok = icmp ult i32 %value_chars, %required
+       br i1 %value_read_ok, label %utf8_size, label %free_wide_error
+ 

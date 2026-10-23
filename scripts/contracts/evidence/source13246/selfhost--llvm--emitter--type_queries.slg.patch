@@ -1,0 +1,28 @@
+diff --git a/selfhost/llvm/emitter/type_queries.slg b/selfhost/llvm/emitter/type_queries.slg
+index 7601fe53..4d819eb6 100644
+--- a/selfhost/llvm/emitter/type_queries.slg
++++ b/selfhost/llvm/emitter/type_queries.slg
+@@ -256,11 +256,23 @@ public arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext
+             }
+     }
+     elementTypeId!
+ }
+ 
++public isRange source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
++    source.typeId => typeId!
++    typeId! < 0 or typeId! >= (context.types -> len)
++        -> if { false -> return }
++    context.types[typeId!].kind == 8 -> if { context.types[typeId!].first => typeId! }
++    typeId! < 0 or typeId! >= (context.types -> len)
++        -> if { false -> return }
++    context.types[typeId!] => valueType
++    valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 25
++}
++
+ public directEachElementTypeId source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
++    source -> isRange(context) -> if { 2 -> return }
+     source.typeId >= 0 and context.types[source.typeId].kind == 1
+         and context.types[source.typeId].origin == 1 and context.types[source.typeId].symbol == 2
+         -> if { 2 -> return }
+     source.kind == 31 -> if { 2 } else {
+         source -> isArguments -> if { 1 } else {

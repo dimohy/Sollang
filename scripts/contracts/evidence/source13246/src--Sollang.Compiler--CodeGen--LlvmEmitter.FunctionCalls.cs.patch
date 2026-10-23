@@ -1,0 +1,124 @@
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+index b15caca4..6a0363b6 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+@@ -924,27 +924,14 @@ internal sealed partial class LlvmEmitter
+         {
+             value = new RuntimeInt(targetType, integerLiteral);
+             return true;
+         }
+         if (IsFloatType(targetType)
+-            && TryGetIntegerLiteralText(expression.Arguments[0], out var floatingIntegerLiteral))
++            && TryGetNumericLiteralText(expression.Arguments[0], out var floatingLiteral))
+         {
+-            if (!double.TryParse(floatingIntegerLiteral, NumberStyles.Float, CultureInfo.InvariantCulture,
+-                    out var literalValue)
+-                || !double.IsFinite(literalValue))
+-            {
+-                throw new SollangException("numeric conversion floating-point literal is out of range");
+-            }
+-            var constant = literalValue.ToString("0.0################E+00", CultureInfo.InvariantCulture);
+-            if (targetType == BoundType.Float64)
+-            {
+-                value = new RuntimeFloat(targetType, constant);
+-                return true;
+-            }
+-            var truncated = NextTemp("numeric_convert");
+-            EmitAssign(truncated, $"fptrunc double {constant} to float");
+-            value = new RuntimeFloat(targetType, truncated);
++            value = new RuntimeFloat(targetType, FormatLlvmFloatingLiteral(
++                floatingLiteral, targetType, expression.Arguments[0].Line, expression.Arguments[0].Column));
+             return true;
+         }
+         var source = EmitExpression(expression.Arguments[0]);
+         if (!IsNumericType(source.Type))
+         {
+@@ -1965,10 +1952,15 @@ internal sealed partial class LlvmEmitter
+                 value = EmitTransientText(value);
+             }
+             EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
+             if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
+             {
++                if (IsStaticArrayRuntimeValue(value, parameter.Type))
++                {
++                    parts.Add(BuildStaticArrayArgument(parameter.Type, value, function.Name));
++                    continue;
++                }
+                 parts.Add(value switch
+                 {
+                     RuntimeMutableStructReference reference => $"ptr {reference.PointerAddress}",
+                     RuntimeMutableContainerReference reference => BuildMutableContainerArgument(reference),
+                     _ => throw new SollangException(
+@@ -2215,10 +2207,15 @@ internal sealed partial class LlvmEmitter
+         if (arrayType == BoundType.StaticIntArray) return BoundType.Int;
+         if (arrayType == BoundType.StaticTextArray) return BoundType.Text;
+         return _program.Types.GetStaticArray(arrayType).ElementType;
+     }
+ 
++    private bool IsStaticArrayRuntimeValue(RuntimeValue value, BoundType expectedType) =>
++        _program.Types.IsStaticArray(expectedType)
++        && _program.Types.IsStaticArray(value.Type)
++        && TryGetRuntimeArrayView(value) is not null;
++
+     private RuntimeValue CreateMutableBorrowArgument(
+         Expression argument,
+         BoundType expectedType,
+         string path,
+         string parameterName)
+@@ -2255,11 +2252,11 @@ internal sealed partial class LlvmEmitter
+         EnsureRuntimeType(value, expectedType, path);
+         if (value is RuntimeBitSet bitSet && _program.Types.IsBitSet(expectedType))
+         {
+             return new RuntimeMutableStructReference(expectedType, bitSet.PointerName);
+         }
+-        if (value is RuntimeStaticInlineArray && _program.Types.IsStaticArray(expectedType))
++        if (IsStaticArrayRuntimeValue(value, expectedType))
+         {
+             return value;
+         }
+         if (_mutableStructSlots.TryGetValue(name.Name, out var structPointer))
+         {
+@@ -2553,14 +2550,13 @@ internal sealed partial class LlvmEmitter
+             return;
+         }
+ 
+         if (argument is not RuntimeMutableContainerReference reference)
+         {
+-            if (argument is RuntimeStaticInlineArray fixedArray
+-                && _program.Types.IsStaticArray(type))
++            if (IsStaticArrayRuntimeValue(argument, type))
+             {
+-                _locals[name] = fixedArray;
++                _locals[name] = argument;
+                 _mutableLocals.Add(name);
+                 _borrowedMutableLocals.Add(name);
+                 _borrowedOwnedLocals.Add(name);
+                 return;
+             }
+@@ -2620,17 +2616,20 @@ internal sealed partial class LlvmEmitter
+         return BuildIntSliceArgument(pointer, array.LengthName);
+     }
+ 
+     private RuntimeIntSlice CreateRuntimeIntSlice(RuntimeValue value)
+     {
+-        return value switch
++        if (value is RuntimeStaticIntArray array)
+         {
+-            RuntimeIntSlice slice => slice,
+-            RuntimeDynamicIntArray array => new RuntimeIntSlice(array.PointerName, array.LengthName),
+-            RuntimeStaticIntArray array => CreateRuntimeIntSlice(array),
+-            _ => throw new SollangException($"expected Int array view but received {value.Type}")
+-        };
++            return CreateRuntimeIntSlice(array);
++        }
++        var view = TryGetRuntimeArrayView(value);
++        if (view is not { Element: var element } || element != BoundType.Int)
++        {
++            throw new SollangException($"expected Int array view but received {value.Type}");
++        }
++        return new RuntimeIntSlice(view.Value.Pointer, view.Value.Length);
+     }
+ 
+     private RuntimeIntSlice CreateRuntimeIntSlice(RuntimeStaticIntArray array)
+     {
+         var pointer = NextTemp("slice_ptr");
