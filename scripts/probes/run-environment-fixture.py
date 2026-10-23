@@ -16,5 +16,5 @@ for line in settings.read_text(encoding='utf-8-sig').splitlines():
     seen.add(name)
     environment[name] = value
 environment.pop('SOLLANG_TEST_MISSING', None)
-result = subprocess.run([str(program)], env=environment, timeout=5)
+result = subprocess.run([str(program), *sys.argv[3:]], env=environment, timeout=5)
 raise SystemExit(result.returncode)

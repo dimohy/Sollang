@@ -10,20 +10,29 @@ public emitWindowsRuntime: -> Unit uses Console {
     @sollang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1
     define internal i1 @sollang_track_environment_allocation(ptr %allocation) {
     entry:
-      %node = call ptr @malloc(i64 16)
-      %ok = icmp ne ptr %node, null
-      br i1 %ok, label %store, label %fail
+    %node = call ptr @malloc(i64 16)
+    %ok = icmp ne ptr %node, null
+    br i1 %ok, label %store, label %fail
 
     store:
-      store ptr %allocation, ptr %node, align 8
-      %next_slot = getelementptr i8, ptr %node, i64 8
-      %head = load ptr, ptr @sollang_environment_allocations, align 8
-      store ptr %head, ptr %next_slot, align 8
-      store ptr %node, ptr @sollang_environment_allocations, align 8
-      ret i1 true
+    store ptr %allocation, ptr %node, align 8
+    %next_slot = getelementptr i8, ptr %node, i64 8
+    %initial_head = load atomic ptr, ptr @sollang_environment_allocations acquire, align 8
+    br label %publish
+
+    publish:
+    %head = phi ptr [ %initial_head, %store ], [ %observed_head, %publish ]
+    store ptr %head, ptr %next_slot, align 8
+    %exchange = cmpxchg ptr @sollang_environment_allocations, ptr %head, ptr %node acq_rel acquire, align 8
+    %observed_head = extractvalue { ptr, i1 } %exchange, 0
+    %published = extractvalue { ptr, i1 } %exchange, 1
+    br i1 %published, label %done, label %publish
+
+    done:
+    ret i1 true
 
     fail:
-      ret i1 false
+    ret i1 false
     }
 
     define internal %sollang.environment_result @sollang_environment(ptr %name, i64 %name_len) {

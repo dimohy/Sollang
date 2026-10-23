@@ -1489,9 +1489,18 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             store:
               store ptr %allocation, ptr %node, align 8
               %next_slot = getelementptr i8, ptr %node, i64 8
-              %head = load ptr, ptr @sollang_environment_allocations, align 8
+              %initial_head = load atomic ptr, ptr @sollang_environment_allocations acquire, align 8
+              br label %publish
+
+            publish:
+              %head = phi ptr [ %initial_head, %store ], [ %observed_head, %publish ]
               store ptr %head, ptr %next_slot, align 8
-              store ptr %node, ptr @sollang_environment_allocations, align 8
+              %exchange = cmpxchg ptr @sollang_environment_allocations, ptr %head, ptr %node acq_rel acquire, align 8
+              %observed_head = extractvalue { ptr, i1 } %exchange, 0
+              %published = extractvalue { ptr, i1 } %exchange, 1
+              br i1 %published, label %done, label %publish
+
+            done:
               ret i1 true
 
             fail:
