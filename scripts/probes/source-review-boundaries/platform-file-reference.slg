@@ -1,0 +1,30 @@
+import sys.file as file
+
+struct FileView { reader: ref file.File }
+
+borrowFile reader: ref file.File -> ref file.File => reader
+
+valueOrEnd result: Result<Option<UInt8>, Text> -> Int => result -> when {
+    Ok(value) => value -> when {
+        Some(byte) => Int(byte)
+        None => -1
+    }
+    Err(_) => -2
+}
+
+readBorrowed reader: ref file.File, offset: UInt64 -> Int uses File {
+    reader -> readAt<UInt8>(offset) -> valueOrEnd
+}
+
+main {
+    file.openRead("scripts/probes/source-review-boundaries/platform-directory-reference.slg") -> when {
+        Ok(reader) {
+            reader -> readAt<UInt8>(0) -> valueOrEnd -> println
+            reader -> readBorrowed(1) -> println
+            FileView { reader: reader -> borrowFile } => view
+            view.reader -> readBorrowed(0) -> println
+            reader -> readBorrowed(1048576) -> println
+        }
+        Err(_) { "file-open-failed" -> println }
+    }
+}
