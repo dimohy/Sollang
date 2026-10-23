@@ -1,0 +1,527 @@
+diff --git a/selfhost/ir/typed/function_lowering.slg b/selfhost/ir/typed/function_lowering.slg
+index 2c74dd21..174e96b4 100644
+--- a/selfhost/ir/typed/function_lowering.slg
++++ b/selfhost/ir/typed/function_lowering.slg
+@@ -2648,11 +2648,10 @@ repairStructuredParallelCallbackRoots results: mut [TypedIrNode; ~], prepared: r
+                         and callbackCandidate.astNode >= 0
+                         and callbackCandidate.astNode < parallelRange.astCount
+                         and callbackCandidate.typeId >= 0
+                         and callbackCandidate.kind != 0
+                         and callbackCandidate.kind != 1
+-                        and callbackCandidate.kind != 5
+                         and callbackCandidate.kind != 10
+                         and callbackCandidate.kind != 11
+                         and callbackCandidate.kind != 17
+                         and callbackCandidate.kind != 19
+                         and callbackCandidate.kind != 21
+@@ -2699,11 +2698,10 @@ repairStructuredParallelCallbackRoots results: mut [TypedIrNode; ~], prepared: r
+                         0 => callbackChildIndex!
+                         callbackChildIndex! < (results -> len) -> while {
+                             results[callbackChildIndex!] => callbackChildCandidate
+                             callbackChildCandidate.parent == callbackRoot!
+                                 and callbackChildCandidate.typeId >= 0
+-                                and callbackChildCandidate.kind != 5
+                                 and callbackChildCandidate.kind != 10
+                                 and callbackChildCandidate.kind != 17
+                                 and callbackChildCandidate.kind != 19
+                                 -> if {
+                                     prepared.package.nodes[parallelRange.astStart + callbackChildCandidate.astNode] => callbackChildAst
+@@ -3414,17 +3412,18 @@ public repairDiscardedDirectAsyncAwaits results: mut [TypedIrNode; ~], prepared:
+         callIndex! + 1 => callIndex!
+     }
+ }
+ 
+ # Named Task flows already retain a kind-5 value node. Share one await node
+-# across all consumers so the task is joined and released exactly once.
++# across all consumers, including the function result region, so its result
++# edge receives the joined value and the task is released exactly once.
+ public repairDirectAsyncAwaitConsumers results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+     results -> len => originalNodeCount
+     0 => consumerIndex!
+     consumerIndex! < originalNodeCount -> while {
+         results[consumerIndex!] => consumer!
+-        (consumer!.kind == 17 or consumer!.kind == 6 or consumer!.kind == 9 or consumer!.kind == 27)
++        (consumer!.kind == 1 or consumer!.kind == 17 or consumer!.kind == 6 or consumer!.kind == 9 or consumer!.kind == 27)
+             and consumer!.operand0 >= 0
+             and consumer!.operand0 < originalNodeCount
+             -> if {
+                 consumer!.operand0 => callIndex
+                 results[callIndex] => call
+@@ -3687,12 +3686,13 @@ appendAndReleaseFunctionResults results: mut [TypedIrNode; ~], functionResults:
+         SourceTypedIr { nodes: [TypedIrNode; ~] } => functionResults[resultIndex!]
+         resultIndex! + 1 => resultIndex!
+     }
+ }
+ 
+-# A trailing console consumer can be resolved before its value-producing `if`
+-# is lowered. In that provisional shape operand0 names the owner function.
++# A trailing console consumer can be resolved before its value-producing control
++# or fold is lowered. The fold is the completed value, rather than its input
++# range. In the provisional shape operand0 names the owner function or shell.
+ # Reconnect only a control value contained by the same source flow; unrelated
+ # controls in the function must never become implicit console arguments.
+ repairTrailingConsoleControlResults results: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+     0 => consoleIndex!
+     consoleIndex! < (results -> len) -> while {
+@@ -3719,10 +3719,11 @@ repairTrailingConsoleControlResults results: mut [TypedIrNode; ~], prepared: ref
+                             results[candidateIndex!] => candidate
+                             candidate.sourceModule == console!.sourceModule
+                                 and candidate.parent == console!.operand0
+                                 and (candidate.kind == 18
+                                 or candidate.kind == 27
++                                or candidate.kind == 32
+                                 or candidate.kind == 33
+                                 or candidate.kind == 34)
+                                 and candidate.astNode >= 0
+                                 and candidate.astNode < sourceRange.astCount
+                                 -> if {
+diff --git a/selfhost/ir/typed/ordinary_function_expressions.slg b/selfhost/ir/typed/ordinary_function_expressions.slg
+index 7eadffe5..12cf6d9f 100644
+--- a/selfhost/ir/typed/ordinary_function_expressions.slg
++++ b/selfhost/ir/typed/ordinary_function_expressions.slg
+@@ -1543,11 +1543,11 @@ lowerOrdinaryFunctionExpressions nodes: mut [TypedIrNode; ~], astToIr: mut [Int;
+                                                         IntrinsicNameRequest { source: source, token: prepared.package.tokens[sourceRange.tokenStart + intrinsicChild.payloadToken] } -> intrinsicOpcode => expressionIntrinsicOpcode
+                                                         expressionIntrinsicOpcode <= -201
+                                                             and expressionIntrinsicOpcode >= -240
+                                                             and expressionIntrinsicOpcode == flowEmissionOpcode!
+                                                             -> if { expressionIntrinsicOpcode => expressionOpcode! }
+-                                                        expressionIntrinsicOpcode == -320
++                                                        expressionIntrinsicOpcode -> isAsyncFileOpcode
+                                                             and expressionIntrinsicOpcode == flowEmissionOpcode!
+                                                             -> if {
+                                                                 expressionIntrinsicOpcode => expressionOpcode!
+                                                                 (expressionFlags! / 8) % 2 == 0
+                                                                     -> if { expressionFlags! + 8 => expressionFlags! }
+diff --git a/selfhost/ir/typed/ordinary_function_finalize_phases.slg b/selfhost/ir/typed/ordinary_function_finalize_phases.slg
+index 58651a2e..792b3b66 100644
+--- a/selfhost/ir/typed/ordinary_function_finalize_phases.slg
++++ b/selfhost/ir/typed/ordinary_function_finalize_phases.slg
+@@ -65,11 +65,11 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
+     [Int; ~] => childNext!
+     nodes -> indexSourceOrderedChildren(expressionIrStart, expressionIrEnd, childHeads!, childNext!)
+     expressionIrStart => operandIrIndex!
+     operandIrIndex! < expressionIrEnd -> while {
+         nodes[operandIrIndex!] => operatorIr!
+-        operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and (operatorIr!.opcode == -27 or (operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228 or operatorIr!.opcode == -229 or operatorIr!.opcode == -236)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -320 or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
++        operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and (operatorIr!.opcode == -27 or (operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228 or operatorIr!.opcode == -229 or operatorIr!.opcode == -236)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or (operatorIr!.opcode -> isAsyncFileOpcode) or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
+             -> if {
+                 -1 => firstOperand!
+                 -1 => secondOperand!
+                 UIntSize(0) => firstStart!
+                 UIntSize(0) => secondStart!
+@@ -149,11 +149,11 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
+                         unaryOperand.typeSymbol => operatorIr!.typeSymbol
+                         unaryOperand.typeId => operatorIr!.typeId
+                         unaryOperand.typeKind => operatorIr!.typeKind
+                         unaryOperand.typeFlags => operatorIr!.typeFlags
+                     }
+-                operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -229)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -243) or (operatorIr!.opcode <= -246 and operatorIr!.opcode >= -247) or operatorIr!.opcode == -252 or (operatorIr!.opcode <= -255 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or operatorIr!.opcode == -320 or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
++                operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or (operatorIr!.opcode == -223 or operatorIr!.opcode == -303) or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -229)) or (operatorIr!.opcode <= -241 and operatorIr!.opcode >= -243) or (operatorIr!.opcode <= -246 and operatorIr!.opcode >= -247) or operatorIr!.opcode == -252 or (operatorIr!.opcode <= -255 and operatorIr!.opcode >= -257) or operatorIr!.opcode == -220 or (operatorIr!.opcode -> isAsyncFileOpcode) or operatorIr!.opcode == -321 or operatorIr!.opcode == -221 or operatorIr!.opcode == -304 or operatorIr!.opcode == -305 or operatorIr!.opcode == -306 or operatorIr!.opcode == -307 or operatorIr!.opcode == -271 or operatorIr!.opcode == -275 or operatorIr!.opcode == -276 or (operatorIr!.opcode -> isArrayExchangeOpcode) or (operatorIr!.opcode -> isOwnedContainerTransformOpcode) or (operatorIr!.opcode -> isRawArenaOpcode))) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32 or operatorIr!.kind == 36
+                     -> if { secondOperand! => operatorIr!.operand1 }
+                 operatorIr!.kind == 8 -> if {
+                     # A binary's AST children are its authoritative left/right
+                     # topology. Re-parented IR children can also contain a
+                     # nested operand's leaf (for example `2 + byte % 2`), so
+@@ -618,25 +618,12 @@ finalizeOrdinaryStructure nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], re
+                 streamJoinAst.length == 5 -> if { 1 => streamJoinIr!.opcode }
+                 streamJoinAst.length == 6 -> if {
+                     (streamJoinText -> byte(streamJoinAst.start)) == 99
+                         -> if { 2 => streamJoinIr!.opcode } else { 3 => streamJoinIr!.opcode }
+                 }
+-                streamJoinIr!.parent >= 0 -> if {
+-                    nodes[streamJoinIr!.parent] => streamJoinParent!
+-                    streamJoinParent!.kind == 17 and streamJoinParent!.operand0 == streamJoinSource!
+-                        -> if {
+-                            streamJoinIrIndex! => streamJoinParent!.operand0
+-                            streamJoinIr!.typeOrigin => streamJoinParent!.typeOrigin
+-                            streamJoinIr!.typeModule => streamJoinParent!.typeModule
+-                            streamJoinIr!.typeSymbol => streamJoinParent!.typeSymbol
+-                            streamJoinIr!.typeId => streamJoinParent!.typeId
+-                            streamJoinIr!.typeKind => streamJoinParent!.typeKind
+-                            streamJoinIr!.typeFlags => streamJoinParent!.typeFlags
+-                            streamJoinParent! => nodes[streamJoinIr!.parent]
+-                        }
+-                }
+                 streamJoinIr! => nodes[streamJoinIrIndex!]
++                nodes -> finalizeStreamJoinValue(streamJoinIrIndex!, prepared)
+             }
+         }
+         streamJoinIrIndex! + 1 => streamJoinIrIndex!
+     }
+ }
+@@ -890,22 +877,13 @@ finalizeOrdinaryCanonicalCalls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~
+             -1 => foldSource!
+             UIntSize(0) => foldSourceStart!
+             expressionIrStart => foldSourceSearch!
+             foldSourceSearch! < expressionIrEnd -> while {
+                 nodes[foldSourceSearch!] => foldSourceCandidate
+-                false => foldSourceSupported!
+-                foldSourceCandidate.kind == 31 -> if { true => foldSourceSupported! }
+-                foldSourceCandidate.typeId >= 0 -> if {
+-                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(foldSourceCandidate.typeId) => foldSourceCandidateValueType
+-                    foldSourceCandidateValueType >= 0
+-                        and (frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 2
+-                        or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 3
+-                        or frozenRecursiveSemanticTypes[foldSourceCandidateValueType].kind == 4)
+-                        -> if { true => foldSourceSupported! }
+-                }
++                foldSourceCandidate -> foldSourceSupported(frozenRecursiveSemanticTypes) => supportedFoldSource
+                 prepared.package.nodes[sourceRange.astStart + foldSourceCandidate.astNode].start => foldSourceCandidateStart
+-                foldSourceSupported! and foldSourceCandidate.parent == foldIr!.parent and foldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + foldIr!.astNode].start and (foldSource! < 0 or foldSourceCandidateStart > foldSourceStart!)
++                supportedFoldSource and foldSourceCandidate.parent == foldIr!.parent and foldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + foldIr!.astNode].start and (foldSource! < 0 or foldSourceCandidateStart > foldSourceStart!)
+                     -> if {
+                         foldSourceSearch! => foldSource!
+                         foldSourceCandidateStart => foldSourceStart!
+                     }
+                 foldSourceSearch! + 1 => foldSourceSearch!
+@@ -1244,11 +1222,18 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
+                                     -> if {
+                                         true => matchCandidateEnum!
+                                     }
+                             }
+                     }
+-                (matchCandidate.typeOrigin == 1 and ((matchCandidate.typeSymbol >= 2 and matchCandidate.typeSymbol <= 14) or (matchCandidate.typeSymbol >= 19 and matchCandidate.typeSymbol <= 22))) => matchCandidateInteger
++                (matchCandidate.typeOrigin == 1 and ((matchCandidate.typeSymbol >= 2 and matchCandidate.typeSymbol <= 14) or (matchCandidate.typeSymbol >= 19 and matchCandidate.typeSymbol <= 22))) => matchCandidateInteger!
++                frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(matchCandidate.typeId) => matchCandidateReadTypeId
++                matchCandidateReadTypeId >= 0 -> if {
++                    frozenRecursiveSemanticTypes[matchCandidateReadTypeId] => matchCandidateReadType
++                    matchCandidateReadType.kind == 1 and matchCandidateReadType.origin == 1
++                        and ((matchCandidateReadType.symbol >= 2 and matchCandidateReadType.symbol <= 14)
++                        or (matchCandidateReadType.symbol >= 19 and matchCandidateReadType.symbol <= 22)) => matchCandidateInteger!
++                }
+                 matchUsesEnumPattern!
+                     and matchCandidateBelongs!
+                     and matchCandidateDistance! == 1
+                     and matchCandidate.kind == 13
+                     and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start
+@@ -1262,11 +1247,11 @@ finalizeOrdinaryControls nodes: mut [TypedIrNode; ~], astToIr: mut [Int; ~], res
+                 matchCandidateBelongs!
+                     and matchCandidate.astNode != matchFlowAst
+                     and matchCandidateValueRank! > 0
+                     and matchCandidatePatternCompatible!
+                     and matchCandidateAst.start < matchControlNode.start
+-                    and ((matchUsesEnumPattern! and matchCandidateEnum!) or (not matchUsesEnumPattern! and matchCandidateInteger))
++                    and ((matchUsesEnumPattern! and matchCandidateEnum!) or (not matchUsesEnumPattern! and matchCandidateInteger!))
+                     -> if {
+                         ((matchCandidateEnum! and matchSubjectEnum!) or (not matchCandidateEnum! and not matchSubjectEnum!)) => sameMatchSubjectClass
+                         matchCandidateValueRank! > matchSubjectValueRank! => betterMatchSubjectRank
+                         (matchCandidateValueRank! == matchSubjectValueRank!
+                             and (matchCandidateDistance! < matchSubjectDistance!
+diff --git a/selfhost/ir/typed/resolved_context_normalize.slg b/selfhost/ir/typed/resolved_context_normalize.slg
+index a41cab5b..eccadd85 100644
+--- a/selfhost/ir/typed/resolved_context_normalize.slg
++++ b/selfhost/ir/typed/resolved_context_normalize.slg
+@@ -37,11 +37,11 @@ normalizeResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticCont
+     nodes -> normalizeResolvedControls(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+     nodes -> normalizeResolvedDeclaredRuntime(prepared)
+     nodes -> normalizeResolvedProcessRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+     nodes -> normalizeResolvedDirectoryRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags) => directoryRuntimeSymbols
+     nodes -> normalizeResolvedFileRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+-    nodes -> normalizeResolvedSocketRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
++    nodes -> normalizeResolvedSocketRuntime(prepared)
+     nodes -> normalizeResolvedDnsRuntime(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags) => dnsRuntimeSymbols
+     nodes -> normalizeResolvedContextualTypes(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+     nodes -> normalizeResolvedStructuralOperands(prepared, recursiveTypes, inferred, frozenRecursiveSemanticTypes, frozenRecursiveTypeByAst, recursiveReferences, recursiveTypeFlags)
+     nodes -> normalizeResolvedLengthResults(frozenRecursiveSemanticTypes)
+     nodes -> normalizeResolvedConsoleProducerResults
+diff --git a/selfhost/ir/typed/resolved_context_normalize_phases.slg b/selfhost/ir/typed/resolved_context_normalize_phases.slg
+index f21539ad..94d74133 100644
+--- a/selfhost/ir/typed/resolved_context_normalize_phases.slg
++++ b/selfhost/ir/typed/resolved_context_normalize_phases.slg
+@@ -1694,10 +1694,11 @@ normalizeResolvedDeclaredRuntime nodes: mut [TypedIrNode; ~], prepared: ref sema
+ # Generic closure and final nominal receiver sealing can resolve a method
+ # after initial lowering. Classify its declared intrinsic identity again;
+ # ordinary user methods keep their existing call plan and opcode.
+ public sealDeclaredRuntimeCalls nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+     nodes -> normalizeResolvedDeclaredRuntime(prepared)
++    nodes -> normalizeResolvedSocketRuntime(prepared)
+ }
+ 
+ resolvedProcessRuntimeOpcode call: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Int {
+     -1 => opcode!
+     call.targetModule >= 0
+@@ -2126,11 +2127,11 @@ normalizeResolvedFileRuntime nodes: mut [TypedIrNode; ~], prepared: ref semantic
+             fileMatchIndex! + 1 => fileMatchIndex!
+         }
+     }
+ }
+ 
+-normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, recursiveTypes: ref expressionTypeIds.ExpressionTypeIdSet, inferred: ref [expressionTypes.ExpressionType; ~], frozenRecursiveSemanticTypes: ref [typeIds.SemanticType; ~], frozenRecursiveTypeByAst: ref [Int; ~], recursiveReferences: ref [typeIds.TypeReference; ~], recursiveTypeFlags: ref [Int; ~] -> Unit {
++normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
+     # A logical namespace may span model and runtime source files. Recognize
+     # the selected intrinsic declaration, never a user call's spelling.
+     [Bool; ~] => socketSources!
+     0 => sourceIndex!
+     sourceIndex! < (prepared.package.ranges -> len)
+@@ -2151,11 +2152,11 @@ normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semant
+         moduleIndex! + 1 => moduleIndex!
+     }
+     0 => callIndex!
+     callIndex! < (nodes -> len) -> while {
+         nodes[callIndex!] => call!
+-        (call!.kind == 6 or call!.kind == 9) and call!.opcode == -1
++        (call!.kind == 6 or call!.kind == 9)
+             and call!.targetModule >= 0 and call!.targetModule < (socketSources! -> len)
+             and socketSources![call!.targetModule]
+             -> if {
+                 prepared.package.ranges[call!.targetModule] => range
+                 call!.symbol >= 0 and call!.symbol < range.symbolCount
+@@ -2263,10 +2264,17 @@ normalizeResolvedSocketRuntime nodes: mut [TypedIrNode; ~], prepared: ref semant
+                                     source -> sourceMatches(name.span.start, name.span.length, "writeTimeout")
+                                         -> if { -284 => call!.opcode }
+                                     source -> sourceMatches(name.span.start, name.span.length, "close")
+                                         -> if { -270 => call!.opcode }
+                                 }
++                                # Late receiver resolution can replace a stale ordinary
++                                # target or opcode. The selected intrinsic also owns
++                                # whether its producer is a Task, before await checks.
++                                (call!.opcode -> isSocketCompletionDequeueOpcode)
++                                    and (declaration.flags / 8) % 2 == 1
++                                    and (call!.flags / 8) % 2 == 0
++                                    -> if { call!.flags + 8 => call!.flags }
+                                 call! => nodes[callIndex!]
+                             }
+                     }
+             }
+         callIndex! + 1 => callIndex!
+@@ -3151,19 +3159,18 @@ normalizeResolvedStructuralOperands nodes: mut [TypedIrNode; ~], prepared: ref s
+                             and ((subjectWhenSibling.typeSymbol >= 2 and subjectWhenSibling.typeSymbol <= 14)
+                             or (subjectWhenSibling.typeSymbol >= 19 and subjectWhenSibling.typeSymbol <= 23))
+                             -> if {
+                                 true => subjectWhenSiblingInteger!
+                             }
+-                        subjectWhenSibling.typeId >= 0 -> if {
+-                            frozenRecursiveSemanticTypes[subjectWhenSibling.typeId] => subjectWhenSiblingType
++                        frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(subjectWhenSibling.typeId) => subjectWhenSiblingReadTypeId
++                        subjectWhenSiblingReadTypeId >= 0 -> if {
++                            frozenRecursiveSemanticTypes[subjectWhenSiblingReadTypeId] => subjectWhenSiblingType
+                             subjectWhenSiblingType.kind == 1
+                                 and subjectWhenSiblingType.origin == 1
+                                 and ((subjectWhenSiblingType.symbol >= 2 and subjectWhenSiblingType.symbol <= 14)
+                                 or (subjectWhenSiblingType.symbol >= 19 and subjectWhenSiblingType.symbol <= 23))
+-                                -> if {
+-                                    true => subjectWhenSiblingInteger!
+-                                }
++                                => subjectWhenSiblingInteger!
+                         }
+                         subjectWhenSibling.parent == subjectWhenRepair!.parent and subjectWhenSiblingInteger!
+                             -> if {
+                                 subjectWhenSiblingIndex! => subjectWhenRepair!.operand0
+                                 subjectWhenRepair! => nodes[subjectWhenRepairIndex!]
+diff --git a/selfhost/ir/typed/resolved_context_seal.slg b/selfhost/ir/typed/resolved_context_seal.slg
+index 08ca6dda..da336045 100644
+--- a/selfhost/ir/typed/resolved_context_seal.slg
++++ b/selfhost/ir/typed/resolved_context_seal.slg
+@@ -90,10 +90,29 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
+     # operation even though the semantic result and downstream ABI are UInt16.
+     0 => contextualBinaryLiteralIndex!
+     contextualBinaryLiteralIndex! < (nodes -> len)
+         -> while {
+             nodes[contextualBinaryLiteralIndex!] => contextualBinary
++            # Subject ranges supply a declared argument context to both bounds,
++            # including a unary-minus carrier, just as the C# emitter does.
++            contextualBinary.kind == 31 and contextualBinary.parent >= 0
++                and contextualBinary.parent < (nodes -> len)
++                -> if {
++                    nodes[contextualBinary.parent] => rangeArm
++                    rangeArm.kind == 19 and rangeArm.operand0 == contextualBinaryLiteralIndex!
++                        and rangeArm.parent >= 0 and rangeArm.parent < (nodes -> len)
++                        -> if {
++                            nodes[rangeArm.parent] => rangeControl
++                            rangeControl.kind == 34 and rangeControl.operand0 >= 0
++                                and rangeControl.operand0 < (nodes -> len)
++                                -> if {
++                                    nodes[rangeControl.operand0] -> materializedReadPeer(frozenRecursiveSemanticTypes, recursiveTypeFlags) => rangeSubject
++                                    nodes -> sealNumericLiteralPeerContext(contextualBinary.operand0, rangeSubject)
++                                    nodes -> sealNumericLiteralPeerContext(contextualBinary.operand1, rangeSubject)
++                                }
++                        }
++                }
+             (contextualBinary.opcode >= grammar.tokenIdPlus()
+                 and contextualBinary.opcode <= grammar.tokenIdPercent())
+                 => contextualBinaryArithmetic
+             (contextualBinaryArithmetic
+                 or contextualBinary.opcode == grammar.tokenIdEqualEqual()
+@@ -1549,14 +1568,14 @@ sealResolvedContext nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.S
+                             or finalFileIntrinsicOpcode! == -232
+                             or finalFileIntrinsicOpcode! == -234
+                             or finalFileIntrinsicOpcode! == -311
+                             or finalFileIntrinsicOpcode! == -312
+                             or (finalFileIntrinsicOpcode! <= -313 and finalFileIntrinsicOpcode! >= -318)
+-                            or (finalFileIntrinsicOpcode! -> isAsyncFileReadOpcode)
++                            or (finalFileIntrinsicOpcode! -> isAsyncFileOpcode)
+                             -> if {
+                                 finalFileIntrinsicOpcode! => finalFileIntrinsic!.opcode
+-                                finalFileIntrinsicOpcode! -> isAsyncFileReadOpcode
++                                finalFileIntrinsicOpcode! -> isAsyncFileOpcode
+                                     and (finalFileIntrinsic!.flags / 8) % 2 == 0
+                                     -> if { finalFileIntrinsic!.flags + 8 => finalFileIntrinsic!.flags }
+                                 finalFileIntrinsic! => nodes[finalFileIntrinsicIndex!]
+                             }
+                     }
+diff --git a/selfhost/ir/typed/source_lowering.slg b/selfhost/ir/typed/source_lowering.slg
+index 83c1ea8e..69683537 100644
+--- a/selfhost/ir/typed/source_lowering.slg
++++ b/selfhost/ir/typed/source_lowering.slg
+@@ -521,10 +521,11 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
+                                                             }
+                                                     }
+                                                     localEntryPatternFunctionSearch! + 1 => localEntryPatternFunctionSearch!
+                                                 }
+                                         }
++                                        frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(entryPatternSubjectCandidateType!) => entryPatternSubjectCandidateType!
+                                         entryPatternSubjectAst.parent == entryPatternSubjectFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 1)
+                                             -> if {
+                                                 entryPatternSubjectTypeId! < 0 or entryPatternSubjectAst.start > entryPatternSubjectStart!
+                                                     -> if {
+                                                         entryPatternSubjectCandidateType! => entryPatternSubjectTypeId!
+@@ -547,17 +548,15 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
+                                             -> if {
+                                                 entryPatternFlowCall.targetSourceModule -> functionResultTypeId(entryPatternFlowCall.functionSymbol, prepared, recursiveTypes, frozenRecursiveSemanticTypes) => entryPatternSubjectTypeId!
+                                             }
+                                     }
+                                 }
+-                                # Legacy expression inference can know the result of
+-                                # an indexed dictionary access before the recursive
+-                                # expression map is materialized. Reconstruct the
+-                                # nominal enum subject from that shallow identity so
+-                                # its payload binding is still emitted.
++                                frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(entryPatternSubjectTypeId!) => entryPatternSubjectTypeId!
++                                # The legacy view projects the same canonical
++                                # expressions. Recover only from a nominal value
++                                # inside this subject flow.
+                                 entryPatternSubjectTypeId! < 0 -> if {
+-                                    -1 => entryPatternLegacySubjectOrigin
+                                     -1 => entryPatternLegacySubjectModule!
+                                     -1 => entryPatternLegacySubjectSymbol!
+                                     0 => entryPatternLegacySubjectSearch!
+                                     entryPatternLegacySubjectSearch! < (inferred -> len)
+                                         -> while {
+@@ -571,11 +570,11 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
+                                                             entryPatternLegacyAncestor! == entryPatternSubjectFlowAst
+                                                                 -> if { true => entryPatternLegacyBelongs! } else {
+                                                                     prepared.package.nodes[sourceRange.astStart + entryPatternLegacyAncestor!].parent => entryPatternLegacyAncestor!
+                                                                 }
+                                                         }
+-                                                    entryPatternLegacySubject.targetModule >= 0 and entryPatternLegacySubject.targetSymbol >= 0 and prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start
++                                                    entryPatternLegacyBelongs! and entryPatternLegacySubject.targetModule >= 0 and entryPatternLegacySubject.targetSymbol >= 0 and prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start
+                                                         -> if {
+                                                             entryPatternLegacySubject.targetModule => entryPatternLegacySubjectModule!
+                                                             entryPatternLegacySubject.targetSymbol => entryPatternLegacySubjectSymbol!
+                                                         }
+                                                 }
+@@ -1523,11 +1522,11 @@ lowerSource requestedSourceIndex: Int, parallelFunctions: Bool, profileFunctionL
+                                                                             IntrinsicNameRequest { source: source, token: prepared.package.tokens[sourceRange.tokenStart + entryIntrinsicChild.payloadToken] } -> intrinsicOpcode => entryExpressionIntrinsicOpcode
+                                                                             entryExpressionIntrinsicOpcode <= -201
+                                                                                 and entryExpressionIntrinsicOpcode >= -240
+                                                                                 and entryExpressionIntrinsicOpcode == entryFlowEmissionOpcode!
+                                                                                 -> if { entryExpressionIntrinsicOpcode => entryExpressionOpcode! }
+-                                                                            entryExpressionIntrinsicOpcode == -320
++                                                                            entryExpressionIntrinsicOpcode -> isAsyncFileOpcode
+                                                                                 and entryExpressionIntrinsicOpcode == entryFlowEmissionOpcode!
+                                                                                 -> if {
+                                                                                     entryExpressionIntrinsicOpcode => entryExpressionOpcode!
+                                                                                     (entryExpressionFlags! / 8) % 2 == 0
+                                                                                         -> if { entryExpressionFlags! + 8 => entryExpressionFlags! }
+diff --git a/selfhost/ir/typed/source_lowering_finalize.slg b/selfhost/ir/typed/source_lowering_finalize.slg
+index 271f9e4c..b7807881 100644
+--- a/selfhost/ir/typed/source_lowering_finalize.slg
++++ b/selfhost/ir/typed/source_lowering_finalize.slg
+@@ -174,11 +174,11 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
+     [Int; ~] => entryChildNext!
+     nodes -> indexSourceOrderedChildren(entryExpressionStart, entryExpressionEnd, entryChildHeads!, entryChildNext!)
+     entryExpressionStart => entryOperandIr!
+     entryOperandIr! < entryExpressionEnd -> while {
+         nodes[entryOperandIr!] => entryOperator!
+-        entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and (entryOperator!.opcode == -27 or (entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229 or entryOperator!.opcode == -236)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -320 or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
++        entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and (entryOperator!.opcode == -27 or (entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229 or entryOperator!.opcode == -236)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or (entryOperator!.opcode -> isAsyncFileOpcode) or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+             -> if {
+                 -1 => entryFirstOperand!
+                 -1 => entrySecondOperand!
+                 UIntSize(0) => entryFirstStart!
+                 UIntSize(0) => entrySecondStart!
+@@ -254,11 +254,11 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
+                         entryUnaryOperand.typeSymbol => entryOperator!.typeSymbol
+                         entryUnaryOperand.typeId => entryOperator!.typeId
+                         entryUnaryOperand.typeKind => entryOperator!.typeKind
+                         entryUnaryOperand.typeFlags => entryOperator!.typeFlags
+                     }
+-                entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -243) or (entryOperator!.opcode <= -246 and entryOperator!.opcode >= -247) or entryOperator!.opcode == -252 or (entryOperator!.opcode <= -255 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or entryOperator!.opcode == -320 or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
++                entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or (entryOperator!.opcode == -223 or entryOperator!.opcode == -303) or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or (entryOperator!.opcode <= -241 and entryOperator!.opcode >= -243) or (entryOperator!.opcode <= -246 and entryOperator!.opcode >= -247) or entryOperator!.opcode == -252 or (entryOperator!.opcode <= -255 and entryOperator!.opcode >= -257) or entryOperator!.opcode == -220 or (entryOperator!.opcode -> isAsyncFileOpcode) or entryOperator!.opcode == -321 or entryOperator!.opcode == -221 or entryOperator!.opcode == -304 or entryOperator!.opcode == -305 or entryOperator!.opcode == -306 or entryOperator!.opcode == -307 or entryOperator!.opcode == -271 or entryOperator!.opcode == -275 or entryOperator!.opcode == -276 or (entryOperator!.opcode -> isArrayExchangeOpcode) or (entryOperator!.opcode -> isOwnedContainerTransformOpcode) or (entryOperator!.opcode -> isRawArenaOpcode))) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32 or entryOperator!.kind == 36
+                     -> if { entrySecondOperand! => entryOperator!.operand1 }
+                 entryOperator!.kind == 22 -> if {
+                     -1 => entryOperator!.operand0
+                     entryFirstOperand! => entryOperator!.operand1
+                 }
+@@ -636,25 +636,12 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
+                 entryStreamJoinAst.length == 5 -> if { 1 => entryStreamJoin!.opcode }
+                 entryStreamJoinAst.length == 6 -> if {
+                     (entryStreamJoinText -> byte(entryStreamJoinAst.start)) == 99
+                         -> if { 2 => entryStreamJoin!.opcode } else { 3 => entryStreamJoin!.opcode }
+                 }
+-                entryStreamJoin!.parent >= 0 -> if {
+-                    nodes[entryStreamJoin!.parent] => entryStreamJoinParent!
+-                    entryStreamJoinParent!.kind == 17 and entryStreamJoinParent!.operand0 == entryStreamJoinSource!
+-                        -> if {
+-                            entryStreamJoinIr! => entryStreamJoinParent!.operand0
+-                            entryStreamJoin!.typeOrigin => entryStreamJoinParent!.typeOrigin
+-                            entryStreamJoin!.typeModule => entryStreamJoinParent!.typeModule
+-                            entryStreamJoin!.typeSymbol => entryStreamJoinParent!.typeSymbol
+-                            entryStreamJoin!.typeId => entryStreamJoinParent!.typeId
+-                            entryStreamJoin!.typeKind => entryStreamJoinParent!.typeKind
+-                            entryStreamJoin!.typeFlags => entryStreamJoinParent!.typeFlags
+-                            entryStreamJoinParent! => nodes[entryStreamJoin!.parent]
+-                        }
+-                }
+                 entryStreamJoin! => nodes[entryStreamJoinIr!]
++                nodes -> finalizeStreamJoinValue(entryStreamJoinIr!, prepared)
+             }
+         }
+         entryStreamJoinIr! + 1 => entryStreamJoinIr!
+     }
+     0 => qualifiedEntryCallMapSearch!
+@@ -840,22 +827,13 @@ finalizeSourceEntry nodes: mut [TypedIrNode; ~], entryAstToIr: mut [Int; ~], res
+             -1 => entryFoldSource!
+             UIntSize(0) => entryFoldSourceStart!
+             entryExpressionStart => entryFoldSourceSearch!
+             entryFoldSourceSearch! < entryExpressionEnd -> while {
+                 nodes[entryFoldSourceSearch!] => entryFoldSourceCandidate
+-                false => entryFoldSourceSupported!
+-                entryFoldSourceCandidate.kind == 31 -> if { true => entryFoldSourceSupported! }
+-                entryFoldSourceCandidate.typeId >= 0 -> if {
+-                    frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(entryFoldSourceCandidate.typeId) => entryFoldSourceCandidateValueType
+-                    entryFoldSourceCandidateValueType >= 0
+-                        and (frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 2
+-                        or frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 3
+-                        or frozenRecursiveSemanticTypes[entryFoldSourceCandidateValueType].kind == 4)
+-                        -> if { true => entryFoldSourceSupported! }
+-                }
++                entryFoldSourceCandidate -> foldSourceSupported(frozenRecursiveSemanticTypes) => supportedEntryFoldSource
+                 prepared.package.nodes[sourceRange.astStart + entryFoldSourceCandidate.astNode].start => entryFoldSourceCandidateStart
+-                entryFoldSourceSupported! and entryFoldSourceCandidate.parent == entryFold!.parent and entryFoldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + entryFold!.astNode].start and (entryFoldSource! < 0 or entryFoldSourceCandidateStart > entryFoldSourceStart!)
++                supportedEntryFoldSource and entryFoldSourceCandidate.parent == entryFold!.parent and entryFoldSourceCandidateStart < prepared.package.nodes[sourceRange.astStart + entryFold!.astNode].start and (entryFoldSource! < 0 or entryFoldSourceCandidateStart > entryFoldSourceStart!)
+                     -> if {
+                         entryFoldSourceSearch! => entryFoldSource!
+                         entryFoldSourceCandidateStart => entryFoldSourceStart!
+                     }
+                 entryFoldSourceSearch! + 1 => entryFoldSourceSearch!
+diff --git a/selfhost/ir/typed/type_queries.slg b/selfhost/ir/typed/type_queries.slg
+index b3b83437..7542f29c 100644
+--- a/selfhost/ir/typed/type_queries.slg
++++ b/selfhost/ir/typed/type_queries.slg
+@@ -4,10 +4,15 @@ import sollang.compiler.semantic.context as semanticContext
+ import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+ import sollang.compiler.semantic.type_ids as typeIds
+ import sollang.compiler.syntax as syntax
+ import syntax.generated.slg as grammar
+ 
++foldSourceSupported source: TypedIrNode, types: ref [typeIds.SemanticType; ~] -> Bool {
++    source.kind == 31 -> if { true -> return }
++    types -> typeIds.foldInputTypeSupported(source.typeId)
++}
++
+ # A declaration template cannot replace a literal's committed value type.
+ # All collection-context passes share this boundary before changing storage
+ # or element identities; generic bodies retain their inferred input facts.
+ hasConcreteLiteralContext types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+     typeId >= 0 and typeId < (types -> len)
