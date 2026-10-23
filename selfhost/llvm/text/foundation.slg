@@ -2582,6 +2582,18 @@ canonicalMemberPathAvailable nodeIndex: Int, context: ref emitterContext.EmitCon
     (nodeIndex -> canonicalMemberValueTypeId(context, state)) >= 0
 }
 
+interpolationIntegerTypeSymbol nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, fallbackSymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => typeId
+    typeId >= 0 and typeId < (context.types -> len)
+        -> if {
+            context.types[typeId] => concreteType
+            concreteType.kind == 1 and concreteType.origin == 1
+                and (concreteType.symbol -> integerWidth(context, state)) > 0
+                -> if { concreteType.symbol -> return }
+        }
+    fallbackSymbol
+}
+
 interpolationNodeIntegerWidth nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     nodes[nodeIndex] => node
     node.typeSymbol -> integerWidth(context, state) => width!

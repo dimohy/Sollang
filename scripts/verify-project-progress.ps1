@@ -69,17 +69,31 @@ if (@($completedUnits | ForEach-Object id | Sort-Object -Unique).Count -ne $comp
     throw 'completed implementation units must be unique and separate from current work'
 }
 foreach ($unit in $completedUnits) {
-    if ($unit.status -cne 'complete' -or $unit.stepsComplete -ne $unit.stepsTotal -or
+    $unknownSteps = $null -eq $unit.stepsComplete -and $null -eq $unit.stepsTotal
+    $validSteps = if ($unknownSteps) {
+        $unit.PSObject.Properties['stepsEvidenceState'] -and
+            $unit.stepsEvidenceState -ceq 'unknown' -and
+            $unit.PSObject.Properties['stepsEvidenceReason'] -and
+            -not [string]::IsNullOrWhiteSpace($unit.stepsEvidenceReason)
+    } else {
+        ($unit.stepsComplete -is [int] -or $unit.stepsComplete -is [long]) -and
+            ($unit.stepsTotal -is [int] -or $unit.stepsTotal -is [long]) -and
+            $unit.stepsComplete -eq $unit.stepsTotal -and $unit.stepsTotal -gt 0
+    }
+    if ($unit.status -cne 'complete' -or -not $validSteps -or
+        -not ($unit.focusedComplete -is [int] -or $unit.focusedComplete -is [long]) -or
+        -not ($unit.focusedTotal -is [int] -or $unit.focusedTotal -is [long]) -or
         $unit.focusedComplete -ne $unit.focusedTotal -or
+        $unit.focusedTotal -le 0 -or
         [string]::IsNullOrWhiteSpace($unit.evidence) -or
         -not (Test-Path -LiteralPath (Join-Path $RepositoryRoot $unit.evidence) -PathType Leaf)) {
         throw "completed implementation unit lacks exact counts or evidence: $($unit.id)"
     }
 }
 $unitProgress = $progress.currentGoal.identifiedImplementationUnits
-$expectedUnitComplete = $completedUnits.Count + [int]($progress.currentGoal.currentWork.status -ceq 'complete')
+$expectedUnitComplete = $completedUnits.Count
 $queuedUnits = @($progress.currentGoal.queuedUnits)
-$expectedUnitTotal = $completedUnits.Count + 1 + $queuedUnits.Count
+$expectedUnitTotal = $completedUnits.Count + $queuedUnits.Count
 if ($unitProgress.complete -ne $expectedUnitComplete -or
     $unitProgress.total -ne $expectedUnitTotal -or
     $unitProgress.remaining -ne ($expectedUnitTotal - $expectedUnitComplete) -or

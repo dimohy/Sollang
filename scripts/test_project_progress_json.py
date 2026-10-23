@@ -32,6 +32,12 @@ class ProjectProgressJsonTests(unittest.TestCase):
         goal, compiler, stdlib, _ = [json.loads(before[path].decode("utf-8-sig")) for path in paths]
         self.assertEqual(report["currentGoal"]["queuedUnits"], goal["queuedUnits"])
         self.assertEqual(report["currentGoal"]["completedUnits"], goal["completedUnits"])
+        units = report["currentGoal"]["identifiedImplementationUnits"]
+        self.assertEqual(units["complete"], len(goal["completedUnits"]))
+        self.assertEqual(units["total"], len(goal["completedUnits"]) + len(goal["queuedUnits"]))
+        self.assertEqual(units["completedIds"], [row["id"] for row in goal["completedUnits"]])
+        self.assertNotIn(goal["currentWork"]["id"], units["completedIds"])
+        self.assertEqual(report["currentGoal"]["currentFocusedGate"]["name"], goal["currentFocusedGate"])
         self.assertEqual(report["currentGoal"]["compiler"]["total"], len(compiler["defects"]))
         self.assertEqual(report["currentGoal"]["compiler"]["stabilized"],
                          sum(row["state"] == "closed" for row in compiler["defects"]))
@@ -48,6 +54,77 @@ class ProjectProgressJsonTests(unittest.TestCase):
             input=json.dumps(fixture), capture_output=True, text=True,
             encoding="utf-8", timeout=30)
         self.assertNotEqual(result.returncode, 0)
+
+    def test_retained_counts_require_exact_focus_and_explicit_unknown_workflow(self):
+        command = r"""
+$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest
+$request = $input | ConvertFrom-Json
+$RepositoryRoot = $request.root
+$completedUnits = @($request.unit)
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($request.validator, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'VALIDATOR_PARSE_FAILED' }
+$validation = @($ast.FindAll({ param($a)
+    $a -is [System.Management.Automation.Language.ForEachStatementAst] -and
+        $a.Extent.Text.StartsWith('foreach ($unit in $completedUnits) {', [StringComparison]::Ordinal)
+}, $true))
+if ($validation.Count -ne 1) { throw 'UNIT_VALIDATION_NOT_UNIQUE' }
+Invoke-Expression $validation[0].Extent.Text
+"""
+        goal = json.loads((ROOT / "scripts/contracts/active-goal-progress.json").read_text(encoding="utf-8-sig"))
+        known = copy.deepcopy(goal["completedUnits"][0])
+        unknown = {**known, "stepsComplete": None, "stepsTotal": None,
+                   "stepsEvidenceState": "unknown", "stepsEvidenceReason": "Historical workflow totals were not recorded."}
+        missing_reason = dict(unknown)
+        missing_reason.pop("stepsEvidenceReason")
+        scenarios = [
+            ("current-retained-units", goal["completedUnits"], True),
+            ("known", known, True), ("explicit-unknown", unknown, True),
+            ("unknown-without-reason", missing_reason, False),
+            ("unknown-claimed-complete", {**unknown, "stepsEvidenceState": "complete"}, False),
+            ("partial-unknown", {**unknown, "stepsTotal": 1}, False),
+            ("step-mismatch", {**known, "stepsComplete": 0}, False),
+            ("fractional-steps", {**known, "stepsComplete": 1.5, "stepsTotal": 1.5}, False),
+            ("zero-focus", {**known, "focusedComplete": 0, "focusedTotal": 0}, False),
+            ("fractional-focus", {**known, "focusedComplete": 1.5, "focusedTotal": 1.5}, False),
+            ("focus-mismatch", {**known, "focusedComplete": 0}, False),
+            ("pending-unit", {**known, "status": "pending"}, False),
+            ("missing-evidence", {**known, "evidence": "missing-progress-proof.json"}, False),
+        ]
+        for name, unit, allowed in scenarios:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    [shutil.which("pwsh") or "pwsh", "-NoProfile", "-Command", command],
+                    input=json.dumps({"root": str(ROOT), "validator": str(ROOT / "scripts/verify-project-progress.ps1"), "unit": unit}),
+                    capture_output=True, text=True, encoding="utf-8", timeout=30)
+                self.assertEqual(result.returncode == 0, allowed, result.stderr or result.stdout)
+
+    def test_workflow_task_status_does_not_change_durable_unit_counts(self):
+        command = r"""
+$ErrorActionPreference = 'Stop'; Set-StrictMode -Version Latest
+$request = $input | ConvertFrom-Json
+$completedUnits = @('first', 'second'); $queuedUnits = @('third')
+$work = [pscustomobject]@{status=$request.status}
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($request.reporter, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'REPORTER_PARSE_FAILED' }
+foreach ($name in @('unitComplete', 'unitTotal', 'unitRemaining')) {
+    $assignment = @($ast.FindAll({ param($a)
+        $a -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+            $a.Left.Extent.Text -ceq ('$' + $name)
+    }, $true))
+    if ($assignment.Count -ne 1) { throw 'UNIT_COUNT_ASSIGNMENT_NOT_UNIQUE' }
+    Invoke-Expression $assignment[0].Extent.Text
+}
+@{complete=$unitComplete;total=$unitTotal;remaining=$unitRemaining} | ConvertTo-Json
+"""
+        for status in ("active", "pending", "complete"):
+            with self.subTest(status=status):
+                result = subprocess.run(
+                    [shutil.which("pwsh") or "pwsh", "-NoProfile", "-Command", command],
+                    input=json.dumps({"reporter": str(ROOT / "scripts/show-project-progress.ps1"), "status": status}),
+                    capture_output=True, text=True, encoding="utf-8", timeout=30, check=True)
+                self.assertEqual(json.loads(result.stdout), {"complete": 2, "total": 3, "remaining": 1})
 
     def test_current_focus_preserves_completion_and_rejects_invalid_selection(self):
         command = r"""

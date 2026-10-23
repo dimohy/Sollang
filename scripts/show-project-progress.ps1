@@ -247,11 +247,10 @@ if ($null -ne $activeGoal) {
         @($queuedUnits | Where-Object { $_.id -ceq $work.id -or $completedUnits.id -ccontains $_.id }).Count -gt 0) {
         throw 'queued implementation units must be unique, pending, and distinct from current and completed work'
     }
-    $unitComplete = $completedUnits.Count + [int]($work.status -ceq 'complete')
-    $unitTotal = $completedUnits.Count + 1 + $queuedUnits.Count
+    $unitComplete = $completedUnits.Count
+    $unitTotal = $completedUnits.Count + $queuedUnits.Count
     $unitRemaining = $unitTotal - $unitComplete
     $completedUnitIds = @($completedUnits | ForEach-Object id)
-    if ($work.status -ceq 'complete') { $completedUnitIds += $work.id }
     $steps = @($work.steps)
     $cases = @($work.focusedCases)
     $retainedPositiveCases = @()
@@ -504,7 +503,7 @@ if ($null -ne $activeGoal) {
             currentStatus = $work.status
             completedIds = $completedUnitIds
             queuedIds = @($queuedUnits | ForEach-Object id)
-            scope = 'currently identified units only; future units are not enumerated'
+            scope = 'durable completed and queued units only; current workflow task is excluded; future units are not enumerated'
         }
         baseline = $activeGoal.baseline
         baselineDisplay = $baselineDisplay

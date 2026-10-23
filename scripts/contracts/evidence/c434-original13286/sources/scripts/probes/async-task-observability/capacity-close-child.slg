@@ -1,0 +1,50 @@
+import std.async.diagnostics as diagnostics
+
+value input: Int -> async Int { input }
+parent: -> async Int {
+    7 -> value => child
+    child -> await
+}
+main {
+    diagnostics.startDiagnosticSession(diagnostics.DiagnosticLimits { maximumTrackedTasks: 1 }) -> when {
+        Ok(session) {
+            session => active!
+            1 -> value => firstTask
+            parent() => secondTask
+            active! -> track(firstTask) -> when {
+                Ok(first) {
+                    active! -> track(secondTask) -> when {
+                        Err(failure) {
+                            first -> await => firstValue
+                            active! -> close -> when {
+                                Ok(summary) {
+                                    "closed" -> println
+                                    failure._0 -> await => result
+                                    result -> println
+                                }
+                                Err(closeFailure) {
+                                    failure._0 -> await => result
+                                    closeFailure.session -> close => closed
+                                    "unexpected-busy" -> println
+                                }
+                            }
+                        }
+                        Ok(second) {
+                            first -> await => firstValue
+                            second -> await => secondValue
+                            active! -> close => closed
+                            "unexpected-capacity" -> println
+                        }
+                    }
+                }
+                Err(failure) {
+                    failure._0 -> await => firstValue
+                    secondTask -> await => secondValue
+                    active! -> close => closed
+                    "unexpected-first" -> println
+                }
+            }
+        }
+        Err(error) { "unexpected-start" -> println }
+    }
+}
