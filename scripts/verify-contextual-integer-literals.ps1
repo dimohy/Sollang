@@ -68,7 +68,7 @@ $peerHelper = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'sealInteger
 $nativeHelper = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'sealNativeNumericLiteralContext'
 $binaryPass = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'sealFinalContextualNumericLiterals'
 $materializedPeer = Read-Declaration 'selfhost/ir/typed/type_queries.slg' 'materializedReadPeer'
-$controlType = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'sealNumericControlType'
+$controlType = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'sealControlTypeFromValue'
 $integerValue = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'contextualIntegerValue'
 $numericValue = Read-Declaration 'selfhost/ir/typed/resolved_context_finalize.slg' 'contextualNumericIrValue'
 $materializedType = Read-Declaration 'selfhost/semantic/type_ids.slg' 'public materializedReadTypeId'
@@ -85,6 +85,7 @@ $characterCheckedDecoder = Read-Declaration 'selfhost/syntax/source.slg' 'public
 $characterError = Read-Declaration 'selfhost/syntax/source.slg' 'public enum CharacterLiteralError'
 $characterEscape = Read-Declaration 'selfhost/syntax/source.slg' 'characterEscapeScalar'
 $scalarWidth = Read-Declaration 'selfhost/syntax/unicode_identifier.slg' 'public scalarWidth'
+$constantFindIndex = Read-Declaration 'selfhost/semantic/constant_collection_lowering.slg' 'findIndex'
 $constantFind = Read-Declaration 'selfhost/semantic/constant_collection_lowering.slg' 'public find'
 $grammarSource = Get-Content -LiteralPath (Join-Path $repo 'syntax/generated/sollang_grammar.slg') -Raw
 $grammarDeclarations = @('Minus', 'Plus', 'Percent', 'EqualEqual', 'BangEqual', 'LessEqual', 'Greater') | ForEach-Object {
@@ -356,6 +357,7 @@ public struct TypedIrNode { public kind: Int, public sourceModule: Int, public a
     @{ Name = 'range-constant.slg'; Text = @"
 namespace c394.constant
 public struct Literal { public astNode: Int, public value: Long }
+$constantFindIndex
 $constantFind
 "@ },
     @{ Name = 'range-syntax.slg'; Text = @"
@@ -475,6 +477,7 @@ $evidence = [ordered]@{
         contractSha256 = (Get-FileHash -LiteralPath $rangeContractPath -Algorithm SHA256).Hash
         probeSha256 = (Get-FileHash -LiteralPath (Join-Path $repo 'scripts/probes/contextual-integer-literals/range-diagnostics.slg') -Algorithm SHA256).Hash
         characterDecoderSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($characterDecoder)))
+        constantFindIndexSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($constantFindIndex)))
         constantFindSha256 = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($constantFind)))
         diagnosticIntegration = 'pending-whole-selfhost-source-to-diagnostic'
         stdout = $rangeActual

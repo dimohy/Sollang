@@ -1,0 +1,281 @@
+namespace sollang.compiler.ir.typed
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.context as semanticContext
+import syntax.generated.slg as grammar
+public struct TypedIrNode {
+    public kind: Int
+    public parent: Int
+    public sourceModule: Int
+    public astNode: Int
+    public symbol: Int
+    public targetModule: Int
+    public typeOrigin: Int
+    public typeModule: Int
+    public typeSymbol: Int
+    public typeId: Int
+    public typeKind: Int
+    public typeFlags: Int
+    public payloadToken: Int
+    public opcode: Int
+    public operand0: Int
+    public operand1: Int
+    public nextOperand: Int
+    public flags: Int
+}
+integerTypeRank symbol: Int -> Int {
+    0 => rank!
+    symbol == 3 or symbol == 8 -> if { 1 => rank! }
+    symbol == 4 or symbol == 9 -> if { 2 => rank! }
+    symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14
+        -> if { 3 => rank! }
+    symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13
+        -> if { 4 => rank! }
+    rank!
+}
+sealNumericLiteralContext nodes: mut [TypedIrNode; ~], index: Int, typeId: Int, target: typeIds.SemanticType, flags: Int -> Unit {
+    index >= 0 and index < (nodes -> len)
+        and typeId >= 0 and target.kind == 1 and target.origin == 1
+        and target.module == -1 and target.status == 0
+        and (integerTypeRank(target.symbol) > 0 or (target.symbol >= 19 and target.symbol <= 22))
+        -> unless { return }
+    nodes[index] => carrier!
+    index => leafIndex!
+    carrier!.kind == 7
+        and carrier!.opcode == grammar.tokenIdMinus()
+        and carrier!.operand0 >= 0 and carrier!.operand0 < (nodes -> len)
+        -> if { carrier!.operand0 => leafIndex! }
+    nodes[leafIndex!] => leaf!
+    # Kind 3 also represents decimal literals. Integer context never coerces
+    # a known Float leaf; Float context accepts integer and Float literals.
+    # Explicit casts remain call nodes and are deliberately not traversed.
+    leaf!.kind == 3 and leaf!.typeKind == 1 and leaf!.typeOrigin == 1
+        and (integerTypeRank(leaf!.typeSymbol) > 0
+        or (target.symbol >= 19 and target.symbol <= 22
+        and leaf!.typeSymbol >= 19 and leaf!.typeSymbol <= 22))
+        -> unless { return }
+    typeId => leaf!.typeId
+    target.kind => leaf!.typeKind
+    target.origin => leaf!.typeOrigin
+    target.module => leaf!.typeModule
+    target.symbol => leaf!.typeSymbol
+    flags => leaf!.typeFlags
+    leaf! => nodes[leafIndex!]
+    leafIndex! != index -> if {
+        typeId => carrier!.typeId
+        target.kind => carrier!.typeKind
+        target.origin => carrier!.typeOrigin
+        target.module => carrier!.typeModule
+        target.symbol => carrier!.typeSymbol
+        flags => carrier!.typeFlags
+        carrier! => nodes[index]
+    }
+}
+sealNumericLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    typeIds.SemanticType {
+        kind: peer.typeKind
+        origin: peer.typeOrigin
+        module: peer.typeModule
+        symbol: peer.typeSymbol
+        first: -1
+        second: -1
+        length: -1
+        lengthHash: 0
+        containsParameter: false
+        status: 0
+    } => target
+    nodes -> sealNumericLiteralContext(index, peer.typeId, target, peer.typeFlags)
+}
+sealIntegerLiteralContext nodes: mut [TypedIrNode; ~], index: Int, typeId: Int, target: typeIds.SemanticType, flags: Int -> Unit {
+    integerTypeRank(target.symbol) > 0 -> if {
+        nodes -> sealNumericLiteralContext(index, typeId, target, flags)
+    }
+}
+sealIntegerLiteralPeerContext nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    integerTypeRank(peer.typeSymbol) > 0 -> if {
+        nodes -> sealNumericLiteralPeerContext(index, peer)
+    }
+}
+sealNativeNumericLiteralContext nodes: mut [TypedIrNode; ~], index: Int, parameter: TypedIrNode -> Unit {
+    nodes -> sealNumericLiteralPeerContext(index, parameter)
+}
+materializedReadPeer peer: TypedIrNode, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> TypedIrNode {
+    peer => value!
+    types -> typeIds.materializedReadTypeId(peer.typeId) => readTypeId
+    readTypeId >= 0 and readTypeId < (types -> len) and readTypeId < (flags -> len)
+        -> if {
+            types[readTypeId] => readType
+            readTypeId => value!.typeId
+            readType.kind => value!.typeKind
+            readType.origin => value!.typeOrigin
+            readType.module => value!.typeModule
+            readType.symbol => value!.typeSymbol
+            flags[readTypeId] => value!.typeFlags
+        }
+    value!
+}
+sealControlTypeFromValue nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode -> Unit {
+    nodes[index] => control!
+    peer.typeId => control!.typeId
+    peer.typeKind => control!.typeKind
+    peer.typeOrigin => control!.typeOrigin
+    peer.typeModule => control!.typeModule
+    peer.typeSymbol => control!.typeSymbol
+    peer.typeFlags => control!.typeFlags
+    control! => nodes[index]
+    # Binary value edges may point directly at the selection while source
+    # diagnostics read its enclosing flow. Publish one committed result type.
+    (control!.kind == 18 or control!.kind == 33 or control!.kind == 34)
+        and control!.parent >= 0 and control!.parent < (nodes -> len)
+        -> if {
+            nodes[control!.parent] => flow!
+            flow!.kind == 9 and flow!.operand1 == index -> if {
+                peer.typeId => flow!.typeId
+                peer.typeKind => flow!.typeKind
+                peer.typeOrigin => flow!.typeOrigin
+                peer.typeModule => flow!.typeModule
+                peer.typeSymbol => flow!.typeSymbol
+                peer.typeFlags => flow!.typeFlags
+                flow! => nodes[control!.parent]
+            }
+        }
+}
+contextualIntegerValue nodes: mut [TypedIrNode; ~], index: Int, peer: TypedIrNode, controls: ref [Int; ~], types: ref [typeIds.SemanticType; ~], apply: Bool -> Bool {
+    index >= 0 and index < (nodes -> len) -> unless { false -> return }
+    nodes[index] => value
+    value.kind == 3 -> if {
+        value.typeKind == 1 and value.typeOrigin == 1 and integerTypeRank(value.typeSymbol) > 0
+            -> unless { false -> return }
+        apply -> if { nodes -> sealIntegerLiteralPeerContext(index, peer) }
+        true -> return
+    }
+    value.kind == 7 and value.opcode == grammar.tokenIdMinus()
+        and value.operand0 >= 0 and value.operand0 < (nodes -> len)
+        and nodes[value.operand0].kind == 3 -> if {
+            nodes -> contextualIntegerValue(value.operand0, peer, controls, types, apply) => literal
+            literal and apply -> if { nodes -> sealIntegerLiteralPeerContext(index, peer) }
+            literal -> return
+        }
+    value.kind == 9 and controls[index] >= 0 -> if {
+        nodes -> contextualIntegerValue(controls[index], peer, controls, types, apply) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 19 -> if {
+        nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 18 -> if {
+        (nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply))
+            and (nodes -> contextualIntegerValue(value.nextOperand, peer, controls, types, apply)) => result
+        result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        result -> return
+    }
+    value.kind == 33 or value.kind == 34 -> if {
+        value.kind == 33 -> if { value.operand0 } else { value.operand1 } => arm!
+        false => found!
+        arm! >= 0 and arm! < (nodes -> len) -> while {
+            nodes[arm!].kind == 19 and nodes[arm!].parent == index
+                -> unless { false -> return }
+            nodes -> contextualIntegerValue(arm!, peer, controls, types, apply)
+                -> unless { false -> return }
+            true => found!
+            nodes[arm!].nextOperand => arm!
+        }
+        found! and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+        found! -> return
+    }
+    value.kind == 8 and value.opcode >= grammar.tokenIdPlus() and value.opcode <= grammar.tokenIdPercent()
+        -> if {
+            (nodes -> contextualIntegerValue(value.operand0, peer, controls, types, apply))
+                and (nodes -> contextualIntegerValue(value.operand1, peer, controls, types, apply)) => result
+            result and apply -> if { nodes -> sealControlTypeFromValue(index, peer) }
+            result -> return
+        }
+    (types -> typeIds.materializedReadTypeId(value.typeId)) == peer.typeId
+}
+contextualNumericIrValue nodes: ref [TypedIrNode; ~], index: Int, controls: ref [Int; ~] -> Bool {
+    nodes[index] => value
+    value.kind == 3 or value.kind == 18 or value.kind == 33 or value.kind == 34
+        or (value.kind == 9 and controls[index] >= 0)
+        or (value.kind == 7 and value.opcode == grammar.tokenIdMinus()
+        and value.operand0 >= 0 and value.operand0 < (nodes -> len)
+        and nodes[value.operand0].kind == 3)
+}
+sealFinalContextualNumericLiterals nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], flags: ref [Int; ~] -> Unit {
+    [Int; ~] => controls!
+    nodes -> each slot { controls! -> push(-1) }
+    0 => controlIndex!
+    controlIndex! < (nodes -> len) -> while {
+        nodes[controlIndex!] => control
+        (control.kind == 18 or control.kind == 33 or control.kind == 34) and control.parent >= 0
+            and control.parent < (nodes -> len) and nodes[control.parent].kind == 9
+            -> if { controlIndex! => controls![control.parent] }
+        controlIndex! + 1 => controlIndex!
+    }
+    true => numericTypesChanged!
+    numericTypesChanged! -> while {
+        false => numericTypesChanged!
+        0 => numericIndex!
+        numericIndex! < (nodes -> len) -> while {
+            nodes[numericIndex!] => numeric!
+            (numeric!.opcode >= grammar.tokenIdPlus()
+                and numeric!.opcode <= grammar.tokenIdPercent())
+                => numericArithmetic
+            (numericArithmetic
+                or numeric!.opcode == grammar.tokenIdEqualEqual()
+                or numeric!.opcode == grammar.tokenIdBangEqual()
+                or (numeric!.opcode >= grammar.tokenIdLessEqual()
+                and numeric!.opcode <= grammar.tokenIdGreater()))
+                => numericOperands
+            numeric!.kind == 8
+                and numericOperands
+                and numeric!.operand0 >= 0
+                and numeric!.operand0 < (nodes -> len)
+                and numeric!.operand1 >= 0
+                and numeric!.operand1 < (nodes -> len)
+                -> if {
+                    nodes[numeric!.operand0].typeId => previousLeftTypeId
+                    nodes[numeric!.operand1].typeId => previousRightTypeId
+                    numeric!.typeId => previousResultTypeId
+                    nodes -> contextualNumericIrValue(numeric!.operand0, controls!) => leftContextual
+                    nodes -> contextualNumericIrValue(numeric!.operand1, controls!) => rightContextual
+                    (leftContextual and not rightContextual) or (rightContextual and not leftContextual)
+                        -> if {
+                            leftContextual -> if { numeric!.operand0 } else { numeric!.operand1 } => selected
+                            leftContextual -> if { numeric!.operand1 } else { numeric!.operand0 } => anchor
+                            materializedReadPeer(nodes[anchor], types, flags) => peer
+                            peer.typeKind == 1 and peer.typeOrigin == 1 and integerTypeRank(peer.typeSymbol) > 0
+                                -> if {
+                                    nodes -> contextualIntegerValue(selected, peer, controls!, types, false) => compatible
+                                    compatible -> if {
+                                        nodes -> contextualIntegerValue(selected, peer, controls!, types, true) => committed
+                                    }
+                                }
+                        }
+                    materializedReadPeer(nodes[numeric!.operand0], types, flags) => canonicalLeft
+                    materializedReadPeer(nodes[numeric!.operand1], types, flags) => canonicalRight
+                    numericArithmetic
+                        and canonicalLeft.typeId >= 0
+                        and canonicalLeft.typeId == canonicalRight.typeId
+                        and canonicalLeft.typeKind == 1
+                        and canonicalLeft.typeOrigin == 1
+                        and integerTypeRank(canonicalLeft.typeSymbol) > 0
+                        -> if {
+                            canonicalLeft.typeId => numeric!.typeId
+                            canonicalLeft.typeKind => numeric!.typeKind
+                            canonicalLeft.typeOrigin => numeric!.typeOrigin
+                            canonicalLeft.typeModule => numeric!.typeModule
+                            canonicalLeft.typeSymbol => numeric!.typeSymbol
+                            canonicalLeft.typeFlags => numeric!.typeFlags
+                            numeric! => nodes[numericIndex!]
+                        }
+                    previousLeftTypeId != nodes[numeric!.operand0].typeId
+                        or previousRightTypeId != nodes[numeric!.operand1].typeId
+                        or previousResultTypeId != nodes[numericIndex!].typeId
+                        -> if { true => numericTypesChanged! }
+                }
+            numericIndex! + 1 => numericIndex!
+        }
+    }
+}

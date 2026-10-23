@@ -1,0 +1,77 @@
+namespace c394.syntax
+import c394.unicode_identifier as unicodeIdentifier
+public struct SourceSpan {
+    public fileId: Int
+    public start: UIntSize
+    public length: UIntSize
+}
+public enum CharacterLiteralError {
+    Unterminated
+    ScalarCount
+    UnsupportedEscape(UIntSize)
+}
+characterEscapeScalar value: UInt8 -> Option<Int> {
+    value == 48 -> if { 0 -> Option<Int>.Some -> return }
+    value == 98 -> if { 8 -> Option<Int>.Some -> return }
+    value == 102 -> if { 12 -> Option<Int>.Some -> return }
+    value == 110 -> if { 10 -> Option<Int>.Some -> return }
+    value == 114 -> if { 13 -> Option<Int>.Some -> return }
+    value == 116 -> if { 9 -> Option<Int>.Some -> return }
+    value == 92 -> if { 92 -> Option<Int>.Some -> return }
+    value == 39 -> if { 39 -> Option<Int>.Some -> return }
+    value == 34 -> if { 34 -> Option<Int>.Some -> return }
+    Option<Int>.None
+}
+public decodeCharacterLiteralChecked source: Text, span: SourceSpan -> Result<Int, CharacterLiteralError> {
+    source -> len => sourceLength
+    span.start > sourceLength or span.length > sourceLength - span.start or span.length == 0
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    (source -> byte(span.start)) != 39
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    span.start + span.length => end
+    span.start + 1 => cursor!
+    cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+        -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+    source -> byte(cursor!) => first
+    first == 39
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    0 => scalar!
+    first == 92 -> if {
+        cursor! + 1 => cursor!
+        cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+            -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+        source -> byte(cursor!) -> characterEscapeScalar -> when {
+            Some(value) { value => scalar! }
+            None {
+                CharacterLiteralError.UnsupportedEscape(cursor!) -> Result<Int, CharacterLiteralError>.Err -> return
+            }
+        }
+        cursor! + 1 => cursor!
+    } else {
+        source -> unicodeIdentifier.scalarWidth(cursor!) => width
+        width == 0 or width > end - cursor!
+            -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+        width == 1 -> if { Int(first) => scalar! }
+        width == 2 -> if {
+            (Int(first) - 192) * 64 + Int(source -> byte(cursor! + 1)) - 128 => scalar!
+        }
+        width == 3 -> if {
+            (Int(first) - 224) * 4096 + (Int(source -> byte(cursor! + 1)) - 128) * 64 + Int(source -> byte(cursor! + 2)) - 128 => scalar!
+        }
+        width == 4 -> if {
+            (Int(first) - 240) * 262_144 + (Int(source -> byte(cursor! + 1)) - 128) * 4096 + (Int(source -> byte(cursor! + 2)) - 128) * 64 + Int(source -> byte(cursor! + 3)) - 128 => scalar!
+        }
+        cursor! + width => cursor!
+    }
+    cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+        -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+    (source -> byte(cursor!)) != 39 or cursor! + 1 != end
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    scalar! -> Result<Int, CharacterLiteralError>.Ok
+}
+public decodeCharacterLiteral source: Text, span: SourceSpan -> Option<Int> {
+    source -> decodeCharacterLiteralChecked(span) -> when {
+        Ok(value) { value -> Option<Int>.Some }
+        Err(issue) { Option<Int>.None }
+    }
+}
