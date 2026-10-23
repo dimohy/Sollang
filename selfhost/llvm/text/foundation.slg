@@ -234,6 +234,15 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
             -> if { "control allocas owner $ownerIndex node $(nodeIndex!)" -> runtime.eprintln }
         context.ir[nodeIndex!] => node
         nodeIndex! -> emitDeferredTextCaptureAllocas(ownerIndex, context, state)
+        node -> isBoundedDictionaryLiteral(context) -> if {
+            node.typeId -> boundedDictionaryLayoutForType(context) => dictionaryLayout
+            "  %v$(nodeIndex!)_owner = alloca %sollang.bounded_dictionary.t$(node.typeId), align $(dictionaryLayout.align)" -> println
+        }
+        nodeIndex! -> boundedDictionaryIndexScratchTypeId(context, state) => dictionaryScratchType
+        dictionaryScratchType >= 0 -> if {
+            dictionaryScratchType -> boundedDictionaryLayoutForType(context) => dictionaryLayout
+            "  %bidx$(nodeIndex!)_owner = alloca %sollang.bounded_dictionary.t$(dictionaryScratchType), align $(dictionaryLayout.align)" -> println
+        }
         nodeIndex! -> isDirectEachEmission(context, state)
             -> if {
                 not (nodeIndex! -> asyncIntIteratorIsPersistent(context, state))
@@ -892,7 +901,6 @@ emitBoundedDictionaryControlStore prefix: Text, storagePointer: Text, slot: Text
 emitBoundedDictionaryLiteralOwner nodeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
     context.ir[nodeIndex].typeId => dictionaryTypeId
     dictionaryTypeId -> boundedDictionaryLayoutForType(context) => layout
-    "  %v$(nodeIndex)_owner = alloca %sollang.bounded_dictionary.t$(dictionaryTypeId), align $(layout.align)" -> println
     "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) zeroinitializer, ptr %v$(nodeIndex)_owner, align $(layout.align)" -> println
     "v$(nodeIndex)" -> emitBoundedDictionaryStoragePointer("%v$(nodeIndex)_owner", dictionaryTypeId)
 }
@@ -904,20 +912,20 @@ emitEmptyBoundedDictionaryLiteral nodeIndex: Int, context: ref emitterContext.Em
     "  %v$(nodeIndex) = load %sollang.bounded_dictionary.t$(dictionaryTypeId), ptr %v$(nodeIndex)_owner, align $(layout.align)" -> println
 }
 
-isEmptyBoundedDictionaryLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+isBoundedDictionaryLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
     false => result!
-    node.kind == 16 and node.operand0 < 0 and node.typeId >= 0 and node.typeId < (context.types -> len)
+    node.kind == 16 and node.typeId >= 0 and node.typeId < (context.types -> len)
         -> if { context.types[node.typeId].kind == 13
                 -> if { true => result! } }
     result!
 }
 
+isEmptyBoundedDictionaryLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    node.operand0 < 0 and (node -> isBoundedDictionaryLiteral(context))
+}
+
 isPopulatedBoundedDictionaryLiteral node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
-    false => result!
-    node.kind == 16 and node.operand0 >= 0 and node.typeId >= 0 and node.typeId < (context.types -> len)
-        -> if { context.types[node.typeId].kind == 13
-                -> if { true => result! } }
-    result!
+    node.operand0 >= 0 and (node -> isBoundedDictionaryLiteral(context))
 }
 
 boundedDictionaryValueTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Int {
@@ -926,6 +934,19 @@ boundedDictionaryValueTypeId node: typedIr.TypedIrNode, context: ref emitterCont
         -> if { context.types[typeId!].first => typeId! }
     typeId! >= 0 and typeId! < (context.types -> len) and context.types[typeId!].kind == 13
         -> if { typeId! } else { -1 }
+}
+
+boundedDictionaryIndexScratchTypeId nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[nodeIndex] => node
+    node.kind != 15 or node.operand0 < 0 -> if { -1 -> return }
+    context.ir[node.operand0] => source
+    source -> boundedDictionaryValueTypeId(context) => typeId
+    typeId < 0 -> if { -1 -> return }
+    source.typeId >= 0 and context.types[source.typeId].kind == 8
+        -> if { -1 -> return }
+    source.kind == 5 and (node.operand0 -> mutableStorageRoot(context, state)) >= 0
+        -> if { -1 -> return }
+    typeId
 }
 
 emitBoundedDictionaryLiteralOperand nodeIndex: Int, typeId: Int, prefix: Text, storage: mut Arena, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text uses Console, Process {
@@ -1047,14 +1068,14 @@ emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitter
             "" -> println
         } else {
             sourceIndex -> mutableStorageRoot(context, state) => mutableRoot
-            sourceNode.kind == 5 and mutableRoot >= 0 -> if {
-                "  %$(prefix)_owner = getelementptr i8, ptr %slot$(mutableRoot), i64 0" -> println
-            } else {
-                "  %$(prefix)_owner = alloca %sollang.bounded_dictionary.t$(dictionaryTypeId), align $(layout.align)" -> println
-                "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) " -> print
-                sourceIndex -> writeValue(ownerIndex, context, state)
-                ", ptr %$(prefix)_owner, align $(layout.align)" -> println
-            }
+            (nodeIndex -> boundedDictionaryIndexScratchTypeId(context, state)) < 0
+                -> if {
+                    "  %$(prefix)_owner = getelementptr i8, ptr %slot$(mutableRoot), i64 0" -> println
+                } else {
+                    "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) " -> print
+                    sourceIndex -> writeValue(ownerIndex, context, state)
+                    ", ptr %$(prefix)_owner, align $(layout.align)" -> println
+                }
         }
     prefix -> emitBoundedDictionaryStoragePointer("%$(prefix)_owner", dictionaryTypeId)
     "  %$(prefix)_query = freeze " -> print
@@ -2249,9 +2270,6 @@ emitInterpolationResultPropagation labelIndex: Int, nodeIndex: Int, nodes: ref [
     decision.operandErrorTypeId => errorTypeId
     context.types[errorTypeId] => errorType
     errorType.kind != 1 or errorType.origin != 1 or errorType.symbol != 0 => errorHasPayload
-    "  %interpolation$(labelIndex)_try$(nodeIndex)_slot = alloca " -> print
-    resultTypeId -> writeSemanticTypeId(context, state)
-    ", align $(context.typeAligns[resultTypeId])" -> println
     "  store " -> print
     resultTypeId -> writeSemanticTypeId(context, state)
     " " -> print
@@ -2273,9 +2291,6 @@ emitInterpolationResultPropagation labelIndex: Int, nodeIndex: Int, nodes: ref [
         errorTypeId -> writeSemanticTypeId(context, state)
         ", ptr %interpolation$(labelIndex)_try$(nodeIndex)_error_addr, align $(context.typeAligns[errorTypeId])" -> println
     }
-    "  %interpolation$(labelIndex)_try$(nodeIndex)_return_slot = alloca " -> print
-    returnTypeId -> writeSemanticTypeId(context, state)
-    ", align $(context.typeAligns[returnTypeId])" -> println
     "  store " -> print
     returnTypeId -> writeSemanticTypeId(context, state)
     " zeroinitializer, ptr %interpolation$(labelIndex)_try$(nodeIndex)_return_slot, align $(context.typeAligns[returnTypeId])" -> println
@@ -2374,6 +2389,70 @@ emitInterpolationCallReferenceArgumentAllocas labelIndex: Int, nodeIndex: Int, n
                     nodeIndex -> interpolationCallArgumentAt(argumentOrdinal!, nodes) => argumentIndex!
                 }
         }
+    }
+}
+
+emitInterpolationFixedAllocas labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    nodes[nodeIndex] => node
+    node.kind == 3 and (node.opcode == -24 or node.opcode == -25)
+        -> if {
+            "  %v$(labelIndex)_expression$(nodeIndex)_logical_slot = alloca i1, align 1" -> println
+        }
+    node.kind == 11 and node.operand0 >= 0 -> if {
+        node -> semanticInterpolationNodeIndex(sourceModule, context) => semanticIndex
+        semanticIndex >= 0 and semanticIndex < (context.interpolationResultPropagationByNode -> len)
+            -> if {
+                context.interpolationResultPropagationByNode[semanticIndex] => decision
+                decision.status == 0 -> if {
+                    "  %interpolation$(labelIndex)_try$(nodeIndex)_slot = alloca " -> print
+                    decision.operandTypeId -> writeSemanticTypeId(context, state)
+                    ", align $(context.typeAligns[decision.operandTypeId])" -> println
+                    "  %interpolation$(labelIndex)_try$(nodeIndex)_return_slot = alloca " -> print
+                    decision.functionTypeId -> writeSemanticTypeId(context, state)
+                    ", align $(context.typeAligns[decision.functionTypeId])" -> println
+                }
+            }
+    }
+    node.kind == 7 and node.operand0 >= 0 and node.operand1 >= 0
+        -> if {
+            node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => receiverTypeId
+            receiverTypeId >= 0 and context.types[receiverTypeId].kind == 13
+                -> if {
+                    receiverTypeId -> boundedDictionaryLayoutForType(context) => layout
+                    "  %v$(labelIndex)_expression$(nodeIndex)_owner = alloca %sollang.bounded_dictionary.t$(receiverTypeId), align $(layout.align)" -> println
+                }
+        }
+    node.kind == 6 and node.opcode == -243 and node.operand0 >= 0 and node.operand1 >= 0
+        -> if {
+            node.operand0 -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => receiverTypeId
+            context.types -> typeIds.materializedReadTypeId(receiverTypeId) => setTypeId
+            setTypeId >= 0 and context.types[setTypeId].kind == 7
+                and context.types[setTypeId].origin == 4 and context.types[setTypeId].symbol == 5
+                -> if {
+                    context.types[setTypeId].first => keyTypeId
+                    "  %iset$(labelIndex)_$(nodeIndex)_query_addr = alloca " -> print
+                    keyTypeId -> writeSemanticTypeId(context, state)
+                    ", align $(context.typeAligns[keyTypeId])" -> println
+                }
+        }
+    node.kind == 16 -> if {
+        node -> semanticInterpolationNodeIndex(sourceModule, context) => semanticIndex
+        semanticIndex >= 0 and semanticIndex < (context.interpolationArrayByNode -> len)
+            -> if {
+                context.interpolationArrayByNode[semanticIndex] => literal
+                literal.status == 0 and literal.typeId >= 0 and literal.elementTypeId >= 0
+                    -> if {
+                        context.types[literal.typeId] => arrayType
+                        arrayType.kind == 12 -> if {
+                            ArrayStorageIdentity { resultDomain: 1, resultIndex: nodeIndex, labelIndex: labelIndex } => identity
+                            arrayType.length * (literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
+                            "  " -> print
+                            identity -> writeArrayStorageIdentity("_data")
+                            " = alloca [$byteLength x i8], align " -> print
+                            literal.elementTypeId -> arrayElementStorageAlign(context, state) -> writeDecimalLine
+                        }
+                    }
+            }
     }
 }
 
@@ -2610,7 +2689,6 @@ emitBoundedInterpolationDictionaryIndex labelIndex: Int, nodeIndex: Int, nodes: 
         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
         "" -> println
     } else {
-        "  %$(prefix)_owner = alloca %sollang.bounded_dictionary.t$(dictionaryTypeId), align $(layout.align)" -> println
         "  store %sollang.bounded_dictionary.t$(dictionaryTypeId) " -> print
         labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
         ", ptr %$(prefix)_owner, align $(layout.align)" -> println
@@ -2899,12 +2977,7 @@ emitInterpolationArray labelIndex: Int, nodeIndex: Int, nodes: ref [interpolatio
     arrayType.kind == 12 -> if { arrayType.length => capacity! }
     ArrayStorageIdentity { resultDomain: 1, resultIndex: nodeIndex, labelIndex: labelIndex } => identity
     capacity! * (literal.elementTypeId -> arrayElementStorageSize(context, state)) => byteLength
-    arrayType.kind == 12 -> if {
-        "  " -> print
-        identity -> writeArrayStorageIdentity("_data")
-        " = alloca [$byteLength x i8], align " -> print
-        literal.elementTypeId -> arrayElementStorageAlign(context, state) -> writeDecimalLine
-    } else { identity -> emitArrayHeapBacking(byteLength) }
+    arrayType.kind != 12 -> if { identity -> emitArrayHeapBacking(byteLength) }
     0 => position!
     position! < length -> while {
         position! => elementOrdinal!
@@ -2932,7 +3005,6 @@ emitInterpolationSubtree labelIndex: Int, nodeIndex: Int, nodes: ref [interpolat
     node.kind == 3 and (node.opcode == -24 or node.opcode == -25)
         -> if {
             labelIndex -> emitInterpolationSubtree(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, context, state)
-            "  %v$(labelIndex)_expression$(nodeIndex)_logical_slot = alloca i1, align 1" -> println
             "  store i1 " -> print
             node.opcode == -25 -> if { "0" -> print } else { "1" -> print }
             ", ptr %v$(labelIndex)_expression$(nodeIndex)_logical_slot, align 1" -> println
@@ -3316,9 +3388,6 @@ emitInterpolationSetContains prefix: Text, labelIndex: Int, nodeIndex: Int, node
     "  %$(prefix)_capacity = extractvalue %sollang.dict %$(prefix)_source, 2" -> println
     keySize -> dictionaryEntryLayout(keyAlign, 0, 1) => setEntryLayout
     prefix -> emitGrowableDictionaryPointers("%$(prefix)_storage", "%$(prefix)_capacity", setEntryLayout)
-    "  %$(prefix)_query_addr = alloca " -> print
-    keyTypeId -> writeSemanticTypeId(context, state)
-    ", align $(keyAlign)" -> println
     "  store " -> print
     keyTypeId -> writeSemanticTypeId(context, state)
     " " -> print

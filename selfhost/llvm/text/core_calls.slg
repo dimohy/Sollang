@@ -1321,6 +1321,21 @@ plannedPartitionCallbackRoute nodeIndex: Int, context: ref emitterContext.EmitCo
         }
     found!
 }
+isStreamTerminalRole pipelineIndex: Int, argumentIndex: Int, context: ref emitterContext.EmitContext -> Bool {
+    argumentIndex < 0 -> if { false -> return }
+    context.ir[argumentIndex] => argument
+    argument.kind != 5 -> if { false -> return }
+    context.streamPlan.pipelines[pipelineIndex] => pipeline
+    context.ir[pipeline.terminalIr] => terminal
+    argument.sourceModule != terminal.sourceModule
+        -> if { false -> return }
+    context.ranges[terminal.sourceModule] => range
+    argument.symbol < 0 or argument.symbol >= range.symbolCount
+        -> if { false -> return }
+    context.symbols[range.symbolStart + argument.symbol] => role
+    role.kind == 35 and role.astNode == terminal.astNode
+}
+
 streamCallbackInputValue pipelineIndex: Int, roleSymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.streamPlan.pipelines[pipelineIndex] => pipeline
     context.ir[pipeline.terminalIr].sourceModule => sourceModule
@@ -2160,20 +2175,34 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
             [Int; ~] => interpolationTextIndices!
             interpolationArgumentIndex! >= 0 -> while {
                 interpolationArgumentIndex! -> aggregateValueIndex(context, state) => interpolationArgumentValueIndex
-                interpolationArgumentValueIndex -> producerValueIndex(context, state) => interpolationTextIndex
-                interpolationTextIndex >= 0 and context.ir[interpolationTextIndex].kind == 2
+                interpolationArgumentValueIndex -> producerValueIndex(context, state) => interpolationTextIndex!
+                call -> typedIr.isConsoleRuntimeCall -> if {
+                    callIndex! -> regionOwnedStreamPipeline(context, state) => pipelineIndex
+                    pipelineIndex >= 0 -> if {
+                        pipelineIndex -> isStreamTerminalRole(interpolationArgumentValueIndex, context)
+                            -> if {
+                                context.streamPlan.pipelines[pipelineIndex] => pipeline
+                                context -> emitterContext.streamStageInputValue(pipelineIndex,
+                                pipeline.stageStart + pipeline.stageCount) => retainedValue
+                                retainedValue >= 0 -> if {
+                                    retainedValue -> producerValueIndex(context, state) => interpolationTextIndex!
+                                }
+                            }
+                    }
+                }
+                interpolationTextIndex! >= 0 and context.ir[interpolationTextIndex!].kind == 2
                     -> if {
                         false => interpolationTextSeen!
                         0 => seenTextIndex!
                         seenTextIndex! < (interpolationTextIndices! -> len)
                             -> while {
-                                interpolationTextIndices![seenTextIndex!] == interpolationTextIndex
+                                interpolationTextIndices![seenTextIndex!] == interpolationTextIndex!
                                     -> if { true => interpolationTextSeen! }
                                 seenTextIndex! + 1 => seenTextIndex!
                             }
                         not interpolationTextSeen! -> if {
-                            interpolationTextIndices! -> push(interpolationTextIndex)
-                            context.ir[interpolationTextIndex] => interpolationText
+                            interpolationTextIndices! -> push(interpolationTextIndex!)
+                            context.ir[interpolationTextIndex!] => interpolationText
                             interpolationText -> sourceInterpolations(context, state) => interpolationNodes
                             0 => interpolationNodeIndex!
                             interpolationNodeIndex! < (interpolationNodes -> len)
@@ -2181,6 +2210,12 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                                     interpolationNodes[interpolationNodeIndex!] => interpolationNode
                                     interpolationNode.sourceToken == interpolationText.payloadToken
                                         -> if {
+                                            not state.frozenDeferredTextCaptureLeaves[interpolationTextIndex!]
+                                                -> if {
+                                                    callIndex! -> emitInterpolationFixedAllocas(
+                                                    interpolationNodeIndex!, interpolationNodes, interpolationText.sourceModule,
+                                                    ownerIndex, callIndex!, context, state)
+                                                }
                                             callIndex! -> emitInterpolationCallReferenceArgumentAllocas(
                                             interpolationNodeIndex!,
                                             interpolationNodes,
@@ -4044,6 +4079,15 @@ emitDeferredTextCaptureAllocas valueIndex: Int, ownerIndex: Int, context: ref em
         valueIndex -> interpolatedTextRoots(context, state) => roots
         (roots -> len) > 0 -> if {
             value -> sourceInterpolations(context, state) => fragments
+            0 => scratchNodeIndex!
+            scratchNodeIndex! < (fragments -> len) -> while {
+                fragments[scratchNodeIndex!].sourceToken == value.payloadToken
+                    -> if {
+                        valueIndex -> emitInterpolationFixedAllocas(scratchNodeIndex!, fragments,
+                        value.sourceModule, ownerIndex, valueIndex, context, state)
+                    }
+                scratchNodeIndex! + 1 => scratchNodeIndex!
+            }
             roots -> each root {
                 root -> deferredTextCaptureType(fragments, value.sourceModule, ownerIndex, valueIndex, context, state) => typeId
                 "  %deferred_text$(valueIndex)_root$(root)_slot = alloca " -> print
