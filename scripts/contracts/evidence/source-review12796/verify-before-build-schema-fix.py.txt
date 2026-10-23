@@ -1,0 +1,82 @@
+"""Check frozen executable observations; this replay performs no compiler build."""
+from pathlib import Path
+import hashlib
+import json
+import re
+import sys
+
+sys.dont_write_bytecode = True
+E = Path(__file__).resolve().parent
+ROOT = E.parents[3]
+
+
+def read(path):
+    return json.loads(path.read_text(encoding='utf-8-sig'))
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest().upper()
+
+
+def result(name, completed, total, status='passed'):
+    data = read(E / 'records' / name / 'result.json')
+    assert data['status'] == status and data['completed'] == completed and data['total'] == total, name
+    assert data['inputsStable'] and data['processesStopped'], name
+    return data
+
+
+def helper(path, name):
+    text = path.read_text(encoding='utf-8-sig')
+    match = re.search(r'^[ \t]*define internal (?:i32|i64) @' + name + r'\([^\n]+\{\r?\n.*?^[ \t]*}', text, re.M | re.S)
+    assert match, path
+    return '\n'.join(line.strip() for line in match.group().replace(' #0 {', ' {').splitlines())
+
+
+phase = sys.argv[1]
+assert phase in ('baseline', 'candidate')
+manifest = read(E / 'proof-inputs12829.json')
+for path, digest in manifest['archiveHashes'].items():
+    assert sha(E / path) == digest, path
+for path, digest in manifest['languageInputHashes'].items():
+    assert sha(ROOT / path) == digest, path
+
+for name in ('stdin12819-before-emitted', 'stdin12821-before-native-helper'):
+    before = result(name, 8, 9, 'failed')
+    assert before['failure'].endswith('TRANSFER_COUNT_OR_ERROR_ORACLE_FAILED')
+    assert before['actual'][5] == '4294967296:0:0'
+    assert before['expected'][5] == '4294967296:4294967295:7'
+    assert before['runExit'] == 0
+
+assert helper(E / 'WindowsLlvmRuntimePlatform-before.cs.txt', 'sollang_read_stdin') == helper(E / 'records/stdin12818-before-compiler/chunks.exe.ll', 'sollang_read_stdin')
+assert helper(E / 'runtime-before.slg.txt', 'sollang_runtime_read_standard_input_chunk') == helper(E / 'records/stdin12820-before-native/chunks.exe.ll', 'sollang_runtime_read_standard_input_chunk')
+
+if phase == 'candidate':
+    q = read(E / 'qualification12829.json')
+    assert q['focused'] == [33, 33] and not q['claimsGoalComplete']
+    for path, digest in q['sourceHashes'].items():
+        assert sha(ROOT / path) == digest == sha(E / 'qualified-source' / path), path
+    for name in ('stdin12816-managed-helper', 'stdin12822-whole-source-helper', 'stdin12827-native-helper'):
+        data = result(name, 9, 9)
+        assert data['actual'] == data['expected'] and data['runExit'] == 0
+    for name in ('stdin12802-managed', 'stdin12812-runtime', 'stdin12826-native'):
+        data = result(name, 2, 2)
+        assert len(data['cases']) == 2 and all(row['passed'] for row in data['cases'])
+    result('stdin12808-preflight', 4, 4)
+    stdlib = result('stdin12809-stdlib', 1, 1)
+    assert stdlib['fullStdlibSourceCount'] == 144 and stdlib['checkedSemanticDiagnosticCount'] == 0
+    build = read(E / 'records/v12824/compiler-build01/result.json')
+    assert build['status'] == 'passed' and build['inputsStable'] and build['processesStopped']
+    assert build['compilerSha256'] == q['nativeCompilerSha256']
+    managed_name = 'sollang_read_stdin'
+    slg_name = 'sollang_runtime_read_standard_input_chunk'
+    assert helper(ROOT / 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs', managed_name) == helper(E / 'records/stdin12802-managed/chunks.exe.ll', managed_name)
+    for path in ('records/stdin12813-source/chunks/emitted.ll', 'records/stdin12826-native/chunks.exe.ll'):
+        assert helper(ROOT / 'selfhost/llvm/runtime.slg', slg_name) == helper(E / path, slg_name)
+    # Enforce that the observed helpers came from the frozen current compiler
+    # and source build, rather than accepting identical labels alone.
+    managed_inputs = read(E / 'records/stdin12802-managed/inputs-before.json')['files']
+    native_inputs = read(E / 'records/stdin12826-native/inputs-before.json')['files']
+    assert any(row['path'].replace('\\', '/').endswith('/managed12799/compiler/Sollang.Compiler.dll') and row['sha256'] == q['managedCompilerSha256'] for row in managed_inputs)
+    assert any(row['path'].replace('\\', '/').endswith('/v12824/compiler-build01/compiler.exe') and row['sha256'] == q['nativeCompilerSha256'] for row in native_inputs)
+
+print(json.dumps({'status': 'passed', 'phase': phase, 'baselineOracleFailures': 2, 'candidateFocused': [33, 33] if phase == 'candidate' else None, 'claimsGoalComplete': False}))

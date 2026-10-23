@@ -3339,7 +3339,9 @@ internal sealed partial class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
             entry:
-              %len = trunc i64 %len64 to i32
+              %exceeds_dword = icmp ugt i64 %len64, 4294967295
+              %bounded_len = select i1 %exceeds_dword, i64 4294967295, i64 %len64
+              %len = trunc i64 %bounded_len to i32
               %ok = call i32 @ReadFile(ptr %stdin, ptr %data, i32 %len, ptr %read, ptr null)
               %succeeded = icmp ne i32 %ok, 0
               br i1 %succeeded, label %success, label %inspect_error
