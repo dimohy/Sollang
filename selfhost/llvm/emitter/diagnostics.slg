@@ -7923,6 +7923,47 @@ arrayElementLayoutDiagnosticCount context: ref emitterContext.EmitContext -> Int
     count!
 }
 
+# The layout invariant also sees inferred and cached types. Only an explicit
+# typed-empty value owns the constructor location used by the source diagnostic.
+typedEmptyArrayLayoutDiagnosticSource typeId: Int, context: ref emitterContext.EmitContext -> Int {
+    -1 => selected!
+    -1 => selectedModule!
+    UIntSize(0) => selectedStart!
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context.ir[irIndex!] => node
+        node.typeId == typeId and node.sourceModule >= 0
+            and node.sourceModule < (context.ranges -> len) and node.astNode >= 0
+            -> if {
+                context.ranges[node.sourceModule] => range
+                node.astNode < range.astCount -> if {
+                    context.nodes[range.astStart + node.astNode] => literal
+                    literal.kind == 37 and literal.tokenCount > 0
+                        -> if {
+                            false => explicitType!
+                            0 => childIndex!
+                            childIndex! < range.astCount and not explicitType!
+                                -> while {
+                                    context.nodes[range.astStart + childIndex!] => child
+                                    child.parent == node.astNode and (child.kind == 12 or child.kind == 16)
+                                        -> if { true => explicitType! }
+                                    childIndex! + 1 => childIndex!
+                                }
+                            explicitType! and (selected! < 0 or node.sourceModule < selectedModule!
+                                or (node.sourceModule == selectedModule! and literal.start < selectedStart!))
+                                -> if {
+                                    irIndex! => selected!
+                                    node.sourceModule => selectedModule!
+                                    literal.start => selectedStart!
+                                }
+                        }
+                }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    selected!
+}
+
 emitArrayElementLayoutDiagnostics context: ref emitterContext.EmitContext -> Unit uses Console {
     context -> arrayElementLayoutTypeUses => used
     0 => typeIndex!
@@ -7930,17 +7971,44 @@ emitArrayElementLayoutDiagnostics context: ref emitterContext.EmitContext -> Uni
         used[typeIndex!] and (typeIndex! -> invalidArrayElementLayout(context))
             -> if {
                 context.types[typeIndex!] => invalidArray
-                invalidArray.kind == 2 -> if {
-                    "; sollang semantic error: readonly array views require inline scalar or user-value elements" -> println
-                }
-                invalidArray.kind == 3 -> if {
-                    "; sollang semantic error: growable array elements must have a supported inline value layout" -> println
-                }
-                invalidArray.kind == 4 -> if {
-                    "; sollang semantic error: fixed array elements must be inline scalar or user values" -> println
-                }
-                invalidArray.kind == 12 -> if {
-                    "; sollang semantic error: bounded array elements must be inline scalar or user values" -> println
+                typeIndex! -> typedEmptyArrayLayoutDiagnosticSource(context) => sourceIr
+                sourceIr >= 0 -> if {
+                    context.ir[sourceIr] => sourceNode
+                    context.ranges[sourceNode.sourceModule] => range
+                    context.nodes[range.astStart + sourceNode.astNode] => literal
+                    literal.firstToken => tokenIndex!
+                    tokenIndex! < literal.firstToken + literal.tokenCount
+                        -> while {
+                            context.tokens[range.tokenStart + tokenIndex!] => token
+                            token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                                and token.kind != grammar.tokenIdNewLine() -> if { break }
+                            tokenIndex! + 1 => tokenIndex!
+                        }
+                    context.tokens[range.tokenStart + tokenIndex!] => name
+                    context.sources[sourceNode.sourceModule] => source
+                    context.modules[sourceNode.sourceModule] => identity
+                    "<main>" => moduleName!
+                    identity.pathLength > 0 -> if {
+                        source -> slice(identity.pathStart, identity.pathLength) => moduleName!
+                    }
+                    17 => code!
+                    invalidArray.kind == 3 -> if { 18 => code! }
+                    invalidArray.kind == 4 -> if { 19 => code! }
+                    invalidArray.kind == 12 -> if { 20 => code! }
+                    source -> emitSignatureTypeDiagnosticForSource(moduleName!, name, "", code!)
+                } else {
+                    invalidArray.kind == 2 -> if {
+                        "; sollang semantic error: readonly array views require inline scalar or user-value elements" -> println
+                    }
+                    invalidArray.kind == 3 -> if {
+                        "; sollang semantic error: growable array elements must have a supported inline value layout" -> println
+                    }
+                    invalidArray.kind == 4 -> if {
+                        "; sollang semantic error: fixed array elements must be inline scalar or user values" -> println
+                    }
+                    invalidArray.kind == 12 -> if {
+                        "; sollang semantic error: bounded array elements must be inline scalar or user values" -> println
+                    }
                 }
             }
         typeIndex! + 1 => typeIndex!
