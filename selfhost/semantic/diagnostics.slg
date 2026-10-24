@@ -1601,6 +1601,31 @@ firstPreparedArraySignatureDiagnostic prepared: ref semanticContext.SemanticSnap
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
+firstPreparedLocalAsyncDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+    prepared.package.ranges -> each range {
+        0 => functionIndex!
+        functionIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + functionIndex!] => function
+            function.kind == 7 and function.flags / 8 % 2 == 1
+                and function.astNode >= 0 and function.astNode < range.astCount
+                -> if {
+                    prepared.package.nodes[range.astStart + function.astNode].parent => ancestor!
+                    ancestor! >= 0 and ancestor! < range.astCount
+                        -> while {
+                            prepared.package.nodes[range.astStart + ancestor!] => owner
+                            owner.kind == 7 or owner.kind == 31 or owner.kind == 8
+                                -> if {
+                                    SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: -1, nameToken: function.nameToken, genericToken: -1 } -> return
+                                }
+                            owner.parent => ancestor!
+                        }
+                }
+            functionIndex! + 1 => functionIndex!
+        }
+    }
+    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+}
+
 public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
     prepared -> firstPreparedNominalSignatureDiagnostic => nominalDiagnostic
     # Import ambiguity is a path-resolution error before semantic admission.
@@ -1614,7 +1639,9 @@ public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.Semant
     nominalDiagnostic.code != 0 -> if { nominalDiagnostic -> return }
     # Reject inaccessible nominal paths before an unresolved constructor can
     # enter typed IR. Existing declaration/signature errors keep their priority.
-    prepared -> firstPreparedPrivateNominalDiagnostic
+    prepared -> firstPreparedPrivateNominalDiagnostic => privateDiagnostic
+    privateDiagnostic.code != 0 -> if { privateDiagnostic -> return }
+    prepared -> firstPreparedLocalAsyncDiagnostic
 }
 
 # Unchecked emission preserves its explicit-signature contract. Nominal path
