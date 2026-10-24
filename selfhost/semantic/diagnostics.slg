@@ -2870,20 +2870,12 @@ public firstDictionaryKeyDiagnostic prepared: ref semanticContext.SemanticSnapsh
 # retains the separate overlapping-borrow and live-reference analysis.
 public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~] -> CallOwnershipDiagnostic {
     emptyCallOwnershipDiagnostic() => selected!
-    [Int; ~] => sourceByAst!
+    prepared.package -> semanticContext.indexExpressionSourceAsts => sourceByAst
     [Int; ~] => symbolByAst!
     prepared.package.nodes -> each node {
-        sourceByAst! -> push(-1)
         symbolByAst! -> push(-1)
     }
     prepared.package.ranges -> each range {
-        0 => localAst!
-        localAst! < range.astCount -> while {
-            prepared.package.nodes[range.astStart + localAst!] => node
-            node.parent >= 0 and node.start == prepared.package.nodes[range.astStart + node.parent].start
-                -> if { localAst! => sourceByAst![range.astStart + node.parent] }
-            localAst! + 1 => localAst!
-        }
         0 => nameIndex!
         nameIndex! < range.nameCount -> while {
             prepared.package.names[range.nameStart + nameIndex!] => name
@@ -2906,6 +2898,20 @@ public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapsh
                     -> if {
                         prepared.package.ranges[argument.sourceModule] => range
                         argument.argumentAst => rootAst!
+                        # C# validates the original flow place but borrows the
+                        # actual preceding result at runtime. A grouped flow
+                        # is an explicit temporary, not another chain stage.
+                        readonlyBorrow and argument.parameterOrdinal == 0
+                            and argument.callAst >= 0 and rootAst! >= 0
+                            and prepared.package.nodes[range.astStart + argument.callAst].kind == 10
+                            and prepared.package.nodes[range.astStart + rootAst!].kind == 10
+                            and prepared.package.nodes[range.astStart + argument.callAst].start == prepared.package.nodes[range.astStart + rootAst!].start
+                            -> if {
+                                rootAst! >= 0 and prepared.package.nodes[range.astStart + rootAst!].kind == 10
+                                    -> while {
+                                        sourceByAst[range.astStart + rootAst!] => rootAst!
+                                    }
+                            }
                         false => priorOperandFailure!
                         rootAst! >= 0 and (prepared.package.nodes[range.astStart + rootAst!].kind == 36 or prepared.package.nodes[range.astStart + rootAst!].kind == 41)
                             -> while {
@@ -2913,7 +2919,7 @@ public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapsh
                                 # source rule; this later parameter rule must not mask it.
                                 prepared.package.nodes[range.astStart + rootAst!].kind == 41 and traits[argument.actualTypeId] % 2 == 1
                                     -> if { true => priorOperandFailure! }
-                                sourceByAst![range.astStart + rootAst!] => rootAst!
+                                sourceByAst[range.astStart + rootAst!] => rootAst!
                             }
                         0 => code!
                         readonlyBorrow -> if {
