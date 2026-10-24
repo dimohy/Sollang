@@ -1,0 +1,34 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+
+main {
+    ["struct Storage {\n    public values: [[Int; <=2]; 2]\n}\n\nmake: -> Storage => Storage { values: [[5], [7, 9]] }\n\nreplace values: mut [Int; <=2] -> Unit {\n    42 => values[0]\n}\n\nmain {\n    make() => owner\n    owner.values[0] => first!\n    replace(first!)\n    owner.values[0] => original\n    original[0] -> println\n    first![0] -> println\n    original -> len -> println\n    first! -> len -> println\n}\n",; ~] => sources
+    sources -> semanticContext.prepareParallel => initialPrepared
+    initialPrepared -> expressionTypes.resolveCallContext => callContext
+    callContext.prepared => prepared
+    callContext.types => resolved
+    "sourceCount=$(prepared.package.sources -> len)" -> println
+    resolved.fields -> each field {
+        "field owner=$(field.ownerType) ordinal=$(field.ordinal) type=$(field.fieldType)" -> println
+    }
+    0 => astIndex!
+    prepared.package.nodes -> each node {
+        true -> if {
+            "ast=$(astIndex!) kind=$(node.kind) parent=$(node.parent) start=$(node.start)" -> println
+        }
+        astIndex! + 1 => astIndex!
+    }
+    resolved.expressions -> each expression {
+        prepared.package.nodes[expression.astNode] => node
+        true -> if {
+            "expression ast=$(expression.astNode) type=$(expression.typeId) status=$(expression.status)" -> println
+        }
+    }
+    0 => typeIndex!
+    resolved.types -> each type {
+        true -> if {
+            "type=$(typeIndex!) kind=$(type.kind) first=$(type.first) length=$(type.length) origin=$(type.origin)" -> println
+        }
+        typeIndex! + 1 => typeIndex!
+    }
+}

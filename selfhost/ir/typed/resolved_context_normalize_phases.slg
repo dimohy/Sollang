@@ -2513,51 +2513,60 @@ normalizeResolvedContextualTypes nodes: mut [TypedIrNode; ~], prepared: ref sema
                     contextualArrayElement! => nodes[contextualArray!.operand0]
                 }
                 frozenRecursiveSemanticTypes -> typeIds.materializedReadTypeId(contextualArrayElement!.typeId) => contextualArrayElementValueTypeId
-                contextualArrayElement!.typeId >= 0 -> if {
-                    # Earlier expression inference can observe a nested literal
-                    # before the lowered direct element (for example the `0` in
-                    # `0 -> targetMode`). The lowered operand chain is authoritative
-                    # here, so discard any stale composite identity and rebuild it
-                    # from the first direct element.
-                    -1 => contextualArray!.typeId
-                    3 => contextualArrayKind!
-                    -1 => contextualArrayLength!
-                    not contextualArrayHasTilde -> if {
-                        4 => contextualArrayKind!
-                        contextualArrayRepeatLength >= 0 -> if {
-                            contextualArrayRepeatLength => contextualArrayLength!
-                        } else {
-                            0 => contextualArrayLength!
-                            contextualArray!.operand0 => contextualArrayOperandIndex!
-                            contextualArrayOperandIndex! >= 0 -> while {
-                                contextualArrayLength! + 1 => contextualArrayLength!
-                                nodes[contextualArrayOperandIndex!].nextOperand => contextualArrayOperandIndex!
+                # An unannotated literal can acquire bounded storage only from
+                # its declared context. Preserve that canonical decision while
+                # retaining operand repair and the ordinary element checks.
+                contextualArray!.typeId >= 0
+                    and contextualArray!.typeId < (frozenRecursiveSemanticTypes -> len)
+                    and frozenRecursiveSemanticTypes[contextualArray!.typeId].kind == 12
+                    and not contextualArrayStorage.dynamic
+                    and not contextualArrayStorage.bounded => hasBoundedArrayContext
+                contextualArrayElement!.typeId >= 0 and not hasBoundedArrayContext
+                    -> if {
+                        # Earlier expression inference can observe a nested literal
+                        # before the lowered direct element (for example the `0` in
+                        # `0 -> targetMode`). The lowered operand chain is authoritative
+                        # here, so discard any stale composite identity and rebuild it
+                        # from the first direct element.
+                        -1 => contextualArray!.typeId
+                        3 => contextualArrayKind!
+                        -1 => contextualArrayLength!
+                        not contextualArrayHasTilde -> if {
+                            4 => contextualArrayKind!
+                            contextualArrayRepeatLength >= 0 -> if {
+                                contextualArrayRepeatLength => contextualArrayLength!
+                            } else {
+                                0 => contextualArrayLength!
+                                contextualArray!.operand0 => contextualArrayOperandIndex!
+                                contextualArrayOperandIndex! >= 0 -> while {
+                                    contextualArrayLength! + 1 => contextualArrayLength!
+                                    nodes[contextualArrayOperandIndex!].nextOperand => contextualArrayOperandIndex!
+                                }
                             }
                         }
-                    }
-                    contextualArrayStorage.bounded -> if {
-                        12 => contextualArrayKind!
-                        contextualArrayStorage.length => contextualArrayLength!
-                    }
-                    0 => contextualArrayTypeSearch!
-                    contextualArrayTypeSearch! < (frozenRecursiveSemanticTypes -> len)
-                        and contextualArray!.typeId < 0 -> while {
-                            frozenRecursiveSemanticTypes[contextualArrayTypeSearch!] => contextualArrayType
-                            contextualArrayType.kind == contextualArrayKind!
-                                and contextualArrayType.first == contextualArrayElementValueTypeId
-                                and contextualArrayType.length == contextualArrayLength!
-                                -> if {
-                                    contextualArrayTypeSearch! => contextualArray!.typeId
-                                    contextualArrayType.kind => contextualArray!.typeKind
-                                    contextualArrayType.origin => contextualArray!.typeOrigin
-                                    contextualArrayType.module => contextualArray!.typeModule
-                                    contextualArrayType.symbol => contextualArray!.typeSymbol
-                                    recursiveTypeFlags[contextualArrayTypeSearch!] => contextualArray!.typeFlags
-                                }
-                            contextualArrayTypeSearch! + 1 => contextualArrayTypeSearch!
+                        contextualArrayStorage.bounded -> if {
+                            12 => contextualArrayKind!
+                            contextualArrayStorage.length => contextualArrayLength!
                         }
-                    contextualArray! => nodes[contextualArrayIndex!]
-                }
+                        0 => contextualArrayTypeSearch!
+                        contextualArrayTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                            and contextualArray!.typeId < 0 -> while {
+                                frozenRecursiveSemanticTypes[contextualArrayTypeSearch!] => contextualArrayType
+                                contextualArrayType.kind == contextualArrayKind!
+                                    and contextualArrayType.first == contextualArrayElementValueTypeId
+                                    and contextualArrayType.length == contextualArrayLength!
+                                    -> if {
+                                        contextualArrayTypeSearch! => contextualArray!.typeId
+                                        contextualArrayType.kind => contextualArray!.typeKind
+                                        contextualArrayType.origin => contextualArray!.typeOrigin
+                                        contextualArrayType.module => contextualArray!.typeModule
+                                        contextualArrayType.symbol => contextualArray!.typeSymbol
+                                        recursiveTypeFlags[contextualArrayTypeSearch!] => contextualArray!.typeFlags
+                                    }
+                                contextualArrayTypeSearch! + 1 => contextualArrayTypeSearch!
+                            }
+                        contextualArray! => nodes[contextualArrayIndex!]
+                    }
             }
         contextualArrayIndex! + 1 => contextualArrayIndex!
     }
