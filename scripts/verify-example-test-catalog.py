@@ -15,7 +15,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from completed_artifact_plan import initialize_output, cleanup_output
+from completed_artifact_plan import initialize_output, cleanup_output, assert_output_shutdown
 from verification_execution import VerificationExecution
 
 
@@ -44,11 +44,16 @@ def main() -> None:
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--case-budget-seconds', type=int)
     parser.add_argument('--total-budget-seconds', type=int)
+    parser.add_argument('--reusable-compiler-directory', type=Path, action='append',
+                        help='Explicit retained compiler roots for initialization and cleanup; maximum three')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
     proof_path, runner, compiler, driver, output = (
         path.resolve() for path in (args.preflight, args.runner, args.compiler,
                                    args.selfhost_driver_build, args.output))
+    # Preserve path components for the lifecycle's reparse-point validation.
+    reusable = ([path.absolute() for path in args.reusable_compiler_directory]
+                if args.reusable_compiler_directory is not None else None)
     closure_result = (args.source_closure_result or output / 'source-closure.json').resolve()
     proof = read(proof_path)
     if (proof.get('status') != 'validated' or proof.get('completed') != 0
@@ -107,7 +112,7 @@ def main() -> None:
         raise ValueError('CATALOG_EXECUTION_BUDGET_REQUIRED')
     if output.exists():
         raise ValueError('CATALOG_OUTPUT_ALREADY_EXISTS')
-    initialize_output(repo, output)
+    initialize_output(repo, output, reusable_directories=reusable)
     output.mkdir(parents=True)
     result = dict(status='prepared', verificationScope=scope,
                   completed=0, total=len(rows), fullCatalogTotal=len(ids),
@@ -123,6 +128,8 @@ def main() -> None:
                   retryPolicy='no-automatic-retry', executionOrder='sequential',
                   caseBudgetSeconds=args.case_budget_seconds,
                   totalBudgetSeconds=args.total_budget_seconds)
+    if reusable is not None:
+        result['reusableCompilerDirectories'] = [str(path) for path in reusable]
     record = output / 'result.json'
 
     def save() -> None:
@@ -201,15 +208,28 @@ def main() -> None:
                 case_result['cases'][0].update(status='passed', buildExit=0)
                 # The C# result owns this nested output tree. Cleaning only the
                 # supervisor deliberately leaves nested owners untouched.
-                cleanup_output(repo, inner_path.parent, execute=True)
+                cleanup_output(repo, inner_path.parent, execute=True,
+                               reusable_directories=reusable)
             except BaseException as caught:
                 error = caught
                 raise
             finally:
-                execution.finalize(error, cleanup=True)
-                case.update(status=case_result['status'],
-                            processesStopped=case_result['processesStopped'])
-                save()
+                execution.finalize(error, cleanup=False)
+                try:
+                    if (case_result['status'] == 'passed' and case_result['inputsStable']
+                            and case_result['processesStopped']):
+                        assert_output_shutdown(repo, case_root)
+                        cleanup_output(repo, case_root, execute=True,
+                                       reusable_directories=reusable)
+                except BaseException as cleanup_error:
+                    case_result.update(status='failed',
+                                       failure=f'{type(cleanup_error).__name__}: {cleanup_error}')
+                    execution.save()
+                    raise
+                finally:
+                    case.update(status=case_result['status'],
+                                processesStopped=case_result['processesStopped'])
+                    save()
             if case_result['status'] != 'passed':
                 raise ValueError('CATALOG_CASE_CLOSURE_FAILED: ' + row['id'])
             result['completed'] += 1
