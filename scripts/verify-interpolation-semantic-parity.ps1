@@ -55,10 +55,10 @@ $currentSharedCompiler = [IO.Path]::GetFullPath((Join-Path $root $currentShared.
 if (@($currentSharedContract.cases).Count -ne 16 -or
     @($currentSharedContract.cases.id | Sort-Object -Unique).Count -ne 16 -or
     (Get-FileHash -LiteralPath $currentSharedCompiler -Algorithm SHA256).Hash -cne $currentShared.compilerSha256 -or
-    $currentSharedPaired.inputHashes.PSObject.Properties[$currentSharedCompiler].Value -cne $currentShared.compilerSha256 -or
-    $currentSharedManaged.inputHashes.PSObject.Properties[$currentSharedContractPath].Value -cne (Get-FileHash -LiteralPath $currentSharedContractPath -Algorithm SHA256).Hash -or
-    $currentSharedPaired.inputHashes.PSObject.Properties[$currentSharedContractPath].Value -cne (Get-FileHash -LiteralPath $currentSharedContractPath -Algorithm SHA256).Hash -or
-    $currentSharedPaired.inputHashes.PSObject.Properties[$currentSharedManagedPath].Value -cne (Get-FileHash -LiteralPath $currentSharedManagedPath -Algorithm SHA256).Hash) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentSharedPaired.inputHashes -LiteralPath $currentSharedCompiler) -cne $currentShared.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentSharedManaged.inputHashes -LiteralPath $currentSharedContractPath) -cne (Get-FileHash -LiteralPath $currentSharedContractPath -Algorithm SHA256).Hash -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentSharedPaired.inputHashes -LiteralPath $currentSharedContractPath) -cne (Get-FileHash -LiteralPath $currentSharedContractPath -Algorithm SHA256).Hash -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentSharedPaired.inputHashes -LiteralPath $currentSharedManagedPath) -cne (Get-FileHash -LiteralPath $currentSharedManagedPath -Algorithm SHA256).Hash) {
     throw 'CURRENT_SHARED_QUERY_IDENTITY_INVALID'
 }
 foreach ($entry in @(@{ proof = $currentSharedManaged; mode = 'managed' }, @{ proof = $currentSharedPaired; mode = 'paired' })) {
@@ -183,8 +183,8 @@ $firstUnaryPair = Get-Content -LiteralPath (Join-Path $root $firstError.firstUna
 $firstRangePair = Get-Content -LiteralPath (Join-Path $root $firstError.firstRangePair) -Raw | ConvertFrom-Json
 $firstControl = Get-Content -LiteralPath (Join-Path $root $firstError.retainedCharacterRangePair) -Raw | ConvertFrom-Json
 $firstCompiler = Join-Path (Split-Path -Parent (Join-Path $root $firstError.candidateBuild)) 'compiler.exe'
-$firstUnaryStderr = Get-Content -LiteralPath $firstUnaryPair.logs.selfhostStderr -Raw
-$firstRangeStderr = Get-Content -LiteralPath $firstRangePair.logs.selfhostStderr -Raw
+$firstUnaryStderr = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $firstUnaryPair.logs.selfhostStderr) -Raw
+$firstRangeStderr = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $firstRangePair.logs.selfhostStderr) -Raw
 $firstBaselineStderr = Get-Content -LiteralPath (Join-Path (Split-Path -Parent (Join-Path $root $firstError.baselineFailure)) 'stderr.txt') -Raw
 $interpolationDiagnostics = Get-Content -LiteralPath (Join-Path $root $firstError.selfhostDecisionSource) -Raw
 if ($firstError.status -cne 'passed-slice-unit-open' -or $firstError.focusedPassed -cne '3/3' -or
@@ -241,16 +241,20 @@ function Assert-ExactStderrReport([object]$Report, [int]$Total, [string]$Compile
     }
     foreach ($case in $Report.cases) {
         $pair = Get-Content -LiteralPath (Join-Path $root $case.receipt) -Raw | ConvertFrom-Json
-        $managedStderr = [IO.File]::ReadAllText($pair.logs.managedStderr).Replace("`r`n", "`n")
-        $selfhostStderr = [IO.File]::ReadAllText($pair.logs.selfhostStderr).Replace("`r`n", "`n")
+        $managedLog = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $pair.logs.managedStderr
+        $selfhostLog = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $pair.logs.selfhostStderr
+        $managedStderr = [IO.File]::ReadAllText($managedLog).Replace("`r`n", "`n")
+        $selfhostStderr = [IO.File]::ReadAllText($selfhostLog).Replace("`r`n", "`n")
         if ($pair.state -cne 'passed' -or -not $pair.inputsStable -or
             $pair.sourceSha256 -cne $case.sourceSha256 -or
             $pair.selfhostCompilerSha256 -cne $CompilerSha256 -or
             $pair.managedCompilerSha256 -cne $case.managedCompilerSha256 -or
             (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $pair.source -Algorithm SHA256).Hash -cne $pair.sourceSha256 -or
             (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $pair.expected -Algorithm SHA256).Hash -cne $pair.expectedSha256 -or
-            (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $pair.managedCompilerPath -Algorithm SHA256).Hash -cne $pair.managedCompilerSha256 -or
+            (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedManagedExecutionRecord $case.receipt -LiteralPath $pair.managedCompilerPath -Algorithm SHA256).Hash -cne $pair.managedCompilerSha256 -or
             (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $pair.selfhostCompilerPath -Algorithm SHA256).Hash -cne $pair.selfhostCompilerSha256 -or
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($managedStderr))) -cne $case.managedStderrSha256 -or
+            [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($selfhostStderr))) -cne $case.selfhostStderrSha256 -or
             $managedStderr -cne $selfhostStderr) {
             throw "interpolation exact stderr case is stale or mismatched: $($case.receipt)"
         }
@@ -302,7 +306,7 @@ if ($unknownBinding.status -cne 'passed-slice-unit-open' -or
     $unknownBaseline.failureId -cne 'NEGATIVE_CHECK_FAILED' -or $unknownBaseline.selfhost.expectedInStderr -or
     $unknownPositive.status -cne 'passed' -or -not $unknownPositive.inputStable -or
     $unknownPositive.completed -ne 3 -or $unknownPositive.total -ne 3 -or
-    $unknownPositive.inputHashesStart.PSObject.Properties[$unknownCompiler].Value -cne $unknownBinding.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $unknownPositive.inputHashesStart -LiteralPath $unknownCompiler) -cne $unknownBinding.compilerSha256 -or
     @($unknownBinding.managedFirstProofs).Count -ne 5 -or
     @($unknownBinding.functionNameBaselines).Count -ne 2 -or
     -not $managedSemantic.Contains('private BoundType InferStringExpression(', [StringComparison]::Ordinal) -or
@@ -336,10 +340,10 @@ $currentUnknownCompiler = [IO.Path]::GetFullPath((Join-Path $root $currentUnknow
 if (@($currentUnknownContract.cases).Count -ne 13 -or
     @($currentUnknownContract.cases.id | Sort-Object -Unique).Count -ne 13 -or
     (Get-FileHash -LiteralPath $currentUnknownCompiler -Algorithm SHA256).Hash -cne $currentUnknown.compilerSha256 -or
-    $currentUnknownPaired.inputHashes.PSObject.Properties[$currentUnknownCompiler].Value -cne $currentUnknown.compilerSha256 -or
-    $currentUnknownManaged.inputHashes.PSObject.Properties[$currentUnknownContractPath].Value -cne (Get-FileHash -LiteralPath $currentUnknownContractPath -Algorithm SHA256).Hash -or
-    $currentUnknownPaired.inputHashes.PSObject.Properties[$currentUnknownContractPath].Value -cne (Get-FileHash -LiteralPath $currentUnknownContractPath -Algorithm SHA256).Hash -or
-    $currentUnknownPaired.inputHashes.PSObject.Properties[$currentUnknownManagedPath].Value -cne (Get-FileHash -LiteralPath $currentUnknownManagedPath -Algorithm SHA256).Hash) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentUnknownPaired.inputHashes -LiteralPath $currentUnknownCompiler) -cne $currentUnknown.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentUnknownManaged.inputHashes -LiteralPath $currentUnknownContractPath) -cne (Get-FileHash -LiteralPath $currentUnknownContractPath -Algorithm SHA256).Hash -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentUnknownPaired.inputHashes -LiteralPath $currentUnknownContractPath) -cne (Get-FileHash -LiteralPath $currentUnknownContractPath -Algorithm SHA256).Hash -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentUnknownPaired.inputHashes -LiteralPath $currentUnknownManagedPath) -cne (Get-FileHash -LiteralPath $currentUnknownManagedPath -Algorithm SHA256).Hash) {
     throw 'CURRENT_UNKNOWN_BINDING_IDENTITY_INVALID'
 }
 foreach ($entry in @(@{ proof = $currentUnknownManaged; mode = 'managed' }, @{ proof = $currentUnknownPaired; mode = 'paired' })) {
@@ -1030,7 +1034,7 @@ foreach ($pairPath in @($binaryComparison.positiveMainPair, $binaryComparison.po
         $binaryComparison.retainedPositivePair)) {
     $pair = Get-Content -LiteralPath (Join-Path $root $pairPath) -Raw | ConvertFrom-Json
     if ($pair.status -cne 'passed' -or -not $pair.inputStable -or
-        $pair.inputHashesStart.PSObject.Properties[$comparisonCompiler].Value -cne $binaryComparison.selfhostCompilerSha256) {
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $pair.inputHashesStart -LiteralPath $comparisonCompiler) -cne $binaryComparison.selfhostCompilerSha256) {
         throw "Interpolation comparison positive pair invalid: $pairPath"
     }
 }
@@ -1075,7 +1079,7 @@ for ($pairIndex = 0; $pairIndex -lt $logicalPairPaths.Count; $pairIndex++) {
     if ($pair.status -cne 'passed' -or -not $pair.inputStable -or
         $pair.completed -ne $logicalPairTotals[$pairIndex] -or
         $pair.total -ne $logicalPairTotals[$pairIndex] -or
-        $pair.inputHashesStart.PSObject.Properties[$logicalCompiler].Value -cne $binaryLogical.selfhostCompilerSha256) {
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $pair.inputHashesStart -LiteralPath $logicalCompiler) -cne $binaryLogical.selfhostCompilerSha256) {
         throw "Interpolation logical positive pair invalid: $pairPath"
     }
 }
@@ -1116,7 +1120,7 @@ Assert-ExactStderrReport $nestedExact 2 $nestedLogical.selfhostCompilerSha256
 Assert-ExactStderrReport $nestedRetainedExact 2 $nestedLogical.selfhostCompilerSha256
 if ($nestedPositive.status -cne 'passed' -or -not $nestedPositive.inputStable -or
     $nestedPositive.completed -ne 2 -or $nestedPositive.total -ne 2 -or
-    $nestedPositive.inputHashesStart.PSObject.Properties[$nestedCompiler].Value -cne $nestedLogical.selfhostCompilerSha256) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $nestedPositive.inputHashesStart -LiteralPath $nestedCompiler) -cne $nestedLogical.selfhostCompilerSha256) {
     throw 'Nested logical operand retained positive pair invalid'
 }
 
@@ -1148,7 +1152,7 @@ foreach ($pairPath in $unaryUnit.retainedPositivePairs) {
     $pair = Get-Content -LiteralPath (Join-Path $root $pairPath) -Raw | ConvertFrom-Json
     if ($pair.status -cne 'passed' -or -not $pair.inputStable -or
         $pair.completed -ne 1 -or $pair.total -ne 1 -or
-        $pair.inputHashesStart.PSObject.Properties[$unaryCompiler].Value -cne $unaryUnit.selfhostCompilerSha256) {
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $pair.inputHashesStart -LiteralPath $unaryCompiler) -cne $unaryUnit.selfhostCompilerSha256) {
         throw "Interpolation unary retained positive pair invalid: $pairPath"
     }
 }
@@ -1181,7 +1185,7 @@ Assert-ExactStderrReport $logicalResultExact 1 $logicalResult.selfhostCompilerSh
 Assert-ExactStderrReport $logicalResultRetainedExact 4 $logicalResult.selfhostCompilerSha256
 if ($logicalResultPositive.status -cne 'passed' -or -not $logicalResultPositive.inputStable -or
     $logicalResultPositive.completed -ne 1 -or $logicalResultPositive.total -ne 1 -or
-    $logicalResultPositive.inputHashesStart.PSObject.Properties[$logicalResultCompiler].Value -cne $logicalResult.selfhostCompilerSha256) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $logicalResultPositive.inputHashesStart -LiteralPath $logicalResultCompiler) -cne $logicalResult.selfhostCompilerSha256) {
     throw 'Interpolation logical result retained positive pair invalid'
 }
 
@@ -1218,7 +1222,7 @@ for ($pairIndex = 0; $pairIndex -lt $comparisonResult.retainedPositivePairs.Coun
     if ($pair.status -cne 'passed' -or -not $pair.inputStable -or
         $pair.completed -ne $comparisonPositiveTotals[$pairIndex] -or
         $pair.total -ne $comparisonPositiveTotals[$pairIndex] -or
-        $pair.inputHashesStart.PSObject.Properties[$comparisonResultCompiler].Value -cne $comparisonResult.selfhostCompilerSha256) {
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $pair.inputHashesStart -LiteralPath $comparisonResultCompiler) -cne $comparisonResult.selfhostCompilerSha256) {
         throw "Interpolation comparison result retained positive pair invalid: $pairPath"
     }
 }
@@ -1260,7 +1264,7 @@ for ($pairIndex = 0; $pairIndex -lt $arithmeticResult.positivePairs.Count; $pair
     if ($pair.status -cne 'passed' -or -not $pair.inputStable -or
         $pair.completed -ne $arithmeticPositiveTotals[$pairIndex] -or
         $pair.total -ne $arithmeticPositiveTotals[$pairIndex] -or
-        $pair.inputHashesStart.PSObject.Properties[$arithmeticResultCompiler].Value -cne $arithmeticResult.selfhostCompilerSha256) {
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $pair.inputHashesStart -LiteralPath $arithmeticResultCompiler) -cne $arithmeticResult.selfhostCompilerSha256) {
         throw "Interpolation arithmetic result positive pair invalid: $pairPath"
     }
 }
@@ -1437,7 +1441,7 @@ if ($streamRoleSemantic.status -cne 'passed' -or $streamRoleSemantic.semanticPha
     $streamRoleRetained.Count -ne 2 -or
     $streamRoleRetained[0].status -cne 'passed' -or $streamRoleRetained[0].completed -ne 1 -or
     $streamRoleRetained[1].status -cne 'passed' -or $streamRoleRetained[1].completed -ne 2 -or
-    @($streamRoleRetained | Where-Object { -not $_.inputStable -or $_.inputHashesStart.PSObject.Properties[$streamRoleCompiler].Value -cne $streamRoleSemantic.selfhostCompilerSha256 }).Count -ne 0 -or
+    @($streamRoleRetained | Where-Object { -not $_.inputStable -or (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $_.inputHashesStart -LiteralPath $streamRoleCompiler) -cne $streamRoleSemantic.selfhostCompilerSha256 }).Count -ne 0 -or
     -not ([IO.File]::ReadAllText((Join-Path $root 'selfhost/semantic/expression_type_ids.slg')).Contains('streamRoleTypeBySymbol: [Int; ~]', [StringComparison]::Ordinal))) {
     throw 'Interpolation stream callback semantic arithmetic lacks source, compiler, or paired proof'
 }
@@ -1473,10 +1477,10 @@ if ($streamComparison.status -cne 'passed' -or $streamComparison.semanticPhaseCl
     @($streamComparisonExact | Where-Object { -not $_ }).Count -ne 0 -or
     $streamComparisonPositive.status -cne 'passed' -or $streamComparisonPositive.completed -ne 4 -or
     $streamComparisonPositive.total -ne 4 -or -not $streamComparisonPositive.inputStable -or
-    $streamComparisonPositive.inputHashesStart.PSObject.Properties[$streamComparisonCompiler].Value -cne $streamComparison.selfhostCompilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $streamComparisonPositive.inputHashesStart -LiteralPath $streamComparisonCompiler) -cne $streamComparison.selfhostCompilerSha256 -or
     $streamComparisonTextPositive.status -cne 'passed' -or $streamComparisonTextPositive.completed -ne 1 -or
     $streamComparisonTextPositive.total -ne 1 -or -not $streamComparisonTextPositive.inputStable -or
-    $streamComparisonTextPositive.inputHashesStart.PSObject.Properties[$streamComparisonCompiler].Value -cne $streamComparison.selfhostCompilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $streamComparisonTextPositive.inputHashesStart -LiteralPath $streamComparisonCompiler) -cne $streamComparison.selfhostCompilerSha256 -or
     -not $streamComparisonSourceCode.Contains('comparisonDecisionForOperands', [StringComparison]::Ordinal) -or
     -not $streamComparisonSourceCode.Contains('arithmeticDecisionForOperands', [StringComparison]::Ordinal) -or
     -not $streamComparisonSourceCode.Contains('binary.opcode -> comparisonDecisionForOperands(operands) -> return', [StringComparison]::Ordinal)) {
@@ -1873,8 +1877,8 @@ if ($mismatchedSourcePaths.Count -gt 0) {
             if ([IO.Path]::GetExtension($entry.path) -cnotin @('.slg', '.cs')) {
                 throw "Invalid executable source identity kind: $($entry.path)"
             }
-            $pairedHash = $currentPair.inputHashes.PSObject.Properties[$sourcePath].Value
-            $managedHash = $currentManaged.inputHashes.PSObject.Properties[$sourcePath].Value
+            $pairedHash = (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentPair.inputHashes -LiteralPath $sourcePath)
+            $managedHash = (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentManaged.inputHashes -LiteralPath $sourcePath)
             if ($pairedHash -cne $actualHash -or $managedHash -cne $actualHash) {
                 throw "current interpolation source was not a stable paired input: $($entry.path)"
             }
@@ -1918,7 +1922,7 @@ if ($fractionalCharacter.status -cne 'passed-slice-unit-open' -or
     $fractionalDirectNegative.selfhostCompilerSha256 -cne $fractionalCharacter.compilerSha256 -or
     $fractionalRangeNegative.selfhostCompilerSha256 -cne $fractionalCharacter.compilerSha256 -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $fractionalCandidatePath -Algorithm SHA256).Hash -cne $fractionalCharacter.compilerSha256 -or
-    $fractionalPositive.inputHashesStart.PSObject.Properties[$fractionalCandidatePath].Value -cne $fractionalCharacter.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $fractionalPositive.inputHashesStart -LiteralPath $fractionalCandidatePath) -cne $fractionalCharacter.compilerSha256 -or
     -not $managedCodegen.Contains('return new RuntimeFloat(', [StringComparison]::Ordinal) -or
     -not $managedCodegen.Contains('BoundType.Float32,', [StringComparison]::Ordinal) -or
     -not $semanticInference.Contains('numericLiteralRange.literalUsesFloatingSyntax', [StringComparison]::Ordinal) -or
@@ -1940,7 +1944,7 @@ if ($integerFraction.status -cne 'passed-slice-unit-open' -or
     $integerFractionRetained.completed -ne 2 -or $integerFractionRetained.total -ne 2 -or
     -not $integerFractionRetained.inputStable -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $integerFractionCandidatePath -Algorithm SHA256).Hash -cne $integerFraction.compilerSha256 -or
-    $integerFractionRetained.inputHashesStart.PSObject.Properties[$integerFractionCandidatePath].Value -cne $integerFraction.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $integerFractionRetained.inputHashesStart -LiteralPath $integerFractionCandidatePath) -cne $integerFraction.compilerSha256 -or
     -not $managedSemantic.Contains('if (IsIntegerType(targetType))', [StringComparison]::Ordinal) -or
     -not $managedSemantic.Contains('numeric literal {text} is not an integer for {targetName}', [StringComparison]::Ordinal) -or
     $semanticInference -notmatch '(?s)literalUsesFloatingSyntax\(0, literal\.payloadLength\).*?targetBuiltin != 14 -> if \{ 4 => invalidStatus! \}' -or
@@ -2026,7 +2030,7 @@ if ($sizeSigned.status -cne 'passed-slice-unit-open' -or $sizeSigned.focusedPass
     $sizePair.status -cne 'passed' -or $sizePair.completed -ne 2 -or $sizePair.total -ne 2 -or
     -not $sizePair.inputStable -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $sizeCandidatePath -Algorithm SHA256).Hash -cne $sizeSigned.compilerSha256 -or
-    $sizePair.inputHashesStart.PSObject.Properties[$sizeCandidatePath].Value -cne $sizeSigned.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $sizePair.inputHashesStart -LiteralPath $sizeCandidatePath) -cne $sizeSigned.compilerSha256 -or
     -not $managedConversionCodegen.Contains('IsSignedIntegerType(source.Type) ? "sitofp" : "uitofp"', [StringComparison]::Ordinal) -or
     -not $selfhostSignedCodegen.Contains('symbol == 7 or symbol == 12', [StringComparison]::Ordinal) -or
     -not $sizeSignedLlChecks['signed'] -or
@@ -2043,7 +2047,7 @@ if ($separator.status -cne 'passed-slice-unit-open' -or $separator.focusedPassed
     $separatorPair.status -cne 'passed' -or $separatorPair.completed -ne 1 -or
     $separatorPair.total -ne 1 -or -not $separatorPair.inputStable -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $separatorCandidatePath -Algorithm SHA256).Hash -cne $separator.compilerSha256 -or
-    $separatorPair.inputHashesStart.PSObject.Properties[$separatorCandidatePath].Value -cne $separator.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $separatorPair.inputHashesStart -LiteralPath $separatorCandidatePath) -cne $separator.compilerSha256 -or
     -not $managedLexer.Contains('source[start.._index].Replace', [StringComparison]::Ordinal) -or
     -not $selfhostLexer.Contains('source -> byte(position! + 1)) -> isDigit', [StringComparison]::Ordinal) -or
     -not $numericLiteralRange.Contains('character != 95 -> if { false -> return }', [StringComparison]::Ordinal) -or
@@ -2063,8 +2067,8 @@ if ($largeLiteral.status -cne 'passed-slice-unit-open' -or $largeLiteral.focused
     $largePair.status -cne 'passed' -or $largePair.completed -ne 4 -or $largePair.total -ne 4 -or -not $largePair.inputStable -or
     $signedPair.status -cne 'passed' -or $signedPair.completed -ne 1 -or $signedPair.total -ne 1 -or -not $signedPair.inputStable -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $largeCandidatePath -Algorithm SHA256).Hash -cne $largeLiteral.compilerSha256 -or
-    $largePair.inputHashesStart.PSObject.Properties[$largeCandidatePath].Value -cne $largeLiteral.compilerSha256 -or
-    $signedPair.inputHashesStart.PSObject.Properties[$largeCandidatePath].Value -cne $largeLiteral.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $largePair.inputHashesStart -LiteralPath $largeCandidatePath) -cne $largeLiteral.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $signedPair.inputHashesStart -LiteralPath $largeCandidatePath) -cne $largeLiteral.compilerSha256 -or
     -not $largeBaselineLlvm.Contains('sitofp i32 4294967296 to double', [StringComparison]::Ordinal) -or
     $largeManagedOutput.Trim() -cne 'value=4294967296' -or
     ($signedManagedOutput.Trim() -replace "`r`n", "`n") -cne "negative=-4294967296`nfloat32=4294967296" -or
@@ -2096,7 +2100,7 @@ if ($characterConversion.status -cne 'passed-slice-unit-open' -or $characterConv
     -not $characterNegative.managed.expectedInStderr -or -not $characterNegative.selfhost.expectedInStderr -or
     -not $characterNegative.managed.noEmittedProducts -or -not $characterNegative.selfhost.noEmittedProducts -or
     (Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $characterCandidatePath -Algorithm SHA256).Hash -cne $characterConversion.compilerSha256 -or
-    $characterPositive.inputHashesStart.PSObject.Properties[$characterCandidatePath].Value -cne $characterConversion.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $characterPositive.inputHashesStart -LiteralPath $characterCandidatePath) -cne $characterConversion.compilerSha256 -or
     $characterNegative.selfhostCompilerSha256 -cne $characterConversion.compilerSha256 -or
     -not $characterLexer.Contains('new Token(TokenKind.Character, scalar.ToString(CultureInfo.InvariantCulture)', [StringComparison]::Ordinal) -or
     -not $characterParser.Contains('return new NumberExpression(characterToken.Text', [StringComparison]::Ordinal) -or
@@ -2209,8 +2213,8 @@ if ($semanticKinds -ccontains 0) {
         throw 'integer interpolation semantic decision lacks current paired evidence'
     }
     $candidatePath = Join-Path (Split-Path -Parent (Join-Path $root $integerEvidence.candidateBuild)) 'compiler.exe'
-    $pairCandidateHash = $integerPair.inputHashesStart.PSObject.Properties[$candidatePath].Value
-    $contextCandidateHash = $contextPair.inputHashes.PSObject.Properties[$candidatePath].Value
+    $pairCandidateHash = (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $integerPair.inputHashesStart -LiteralPath $candidatePath)
+    $contextCandidateHash = (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $contextPair.inputHashes -LiteralPath $candidatePath)
     if ((Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $candidatePath -Algorithm SHA256).Hash -cne $integerEvidence.compilerSha256 -or
         $pairCandidateHash -cne $integerEvidence.compilerSha256 -or
         $contextCandidateHash -cne $integerEvidence.compilerSha256) {
@@ -2335,9 +2339,9 @@ $topologyExpected = [IO.File]::ReadAllText((Join-Path $root "examples/regression
 if ($currentTopology.status -cne 'passed' -or $currentTopology.completed -ne 1 -or $currentTopology.total -ne 1 -or
     -not $currentTopology.inputsStable -or -not $currentTopology.processesStopped -or @($currentTopology.runs).Count -ne 2 -or
     (Get-FileHash -LiteralPath $currentTopologyCompiler -Algorithm SHA256).Hash -cne $currentTopologyReference.compilerSha256 -or
-    $currentTopology.inputHashesStart.PSObject.Properties[$currentTopologyCompiler].Value -cne $currentTopologyReference.compilerSha256 -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $currentTopology.inputHashesStart -LiteralPath $currentTopologyCompiler) -cne $currentTopologyReference.compilerSha256 -or
     $topology.actualStdout.Replace("`r`n", "`n") -cne $topologyExpected -or
-    $topology.inputHashes.PSObject.Properties[$topologySourcePath].Value -cne (Get-FileHash -LiteralPath $topologySourcePath -Algorithm SHA256).Hash) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $topology.inputHashes -LiteralPath $topologySourcePath) -cne (Get-FileHash -LiteralPath $topologySourcePath -Algorithm SHA256).Hash) {
     throw 'CURRENT_INDEXED_MEMBER_TOPOLOGY_PROOF_INCOMPLETE'
 }
 foreach ($hashedInput in $currentTopology.inputHashesStart.PSObject.Properties) {
@@ -2389,7 +2393,7 @@ if ($conversionEvidence.status -cne 'passed-slice-unit-open' -or
 }
 $conversionCompilerPath = Join-Path (Split-Path -Parent (Join-Path $root $conversionEvidence.candidateBuild)) 'compiler.exe'
 if ((Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $conversionCompilerPath -Algorithm SHA256).Hash -cne $conversionEvidence.compilerSha256 -or
-    $conversionPositive.inputHashesStart.PSObject.Properties[$conversionCompilerPath].Value -cne $conversionEvidence.compilerSha256) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $conversionPositive.inputHashesStart -LiteralPath $conversionCompilerPath) -cne $conversionEvidence.compilerSha256) {
     throw 'numeric conversion operand evidence names a different compiler candidate'
 }
 foreach ($negativePath in @($conversionEvidence.negativePairs)) {
@@ -2427,7 +2431,7 @@ if ($rangeEvidence.status -cne 'passed-slice-unit-open' -or
 }
 $rangeCompilerPath = Join-Path (Split-Path -Parent (Join-Path $root $rangeEvidence.candidateBuild)) 'compiler.exe'
 if ((Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $rangeCompilerPath -Algorithm SHA256).Hash -cne $rangeEvidence.compilerSha256 -or
-    $rangePositive.inputHashesStart.PSObject.Properties[$rangeCompilerPath].Value -cne $rangeEvidence.compilerSha256) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $rangePositive.inputHashesStart -LiteralPath $rangeCompilerPath) -cne $rangeEvidence.compilerSha256) {
     throw 'numeric conversion range evidence names a different compiler candidate'
 }
 foreach ($negativePath in @($rangeEvidence.negativePairs)) {
@@ -2515,7 +2519,7 @@ if ($arityEvidence.status -cne 'passed-slice-unit-open' -or
 }
 $arityCompilerPath = Join-Path (Split-Path -Parent (Join-Path $root $arityEvidence.candidateBuild)) 'compiler.exe'
 if ((Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath $arityCompilerPath -Algorithm SHA256).Hash -cne $arityEvidence.compilerSha256 -or
-    $arityPositive.inputHashesStart.PSObject.Properties[$arityCompilerPath].Value -cne $arityEvidence.compilerSha256) {
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $arityPositive.inputHashesStart -LiteralPath $arityCompilerPath) -cne $arityEvidence.compilerSha256) {
     throw 'numeric conversion arity evidence names a different compiler candidate'
 }
 foreach ($negativePath in @($arityEvidence.negativePairs)) {
