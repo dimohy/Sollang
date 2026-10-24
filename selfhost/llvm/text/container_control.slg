@@ -2131,6 +2131,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             -> if {
                 false => ownedDropNeedsInlineArrayReload!
                 context.types[ownedDropCandidate.typeId].kind == 4 => ownedDropHasInlineArrayAbi
+                context.types[ownedDropCandidate.typeId].kind == 12 => ownedDropNeedsBoundedValue
                 -1 => ownedDropFrameRoot!
                 ownedDropOwner! >= 0 and context.ir[ownedDropOwner!].kind == 0
                     -> if {
@@ -2172,7 +2173,9 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                         "  " -> print
                         request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                         "_current = load " -> print
-                        ownedDropCandidate.typeId -> writeSemanticTypeId(context, state)
+                        ownedDropNeedsBoundedValue -> if {
+                            ownedDropCandidate -> writeIrType(context, state)
+                        } else { ownedDropCandidate.typeId -> writeSemanticTypeId(context, state) }
                         ", ptr " -> print
                         ownedDropFrameRoot! >= 0 -> if {
                             ownedDropFrameRoot! -> writeAsyncLocalAddress(context)
@@ -2180,21 +2183,42 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                         ", align " -> print
                         ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
                     }
-                "  call void @sollang_drop_t$(ownedDropCandidate.typeId)(" -> print
-                ownedDropCandidate.typeId -> writeSemanticTypeId(context, state)
-                " " -> print
-                (ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0) and not ownedDropNeedsInlineArrayReload!
-                    -> if {
-                        request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                        "_current" -> print
-                    } else {
-                        ownedDropNeedsInlineArrayReload! -> if {
+                ownedDropNeedsBoundedValue -> if {
+                    # Local slots and expressions carry runtime handles; drop
+                    # helpers receive canonical inline bounded values.
+                    "  %cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)_handle = freeze %sollang.array.i32 " -> print
+                    ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0
+                        -> if {
                             request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                            "_fixed" -> print
+                            "_current" -> print
                         } else {
                             ownedDropValueIndex! -> writeCleanupValueName(ownedDropParameterIndex!, ownedDropOwner!, context, state)
                         }
-                    }
+                    "" -> println
+                    Arena(0) => prefixStorage!
+                    "cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)" -> materialize(prefixStorage!) => prefix
+                    Arena(0) => valueStorage!
+                    "%$(prefix)_handle" -> materialize(valueStorage!) => handle
+                    prefix -> emitBoundedArrayValueFromHandle(handle, ownedDropCandidate.typeId, context, state)
+                }
+                "  call void @sollang_drop_t$(ownedDropCandidate.typeId)(" -> print
+                ownedDropCandidate.typeId -> writeSemanticTypeId(context, state)
+                " " -> print
+                ownedDropNeedsBoundedValue -> if {
+                    "%cleanupbounded$(request.edgeIndex)_b$(cleanupBindingIndex)" -> print
+                } else { (ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0) and not ownedDropNeedsInlineArrayReload!
+                        -> if {
+                            request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
+                            "_current" -> print
+                        } else {
+                            ownedDropNeedsInlineArrayReload! -> if {
+                                request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
+                                "_fixed" -> print
+                            } else {
+                                ownedDropValueIndex! -> writeCleanupValueName(ownedDropParameterIndex!, ownedDropOwner!, context, state)
+                            }
+                        }
+                }
                 ")" -> println
                 ownedDropHasInlineArrayAbi -> if {
                     "  call void @free(ptr " -> print

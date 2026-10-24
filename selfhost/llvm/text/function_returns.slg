@@ -342,14 +342,24 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             ", ptr %dropfixedreturn$(dropIndex!)_data, align " -> print
                             context.typeAligns[dropCandidate.typeId] -> writeDecimalLine
                         }
+                    context.types[dropCandidate.typeId].kind == 12 => dropCandidateNeedsBoundedValue
+                    dropCandidateNeedsBoundedValue -> if {
+                        Arena(0) => prefixStorage!
+                        "dropboundedreturn$(dropIndex!)" -> materialize(prefixStorage!) => prefix
+                        Arena(0) => valueStorage!
+                        "%v$(dropIndex!)" -> materialize(valueStorage!) => valueName
+                        prefix -> emitBoundedArrayValueFromHandle(valueName, dropCandidate.typeId, context, state)
+                    }
                     "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
                     dropCandidate.typeId -> writeSemanticTypeId(context, state)
                     " " -> print
-                    dropCandidateNeedsInlineArrayReload! -> if {
-                        "%dropfixedreturn$(dropIndex!)" -> print
-                    } else {
-                        "%v$(dropIndex!)" -> print
-                    }
+                    dropCandidateNeedsBoundedValue -> if {
+                        "%dropboundedreturn$(dropIndex!)" -> print
+                    } else { dropCandidateNeedsInlineArrayReload! -> if {
+                            "%dropfixedreturn$(dropIndex!)" -> print
+                        } else {
+                            "%v$(dropIndex!)" -> print
+                    } }
                     ")" -> println
                 }
             dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
@@ -461,22 +471,43 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
                         -> if {
                             "  %drop$(dropIndex!)_current = load " -> print
-                            dropCandidate.typeId -> writeSemanticTypeId(context, state)
+                            context.types[dropCandidate.typeId].kind == 12
+                                -> if {
+                                    dropCandidate -> writeIrType(context, state)
+                                } else { dropCandidate.typeId -> writeSemanticTypeId(context, state) }
                             ", ptr %slot$(dropCandidateRoot!), align " -> print
                             dropCandidate -> storageAlign(context, state) -> writeDecimalLine
                         }
+                    context.types[dropCandidate.typeId].kind == 12 => dropBindingNeedsBoundedValue
+                    dropBindingNeedsBoundedValue -> if {
+                        "  %dropboundedbinding$(dropIndex!)_handle = freeze %sollang.array.i32 " -> print
+                        dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                            dropCandidate.flags == 1 -> if { "%drop$(dropIndex!)_current" -> print } else {
+                                dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                            }
+                        }
+                        "" -> println
+                        Arena(0) => prefixStorage!
+                        "dropboundedbinding$(dropIndex!)" -> materialize(prefixStorage!) => prefix
+                        Arena(0) => valueStorage!
+                        "%$(prefix)_handle" -> materialize(valueStorage!) => handle
+                        prefix -> emitBoundedArrayValueFromHandle(handle, dropCandidate.typeId, context, state)
+                    }
                     "  call void @sollang_drop_t$(dropCandidate.typeId)(" -> print
                     dropCandidate.typeId -> writeSemanticTypeId(context, state)
                     " " -> print
-                    dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
-                        dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
-                            -> if { "%drop$(dropIndex!)_current" -> print } else {
-                                dropBindingNeedsInlineArrayReload! -> if {
-                                    "%dropfixedbinding$(dropIndex!)" -> print
-                                } else {
-                                    dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                    dropBindingNeedsBoundedValue -> if {
+                        "%dropboundedbinding$(dropIndex!)" -> print
+                    } else { dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                            dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
+                                -> if { "%drop$(dropIndex!)_current" -> print } else {
+                                    dropBindingNeedsInlineArrayReload! -> if {
+                                        "%dropfixedbinding$(dropIndex!)" -> print
+                                    } else {
+                                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
+                                    }
                                 }
-                            }
+                        }
                     }
                     ")" -> println
                 }
