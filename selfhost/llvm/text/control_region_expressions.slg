@@ -1072,7 +1072,7 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
     regionNode -> isEmptyBoundedDictionaryLiteral(context)
         -> if { regionNodeIndex -> emitEmptyBoundedDictionaryLiteral(context) }
     regionNode -> isPopulatedBoundedDictionaryLiteral(context)
-        -> if { regionNodeIndex -> emitPopulatedBoundedDictionaryLiteral(context, state) }
+        -> if { regionNodeIndex -> emitPopulatedBoundedDictionaryLiteral(ownerIndex, context, state) }
     regionNode.kind == 16 and regionNode.typeOrigin == 15
         and not (regionNode -> isEmptyBoundedDictionaryLiteral(context))
         and not (regionNode -> isPopulatedBoundedDictionaryLiteral(context))
@@ -1160,6 +1160,12 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 regionDictionaryItemPosition! % 2 == 0 -> if {
                     DictionaryLiteralSlotRequest { dictionaryIndex: regionNodeIndex, ownerIndex: ownerIndex, entryPosition: regionDictionaryEntryPosition, keyIndex: regionDictionaryItemIndex!, keyTypeId: regionDictionaryKeyTypeId!, hashWidth: regionControlHashWidth!, hashMethod: regionControlHashMethod!, capacity: regionDictionaryCapacity, valueTypeId: regionDictionaryValueTypeId!, valueSymbol: regionNode.typeSymbol, entryLayout: regionDictionaryEntryLayout } -> emitDictionaryLiteralSlot(context, state)
                 }
+                regionDictionaryItemTypeId >= 0 and context.types[regionDictionaryItemTypeId].kind == 12
+                    -> if {
+                        Arena(0) => boundedPrefixStorage!
+                        "v$(regionNodeIndex)_$(regionDictionarySide)_bounded$(regionDictionaryEntryPosition)" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                        boundedPrefix -> emitBoundedArrayValue(regionDictionaryItemIndex!, ownerIndex, regionDictionaryItemTypeId, context, state)
+                    }
                 "  %v$(regionNodeIndex)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition) = getelementptr " -> print
                 regionDictionaryEntryLayout -> writeDictionaryEntryStorageType
                 ", ptr %v$(regionNodeIndex)_$(regionDictionarySide), i64 %v$(regionNodeIndex)_literal$(regionDictionaryEntryPosition)_slot" -> println
@@ -1168,7 +1174,10 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                     -> if { "ptr" -> print } else { regionDictionaryItemTypeId >= 0
                             -> if { regionDictionaryItemTypeId -> writeSemanticTypeId(context, state) } else { regionDictionaryItemSymbol -> llvmType(context, state) -> print } }
                 " " -> print
-                regionDictionaryItemIndex! -> writeDictionaryLiteralItem(ownerIndex, context, state)
+                regionDictionaryItemTypeId >= 0 and context.types[regionDictionaryItemTypeId].kind == 12
+                    -> if { "%v$(regionNodeIndex)_$(regionDictionarySide)_bounded$(regionDictionaryEntryPosition)" -> print } else {
+                        regionDictionaryItemIndex! -> writeDictionaryLiteralItem(ownerIndex, context, state)
+                    }
                 ", ptr %v$(regionNodeIndex)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
                 regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)
                     -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { regionDictionaryItemTypeId >= 0

@@ -1964,7 +1964,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
     entryExpression -> isEmptyBoundedDictionaryLiteral(context)
         -> if { entryExpressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }
     entryExpression -> isPopulatedBoundedDictionaryLiteral(context)
-        -> if { entryExpressionIndex -> emitPopulatedBoundedDictionaryLiteral(context, state) }
+        -> if { entryExpressionIndex -> emitPopulatedBoundedDictionaryLiteral(functionIndex, context, state) }
     entryExpression.kind == 16 and (entryExpression.typeOrigin == 15 or entryExpression.typeKind == 13)
         and not (entryExpression -> isEmptyBoundedDictionaryLiteral(context))
         and not (entryExpression -> isPopulatedBoundedDictionaryLiteral(context))
@@ -2056,6 +2056,12 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                 entryDictionaryItemPosition! % 2 == 0 -> if {
                     DictionaryLiteralSlotRequest { dictionaryIndex: entryExpressionIndex, ownerIndex: functionIndex, entryPosition: entryDictionaryEntryPosition, keyIndex: entryDictionaryItemIndex!, keyTypeId: entryDictionaryKeyTypeId!, hashWidth: entryDictionaryControlHashWidth!, hashMethod: entryDictionaryControlHashMethod!, capacity: entryDictionaryCapacity, valueTypeId: entryDictionaryValueTypeId!, valueSymbol: entryExpression.typeSymbol, entryLayout: entryDictionaryEntryLayout } -> emitDictionaryLiteralSlot(context, state)
                 }
+                entryDictionaryItemTypeId >= 0 and context.types[entryDictionaryItemTypeId].kind == 12
+                    -> if {
+                        Arena(0) => boundedPrefixStorage!
+                        "v$(entryExpressionIndex)_$(entryDictionarySide)_bounded$(entryDictionaryEntryPosition)" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                        boundedPrefix -> emitBoundedArrayValue(entryDictionaryItemIndex!, functionIndex, entryDictionaryItemTypeId, context, state)
+                    }
                 "  %v$(entryExpressionIndex)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition) = getelementptr " -> print
                 entryDictionaryEntryLayout -> writeDictionaryEntryStorageType
                 ", ptr %v$(entryExpressionIndex)_$(entryDictionarySide), i64 %v$(entryExpressionIndex)_literal$(entryDictionaryEntryPosition)_slot" -> println
@@ -2064,7 +2070,10 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                     -> if { "ptr" -> print } else { entryDictionaryItemTypeId >= 0
                             -> if { entryDictionaryItemTypeId -> writeSemanticTypeId(context, state) } else { entryDictionaryItemSymbol -> llvmType(context, state) -> print } }
                 " " -> print
-                entryDictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
+                entryDictionaryItemTypeId >= 0 and context.types[entryDictionaryItemTypeId].kind == 12
+                    -> if { "%v$(entryExpressionIndex)_$(entryDictionarySide)_bounded$(entryDictionaryEntryPosition)" -> print } else {
+                        entryDictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
+                    }
                 ", ptr %v$(entryExpressionIndex)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
                 entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)
                     -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemTypeId >= 0

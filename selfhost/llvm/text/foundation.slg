@@ -949,8 +949,12 @@ boundedDictionaryIndexScratchTypeId nodeIndex: Int, context: ref emitterContext.
     typeId
 }
 
-emitBoundedDictionaryLiteralOperand nodeIndex: Int, typeId: Int, prefix: Text, storage: mut Arena, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text uses Console, Process {
+emitBoundedDictionaryLiteralOperand nodeIndex: Int, ownerIndex: Int, typeId: Int, prefix: Text, storage: mut Arena, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text uses Console, Process {
     context.ir[nodeIndex] => operand
+    context.types[typeId].kind == 12 -> if {
+        prefix -> emitBoundedArrayValue(nodeIndex, ownerIndex, typeId, context, state)
+        "%$(prefix)" -> materialize(storage) -> return
+    }
     operand.kind == 3 or operand.kind == 4 -> if {
         "%$(prefix)" -> materialize(storage) => valueName
         "  $(valueName) = add " -> print
@@ -969,7 +973,7 @@ emitBoundedDictionaryLiteralOperand nodeIndex: Int, typeId: Int, prefix: Text, s
     "%v$(nodeIndex)" -> materialize(storage)
 }
 
-emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[nodeIndex] => dictionaryNode
     dictionaryNode.typeId => dictionaryTypeId
     context.types[dictionaryTypeId] => dictionaryType
@@ -999,8 +1003,8 @@ emitPopulatedBoundedDictionaryLiteral nodeIndex: Int, context: ref emitterContex
         Arena(0) => prefixStorage!
         "bd$(nodeIndex)_$(entryIndex!)_key_operand" -> materialize(keyPrefixStorage!) => keyOperandPrefix
         "bd$(nodeIndex)_$(entryIndex!)_value_operand" -> materialize(valuePrefixStorage!) => valueOperandPrefix
-        keyIndex! -> emitBoundedDictionaryLiteralOperand(keyTypeId, keyOperandPrefix, keyNameStorage!, context, state) => keyName
-        valueIndex -> emitBoundedDictionaryLiteralOperand(valueTypeId, valueOperandPrefix, valueNameStorage!, context, state) => valueName
+        keyIndex! -> emitBoundedDictionaryLiteralOperand(ownerIndex, keyTypeId, keyOperandPrefix, keyNameStorage!, context, state) => keyName
+        valueIndex -> emitBoundedDictionaryLiteralOperand(ownerIndex, valueTypeId, valueOperandPrefix, valueNameStorage!, context, state) => valueName
         "bd$(nodeIndex)_$(entryIndex!)" -> materialize(prefixStorage!) => prefix
         textKey! -> if {
             "  %$(prefix)_hash = call i64 @sollang_dictionary_hash_text(%sollang.text $(keyName))" -> println

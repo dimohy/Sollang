@@ -2151,6 +2151,15 @@ emitDictionaryRehashEntries prefix: Text, entryLayout: DictionaryEntryLayout, ke
     "$(prefix)_rehash_done:" -> println
 }
 
+# Every put store consumes the same materialized value, regardless of whether
+# the entry is replaced, inserted in place, or inserted after growth.
+writeDictionaryPutStoredValue putIndex: Int, valueIndex: Int, ownerIndex: Int, valueTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    valueTypeId >= 0 and context.types[valueTypeId].kind == 12
+        -> if { "%put$(putIndex)_bounded_value" -> print } else {
+            valueIndex -> writeValue(ownerIndex, context, state)
+        }
+}
+
 emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request.whileIndex => putIndex
     context.ir[putIndex] => putNode
@@ -2260,6 +2269,12 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             "  %put$(putIndex)_h2_value = select i1 %put$(putIndex)_h2_zero, i64 1, i64 %put$(putIndex)_h2_raw" -> println
             "  %put$(putIndex)_h2 = trunc i64 %put$(putIndex)_h2_value to i8" -> println
             putKeyTypeId! -> dictionaryEntryLayoutForTypeIds(putValueTypeId!, putSource.typeModule, putSource.typeSymbol, context, state) => putEntryLayout
+            putValueTypeId! >= 0 and context.types[putValueTypeId!].kind == 12
+                -> if {
+                    Arena(0) => boundedPrefixStorage!
+                    "put$(putIndex)_bounded_value" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                    boundedPrefix -> emitBoundedArrayValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
+                }
             "put$(putIndex)_old" -> emitGrowableDictionaryPointers("%put$(putIndex)_old_storage", "%put$(putIndex)_old_capacity", putEntryLayout)
             "  %put$(putIndex)_probe_query = freeze " -> print
             putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeModule -> llvmType(context, state) -> print }
@@ -2341,7 +2356,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                 "  store " -> print
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
                 " " -> print
-                putValueIndex -> writeValue(request.ownerIndex, context, state)
+                putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
                 ", ptr %put$(putIndex)_update_in_place_ptr, align " -> print
                 putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
             }
@@ -2373,7 +2388,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
             "  store " -> print
             putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
             " " -> print
-            putValueIndex -> writeValue(request.ownerIndex, context, state)
+            putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
             ", ptr %put$(putIndex)_insert_in_place_value_ptr, align " -> print
             putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
             "  %put$(putIndex)_insert_in_place_control_ptr = getelementptr i8, ptr %put$(putIndex)_old_controls, i64 %put$(putIndex)_new_key_slot" -> println
@@ -2447,7 +2462,7 @@ emitDictionaryPut request: WhileValueRequest, context: ref emitterContext.EmitCo
                 "  store " -> print
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId(context, state) } else { putSource.typeSymbol -> llvmType(context, state) -> print }
                 " " -> print
-                putValueIndex -> writeValue(request.ownerIndex, context, state)
+                putIndex -> writeDictionaryPutStoredValue(putValueIndex, request.ownerIndex, putValueTypeId!, context, state)
                 ", ptr %put$(putIndex)_insert_value_ptr, align " -> print
                 putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
                 "put$(putIndex)_store_control" -> emitDictionaryControlStore("%put$(putIndex)_controls", "%put$(putIndex)_slot", "%put$(putIndex)_h2", "%put$(putIndex)_capacity")
@@ -2502,11 +2517,17 @@ emitBoundedDictionaryPut request: WhileValueRequest, context: ref emitterContext
     " " -> print
     keyIndex -> writeValue(request.ownerIndex, context, state)
     "" -> println
-    "  %$(prefix)_new_value = freeze " -> print
-    valueTypeId -> writeAggregateFieldTypeId(context, state)
-    " " -> print
-    valueIndex -> writeValue(request.ownerIndex, context, state)
-    "" -> println
+    context.types[valueTypeId].kind == 12 -> if {
+        Arena(0) => boundedPrefixStorage!
+        "$(prefix)_new_value" -> materialize(boundedPrefixStorage!) => boundedPrefix
+        boundedPrefix -> emitBoundedArrayValue(valueIndex, request.ownerIndex, valueTypeId, context, state)
+    } else {
+        "  %$(prefix)_new_value = freeze " -> print
+        valueTypeId -> writeAggregateFieldTypeId(context, state)
+        " " -> print
+        valueIndex -> writeValue(request.ownerIndex, context, state)
+        "" -> println
+    }
     false => textKey!
     keyType.kind == 1 and keyType.origin == 1 and keyType.symbol == 1
         -> if { true => textKey! }
@@ -2752,9 +2773,14 @@ emitBoundedDictionaryTake request: WhileValueRequest, context: ref emitterContex
     "" -> println
     "$(prefix)_find" -> emitBoundedDictionaryFindRequiredSlot("%$(prefix)_storage", "%$(prefix)_query", dictionaryTypeId, false, context, state)
     "$(prefix)_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_find_slot", layout.valueOffset, layout)
-    "  %v$(takeIndex) = load " -> print
+    "  %v$(takeIndex)" -> print
+    context.types[valueTypeId].kind == 12 -> if { "_bounded_value" -> print }
+    " = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr %$(prefix)_value_ptr, align $(layout.valueAlign)" -> println
+    Arena(0) => takenPrefixStorage!
+    "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
+    takenPrefix -> emitStoredBoundedValueHandle(valueTypeId, context, state)
     keyTypeId -> semanticTypeOwns(context, state)
         -> if {
             "$(prefix)_key" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_find_slot", 0, layout)
@@ -2911,10 +2937,19 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
         takeEntryLayout -> writeDictionaryEntryStorageType
         ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_find_index" -> println
-        "  %v$(takeIndex) = load " -> print
+        "  %v$(takeIndex)" -> print
+        takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
+            -> if { "_bounded_value" -> print }
+        " = load " -> print
         takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId(context, state) } else { takeSource.typeSymbol -> llvmType(context, state) -> print }
         ", ptr %take$(takeIndex)_value_ptr, align " -> print
         takeValueTypeId! >= 0 -> if { context.typeAligns[takeValueTypeId!] -> writeDecimalLine } else { takeSource.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
+        takeValueTypeId! >= 0 and context.types[takeValueTypeId!].kind == 12
+            -> if {
+                Arena(0) => takenPrefixStorage!
+                "v$(takeIndex)" -> materialize(takenPrefixStorage!) => takenPrefix
+                takenPrefix -> emitStoredBoundedValueHandle(takeValueTypeId!, context, state)
+            }
         takeKeyTypeId! >= 0 and (takeKeyTypeId! -> semanticTypeOwns(context, state))
             -> if {
                 "  call void @sollang_drop_t$(takeKeyTypeId!)(" -> print

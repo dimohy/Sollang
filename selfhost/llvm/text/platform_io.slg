@@ -171,6 +171,11 @@ writeEnumStoragePayload request: EnumStorageRequest, interpolationNodes: ref [in
             request -> writeEnumStorageIdentity("_payload_value")
             return
         }
+    request.payloadTypeId >= 0 and context.types[request.payloadTypeId].kind == 12
+        -> if {
+            request -> writeEnumStorageIdentity("_payload_bounded")
+            return
+        }
     request.payloadInterpolation >= 0 -> if {
         request.labelIndex -> writeInterpolationValue(request.payloadInterpolation, interpolationNodes, request.sourceModule, request.ownerIndex, request.beforeIndex, context, state)
     } else {
@@ -195,6 +200,20 @@ emitEnumStorage request: EnumStorageRequest, interpolationNodes: ref [interpolat
         ", align " -> print
         payloadReferenceType -> runtimeAggregateStorageAlignment(context) -> writeDecimalLine
     }
+    request.payloadTypeId >= 0 and context.types[request.payloadTypeId].kind == 12
+        and payloadReferenceType < 0 -> if {
+            Arena(0) => boundedPrefixStorage!
+            request.resultDomain == 1 -> if {
+                "v$(request.labelIndex)_expression$(request.resultIndex)_payload_bounded" -> materialize(boundedPrefixStorage!)
+            } else {
+                "v$(request.resultIndex)_payload_bounded" -> materialize(boundedPrefixStorage!)
+            } => boundedPrefix
+            request.payloadInterpolation >= 0 -> if {
+                boundedPrefix -> emitInterpolationBoundedValue(request.labelIndex, request.payloadInterpolation, request.payloadTypeId, interpolationNodes, request.sourceModule, request.ownerIndex, request.beforeIndex, context, state)
+            } else {
+                boundedPrefix -> emitBoundedArrayValue(request.payloadIr, request.ownerIndex, request.payloadTypeId, context, state)
+            }
+        }
     "  " -> print
     request -> writeEnumStorageIdentity("_enum_slot")
     " = alloca " -> print

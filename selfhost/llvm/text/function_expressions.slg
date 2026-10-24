@@ -1348,7 +1348,7 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
     expression -> isEmptyBoundedDictionaryLiteral(context)
         -> if { expressionIndex -> emitEmptyBoundedDictionaryLiteral(context) }
     expression -> isPopulatedBoundedDictionaryLiteral(context)
-        -> if { expressionIndex -> emitPopulatedBoundedDictionaryLiteral(context, state) }
+        -> if { expressionIndex -> emitPopulatedBoundedDictionaryLiteral(functionIndex, context, state) }
     expression.kind == 16 and expression.typeOrigin == 15
         and not (expression -> isEmptyBoundedDictionaryLiteral(context))
         and not (expression -> isPopulatedBoundedDictionaryLiteral(context))
@@ -1437,6 +1437,12 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
                 dictionaryItemPosition! % 2 == 0 -> if {
                     DictionaryLiteralSlotRequest { dictionaryIndex: expressionIndex, ownerIndex: functionIndex, entryPosition: dictionaryEntryPosition, keyIndex: dictionaryItemIndex!, keyTypeId: dictionaryKeyTypeId!, hashWidth: dictionaryControlHashWidth!, hashMethod: dictionaryControlHashMethod!, capacity: dictionaryCapacity, valueTypeId: dictionaryValueTypeId!, valueSymbol: expression.typeSymbol, entryLayout: dictionaryEntryLayout } -> emitDictionaryLiteralSlot(context, state)
                 }
+                dictionaryItemTypeId >= 0 and context.types[dictionaryItemTypeId].kind == 12
+                    -> if {
+                        Arena(0) => boundedPrefixStorage!
+                        "v$(expressionIndex)_$(dictionarySide)_bounded$(dictionaryEntryPosition)" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                        boundedPrefix -> emitBoundedArrayValue(dictionaryItemIndex!, functionIndex, dictionaryItemTypeId, context, state)
+                    }
                 "  %v$(expressionIndex)_$(dictionarySide)_ptr$(dictionaryEntryPosition) = getelementptr " -> print
                 dictionaryEntryLayout -> writeDictionaryEntryStorageType
                 ", ptr %v$(expressionIndex)_$(dictionarySide), i64 %v$(expressionIndex)_literal$(dictionaryEntryPosition)_slot" -> println
@@ -1445,7 +1451,10 @@ emitFunctionEnumExpressions expressionIndex: Int, functionIndex: Int, functionEn
                     -> if { "ptr" -> print } else { dictionaryItemTypeId >= 0
                             -> if { dictionaryItemTypeId -> writeSemanticTypeId(context, state) } else { dictionaryItemSymbol -> llvmType(context, state) -> print } }
                 " " -> print
-                dictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
+                dictionaryItemTypeId >= 0 and context.types[dictionaryItemTypeId].kind == 12
+                    -> if { "%v$(expressionIndex)_$(dictionarySide)_bounded$(dictionaryEntryPosition)" -> print } else {
+                        dictionaryItemIndex! -> writeDictionaryLiteralItem(functionIndex, context, state)
+                    }
                 ", ptr %v$(expressionIndex)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
                 dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)
                     -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { dictionaryItemTypeId >= 0

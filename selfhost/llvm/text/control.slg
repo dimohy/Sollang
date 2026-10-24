@@ -333,10 +333,18 @@ emitResultPropagationValue tryIndex: Int, operandIndex: Int, parentIndex: Int, t
                     "; sollang compiler error S038: fixed-array try payload lacks canonical element or static length at ir $tryIndex (type $okTypeId)" -> println
                 }
                 "  %v$(tryIndex) = load { ptr, i64 }, ptr %try$(tryIndex)_ok_addr, align $(context.pointerBitWidth / 8)" -> println
-            } else {
-                "  %v$(tryIndex) = load " -> print
-                okTypeId -> writeSemanticTypeId(context, state)
-                ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
+            } else { okType.kind == 12 -> if {
+                    "  %v$(tryIndex)_bounded_value = load " -> print
+                    okTypeId -> writeValueAbiTypeId(context, state)
+                    ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
+                    Arena(0) => prefixStorage!
+                    "v$(tryIndex)" -> materialize(prefixStorage!) => prefix
+                    prefix -> emitStoredBoundedValueHandle(okTypeId, context, state)
+                } else {
+                    "  %v$(tryIndex) = load " -> print
+                    okTypeId -> writeSemanticTypeId(context, state)
+                    ", ptr %try$(tryIndex)_ok_addr, align $(context.typeAligns[okTypeId])" -> println
+                }
             }
         }
 }
@@ -1501,11 +1509,20 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                         and context.types[matchArmBindingTypeId].length >= 0
                         -> if {
                             "  %v$(armBindingIndex) = load { ptr, i64 }, ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align 8" -> println
-                        } else {
-                            "  %v$(armBindingIndex) = load " -> print
-                            armBinding -> writeIrType(context, state)
-                            ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
-                            armBinding -> storageAlign(context, state) -> writeDecimalLine
+                        } else { matchArmBindingTypeId >= 0 and context.types[matchArmBindingTypeId].kind == 12
+                                -> if {
+                                    "  %v$(armBindingIndex)_bounded_value = load " -> print
+                                    matchArmBindingTypeId -> writeValueAbiTypeId(context, state)
+                                    ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align $(context.typeAligns[matchArmBindingTypeId])" -> println
+                                    Arena(0) => prefixStorage!
+                                    "v$(armBindingIndex)" -> materialize(prefixStorage!) => prefix
+                                    prefix -> emitStoredBoundedValueHandle(matchArmBindingTypeId, context, state)
+                                } else {
+                                    "  %v$(armBindingIndex) = load " -> print
+                                    armBinding -> writeIrType(context, state)
+                                    ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
+                                    armBinding -> storageAlign(context, state) -> writeDecimalLine
+                                }
                         }
                 }
             armBindingHasOwnershipFlag -> if {
@@ -1581,10 +1598,20 @@ emitEnumMatchWithSubjectDomain matchIndex: Int, conditionIndex: Int, emissionOrd
                         "  %v$(matchIndex)_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
                         subject -> writeIrType(context, state)
                         ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
-                        "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value = load " -> print
-                        matchResultType -> writeIrType(context, state)
-                        ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align " -> print
-                        matchResultType -> storageAlign(context, state) -> writeDecimalLine
+                        context.types[safeMatchTypeIndex!].kind == 12
+                            -> if {
+                                "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value_bounded_value = load " -> print
+                                safeMatchTypeIndex! -> writeValueAbiTypeId(context, state)
+                                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align $(context.typeAligns[safeMatchTypeIndex!])" -> println
+                                Arena(0) => prefixStorage!
+                                "v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> materialize(prefixStorage!) => prefix
+                                prefix -> emitStoredBoundedValueHandle(safeMatchTypeIndex!, context, state)
+                            } else {
+                                "  %v$(matchIndex)_arm$(armOrdinal!)_direct_value = load " -> print
+                                matchResultType -> writeIrType(context, state)
+                                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_direct_payload, align " -> print
+                                matchResultType -> storageAlign(context, state) -> writeDecimalLine
+                            }
                     }
                     matchResultType -> integerNodeWidth(context, state) => matchResultWidth
                     armValue -> integerNodeWidth(context, state) => armResultWidth
