@@ -1206,12 +1206,18 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
         }
     " }" -> print
 }
+emitParallelAdditionalArgumentValues bodyCallIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex
+    argumentIndex -> emitCallIntegerArgumentPromotions(bodyCallIndex, ownerIndex, 1, context, state)
+    argumentIndex -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
+}
+
 emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     bodyCallIndex -> parallelAdditionalArgumentCount(context) => additionalCount
     captures -> len => captureCount
     captureCount + additionalCount => fieldCount
     fieldCount > 0 -> if {
-        bodyCallIndex -> parallelAdditionalArgumentStart(context) -> emitReferenceArgumentValues(bodyCallIndex, ownerIndex, 1, context, state)
+        bodyCallIndex -> emitParallelAdditionalArgumentValues(ownerIndex, context, state)
         "  %v$(parallelIndex)_capture_environment = alloca " -> print
         bodyCallIndex -> writeParallelCaptureType(captures, context, state)
         ", align 8" -> println
