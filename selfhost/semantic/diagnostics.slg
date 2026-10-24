@@ -2868,9 +2868,56 @@ public firstDictionaryKeyDiagnostic prepared: ref semanticContext.SemanticSnapsh
 
 # Argument eligibility belongs to the resolved source contract. Lowered IR
 # retains the separate overlapping-borrow and live-reference analysis.
+public primaryFlowPlaceRoots prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
+    prepared.package -> semanticContext.indexExpressionSourceAsts => sources
+    [Int; ~] => names!
+    [Int; ~] => roots!
+    prepared.package.nodes -> each node {
+        names! -> push(-1)
+        roots! -> push(-1)
+    }
+    prepared.package.ranges -> each range {
+        0 => nameIndex!
+        nameIndex! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + nameIndex!] => name
+            name.astNode >= 0 and name.symbol >= 0 -> if {
+                name.symbol => names![range.astStart + name.astNode]
+            }
+            nameIndex! + 1 => nameIndex!
+        }
+        0 => flowIndex!
+        flowIndex! < range.astCount -> while {
+            prepared.package.nodes[range.astStart + flowIndex!].kind == 10
+                -> if {
+                    flowIndex! + 0 => root!
+                    root! >= 0 and prepared.package.nodes[range.astStart + root!].kind == 10
+                        -> while {
+                            sources[range.astStart + root!] => source
+                            source >= 0 and prepared.package.nodes[range.astStart + source].kind == 10
+                                and prepared.package.nodes[range.astStart + source].start != prepared.package.nodes[range.astStart + root!].start
+                                -> if {
+                                    -1 => root!
+                                } else { source => root! }
+                        }
+                    root! >= 0 and (prepared.package.nodes[range.astStart + root!].kind == 36 or prepared.package.nodes[range.astStart + root!].kind == 41)
+                        -> while {
+                            sources[range.astStart + root!] => root!
+                        }
+                    root! >= 0 and prepared.package.nodes[range.astStart + root!].kind == 15
+                        and names![range.astStart + root!] >= 0 -> if {
+                            root! => roots![range.astStart + flowIndex!]
+                        }
+                }
+            flowIndex! + 1 => flowIndex!
+        }
+    }
+    roots!
+}
+
 public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~] -> CallOwnershipDiagnostic {
     emptyCallOwnershipDiagnostic() => selected!
     prepared.package -> semanticContext.indexExpressionSourceAsts => sourceByAst
+    prepared -> primaryFlowPlaceRoots => flowPlaces
     [Int; ~] => symbolByAst!
     prepared.package.nodes -> each node {
         symbolByAst! -> push(-1)
@@ -2898,19 +2945,11 @@ public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapsh
                     -> if {
                         prepared.package.ranges[argument.sourceModule] => range
                         argument.argumentAst => rootAst!
-                        # C# validates the original flow place but borrows the
-                        # actual preceding result at runtime. A grouped flow
-                        # is an explicit temporary, not another chain stage.
                         readonlyBorrow and argument.parameterOrdinal == 0
-                            and argument.callAst >= 0 and rootAst! >= 0
-                            and prepared.package.nodes[range.astStart + argument.callAst].kind == 10
-                            and prepared.package.nodes[range.astStart + rootAst!].kind == 10
-                            and prepared.package.nodes[range.astStart + argument.callAst].start == prepared.package.nodes[range.astStart + rootAst!].start
+                            and argument.callAst >= 0
                             -> if {
-                                rootAst! >= 0 and prepared.package.nodes[range.astStart + rootAst!].kind == 10
-                                    -> while {
-                                        sourceByAst[range.astStart + rootAst!] => rootAst!
-                                    }
+                                flowPlaces[range.astStart + argument.callAst] => flowPlace
+                                flowPlace >= 0 -> if { flowPlace => rootAst! }
                             }
                         false => priorOperandFailure!
                         rootAst! >= 0 and (prepared.package.nodes[range.astStart + rootAst!].kind == 36 or prepared.package.nodes[range.astStart + rootAst!].kind == 41)

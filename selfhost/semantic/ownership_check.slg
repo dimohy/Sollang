@@ -6684,9 +6684,10 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
             }
         sliceReturnIndex! + 1 => sliceReturnIndex!
     }
-    # A value passed to ref T must already be a reference or resolve to an
-    # immutable binding place. Literals, constructor results, and call results
-    # are temporaries and cannot become the origin of a returned reference.
+    # Source eligibility also admits a transient current flow result when the
+    # original input is a place. The returned-loan analysis below still uses
+    # the actual argument and requires a stable origin for escaping references.
+    prepared -> semanticDiagnostics.primaryFlowPlaceRoots => referenceFlowPlaces
     0 => referenceCallIndex!
     referenceCallIndex! < (typed -> len) -> while {
         typed[referenceCallIndex!] => referenceCall
@@ -6735,6 +6736,16 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                         referenceRoot.kind == 10 or referenceRoot.kind == 17 or referenceRoot.kind == 29
                                             -> if { true => referenceAddressable! }
                                     }
+                                    referenceParameterIr! == referenceTarget.operand1
+                                        and referenceCall.sourceModule >= 0 and referenceCall.sourceModule < (prepared.package.ranges -> len)
+                                        -> if {
+                                            prepared.package.ranges[referenceCall.sourceModule] => flowRange
+                                            referenceCall.astNode >= 0 and referenceCall.astNode < flowRange.astCount
+                                                and referenceFlowPlaces[flowRange.astStart + referenceCall.astNode] >= 0
+                                                -> if {
+                                                    true => referenceAddressable!
+                                                }
+                                        }
                                     not referenceAddressable!
                                         and not (types -> typeIds.typedArrayArgumentElementMismatch(referenceArgument.typeId, referenceParameter.typeId))
                                         -> if {
