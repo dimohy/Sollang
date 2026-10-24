@@ -4,6 +4,31 @@ param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+function Resolve-C613ExpectedDiagnostic([string]$CurrentRoot, $Negative) {
+    $sourceName = [IO.Path]::GetFileName([string]$Negative.source)
+    $expectedName = [IO.Path]::ChangeExtension($sourceName, '.stderr.contains.txt')
+    if ([IO.Path]::GetExtension($sourceName) -cne '.slg' -or
+        [IO.Path]::GetFileName([string]$Negative.expected) -cne $expectedName) {
+        throw 'C613 historical diagnostic source/expectation identity differs'
+    }
+    $expectedPath = ''
+    foreach ($entry in @(
+        @{ recorded = $Negative.source; name = $sourceName; hash = $Negative.sourceSha256 },
+        @{ recorded = $Negative.expected; name = $expectedName; hash = $Negative.expectedSha256 }
+    )) {
+        $relative = [IO.Path]::Combine('examples', 'regression', 'diagnostics', $entry.name)
+        $canonical = [IO.Path]::GetFullPath([IO.Path]::Combine($CurrentRoot, $relative))
+        $historical = [IO.Path]::Combine('P:\MyWorks\Sollang', $relative)
+        $recorded = [IO.Path]::GetFullPath([string]$entry.recorded)
+        if (($recorded -ine $canonical -and $recorded -ine $historical) -or
+            [string]$entry.hash -notmatch '^[0-9A-Fa-f]{64}$' -or
+            (Get-FileHash -LiteralPath $canonical -Algorithm SHA256).Hash -ine $entry.hash) {
+            throw 'C613 historical diagnostic canonical path or pinned bytes differ'
+        }
+        $expectedPath = $canonical
+    }
+    return $expectedPath
+}
 $unit = Get-Content -LiteralPath (Join-Path $root 'artifacts/scratch/c613-result-propagation-semantic-owner-unit-20260929-01.json') -Raw | ConvertFrom-Json
 $managedFirst = Get-Content -LiteralPath $unit.steps[0].evidence -Raw | ConvertFrom-Json
 $build = Get-Content -LiteralPath $unit.steps[2].evidence -Raw | ConvertFrom-Json
@@ -72,7 +97,8 @@ foreach ($path in $focused.negativeEvidence) {
     $directory = Split-Path -Parent $path
     $managedStderr = [IO.File]::ReadAllText((Join-Path $directory 'managed.stderr.txt')).Replace("`r`n", "`n")
     $selfhostStderr = [IO.File]::ReadAllText((Join-Path $directory 'selfhost.stderr.txt')).Replace("`r`n", "`n")
-    $expected = [IO.File]::ReadAllText($negative.expected).Replace("`r`n", "`n").TrimEnd("`n")
+    $expectedPath = Resolve-C613ExpectedDiagnostic $root $negative
+    $expected = [IO.File]::ReadAllText($expectedPath).Replace("`r`n", "`n").TrimEnd("`n")
     if ($negative.state -cne 'passed' -or -not $negative.inputsStable -or
         $null -ne $negative.failureId -or
         $negative.selfhostCompilerSha256 -cne $build.compilerSha256 -or
