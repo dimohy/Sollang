@@ -863,6 +863,8 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                             argumentListIndex! < (fragmentAst -> len) -> while {
                                                 fragmentAst[argumentListIndex!] => argumentList
                                                 argumentList.parent == fragmentAstIndex! and argumentList.kind == 11
+                                                    and flowTargetPayloadToken! >= 0
+                                                    and argumentList.start >= fragmentTokens[flowTargetPayloadToken!].span.start + fragmentTokens[flowTargetPayloadToken!].span.length
                                                     -> if {
                                                         0 => argumentIndex!
                                                         argumentIndex! < (fragmentAst -> len) -> while {
@@ -1211,7 +1213,9 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
     0 => callParentIndex!
     callParentIndex! < (wiredNodes! -> len) -> while {
         wiredNodes![callParentIndex!] => callParent!
-        callParent!.kind == 8 or callParent!.kind == 9 or callParent!.kind == 10
+        # An intrinsic can terminate the same receiver chain, for example
+        # owner.values -> copy -> len. Its receiver call still owns its input.
+        callParent!.kind == 6 or callParent!.kind == 8 or callParent!.kind == 9 or callParent!.kind == 10
             -> if {
                 -1 => callNestedCandidate!
                 # A suffix can follow more than three direct children. Inspect

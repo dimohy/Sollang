@@ -1,0 +1,35 @@
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.interpolation_inference as inference
+import sys.process as process
+
+main {
+    [false, true, true, true; ~] => expected
+    0 => index!
+    ["""make: -> [Int; <=3] => [7, 9]
+
+main {
+    "size=$(make() -> len)" -> println
+    "first=$(make()[0])" -> println
+}
+""", """main {
+    "abcd" => text
+    "length=$((text -> slice(UIntSize(1), UIntSize(2))) -> len(0))" -> println
+}
+""", """main {
+    "$(7 -> len(1))" -> println
+}
+""", """main {
+    "$(7 -> capacity(1))" -> println
+}
+"""; ~] -> each source {
+        source -> interpolation.lower => nodes
+        false => actual!
+        nodes -> inference.invalidIntrinsicFlowArityByNode -> each invalid {
+            invalid -> if { true => actual! }
+        }
+        "case=$(index!) invalid=$(actual!) expected=$(expected[index!])" -> println
+        actual! != expected[index!] -> if { process.exit(1) }
+        index! + 1 => index!
+    }
+    "ARITY_CHECKS_PASSED" -> println
+}

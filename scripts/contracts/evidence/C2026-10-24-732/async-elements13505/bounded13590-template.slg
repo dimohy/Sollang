@@ -1,0 +1,91 @@
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.interpolation_inference as inference
+import sys.process as process
+
+main {
+    [false, false, false, true, true, true; ~] => expected
+    0 => index!
+    0 => checked!
+    ["""make: -> [Int; <=3] => [7, 9]
+
+main {
+    "size=$(make() -> len)" -> println
+    "first=$(make()[0])" -> println
+}
+""", """struct Storage {
+    public values: [Int; <=3]
+}
+
+make: -> [Int; <=3] => [7, 9]
+
+copy values: [Int; <=3] -> [Int; <=3] => values
+
+inspect values: ref [Int; <=3] -> Int => values -> len
+
+describe values: ref [Int; <=3] -> Unit uses Console {
+    "refLen=$(values -> len)" -> println
+    "refItem=$(values[0])" -> println
+}
+
+main {
+    make() => values!
+    42 => values![1]
+    Storage { values: [11, 13] } => owner
+    "copy=$(copy(values!) -> len)" -> println
+    "first=$(copy(values!)[0])" -> println
+    "read=$(values! -> inspect)" -> println
+    "field=$(owner.values[0])" -> println
+    "fieldSize=$(owner.values -> copy -> len)" -> println
+    "cap=$(owner.values -> capacity)" -> println
+    values! -> describe
+}
+""", """make: -> [Int; <=3] => [7, 9]
+
+first values: [Int] -> Int => values[0]
+
+read values: ref [Int; <=3] -> Unit uses Console {
+    "borrowed=$(values -> first)" -> println
+}
+
+main {
+    make() => values
+    "first=$(values -> first)" -> println
+    "temporary=$(make() -> first)" -> println
+    values -> read
+}
+""", """main {
+    "abcd" => text
+    "length=$((text -> slice(UIntSize(1), UIntSize(2))) -> len(0))" -> println
+}
+""", """main {
+    "$(7 -> len(1))" -> println
+}
+""", """main {
+    "$(7 -> capacity(1))" -> println
+}
+"""; ~] -> each source {
+        source -> interpolation.lower => nodes
+        false => actual!
+        nodes -> inference.invalidIntrinsicFlowArityByNode -> each invalid {
+            invalid -> if { true => actual! }
+        }
+        "case=$(index!) invalid=$(actual!) expected=$(expected[index!])" -> println
+        ((actual! and not expected[index!]) or (not actual! and expected[index!])) -> if { process.exit(1) }
+        nodes -> each node {
+            (node.kind == 8 or node.kind == 10) and node.callNameLength > 0 -> if {
+                source -> slice(node.callNameStart, node.callNameLength) => name
+                -1 => arity!
+                name == "make" -> if { 0 => arity! }
+                name == "copy" or name == "inspect" or name == "first" -> if { 1 => arity! }
+                arity! >= 0 -> if {
+                    "call=$name provided=$(node.argumentCount) expected=$(arity!)" -> println
+                    node.argumentCount != arity! -> if { process.exit(1) }
+                    checked! + 1 => checked!
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+    checked! < 8 -> if { process.exit(1) }
+    "FRONTEND_CHECKS_PASSED calls=$(checked!)" -> println
+}
