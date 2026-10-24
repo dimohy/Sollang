@@ -1,0 +1,106 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as inference
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.interpolation as interpolation
+
+clearLexicalTypes values: mut [Int; ~] -> Unit {
+    0 => index!
+    index! < (values -> len) -> while {
+        -1 => values[index!]
+        index! + 1 => index!
+    }
+}
+
+setQueryStart nodes: mut [interpolation.InterpolationNode; ~], index: Int, start: UIntSize -> UIntSize {
+    nodes[index] => node!
+    node!.payloadStart => previous
+    start => node!.payloadStart
+    node! => nodes[index]
+    previous
+}
+
+report prepared: ref semanticContext.SemanticSnapshot, facts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [typedIr.TypedIrNode; ~], label: Text -> Unit uses Console {
+    streamIr.StreamPlan { pipelines: [], stages: [], junctions: [], junctionInputs: [], partitionRoutes: [] } => plan
+    prepared -> inference.resultTypeByNode(plan, facts, nodes, facts.types, facts.fields) => results
+    0 => index!
+    index! < (prepared.interpolations -> len) -> while {
+        prepared.interpolations[index!].kind == 1 -> if {
+            results[index!] => typeId
+            -1 => symbol!
+            typeId >= 0 and typeId < (facts.types -> len)
+                -> if { facts.types[typeId].symbol => symbol! }
+            "$label:$(symbol!)" -> println
+        }
+        index! + 1 => index!
+    }
+}
+
+main {
+    [
+    """
+    namespace sample.lookup_first
+    public read: -> Text {
+        11 => item
+        "$item"
+    }
+    """,
+    """
+    namespace sample.lookup_second
+    public read: -> Text {
+        true => item
+        "$item"
+    }
+    """; ~
+    ] => sources
+    sources -> semanticContext.prepare => prepared!
+    prepared! -> expressionTypeIds.resolveContext => facts!
+    prepared! -> typedIr.lowerResolvedContext(facts!) => nodes!
+    facts!.interpolationLexicalTypeByNode -> clearLexicalTypes
+    prepared! -> report(facts!, nodes!, "baseline")
+    -1 => firstLexical!
+    0 => lexicalIndex!
+    lexicalIndex! < (prepared!.interpolations -> len)
+        -> while {
+            firstLexical! < 0 and prepared!.interpolations[lexicalIndex!].kind == 1
+                -> if { lexicalIndex! => firstLexical! }
+            lexicalIndex! + 1 => lexicalIndex!
+        }
+    firstLexical! >= 0 -> if {
+        prepared!.interpolations[firstLexical!].symbol => lexicalSymbol
+        -1 => bindingIndex!
+        0 => scan!
+        scan! < (nodes! -> len) -> while {
+            nodes![scan!] => candidate
+            bindingIndex! < 0 and (candidate.kind == 17 or candidate.kind == 29)
+                and candidate.sourceModule == 0 and candidate.symbol == lexicalSymbol
+                and candidate.astNode >= 0 and candidate.typeId >= 0
+                -> if { scan! => bindingIndex! }
+            scan! + 1 => scan!
+        }
+        bindingIndex! >= 0 -> if {
+            nodes![bindingIndex!] => original
+            facts!.types -> typeIds.builtinTypeId(23) => boolTypeId
+            original => duplicate!
+            boolTypeId => duplicate!.typeId
+            nodes! -> push(duplicate!)
+            prepared! -> report(facts!, nodes!, "equal-offset")
+            duplicate! => nodes![bindingIndex!]
+            original => nodes![(nodes! -> len) - 1]
+            prepared! -> report(facts!, nodes!, "first-offset-wins")
+            original => nodes![bindingIndex!]
+            6 => duplicate!.kind
+            duplicate! => nodes![(nodes! -> len) - 1]
+            prepared! -> report(facts!, nodes!, "nonbinding")
+            17 => duplicate!.kind
+            -1 => duplicate!.astNode
+            duplicate! => nodes![(nodes! -> len) - 1]
+            prepared! -> report(facts!, nodes!, "invalid-ast")
+            prepared!.interpolations -> setQueryStart(firstLexical!, 0) => originalStart
+            prepared! -> report(facts!, nodes!, "before-binding")
+            prepared!.interpolations -> setQueryStart(firstLexical!, originalStart) => restoredStart
+        } else { "missing binding" -> println }
+    } else { "missing lexical node" -> println }
+}
