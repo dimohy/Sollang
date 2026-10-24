@@ -1478,16 +1478,22 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                     -> while {
                         context.ir[currentFunctionCaptures[functionCaptureMatchIndex!]].symbol == functionCaptureUse.symbol
                             -> if {
-                                functionCaptureUse -> ownsType -> if {
-                                    "  %v$(functionCaptureUseIndex!) = load " -> print
-                                    functionCaptureUse -> writeIrType(context, state)
-                                    ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
-                                    functionCaptureUse -> storageAlign(context, state) -> writeDecimalLine
-                                } else {
-                                    "  %v$(functionCaptureUseIndex!) = freeze " -> print
-                                    functionCaptureUse -> writeIrType(context, state)
-                                    " %capture_$(functionCaptureMatchIndex!)" -> println
-                                }
+                                functionCaptureUse -> referenceValueTypeId(context, state) => captureReferenceType
+                                # emitNamedPlaceRead owns the canonical load and local
+                                # handle for this reference use; define its SSA once.
+                                captureReferenceType >= 0 and context.types[captureReferenceType].kind == 12
+                                    -> unless {
+                                        functionCaptureUse -> ownsType -> if {
+                                            "  %v$(functionCaptureUseIndex!) = load " -> print
+                                            functionCaptureUse -> writeIrType(context, state)
+                                            ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
+                                            functionCaptureUse -> storageAlign(context, state) -> writeDecimalLine
+                                        } else {
+                                            "  %v$(functionCaptureUseIndex!) = freeze " -> print
+                                            functionCaptureUse -> writeIrType(context, state)
+                                            " %capture_$(functionCaptureMatchIndex!)" -> println
+                                        }
+                                    }
                             }
                         functionCaptureMatchIndex! + 1 => functionCaptureMatchIndex!
                     }
