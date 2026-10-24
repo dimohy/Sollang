@@ -2604,15 +2604,29 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
             }
             ", i32 0, i32 " -> print
             context.ir[mutableValueIndex].symbol -> writeDecimalLine
-            "  %$(label)_ptr = getelementptr inbounds " -> print
-            context.ir[mutableValueIndex] -> writeIrType(context, state)
-            ", ptr %$(label)_storage, i32 0, i32 0" -> println
-            "  %$(label)_len = getelementptr inbounds " -> print
-            context.ir[mutableValueIndex] -> writeIrType(context, state)
-            ", ptr %$(label)_storage, i32 0, i32 1" -> println
-            "  %$(label)_capacity = getelementptr inbounds " -> print
-            context.ir[mutableValueIndex] -> writeIrType(context, state)
-            ", ptr %$(label)_storage, i32 0, i32 2" -> println
+            context.ir[mutableValueIndex] -> boundedArrayValueTypeId(context, state) => boundedMutableFieldTypeId
+            boundedMutableFieldTypeId >= 0 -> if {
+                "  %$(label)_len = getelementptr inbounds " -> print
+                boundedMutableFieldTypeId -> writeValueAbiTypeId(context, state)
+                ", ptr %$(label)_storage, i32 0, i32 0" -> println
+                "  %$(label)_data = getelementptr inbounds " -> print
+                boundedMutableFieldTypeId -> writeValueAbiTypeId(context, state)
+                ", ptr %$(label)_storage, i32 0, i32 1, i64 0" -> println
+                "  %$(label)_ptr = alloca ptr, align 8" -> println
+                "  store ptr %$(label)_data, ptr %$(label)_ptr, align 8" -> println
+                "  %$(label)_capacity = alloca i64, align 8" -> println
+                "  store i64 $(context.types[boundedMutableFieldTypeId].length), ptr %$(label)_capacity, align 8" -> println
+            } else {
+                "  %$(label)_ptr = getelementptr inbounds " -> print
+                context.ir[mutableValueIndex] -> writeIrType(context, state)
+                ", ptr %$(label)_storage, i32 0, i32 0" -> println
+                "  %$(label)_len = getelementptr inbounds " -> print
+                context.ir[mutableValueIndex] -> writeIrType(context, state)
+                ", ptr %$(label)_storage, i32 0, i32 1" -> println
+                "  %$(label)_capacity = getelementptr inbounds " -> print
+                context.ir[mutableValueIndex] -> writeIrType(context, state)
+                ", ptr %$(label)_storage, i32 0, i32 2" -> println
+            }
             "  %$(label)_0 = insertvalue %sollang.mutable_container poison, ptr %$(label)_ptr, 0" -> println
             "  %$(label)_1 = insertvalue %sollang.mutable_container %$(label)_0, ptr %$(label)_len, 1" -> println
             "  %$(label) = insertvalue %sollang.mutable_container %$(label)_1, ptr %$(label)_capacity, 2" -> println

@@ -628,13 +628,25 @@ emitWholeParameterDrop parameterIndex: Int, functionIndex: Int, edgeIndex: Int, 
         ", ptr %drop_parameter$(parameterIndex)_edge$(edgeIndex)_data, align " -> print
         context.typeAligns[parameter.typeId] -> writeDecimalLine
     }
+    context.types[parameter.typeId].kind == 12 -> if {
+        Arena(0) => prefixStorage!
+        "drop_parameter$(parameterIndex)_edge$(edgeIndex)_bounded" -> materialize(prefixStorage!) => prefix
+        "  %$(prefix)_handle = freeze %sollang.array.i32 " -> print
+        context -> writeParameterReference(functionIndex, parameter.symbol) => parameterWritten
+        "" -> println
+        Arena(0) => valueStorage!
+        "%$(prefix)_handle" -> materialize(valueStorage!) => handle
+        prefix -> emitBoundedArrayValueFromHandle(handle, parameter.typeId, context, state)
+    }
     "  call void @sollang_drop_t$(parameter.typeId)(" -> print
     parameter.typeId -> writeSemanticTypeId(context, state)
     " " -> print
     inlineArray -> if {
         "%drop_parameter$(parameterIndex)_edge$(edgeIndex)_value" -> print
     } else {
-        context -> writeParameterReference(functionIndex, parameter.symbol) => parameterWritten
+        context.types[parameter.typeId].kind == 12 -> if {
+            "%drop_parameter$(parameterIndex)_edge$(edgeIndex)_bounded" -> print
+        } else { context -> writeParameterReference(functionIndex, parameter.symbol) => parameterWritten }
     }
     ")" -> println
 }
@@ -1916,13 +1928,27 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                         ", ptr %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data, align " -> print
                         context.typeAligns[dropTask.typeId] -> writeDecimalLine
                     }
+                context.types[dropTask.typeId].kind == 12
+                    and (dropTask.valueKind != 2 or dropTask.valueIndex >= 0) => dropTaskNeedsBoundedValue
+                dropTaskNeedsBoundedValue -> if {
+                    Arena(0) => prefixStorage!
+                    "dropbounded$(edgeNodeIndex)_$(dropTaskIndex!)" -> materialize(prefixStorage!) => prefix
+                    "  %$(prefix)_handle = freeze %sollang.array.i32 " -> print
+                    dropTask -> emitDropValueName(context, state)
+                    "" -> println
+                    Arena(0) => valueStorage!
+                    "%$(prefix)_handle" -> materialize(valueStorage!) => handle
+                    prefix -> emitBoundedArrayValueFromHandle(handle, dropTask.typeId, context, state)
+                }
                 "  call void @sollang_drop_t$(dropTask.typeId)(" -> print
                 dropTask.typeId -> writeSemanticTypeId(context, state)
                 " " -> print
                 dropTaskNeedsFixedReload! -> if {
                     "%dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)" -> print
                 } else {
-                    dropTask -> emitDropValueName(context, state)
+                    dropTaskNeedsBoundedValue -> if {
+                        "%dropbounded$(edgeNodeIndex)_$(dropTaskIndex!)" -> print
+                    } else { dropTask -> emitDropValueName(context, state) }
                 }
                 ")" -> println
             } else {
@@ -2306,10 +2332,18 @@ emitPatternBindingDrop bindingIndex: Int, regionIndex: Int, context: ref emitter
         }
         "  call void @free(ptr %patternfixed$(bindingIndex)_data)" -> println
     } else {
+        context.types[typeId].kind == 12 -> if {
+            "  %patternbounded$(bindingIndex)_handle = freeze %sollang.array.i32 " -> print
+            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
+            "" -> println
+            "patternbounded$(bindingIndex)" -> emitBoundedArrayValueFromHandle("%patternbounded$(bindingIndex)_handle", typeId, context, state)
+        }
         "  call void @sollang_drop_t$(typeId)(" -> print
         typeId -> writeSemanticTypeId(context, state)
         " " -> print
-        frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
+        context.types[typeId].kind == 12 -> if { "%patternbounded$(bindingIndex)" -> print } else {
+            frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
+        }
         ")" -> println
     }
 }
@@ -2442,8 +2476,23 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                     }
                 dropType.kind == 3 or dropType.kind == 12 or (dropType.kind == 7 and dropType.origin == 4 and dropType.symbol == 7)
                     -> if {
-                        "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
-                        "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
+                        dropType.kind == 12 -> if {
+                            "  %owner = alloca " -> print
+                            dropTypeIndex! -> writeSemanticTypeId(context, state)
+                            ", align $(context.typeAligns[dropTypeIndex!])" -> println
+                            "  store " -> print
+                            dropTypeIndex! -> writeSemanticTypeId(context, state)
+                            " %value, ptr %owner, align $(context.typeAligns[dropTypeIndex!])" -> println
+                            "  %data = getelementptr inbounds " -> print
+                            dropTypeIndex! -> writeSemanticTypeId(context, state)
+                            ", ptr %owner, i32 0, i32 1, i64 0" -> println
+                            "  %length = extractvalue " -> print
+                            dropTypeIndex! -> writeSemanticTypeId(context, state)
+                            " %value, 0" -> println
+                        } else {
+                            "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
+                            "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
+                        }
                         dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1
                             -> if {
                                 "  br label %loop" -> println
@@ -3101,10 +3150,7 @@ boundedArrayValueTypeId node: typedIr.TypedIrNode, context: ref emitterContext.E
 }
 
 writeValueAbiTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    context.types[typeId].kind == 12
-        -> if { "%sollang.bounded_array.t$(typeId)" -> print } else {
-            typeId -> writeAggregateFieldTypeId(context, state)
-        }
+    typeId -> writeAggregateFieldTypeId(context, state)
 }
 
 writeFunctionValueAbiType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -3167,6 +3213,43 @@ emitBoundedArrayHandle prefix: Text, valueName: Text, typeId: Int, context: ref 
     "  %$(prefix) = insertvalue %sollang.array.i32 %$(prefix)_1, i64 $(context.types[typeId].length), 2" -> println
 }
 
+# Inline element loads become local runtime handles. Keep their temporary
+# names separate from the outer index operation's data and length values.
+emitStoredBoundedValueHandle prefix: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    typeId >= 0 and context.types[typeId].kind == 12
+        -> if {
+            Arena(0) => nameStorage!
+            "$(prefix)_loaded" -> materialize(nameStorage!) => handlePrefix
+            Arena(0) => valueStorage!
+            "%$(prefix)_bounded_value" -> materialize(valueStorage!) => storedValue
+            handlePrefix -> emitBoundedArrayHandle(storedValue, typeId, context, state)
+            "  %$(prefix) = freeze %sollang.array.i32 %$(handlePrefix)" -> println
+        }
+}
+
+emitIndexedReadonlySource prefix: Text, sourceIndex: Int, ownerIndex: Int, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    "  %$(prefix)" -> print
+    context.types[typeId].kind == 12 -> if { "_bounded_value" -> print }
+    " = load " -> print
+    typeId -> writeAggregateFieldTypeId(context, state)
+    ", ptr " -> print
+    ownerIndex -> writeForwardedReferenceValue(sourceIndex, context, state)
+    ", align $(context.typeAligns[typeId])" -> println
+    prefix -> emitStoredBoundedValueHandle(typeId, context, state)
+}
+
+writeIndexedSourceType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.types[typeId].kind == 12 -> if { "%sollang.array.i32" -> print } else {
+        typeId -> writeAggregateFieldTypeId(context, state)
+    }
+}
+
+writeMemberStorageValueName nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "%v$(nodeIndex)" -> print
+    (context.ir[nodeIndex] -> boundedArrayValueTypeId(context, state)) >= 0
+        -> if { "_bounded_value" -> print }
+}
+
 writeAggregateFieldTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.types[typeId].kind == 4 -> if { "{ ptr, i64 }" -> print } else { typeId -> writeSemanticTypeId(context, state) }
 }
@@ -3180,7 +3263,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
             context.types[typeTask] => current
             current.kind == 2 -> if { "{ ptr, i64 }" -> print }
             current.kind == 3 -> if { "%sollang.array.i32" -> print }
-            current.kind == 12 -> if { "%sollang.array.i32" -> print }
+            current.kind == 12 -> if { "%sollang.bounded_array.t$(typeTask)" -> print }
             current.kind == 5 -> if { "%sollang.dict" -> print }
             current.kind == 13 -> if { "%sollang.bounded_dictionary.t$(typeTask)" -> print }
             current.kind == 14 -> if { "%sollang.bitset.t$(typeTask)" -> print }
@@ -3285,6 +3368,11 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
         "%sollang.task" -> print
         return
     }
+    (node -> boundedArrayValueTypeId(context, state)) >= 0
+        -> if {
+            "%sollang.array.i32" -> print
+            return
+        }
     # Recursive semantic identity is authoritative. The legacy projection
     # can still carry a stale imported nominal module on region nodes, so
     # consulting it first reintroduces sys.file.SourceText as an unrelated

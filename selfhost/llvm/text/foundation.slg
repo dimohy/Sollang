@@ -1124,9 +1124,12 @@ emitBoundedDictionaryIndex nodeIndex: Int, ownerIndex: Int, context: ref emitter
     "  unreachable" -> println
     "$(prefix)_found:" -> println
     "v$(nodeIndex)_value" -> emitBoundedDictionaryEntryPointer("%$(prefix)_storage", "%$(prefix)_slot", layout.valueOffset, layout)
-    "  %v$(nodeIndex) = load " -> print
+    "  " -> print
+    nodeIndex -> writeMemberStorageValueName(context, state)
+    " = load " -> print
     valueTypeId -> writeAggregateFieldTypeId(context, state)
     ", ptr %v$(nodeIndex)_value_ptr, align $(layout.valueAlign)" -> println
+    "v$(nodeIndex)" -> emitStoredBoundedValueHandle(valueTypeId, context, state)
 }
 
 # Emits a complete probe and leaves control in the found block with
@@ -4297,12 +4300,9 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 0 => status!
             }
             current.kind == 12 -> if {
-                # Bounded arrays keep inline backing storage at the owner, but
-                # expression values use the common { data, length, capacity }
-                # handle so calls and collection operations stay uniform.
-                24 => size!
-                8 => align!
-                0 => status!
+                # Canonical layout describes the inline value, independently
+                # of the descriptor used by local collection expressions.
+                1 => status!
             }
             current.kind == 5 -> if {
                 24 => size!
@@ -4379,6 +4379,21 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                             request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => elementLayout
                             elementLayout.size * current.length => sizes![typeIndex!]
                             elementLayout.align => aligns![typeIndex!]
+                            0 => statuses![typeIndex!]
+                            true => changed!
+                        }
+                }
+                current.kind == 12 -> if {
+                    current.first >= 0 and statuses![current.first] == 0 and current.length >= 0
+                        -> if {
+                            request.types[current.first] -> aggregateFieldLayout(sizes![current.first], aligns![current.first]) => boundedElementLayout
+                            8 => boundedAlignment!
+                            boundedElementLayout.align > boundedAlignment!
+                                -> if { boundedElementLayout.align => boundedAlignment! }
+                            ((8 + boundedElementLayout.align - 1) / boundedElementLayout.align) * boundedElementLayout.align => boundedDataOffset
+                            boundedDataOffset + boundedElementLayout.size * current.length => boundedEnd
+                            ((boundedEnd + boundedAlignment! - 1) / boundedAlignment!) * boundedAlignment! => sizes![typeIndex!]
+                            boundedAlignment! => aligns![typeIndex!]
                             0 => statuses![typeIndex!]
                             true => changed!
                         }

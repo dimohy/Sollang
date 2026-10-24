@@ -1424,6 +1424,10 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                 "  %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy = insertvalue { ptr, i64 } %v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy0, i64 %v$(entryExpressionIndex)_field$(entryFieldPosition!)_length, 1" -> println
                             }
                     }
+                entryTargetFieldTypeId! >= 0 and context.types[entryTargetFieldTypeId!].kind == 12 => entryBoundedField
+                entryBoundedField -> if {
+                    "v$(entryExpressionIndex)_field$(entryFieldPosition!)_bounded" -> emitBoundedArrayValue(entryEmittedFieldIndex, functionIndex, entryTargetFieldTypeId!, context, state)
+                }
                 "  " -> print
                 entryFieldValue.nextOperand < 0 -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_f$(entryFieldPosition!)" -> print }
                 " = insertvalue " -> print
@@ -1436,30 +1440,31 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                 ", " -> print
                 entryTargetFieldTypeId! >= 0 -> if { entryTargetFieldTypeId! -> writeAggregateFieldTypeId(context, state) } else { entryEmittedFieldValue -> writeIrType(context, state) }
                 " " -> print
-                copyEntryFixedStructField! -> if {
-                    "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_struct_copy" -> print
-                } else { copyEntryFixedArrayField! -> if {
-                        "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy" -> print
-                    } else {                 entryEmittedFieldValue.kind == 2
-                            -> if {
-                                entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
-                                Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
-                                "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
-                            } else {
-                                entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
-                                    -> if {
-                                        entryEmittedFieldValue -> sourceToken(context, state) => entryFieldToken
-                                        entryEmittedFieldValue.kind == 3 -> if {
-                                            entryEmittedFieldValue -> writeIntegerLiteral(context, state)
+                entryBoundedField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_bounded" -> print } else { copyEntryFixedStructField! -> if {
+                        "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_struct_copy" -> print
+                    } else { copyEntryFixedArrayField! -> if {
+                            "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_copy" -> print
+                        } else {                 entryEmittedFieldValue.kind == 2
+                                -> if {
+                                    entryEmittedFieldValue -> sourceToken(context, state) => entryFieldTextToken
+                                    Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength(context, state)) => entryFieldTextLength
+                                    "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
+                                } else {
+                                    entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4
+                                        -> if {
+                                            entryEmittedFieldValue -> sourceToken(context, state) => entryFieldToken
+                                            entryEmittedFieldValue.kind == 3 -> if {
+                                                entryEmittedFieldValue -> writeIntegerLiteral(context, state)
+                                            } else {
+                                                (context.sources[entryEmittedFieldValue.sourceModule] -> byte(entryFieldToken.span.start)) == 116
+                                                    -> if { "1" -> print } else { "0" -> print }
+                                            }
                                         } else {
-                                            (context.sources[entryEmittedFieldValue.sourceModule] -> byte(entryFieldToken.span.start)) == 116
-                                                -> if { "1" -> print } else { "0" -> print }
+                                            castEntryStructField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_cast" -> print } else { "%v$(entryEmittedFieldIndex)" -> print }
                                         }
-                                    } else {
-                                        castEntryStructField -> if { "%v$(entryExpressionIndex)_field$(entryFieldPosition!)_cast" -> print } else { "%v$(entryEmittedFieldIndex)" -> print }
-                                    }
-                            }
-                } }
+                                }
+                    } }
+                }
                 ", $(entryFieldPosition!)" -> println
                 entryFieldValue.nextOperand => entryFieldValueIndex!
                 entryFieldPosition! + 1 => entryFieldPosition!
@@ -1471,7 +1476,9 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
         context.ir[entryExpression.operand0] => entrySyntheticProductBase
         entrySyntheticProductBase.typeKind == 10 and entrySyntheticProductBase.typeId >= (context.types -> len) and entryExpression.symbol >= 0
             -> if {
-                "  %v$(entryExpressionIndex) = extractvalue %sollang.product.t$(entrySyntheticProductBase.typeId) %v$(entryExpression.operand0), $(entryExpression.symbol)" -> println
+                "  " -> print
+                entryExpressionIndex -> writeMemberStorageValueName(context, state)
+                " = extractvalue %sollang.product.t$(entrySyntheticProductBase.typeId) %v$(entryExpression.operand0), $(entryExpression.symbol)" -> println
             } else {
                 entryExpressionIndex -> canonicalMemberPathAvailable(context, state)
                     -> if {
@@ -1520,7 +1527,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                         context.fields[entryCanonicalMemberResolvedField] => entryCanonicalMemberField
                                         "  " -> print
                                         entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
-                                            -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                            -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
                                         entryCanonicalMemberReference! -> if {
                                             "_address = getelementptr inbounds " -> print
                                             entryCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
@@ -1529,12 +1536,12 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                             ", i32 0, i32 $(entryCanonicalMemberField.ordinal)" -> println
                                             "  " -> print
                                             entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
-                                                -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                                -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
                                             " = load " -> print
                                             entryCanonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
                                             ", ptr " -> print
                                             entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
-                                                -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
+                                                -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal!)" -> print }
                                             "_address, align $(context.typeAligns[entryCanonicalMemberField.fieldType])" -> println
                                         } else {
                                             context.types[entryCanonicalMemberField.fieldType] => entryCanonicalMemberFieldType
@@ -1644,7 +1651,7 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
                                                                     }
                                                                     "  " -> print
                                                                     entryMemberIdentifierOrdinal! == entryMemberIdentifierCount! - 1
-                                                                        -> if { "%v$(entryExpressionIndex)" -> print } else { "%v$(entryExpressionIndex)_m$(entryMemberProjectionOrdinal!)" -> print }
+                                                                        -> if { entryExpressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(entryExpressionIndex)_m$(entryMemberProjectionOrdinal!)" -> print }
                                                                     " = extractvalue %sollang.struct.m$(entryMemberOwnerSourceModule!)_s$(entryMemberCurrentSymbol!) " -> print
                                                                     entryMemberProjectionOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else {
                                                                         "%v$(entryExpressionIndex)_m" -> print
@@ -1672,6 +1679,10 @@ emitEntryControlExpression entryExpressionIndex: Int, functionIndex: Int, entryO
         entryExpressionIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyTypeId
         bindingCopyTypeId >= 0 -> if {
             "%v$(entryExpressionIndex)_binding_copy" -> emitCopyableFixedStorageValue("%v$(entryExpressionIndex)", bindingCopyTypeId, context, state)
+        }
+        context.ir[entryExpressionIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
+        boundedMemberTypeId >= 0 -> if {
+            "v$(entryExpressionIndex)" -> emitBoundedArrayHandle("%v$(entryExpressionIndex)_bounded_value", boundedMemberTypeId, context, state)
         }
     }
 }
@@ -1943,16 +1954,8 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
             entryArrayElementIndex! >= 0 and entryArrayElementPosition! < entryArrayLength!
                 -> while {
                     context.ir[entryArrayElementIndex!] => entryArrayElement
-                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(entryArrayElementPosition!, entryExpression -> arrayElementTypeId(context, state), entryExpression.typeSymbol, context, state)
-                    entryArrayElement.kind == 3 or entryArrayElement.kind == 4
-                        -> if {
-                            entryArrayElement -> sourceToken(context, state) => entryArrayElementToken
-                            entryArrayElement.kind == 3 -> if { entryArrayElement -> writeIntegerLiteral(context, state) } else {
-                                (context.sources[entryArrayElement.sourceModule] -> byte(entryArrayElementToken.span.start)) == 116
-                                    -> if { "1" -> print } else { "0" -> print }
-                            }
-                        } else { "%v$(entryArrayElementIndex!)" -> print }
-                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 } -> emitArrayElementStoreSuffix(entryArrayElementPosition!, entryExpression -> arrayElementAlign(context, state))
+                    ArrayStorageIdentity { resultDomain: 0, resultIndex: entryExpressionIndex, labelIndex: -1 }
+                        -> emitArrayValueElementStore(entryArrayElementPosition!, entryExpression -> arrayElementTypeId(context, state), entryExpression.typeSymbol, entryArrayElementIndex!, functionIndex, context, state)
                     entryArrayOperandCount > 1 -> if { entryArrayElement.nextOperand => entryArrayElementIndex! }
                     entryArrayElementPosition! + 1 => entryArrayElementPosition!
                 }

@@ -61,7 +61,7 @@ emitArrayHeapBacking identity: ArrayStorageIdentity, byteLength: Int -> Unit use
 }
 
 writeArrayStorageElementType elementTypeId: Int, legacySymbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    elementTypeId >= 0 -> if { elementTypeId -> writeSemanticTypeId(context, state) } else {
+    elementTypeId >= 0 -> if { elementTypeId -> writeAggregateFieldTypeId(context, state) } else {
         legacySymbol -> llvmType(context, state) -> print
     }
 }
@@ -83,6 +83,22 @@ emitArrayElementStoreSuffix identity: ArrayStorageIdentity, position: Int, align
     ", ptr " -> print
     identity -> writeArrayStorageIdentity("_ptr")
     "$position, align $alignment" -> println
+}
+
+emitArrayValueElementStore identity: ArrayStorageIdentity, position: Int, elementTypeId: Int, legacySymbol: Int, valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    elementTypeId >= 0 and context.types[elementTypeId].kind == 12 => boundedElement
+    boundedElement -> if {
+        "v$(identity.resultIndex)_element$(position)_bounded" -> emitBoundedArrayValue(valueIndex, ownerIndex, elementTypeId, context, state)
+    }
+    identity -> emitArrayElementStorePrefix(position, elementTypeId, legacySymbol, context, state)
+    boundedElement -> if { "%v$(identity.resultIndex)_element$(position)_bounded" -> print } else {
+        valueIndex -> writeValue(ownerIndex, context, state)
+    }
+    elementTypeId >= 0 -> if {
+        identity -> emitArrayElementStoreSuffix(position, elementTypeId -> arrayElementStorageAlign(context, state))
+    } else {
+        identity -> emitArrayElementStoreSuffix(position, legacySymbol -> legacyStorageAlign(context, state))
+    }
 }
 
 emitArrayStorageCarrier identity: ArrayStorageIdentity, length: Int, capacity: Int, view: Bool -> Unit uses Console {
@@ -3667,7 +3683,10 @@ arrayElementSize node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
 arrayElementStorageAlign elementTypeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     context.types[elementTypeId] => elementType
     elementType.kind == 1 and elementType.origin == 1 and elementType.symbol == 24
-        -> if { elementType.symbol -> legacyStorageAlign(context, state) } else { context.typeAligns[elementTypeId] }
+        -> if { elementType.symbol -> legacyStorageAlign(context, state) } else {
+            elementType -> aggregateFieldLayout(context.typeSizes[elementTypeId], context.typeAligns[elementTypeId]) => elementLayout
+            elementLayout.align
+        }
 }
 arrayElementAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     node -> arrayElementTypeId(context, state) => elementTypeId
@@ -3675,7 +3694,7 @@ arrayElementAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitCon
 }
 writeArrayElementType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     node -> arrayElementTypeId(context, state) => elementTypeId
-    elementTypeId >= 0 -> if { elementTypeId -> writeSemanticTypeId(context, state) } else { node.typeSymbol -> llvmType(context, state) -> print }
+    elementTypeId >= 0 -> if { elementTypeId -> writeAggregateFieldTypeId(context, state) } else { node.typeSymbol -> llvmType(context, state) -> print }
 }
 
 writeArrayViewType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {

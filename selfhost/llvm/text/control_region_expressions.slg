@@ -422,6 +422,11 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                 regionFieldValue.nextOperand => regionNextFieldValue!
                 regionIndexedFieldValue! and regionNextFieldValue! >= 0
                     -> if { context.ir[regionNextFieldValue!].nextOperand => regionNextFieldValue! }
+                regionTargetFieldTypeId! >= 0 and context.types[regionTargetFieldTypeId!].kind == 12 => regionBoundedField
+                regionBoundedField and not regionIndexedFieldValue!
+                    -> if {
+                        "v$(regionNodeIndex)_field$(regionFieldPosition!)_bounded" -> emitBoundedArrayValue(regionEmittedFieldIndex, ownerIndex, regionTargetFieldTypeId!, context, state)
+                    }
                 "  " -> print
                 regionNextFieldValue! < 0 -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_f$(regionFieldPosition!)" -> print }
                 " = insertvalue " -> print
@@ -434,33 +439,36 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                 ", " -> print
                 regionTargetFieldTypeId! >= 0 -> if { regionTargetFieldTypeId! -> writeAggregateFieldTypeId(context, state) } else { regionEmittedFieldValue -> writeIrType(context, state) }
                 " " -> print
-                regionCopyNamedFixedStructField! -> if {
-                    "%v$(regionNodeIndex)_field$(regionFieldPosition!)_struct_copy" -> print
-                } else { regionCopyNamedFixedField! -> if {
-                        "%v$(regionNodeIndex)_field$(regionFieldPosition!)_copy" -> print
-                    } else { regionEmittedFieldValue.kind == 2 -> if {
-                            regionEmittedFieldValue -> sourceToken(context, state) => regionFieldTextToken
-                            Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength(context, state)) => regionFieldTextLength
-                            "{ ptr @sollang_str_$(regionEmittedFieldIndex), i64 $regionFieldTextLength }" -> print
-                        } else {
-                            regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4
-                                -> if {
-                                    regionEmittedFieldValue -> sourceToken(context, state) => regionFieldToken
-                                    regionEmittedFieldValue.kind == 3 -> if {
-                                        regionEmittedFieldValue -> writeIntegerLiteral(context, state)
+                regionBoundedField -> if {
+                    regionIndexedFieldValue! -> if { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_indexed" -> print } else { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_bounded" -> print }
+                } else { regionCopyNamedFixedStructField! -> if {
+                        "%v$(regionNodeIndex)_field$(regionFieldPosition!)_struct_copy" -> print
+                    } else { regionCopyNamedFixedField! -> if {
+                            "%v$(regionNodeIndex)_field$(regionFieldPosition!)_copy" -> print
+                        } else { regionEmittedFieldValue.kind == 2 -> if {
+                                regionEmittedFieldValue -> sourceToken(context, state) => regionFieldTextToken
+                                Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength(context, state)) => regionFieldTextLength
+                                "{ ptr @sollang_str_$(regionEmittedFieldIndex), i64 $regionFieldTextLength }" -> print
+                            } else {
+                                regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4
+                                    -> if {
+                                        regionEmittedFieldValue -> sourceToken(context, state) => regionFieldToken
+                                        regionEmittedFieldValue.kind == 3 -> if {
+                                            regionEmittedFieldValue -> writeIntegerLiteral(context, state)
+                                        } else {
+                                            (context.sources[regionEmittedFieldValue.sourceModule] -> byte(regionFieldToken.span.start)) == 116
+                                                -> if { "1" -> print } else { "0" -> print }
+                                        }
                                     } else {
-                                        (context.sources[regionEmittedFieldValue.sourceModule] -> byte(regionFieldToken.span.start)) == 116
-                                            -> if { "1" -> print } else { "0" -> print }
-                                    }
-                                } else {
-                                    regionIndexedFieldValue! -> if { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_indexed" -> print } else {
-                                        regionCastStructField -> if { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_cast" -> print } else {
-                                            regionEmittedFieldValue.kind == 5 and ownerIndex >= 0 and context.ir[ownerIndex].operand1 >= 0 and regionEmittedFieldValue.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
-                                                -> if { "%arg" -> print } else { "%v$(regionEmittedFieldIndex)" -> print }
+                                        regionIndexedFieldValue! -> if { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_indexed" -> print } else {
+                                            regionCastStructField -> if { "%v$(regionNodeIndex)_field$(regionFieldPosition!)_cast" -> print } else {
+                                                regionEmittedFieldValue.kind == 5 and ownerIndex >= 0 and context.ir[ownerIndex].operand1 >= 0 and regionEmittedFieldValue.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
+                                                    -> if { "%arg" -> print } else { "%v$(regionEmittedFieldIndex)" -> print }
+                                            }
                                         }
                                     }
-                                }
-                } } }
+                    } } }
+                }
                 ", $(regionFieldPosition!)" -> println
                 regionNextFieldValue! => regionFieldValueIndex!
                 regionFieldPosition! + 1 => regionFieldPosition!
@@ -525,7 +533,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                 context.fields[regionCanonicalMemberResolvedField!] => regionCanonicalMemberField
                                 "  " -> print
                                 regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
-                                    -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                    -> if { regionNodeIndex -> writeMemberStorageValueName(context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
                                 regionCanonicalMemberReference! -> if {
                                     "_address = getelementptr inbounds " -> print
                                     regionCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
@@ -534,12 +542,12 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                     ", i32 0, i32 $(regionCanonicalMemberField.ordinal)" -> println
                                     "  " -> print
                                     regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
-                                        -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                        -> if { regionNodeIndex -> writeMemberStorageValueName(context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
                                     " = load " -> print
                                     regionCanonicalMemberField.fieldType -> writeAggregateFieldTypeId(context, state)
                                     ", ptr " -> print
                                     regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
-                                        -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
+                                        -> if { regionNodeIndex -> writeMemberStorageValueName(context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal!)" -> print }
                                     "_address, align $(context.typeAligns[regionCanonicalMemberField.fieldType])" -> println
                                 } else {
                                     " = extractvalue " -> print
@@ -570,12 +578,16 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                     -> if {
                                         context.types[regionReferenceMemberValueType!].first => regionReferenceMemberValueType!
                                     }
-                                "  %v$(regionNodeIndex) = load " -> print
+                                "  " -> print
+                                regionNodeIndex -> writeMemberStorageValueName(context, state)
+                                " = load " -> print
                                 regionReferenceMemberValueType! >= 0 -> if { regionReferenceMemberValueType! -> writeSemanticTypeId(context, state) } else { regionNode -> writeIrType(context, state) }
                                 ", ptr %v$(regionNodeIndex)_address, align " -> print
                                 regionReferenceMemberValueType! >= 0 -> if { context.typeAligns[regionReferenceMemberValueType!] -> writeDecimalLine } else { regionNode -> storageAlign(context, state) -> writeDecimalLine }
                             } else {
-                                "  %v$(regionNodeIndex) = extractvalue " -> print
+                                "  " -> print
+                                regionNodeIndex -> writeMemberStorageValueName(context, state)
+                                " = extractvalue " -> print
                                 regionReferenceMemberBase.typeId -> writeSemanticTypeId(context, state)
                                 " " -> print
                                 ownerIndex -> writeReferencePlaceValue(regionNode.operand0, context, state)
@@ -691,7 +703,7 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                                                     }
                                                                     "  " -> print
                                                                     regionMemberIdentifierOrdinal! == regionMemberIdentifierCount! - 1
-                                                                        -> if { "%v$(regionNodeIndex)" -> print } else { "%v$(regionNodeIndex)_m$(regionMemberProjectionOrdinal!)" -> print }
+                                                                        -> if { regionNodeIndex -> writeMemberStorageValueName(context, state) } else { "%v$(regionNodeIndex)_m$(regionMemberProjectionOrdinal!)" -> print }
                                                                     " = extractvalue %sollang.struct.m$(regionOwnerSourceModule!)_s$(regionMemberCurrentSymbol!) " -> print
                                                                     regionMemberProjectionOrdinal! == 0 -> if {
                                                                         regionMemberBase.kind == 5 and ownerIndex >= 0 and context.ir[ownerIndex].operand1 >= 0 and regionMemberBase.symbol == context.ir[context.ir[ownerIndex].operand1].symbol
@@ -722,6 +734,10 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
         regionNodeIndex -> bindingFixedStorageCopyTypeId(context) => bindingCopyTypeId
         bindingCopyTypeId >= 0 -> if {
             "%v$(regionNodeIndex)_binding_copy" -> emitCopyableFixedStorageValue("%v$(regionNodeIndex)", bindingCopyTypeId, context, state)
+        }
+        context.ir[regionNodeIndex] -> boundedArrayValueTypeId(context, state) => boundedMemberTypeId
+        boundedMemberTypeId >= 0 -> if {
+            "v$(regionNodeIndex)" -> emitBoundedArrayHandle("%v$(regionNodeIndex)_bounded_value", boundedMemberTypeId, context, state)
         }
     }
 }
@@ -1040,9 +1056,8 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 regionArrayElementIndex! >= 0 and regionArrayElementPosition! < regionArrayLength
                     -> while {
                         context.ir[regionArrayElementIndex!] => regionArrayElement
-                        ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayElementStorePrefix(regionArrayElementPosition!, regionNode -> arrayElementTypeId(context, state), regionNode.typeSymbol, context, state)
-                        regionArrayElementIndex! -> writeValue(ownerIndex, context, state)
-                        ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 } -> emitArrayElementStoreSuffix(regionArrayElementPosition!, regionNode -> arrayElementAlign(context, state))
+                        ArrayStorageIdentity { resultDomain: 0, resultIndex: regionNodeIndex, labelIndex: -1 }
+                            -> emitArrayValueElementStore(regionArrayElementPosition!, regionNode -> arrayElementTypeId(context, state), regionNode.typeSymbol, regionArrayElementIndex!, ownerIndex, context, state)
                         regionArrayOperandCount! > 1 -> if { regionArrayElement.nextOperand => regionArrayElementIndex! }
                         regionArrayElementPosition! + 1 => regionArrayElementPosition!
                     }
@@ -1184,12 +1199,7 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
             -> if {
                 context.types[regionIndexedContainerTypeId!].first => regionIndexedContainerTypeId!
                 true => regionIndexedReadonlyReference!
-                "  %v$(regionNodeIndex)_indexed_source = load " -> print
-                regionIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
-                ", ptr " -> print
-                regionNode.operand0 -> writeValue(ownerIndex, context, state)
-                ", align " -> print
-                context.typeAligns[regionIndexedContainerTypeId!] -> writeDecimalLine
+                "v$(regionNodeIndex)_indexed_source" -> emitIndexedReadonlySource(regionNode.operand0, ownerIndex, regionIndexedContainerTypeId!, context, state)
             }
         regionNode.operand0 -> mutableBorrowParameterOrdinal(ownerIndex, context, state) => regionIndexedMutableParameterOrdinal
         -1 => regionIndexedMutableParameterIndex!
@@ -1385,7 +1395,9 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
                 "  %v$(regionNodeIndex)_value_ptr = getelementptr " -> print
                 regionIndexedDictionaryEntryLayout -> writeDictionaryEntryStorageType
                 ", ptr %v$(regionNodeIndex)_values, i64 %v$(regionNodeIndex)_group_candidate_slot" -> println
-                "  %v$(regionNodeIndex) = load " -> print
+                "  " -> print
+                regionNodeIndex -> writeMemberStorageValueName(context, state)
+                " = load " -> print
                 regionIndexedDictionaryValueTypeId! >= 0 -> if { regionIndexedDictionaryValueTypeId! -> writeSemanticTypeId(context, state) } else { regionIndexedValue.typeSymbol -> llvmType(context, state) -> print }
                 ", ptr %v$(regionNodeIndex)_value_ptr, align " -> print
                 regionIndexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[regionIndexedDictionaryValueTypeId!] -> writeDecimalLine } else { regionIndexedValue.typeSymbol -> legacyStorageAlign(context, state) -> writeDecimalLine }
@@ -1401,7 +1413,7 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
                     } else {
                         "  %v$(regionNodeIndex)_data = extractvalue " -> print
                         regionIndexedReadonlyReference! -> if {
-                            regionIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+                            regionIndexedContainerTypeId! -> writeIndexedSourceType(context, state)
                         } else {
                             regionIndexedValue -> writeIrType(context, state)
                         }
@@ -1410,7 +1422,7 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
                         ", 0" -> println
                         "  %v$(regionNodeIndex)_length = extractvalue " -> print
                         regionIndexedReadonlyReference! -> if {
-                            regionIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+                            regionIndexedContainerTypeId! -> writeIndexedSourceType(context, state)
                         } else {
                             regionIndexedValue -> writeIrType(context, state)
                         }
@@ -1487,7 +1499,7 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
                 "  unreachable" -> println
                 "v$(regionNodeIndex)_index_ok:" -> println
                 "  %v$(regionNodeIndex)_ptr = getelementptr " -> print
-                regionNode -> writeIrType(context, state)
+                regionNode.typeId >= 0 -> if { regionNode.typeId -> writeAggregateFieldTypeId(context, state) } else { regionNode -> writeIrType(context, state) }
                 ", ptr %v$(regionNodeIndex)_data, i64 " -> print
                 regionIndexValue.kind == 3 -> if {
                     regionIndexValue -> writeIntegerLiteral(context, state)
@@ -1501,11 +1513,17 @@ emitIndexRead regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext
                             }
                         }
                 }
-                "  %v$(regionNodeIndex) = load " -> print
-                regionNode -> writeIrType(context, state)
+                "  " -> print
+                regionNodeIndex -> writeMemberStorageValueName(context, state)
+                " = load " -> print
+                regionNode.typeId >= 0 -> if { regionNode.typeId -> writeAggregateFieldTypeId(context, state) } else { regionNode -> writeIrType(context, state) }
                 ", ptr %v$(regionNodeIndex)_ptr, align " -> print
                 regionNode -> storageAlign(context, state) -> writeDecimalLine
             }
+        }
+        regionNode -> boundedArrayValueTypeId(context, state) => indexedBoundedTypeId
+        indexedBoundedTypeId >= 0 -> if {
+            "v$(regionNodeIndex)" -> emitStoredBoundedValueHandle(indexedBoundedTypeId, context, state)
         }
     }
 }
