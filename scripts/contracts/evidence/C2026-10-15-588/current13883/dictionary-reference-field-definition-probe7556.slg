@@ -1,0 +1,36 @@
+struct Entry { words: [Int; ~] }
+struct View { entries: ref [Entry; ~] }
+borrowEntries values: ref [Entry; ~] -> ref [Entry; ~] => values
+size entry: ref Entry -> Int => entry.words -> len
+impl View {
+    public count: self, index: ref Int -> Int => self.entries[index] -> size
+}
+struct Scalars { values: ref [Int; ~] }
+borrowInts values: ref [Int; ~] -> ref [Int; ~] => values
+readInt value: ref Int -> Int => value
+impl Scalars {
+    public at: self, index: ref Int -> Int => self.values[index] -> readInt
+}
+struct Lookup { values: ref {Text: Entry} }
+borrowTable values: ref {Text: Entry} -> ref {Text: Entry} => values
+impl Lookup {
+    public count: self, key: Text -> Int => self.values[key] -> size
+}
+
+main {
+    [Entry; ~] => entries!
+    entries! -> push(Entry { words: [1,; ~] })
+    View { entries: entries! -> borrowEntries } => view
+    0 => index
+    view -> count(index) -> println
+    entries![index] -> size -> println
+    [Int; ~] => values!
+    values! -> push(42)
+    Scalars { values: values! -> borrowInts } => scalars
+    scalars -> at(index) -> println
+    values![index] -> readInt -> println
+    {Text: Entry; 2~} => table!
+    table! -> put("one", Entry { words: [7, 8; ~] })
+    Lookup { values: table! -> borrowTable } => lookup
+    lookup -> count("one") -> println
+}
