@@ -293,6 +293,35 @@ $unknownCompiler = Join-Path (Split-Path -Parent (Join-Path $root $unknownBindin
 $unknownSemantic = Get-Content -LiteralPath (Join-Path $root $unknownBinding.selfhostDecisionSource) -Raw
 $unknownCallResolution = Get-Content -LiteralPath (Join-Path $root $unknownBinding.selfhostCallResolutionSource) -Raw
 $unknownPackageCallResolution = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/call_resolution_sources.slg') -Raw
+$currentUnknown = $contract.currentUnknownBindingEvidence
+$unknownScopeComparisonPath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.sourceComparison
+$unknownScopeComparison = Get-Content -LiteralPath $unknownScopeComparisonPath -Raw | ConvertFrom-Json
+$unknownScopePaired = Get-Content -LiteralPath (Join-Path $root $currentUnknown.paired) -Raw | ConvertFrom-Json
+if ($unknownScopeComparison.status -cne 'compared-before-slg-edit' -or
+    $unknownScopeComparison.slgCompilerEdits -ne 0 -or
+    (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $unknownScopeComparison.managedFirst) -cne
+        (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.managed) -or
+    (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $unknownScopePaired.inputHashes -LiteralPath $unknownScopeComparisonPath) -cne
+        (Get-FileHash -LiteralPath $unknownScopeComparisonPath -Algorithm SHA256).Hash) {
+    throw 'CURRENT_UNKNOWN_SOURCE_COMPARISON_INVALID'
+}
+# The current resolver indexes functions by declaration parent instead of
+# comparing candidate.parent in a linear scan. Bind the reviewed scope walk
+# to the current exact13 execution rather than requiring obsolete source text.
+$unknownScopeSources = @('src/Sollang.Compiler/Semantics/SemanticCompiler.cs', 'selfhost/semantic/calls.slg',
+    'selfhost/semantic/call_resolution_sources.slg', 'selfhost/ir/interpolation.slg',
+    'selfhost/semantic/interpolation_inference.slg', 'selfhost/llvm/text/context_prepare.slg',
+    'selfhost/llvm/emitter/diagnostics.slg')
+if (@($unknownScopeComparison.sourceHashes.PSObject.Properties).Count -ne $unknownScopeSources.Count) {
+    throw 'CURRENT_UNKNOWN_SOURCE_COMPARISON_INVALID'
+}
+foreach ($source in $unknownScopeSources) {
+    $sourceHash = Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $unknownScopeComparison.sourceHashes -LiteralPath $source
+    if ((Get-FileHash -LiteralPath (Join-Path $root $source) -Algorithm SHA256).Hash -cne $sourceHash -or
+        (Get-CompilerEvidencePinnedHash -RepositoryRoot $root -InputHashes $unknownScopePaired.inputHashes -LiteralPath $source) -cne $sourceHash) {
+        throw 'CURRENT_UNKNOWN_SOURCE_COMPARISON_INVALID'
+    }
+}
 if ($unknownBinding.status -cne 'passed-slice-unit-open' -or
     $unknownBinding.unknownBindingExact -cne '5/5' -or
     $unknownBinding.retainedDiagnosticExact -cne '9/9' -or
@@ -316,7 +345,6 @@ if ($unknownBinding.status -cne 'passed-slice-unit-open' -or
     -not $interpolationLowering.Contains('public bareFunctionStatus: Int', [StringComparison]::Ordinal) -or
     -not $interpolationLowering.Contains('functionSymbol.parent == localFunctionOwner!', [StringComparison]::Ordinal) -or
     -not $unknownCallResolution.Contains('resolveLexicalFunction source:', [StringComparison]::Ordinal) -or
-    -not $unknownCallResolution.Contains('candidate.parent == scope!', [StringComparison]::Ordinal) -or
     -not $unknownCallResolution.Contains('resolveLexicalFunction(source, nodes, tokens, table', [StringComparison]::Ordinal) -or
     -not $unknownPackageCallResolution.Contains('resolveLexicalFunction(source, package.nodes, package.tokens, package.symbols', [StringComparison]::Ordinal) -or
     -not $interpolationLowering.Contains('candidateVisible! -> if {', [StringComparison]::Ordinal) -or
@@ -330,7 +358,6 @@ if ($unknownBinding.status -cne 'passed-slice-unit-open' -or
     $emitterDiagnostics.Contains('isBlockingUnknownInterpolation', [StringComparison]::Ordinal)) {
     throw 'unknown interpolation binding slice lacks source-first semantic decision or current paired evidence'
 }
-$currentUnknown = $contract.currentUnknownBindingEvidence
 $currentUnknownContractPath = [IO.Path]::GetFullPath((Join-Path $root $currentUnknown.contract))
 $currentUnknownContract = Get-Content -LiteralPath $currentUnknownContractPath -Raw | ConvertFrom-Json
 $currentUnknownManagedPath = [IO.Path]::GetFullPath((Join-Path $root $currentUnknown.managed))
@@ -913,8 +940,8 @@ if ($bitSetLength.status -cne 'passed' -or $bitSetLength.focusedPassed -cne '2/2
     $bitSetLengthReference.completed -ne 1 -or $bitSetLengthReference.total -ne 1 -or
     -not $bitSetLengthValueLlChecks['length'] -or
     -not $bitSetLengthReferenceLlChecks['length'] -or
-    -not $interpolationCodegen.Contains('bitSetLengthTypeId! >= 0 and (context.types[bitSetLengthTypeId!].kind == 14 or context.types[bitSetLengthTypeId!].kind == 4)', [StringComparison]::Ordinal) -or
-    -not $interpolationCodegen.Contains('interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => lengthResultWidth', [StringComparison]::Ordinal)) {
+    -not $interpolationCodegen.Contains('bitSetLengthTypeId! >= 0 and (context.types[bitSetLengthTypeId!].kind == 14 or context.types[bitSetLengthTypeId!].kind == 4 or context.types[bitSetLengthTypeId!].kind == 12)', [StringComparison]::Ordinal) -or
+    -not $interpolationCodegen.Contains('nodeIndex -> interpolationNodeIntegerWidth(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => lengthResultWidth', [StringComparison]::Ordinal)) {
     throw 'BitSet length interpolation lacks fixed-width C# source, LLVM constant, or paired runtime proof'
 }
 
