@@ -29,6 +29,7 @@ import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
+import sys.process as process
 import syntax.generated.slg as grammar
 import sys.file as file
 import sys.runtime as runtime
@@ -607,7 +608,7 @@ interpolationLiteralReachable nodeIndex: Int, sourceModule: Int, context: ref em
     false
 }
 
-emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console {
+emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool, state: ref CoreEmitterState -> CorePreambleFeatures uses Console, Process {
     profile -> if { "preamble start" -> runtime.eprintln }
     """
     @sollang_bool_true_bytes = private constant [4 x i8] c"true"
@@ -1440,9 +1441,12 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         parallelBranchCallbackIndex! -> writeParallelBranchEnvironmentType(parallelBranchCaptures, context, state)
                         ", ptr %environment, i32 0, i32 0" -> println
                         "  %parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!) = load " -> print
-                        parallelBranchSource -> writeIrType(context, state)
+                        parallelBranchSource -> writeParallelBranchSourceType(context, state)
                         ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_source_address$(parallelBranchArmOrdinal!), align " -> print
-                        parallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
+                        parallelBranchSource -> parallelBranchSourceUsesPointer(context, state)
+                            -> if { 8 -> writeDecimalLine } else {
+                                parallelBranchSource -> storageAlign(context, state) -> writeDecimalLine
+                            }
                         0 => parallelBranchCaptureLoadIndex!
                         parallelBranchCaptureLoadIndex! < (parallelBranchCaptures -> len)
                             -> while {
@@ -1480,10 +1484,35 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         parallelBranchExpression.operand1 => parallelBranchStageFlowIndex!
                         parallelBranchStageIndex! >= 0 -> while {
                             context.ir[parallelBranchStageIndex!] => parallelBranchStage
-                            "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage$(parallelBranchStageOrdinal!) = call " -> print
-                            parallelBranchStage -> writeIrType(context, state)
-                            " @sollang_m$(parallelBranchStage.targetModule)_s$(parallelBranchStage.symbol)(" -> print
                             CallEnvironmentRequest { callerIndex: -1, callIndex: parallelBranchStageIndex!, targetModule: parallelBranchStage.targetModule, targetSymbol: parallelBranchStage.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => parallelBranchStageTarget
+                            parallelBranchStageIndex! -> callTargetParameter(0, context, state) => parallelBranchPrimaryParameter
+                            parallelBranchStageTarget < 0 or parallelBranchPrimaryParameter < 0
+                                -> if {
+                                    "; sollang compiler error S019: parallel branch stage has no resolved primary parameter" -> println
+                                    process.exit(1)
+                                }
+                            context.ir[parallelBranchPrimaryParameter] -> referenceValueTypeId(context, state) => parallelBranchBorrowType
+                            context.ir[parallelBranchStageFlowIndex!] -> effectiveTypeId(context, state) => parallelBranchFlowType
+                            parallelBranchBorrowType >= 0 and parallelBranchBorrowType == parallelBranchFlowType
+                                and not (parallelBranchStageOrdinal! == 0 and (parallelBranchSource -> parallelBranchSourceUsesPointer(context, state))) => parallelBranchBorrowValue
+                            parallelBranchBorrowValue -> if {
+                                "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!) = alloca " -> print
+                                context.ir[parallelBranchStageFlowIndex!] -> writeFunctionValueAbiType(context, state)
+                                ", align $(context.typeAligns[parallelBranchFlowType])" -> println
+                                "  store " -> print
+                                context.ir[parallelBranchStageFlowIndex!] -> writeFunctionValueAbiType(context, state)
+                                " " -> print
+                                parallelBranchStageOrdinal! == 0 -> if {
+                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
+                                } else {
+                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+                                    parallelBranchStageOrdinal! - 1 -> writeDecimal
+                                }
+                                ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!), align $(context.typeAligns[parallelBranchFlowType])" -> println
+                            }
+                            "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage$(parallelBranchStageOrdinal!) = call " -> print
+                            parallelBranchStage -> writeFunctionValueAbiType(context, state)
+                            " @sollang_m$(parallelBranchStage.targetModule)_s$(parallelBranchStage.symbol)(" -> print
                             parallelBranchStageTarget >= 0 -> if {
                                 parallelBranchStageTarget -> functionCaptures(context, state) => parallelBranchStageCaptures
                                 0 => parallelBranchStageCaptureIndex!
@@ -1503,14 +1532,16 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                         parallelBranchStageCaptureIndex! + 1 => parallelBranchStageCaptureIndex!
                                     }
                             }
-                            context.ir[parallelBranchStageFlowIndex!] -> writeIrType(context, state)
+                            context.ir[parallelBranchPrimaryParameter] -> writeFunctionValueAbiType(context, state)
                             " " -> print
-                            parallelBranchStageOrdinal! == 0 -> if {
-                                "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
-                            } else {
-                                "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
-                                parallelBranchStageOrdinal! - 1 -> writeDecimal
-                            }
+                            parallelBranchBorrowValue -> if {
+                                "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_input$(parallelBranchStageOrdinal!)" -> print
+                            } else { parallelBranchStageOrdinal! == 0 -> if {
+                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_source$(parallelBranchArmOrdinal!)" -> print
+                                } else {
+                                    "%parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
+                                    parallelBranchStageOrdinal! - 1 -> writeDecimal
+                            } }
                             parallelBranchStage.operand0 => parallelBranchStageArgumentIndex!
                             parallelBranchStageArgumentIndex! >= 0 and context.ir[parallelBranchStageArgumentIndex!].parent == parallelBranchStageIndex!
                                 -> while {
@@ -1536,7 +1567,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         parallelBranchExpression -> writeIrType(context, state)
                         ", ptr %output, i32 0, i32 $(parallelBranchArmOrdinal!)" -> println
                         "  store " -> print
-                        parallelBranchArm -> writeIrType(context, state)
+                        parallelBranchArm -> writeFunctionValueAbiType(context, state)
                         " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_stage" -> print
                         parallelBranchStageOrdinal! - 1 -> writeDecimal
                         ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_output$(parallelBranchArmOrdinal!), align " -> print

@@ -67,6 +67,7 @@ struct CallEnvironmentRequest {
 struct CaptureValueRequest {
     callerIndex: Int
     callIndex: Int
+    interpolationIndex: Int
     bindingIndex: Int
     captureIndex: Int
 }
@@ -3506,6 +3507,28 @@ emitInterpolationCallTargetLoad labelIndex: Int, nodeIndex: Int, functionIndex: 
     }
 }
 
+emitInterpolationCaptureEnvironment labelIndex: Int, nodeIndex: Int, functionIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    functionIndex -> functionCaptures(context, state) => captures
+    0 => captureIndex!
+    captureIndex! < (captures -> len) -> while {
+        CaptureValueRequest { callerIndex: ownerIndex, callIndex: labelIndex, interpolationIndex: nodeIndex, bindingIndex: captures[captureIndex!], captureIndex: captureIndex! } -> emitCaptureTransport(context, state)
+        captureIndex! + 1 => captureIndex!
+    }
+}
+
+writeInterpolationCaptureEnvironment labelIndex: Int, nodeIndex: Int, functionIndex: Int, ownerIndex: Int, hasExplicitArguments: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    functionIndex -> functionCaptures(context, state) => captures
+    0 => captureIndex!
+    captureIndex! < (captures -> len) -> while {
+        context.ir[captures[captureIndex!]] -> writeCaptureAbiType(context, state)
+        " " -> print
+        CaptureValueRequest { callerIndex: ownerIndex, callIndex: labelIndex, interpolationIndex: nodeIndex, bindingIndex: captures[captureIndex!], captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
+        captureIndex! + 1 < (captures -> len) or hasExplicitArguments
+            -> if { ", " -> print }
+        captureIndex! + 1 => captureIndex!
+    }
+}
+
 writeInterpolationCallTarget labelIndex: Int, nodeIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[functionIndex] => function
     function -> isNativeFunction(context, state) -> if {
@@ -3620,6 +3643,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     "v$(labelIndex)_expression$(nodeIndex)_arg0_bounded" -> materialize(prefixStorage!) => prefix
                     prefix -> emitInterpolationBoundedValue(labelIndex, node.operand0, computedBoundedInput, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                 }
+                labelIndex -> emitInterpolationCaptureEnvironment(nodeIndex, computedMethodIndex, ownerIndex, context, state)
                 labelIndex -> emitInterpolationCallTargetLoad(nodeIndex, computedMethodIndex, context, state)
                 "  %v$(labelIndex)_expression$(nodeIndex)" -> print
                 computedBoundedResult >= 0 -> if { "_bounded_value" -> print }
@@ -3628,6 +3652,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     computedMethod -> writeFunctionValueAbiType(context, state)
                 } else { computedMethod -> writeIrType(context, state) }
                 labelIndex -> writeInterpolationCallTarget(nodeIndex, computedMethodIndex, context, state)
+                labelIndex -> writeInterpolationCaptureEnvironment(nodeIndex, computedMethodIndex, ownerIndex, true, context, state)
                 computedUsesBoundedInput -> if {
                     computedParameter -> writeFunctionValueAbiType(context, state)
                 } else { computedParameter -> writeIrType(context, state) }
@@ -3733,6 +3758,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     projectionArgumentOrdinal! + 1 => projectionArgumentOrdinal!
                     nodeIndex -> interpolationCallArgumentAt(projectionArgumentOrdinal!, nodes) => projectionArgumentIndex!
                 }
+            labelIndex -> emitInterpolationCaptureEnvironment(nodeIndex, callTargetFunction, ownerIndex, context, state)
             labelIndex -> emitInterpolationCallTargetLoad(nodeIndex, callTargetFunction, context, state)
             "  %v$(labelIndex)_expression$(nodeIndex)" -> print
             boundedCallResult >= 0 -> if { "_bounded_value" -> print }
@@ -3741,6 +3767,8 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 callTarget -> writeFunctionValueAbiType(context, state)
             } else { callTarget -> writeIrType(context, state) }
             labelIndex -> writeInterpolationCallTarget(nodeIndex, callTargetFunction, context, state)
+            callTarget.operand1 >= 0 and argumentLimit > 0 and (nodeIndex -> interpolationCallArgumentAt(0, nodes)) >= 0 => hasExplicitArguments
+            labelIndex -> writeInterpolationCaptureEnvironment(nodeIndex, callTargetFunction, ownerIndex, hasExplicitArguments, context, state)
             callTarget.operand1 => callParameterIndex!
             0 => callArgumentOrdinal!
             nodeIndex -> interpolationCallArgumentAt(0, nodes) => callArgumentIndex!

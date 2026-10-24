@@ -1590,11 +1590,23 @@ writeParallelBranchArgumentType argumentIndex: Int, context: ref emitterContext.
     context.ir[argumentIndex].parent => callIndex
     argumentIndex -> parallelBranchArgumentOrdinal(context) => ordinal
     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
-    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeIrType(context, state) } else { context.ir[argumentIndex] -> writeIrType(context, state) }
+    parameterIndex >= 0 -> if { context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state) } else { context.ir[argumentIndex] -> writeFunctionValueAbiType(context, state) }
 }
+
+parallelBranchSourceUsesPointer source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    (source -> referenceValueTypeId(context, state)) >= 0 or (source -> captureUsesBorrowAbi(context, state))
+}
+
+writeParallelBranchSourceType source: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    source -> parallelBranchSourceUsesPointer(context, state)
+        -> if { "ptr" -> print } else {
+            source -> writeFunctionValueAbiType(context, state)
+        }
+}
+
 writeParallelBranchEnvironmentType branchIndex: Int, captures: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     "{ " -> print
-    context.ir[context.ir[branchIndex].operand1] -> writeIrType(context, state)
+    context.ir[context.ir[branchIndex].operand1] -> writeParallelBranchSourceType(context, state)
     0 => captureIndex!
     captureIndex! < (captures -> len) -> while {
         ", " -> print
@@ -2058,6 +2070,21 @@ captureBindingIsLocal request: CaptureValueRequest, context: ref emitterContext.
     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
 }
 
+captureTransportPrefix request: CaptureValueRequest, storage: mut Arena -> Text {
+    request.interpolationIndex >= 0 -> if {
+        "interpolation$(request.callIndex)_expression$(request.interpolationIndex)_capture$(request.captureIndex)" -> materialize(storage) -> return
+    }
+    "callenv$(request.callIndex)_capture$(request.captureIndex)" -> materialize(storage)
+}
+
+captureParameterOrdinal request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[request.bindingIndex] => binding
+    context.ir[request.callerIndex].operand1 => primary
+    primary >= 0 and context.ir[primary].symbol == binding.symbol
+        -> if { 0 -> return }
+    request.callerIndex -> additionalParameterOrdinal(binding.symbol, context, state)
+}
+
 emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request -> captureBindingIsLocal(context, state)
         -> unless { return }
@@ -2065,20 +2092,17 @@ emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterCo
     binding -> boundedArrayValueTypeId(context, state) => boundedType
     boundedType < 0 -> if { return }
     Arena(0) => prefixStorage!
-    "callenv$(request.callIndex)_capture$(request.captureIndex)" -> materialize(prefixStorage!) => prefix
+    request -> captureTransportPrefix(prefixStorage!) => prefix
     binding.kind == 10 and binding.flags / 2 % 2 == 1
         -> if {
-            request.callerIndex -> additionalParameterOrdinal(binding.symbol, context, state) => ordinal!
-            context.ir[request.callerIndex].operand1 => primary
-            primary >= 0 and context.ir[primary].symbol == binding.symbol
-                -> if { 0 => ordinal! }
-            ordinal! < 0 -> if {
+            request -> captureParameterOrdinal(context, state) => ordinal
+            ordinal < 0 -> if {
                 "; sollang compiler error S019: bounded capture has no mutable parameter ordinal" -> println
                 process.exit(1)
             }
             Arena(0) => sourcePrefixStorage!
             "$(prefix)_source" -> materialize(sourcePrefixStorage!) => sourcePrefix
-            sourcePrefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal!, request.callerIndex, context, state)
+            sourcePrefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal, request.callerIndex, context, state)
         } else { binding.kind != 10 and binding.flags == 1 -> if {
                 request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
                 "  %$(prefix)_source = load %sollang.array.i32, ptr %slot$(bindingRoot), align 8" -> println
@@ -2104,7 +2128,57 @@ emitBoundedCaptureTransport request: CaptureValueRequest, context: ref emitterCo
         }
 }
 
+emitCaptureTransport request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[request.bindingIndex] => binding
+    (binding -> boundedArrayValueTypeId(context, state)) >= 0
+        -> if {
+            request -> emitBoundedCaptureTransport(context, state)
+            return
+        }
+    request -> captureBindingIsLocal(context, state)
+        -> unless { return }
+    Arena(0) => prefixStorage!
+    request -> captureTransportPrefix(prefixStorage!) => prefix
+    binding.kind == 10 and binding.flags / 2 % 2 == 1
+        -> if {
+            request -> captureParameterOrdinal(context, state) => ordinal
+            ordinal < 0 -> if {
+                "; sollang compiler error S019: capture has no mutable parameter ordinal" -> println
+                process.exit(1)
+            }
+            prefix -> emitCurrentMutableParameterValueAt(request.bindingIndex, ordinal, request.callerIndex, context, state)
+        } else {
+            binding.kind != 10 and binding.flags == 1 and not (binding -> captureUsesBorrowAbi(context, state))
+                -> if {
+                    request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
+                    "  %$(prefix) = load " -> print
+                    binding -> writeIrType(context, state)
+                    ", ptr %slot$(bindingRoot), align " -> print
+                    binding -> storageAlign(context, state) -> writeDecimalLine
+                }
+        }
+    (binding -> captureUsesBorrowAbi(context, state)) and not (binding.kind != 10 and binding.flags == 1)
+        -> if {
+            request.interpolationIndex >= 0 -> if {
+                "  %$(prefix)_ref = alloca " -> print
+                binding -> writeIrType(context, state)
+                ", align " -> print
+                binding -> storageAlign(context, state) -> writeDecimalLine
+            }
+            "  store " -> print
+            binding -> writeIrType(context, state)
+            " " -> print
+            request -> emitCaptureValue(context, state)
+            ", ptr " -> print
+            request -> emitCapturePointer(context, state)
+            ", align " -> print
+            binding -> storageAlign(context, state) -> writeDecimalLine
+        }
+}
+
 writeCaptureArgumentValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    Arena(0) => prefixStorage!
+    request -> captureTransportPrefix(prefixStorage!) => prefix
     context.ir[request.bindingIndex] => binding
     binding -> captureUsesBorrowAbi(context, state)
         -> if {
@@ -2113,25 +2187,29 @@ writeCaptureArgumentValue request: CaptureValueRequest, context: ref emitterCont
             (binding -> boundedArrayValueTypeId(context, state)) >= 0
                 and (request -> captureBindingIsLocal(context, state))
                 -> if {
-                    "%callenv$(request.callIndex)_capture$(request.captureIndex)_bounded" -> print
+                    "%$(prefix)_bounded" -> print
                 } else { request -> emitCaptureValue(context, state) }
         }
 }
 
 emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    Arena(0) => prefixStorage!
+    request -> captureTransportPrefix(prefixStorage!) => prefix
     request.callerIndex -> functionEnd(context, state) => callerEnd
     context.ir[request.bindingIndex] => binding
     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
         -> if {
             (binding -> boundedArrayValueTypeId(context, state)) >= 0
                 -> if {
-                    "%callenv$(request.callIndex)_capture$(request.captureIndex)_bounded_ref" -> print
+                    "%$(prefix)_bounded_ref" -> print
                 } else { binding.kind != 10 and binding.flags == 1 -> if {
                         request.bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
                         "%slot$(bindingRoot)" -> print
-                    } else {
-                        "%capture_borrow_binding$(request.bindingIndex)" -> print
-                } }
+                    } else { request.interpolationIndex >= 0 -> if {
+                            "%$(prefix)_ref" -> print
+                        } else {
+                            "%capture_borrow_binding$(request.bindingIndex)" -> print
+                } } }
         } else {
             request.callerIndex -> functionCaptures(context, state) => callerCaptures
             -1 => capturePosition!
@@ -2146,23 +2224,24 @@ emitCapturePointer request: CaptureValueRequest, context: ref emitterContext.Emi
         }
 }
 emitCaptureValue request: CaptureValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    Arena(0) => prefixStorage!
+    request -> captureTransportPrefix(prefixStorage!) => prefix
     context.ir[request.callerIndex] => caller
     context.ir[request.bindingIndex] => binding
     request.callerIndex -> functionEnd(context, state) => callerEnd
     request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd
         -> if {
             binding.kind == 10 -> if {
-                -1 => captureParameterOrdinal!
-                context.ir[request.callerIndex].kind == 0 and context.ir[request.callerIndex].operand1 >= 0
-                    -> if {
-                        binding.symbol == context.ir[context.ir[request.callerIndex].operand1].symbol
-                            -> if { 0 => captureParameterOrdinal! } else {
-                                request.callerIndex -> additionalParameterOrdinal(binding.symbol, context, state) => captureParameterOrdinal!
-                            }
-                    }
-                captureParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(captureParameterOrdinal!)" -> print }
+                request -> captureParameterOrdinal(context, state) => ordinal
+                ordinal < 0 -> if {
+                    "; sollang compiler error S019: capture has no parameter ordinal" -> println
+                    process.exit(1)
+                }
+                binding.flags / 2 % 2 == 1 -> if {
+                    "%$(prefix)" -> print
+                } else { ordinal == 0 -> if { "%arg" -> print } else { "%arg$(ordinal)" -> print } }
             } else {
-                binding.flags == 1 -> if { "%callenv$(request.callIndex)_capture$(request.captureIndex)" -> print } else {
+                binding.flags == 1 -> if { "%$(prefix)" -> print } else {
                     binding.operand0 -> writeValue(request.callerIndex, context, state)
                 }
             }
@@ -3274,36 +3353,13 @@ emitCallCaptureEnvironmentValues request: CallEnvironmentRequest, context: ref e
                 resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
             }
     }
-    request.callerIndex -> functionEnd(context, state) => callerEnd
     0 => captureIndex!
     captureIndex! < (callCaptures! -> len) -> while {
-        callCaptures![captureIndex!] => bindingIndex
-        context.ir[bindingIndex] => binding
-        (binding -> boundedArrayValueTypeId(context, state)) >= 0
-            -> if {
-                CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitBoundedCaptureTransport(context, state)
-            } else {
-                bindingIndex > request.callerIndex and bindingIndex < callerEnd and binding.kind != 10 and binding.flags == 1 and not (binding -> ownsType)
-                    -> if {
-                        bindingIndex -> mutableBindingRoot(context, state) => bindingRoot
-                        "  %callenv$(request.callIndex)_capture$(captureIndex!) = load " -> print
-                        binding -> writeIrType(context, state)
-                        ", ptr %slot$(bindingRoot), align " -> print
-                        binding -> storageAlign(context, state) -> writeDecimalLine
-                    }
-                (binding -> ownsType) and bindingIndex > request.callerIndex and bindingIndex < callerEnd and not (binding.kind != 10 and binding.flags == 1)
-                    -> if {
-                        "  store " -> print
-                        binding -> writeIrType(context, state)
-                        " " -> print
-                        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
-                        ", ptr %capture_borrow_binding$(bindingIndex), align " -> print
-                        binding -> storageAlign(context, state) -> writeDecimalLine
-                    }
-            }
+        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, interpolationIndex: -1, bindingIndex: callCaptures![captureIndex!], captureIndex: captureIndex! } -> emitCaptureTransport(context, state)
         captureIndex! + 1 => captureIndex!
     }
 }
+
 emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     request -> targetFunctionIndex(context, state) => targetFunctionIr
     [Int; ~] => callCaptures!
@@ -3329,7 +3385,7 @@ emitCallEnvironment request: CallEnvironmentRequest, context: ref emitterContext
         callCaptures![captureIndex!] => bindingIndex
         context.ir[bindingIndex] -> writeCaptureAbiType(context, state)
         " " -> print
-        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
+        CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, interpolationIndex: -1, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
         captureIndex! + 1 < (callCaptures! -> len) or request.hasArgument
             -> if { ", " -> print }
         captureIndex! + 1 => captureIndex!

@@ -77,6 +77,27 @@ emitSequentialBranchAggregate branchIndex: Int, ownerIndex: Int, context: ref em
 emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[branchIndex] => branch
     context.ir[branch.operand1] => branchSource
+    branchSource -> boundedArrayValueTypeId(context, state) => boundedSourceType
+    boundedSourceType >= 0 -> if {
+        Arena(0) => sourcePrefixStorage!
+        "v$(branchIndex)_source_bounded" -> materialize(sourcePrefixStorage!) => sourcePrefix
+        sourcePrefix -> emitBoundedArrayValue(branch.operand1, ownerIndex, boundedSourceType, context, state)
+    }
+    (branchSource -> captureUsesBorrowAbi(context, state)) and (branchSource -> referenceValueTypeId(context, state)) < 0
+        -> if {
+            "  %v$(branchIndex)_source_ref = alloca " -> print
+            branchSource -> writeFunctionValueAbiType(context, state)
+            ", align " -> print
+            branchSource -> storageAlign(context, state) -> writeDecimalLine
+            "  store " -> print
+            branchSource -> writeFunctionValueAbiType(context, state)
+            " " -> print
+            boundedSourceType >= 0 -> if { "%v$(branchIndex)_source_bounded" -> print } else {
+                branch.operand1 -> writeValue(ownerIndex, context, state)
+            }
+            ", ptr %v$(branchIndex)_source_ref, align " -> print
+            branchSource -> storageAlign(context, state) -> writeDecimalLine
+        }
     branchIndex -> parallelBranchCaptures(context, state) => branchCaptures
     0 => branchArmCount!
     branch.operand0 => branchArmCountIndex!
@@ -91,15 +112,27 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
     branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
     ", ptr %v$(branchIndex)_environment, i32 0, i32 0" -> println
     "  store " -> print
-    branchSource -> writeIrType(context, state)
+    branchSource -> writeParallelBranchSourceType(context, state)
     " " -> print
-    branch.operand1 -> writeValue(ownerIndex, context, state)
+    (branchSource -> referenceValueTypeId(context, state)) >= 0
+        -> if {
+            ownerIndex -> writeReferencePlaceValue(branch.operand1, context, state)
+        } else { branchSource -> captureUsesBorrowAbi(context, state)
+                -> if {
+                    "%v$(branchIndex)_source_ref" -> print
+                } else { boundedSourceType >= 0 -> if { "%v$(branchIndex)_source_bounded" -> print } else {
+                        branch.operand1 -> writeValue(ownerIndex, context, state)
+                } }
+        }
     ", ptr %v$(branchIndex)_source_address, align " -> print
-    branchSource -> storageAlign(context, state) -> writeDecimalLine
+    branchSource -> parallelBranchSourceUsesPointer(context, state)
+        -> if { 8 -> writeDecimalLine } else {
+            branchSource -> storageAlign(context, state) -> writeDecimalLine
+        }
     0 => branchCaptureIndex!
     branchCaptureIndex! < (branchCaptures -> len)
         -> while {
-            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitBoundedCaptureTransport(context, state)
+            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, interpolationIndex: -1, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitCaptureTransport(context, state)
             "  %v$(branchIndex)_capture_address_$(branchCaptureIndex!) = getelementptr " -> print
             branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
             ", ptr %v$(branchIndex)_environment, i32 0, i32 " -> print
@@ -108,7 +141,7 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
             "  store " -> print
             branchCapture -> writeCaptureAbiType(context, state)
             " " -> print
-            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> writeCaptureArgumentValue(context, state)
+            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, interpolationIndex: -1, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> writeCaptureArgumentValue(context, state)
             ", ptr %v$(branchIndex)_capture_address_$(branchCaptureIndex!), align " -> print
             branchCapture -> captureUsesBorrowAbi(context, state)
                 -> if { "8" -> println } else {
@@ -124,6 +157,10 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
             context.ir[branchArgument].parent => branchArgumentCall
             branchArgument -> parallelBranchArgumentOrdinal(context) => branchArgumentOrdinal
             branchArgumentCall -> callTargetParameter(branchArgumentOrdinal, context, state) => branchArgumentParameter
+            branchArgumentOrdinal == 1 -> if {
+                branchArgument -> emitCallIntegerArgumentPromotions(branchArgumentCall, ownerIndex, 1, context, state)
+                branchArgument -> emitReferenceArgumentValues(branchArgumentCall, ownerIndex, 1, context, state)
+            }
             "  %v$(branchIndex)_argument_address_$(branchArgumentIndex!) = getelementptr " -> print
             branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
             ", ptr %v$(branchIndex)_environment, i32 0, i32 " -> print

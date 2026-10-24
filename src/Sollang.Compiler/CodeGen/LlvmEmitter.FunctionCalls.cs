@@ -659,7 +659,9 @@ internal sealed partial class LlvmEmitter
             : _program.Types.IsReference(function.InputType.Value)
                 ? argument is RuntimeReference producedReference
                     ? producedReference
-                    : CreateReadonlyReferenceArgument(source, function.InputType.Value, function.Name)
+                    : receivesSourcePlace
+                        ? CreateReadonlyReferenceArgument(source, function.InputType.Value, function.Name)
+                        : CreateReadonlyFlowResultReference(argument, function.InputType.Value, function.Name)
                 : argument;
         EnsureFunctionArgumentRuntimeType(functionArgument, function.InputType.Value, function.Name);
         var additionalArguments = (function.AdditionalParameters ?? [])
@@ -681,6 +683,16 @@ internal sealed partial class LlvmEmitter
         foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())
             DropOwnedRuntimeValue(temporary);
         return value;
+    }
+
+    private RuntimeReference CreateReadonlyFlowResultReference(RuntimeValue value, BoundType referenceType, string path)
+    {
+        var elementType = _program.Types.GetReference(referenceType).ElementType;
+        EnsureRuntimeType(value, elementType, path);
+        return new RuntimeReference(
+            referenceType,
+            elementType,
+            GetOrCreateReadonlyValuePointer(value, "ref_flow_result"));
     }
 
     private void TrackReadonlyCallTemporary(Expression expression, RuntimeValue value, List<RuntimeValue> temporaries)
