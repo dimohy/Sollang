@@ -1305,9 +1305,10 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                 ", ptr %capture_environment, i32 0, i32 $(parallelCallbackCaptureIndex!)" -> println
                                 context.ir[parallelCallbackCaptures[parallelCallbackCaptureIndex!]] => parallelCallbackCapture
                                 "  %capture_value_$(parallelCallbackCaptureIndex!) = load " -> print
-                                parallelCallbackCapture -> ownsType -> if { "ptr" -> print } else { parallelCallbackCapture -> writeIrType(context, state) }
+                                parallelCallbackCapture -> writeCaptureAbiType(context, state)
                                 ", ptr %capture_address_$(parallelCallbackCaptureIndex!), align " -> print
-                                parallelCallbackCapture -> ownsType -> if { 8 -> writeDecimalLine } else { parallelCallbackCapture -> storageAlign(context, state) -> writeDecimalLine }
+                                parallelCallbackCapture -> captureUsesBorrowAbi(context, state)
+                                    -> if { 8 -> writeDecimalLine } else { parallelCallbackCapture -> storageAlign(context, state) -> writeDecimalLine }
                                 parallelCallbackCaptureIndex! + 1 => parallelCallbackCaptureIndex!
                             }
                         parallelExpression.operand1 -> parallelAdditionalArgumentStart(context) => parallelCallbackAdditionalIndex!
@@ -1321,9 +1322,9 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                 ", ptr %capture_environment, i32 0, i32 $(parallelCallbackEnvironmentIndex)" -> println
                                 "  %capture_value_$(parallelCallbackEnvironmentIndex) = load " -> print
                                 parallelCallbackParameterIndex >= 0 -> if {
-                                    context.ir[parallelCallbackParameterIndex] -> writeIrType(context, state)
+                                    context.ir[parallelCallbackParameterIndex] -> writeFunctionValueAbiType(context, state)
                                 } else {
-                                    context.ir[parallelCallbackAdditionalIndex!] -> writeIrType(context, state)
+                                    context.ir[parallelCallbackAdditionalIndex!] -> writeFunctionValueAbiType(context, state)
                                 }
                                 ", ptr %capture_address_$(parallelCallbackEnvironmentIndex), align " -> print
                                 parallelCallbackParameterIndex >= 0 -> if {
@@ -1336,13 +1337,13 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                             }
                     }
                     "  %mapped = call " -> print
-                    parallelBodyCall -> writeIrType(context, state)
+                    parallelBodyCall -> writeFunctionValueAbiType(context, state)
                     " @sollang_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
                     0 => parallelCallbackArgumentIndex!
                     parallelCallbackArgumentIndex! < parallelCallbackCaptureCount
                         -> while {
                             context.ir[parallelCallbackCaptures[parallelCallbackArgumentIndex!]] => parallelCallbackArgument
-                            parallelCallbackArgument -> ownsType -> if { "ptr" -> print } else { parallelCallbackArgument -> writeIrType(context, state) }
+                            parallelCallbackArgument -> writeCaptureAbiType(context, state)
                             " %capture_value_$(parallelCallbackArgumentIndex!), " -> print
                             parallelCallbackArgumentIndex! + 1 => parallelCallbackArgumentIndex!
                         }
@@ -1356,9 +1357,9 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                             parallelCallbackCaptureCount + parallelCallbackAdditionalOrdinal! => parallelCallbackEnvironmentIndex
                             ", " -> print
                             parallelCallbackParameterIndex >= 0 -> if {
-                                context.ir[parallelCallbackParameterIndex] -> writeIrType(context, state)
+                                context.ir[parallelCallbackParameterIndex] -> writeFunctionValueAbiType(context, state)
                             } else {
-                                context.ir[parallelCallbackAdditionalIndex!] -> writeIrType(context, state)
+                                context.ir[parallelCallbackAdditionalIndex!] -> writeFunctionValueAbiType(context, state)
                             }
                             " %capture_value_$(parallelCallbackEnvironmentIndex)" -> print
                             context.ir[parallelCallbackAdditionalIndex!].nextOperand => parallelCallbackAdditionalIndex!
@@ -1373,7 +1374,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         parallelBodyResultSize -> writeDecimalLine
                         "  %output_address = getelementptr i8, ptr %output, i64 %output_offset" -> println
                         "  store " -> print
-                        parallelBodyCall -> writeIrType(context, state)
+                        parallelBodyCall -> writeFunctionValueAbiType(context, state)
                         " %mapped, ptr %output_address, align " -> print
                         parallelBodyCall -> storageAlign(context, state) -> writeDecimalLine
                         "  %initialized_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 12" -> println
@@ -1381,7 +1382,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                         "  %initialized_address = getelementptr i8, ptr %initialized, i64 %index" -> println
                         "  store atomic i8 1, ptr %initialized_address release, align 1" -> println
                         "  %result_tag = extractvalue " -> print
-                        parallelBodyCall -> writeIrType(context, state)
+                        parallelBodyCall -> writeFunctionValueAbiType(context, state)
                         " %mapped, 0" -> println
                         "  %is_error = icmp eq i32 %result_tag, 1" -> println
                         "  br i1 %is_error, label %publish_error, label %done" -> println
@@ -1451,9 +1452,10 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                 parallelBranchCaptureLoadIndex! + 1 -> writeDecimalLine
                                 context.ir[parallelBranchCaptures[parallelBranchCaptureLoadIndex!]] => parallelBranchCaptureLoad
                                 "  %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchCaptureLoadIndex!) = load " -> print
-                                parallelBranchCaptureLoad -> ownsType -> if { "ptr" -> print } else { parallelBranchCaptureLoad -> writeIrType(context, state) }
+                                parallelBranchCaptureLoad -> writeCaptureAbiType(context, state)
                                 ", ptr %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture_address$(parallelBranchCaptureLoadIndex!), align " -> print
-                                parallelBranchCaptureLoad -> ownsType -> if { "8" -> println } else { parallelBranchCaptureLoad -> storageAlign(context, state) -> writeDecimalLine }
+                                parallelBranchCaptureLoad -> captureUsesBorrowAbi(context, state)
+                                    -> if { "8" -> println } else { parallelBranchCaptureLoad -> storageAlign(context, state) -> writeDecimalLine }
                                 parallelBranchCaptureLoadIndex! + 1 => parallelBranchCaptureLoadIndex!
                             }
                         0 => parallelBranchArgumentLoadIndex!
@@ -1496,7 +1498,7 @@ emitCorePreambleFeatures context: ref emitterContext.EmitContext, profile: Bool,
                                                 parallelBranchCapturePositionSearch! + 1 => parallelBranchCapturePositionSearch!
                                             }
                                         context.ir[parallelBranchStageCaptures[parallelBranchStageCaptureIndex!]] => parallelBranchStageCapture
-                                        parallelBranchStageCapture -> ownsType -> if { "ptr" -> print } else { parallelBranchStageCapture -> writeIrType(context, state) }
+                                        parallelBranchStageCapture -> writeCaptureAbiType(context, state)
                                         " %parallel_branch_$(parallelBranchCallbackIndex!)_arm$(parallelBranchArmOrdinal!)_capture$(parallelBranchStageCapturePosition!), " -> print
                                         parallelBranchStageCaptureIndex! + 1 => parallelBranchStageCaptureIndex!
                                     }

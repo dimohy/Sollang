@@ -1264,7 +1264,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
         functionCaptureParameterIndex! < (currentFunctionCaptures -> len)
             -> while {
                 context.ir[currentFunctionCaptures[functionCaptureParameterIndex!]] => functionCaptureParameter
-                functionCaptureParameter -> ownsType -> if { "ptr" -> print } else { functionCaptureParameter -> writeIrType(context, state) }
+                functionCaptureParameter -> writeCaptureAbiType(context, state)
                 " %capture_$(functionCaptureParameterIndex!)" -> print
                 functionCaptureParameterIndex! + 1 < (currentFunctionCaptures -> len) or function.operand1 >= 0 or function.nextOperand >= 0
                     -> if { ", " -> print }
@@ -1438,7 +1438,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         -> while {
                             captureBorrowCallBindings[captureBorrowCallBindingIndex!] => captureBorrowBindingIndex
                             context.ir[captureBorrowBindingIndex] => captureBorrowBinding
-                            captureBorrowBindingIndex > functionIndex and captureBorrowBindingIndex < functionEnd! and (captureBorrowBinding -> ownsType) and not (captureBorrowBinding.kind != 10 and captureBorrowBinding.flags == 1)
+                            captureBorrowBindingIndex > functionIndex and captureBorrowBindingIndex < functionEnd! and (captureBorrowBinding -> ownsType) and (captureBorrowBinding -> boundedArrayValueTypeId(context, state)) < 0 and not (captureBorrowBinding.kind != 10 and captureBorrowBinding.flags == 1)
                                 -> if {
                                     false => captureBorrowDuplicate!
                                     0 => captureBorrowDuplicateIndex!
@@ -1467,6 +1467,32 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
             captureBorrowBinding -> storageAlign(context, state) -> writeDecimalLine
             captureBorrowBindingListIndex! + 1 => captureBorrowBindingListIndex!
         }
+    # Canonical capture values are dematerialized once in the receiving frame.
+    0 => boundedCaptureIndex!
+    boundedCaptureIndex! < (currentFunctionCaptures -> len) and function.flags / 8 % 2 == 0
+        -> while {
+            context.ir[currentFunctionCaptures[boundedCaptureIndex!]] => boundedCapture
+            boundedCapture -> boundedArrayValueTypeId(context, state) => boundedCaptureType
+            boundedCaptureType >= 0 -> if {
+                "  %capture_$(boundedCaptureIndex!)_bounded = " -> print
+                boundedCapture -> captureUsesBorrowAbi(context, state)
+                    -> if {
+                        "load " -> print
+                        boundedCaptureType -> writeValueAbiTypeId(context, state)
+                        ", ptr %capture_$(boundedCaptureIndex!), align $(context.typeAligns[boundedCaptureType])" -> println
+                    } else {
+                        "freeze " -> print
+                        boundedCaptureType -> writeValueAbiTypeId(context, state)
+                        " %capture_$(boundedCaptureIndex!)" -> println
+                    }
+                Arena(0) => capturePrefixStorage!
+                "capture_$(boundedCaptureIndex!)_runtime" -> materialize(capturePrefixStorage!) => capturePrefix
+                Arena(0) => captureValueStorage!
+                "%capture_$(boundedCaptureIndex!)_bounded" -> materialize(captureValueStorage!) => captureValue
+                capturePrefix -> emitBoundedArrayHandle(captureValue, boundedCaptureType, context, state)
+            }
+            boundedCaptureIndex! + 1 => boundedCaptureIndex!
+        }
     function.operand0 + 1 => expressionStart
     expressionStart => functionCaptureUseIndex!
     functionCaptureUseIndex! < functionEnd! -> while {
@@ -1483,16 +1509,19 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                                 # handle for this reference use; define its SSA once.
                                 captureReferenceType >= 0 and context.types[captureReferenceType].kind == 12
                                     -> unless {
-                                        functionCaptureUse -> ownsType -> if {
-                                            "  %v$(functionCaptureUseIndex!) = load " -> print
-                                            functionCaptureUse -> writeIrType(context, state)
-                                            ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
-                                            functionCaptureUse -> storageAlign(context, state) -> writeDecimalLine
-                                        } else {
-                                            "  %v$(functionCaptureUseIndex!) = freeze " -> print
-                                            functionCaptureUse -> writeIrType(context, state)
-                                            " %capture_$(functionCaptureMatchIndex!)" -> println
-                                        }
+                                        (functionCaptureUse -> boundedArrayValueTypeId(context, state)) >= 0
+                                            and function.flags / 8 % 2 == 0 -> if {
+                                                "  %v$(functionCaptureUseIndex!) = freeze %sollang.array.i32 %capture_$(functionCaptureMatchIndex!)_runtime" -> println
+                                            } else { functionCaptureUse -> ownsType -> if {
+                                                    "  %v$(functionCaptureUseIndex!) = load " -> print
+                                                    functionCaptureUse -> writeIrType(context, state)
+                                                    ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
+                                                    functionCaptureUse -> storageAlign(context, state) -> writeDecimalLine
+                                                } else {
+                                                    "  %v$(functionCaptureUseIndex!) = freeze " -> print
+                                                    functionCaptureUse -> writeIrType(context, state)
+                                                    " %capture_$(functionCaptureMatchIndex!)" -> println
+                                            } }
                                     }
                             }
                         functionCaptureMatchIndex! + 1 => functionCaptureMatchIndex!

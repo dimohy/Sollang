@@ -1186,7 +1186,7 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
     fieldIndex! < (captures -> len) -> while {
         fieldIndex! > 0 -> if { ", " -> print }
         context.ir[captures[fieldIndex!]] => capture
-        capture -> ownsType -> if { "ptr" -> print } else { capture -> writeIrType(context, state) }
+        capture -> writeCaptureAbiType(context, state)
         fieldIndex! + 1 => fieldIndex!
     }
     callIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!
@@ -1196,9 +1196,9 @@ writeParallelCaptureType callIndex: Int, captures: [Int; ~], context: ref emitte
             fieldIndex! > 0 -> if { ", " -> print }
             callIndex -> callTargetParameter(parameterOrdinal!, context, state) => parameterIndex
             parameterIndex >= 0 -> if {
-                context.ir[parameterIndex] -> writeIrType(context, state)
+                context.ir[parameterIndex] -> writeFunctionValueAbiType(context, state)
             } else {
-                context.ir[argumentIndex!] -> writeIrType(context, state)
+                context.ir[argumentIndex!] -> writeFunctionValueAbiType(context, state)
             }
             fieldIndex! + 1 => fieldIndex!
             parameterOrdinal! + 1 => parameterOrdinal!
@@ -1223,17 +1223,14 @@ emitParallelCaptureEnvironment parallelIndex: Int, bodyCallIndex: Int, ownerInde
             captures[captureIndex!] => captureBindingIndex
             context.ir[captureBindingIndex] => captureBinding
             "  store " -> print
-            captureBinding -> ownsType -> if {
-                "ptr " -> print
-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCapturePointer(context, state)
-                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align 8" -> println
-            } else {
-                captureBinding -> writeIrType(context, state)
-                " " -> print
-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> emitCaptureValue(context, state)
-                ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align " -> print
-                captureBinding -> storageAlign(context, state) -> writeDecimalLine
-            }
+            captureBinding -> writeCaptureAbiType(context, state)
+            " " -> print
+            CaptureValueRequest { callerIndex: ownerIndex, callIndex: parallelIndex, bindingIndex: captureBindingIndex, captureIndex: captureIndex! } -> writeCaptureArgumentValue(context, state)
+            ", ptr %v$(parallelIndex)_capture_address_$(captureIndex!), align " -> print
+            captureBinding -> captureUsesBorrowAbi(context, state)
+                -> if { 8 -> writeDecimalLine } else {
+                    captureBinding -> storageAlign(context, state) -> writeDecimalLine
+                }
             captureIndex! + 1 => captureIndex!
         }
         bodyCallIndex -> parallelAdditionalArgumentStart(context) => argumentIndex!

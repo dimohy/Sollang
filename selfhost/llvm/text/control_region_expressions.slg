@@ -99,22 +99,21 @@ emitParallelBranchValue branchIndex: Int, ownerIndex: Int, context: ref emitterC
     0 => branchCaptureIndex!
     branchCaptureIndex! < (branchCaptures -> len)
         -> while {
+            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitBoundedCaptureTransport(context, state)
             "  %v$(branchIndex)_capture_address_$(branchCaptureIndex!) = getelementptr " -> print
             branchIndex -> writeParallelBranchEnvironmentType(branchCaptures, context, state)
             ", ptr %v$(branchIndex)_environment, i32 0, i32 " -> print
             branchCaptureIndex! + 1 -> writeDecimalLine
             context.ir[branchCaptures[branchCaptureIndex!]] => branchCapture
             "  store " -> print
-            branchCapture -> ownsType -> if {
-                "ptr " -> print
-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitCapturePointer(context, state)
-            } else {
-                branchCapture -> writeIrType(context, state)
-                " " -> print
-                CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> emitCaptureValue(context, state)
-            }
+            branchCapture -> writeCaptureAbiType(context, state)
+            " " -> print
+            CaptureValueRequest { callerIndex: ownerIndex, callIndex: branchIndex, bindingIndex: branchCaptures[branchCaptureIndex!], captureIndex: branchCaptureIndex! } -> writeCaptureArgumentValue(context, state)
             ", ptr %v$(branchIndex)_capture_address_$(branchCaptureIndex!), align " -> print
-            branchCapture -> ownsType -> if { "8" -> println } else { branchCapture -> storageAlign(context, state) -> writeDecimalLine }
+            branchCapture -> captureUsesBorrowAbi(context, state)
+                -> if { "8" -> println } else {
+                    branchCapture -> storageAlign(context, state) -> writeDecimalLine
+                }
             branchCaptureIndex! + 1 => branchCaptureIndex!
         }
     branchIndex -> parallelBranchArguments(context) => branchArguments

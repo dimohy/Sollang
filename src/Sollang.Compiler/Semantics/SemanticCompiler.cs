@@ -2613,9 +2613,17 @@ internal sealed partial class SemanticCompiler
         var functionBorrowedTextOrigins = new Dictionary<string, IReadOnlySet<string>>(
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
+        // A descendant can need an ancestor binding that this function does
+        // not read directly. Preserve lexical candidates during child validation;
+        // current parameters and locals still shadow the outer binding.
+        var localCaptureCandidates = new Dictionary<string, BoundType>(capturedBindings, StringComparer.Ordinal);
+        foreach (var binding in bodyBindings)
+        {
+            localCaptureCandidates[binding.Key] = binding.Value;
+        }
         foreach (var localFunction in function.LocalFunctions.Values)
         {
-            ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
+            ValidateUserFunction(localFunction, scopedFunctions, localCaptureCandidates);
         }
         _activeBorrowedTextOrigins.Clear();
         _activeReadonlyReferenceBindings.Clear();
@@ -2634,7 +2642,9 @@ internal sealed partial class SemanticCompiler
             }
             foreach (var calledCapture in calledCaptures)
             {
-                if (capturedBindings.ContainsKey(calledCapture.Key))
+                if (!bodyBindings.ContainsKey(calledCapture.Key)
+                    && capturedBindings.TryGetValue(calledCapture.Key, out var ancestorType)
+                    && ancestorType == calledCapture.Value)
                 {
                     effectiveCapturedBindings[calledCapture.Key] = calledCapture.Value;
                 }
