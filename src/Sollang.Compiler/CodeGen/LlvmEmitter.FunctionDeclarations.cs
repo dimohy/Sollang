@@ -761,6 +761,11 @@ internal sealed partial class LlvmEmitter
             };
         }
 
+        if (function.IsAsync && function.InputType is { } asyncInputType)
+        {
+            return $"{AsyncStorageLlvmType(asyncInputType)} %it";
+        }
+
         if (function.HasValueGenericFixedArrayInput)
         {
             return "%sollang.int_slice %it";
@@ -864,6 +869,17 @@ internal sealed partial class LlvmEmitter
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             BindMutableBorrowFunctionParameter(function);
+            return;
+        }
+
+        // Async context slots contain canonical aggregate values, matching
+        // additional parameters and results, rather than the synchronous
+        // primary parameter's legacy container descriptors.
+        if (function.IsAsync && function.InputType is { } asyncInputType)
+        {
+            _locals.Add(
+                function.InputName ?? "it",
+                DematerializeAsyncResult(asyncInputType, "%it"));
             return;
         }
 

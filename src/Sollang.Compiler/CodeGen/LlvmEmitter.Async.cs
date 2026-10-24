@@ -1318,6 +1318,7 @@ internal sealed partial class LlvmEmitter
             || type == BoundType.IntDictionary
             || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
+            || _program.Types.IsBoundedArray(type)
             || _program.Types.IsDictionary(type)
             || _program.Types.IsSet(type)
             || _program.Types.IsDeque(type))
@@ -1362,6 +1363,7 @@ internal sealed partial class LlvmEmitter
             || type == BoundType.IntDictionary
             || _program.Types.IsStaticArray(type)
             || _program.Types.IsDynamicArray(type)
+            || _program.Types.IsBoundedArray(type)
             || _program.Types.IsDictionary(type)
             || _program.Types.IsSet(type)
             || _program.Types.IsDeque(type);

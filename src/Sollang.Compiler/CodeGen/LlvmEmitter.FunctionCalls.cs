@@ -2016,6 +2016,13 @@ internal sealed partial class LlvmEmitter
             argument = EmitTransientText(argument);
         }
 
+        if (function.IsAsync)
+        {
+            EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, function.Name);
+            var value = MaterializeAsyncResult(argument);
+            return $"{value.TypeName} {value.ValueName}";
+        }
+
         if (function.HasValueGenericFixedArrayInput)
         {
             var (pointer, length, actualType, knownLength) = argument switch

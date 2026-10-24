@@ -1,0 +1,494 @@
+diff --git a/selfhost/llvm/text/call_arguments.slg b/selfhost/llvm/text/call_arguments.slg
+index 795dfd1ff..c879a94aa 100644
+--- a/selfhost/llvm/text/call_arguments.slg
++++ b/selfhost/llvm/text/call_arguments.slg
+@@ -872,7 +872,7 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
+         }
+ }
+ callBoundedValueParameterTypeId callIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+-    (context.ir[callIndex] -> targetsNativeFunction(context, state)) or context.ir[callIndex].flags / 8 % 2 == 1
++    context.ir[callIndex] -> targetsNativeFunction(context, state)
+         -> if { -1 -> return }
+     callIndex -> callTargetParameter(ordinal, context, state) => parameterIndex
+     parameterIndex < 0 -> if { -1 -> return }
+diff --git a/selfhost/llvm/text/containers.slg b/selfhost/llvm/text/containers.slg
+index 35b2073ff..84fb97b27 100644
+--- a/selfhost/llvm/text/containers.slg
++++ b/selfhost/llvm/text/containers.slg
+@@ -1963,20 +1963,27 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
+         pushSource -> writeArrayElementType(context, state)
+         "" -> println
+     }
++    pushSource -> arrayElementTypeId(context, state) => pushElementType
++    pushElementType >= 0 and context.types[pushElementType].kind == 12 => pushBoundedElement
++    pushBoundedElement -> if {
++        "push$(pushIndex)_bounded_value" -> emitBoundedArrayValue(pushValueNameIndex!, request.ownerIndex, pushElementType, context, state)
++    }
+     "  store " -> print
+     pushSource -> writeArrayElementType(context, state)
+     " " -> print
+-    pushValue.kind == 3 or pushValue.kind == 4 -> if {
+-        pushValue -> sourceToken(context, state) => pushValueToken
+-        pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
+-            (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
+-                -> if { "1" -> print } else { "0" -> print }
+-        }
+-    } else {
+-        castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
+-            pushValueParameterOrdinal! >= 0 -> if {
+-                pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
+-            } else { "%v$(pushValueIndex)" -> print }
++    pushBoundedElement -> if { "%push$(pushIndex)_bounded_value" -> print } else {
++        pushValue.kind == 3 or pushValue.kind == 4 -> if {
++            pushValue -> sourceToken(context, state) => pushValueToken
++            pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
++                (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
++                    -> if { "1" -> print } else { "0" -> print }
++            }
++        } else {
++            castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
++                pushValueParameterOrdinal! >= 0 -> if {
++                    pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
++                } else { "%v$(pushValueIndex)" -> print }
++            }
+         }
+     }
+     pushSource -> arrayElementAlign(context, state) => pushElementAlign
+@@ -2983,10 +2990,14 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
+         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
+         takeSource -> writeArrayElementType(context, state)
+         ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_selected" -> println
+-        "  %v$(takeIndex) = load " -> print
++        "  " -> print
++        takeIndex -> writeMemberStorageValueName(context, state)
++        " = load " -> print
+         takeSource -> writeArrayElementType(context, state)
+         ", ptr %take$(takeIndex)_value_ptr, align " -> print
+         takeSource -> arrayElementAlign(context, state) -> writeDecimalLine
++        takeNode -> boundedArrayValueTypeId(context, state) => takeBoundedElementType
++        "v$(takeIndex)" -> emitStoredBoundedValueHandle(takeBoundedElementType, context, state)
+         "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
+         "  br label %take$(takeIndex)_shift" -> println
+         "take$(takeIndex)_shift:" -> println
+diff --git a/selfhost/llvm/text/core_calls.slg b/selfhost/llvm/text/core_calls.slg
+index 34b59f16e..b2b552e8c 100644
+--- a/selfhost/llvm/text/core_calls.slg
++++ b/selfhost/llvm/text/core_calls.slg
+@@ -423,10 +423,14 @@ emitAwaitTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, stat
+             "v$(nodeIndex)" -> emitJoinedTaskResultCompletion
+             not (awaited.typeOrigin == 1 and awaited.typeSymbol == 0)
+                 -> if {
+-                    "  %v$(nodeIndex) = load " -> print
++                    "  " -> print
++                    nodeIndex -> writeMemberStorageValueName(context, state)
++                    " = load " -> print
+                     awaited.typeId -> writeSemanticTypeId(context, state)
+                     ", ptr %v$(nodeIndex)_task_context, align " -> print
+                     awaited -> storageAlign(context, state) -> writeDecimalLine
++                    awaited -> boundedArrayValueTypeId(context, state) => awaitedBoundedType
++                    "v$(nodeIndex)" -> emitStoredBoundedValueHandle(awaitedBoundedType, context, state)
+                 }
+             "  %v$(nodeIndex)_task_released = call i1 @sollang_task_release(ptr %v$(nodeIndex)_task_handle)" -> println
+             "  br i1 %v$(nodeIndex)_task_released, label %await$(nodeIndex)_released, label %await$(nodeIndex)_release_failed" -> println
+diff --git a/selfhost/llvm/text/functions.slg b/selfhost/llvm/text/functions.slg
+index 09ecc9fd6..fca3eecb9 100644
+--- a/selfhost/llvm/text/functions.slg
++++ b/selfhost/llvm/text/functions.slg
+@@ -516,6 +516,30 @@ asyncFrameHasOwnershipFlag bindingIndex: Int, context: ref emitterContext.EmitCo
+         or (bindingIndex -> namedBindingNeedsOwnershipFlag(state))
+ }
+ 
++emitBoundedAsyncFrameTransfer bindingIndex: Int, stateIndex: Int, typeId: Int, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
++    Arena(0) => prefixStorage!
++    "async_frame$(stateIndex)_$(bindingIndex)" -> materialize(prefixStorage!) => prefix
++    Arena(0) => valueStorage!
++    loading -> if { "%$(prefix)_loaded" } else { "%$(prefix)_stored" } -> materialize(valueStorage!) => valueName
++    loading -> if {
++        "  %$(prefix)_loaded = load " -> print
++        typeId -> writeValueAbiTypeId(context, state)
++        ", ptr %$(prefix)_load_address, align $(context.typeAligns[typeId])" -> println
++        "$(prefix)_handle" -> emitBoundedArrayHandle(valueName, typeId, context, state)
++        "  store %sollang.array.i32 %$(prefix)_handle, ptr " -> print
++        bindingIndex -> writeAsyncLocalAddress(context)
++        ", align 8" -> println
++    } else {
++        "  %$(prefix)_stored = load %sollang.array.i32, ptr " -> print
++        bindingIndex -> writeAsyncLocalAddress(context)
++        ", align 8" -> println
++        "$(prefix)_inline" -> emitBoundedArrayValueFromHandle(valueName, typeId, context, state)
++        "  store " -> print
++        typeId -> writeValueAbiTypeId(context, state)
++        " %$(prefix)_inline, ptr %$(prefix)_store_address, align $(context.typeAligns[typeId])" -> println
++    }
++}
++
+ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+     loading -> if {
+         "  %async_frame$(point.state)_load = load ptr, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+@@ -534,22 +558,27 @@ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, cont
+                 " = getelementptr i8, ptr %async_frame$(point.state)_" -> print
+                 loading -> if { "load" -> print } else { "store" -> print }
+                 ", i64 $(offset!)" -> println
+-                "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
+-                loading -> if { "loaded" -> print } else { "stored" -> print }
+-                " = load " -> print
+-                binding -> writeIrType(context, state)
+-                ", ptr " -> print
+-                loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
+-                ", align " -> print
+-                binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+-                "  store " -> print
+-                binding -> writeIrType(context, state)
+-                " %async_frame$(point.state)_$(bindingIndex!)_" -> print
+-                loading -> if { "loaded" -> print } else { "stored" -> print }
+-                ", ptr " -> print
+-                loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
+-                ", align " -> print
+-                binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
++                binding -> boundedArrayValueTypeId(context, state) => boundedFrameType
++                boundedFrameType >= 0 -> if {
++                    bindingIndex! -> emitBoundedAsyncFrameTransfer(point.state, boundedFrameType, loading, context, state)
++                } else {
++                    "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
++                    loading -> if { "loaded" -> print } else { "stored" -> print }
++                    " = load " -> print
++                    binding -> writeIrType(context, state)
++                    ", ptr " -> print
++                    loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
++                    ", align " -> print
++                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
++                    "  store " -> print
++                    binding -> writeIrType(context, state)
++                    " %async_frame$(point.state)_$(bindingIndex!)_" -> print
++                    loading -> if { "loaded" -> print } else { "stored" -> print }
++                    ", ptr " -> print
++                    loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
++                    ", align " -> print
++                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
++                }
+                 offset! + (bindingIndex! -> asyncContextValueSize(context, state)) => offset!
+                 bindingIndex! -> asyncFrameHasOwnershipFlag(context, state)
+                     -> if {
+@@ -588,10 +617,16 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
+         context.ir[function.operand1] => asyncPrimaryParameter
+         functionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncPrimaryOffset
+         "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncPrimaryOffset)" -> println
+-        "  %arg = load " -> print
+-        asyncPrimaryParameter -> writeIrType(context, state)
++        asyncPrimaryParameter -> boundedArrayValueTypeId(context, state) => asyncPrimaryBoundedType
++        "  %arg" -> print
++        asyncPrimaryBoundedType >= 0 -> if { "_bounded" -> print }
++        " = load " -> print
++        asyncPrimaryParameter -> writeFunctionValueAbiType(context, state)
+         ", ptr %async_arg_address, align " -> print
+         asyncPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
++        asyncPrimaryBoundedType >= 0 -> if {
++            "arg" -> emitBoundedArrayHandle("%arg_bounded", asyncPrimaryBoundedType, context, state)
++        }
+     }
+     function.nextOperand => asyncAdditionalParameterIndex!
+     1 => asyncAdditionalParameterOrdinal!
+@@ -599,10 +634,16 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
+         context.ir[asyncAdditionalParameterIndex!] => asyncAdditionalParameter
+         functionIndex -> asyncParameterContextOffset(asyncAdditionalParameterIndex!, context, state) => asyncAdditionalOffset
+         "  %async_arg$(asyncAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncAdditionalOffset)" -> println
+-        "  %arg$(asyncAdditionalParameterOrdinal!) = load " -> print
+-        asyncAdditionalParameter -> writeIrType(context, state)
++        asyncAdditionalParameter -> boundedArrayValueTypeId(context, state) => asyncAdditionalBoundedType
++        "  %arg$(asyncAdditionalParameterOrdinal!)" -> print
++        asyncAdditionalBoundedType >= 0 -> if { "_bounded" -> print }
++        " = load " -> print
++        asyncAdditionalParameter -> writeFunctionValueAbiType(context, state)
+         ", ptr %async_arg$(asyncAdditionalParameterOrdinal!)_address, align " -> print
+         asyncAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
++        asyncAdditionalBoundedType >= 0 -> if {
++            "arg$(asyncAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(asyncAdditionalParameterOrdinal!)_bounded", asyncAdditionalBoundedType, context, state)
++        }
+         asyncAdditionalParameter.nextOperand => asyncAdditionalParameterIndex!
+         asyncAdditionalParameterOrdinal! + 1 => asyncAdditionalParameterOrdinal!
+     }
+@@ -790,10 +831,20 @@ emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName:
+     context.ir[functionIndex] => function
+     function.typeOrigin == 1 and function.typeSymbol == 0
+         -> unless {
+-            "  store " -> print
+-            function -> writeIrType(context, state)
+-            " $valueName, ptr %async_context, align " -> print
+-            function -> storageAlign(context, state) -> writeDecimalLine
++            function -> boundedArrayValueTypeId(context, state) => boundedResultType
++            boundedResultType >= 0 -> if {
++                Arena(0) => prefixStorage!
++                "async_result$(completionIndex)" -> materialize(prefixStorage!) => prefix
++                prefix -> emitBoundedArrayValueFromHandle(valueName, boundedResultType, context, state)
++                "  store " -> print
++                boundedResultType -> writeValueAbiTypeId(context, state)
++                " %$(prefix), ptr %async_context, align $(context.typeAligns[boundedResultType])" -> println
++            } else {
++                "  store " -> print
++                function -> writeIrType(context, state)
++                " $valueName, ptr %async_context, align " -> print
++                function -> storageAlign(context, state) -> writeDecimalLine
++            }
+         }
+     functionIndex -> emitAsyncDiagnosticCompletion(completionIndex, context, state)
+     "  ret i1 true" -> println
+@@ -823,7 +874,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref
+                         -> if {
+                             "  %async_cancel_owned_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
+                             "  %async_cancel_owned_value$(point.state)_$(bindingIndex!) = load " -> print
+-                            binding -> writeIrType(context, state)
++                            binding -> writeFunctionValueAbiType(context, state)
+                             ", ptr %async_cancel_owned_address$(point.state)_$(bindingIndex!), align " -> print
+                             binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                         }
+@@ -1005,7 +1056,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
+     }
+     function.operand1 >= 0 -> if {
+         context.ir[function.operand1] => asyncWrapperPrimaryParameter
+-        asyncWrapperPrimaryParameter -> writeIrType(context, state)
++        asyncWrapperPrimaryParameter -> writeFunctionValueAbiType(context, state)
+         " %arg" -> print
+         function.nextOperand >= 0 -> if { ", " -> print }
+     }
+@@ -1013,7 +1064,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
+     1 => asyncWrapperAdditionalParameterOrdinal!
+     asyncWrapperAdditionalParameterIndex! >= 0 -> while {
+         context.ir[asyncWrapperAdditionalParameterIndex!] => asyncWrapperAdditionalParameter
+-        asyncWrapperAdditionalParameter -> writeIrType(context, state)
++        asyncWrapperAdditionalParameter -> writeFunctionValueAbiType(context, state)
+         " %arg$(asyncWrapperAdditionalParameterOrdinal!)" -> print
+         asyncWrapperAdditionalParameter.nextOperand >= 0
+             -> if { ", " -> print }
+@@ -1062,7 +1113,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
+         requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
+         "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredPrimaryOffset)" -> println
+         "  store " -> print
+-        asyncStoredPrimaryParameter -> writeIrType(context, state)
++        asyncStoredPrimaryParameter -> writeFunctionValueAbiType(context, state)
+         " %arg, ptr %async_arg_address, align " -> print
+         asyncStoredPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+     }
+@@ -1073,7 +1124,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
+         requestedFunctionIndex -> asyncParameterContextOffset(asyncStoredAdditionalParameterIndex!, context, state) => asyncStoredAdditionalOffset
+         "  %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredAdditionalOffset)" -> println
+         "  store " -> print
+-        asyncStoredAdditionalParameter -> writeIrType(context, state)
++        asyncStoredAdditionalParameter -> writeFunctionValueAbiType(context, state)
+         " %arg$(asyncStoredAdditionalParameterOrdinal!), ptr %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address, align " -> print
+         asyncStoredAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+         asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!
+diff --git a/selfhost/semantic/expression_type_ids_resolution_phases.slg b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+index caea7feeb..23b9e170f 100644
+--- a/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ b/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -2039,10 +2039,20 @@ public nominalStructType package: ref analysis.PackageAnalysis, types: ref [type
+ public contextualRecordField package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], firstField: ref [Int; ~], nextField: ref [Int; ~], ownerType: Int, sourceModule: Int, labelAst: Int -> Int {
+     package.ranges[sourceModule] => range
+     package.nodes[range.astStart + labelAst] => label
+-    label.kind != 15 or label.cstRuleId != grammar.ruleIdNameExpression()
+-        or label.payloadToken < 0 or ownerType < 0 or ownerType >= (firstField -> len)
++    not ((label.kind == 15 and label.cstRuleId == grammar.ruleIdNameExpression()) or label.kind == 40)
++        or ownerType < 0 or ownerType >= (firstField -> len)
+         -> if { -1 -> return }
+-    package.tokens[range.tokenStart + label.payloadToken] => token
++    label.payloadToken => labelToken!
++    label.kind == 40 -> if {
++        label.firstToken => labelToken!
++        labelToken! < label.firstToken + label.tokenCount
++            and package.tokens[range.tokenStart + labelToken!].kind != grammar.tokenIdIdentifier()
++            -> while { labelToken! + 1 => labelToken! }
++        labelToken! >= label.firstToken + label.tokenCount
++            -> if { -1 -> return }
++    }
++    labelToken! < 0 -> if { -1 -> return }
++    package.tokens[range.tokenStart + labelToken!] => token
+     package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
+     firstField[ownerType] => fieldIndex!
+     fieldIndex! >= 0 -> while {
+@@ -2084,7 +2094,7 @@ indexContextualRecords package: ref analysis.PackageAnalysis -> ContextualRecord
+         local! < range.astCount -> while {
+             range.astStart + local! => global
+             package.nodes[global] => node
+-            node.kind == 38 -> if {
++            node.kind == 38 or node.kind == 39 -> if {
+                 records! -> push(ContextualRecordAst { sourceModule: range.sourceModule, astNode: local! })
+             }
+             node.parent >= 0 -> if {
+@@ -2258,6 +2268,22 @@ resolveContextualRecordNumericValues package: ref analysis.PackageAnalysis, type
+     package.sources[sourceModule] -> len => sourceLength
+     package.sources[sourceModule] -> slice(UIntSize(0), sourceLength) => source
+     false => changed!
++    package.nodes[range.astStart + literalAst].kind == 39
++        -> if {
++            index.firstChild[range.astStart + literalAst] => initializer!
++            initializer! >= 0 -> while {
++                package.nodes[initializer!].kind == 40 -> if {
++                    package -> contextualRecordField(fields, firstField, nextField, ownerType, sourceModule, initializer! - range.astStart) => field
++                    index.firstChild[initializer!] => value
++                    field >= 0 and value >= 0 -> if {
++                        package -> resolveContextualRecordFieldValue(types, expressions, expressionIndexByAst, index, sourceModule, value, fields[field].fieldType, expectedContextByAst)
++                            -> if { true => changed! }
++                    }
++                }
++                index.nextChild[initializer!] => initializer!
++            }
++            changed! -> return
++        }
+     -1 => label!
+     0 => ordinal!
+     index.firstChild[range.astStart + literalAst] => child!
+@@ -2422,6 +2448,15 @@ resolveContextualRecordTypes prepared: ref semanticContext.SemanticSnapshot, typ
+                     }
+             }
+         }
++        # An explicit nominal constructor already supplies its field contracts
++        # even when the enclosing binding has no expected type. Reuse the
++        # same recursive field context as a contextually typed record.
++        expected! < 0 and expressionIndexByAst[global] >= 0
++            -> if {
++                expressions[expressionIndexByAst[global]].typeId => declaredRecordType
++                prepared.package -> nominalStructType(types, declaredRecordType)
++                    -> if { declaredRecordType => expected! }
++            }
+         prepared.package -> nominalStructType(types, expected!)
+             -> if {
+                 setContextualRecordExpressionType(expressions, expressionIndexByAst, record.sourceModule, record.astNode, global, expected!)
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
+index a53c685bb..8dc608c69 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs
+@@ -1318,6 +1318,7 @@ internal sealed partial class LlvmEmitter
+             || type == BoundType.IntDictionary
+             || _program.Types.IsStaticArray(type)
+             || _program.Types.IsDynamicArray(type)
++            || _program.Types.IsBoundedArray(type)
+             || _program.Types.IsDictionary(type)
+             || _program.Types.IsSet(type)
+             || _program.Types.IsDeque(type))
+@@ -1362,6 +1363,7 @@ internal sealed partial class LlvmEmitter
+             || type == BoundType.IntDictionary
+             || _program.Types.IsStaticArray(type)
+             || _program.Types.IsDynamicArray(type)
++            || _program.Types.IsBoundedArray(type)
+             || _program.Types.IsDictionary(type)
+             || _program.Types.IsSet(type)
+             || _program.Types.IsDeque(type);
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+index 2c4add840..506554648 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs
+@@ -2016,6 +2016,13 @@ internal sealed partial class LlvmEmitter
+             argument = EmitTransientText(argument);
+         }
+ 
++        if (function.IsAsync)
++        {
++            EnsureFunctionArgumentRuntimeType(argument, function.InputType.Value, function.Name);
++            var value = MaterializeAsyncResult(argument);
++            return $"{value.TypeName} {value.ValueName}";
++        }
++
+         if (function.HasValueGenericFixedArrayInput)
+         {
+             var (pointer, length, actualType, knownLength) = argument switch
+diff --git a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs
+index 3f50d2c81..fbdb5f847 100644
+--- a/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs
++++ b/src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionDeclarations.cs
+@@ -761,6 +761,11 @@ internal sealed partial class LlvmEmitter
+             };
+         }
+ 
++        if (function.IsAsync && function.InputType is { } asyncInputType)
++        {
++            return $"{AsyncStorageLlvmType(asyncInputType)} %it";
++        }
++
+         if (function.HasValueGenericFixedArrayInput)
+         {
+             return "%sollang.int_slice %it";
+@@ -867,6 +872,17 @@ internal sealed partial class LlvmEmitter
+             return;
+         }
+ 
++        // Async context slots contain canonical aggregate values, matching
++        // additional parameters and results, rather than the synchronous
++        // primary parameter's legacy container descriptors.
++        if (function.IsAsync && function.InputType is { } asyncInputType)
++        {
++            _locals.Add(
++                function.InputName ?? "it",
++                DematerializeAsyncResult(asyncInputType, "%it"));
++            return;
++        }
++
+         if (function.InputType == BoundType.Arguments)
+         {
+             _locals.Add(function.InputName ?? "it", new RuntimeArguments("%it"));
+diff --git a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+index 62ab9fd0b..e547d5226 100644
+--- a/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ b/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -8834,7 +8834,7 @@ internal sealed partial class SemanticCompiler
+         if (expression.BoundedCapacity is { } boundedCapacity)
+         {
+             var boundedElementType = ParseType(expression.ElementType, expression.Line, expression.Column);
+-            if (boundedElementType == BoundType.Unit || IsNestedContainerElementType(boundedElementType))
++            if (IsUnsupportedInlineArrayElementType(boundedElementType))
+             {
+                 throw Error(expression.Line, expression.Column, "bounded array elements must be inline scalar or user values");
+             }
+@@ -16139,7 +16139,7 @@ internal sealed partial class SemanticCompiler
+                 throw Error(line, column, "fixed array length must be a nonnegative integer literal");
+             }
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "fixed array elements must be inline scalar or user values");
+             }
+@@ -16151,7 +16151,7 @@ internal sealed partial class SemanticCompiler
+         {
+             var elementName = typeName[1..^1].Trim();
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "readonly array views require inline scalar or user-value elements");
+             }
+@@ -16169,7 +16169,7 @@ internal sealed partial class SemanticCompiler
+                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
+             }
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "bounded array elements must be inline scalar or user values");
+             }
+@@ -16529,8 +16529,14 @@ internal sealed partial class SemanticCompiler
+         return type == BoundType.Unit
+             || (IsNestedContainerElementType(type)
+                 && type != BoundType.DynamicIntArray
+-                && !_types.IsDynamicArray(type));
++                && !_types.IsDynamicArray(type)
++                && !_types.IsBoundedArray(type));
+     }
++
++    private bool IsUnsupportedInlineArrayElementType(BoundType type) =>
++        type == BoundType.Unit
++        || (IsNestedContainerElementType(type) && !_types.IsBoundedArray(type));
++
+     private bool IsNestedContainerElementType(BoundType type)
+     {
+         return type is BoundType.IntSlice
+@@ -17285,6 +17291,10 @@ internal sealed partial class SemanticCompiler
+             {
+                 return IsValueTypeSupported(_types.GetDynamicArray(type).ElementType, allowSharedSourceText, visiting);
+             }
++            if (_types.IsBoundedArray(type))
++            {
++                return IsValueTypeSupported(_types.GetBoundedArray(type).ElementType, allowSharedSourceText, visiting);
++            }
+             if (_types.IsDictionary(type))
+             {
+                 var dictionary = _types.GetDictionary(type);

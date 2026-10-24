@@ -1963,20 +1963,27 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
         pushSource -> writeArrayElementType(context, state)
         "" -> println
     }
+    pushSource -> arrayElementTypeId(context, state) => pushElementType
+    pushElementType >= 0 and context.types[pushElementType].kind == 12 => pushBoundedElement
+    pushBoundedElement -> if {
+        "push$(pushIndex)_bounded_value" -> emitBoundedArrayValue(pushValueNameIndex!, request.ownerIndex, pushElementType, context, state)
+    }
     "  store " -> print
     pushSource -> writeArrayElementType(context, state)
     " " -> print
-    pushValue.kind == 3 or pushValue.kind == 4 -> if {
-        pushValue -> sourceToken(context, state) => pushValueToken
-        pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
-            (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
-                -> if { "1" -> print } else { "0" -> print }
-        }
-    } else {
-        castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
-            pushValueParameterOrdinal! >= 0 -> if {
-                pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
-            } else { "%v$(pushValueIndex)" -> print }
+    pushBoundedElement -> if { "%push$(pushIndex)_bounded_value" -> print } else {
+        pushValue.kind == 3 or pushValue.kind == 4 -> if {
+            pushValue -> sourceToken(context, state) => pushValueToken
+            pushValue.kind == 3 -> if { pushValue -> writeIntegerLiteral(context, state) } else {
+                (context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == 116
+                    -> if { "1" -> print } else { "0" -> print }
+            }
+        } else {
+            castPushValue -> if { "%push$(pushIndex)_value_cast" -> print } else {
+                pushValueParameterOrdinal! >= 0 -> if {
+                    pushValueParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(pushValueParameterOrdinal!)" -> print }
+                } else { "%v$(pushValueIndex)" -> print }
+            }
         }
     }
     pushSource -> arrayElementAlign(context, state) => pushElementAlign
@@ -2983,10 +2990,14 @@ emitTake request: WhileValueRequest, context: ref emitterContext.EmitContext, st
         "  %take$(takeIndex)_value_ptr = getelementptr " -> print
         takeSource -> writeArrayElementType(context, state)
         ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_selected" -> println
-        "  %v$(takeIndex) = load " -> print
+        "  " -> print
+        takeIndex -> writeMemberStorageValueName(context, state)
+        " = load " -> print
         takeSource -> writeArrayElementType(context, state)
         ", ptr %take$(takeIndex)_value_ptr, align " -> print
         takeSource -> arrayElementAlign(context, state) -> writeDecimalLine
+        takeNode -> boundedArrayValueTypeId(context, state) => takeBoundedElementType
+        "v$(takeIndex)" -> emitStoredBoundedValueHandle(takeBoundedElementType, context, state)
         "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
         "  br label %take$(takeIndex)_shift" -> println
         "take$(takeIndex)_shift:" -> println

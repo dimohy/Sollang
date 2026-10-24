@@ -516,6 +516,30 @@ asyncFrameHasOwnershipFlag bindingIndex: Int, context: ref emitterContext.EmitCo
         or (bindingIndex -> namedBindingNeedsOwnershipFlag(state))
 }
 
+emitBoundedAsyncFrameTransfer bindingIndex: Int, stateIndex: Int, typeId: Int, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    Arena(0) => prefixStorage!
+    "async_frame$(stateIndex)_$(bindingIndex)" -> materialize(prefixStorage!) => prefix
+    Arena(0) => valueStorage!
+    loading -> if { "%$(prefix)_loaded" } else { "%$(prefix)_stored" } -> materialize(valueStorage!) => valueName
+    loading -> if {
+        "  %$(prefix)_loaded = load " -> print
+        typeId -> writeValueAbiTypeId(context, state)
+        ", ptr %$(prefix)_load_address, align $(context.typeAligns[typeId])" -> println
+        "$(prefix)_handle" -> emitBoundedArrayHandle(valueName, typeId, context, state)
+        "  store %sollang.array.i32 %$(prefix)_handle, ptr " -> print
+        bindingIndex -> writeAsyncLocalAddress(context)
+        ", align 8" -> println
+    } else {
+        "  %$(prefix)_stored = load %sollang.array.i32, ptr " -> print
+        bindingIndex -> writeAsyncLocalAddress(context)
+        ", align 8" -> println
+        "$(prefix)_inline" -> emitBoundedArrayValueFromHandle(valueName, typeId, context, state)
+        "  store " -> print
+        typeId -> writeValueAbiTypeId(context, state)
+        " %$(prefix)_inline, ptr %$(prefix)_store_address, align $(context.typeAligns[typeId])" -> println
+    }
+}
+
 emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     loading -> if {
         "  %async_frame$(point.state)_load = load ptr, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
@@ -534,22 +558,27 @@ emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, cont
                 " = getelementptr i8, ptr %async_frame$(point.state)_" -> print
                 loading -> if { "load" -> print } else { "store" -> print }
                 ", i64 $(offset!)" -> println
-                "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
-                loading -> if { "loaded" -> print } else { "stored" -> print }
-                " = load " -> print
-                binding -> writeIrType(context, state)
-                ", ptr " -> print
-                loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
-                ", align " -> print
-                binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
-                "  store " -> print
-                binding -> writeIrType(context, state)
-                " %async_frame$(point.state)_$(bindingIndex!)_" -> print
-                loading -> if { "loaded" -> print } else { "stored" -> print }
-                ", ptr " -> print
-                loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
-                ", align " -> print
-                binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                binding -> boundedArrayValueTypeId(context, state) => boundedFrameType
+                boundedFrameType >= 0 -> if {
+                    bindingIndex! -> emitBoundedAsyncFrameTransfer(point.state, boundedFrameType, loading, context, state)
+                } else {
+                    "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
+                    loading -> if { "loaded" -> print } else { "stored" -> print }
+                    " = load " -> print
+                    binding -> writeIrType(context, state)
+                    ", ptr " -> print
+                    loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
+                    ", align " -> print
+                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                    "  store " -> print
+                    binding -> writeIrType(context, state)
+                    " %async_frame$(point.state)_$(bindingIndex!)_" -> print
+                    loading -> if { "loaded" -> print } else { "stored" -> print }
+                    ", ptr " -> print
+                    loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
+                    ", align " -> print
+                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                }
                 offset! + (bindingIndex! -> asyncContextValueSize(context, state)) => offset!
                 bindingIndex! -> asyncFrameHasOwnershipFlag(context, state)
                     -> if {
@@ -588,10 +617,16 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
         context.ir[function.operand1] => asyncPrimaryParameter
         functionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncPrimaryOffset
         "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncPrimaryOffset)" -> println
-        "  %arg = load " -> print
-        asyncPrimaryParameter -> writeIrType(context, state)
+        asyncPrimaryParameter -> boundedArrayValueTypeId(context, state) => asyncPrimaryBoundedType
+        "  %arg" -> print
+        asyncPrimaryBoundedType >= 0 -> if { "_bounded" -> print }
+        " = load " -> print
+        asyncPrimaryParameter -> writeFunctionValueAbiType(context, state)
         ", ptr %async_arg_address, align " -> print
         asyncPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncPrimaryBoundedType >= 0 -> if {
+            "arg" -> emitBoundedArrayHandle("%arg_bounded", asyncPrimaryBoundedType, context, state)
+        }
     }
     function.nextOperand => asyncAdditionalParameterIndex!
     1 => asyncAdditionalParameterOrdinal!
@@ -599,10 +634,16 @@ emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitC
         context.ir[asyncAdditionalParameterIndex!] => asyncAdditionalParameter
         functionIndex -> asyncParameterContextOffset(asyncAdditionalParameterIndex!, context, state) => asyncAdditionalOffset
         "  %async_arg$(asyncAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncAdditionalOffset)" -> println
-        "  %arg$(asyncAdditionalParameterOrdinal!) = load " -> print
-        asyncAdditionalParameter -> writeIrType(context, state)
+        asyncAdditionalParameter -> boundedArrayValueTypeId(context, state) => asyncAdditionalBoundedType
+        "  %arg$(asyncAdditionalParameterOrdinal!)" -> print
+        asyncAdditionalBoundedType >= 0 -> if { "_bounded" -> print }
+        " = load " -> print
+        asyncAdditionalParameter -> writeFunctionValueAbiType(context, state)
         ", ptr %async_arg$(asyncAdditionalParameterOrdinal!)_address, align " -> print
         asyncAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncAdditionalBoundedType >= 0 -> if {
+            "arg$(asyncAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(asyncAdditionalParameterOrdinal!)_bounded", asyncAdditionalBoundedType, context, state)
+        }
         asyncAdditionalParameter.nextOperand => asyncAdditionalParameterIndex!
         asyncAdditionalParameterOrdinal! + 1 => asyncAdditionalParameterOrdinal!
     }
@@ -790,10 +831,20 @@ emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName:
     context.ir[functionIndex] => function
     function.typeOrigin == 1 and function.typeSymbol == 0
         -> unless {
-            "  store " -> print
-            function -> writeIrType(context, state)
-            " $valueName, ptr %async_context, align " -> print
-            function -> storageAlign(context, state) -> writeDecimalLine
+            function -> boundedArrayValueTypeId(context, state) => boundedResultType
+            boundedResultType >= 0 -> if {
+                Arena(0) => prefixStorage!
+                "async_result$(completionIndex)" -> materialize(prefixStorage!) => prefix
+                prefix -> emitBoundedArrayValueFromHandle(valueName, boundedResultType, context, state)
+                "  store " -> print
+                boundedResultType -> writeValueAbiTypeId(context, state)
+                " %$(prefix), ptr %async_context, align $(context.typeAligns[boundedResultType])" -> println
+            } else {
+                "  store " -> print
+                function -> writeIrType(context, state)
+                " $valueName, ptr %async_context, align " -> print
+                function -> storageAlign(context, state) -> writeDecimalLine
+            }
         }
     functionIndex -> emitAsyncDiagnosticCompletion(completionIndex, context, state)
     "  ret i1 true" -> println
@@ -823,7 +874,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                         -> if {
                             "  %async_cancel_owned_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
                             "  %async_cancel_owned_value$(point.state)_$(bindingIndex!) = load " -> print
-                            binding -> writeIrType(context, state)
+                            binding -> writeFunctionValueAbiType(context, state)
                             ", ptr %async_cancel_owned_address$(point.state)_$(bindingIndex!), align " -> print
                             binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                         }
@@ -1005,7 +1056,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     }
     function.operand1 >= 0 -> if {
         context.ir[function.operand1] => asyncWrapperPrimaryParameter
-        asyncWrapperPrimaryParameter -> writeIrType(context, state)
+        asyncWrapperPrimaryParameter -> writeFunctionValueAbiType(context, state)
         " %arg" -> print
         function.nextOperand >= 0 -> if { ", " -> print }
     }
@@ -1013,7 +1064,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     1 => asyncWrapperAdditionalParameterOrdinal!
     asyncWrapperAdditionalParameterIndex! >= 0 -> while {
         context.ir[asyncWrapperAdditionalParameterIndex!] => asyncWrapperAdditionalParameter
-        asyncWrapperAdditionalParameter -> writeIrType(context, state)
+        asyncWrapperAdditionalParameter -> writeFunctionValueAbiType(context, state)
         " %arg$(asyncWrapperAdditionalParameterOrdinal!)" -> print
         asyncWrapperAdditionalParameter.nextOperand >= 0
             -> if { ", " -> print }
@@ -1062,7 +1113,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
         "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredPrimaryOffset)" -> println
         "  store " -> print
-        asyncStoredPrimaryParameter -> writeIrType(context, state)
+        asyncStoredPrimaryParameter -> writeFunctionValueAbiType(context, state)
         " %arg, ptr %async_arg_address, align " -> print
         asyncStoredPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
     }
@@ -1073,7 +1124,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         requestedFunctionIndex -> asyncParameterContextOffset(asyncStoredAdditionalParameterIndex!, context, state) => asyncStoredAdditionalOffset
         "  %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredAdditionalOffset)" -> println
         "  store " -> print
-        asyncStoredAdditionalParameter -> writeIrType(context, state)
+        asyncStoredAdditionalParameter -> writeFunctionValueAbiType(context, state)
         " %arg$(asyncStoredAdditionalParameterOrdinal!), ptr %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address, align " -> print
         asyncStoredAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
         asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!

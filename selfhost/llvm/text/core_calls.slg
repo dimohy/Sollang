@@ -423,10 +423,14 @@ emitAwaitTaskValue nodeIndex: Int, context: ref emitterContext.EmitContext, stat
             "v$(nodeIndex)" -> emitJoinedTaskResultCompletion
             not (awaited.typeOrigin == 1 and awaited.typeSymbol == 0)
                 -> if {
-                    "  %v$(nodeIndex) = load " -> print
+                    "  " -> print
+                    nodeIndex -> writeMemberStorageValueName(context, state)
+                    " = load " -> print
                     awaited.typeId -> writeSemanticTypeId(context, state)
                     ", ptr %v$(nodeIndex)_task_context, align " -> print
                     awaited -> storageAlign(context, state) -> writeDecimalLine
+                    awaited -> boundedArrayValueTypeId(context, state) => awaitedBoundedType
+                    "v$(nodeIndex)" -> emitStoredBoundedValueHandle(awaitedBoundedType, context, state)
                 }
             "  %v$(nodeIndex)_task_released = call i1 @sollang_task_release(ptr %v$(nodeIndex)_task_handle)" -> println
             "  br i1 %v$(nodeIndex)_task_released, label %await$(nodeIndex)_released, label %await$(nodeIndex)_release_failed" -> println

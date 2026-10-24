@@ -8834,7 +8834,7 @@ internal sealed partial class SemanticCompiler
         if (expression.BoundedCapacity is { } boundedCapacity)
         {
             var boundedElementType = ParseType(expression.ElementType, expression.Line, expression.Column);
-            if (boundedElementType == BoundType.Unit || IsNestedContainerElementType(boundedElementType))
+            if (IsUnsupportedInlineArrayElementType(boundedElementType))
             {
                 throw Error(expression.Line, expression.Column, "bounded array elements must be inline scalar or user values");
             }
@@ -16139,7 +16139,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(line, column, "fixed array length must be a nonnegative integer literal");
             }
             var elementType = ParseType(elementName, line, column);
-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            if (IsUnsupportedInlineArrayElementType(elementType))
             {
                 throw Error(line, column, "fixed array elements must be inline scalar or user values");
             }
@@ -16151,7 +16151,7 @@ internal sealed partial class SemanticCompiler
         {
             var elementName = typeName[1..^1].Trim();
             var elementType = ParseType(elementName, line, column);
-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            if (IsUnsupportedInlineArrayElementType(elementType))
             {
                 throw Error(line, column, "readonly array views require inline scalar or user-value elements");
             }
@@ -16169,7 +16169,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
             }
             var elementType = ParseType(elementName, line, column);
-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
+            if (IsUnsupportedInlineArrayElementType(elementType))
             {
                 throw Error(line, column, "bounded array elements must be inline scalar or user values");
             }
@@ -16529,8 +16529,14 @@ internal sealed partial class SemanticCompiler
         return type == BoundType.Unit
             || (IsNestedContainerElementType(type)
                 && type != BoundType.DynamicIntArray
-                && !_types.IsDynamicArray(type));
+                && !_types.IsDynamicArray(type)
+                && !_types.IsBoundedArray(type));
     }
+
+    private bool IsUnsupportedInlineArrayElementType(BoundType type) =>
+        type == BoundType.Unit
+        || (IsNestedContainerElementType(type) && !_types.IsBoundedArray(type));
+
     private bool IsNestedContainerElementType(BoundType type)
     {
         return type is BoundType.IntSlice
@@ -17284,6 +17290,10 @@ internal sealed partial class SemanticCompiler
             if (_types.IsDynamicArray(type))
             {
                 return IsValueTypeSupported(_types.GetDynamicArray(type).ElementType, allowSharedSourceText, visiting);
+            }
+            if (_types.IsBoundedArray(type))
+            {
+                return IsValueTypeSupported(_types.GetBoundedArray(type).ElementType, allowSharedSourceText, visiting);
             }
             if (_types.IsDictionary(type))
             {
