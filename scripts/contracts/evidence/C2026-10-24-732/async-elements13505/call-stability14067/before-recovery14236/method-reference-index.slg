@@ -1,0 +1,234 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+
+reference source: Int, ast: Int, type: Int, status: Int -> typeIds.TypeReference {
+    typeIds.TypeReference { sourceModule: source, typeAst: ast, typeId: type, status: status }
+}
+
+linearLast references: ref [typeIds.TypeReference; ~], source: Int, ast: Int -> Int {
+    -1 => selected!
+    references -> each candidate {
+        ast >= 0 and candidate.sourceModule == source and candidate.typeAst == ast and candidate.status == 0
+            -> if { candidate.typeId => selected! }
+    }
+    selected!
+}
+
+linearMatches references: ref [typeIds.TypeReference; ~], source: Int, ast: Int, type: Int -> Bool {
+    references -> each candidate {
+        candidate.sourceModule == source and candidate.typeAst == ast and candidate.typeId == type and candidate.status == 0
+            -> if { true -> return }
+    }
+    false
+}
+
+linearPrimary package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], sourceIndex: Int, functionSymbol: Int, ownerTypeId: Int -> Bool {
+    package.ranges[sourceIndex] => range
+    package.symbols[range.symbolStart + functionSymbol] => function
+    function.kind == 31 and function.astNode >= 0
+        and package.nodes[range.astStart + function.astNode].secondaryToken >= 0
+        -> if { true -> return }
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + symbolIndex!] => parameter
+        parameter.kind == 35 and parameter.parent == functionSymbol
+            and parameter.astNode == function.astNode and parameter.typeNode >= 0
+            -> if {
+                references -> each reference {
+                    reference.sourceModule == sourceIndex and reference.typeAst == parameter.typeNode
+                        and reference.status == 0 and reference.typeId == ownerTypeId
+                        -> if { true -> return }
+                }
+            }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    false
+}
+
+linearDeclarationFacts package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
+    [Int; ~] => ownerTypes!
+    [Bool; ~] => primaryMatches!
+    [Int; ~] => traitAsts!
+    [Int; ~] => methodSymbols!
+    [Int; ~] => methodStarts!
+    [Int; ~] => methodCounts!
+    [Int; ~] => implOwnerTypes!
+    [Int; ~] => implTraitAsts!
+    package.symbols -> each symbol {
+        ownerTypes! -> push(-1)
+        primaryMatches! -> push(false)
+        traitAsts! -> push(-1)
+        implOwnerTypes! -> push(-2)
+        implTraitAsts! -> push(-1)
+    }
+    package.ranges -> each range {
+        methodSymbols! -> len => methodStart
+        methodStarts! -> push(methodStart)
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => method
+            (method.kind == 31 or method.kind == 7) and method.parent >= 0
+                and method.parent < range.symbolCount and method.nameToken >= 0
+                -> if {
+                    package.symbols[range.symbolStart + method.parent] => implementation
+                    implementation.kind == 6 and implementation.astNode >= 0
+                        and implementation.astNode < range.astCount -> if {
+                            methodSymbols! -> push(symbolIndex!)
+                            range.symbolStart + method.parent => implSlot
+                            implOwnerTypes![implSlot] == -2 -> if {
+                                package -> typeIds.implOwnerTypeAst(range.sourceModule, implementation.astNode) => ownerAst
+                                -1 => ownerType!
+                                references -> each reference {
+                                    ownerAst >= 0 and reference.sourceModule == range.sourceModule
+                                        and reference.typeAst == ownerAst and reference.status == 0
+                                        -> if { reference.typeId => ownerType! }
+                                }
+                                ownerType! => implOwnerTypes![implSlot]
+                                package -> typedMethodTraitAst(range.sourceModule, implementation.astNode, ownerAst)
+                                    => implTraitAsts![implSlot]
+                            }
+                            implOwnerTypes![implSlot] => ownerTypes![range.symbolStart + symbolIndex!]
+                            implTraitAsts![implSlot] => traitAsts![range.symbolStart + symbolIndex!]
+                            linearPrimary(package, references, range.sourceModule, symbolIndex!, implOwnerTypes![implSlot])
+                                => primaryMatches![range.symbolStart + symbolIndex!]
+                        }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        methodCounts! -> push((methodSymbols! -> len) - methodStart)
+    }
+    [Bool; ~] => importReachability!
+    identities -> len => moduleCount
+    0 => reachabilitySlot!
+    reachabilitySlot! < (package.sources -> len) * moduleCount
+        -> while {
+            importReachability! -> push(false)
+            reachabilitySlot! + 1 => reachabilitySlot!
+        }
+    resolvedImports -> each imported {
+        imported.sourceModule >= 0 and imported.sourceModule < (package.sources -> len)
+            and imported.status == 0 and imported.targetModule >= 0
+            and imported.targetModule < moduleCount -> if {
+                identities[imported.targetModule].pathHash => importedPathHash
+                0 => reachableModule!
+                reachableModule! < moduleCount -> while {
+                    modules.sameLogicalAnalyzedSource(package.sources, identities, identities[reachableModule!].sourceIndex, identities[imported.targetModule].sourceIndex, package.tokens, package.ranges)
+                        -> if {
+                            true => importReachability![imported.sourceModule * moduleCount + reachableModule!]
+                        }
+                    reachableModule! + 1 => reachableModule!
+                }
+            }
+    }
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, importReachability: importReachability! }
+}
+
+sameInts left: ref [Int; ~], right: ref [Int; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<(left -> len) -> each index { left[index] != right[index] -> if { false -> return } }
+    true
+}
+
+sameBool left: Bool, right: Bool -> Bool { left -> if { right } else { not right } }
+
+sameBools left: ref [Bool; ~], right: ref [Bool; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0..<(left -> len) -> each index { not sameBool(left[index], right[index]) -> if { false -> return } }
+    true
+}
+
+main {
+    ["struct NumberSource { value: Int }\ntrait Source { type Item\nread: self -> Item }\nimpl Source for NumberSource { type Item = Int\nread: self -> Int { self.value } }\nmain {}", "namespace model\npublic other value: Int -> Int { value }"; ~] -> analysis.analyze => package
+    [
+    reference(0, 0, 11, 0), reference(1, 0, 22, 0), reference(0, 0, 33, 0),
+    reference(0, 0, 44, 1), reference(0, 1, -1, 0), reference(0, 1000000, 55, 0),
+    reference(1, 1000000, 66, 0), reference(-1, 0, 77, 0), reference(0, -1, 88, 0),
+    reference(0, 0, 11, 0); ~
+    ] => references!
+    package.ranges -> each range {
+        0..<range.symbolCount -> each symbolIndex {
+            package.symbols[range.symbolStart + symbolIndex] => parameter
+            parameter.kind == 35 and parameter.typeNode >= 0
+                -> if {
+                    references! -> push(reference(range.sourceModule, parameter.typeNode, 33, 0))
+                    references! -> push(reference(range.sourceModule, parameter.typeNode, 11, 0))
+                    references! -> push(reference(range.sourceModule, parameter.typeNode, 44, 1))
+                }
+        }
+    }
+    package -> indexTypedMethodReferences(references!) => index
+    [Int; ~] => emptyHeads
+    [Int; ~] => emptyPrevious
+    TypedMethodReferenceIndex { heads: emptyHeads, previous: emptyPrevious } => emptyIndex
+    true => equal!
+    0 => checked!
+    [-1, 0, 1, 2; ~] -> each source {
+        [-1, 0, 1, 1000000; ~] -> each ast {
+            (references! -> linearLast(source, ast)) != lastTypedMethodReference(package, references!, index, source, ast)
+                -> if { false => equal! }
+            checked! + 1 => checked!
+            [-1, 11, 22, 33, 44, 55, 66, 77, 88; ~] -> each type {
+                not sameBool(references! -> linearMatches(source, ast, type), typedMethodReferenceMatches(package, references!, index, source, ast, type))
+                    -> if { false => equal! }
+                not sameBool(references! -> linearMatches(source, ast, type), typedMethodReferenceMatches(package, references!, emptyIndex, source, ast, type))
+                    -> if { false => equal! }
+                checked! + 1 => checked!
+            }
+        }
+    }
+    equal! -> println
+    checked! -> println
+    true => primaryEqual!
+    false => primarySelected!
+    package.ranges -> each range {
+        0..<range.symbolCount -> each symbolIndex {
+            package.symbols[range.symbolStart + symbolIndex] => function
+            (function.kind == 7 or function.kind == 31) and function.astNode >= 0
+                -> if {
+                    [11, 33, 44, -1; ~] -> each type {
+                        linearPrimary(package, references!, range.sourceModule, symbolIndex, type) => expected
+                        typedMethodPrimaryMatches(package, references!, range.sourceModule, symbolIndex, type, index) => actual
+                        not sameBool(expected, actual) -> if { false => primaryEqual! }
+                        expected -> if { true => primarySelected! }
+                    }
+                }
+        }
+    }
+    primaryEqual! -> println
+    primarySelected! -> println
+    package -> modules.identitiesAnalyzed => identities
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package -> linearDeclarationFacts(references!, identities, resolvedImports) => expectedFacts
+    package -> prepareTypedMethodDeclarationFacts(references!, identities, resolvedImports) => actualFacts
+    (sameInts(expectedFacts.ownerTypes, actualFacts.ownerTypes)
+        and sameBools(expectedFacts.primaryMatches, actualFacts.primaryMatches)
+        and sameInts(expectedFacts.traitAsts, actualFacts.traitAsts)
+        and sameInts(expectedFacts.methodSymbols, actualFacts.methodSymbols)
+        and sameInts(expectedFacts.methodStarts, actualFacts.methodStarts)
+        and sameInts(expectedFacts.methodCounts, actualFacts.methodCounts)
+        and sameBools(expectedFacts.importReachability, actualFacts.importReachability))
+        -> println
+    true => exactRowsEqual!
+    0 => exactRowsChecked!
+    [-1, 0, 1, 2; ~] -> each source {
+        [-1, 0, 1, 1000000; ~] -> each ast {
+            -1 => expectedRow!
+            0 => row!
+            references! -> each reference {
+                reference.status == 0 and reference.sourceModule == source and reference.typeAst == ast
+                    -> if { row! => expectedRow! }
+                row! + 1 => row!
+            }
+            lastSourceReferenceIndex(package, references!, index, source, ast) != expectedRow!
+                -> if { false => exactRowsEqual! }
+            exactRowsChecked! + 1 => exactRowsChecked!
+        }
+    }
+    exactRowsEqual! -> println
+    exactRowsChecked! -> println
+
+}

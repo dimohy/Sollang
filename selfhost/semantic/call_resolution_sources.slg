@@ -306,6 +306,9 @@ struct TypedMethodDeclarationFacts {
     methodSymbols: [Int; ~]
     methodStarts: [Int; ~]
     methodCounts: [Int; ~]
+    openFunctionSymbols: [Int; ~]
+    openFunctionStarts: [Int; ~]
+    openFunctionCounts: [Int; ~]
     importReachability: [Bool; ~]
 }
 
@@ -317,6 +320,9 @@ prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, refere
     [Int; ~] => methodSymbols!
     [Int; ~] => methodStarts!
     [Int; ~] => methodCounts!
+    [Int; ~] => openFunctionSymbols!
+    [Int; ~] => openFunctionStarts!
+    [Int; ~] => openFunctionCounts!
     [Int; ~] => implOwnerTypes!
     [Int; ~] => implTraitAsts!
     package.symbols -> each symbol {
@@ -329,9 +335,15 @@ prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, refere
     package.ranges -> each range {
         methodSymbols! -> len => methodStart
         methodStarts! -> push(methodStart)
+        openFunctionSymbols! -> len => openFunctionStart
+        openFunctionStarts! -> push(openFunctionStart)
         0 => symbolIndex!
         symbolIndex! < range.symbolCount -> while {
             package.symbols[range.symbolStart + symbolIndex!] => method
+            method.kind == 7 and method.flags / 4 % 2 == 1
+                and (method.parent < 0 or (method.parent < range.symbolCount
+                and package.symbols[range.symbolStart + method.parent].kind != 6))
+                -> if { openFunctionSymbols! -> push(symbolIndex!) }
             (method.kind == 31 or method.kind == 7) and method.parent >= 0
                 and method.parent < range.symbolCount and method.nameToken >= 0
                 -> if {
@@ -356,6 +368,7 @@ prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, refere
             symbolIndex! + 1 => symbolIndex!
         }
         methodCounts! -> push((methodSymbols! -> len) - methodStart)
+        openFunctionCounts! -> push((openFunctionSymbols! -> len) - openFunctionStart)
     }
     [Bool; ~] => importReachability!
     identities -> len => moduleCount
@@ -380,7 +393,7 @@ prepareTypedMethodDeclarationFacts package: ref analysis.PackageAnalysis, refere
                 }
             }
     }
-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, importReachability: importReachability! }
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability! }
 }
 
 public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.PackageAnalysis, types: ref [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~] -> TypedMethodResolution{
@@ -390,8 +403,11 @@ public resolveTypedMethod request: TypedMethodRequest, package: ref analysis.Pac
     [Int; ~] => methodSymbols
     [Int; ~] => methodStarts
     [Int; ~] => methodCounts
+    [Int; ~] => openFunctionSymbols
+    [Int; ~] => openFunctionStarts
+    [Int; ~] => openFunctionCounts
     [Bool; ~] => importReachability
-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, importReachability: importReachability } => declarations
+    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability } => declarations
     request -> resolveTypedMethodWithDeclarations(package, types, references, identities, imports, resolvedImports, qualifiedResults, declarations)
 }
 
@@ -1215,6 +1231,76 @@ bestBindingLiteralAt nodes: ref [ast.AstNode; ~], sourceAstStart: Int, index: re
     selected!
 }
 
+struct ReceiverRecoveryIndex {
+    first: [Int; ~]
+    rows: [Int; ~]
+    next: [Int; ~]
+    propagates: [Bool; ~]
+}
+
+appendReceiverResultAncestors first: mut [Int; ~], rows: mut [Int; ~], nextEdges: mut [Int; ~], last: mut [Int; ~], nodes: ref [ast.AstNode; ~], astStart: Int, node: Int, row: Int -> Unit {
+    node => ancestor!
+    ancestor! >= 0 -> while {
+        rows -> len => edge
+        rows -> push(row)
+        nextEdges -> push(-1)
+        last[ancestor!] => previous
+        previous >= 0 -> if { edge => nextEdges[previous] } else {
+            edge => first[ancestor!]
+        }
+        edge => last[ancestor!]
+        nodes[astStart + ancestor!].parent => ancestor!
+    }
+}
+
+indexReceiverRecovery nodes: ref [ast.AstNode; ~], astStart: Int, astCount: Int, sourceIndex: Int, localCalls: ref [TypedCallCandidate; ~], qualifiedTargets: ref [Int; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], existing: ref [ModuleCallResolution; ~] -> ReceiverRecoveryIndex {
+    [Int; ~] => first!
+    [Int; ~] => last!
+    [Int; ~] => rows!
+    [Int; ~] => nextEdges!
+    [Bool; ~] => propagates!
+    0 => seed!
+    seed! < astCount -> while {
+        first! -> push(-1)
+        last! -> push(-1)
+        propagates! -> push(false)
+        seed! + 1 => seed!
+    }
+    0 => astIndex!
+    astIndex! < astCount -> while {
+        nodes[astStart + astIndex!].kind == 82 -> if {
+            astIndex! => ancestor!
+            ancestor! >= 0 -> while {
+                true => propagates![ancestor!]
+                nodes[astStart + ancestor!].parent => ancestor!
+            }
+        }
+        astIndex! + 1 => astIndex!
+    }
+    0 => row!
+    row! < (existing -> len) -> while {
+        existing[row!] => current
+        current.sourceModule == sourceIndex and current.callAst >= 0 and current.callAst < astCount
+            -> if { appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, current.callAst, row!) }
+        row! + 1 => row!
+    }
+    0 => localIndex!
+    localIndex! < (localCalls -> len) -> while {
+        (existing -> len) + localIndex! => resultRow
+        appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, localCalls[localIndex!].callAst, resultRow)
+        qualifiedTargets[localIndex!] => qualifiedIndex
+        qualifiedIndex >= 0 and qualifiedIndex < (qualifiedResults -> len)
+            -> if {
+                qualifiedResults[qualifiedIndex].pathAst => path
+                path >= 0 and path < astCount -> if {
+                    appendReceiverResultAncestors(first!, rows!, nextEdges!, last!, nodes, astStart, path, resultRow)
+                }
+            }
+        localIndex! + 1 => localIndex!
+    }
+    ReceiverRecoveryIndex { first: first!, rows: rows!, next: nextEdges!, propagates: propagates! }
+}
+
 resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], qualifiedResults: ref [qualified.QualifiedResolution; ~], declaredIntrinsicNames: ref [DeclaredIntrinsicCallableName; ~], receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], declarations: ref TypedMethodDeclarationFacts, referenceIndex: ref TypedMethodReferenceIndex -> [ModuleCallResolution; ~] {
     [ModuleCallResolution; ~] => results!
     package.ranges[sourceIndex] => literalRange
@@ -1583,6 +1669,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
     }
     indexQualifiedCallTargets(sourceIndex, package, localCalls!, receiverCallByAst!, sourceQualifiedIndices!, qualifiedResults, leftParenByCall!) => qualifiedTargetByCall
     results! -> len => typedSourceResultStart
+    indexReceiverRecovery(package.nodes, sourceRange.astStart, sourceRange.astCount, sourceIndex, localCalls!, qualifiedTargetByCall, qualifiedResults, results!) => receiverRecovery
     [Bool; ~] => propertySelections!
     0 => propertySeed!
     propertySeed! < (localCalls! -> len) -> while {
@@ -2389,10 +2476,12 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                 -> if {
                                     -1 => receiverInitializerResolution!
                                     1000000 => receiverInitializerDistance!
-                                    0 => receiverResultIndex!
-                                    receiverResultIndex! < (results! -> len)
-                                        -> while {
-                                            results![receiverResultIndex!] => receiverResult
+                                    receiverBinding.astNode >= 0 and receiverBinding.astNode < (receiverRecovery.first -> len)
+                                        -> if { receiverRecovery.first[receiverBinding.astNode] } else { -1 } => receiverResultEdge!
+                                    receiverResultEdge! >= 0 -> while {
+                                        receiverRecovery.rows[receiverResultEdge!] => receiverResultIndex
+                                        receiverResultIndex < (results! -> len) -> if {
+                                            results![receiverResultIndex] => receiverResult
                                             receiverResult.sourceModule == sourceIndex
                                                 and receiverResult.status == 0
                                                 and receiverResult.targetSourceModule >= 0
@@ -2417,12 +2506,13 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                     receiverResultBelongs!
                                                         and receiverResultDistance! < receiverInitializerDistance!
                                                         -> if {
-                                                            receiverResultIndex! => receiverInitializerResolution!
+                                                            receiverResultIndex => receiverInitializerResolution!
                                                             receiverResultDistance! => receiverInitializerDistance!
                                                         }
                                                 }
-                                            receiverResultIndex! + 1 => receiverResultIndex!
                                         }
+                                        receiverRecovery.next[receiverResultEdge!] => receiverResultEdge!
+                                    }
                                     receiverInitializerResolution! >= 0 -> if {
                                         results![receiverInitializerResolution!] => receiverInitializer
                                         package.ranges[receiverInitializer.targetSourceModule]
@@ -2449,31 +2539,13 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                 receiverReferenceIndex >= 0 -> if {
                                                     semantic.references[receiverReferenceIndex].typeId => receiverResultTypeId!
                                                 }
-                                                false => receiverBindingPropagates!
-                                                0 => receiverPropagationIndex!
-                                                receiverPropagationIndex! < sourceRange.astCount
-                                                    -> while {
-                                                        package.nodes[sourceRange.astStart + receiverPropagationIndex!]
-                                                            => receiverPropagation
-                                                        receiverPropagation.kind == 82 -> if {
-                                                            receiverPropagationIndex! => receiverPropagationAncestor!
-                                                            receiverPropagationAncestor! >= 0
-                                                                and not receiverBindingPropagates!
-                                                                -> while {
-                                                                    receiverPropagationAncestor! == receiverBinding.astNode
-                                                                        -> if {
-                                                                            true => receiverBindingPropagates!
-                                                                        } else {
-                                                                            package.nodes[sourceRange.astStart + receiverPropagationAncestor!].parent
-                                                                                => receiverPropagationAncestor!
-                                                                        }
-                                                                }
-                                                        }
-                                                        receiverPropagationIndex! + 1 => receiverPropagationIndex!
-                                                    }
+                                                receiverBinding.astNode >= 0
+                                                    and receiverBinding.astNode < (receiverRecovery.propagates -> len)
+                                                    and receiverRecovery.propagates[receiverBinding.astNode]
+                                                    => receiverBindingPropagates
                                                 receiverResultTypeId! >= 0 -> if {
                                                     semantic.types[receiverResultTypeId!] => receiverResultType
-                                                    receiverBindingPropagates!
+                                                    receiverBindingPropagates
                                                         and receiverResultType.kind == 7
                                                         and receiverResultType.origin == 4
                                                         and receiverResultType.symbol == 1
@@ -3946,6 +4018,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                 false => openImportFound!
                 false => openImportAmbiguous!
                 not siblingFound!
+                    and localFreeFallbackAllowed!
                     and not local.intrinsicFallback
                     and (local.functionSymbol == -1 or localCallNode.kind == 10)
                     and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)
@@ -3973,14 +4046,15 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                     package.sources[openTargetSource]
                                                         -> slice(UIntSize(0), openTargetLength)
                                                         => openTargetText
+                                                    (declarations.ownerTypes -> len) == 0 -> if { openTargetRange.symbolCount } else { declarations.openFunctionCounts[openTargetSource] } => openSymbolCount
                                                     0 => openSymbolIndex!
-                                                    openSymbolIndex! < openTargetRange.symbolCount
+                                                    openSymbolIndex! < openSymbolCount
                                                         -> while {
-                                                            package.symbols[openTargetRange.symbolStart + openSymbolIndex!]
+                                                            (declarations.ownerTypes -> len) == 0 -> if { openSymbolIndex! } else { declarations.openFunctionSymbols[declarations.openFunctionStarts[openTargetSource] + openSymbolIndex!] } => openCandidateSymbol
+                                                            package.symbols[openTargetRange.symbolStart + openCandidateSymbol]
                                                                 => openCandidate
                                                             false => openCandidateAccepted!
-                                                            localFreeFallbackAllowed!
-                                                                and openCandidate.kind == 7
+                                                            openCandidate.kind == 7
                                                                 and (openCandidate.parent < 0
                                                                 or (openCandidate.parent < openTargetRange.symbolCount
                                                                 and package.symbols[openTargetRange.symbolStart + openCandidate.parent].kind != 6))
@@ -4016,7 +4090,7 @@ resolveSourceTypedWithDeclarations sourceIndex: Int, package: ref analysis.Packa
                                                                                 => resolvedTargetModule!
                                                                             openTargetSource
                                                                                 => resolvedTargetSource!
-                                                                            openSymbolIndex!
+                                                                            openCandidateSymbol
                                                                                 => resolvedFunctionSymbol!
                                                                             0 => resolvedStatus!
                                                                         }
