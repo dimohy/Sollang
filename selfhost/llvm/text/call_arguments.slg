@@ -704,7 +704,8 @@ writeReferencePlaceValue functionIndex: Int, valueIndex: Int, context: ref emitt
         and context.ir[referenceValue.operand0].typeId >= 0
         and context.types[context.ir[referenceValue.operand0].typeId].kind == 8
         -> if {
-            "%v$(valueIndex)_address" -> print
+            valueIndex -> writeMemberStorageValueName(context, state)
+            "_address" -> print
             true => wroteParameter!
         }
     not wroteParameter! -> if {
@@ -1902,15 +1903,37 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
             }
         "  call void @free(ptr $(temporaryName!))" -> println
     } else {
+        context.types[value.typeId].kind == 12 => boundedDrop
+        Arena(0) => boundedPrefixStorage!
+        "" => boundedPrefix!
+        boundedDrop -> if {
+            whileIndex >= 0 -> if {
+                "while$(whileIndex)_call$(callIndex)_temporary$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix!
+            } else {
+                "call$(callIndex)_temporary$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix!
+            }
+            "  %$(boundedPrefix!)_handle = freeze %sollang.array.i32 " -> print
+            whileIndex >= 0 -> if {
+                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
+            } else { "%v$(valueIndex)" -> print }
+            "" -> println
+            Arena(0) => boundedHandleStorage!
+            "%$(boundedPrefix!)_handle" -> materialize(boundedHandleStorage!) => boundedHandle
+            boundedPrefix! -> emitBoundedArrayValueFromHandle(boundedHandle, value.typeId, context, state)
+        }
         "  call void @sollang_drop_t$(value.typeId)(" -> print
         value.typeId -> writeSemanticTypeId(context, state)
         " " -> print
-        whileIndex >= 0
-            -> if {
-                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
-            } else {
-                "%v$(valueIndex)" -> print
-            }
+        boundedDrop -> if {
+            "%$(boundedPrefix!)" -> print
+        } else {
+            whileIndex >= 0
+                -> if {
+                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)
+                } else {
+                    "%v$(valueIndex)" -> print
+                }
+        }
         ")" -> println
     }
     droppedOwners -> push(valueIndex)

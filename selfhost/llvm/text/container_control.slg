@@ -894,37 +894,62 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
             }
             argumentIndex -> callArgumentNeedsSliceProjection(callIndex, ordinal, context, state) => whileArgumentNeedsSliceProjection
             argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state) => whileArgumentNeedsReferenceValueLoad
-            callIndex -> callArgumentIsMutableBorrow(ordinal, context, state)
-                -> if {
-                    argumentIndex -> writeCallArgument(callIndex, ownerIndex, ordinal, context, state)
-                } else {
-                    whileArgumentNeedsSliceProjection -> if {
-                        "{ ptr, i64 } %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice" -> print
+            callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => whileBoundedArgumentTypeId
+            whileBoundedArgumentTypeId >= 0 -> if {
+                whileBoundedArgumentTypeId -> writeValueAbiTypeId(context, state)
+                " %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded" -> print
+            } else {
+                callIndex -> callArgumentIsMutableBorrow(ordinal, context, state)
+                    -> if {
+                        argumentIndex -> writeCallArgument(callIndex, ownerIndex, ordinal, context, state)
                     } else {
-                        argumentNeedsReferenceSlot! -> if {
-                            "ptr %callref$(callIndex)_arg$(ordinal)_address" -> print
+                        whileArgumentNeedsSliceProjection -> if {
+                            "{ ptr, i64 } %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice" -> print
                         } else {
-                            argumentParameterIndex >= 0 -> if {
-                                context.ir[argumentParameterIndex] -> writeIrType(context, state)
+                            argumentNeedsReferenceSlot! -> if {
+                                "ptr %callref$(callIndex)_arg$(ordinal)_address" -> print
                             } else {
-                                argument -> writeIrType(context, state)
-                            }
-                            " " -> print
-                            whileArgumentNeedsReferenceValueLoad -> if {
-                                "%while$(whileIndex)_call$(callIndex)_arg$(ordinal)_reference_value" -> print
-                            } else {
-                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentValueIndex } -> writeWhileValue(context, state)
+                                argumentParameterIndex >= 0 -> if {
+                                    context.ir[argumentParameterIndex] -> writeIrType(context, state)
+                                } else {
+                                    argument -> writeIrType(context, state)
+                                }
+                                " " -> print
+                                whileArgumentNeedsReferenceValueLoad -> if {
+                                    "%while$(whileIndex)_call$(callIndex)_arg$(ordinal)_reference_value" -> print
+                                } else {
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentValueIndex } -> writeWhileValue(context, state)
+                                }
                             }
                         }
                     }
-                }
+            }
             argument.nextOperand -> emitWhileCallArgumentChain(callIndex, whileIndex, ownerIndex, ordinal + 1, true, context, state)
         }
 }
 emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, ordinal: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     argumentIndex >= 0 and (context.ir[argumentIndex].parent == callIndex or argumentIndex == context.ir[callIndex].operand0)
         -> if {
-            argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+            callIndex -> callBoundedValueParameterTypeId(ordinal, context, state) => whileBoundedArgumentTypeId
+            whileBoundedArgumentTypeId >= 0 -> if {
+                argumentIndex -> aggregateValueIndex(context, state) => whileBoundedValueIndex
+                argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state)
+                    -> if {
+                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded = load " -> print
+                        whileBoundedArgumentTypeId -> writeValueAbiTypeId(context, state)
+                        ", ptr " -> print
+                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileBoundedValueIndex } -> writeWhileValue(context, state)
+                        ", align $(context.typeAligns[whileBoundedArgumentTypeId])" -> println
+                    } else {
+                        Arena(0) => boundedPrefixStorage!
+                        "while$(whileIndex)_call$(callIndex)_arg$(ordinal)_bounded" -> materialize(boundedPrefixStorage!) => boundedPrefix
+                        "  %$(boundedPrefix)_handle = freeze %sollang.array.i32 " -> print
+                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileBoundedValueIndex } -> writeWhileValue(context, state)
+                        "" -> println
+                        boundedPrefix -> emitBoundedArrayValueFromHandle("%$(boundedPrefix)_handle", whileBoundedArgumentTypeId, context, state)
+                    }
+            }
+            whileBoundedArgumentTypeId < 0 and (argumentIndex -> callArgumentNeedsReferenceValueLoad(callIndex, ordinal, context, state))
                 -> if {
                     argumentIndex -> aggregateValueIndex(context, state) => whileReferenceValueIndex
                     callIndex -> callTargetParameter(ordinal, context, state) => whileReferenceParameterIndex
@@ -1304,6 +1329,8 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                             valueNode.opcode >= 1_000_000 -> if {
                                                 valueNode.opcode - 1_000_000 => whileArrayCapacity!
                                             }
+                                            valueNode.typeId >= 0 and context.types[valueNode.typeId].kind == 12
+                                                -> if { context.types[valueNode.typeId].length => whileArrayCapacity! }
                                             (valueNode -> isFixedArrayType)
                                                 and not (valueNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
                                                 -> if {
@@ -1401,12 +1428,23 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 } else {
                                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitWhileCallEnvironmentValues(whileIndex, context, state)
                                                     valueNode.operand0 -> emitWhileCallArgumentPromotions(valueNodeIndex, whileIndex, ownerIndex, 0, context, state)
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
-                                                    valueNode -> writeIrType(context, state)
+                                                    valueNode -> boundedArrayValueTypeId(context, state) => whileBoundedResultTypeId
+                                                    whileBoundedResultTypeId >= 0 and valueNode.flags / 8 % 2 == 0
+                                                        and not (valueNode -> targetsNativeFunction(context, state)) => whileBoundedResult
+                                                    whileBoundedResult -> if {
+                                                        "  %while$(whileIndex)_bounded$(valueNodeIndex) = call " -> print
+                                                        whileBoundedResultTypeId -> writeValueAbiTypeId(context, state)
+                                                    } else {
+                                                        "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
+                                                        valueNode -> writeIrType(context, state)
+                                                    }
                                                     valueNodeIndex -> writeResolvedCallTarget(valueNode, context, state)
                                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitCallEnvironment(context, state) => whileCallEnvironment
                                                     valueNode.operand0 -> emitWhileCallArgumentChain(valueNodeIndex, whileIndex, ownerIndex, 0, false, context, state)
                                                     ")" -> println
+                                                    whileBoundedResult -> if {
+                                                        "while$(whileIndex)_v$(valueNodeIndex)" -> emitBoundedArrayHandle("%while$(whileIndex)_bounded$(valueNodeIndex)", whileBoundedResultTypeId, context, state)
+                                                    }
                                                     valueNodeIndex -> emitCallTemporaryDrops(whileIndex, ownerIndex, context, state)
                                                 }
                                         }
@@ -1478,12 +1516,15 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 -> if {
                                                     context.types[whileIndexedContainerTypeId!].first => whileIndexedContainerTypeId!
                                                     true => whileIndexedReadonlyReference!
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_indexed_source = load " -> print
-                                                    whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
-                                                    ", ptr " -> print
-                                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
-                                                    ", align " -> print
-                                                    context.typeAligns[whileIndexedContainerTypeId!] -> writeDecimalLine
+                                                    context.types[whileIndexedContainerTypeId!].kind != 12
+                                                        -> if {
+                                                            "  %while$(whileIndex)_v$(valueNodeIndex)_indexed_source = load " -> print
+                                                            whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+                                                            ", ptr " -> print
+                                                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                                            ", align " -> print
+                                                            context.typeAligns[whileIndexedContainerTypeId!] -> writeDecimalLine
+                                                        }
                                                 }
                                             whileIndexedContainerTypeId! >= 0 and context.types[whileIndexedContainerTypeId!].kind == 5
                                                 -> if {
@@ -1530,32 +1571,46 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                                 whileIndexedMutableParameterOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(whileIndexedMutableParameterOrdinal)_mut_len_addr" -> print }
                                                                 ", align 8" -> println
                                                             } else {
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
-                                                                whileIndexedReadonlyReference! -> if {
-                                                                    whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
-                                                                } else {
-                                                                    whileIndexedArray -> writeIrType(context, state)
-                                                                }
-                                                                " " -> print
-                                                                whileIndexedReadonlyReference! -> if {
-                                                                    "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
-                                                                } else {
-                                                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
-                                                                }
-                                                                ", 0" -> println
-                                                                "  %while$(whileIndex)_v$(valueNodeIndex)_length = extractvalue " -> print
-                                                                whileIndexedReadonlyReference! -> if {
-                                                                    whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
-                                                                } else {
-                                                                    whileIndexedArray -> writeIrType(context, state)
-                                                                }
-                                                                " " -> print
-                                                                whileIndexedReadonlyReference! -> if {
-                                                                    "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
-                                                                } else {
-                                                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
-                                                                }
-                                                                ", 1" -> println
+                                                                whileIndexedReadonlyReference! and whileIndexedContainerTypeId! >= 0
+                                                                    and context.types[whileIndexedContainerTypeId!].kind == 12
+                                                                    -> if {
+                                                                        # A readonly bounded reference points at inline length/data storage.
+                                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_data = getelementptr inbounds " -> print
+                                                                        whileIndexedContainerTypeId! -> writeValueAbiTypeId(context, state)
+                                                                        ", ptr " -> print
+                                                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                                                        ", i32 0, i32 1, i64 0" -> println
+                                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_length = load i64, ptr " -> print
+                                                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                                                        ", align 8" -> println
+                                                                    } else {
+                                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
+                                                                        whileIndexedReadonlyReference! -> if {
+                                                                            whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+                                                                        } else {
+                                                                            whileIndexedArray -> writeIrType(context, state)
+                                                                        }
+                                                                        " " -> print
+                                                                        whileIndexedReadonlyReference! -> if {
+                                                                            "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
+                                                                        } else {
+                                                                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                                                        }
+                                                                        ", 0" -> println
+                                                                        "  %while$(whileIndex)_v$(valueNodeIndex)_length = extractvalue " -> print
+                                                                        whileIndexedReadonlyReference! -> if {
+                                                                            whileIndexedContainerTypeId! -> writeAggregateFieldTypeId(context, state)
+                                                                        } else {
+                                                                            whileIndexedArray -> writeIrType(context, state)
+                                                                        }
+                                                                        " " -> print
+                                                                        whileIndexedReadonlyReference! -> if {
+                                                                            "%while$(whileIndex)_v$(valueNodeIndex)_indexed_source" -> print
+                                                                        } else {
+                                                                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue(context, state)
+                                                                        }
+                                                                        ", 1" -> println
+                                                                    }
                                                             }
                                                         whileIndexWidth == 64 -> if {
                                                             "  %while$(whileIndex)_v$(valueNodeIndex)_index = add i64 0, " -> print
