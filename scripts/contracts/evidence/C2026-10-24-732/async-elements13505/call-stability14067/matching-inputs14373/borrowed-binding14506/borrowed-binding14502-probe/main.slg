@@ -1,0 +1,58 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+    """
+    struct Request { values: [Int; ~] }
+    readCount values: [Int; ~] -> Int {
+        Request { values: values } => request
+        request.values -> len
+    }
+    main {
+        [7, 8; ~] => values
+        values -> readCount -> println
+        values[0] -> println
+    }
+    """; ~
+    ] -> llvm.probeBorrowedLocalDiagnostics("borrowed-local") => borrowedlocal
+    "borrowed-local=$borrowedlocal" -> println
+    [
+    """
+    struct Request { values: [Int; ~] }
+    readCount values: move [Int; ~] -> Int {
+        Request { values: values } => request
+        request.values -> len
+    }
+    main { [7, 8; ~] -> readCount -> println }
+    """; ~
+    ] -> llvm.probeBorrowedLocalDiagnostics("owned-local") => ownedlocal
+    "owned-local=$ownedlocal" -> println
+    [
+    """
+    struct Request { values: [Int; ~] }
+    readRequest request: ref Request -> Int => request.values -> len
+    readCount values: [Int; ~] -> Int { Request { values: values } -> readRequest }
+    main {
+        [7, 8; ~] => values
+        values -> readCount -> println
+        values[0] -> println
+    }
+    """; ~
+    ] -> llvm.probeBorrowedLocalDiagnostics("borrowed-readonly-call") => borrowedreadonlycall
+    "borrowed-readonly-call=$borrowedreadonlycall" -> println
+    [
+    """
+    struct Request { values: [Int; 2] }
+    readCount values: [Int; 2] -> Int {
+        Request { values: values } => request
+        request.values[0]
+    }
+    main {
+        [7, 8] => values
+        values -> readCount -> println
+        values[0] -> println
+    }
+    """; ~
+    ] -> llvm.probeBorrowedLocalDiagnostics("fixed-copy-control") => fixedcopycontrol
+    "fixed-copy-control=$fixedcopycontrol" -> println
+}

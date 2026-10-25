@@ -6337,7 +6337,13 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                 ownedEscapeAncestor! >= 0 and ownedEscapeFunctionIr! < 0 and ownershipPreserved!
                     -> while {
                         typed[ownedEscapeAncestor!] => ownedEscapeParent
-                        (ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25)
+                        (ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25
+                            or (ownedEscapeParent.kind == 17
+                            and not (ownedEscapeAncestor! -> materializedBlockInputIsBorrowed)
+                            and (typed[ownedEscapeChild!].kind == 12
+                            or typed[ownedEscapeChild!].kind == 14
+                            or typed[ownedEscapeChild!].kind == 16
+                            or typed[ownedEscapeChild!].kind == 35)))
                             and ownedEscapeParent.operand0 == ownedEscapeChild!
                             -> if {
                                 true => reachesOwnedStorage!
@@ -6467,7 +6473,10 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                         typed[ownedEscapeStorageDestinationIr!].kind == 25
                                             -> if { 1 } else {
                                                 typed[ownedEscapeStorageDestinationIr!].kind == 24
-                                                    -> if { 2 } else { 0 }
+                                                    -> if { 2 } else {
+                                                        typed[ownedEscapeStorageDestinationIr!].kind == 17
+                                                            -> if { 3 } else { 0 }
+                                                    }
                                             }
                                     } else { ownedEscapeReturnKind }
                                     expectedModule: reachesOwnedStorage! -> if { ownedEscapeStorageDestinationIr! } else { typed[ownedEscapeFunctionIr!].sourceModule }

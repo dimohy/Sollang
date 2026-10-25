@@ -1769,7 +1769,17 @@ emitBorrowedOwnedStorageOrResultDiagnostic context: ref emitterContext.EmitConte
                         -> if {
                             "owned indexed storage" -> print
                         } else {
-                            "owned container storage" -> print
+                            diagnostic.code == 26 and diagnostic.expectedOrigin == 3
+                                -> if {
+                                    context.ir[diagnostic.expectedModule] => binding
+                                    context.ranges[binding.sourceModule] => bindingRange
+                                    context.tokens[bindingRange.tokenStart + binding.payloadToken] => bindingToken
+                                    "owned binding '" -> print
+                                    context.sources[binding.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print
+                                    "'" -> print
+                                } else {
+                                    "owned container storage" -> print
+                                }
                         }
                 }
             "; transfer ownership with a move input such as '$name: move ...', or store a borrowed view/copy the value explicitly" -> println
