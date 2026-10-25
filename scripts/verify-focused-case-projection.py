@@ -100,7 +100,12 @@ def verify(contract_path, paired_path, managed_path):
     shared_contracts = [Path(path) for path in paired['inputHashes']
                        if Path(path).suffix == '.json' and path in managed['inputHashes']
                        and Path(path).is_file()]
-    candidates = [path for path in shared_contracts if read(path).get('cases')]
+    candidates = []
+    for path in shared_contracts:
+        value = read(path)
+        if (isinstance(value, dict) and isinstance(value.get('cases'), list)
+                and value['cases']):
+            candidates.append(path)
     frozen = None
     for candidate in candidates:
         rows = read(candidate)['cases']

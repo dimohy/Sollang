@@ -52,6 +52,24 @@ class ProjectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'EXACT_CONTRACT_NOT_COVERED'):
             projection.verify(uncovered, self.paired, self.managed)
 
+    def test_shared_noncontract_json_preserves_exact_contract_check(self):
+        for value in ([1, 2], None, 3, {'cases': 'not-a-contract'}):
+            with self.subTest(value=value):
+                extra = self.root / 'unrelated.json'
+                self.write(extra, value)
+                managed = projection.read(self.managed)
+                managed['inputHashes'][str(extra)] = projection.sha(extra)
+                self.write(self.managed, managed)
+                paired = projection.read(self.paired)
+                paired['inputHashes'][str(extra)] = projection.sha(extra)
+                paired['inputHashes'][str(self.managed)] = projection.sha(self.managed)
+                self.write(self.paired, paired)
+                self.assertEqual(self.verify()['completed'], 1)
+                uncovered = self.root / 'uncovered-with-extra.json'
+                self.write(uncovered, dict(cases=[dict(self.case, id='missing')]))
+                with self.assertRaisesRegex(ValueError, 'EXACT_CONTRACT_NOT_COVERED'):
+                    projection.verify(uncovered, self.paired, self.managed)
+
     def test_input_drift_rejected(self):
         self.write(self.contract, dict(cases=[dict(self.case, stdout='changed')]))
         with self.assertRaisesRegex(ValueError, 'PARENT_INPUT_DRIFT'):

@@ -117,7 +117,7 @@ function Save-Capture([string]$Directory, [string]$Stem, $Capture) {
     [IO.File]::WriteAllBytes((Join-Path $Directory "$Stem.stdout.txt"), $Capture.StdoutBytes)
     [IO.File]::WriteAllBytes((Join-Path $Directory "$Stem.stderr.txt"), $Capture.StderrBytes)
 }
-function Add-ProcessEvidence($Capture, [hashtable]$Item) {
+function Add-ProcessEvidence($Capture, [System.Collections.IDictionary]$Item) {
     $Item.rootProcessIds += $Capture.RootProcessId
     $Item.descendantProcessIds += @($Capture.DescendantProcessIds)
     $Item.orphanProcessIds += @($Capture.OrphanProcessIds)
@@ -139,13 +139,33 @@ foreach ($path in $paths.Values) { if (-not (Test-Path -LiteralPath $path -PathT
 $startHashes = HashMap $paths
 if ($startHashes.compiler -cne $ExpectedCompilerSha256) { throw "compiler hash mismatch: expected=$ExpectedCompilerSha256 actual=$($startHashes.compiler)" }
 
+if ($ValidateInputsOnly) {
+    if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'result.json')) {
+        throw 'Input validation requires an output directory without a prior execution result'
+    }
+    $endHashes = HashMap $paths
+    if (-not (MapsEqual $startHashes $endHashes)) { throw 'Managed matrix inputs changed during preflight' }
+    $preflight = [ordered]@{
+        schemaVersion=1; status='validated-inputs'; scope='async-task-observability-managed-matrix-inputs'
+        executionMode='inputs-only'; completed=0; total=$cases.Count; validatedInputs=$cases.Count
+        compilerPath=$Compiler; expectedCompilerSha256=$ExpectedCompilerSha256
+        inputHashesStart=$startHashes; inputHashesEnd=$endHashes; inputDrift=$false
+        executedCases=@(); rootProcessIds=@(); descendantProcessIds=@(); orphanProcessIds=@()
+    }
+    $preflightPath = Join-Path $OutputDirectory 'preflight.json'
+    $preflight | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $preflightPath -Encoding utf8
+    Write-Host "[async task observability managed matrix inputs] VALIDATED $($cases.Count); executed 0/$($cases.Count); $preflightPath"
+    return
+}
+
+
 $record = [ordered]@{
     schemaVersion=1; status='failed'; scope='async-task-observability-managed-matrix'
     compilerPath=$Compiler; expectedCompilerSha256=$ExpectedCompilerSha256
     compilerSha256Start=$startHashes.compiler; compilerSha256End=$startHashes.compiler; compilerDrift=$false
     inputHashesStart=$startHashes; inputHashesEnd=$startHashes; inputDrift=$false
     completed=0; total=13; cases=@(); failureIds=@(); rootProcessIds=@(); descendantProcessIds=@(); orphanProcessIds=@()
-    schemaControls=[ordered]@{ positiveAccepted=$false; negativeRejected=0; negativeTotal=7 }
+    schemaControls=[ordered]@{ positiveAccepted=$false; negativeRejected=0; negativeTotal=9 }
 }
 $resultPath = Join-Path $OutputDirectory 'result.json'
 $failureId = 'ASYNC_TASK_OBSERVABILITY_MANAGED_MATRIX_PREFLIGHT_FAILED'
@@ -224,12 +244,6 @@ try {
             $item.descendantProcessIds = @($item.descendantProcessIds | Sort-Object -Unique)
             $item.orphanProcessIds = @($item.orphanProcessIds | Sort-Object -Unique)
             if ($item.orphanProcessIds.Count -ne 0) { throw "$($case.id) left live descendants" }
-        } elseif ($case.expectation -ceq 'compiler-rejected') {
-            $item.compileExit = 1
-            $item.diagnosticMatched = $true
-        } else {
-            $item.nativeExit = 0; $item.nativeExact = $true; $item.llvmAsExit = 0; $item.v004Exit = 0
-            if ($case.id -ceq 'production-off-zero-overhead') { $item.allocationParity = $true }
         }
         $record.cases += [pscustomobject]$item
         $record.completed++
@@ -276,7 +290,9 @@ $mutations = @(
     { param($r) $r.cases[0].passed = $false },
     { param($r) $r.orphanProcessIds = @(99999) },
     { param($r) $r.compilerDrift = $true },
-    { param($r) $r.failureIds = @('FORGED_SUCCESS') }
+    { param($r) $r.failureIds = @('FORGED_SUCCESS') },
+    { param($r) $r.rootProcessIds = @() },
+    { param($r) $r.cases[0].rootProcessIds = @() }
 )
 foreach ($mutate in $mutations) {
     $negative = (($record | ConvertTo-Json -Depth 16) | ConvertFrom-Json)
@@ -286,4 +302,4 @@ foreach ($mutate in $mutations) {
 $record.schemaControls.negativeRejected = $negativeRejected
 if ($negativeRejected -ne $record.schemaControls.negativeTotal) { throw 'managed matrix schema accepted a negative control' }
 [IO.File]::WriteAllText($resultPath, (($record | ConvertTo-Json -Depth 16) + "`n"), [Text.UTF8Encoding]::new($false))
-Write-Host "[async task observability managed matrix] PASS 13/13; schema positive1/1 negative7/7; $resultPath"
+Write-Host "[async task observability managed matrix] PASS 13/13; schema positive1/1 negative$negativeRejected/$($record.schemaControls.negativeTotal); $resultPath"
