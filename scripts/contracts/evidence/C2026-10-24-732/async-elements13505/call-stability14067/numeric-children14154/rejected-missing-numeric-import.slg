@@ -1,0 +1,184 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+
+public probeNumericInitialCore14154 prepared: semanticContext.SemanticSnapshot -> ExpressionTypeIdSet {
+    prepared -> resolveContextCore
+}
+
+public probeNumericExpected14154 prepared: ref semanticContext.SemanticSnapshot, resolved: ref ExpressionTypeIdSet, bindings: ref [semanticContext.CallArgumentBinding; ~] -> [Int; ~] {
+    [Bool; ~] => genericBySymbol!
+    prepared.package.symbols -> each symbol { genericBySymbol! -> push(false) }
+    prepared.package.ranges -> each range {
+        0 => index!
+        index! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + index!] => symbol
+            symbol.kind == 32 and symbol.parent >= 0 and symbol.parent < range.symbolCount
+                -> if {
+                    true => genericBySymbol![range.symbolStart + symbol.parent]
+                }
+            index! + 1 => index!
+        }
+    }
+    [Int; ~] => expectedTypes!
+    bindings -> each binding {
+        callParameterType(prepared, resolved, binding) => expected!
+        expected! >= 0 and expected! < (resolved.types -> len)
+            -> if {
+                prepared.package.ranges[binding.sourceModule] => sourceRange
+                prepared.package.ranges[binding.targetSourceModule] => targetRange
+                prepared.package.nodes[sourceRange.astStart + binding.callAst] => call
+                genericBySymbol![targetRange.symbolStart + binding.functionSymbol] => generic
+                prepared.package.nodes[sourceRange.astStart + binding.argumentAst].kind => argumentKind
+                generic and call.kind != 10 -> if { -1 => expected! }
+                call.kind == 10 and binding.parameterOrdinal == 0
+                    and argumentKind != 14 and argumentKind != 22 and argumentKind != 37
+                    -> if { -1 => expected! }
+            } else { -1 => expected! }
+        expectedTypes! -> push(expected!)
+    }
+    expectedTypes!
+}
+
+public probeNumericBaseline14154 prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], bindings: ref [semanticContext.CallArgumentBinding; ~], expectedTypes: ref [Int; ~] -> Int {
+    0 => changed!
+    0 => index!
+    index! < (bindings -> len) -> while {
+        bindings[index!] => binding
+        contextualizeNumericCallArgumentArena(prepared, types, expressions, expressionByAst, binding.sourceModule, binding.argumentAst, expectedTypes[index!]) => contextual
+        contextual -> if { changed! + 1 => changed! }
+        index! + 1 => index!
+    }
+    changed!
+}
+
+public probeNumericIndexed14154 prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], bindings: ref [semanticContext.CallArgumentBinding; ~], expectedTypes: ref [Int; ~] -> Int {
+    prepared.package -> indexContextualRecords => children
+    0 => changed!
+    0 => index!
+    index! < (bindings -> len) -> while {
+        bindings[index!] => binding
+        probeIndexedNumericArena14154(prepared, types, expressions, expressionByAst, binding.sourceModule, binding.argumentAst, expectedTypes[index!], children) => contextual
+        contextual -> if { changed! + 1 => changed! }
+        index! + 1 => index!
+    }
+    changed!
+}
+
+probeIndexedNumericArena14154 prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionByAst: mut [Int; ~], sourceModule: Int, argumentAst: Int, expectedTypeId: Int, children: ref ContextualRecordIndex -> Bool {
+    expectedTypeId < 0 or expectedTypeId >= (types -> len)
+        -> if { false -> return }
+    types[expectedTypeId] => expected
+    not (expected.kind == 1 and expected.origin == 1
+        and ((expected.symbol >= 2 and expected.symbol <= 14)
+        or (expected.symbol >= 19 and expected.symbol <= 22)))
+        -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + argumentAst => globalAst
+    prepared.package.nodes[globalAst] => argument
+    false => contextual!
+    argument.kind == 14 -> if {
+        prepared.package.sources[sourceModule] -> len => sourceLength
+        prepared.package.sources[sourceModule] -> slice(UIntSize(0), sourceLength) => source
+        source -> numericLiteralRange.literalUsesFloatingSyntax(argument.start, argument.start + argument.length) => floating
+        not floating or expected.symbol >= 19 -> if { true => contextual! }
+    }
+    argument.kind == 22 -> if {
+        children.firstChild[globalAst] - range.astStart => childAst!
+        childAst! >= 0 and childAst! < range.astCount
+            -> while {
+                prepared.package.nodes[range.astStart + childAst!] => child
+                child.parent == argumentAst and child.kind == 14
+                    -> if {
+                        probeIndexedNumericArena14154(prepared, types, expressions, expressionByAst, sourceModule, childAst!, expectedTypeId, children) => childContextual
+                        childContextual -> if { true => contextual! }
+                    }
+                children.nextChild[range.astStart + childAst!] - range.astStart => childAst!
+            }
+    }
+    argument.kind == 10 -> if {
+        false => foundBranch!
+        true => allBranchesContextual!
+        children.firstChild[globalAst] - range.astStart => controlAst!
+        controlAst! >= 0 and controlAst! < range.astCount
+            -> while {
+                prepared.package.nodes[range.astStart + controlAst!] => control
+                control.parent == argumentAst and control.kind == 42
+                    -> if {
+                        children.firstChild[range.astStart + controlAst!] - range.astStart => branchAst!
+                        branchAst! >= 0 and branchAst! < range.astCount
+                            -> while {
+                                prepared.package.nodes[range.astStart + branchAst!] => branch
+                                branch.parent == controlAst! and branch.kind == 43
+                                    -> if {
+                                        true => foundBranch!
+                                        -1 => valueAst!
+                                        children.firstChild[range.astStart + branchAst!] - range.astStart => valueSearch!
+                                        valueSearch! >= 0 and valueSearch! < range.astCount
+                                            -> while {
+                                                prepared.package.nodes[range.astStart + valueSearch!] => value
+                                                value.parent == branchAst!
+                                                    and value.start + value.length == branch.start + branch.length
+                                                    -> if { valueSearch! => valueAst! }
+                                                children.nextChild[range.astStart + valueSearch!] - range.astStart => valueSearch!
+                                            }
+                                        valueAst! < 0 -> if { false => allBranchesContextual! } else {
+                                            probeIndexedNumericArena14154(prepared, types, expressions, expressionByAst, sourceModule, valueAst!, expectedTypeId, children) => branchContextual
+                                            not branchContextual -> if { false => allBranchesContextual! }
+                                        }
+                                    }
+                                children.nextChild[range.astStart + branchAst!] - range.astStart => branchAst!
+                            }
+                    }
+                children.nextChild[range.astStart + controlAst!] - range.astStart => controlAst!
+            }
+        foundBranch! and allBranchesContextual! -> if { true => contextual! }
+    }
+    (argument.kind == 20 or argument.kind == 21)
+        and expected.symbol >= 2 and expected.symbol <= 14
+        -> if {
+            -1 => leftAst!
+            -1 => rightAst!
+            children.firstChild[globalAst] - range.astStart => childAst!
+            childAst! >= 0 and childAst! < range.astCount
+                -> while {
+                    prepared.package.nodes[range.astStart + childAst!].parent == argumentAst
+                        -> if {
+                            leftAst! < 0 -> if { childAst! => leftAst! } else { childAst! => rightAst! }
+                        }
+                    children.nextChild[range.astStart + childAst!] - range.astStart => childAst!
+                }
+            leftAst! >= 0 and rightAst! >= 0 -> if {
+                probeIndexedNumericArena14154(prepared, types, expressions, expressionByAst, sourceModule, leftAst!, expectedTypeId, children) => leftContextual
+                probeIndexedNumericArena14154(prepared, types, expressions, expressionByAst, sourceModule, rightAst!, expectedTypeId, children) => rightContextual
+                expressionByAst[range.astStart + leftAst!] => leftIndex
+                expressionByAst[range.astStart + rightAst!] => rightIndex
+                leftIndex >= 0 and rightIndex >= 0 -> if {
+                    types -> typeIds.materializedReadTypeId(expressions[leftIndex].typeId) => leftType
+                    types -> typeIds.materializedReadTypeId(expressions[rightIndex].typeId) => rightType
+                    leftType == expectedTypeId and rightType == expectedTypeId
+                        -> if { true => contextual! }
+                }
+            }
+        }
+    contextual! -> if {
+        expressionByAst[globalAst] => expressionIndex
+        expressionIndex >= 0 -> if {
+            expressions[expressionIndex] => expression!
+            expectedTypeId => expression!.typeId
+            0 => expression!.status
+            expressions -> replaceCallExpression(expressionIndex, expression!)
+        } else {
+            expressions -> len => nextIndex
+            expressions -> push(ExpressionTypeId {
+                sourceModule: sourceModule
+                astNode: argumentAst
+                typeId: expectedTypeId
+                status: 0
+            })
+            nextIndex => expressionByAst[globalAst]
+        }
+    }
+    contextual!
+}

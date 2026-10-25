@@ -1,0 +1,93 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sys.process as process
+import sys.runtime as runtime
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argumentIndex!
+    argumentIndex! < (arguments -> len) -> while {
+        paths! -> push(arguments[argumentIndex!])
+        argumentIndex! + 1 => argumentIndex!
+    }
+    "prepare-files" -> println
+    paths! -> semanticContext.prepareFiles => prepared
+    "numeric-child-index" -> println
+    prepared -> expressionTypeIds.probeNumericInitialCore14154 => initial
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => bindings
+    expressionTypeIds.probeNumericExpected14154(prepared, initial, bindings) => expected
+    [expressionTypeIds.ExpressionTypeId; ~] => baseline!
+    [expressionTypeIds.ExpressionTypeId; ~] => indexed!
+    initial.expressions -> each item {
+        baseline! -> push(item)
+        indexed! -> push(item)
+    }
+    [Int; ~] => baselineByAst!
+    [Int; ~] => indexedByAst!
+    prepared.package.nodes -> each node {
+        baselineByAst! -> push(-1)
+        indexedByAst! -> push(-1)
+    }
+    0 => expressionIndex!
+    initial.expressions -> each item {
+        prepared.package.ranges[item.sourceModule].astStart + item.astNode => globalAst
+        expressionIndex! => baselineByAst![globalAst]
+        expressionIndex! => indexedByAst![globalAst]
+        expressionIndex! + 1 => expressionIndex!
+    }
+    runtime.nowMillis() => baselineStarted
+    expressionTypeIds.probeNumericBaseline14154(prepared, initial.types, baseline!, baselineByAst!, bindings, expected) => baselineContextual
+    runtime.nowMillis() - baselineStarted => baselineElapsed
+    runtime.nowMillis() => indexedStarted
+    expressionTypeIds.probeNumericIndexed14154(prepared, initial.types, indexed!, indexedByAst!, bindings, expected) => indexedContextual
+    runtime.nowMillis() - indexedStarted => indexedElapsed
+    (baseline! -> len) == (indexed! -> len) and baselineContextual == indexedContextual => equal!
+    0 => comparedFields!
+    0 => actualChanges!
+    0 => row!
+    row! < (baseline! -> len) and row! < (indexed! -> len)
+        -> while {
+            baseline![row!] => left
+            indexed![row!] => right
+            left.sourceModule != right.sourceModule or left.astNode != right.astNode or left.typeId != right.typeId or left.status != right.status
+                -> if { false => equal! }
+            comparedFields! + 4 => comparedFields!
+            row! < (initial.expressions -> len) -> if {
+                initial.expressions[row!] => old
+                left.sourceModule != old.sourceModule or left.astNode != old.astNode or left.typeId != old.typeId or left.status != old.status
+                    -> if { actualChanges! + 1 => actualChanges! }
+            } else { actualChanges! + 1 => actualChanges! }
+            row! + 1 => row!
+        }
+    0 => ast!
+    ast! < (baselineByAst! -> len) and ast! < (indexedByAst! -> len)
+        -> while {
+            baselineByAst![ast!] != indexedByAst![ast!] -> if { false => equal! }
+            ast! + 1 => ast!
+        }
+    (baselineByAst! -> len) != (indexedByAst! -> len)
+        -> if { false => equal! }
+    "source-modules" -> println
+    prepared.package.sources -> len -> println
+    "binding-records" -> println
+    bindings -> len -> println
+    "baseline-ms" -> println
+    baselineElapsed -> println
+    "indexed-ms" -> println
+    indexedElapsed -> println
+    "baseline-contextual" -> println
+    baselineContextual -> println
+    "indexed-contextual" -> println
+    indexedContextual -> println
+    "expression-records" -> println
+    baseline! -> len -> println
+    "equal" -> println
+    equal! -> if { 1 } else { 0 } -> println
+    "compared-fields" -> println
+    comparedFields! -> println
+    "compared-ast-slots" -> println
+    ast! -> println
+    "actual-type-changes" -> println
+    actualChanges! -> println
+}
