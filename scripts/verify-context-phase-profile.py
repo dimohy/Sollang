@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from completed_artifact_plan import initialize_output, cleanup_output
 from verification_source_proof import current_build_inputs
 from verification_execution import VerificationExecution
+from context_profile_source_contract import validate_loader
 from verification_json_records import write_json_atomic
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -60,6 +61,7 @@ if 'verifiedStandardLibraryPrefixCount' in plan:
     if (stdlib_root != (ROOT / 'stdlib').resolve() or type(prefix_count) is not int
             or prefix_count != len(stdlib) or set(runtime_paths[:prefix_count]) != stdlib):
         raise ValueError('PROFILE_STDLIB_PREFIX_MISMATCH')
+validate_loader(profile, plan.get('verifiedStandardLibraryPrefixCount'))
 pins = dict(plan['inputHashes'])
 build_record = json.loads((build / 'result.json').read_text(encoding='utf-8-sig'))
 for path in current_build_inputs(ROOT, build_record):
@@ -83,7 +85,7 @@ for path in [managed, managed.with_suffix('.dll'), managed.with_suffix('.deps.js
         raise ValueError('PROFILE_MANAGED_COMPILER_NOT_QUALIFIED: ' + str(path))
 for path in [plan_path, proof_path, Path(__file__).resolve(), Path(plan.get('generator', source / 'generate.py')),
              ROOT / 'scripts/verification_execution.py', ROOT / 'scripts/verification_json_records.py',
-             ROOT / 'scripts/completed_artifact_plan.py', ROOT / '.tools/llvm-22.1.8/bin/clang.exe']:
+             ROOT / 'scripts/completed_artifact_plan.py', ROOT / 'scripts/context_profile_source_contract.py', ROOT / '.tools/llvm-22.1.8/bin/clang.exe']:
     pins[str(path)] = sha(path)
 
 def stable():

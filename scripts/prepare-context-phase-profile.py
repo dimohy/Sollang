@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from context_profile_source_contract import render_loader, validate_loader
 
 root = Path.cwd()
 parser = argparse.ArgumentParser(description=__doc__)
@@ -88,32 +89,7 @@ profileMark label: Text -> Unit uses Console {
 }
 
 '''
-tail = '''
-
-public profileResolvedFiles paths: [Text; ~] -> Int uses Console, File {
-    "prepare-files" -> profileMark
-    paths -> semanticContext.prepareFiles => prepared!
-    __STDLIB_COUNT__ => prepared!.standardLibrarySourceCount
-    prepared! -> semanticContext.freeze => prepared
-    [Text; ~] => sources!
-    prepared.package.sources -> each item { sources! -> push(item -> sourceDecoding.utf8Text) }
-    llvmTarget.windowsX64() => target
-    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: __STDLIB_COUNT__, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
-    prepared -> semanticDiagnostics.firstPreparedExplicitSignatureTypeDiagnostic => signatureDiagnostic
-    prepared.package -> semanticDiagnostics.unresolvedMutableLocalReads => mutableNames
-    libraryImports.empty() => libraries
-    [libraryImports.LibraryFunctionResolution; ~] => libraryCalls
-    prepared.package -> libraryImports.callResultTypes(prepared.semantic.types, libraries, libraryCalls) => externalResults
-    "resolve-call-context" -> profileMark
-    prepared -> expressionTypeIds.resolveCallContextWithExternalResults(externalResults) => resolved
-    "resolved-context" -> profileMark
-    request -> profileResolvedSnapshot(resolved, libraries, libraryCalls, mutableNames, signatureDiagnostic) => context
-    "blocking-diagnostics" -> profileMark
-    context -> diagnostics.blockingDiagnosticCount => count
-    "complete" -> profileMark
-    count
-}
-'''
+tail = render_loader(count)
 main = '''import sollang.compiler.llvm.text as llvm
 import sys.process as process
 
@@ -129,14 +105,14 @@ main {
     "profile diagnostics = $count" -> println
 }
 '''
-tail = tail.replace('__STDLIB_COUNT__', str(count))
+validate_loader(prefix + marker + header + '\n' + body + tail, count)
 out.mkdir(parents=True)
 for name, content in [('profile.slg', prefix + marker + header + '\n' + body + tail), ('main.slg', main)]:
     path = out / name
     assert not path.exists(), path
     path.write_text(content, encoding='utf-8', newline='\n')
 sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest().upper()
-inputs = [*paths, *harness, canonical, Path(__file__).resolve(), base_plan, harness_manifest]
+inputs = [*paths, *harness, canonical, Path(__file__).resolve(), base_plan, harness_manifest, root / "scripts/context_profile_source_contract.py"]
 plan.update(generator=str(Path(__file__).resolve()), schemaVersion=1, status='prepared-current-source-preflight-pending',
     scope='context-stage-trace-with-validated-selected-stdlib-prefix-no-acceptance-credit',
     source=str(canonical), sourceSha256=sha(canonical),
@@ -149,7 +125,7 @@ plan.update(generator=str(Path(__file__).resolve()), schemaVersion=1, status='pr
     maximumBuildInvocations=1, buildMaximumSeconds=180, maximumInvocations=1, maximumSeconds=180,
     maximumAdditionalTotalSeconds=360, retryCount=0, claimsPerformanceImprovement=False,
     claimsGoalComplete=False,
-    limitations=['Raw mapped-file preparation and an empty external artifact library catalog still differ from the production checked/cached entry.',
+    limitations=['The checked borrowed-source preparation matches production ownership; the external artifact library catalog is still empty and caching is omitted.',
                  'Stdlib source authority is admitted only after exact selected-root prefix validation.',
                  'Trace timing is diagnostic evidence, not original acceptance or a production speed claim.'])
 plan.pop('cumulativeDiagnosticMaximumSeconds', None)
