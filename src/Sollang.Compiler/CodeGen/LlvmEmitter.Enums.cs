@@ -11,7 +11,7 @@ internal sealed partial class LlvmEmitter
     {
         value = null!;
         if (expression.Path.Count < 2
-            || !_program.Types.TryResolveInModule(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), _currentFunction?.ModuleName, out var type)
+            || !TryResolveRuntimeTypeName(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), out var type)
             || !_program.Types.IsEnum(type))
         {
             return false;
@@ -73,7 +73,7 @@ internal sealed partial class LlvmEmitter
         value = null!;
         if (expression.Source is not NameExpression typeName
             || _locals.ContainsKey(typeName.Name)
-            || !_program.Types.TryResolveInModule(typeName.Name, _currentFunction?.ModuleName, out var type)
+            || !TryResolveRuntimeTypeName(typeName.Name, out var type)
             || !_program.Types.IsEnum(type))
         {
             return false;

@@ -36,6 +36,11 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionTypeNames =
+        new(ReferenceEqualityComparer.Instance);
+    private Dictionary<string, BoundType>? _currentFunctionTypeNames;
+    private IReadOnlyDictionary<string, BoundType>? _currentFunctionTypeNameBindings;
+    private string? _currentFunctionTypeNameModule;
     private readonly Dictionary<object, BoundFunction> _resolvedCaptureCalls =
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCaptureCandidates =
@@ -304,6 +309,7 @@ internal sealed partial class SemanticCompiler
             mainBindings,
             _functionBindings,
             _functionCapturedBindings,
+            _functionTypeNames,
             storagePlacement.MainFrame,
             storagePlacement.FunctionFrames,
             stableFunctionIdentities,
@@ -571,10 +577,19 @@ internal sealed partial class SemanticCompiler
                 continue;
             }
 
-            ValidateUserFunction(
-                function,
-                functions,
-                new Dictionary<string, BoundType>(StringComparer.Ordinal));
+            if (function.SpecializedType is not null)
+            {
+                // A concrete signature may leave type parameters in body syntax.
+                // Revalidation needs the same environment as its first binding.
+                ValidateGenericSpecialization(function, functions);
+            }
+            else
+            {
+                ValidateUserFunction(
+                    function,
+                    functions,
+                    new Dictionary<string, BoundType>(StringComparer.Ordinal));
+            }
         }
 
         return (reused, total);
@@ -590,18 +605,21 @@ internal sealed partial class SemanticCompiler
         if (!CollectReusableFunctionTree(root, parentIdentity: null, reusePlan, tree))
             return false;
         Dictionary<BoundFunction, (IReadOnlyDictionary<string, BoundType> Bindings,
-            IReadOnlyDictionary<string, BoundType> Captured)> materialized;
+            IReadOnlyDictionary<string, BoundType> Captured,
+            IReadOnlyDictionary<string, BoundType> TypeNames)> materialized;
         try
         {
             materialized = new Dictionary<BoundFunction, (
                 IReadOnlyDictionary<string, BoundType> Bindings,
-                IReadOnlyDictionary<string, BoundType> Captured)>(ReferenceEqualityComparer.Instance);
+                IReadOnlyDictionary<string, BoundType> Captured,
+                IReadOnlyDictionary<string, BoundType> TypeNames)>(ReferenceEqualityComparer.Instance);
             foreach (var item in tree)
             {
                 materialized.Add(
                     item.Function,
                     (RestoreBindings(item.Reuse.Bindings),
-                        RestoreBindings(item.Reuse.CapturedBindings)));
+                        RestoreBindings(item.Reuse.CapturedBindings),
+                        RestoreBindings(item.Reuse.TypeNames)));
             }
         }
         catch (InvalidDataException)
@@ -618,6 +636,7 @@ internal sealed partial class SemanticCompiler
         {
             _functionBindings[function] = bindings.Bindings;
             _functionCapturedBindings[function] = bindings.Captured;
+            _functionTypeNames[function] = bindings.TypeNames;
         }
         return true;
     }
@@ -710,13 +729,15 @@ internal sealed partial class SemanticCompiler
 
             var materializedBindings = new Dictionary<BoundFunction, (
                 IReadOnlyDictionary<string, BoundType> Bindings,
-                IReadOnlyDictionary<string, BoundType> Captured)>(ReferenceEqualityComparer.Instance);
+                IReadOnlyDictionary<string, BoundType> Captured,
+                IReadOnlyDictionary<string, BoundType> TypeNames)>(ReferenceEqualityComparer.Instance);
             foreach (var pair in restoredBindings)
             {
                 materializedBindings.Add(
                     pair.Key,
                     (RestoreBindings(pair.Value.Bindings),
-                        RestoreBindings(pair.Value.CapturedBindings)));
+                        RestoreBindings(pair.Value.CapturedBindings),
+                        RestoreBindings(pair.Value.TypeNames)));
             }
             restoredOwners.UnionWith(restoredBindings.Values.Select(static binding => binding.Identity));
             var numericAnnotations = reusePlan.ContextualNumericTypes.Where(pair =>
@@ -751,6 +772,7 @@ internal sealed partial class SemanticCompiler
             {
                 _functionBindings[function] = bindings.Bindings;
                 _functionCapturedBindings[function] = bindings.Captured;
+                _functionTypeNames[function] = bindings.TypeNames;
             }
             return true;
         }
@@ -2465,6 +2487,12 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        var previousTypeNames = _currentFunctionTypeNames;
+        var previousTypeNameBindings = _currentFunctionTypeNameBindings;
+        var previousTypeNameModule = _currentFunctionTypeNameModule;
+        _currentFunctionTypeNames = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        _currentFunctionTypeNameBindings = _activeGenericTypeArguments;
+        _currentFunctionTypeNameModule = function.ModuleName;
         var previousExpressionContext = _expressionInferenceContext;
         _expressionInferenceContext = null;
         var previousFunctionDeclarationName = _currentFunctionDeclarationName;
@@ -2490,9 +2518,13 @@ internal sealed partial class SemanticCompiler
             ValidateUserFunctionCore(function, parentFunctions, capturedBindings);
             WarnUnusedMutableBindings();
             WarnFixedLengthGrowableArrays();
+            _functionTypeNames[function] = _currentFunctionTypeNames;
         }
         finally
         {
+            _currentFunctionTypeNames = previousTypeNames;
+            _currentFunctionTypeNameBindings = previousTypeNameBindings;
+            _currentFunctionTypeNameModule = previousTypeNameModule;
             _expressionInferenceContext = previousExpressionContext;
             _currentFunctionDeclarationName = previousFunctionDeclarationName;
             _currentFunctionIsMain = previousFunctionIsMain;
@@ -15994,6 +16026,20 @@ internal sealed partial class SemanticCompiler
     }
 
     private BoundType ParseType(string typeName, int line, int column)
+    {
+        var type = ParseTypeCore(typeName, line, column);
+        // Source spellings belong to the owner and its generic environment.
+        // A nested callee's signature must not replace the caller's aliases.
+        if (_currentFunctionTypeNames is not null
+            && ReferenceEquals(_activeGenericTypeArguments, _currentFunctionTypeNameBindings)
+            && StringComparer.Ordinal.Equals(_currentModuleName, _currentFunctionTypeNameModule))
+        {
+            _currentFunctionTypeNames[typeName.Trim()] = type;
+        }
+        return type;
+    }
+
+    private BoundType ParseTypeCore(string typeName, int line, int column)
     {
         if (typeName.StartsWith("box ", StringComparison.Ordinal))
         {

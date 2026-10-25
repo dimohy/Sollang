@@ -938,23 +938,14 @@ internal sealed partial class LlvmEmitter
 
     private bool TryResolveRuntimeTypeName(string typeName, out BoundType type)
     {
-        if (_program.Types.TryResolve(typeName, out type))
-        {
-            return true;
-        }
-        // Fixed arrays are interned by element identity and length, rather
-        // than by a source spelling in the nominal name table.
-        if (typeName.StartsWith('[') && typeName.EndsWith(']')
-            && typeName.LastIndexOf(';') is var separator && separator > 1
-            && int.TryParse(typeName.AsSpan(separator + 1, typeName.Length - separator - 2).Trim(),
-                NumberStyles.None, CultureInfo.InvariantCulture, out var length)
-            && TryResolveRuntimeTypeName(typeName[1..separator].Trim(), out var elementType)
-            && _program.Types.TryGetFixedStaticArrayForShape(elementType, length, out type))
-        {
-            return true;
-        }
         if (_currentFunction is { } function)
         {
+            if (_program.FunctionTypeNames.TryGetValue(function, out var names)
+                && names.TryGetValue(typeName.Trim(), out type))
+                return true;
+            if (function.SpecializedGenericTypes is { } arguments
+                && arguments.TryGetValue(typeName, out type))
+                return true;
             if (typeName == function.GenericParameterName && function.SpecializedType is { } primaryType)
             {
                 type = primaryType;
@@ -973,6 +964,16 @@ internal sealed partial class LlvmEmitter
                 return true;
             }
         }
+        if (_program.Types.TryResolveInModule(typeName, _currentFunction?.ModuleName, out type))
+            return true;
+        // Structural fixed arrays are already interned during semantic analysis.
+        if (typeName.StartsWith('[') && typeName.EndsWith(']')
+            && typeName.LastIndexOf(';') is var separator && separator > 1
+            && int.TryParse(typeName.AsSpan(separator + 1, typeName.Length - separator - 2).Trim(),
+                NumberStyles.None, CultureInfo.InvariantCulture, out var length)
+            && TryResolveRuntimeTypeName(typeName[1..separator].Trim(), out var elementType)
+            && _program.Types.TryGetFixedStaticArrayForShape(elementType, length, out type))
+            return true;
         type = default;
         return false;
     }

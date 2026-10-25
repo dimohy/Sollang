@@ -16,7 +16,7 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 9;
+    private const ulong Schema = 10;
     private const int DigestLength = 32;
     private const int HeaderWords = 13;
     private const int MaximumRecords = 1_000_000;
@@ -275,6 +275,7 @@ internal sealed class IncrementalSemanticCache
                     WriteString(stream, checksum, function.ModuleName);
                     WriteBindings(stream, checksum, function.Bindings);
                     WriteBindings(stream, checksum, function.CapturedBindings);
+                    WriteBindings(stream, checksum, function.TypeNames);
                 }
                 foreach (var specialization in _specializations)
                     WriteSpecialization(stream, checksum, specialization);
@@ -318,6 +319,9 @@ internal sealed class IncrementalSemanticCache
                 StableBindings(program.Types, program.FunctionBindings[item.Function]),
                 program.FunctionCapturedBindings.TryGetValue(item.Function, out var captured)
                     ? StableBindings(program.Types, captured)
+                    : new Dictionary<string, string>(StringComparer.Ordinal),
+                program.FunctionTypeNames.TryGetValue(item.Function, out var typeNames)
+                    ? StableBindings(program.Types, typeNames)
                     : new Dictionary<string, string>(StringComparer.Ordinal)))
             .OrderBy(static function => function.Identity, StringComparer.Ordinal)
             .ToArray();
@@ -519,7 +523,8 @@ internal sealed class IncrementalSemanticCache
             var module = ReadString(stream, checksum);
             var bindings = ReadBindings(stream, checksum);
             var captured = ReadBindings(stream, checksum);
-            reusable[index] = new SemanticFunctionReuse(identity, module, bindings, captured);
+            var typeNames = ReadBindings(stream, checksum);
+            reusable[index] = new SemanticFunctionReuse(identity, module, bindings, captured, typeNames);
             previous = identity;
         }
         var specializations = new SemanticSpecializationReuse[specializationCount];

@@ -1,0 +1,716 @@
+using System.Globalization;
+using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Syntax;
+
+namespace Sollang.Compiler.CodeGen;
+
+internal sealed partial class LlvmEmitter
+{
+    private bool TryEmitEnumConstructor(CallExpression expression, out RuntimeValue value)
+    {
+        value = null!;
+        if (expression.Path.Count < 2
+            || !_program.Types.TryResolveInModule(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), _currentFunction?.ModuleName, out var type)
+            || !_program.Types.IsEnum(type))
+        {
+            return false;
+        }
+
+        var definition = _program.Types.GetEnum(type);
+        var variantName = expression.Path[^1];
+        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == variantName)
+            ?? throw new SollangException($"enum '{definition.Name}' has no variant '{variantName}'");
+        var payloadType = variant.PayloadType
+            ?? throw new SollangException($"payload-free variant '{definition.Name}.{variant.Name}' uses member syntax without parentheses");
+        var payload = EmitFunctionArgumentExpression(expression.Arguments[0], payloadType);
+        EnsureRuntimeType(payload, payloadType, $"{definition.Name}.{variant.Name}");
+        var copiesBorrowedPayload = CopiesBorrowedFixedEnumPayload(expression.Arguments[0], payloadType);
+        if (copiesBorrowedPayload)
+        {
+            payload = CopyFixedStorageValue(payload);
+        }
+        value = EmitEnumValue(type, variant, payload);
+        if (_program.Types.ContainsOwnedStorage(payloadType) && !copiesBorrowedPayload)
+        {
+            RemoveOwnedLiteralSources(expression.Arguments[0], payloadType);
+        }
+        return true;
+    }
+
+    private bool CopiesBorrowedFixedEnumPayload(Expression expression, BoundType payloadType)
+    {
+        if (!_program.Types.RequiresFixedStorageCopy(payloadType))
+            return false;
+        var owner = expression is NameExpression name ? name.Name
+            : TryGetOwnedFieldProjection(expression, out var fieldOwner, out _) ? fieldOwner : null;
+        if (owner is null || !IsBorrowedOwnedPlace(expression))
+            return false;
+
+        // Owned match payloads also use borrowed local views, but their exact
+        // cleanup obligation permits a transfer. A genuinely borrowed subject
+        // has no such obligation and must retain its original backing.
+        return !HasOwnedMatchPayloadCleanup(owner);
+    }
+
+    private bool HasOwnedMatchPayloadCleanup(string ownerName) =>
+        _borrowedOwnedTransferFlags.TryGetValue(ownerName, out var retainedFlag)
+        && _terminatingOwnedCleanupObligations.Any(obligation =>
+            obligation.BindingName == ownerName && obligation.RetainedFlag == retainedFlag);
+
+    private bool IsBorrowedOwnedPlace(Expression expression) => expression switch
+    {
+        NameExpression name => _borrowedOwnedLocals.Contains(name.Name)
+            || _locals.GetValueOrDefault(name.Name) is RuntimeReference,
+        FieldAccessExpression field => IsBorrowedOwnedPlace(field.Source),
+        IndexExpression index => IsBorrowedOwnedPlace(index.Source),
+        TapExpression tap => IsBorrowedOwnedPlace(tap.Source),
+        _ => false
+    };
+
+    private bool TryEmitPayloadlessEnumVariant(FieldAccessExpression expression, out RuntimeValue value)
+    {
+        value = null!;
+        if (expression.Source is not NameExpression typeName
+            || _locals.ContainsKey(typeName.Name)
+            || !_program.Types.TryResolveInModule(typeName.Name, _currentFunction?.ModuleName, out var type)
+            || !_program.Types.IsEnum(type))
+        {
+            return false;
+        }
+
+        var definition = _program.Types.GetEnum(type);
+        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == expression.FieldName)
+            ?? throw new SollangException($"enum '{definition.Name}' has no variant '{expression.FieldName}'");
+        if (variant.PayloadType is { } payloadType
+            && payloadType != BoundType.Unit)
+        {
+            throw new SollangException($"variant '{definition.Name}.{variant.Name}' requires a payload argument");
+        }
+
+        value = EmitEnumValue(
+            type,
+            variant,
+            variant.PayloadType == BoundType.Unit ? RuntimeUnit.Instance : null);
+        return true;
+    }
+
+    private RuntimeEnum EmitEnumValue(BoundType type, BoundEnumVariant variant, RuntimeValue? payload)
+    {
+        var llvmType = LlvmEnumType(type);
+        var slot = NextTemp("enum_init_slot");
+        EmitAlloca(slot, llvmType, 8);
+        EmitStore(llvmType, "zeroinitializer", slot, 8);
+        var tagAddress = NextTemp("enum_tag_addr");
+        EmitAssign(tagAddress, $"getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 0");
+        EmitStore("i32", variant.Tag.ToString(CultureInfo.InvariantCulture), tagAddress, 4);
+
+        // Unit is a semantic payload but has no runtime storage. Treat it like
+        // the native try lowering does: the variant tag carries the complete
+        // value and no zero-width payload field is materialized.
+        if (payload is not null and not RuntimeUnit)
+        {
+            var payloadAddress = NextTemp("enum_payload_addr");
+            EmitAssign(payloadAddress, $"getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 1");
+            var materialized = MaterializeAggregateValue(payload);
+            EmitStore(materialized.TypeName, materialized.ValueName, payloadAddress, RuntimeAlignment(payload.Type));
+        }
+
+        var aggregate = NextTemp("enum_value");
+        EmitLoad(aggregate, llvmType, slot, 8);
+        return new RuntimeEnum(type, aggregate);
+    }
+
+    private RuntimeValue EmitEnumMatchExpression(
+        EnumMatchExpression expression,
+        BoundType? expectedResultType = null)
+    {
+        var subject = EmitExpression(expression.Subject) as RuntimeEnum
+            ?? throw new SollangException("enum when expects a runtime enum subject");
+        var definition = _program.Types.GetEnum(subject.Type);
+        var tag = NextTemp("enum_tag");
+        EmitAssign(tag, $"extractvalue {LlvmEnumType(subject.Type)} {subject.ValueName}, 0");
+
+        var ownsStorage = _program.Types.ContainsOwnedStorage(subject.Type);
+        var anonymousSubject = IsAnonymousOwnedExpression(expression.Subject);
+        var armTransfers = expression.Arms.ToDictionary(
+            arm => arm,
+            arm => arm.Condition is EnumPatternExpression { BindingName: { } bindingName } pattern
+                && definition.Variants.First(candidate => candidate.Name == pattern.VariantName).PayloadType is { } payloadType
+                && _program.Types.ContainsOwnedStorage(payloadType)
+                && TransfersOwnerName(arm.Body, bindingName, payloadType));
+        var transfersAnyPayload = armTransfers.Values.Any(static transfers => transfers);
+        var subjectOwnerName = expression.Subject switch
+        {
+            NameExpression name => name.Name,
+            FieldAccessExpression { Source: NameExpression owner } => owner.Name,
+            _ => null
+        };
+        var outerOwnedLocals = _locals
+            .Where(local => !string.Equals(local.Key, subjectOwnerName, StringComparison.Ordinal)
+                && local.Value != subject
+                && !_borrowedOwnedLocals.Contains(local.Key)
+                && !_mutableLocals.Contains(local.Key)
+                && _program.Types.ContainsOwnedStorage(local.Value.Type))
+            .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal);
+        var bindsAnyOwnedPayload = expression.Arms.Any(arm =>
+            arm.Condition is EnumPatternExpression { BindingName: not null } pattern
+            && definition.Variants.First(candidate => candidate.Name == pattern.VariantName)
+                .PayloadType is { } payloadType
+            && _program.Types.ContainsOwnedStorage(payloadType));
+        var removedNamedSubject = false;
+        RuntimeStruct? removedProjectedOwner = null;
+        BoundStructField? projectedSubjectField = null;
+        if (ownsStorage
+            && bindsAnyOwnedPayload
+            && transfersAnyPayload
+            && expression.Subject is NameExpression subjectName
+            && (!IsBorrowedOwnedPlace(expression.Subject)
+                || HasOwnedMatchPayloadCleanup(subjectName.Name)))
+        {
+            foreach (var alias in _locals
+                .Where(local => local.Value == subject)
+                .Select(static local => local.Key)
+                .Append(subjectName.Name)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray())
+            {
+                RemoveLocal(alias);
+            }
+            removedNamedSubject = true;
+        }
+        else if (ownsStorage
+            && bindsAnyOwnedPayload
+            && transfersAnyPayload
+            && expression.Subject is FieldAccessExpression
+            {
+                Source: NameExpression ownerName,
+                FieldName: var fieldName
+            }
+            && !_mutableLocals.Contains(ownerName.Name)
+            && (!IsBorrowedOwnedPlace(expression.Subject)
+                || HasOwnedMatchPayloadCleanup(ownerName.Name))
+            && _locals.TryGetValue(ownerName.Name, out var ownerValue)
+            && ownerValue is RuntimeStruct ownerStruct
+            && _program.Types.IsStruct(ownerStruct.Type)
+            && _program.Types.GetStruct(ownerStruct.Type).Fields.FirstOrDefault(
+                field => string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } ownerField
+            && ownerField.Type == subject.Type)
+        {
+            removedProjectedOwner = ownerStruct;
+            projectedSubjectField = ownerField;
+            RemoveLocal(ownerName.Name);
+        }
+
+        var entryScope = CaptureLocals();
+        // Suspension reloads also update enclosing cleanup and hidden scopes.
+        // Each sibling arm must start with the pre-match bindings, then join
+        // only the scopes belonging to its live continuation.
+        var continuationScopes = CaptureAsyncContinuationBranchScopes(includeLoopSnapshots: true);
+        var continuationEdges = new List<(LocalScope[] Scopes, string Label)>();
+        var endLabel = NextLabel("enum_when_end");
+        var valueResults = new List<(RuntimeValue Value, string Label)>();
+        var scopeResults = new List<(LocalScope Scope, string Label)>();
+        var continuingPaths = new List<EnumContinuingPath>();
+        var hasEndPredecessor = false;
+        var nextConditionLabel = _currentBlockLabel;
+        foreach (var arm in expression.Arms)
+        {
+            RestoreAsyncContinuationScopes(continuationScopes);
+            RestoreLocals(entryScope);
+            _currentBlockLabel = nextConditionLabel;
+            var pattern = (EnumPatternExpression)arm.Condition;
+            var variant = definition.Variants.First(candidate => candidate.Name == pattern.VariantName);
+            var armLabel = NextLabel("enum_when_arm");
+            var nextLabel = NextLabel("enum_when_next");
+            var matches = NextTemp("enum_matches");
+            EmitCompare(matches, "eq", "i32", tag, variant.Tag.ToString(CultureInfo.InvariantCulture));
+            EmitConditionalBranch(matches, armLabel, nextLabel);
+
+            EmitLabel(armLabel);
+            _currentBlockLabel = armLabel;
+            RuntimeValue? payload = null;
+            string? payloadTransferFlag = null;
+            var armOwnsPayload = false;
+            if (variant.PayloadType is { } payloadType)
+            {
+                payload = ExtractEnumPayload(subject, payloadType);
+                if (pattern.BindingName is not null
+                    && _program.Types.ContainsOwnedStorage(payloadType))
+                {
+                    armOwnsPayload = ownsStorage
+                        && (anonymousSubject || removedNamedSubject || removedProjectedOwner is not null);
+                    payloadTransferFlag = NextTemp("enum_payload_owned");
+                    EmitAlloca(payloadTransferFlag, "i1", 1);
+                    EmitStore("i1", "true", payloadTransferFlag, 1);
+                }
+            }
+
+            var armResult = EmitEnumArmBody(
+                arm.Body,
+                pattern.BindingName,
+                payload,
+                payloadTransferFlag,
+                armOwnsPayload,
+                removedProjectedOwner,
+                projectedSubjectField,
+                expectedResultType);
+            if (pattern.BindingName is not null
+                && armResult.ExitScope.BorrowedOwnedTransferFlags.TryGetValue(
+                    pattern.BindingName,
+                    out var exitingPayloadTransferFlag))
+            {
+                payloadTransferFlag = exitingPayloadTransferFlag;
+            }
+            var armTerminated = _currentBlockTerminated;
+            if (!armTerminated && removedProjectedOwner is not null)
+            {
+                if (payloadTransferFlag is not null)
+                {
+                    DropOwnedProjectedSubjectIfRetained(
+                        payloadTransferFlag,
+                        removedProjectedOwner,
+                        projectedSubjectField!.Name);
+                }
+                else if (armTransfers[arm])
+                {
+                    DropOwnedStructFieldsExcept(removedProjectedOwner, projectedSubjectField!.Name);
+                }
+                else
+                {
+                    DropOwnedRuntimeValue(removedProjectedOwner);
+                }
+            }
+            else if (!armTerminated
+                && ownsStorage
+                && (anonymousSubject || removedNamedSubject)
+                && payloadTransferFlag is not null)
+            {
+                // A consumed payload has no remaining cleanup obligation.
+                // Its old stack flag may not exist on an async resume path.
+                if (pattern.BindingName is not null
+                    && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var exitingPayload)
+                    && exitingPayload is RuntimeStruct retainedStruct
+                    && armResult.ExitScope.MovedOwnedStructFields.TryGetValue(
+                        pattern.BindingName,
+                        out var movedPayloadFields)
+                    && movedPayloadFields.Count > 0)
+                {
+                    DropOwnedStructFieldsExceptTransferredIfRetained(
+                        payloadTransferFlag,
+                        retainedStruct,
+                        movedPayloadFields.Select(static path =>
+                            (IReadOnlyList<string>)path.Split('.')).ToArray());
+                }
+                else if (pattern.BindingName is not null
+                    && armResult.ExitScope.Locals.TryGetValue(pattern.BindingName, out var retainedPayload))
+                {
+                    // The emitted flag distinguishes an actual transfer from a
+                    // fixed-storage result copy; syntax alone cannot do that.
+                    DropOwnedRuntimeValueIfRetained(payloadTransferFlag, retainedPayload);
+                }
+            }
+            else if (!armTerminated
+                && ownsStorage
+                && (anonymousSubject || removedNamedSubject)
+                && variant.PayloadType is { } selectedPayloadType
+                && _program.Types.ContainsOwnedStorage(selectedPayloadType)
+                && !armTransfers[arm])
+            {
+                DropOwnedRuntimeValue(subject);
+            }
+            if (!armTerminated)
+            {
+                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+                continuingPaths.Add(new EnumContinuingPath(
+                    armResult.Value,
+                    armResult.ExitScope,
+                    _currentBlockLabel,
+                    _activeFunctions.CreateInsertionPoint()));
+                EmitBranch(endLabel);
+                hasEndPredecessor = true;
+            }
+
+            EmitLabel(nextLabel);
+            nextConditionLabel = nextLabel;
+        }
+
+        _currentBlockLabel = nextConditionLabel;
+        RestoreAsyncContinuationScopes(continuationScopes);
+        RestoreLocals(entryScope);
+        if (expression.Else is not null)
+        {
+            var elseResult = EmitScopedBlockBody(expression.Else, expectedResultType);
+            var elseTerminated = _currentBlockTerminated;
+            if (!elseTerminated && removedProjectedOwner is not null)
+            {
+                DropOwnedRuntimeValue(removedProjectedOwner);
+            }
+            else if (!elseTerminated && ownsStorage && (anonymousSubject || removedNamedSubject))
+            {
+                DropOwnedRuntimeValue(subject);
+            }
+            if (!elseTerminated)
+            {
+                continuationEdges.Add((SnapshotAsyncContinuationScopes(continuationScopes), _currentBlockLabel));
+                continuingPaths.Add(new EnumContinuingPath(
+                    elseResult.Value,
+                    elseResult.ExitScope,
+                    _currentBlockLabel,
+                    _activeFunctions.CreateInsertionPoint()));
+                EmitBranch(endLabel);
+                hasEndPredecessor = true;
+            }
+        }
+        else
+        {
+            EmitTrap();
+        }
+
+        if (!hasEndPredecessor)
+        {
+            return RuntimeUnit.Instance;
+        }
+
+        NormalizeEnumOuterOwnerScopes(outerOwnedLocals, continuingPaths);
+        foreach (var path in continuingPaths)
+        {
+            if (path.Value is not null)
+            {
+                valueResults.Add((path.Value, path.Label));
+            }
+            scopeResults.Add((path.Scope, path.Label));
+        }
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        // Ownership merges may emit flag stores before a later scope needs
+        // another phi. Keep every join phi before those ordinary instructions.
+        var previousJoinPhis = _scopeJoinPhis;
+        _scopeJoinPhis = (_activeFunctions, endLabel, _activeFunctions.CreateInsertionPoint());
+        try
+        {
+            if (_activeAsyncCfg is not null)
+            {
+                MergeAsyncOuterScope(entryScope, scopeResults);
+            }
+            else
+            {
+                MergeSynchronousOuterScope(entryScope, scopeResults);
+            }
+            MergeAsyncContinuationScopes(continuationScopes, continuationEdges, entryScope, scopeResults);
+            return valueResults.Count == 0
+                ? RuntimeUnit.Instance
+                : EmitPhiValue("enum_when", valueResults);
+        }
+        finally
+        {
+            _scopeJoinPhis = previousJoinPhis;
+        }
+    }
+
+    private void NormalizeEnumOuterOwnerScopes(
+        IReadOnlyDictionary<string, RuntimeValue> outerOwnedLocals,
+        IReadOnlyList<EnumContinuingPath> continuingPaths)
+    {
+        if (continuingPaths.Count < 2 || outerOwnedLocals.Count == 0)
+        {
+            return;
+        }
+
+        var normalizedNames = new HashSet<string>(StringComparer.Ordinal);
+        var previousFunctions = _activeFunctions;
+        var previousLabel = _currentBlockLabel;
+        var previousTerminated = _currentBlockTerminated;
+        try
+        {
+            foreach (var (name, _) in outerOwnedLocals)
+            {
+                // A live continuation must join its ownership state explicitly.
+                // Tail results may consume the owner and clean up other paths.
+                if (OwnerReadInContinuation(name))
+                    continue;
+                var presentPaths = continuingPaths
+                    .Where(path => path.Scope.Locals.ContainsKey(name))
+                    .ToArray();
+                if (presentPaths.Length == 0 || presentPaths.Length == continuingPaths.Count)
+                {
+                    continue;
+                }
+
+                normalizedNames.Add(name);
+                foreach (var path in presentPaths)
+                {
+                    _activeFunctions = path.Cleanup;
+                    _currentBlockLabel = path.Label;
+                    _currentBlockTerminated = false;
+                    DropOwnedRuntimeValue(path.Scope.Locals[name]);
+                    path.Label = _currentBlockLabel;
+                }
+            }
+        }
+        finally
+        {
+            _activeFunctions = previousFunctions;
+            _currentBlockLabel = previousLabel;
+            _currentBlockTerminated = previousTerminated;
+        }
+
+        if (normalizedNames.Count == 0)
+        {
+            return;
+        }
+        foreach (var path in continuingPaths)
+        {
+            path.Scope = RemoveLocalsFromScope(path.Scope, normalizedNames);
+        }
+    }
+
+    private static LocalScope RemoveLocalsFromScope(LocalScope scope, IReadOnlySet<string> removed)
+    {
+        return new LocalScope(
+            scope.Locals
+                .Where(local => !removed.Contains(local.Key))
+                .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal),
+            scope.MutableLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedMutableLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedOwnedLocals.Where(name => !removed.Contains(name)).ToHashSet(StringComparer.Ordinal),
+            scope.MovedOwnedStructFields
+                .Where(item => !removed.Contains(item.Key))
+                .ToDictionary(
+                    static item => item.Key,
+                    static item => new HashSet<string>(item.Value, StringComparer.Ordinal),
+                    StringComparer.Ordinal),
+            scope.MutableContainerSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableStructSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableScalarSlots
+                .Where(slot => !removed.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.ReadonlyCaptureBorrowPointers
+                .Where(pointer => !removed.Contains(pointer.Key))
+                .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
+            scope.ReadonlyValueSlots,
+            scope.BorrowedOwnedTransferFlags
+                .Where(flag => !removed.Contains(flag.Key))
+                .ToDictionary(static flag => flag.Key, static flag => flag.Value, StringComparer.Ordinal),
+            scope.TerminatingOwnedCleanupObligations
+                .Where(obligation => obligation.BindingName is null
+                    || !removed.Contains(obligation.BindingName))
+                .ToList());
+    }
+
+    private void DropOwnedStructFieldsExcept(RuntimeStruct owner, params string[] excludedFieldNames)
+    {
+        var definition = _program.Types.GetStruct(owner.Type);
+        var llvmType = LlvmStructType(owner.Type);
+        foreach (var field in definition.Fields.Where(field =>
+                     !excludedFieldNames.Contains(field.Name, StringComparer.Ordinal)
+                     && _program.Types.ContainsOwnedStorage(field.Type)))
+        {
+            var value = NextTemp("drop_remaining_field");
+            EmitAssign(
+                value,
+                $"extractvalue {llvmType} {owner.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            EmitOwnedDropCall(field.Type, value);
+        }
+    }
+
+    private BlockResult EmitEnumArmBody(
+        BlockBody body,
+        string? bindingName,
+        RuntimeValue? payload,
+        string? payloadTransferFlag,
+        bool ownsPayload,
+        RuntimeStruct? projectedOwner,
+        BoundStructField? projectedField,
+        BoundType? expectedResultType = null)
+    {
+        var outerLocals = CaptureLocals();
+        var cleanupBindingId = ownsPayload || projectedOwner is not null
+            ? ++_nextOwnedCleanupBindingId
+            : 0;
+        try
+        {
+            if (bindingName is not null && payload is not null)
+            {
+                _locals[bindingName] = payload;
+                if (_program.Types.ContainsOwnedStorage(payload.Type))
+                {
+                    _borrowedOwnedLocals.Add(bindingName);
+                    if (ownsPayload)
+                    {
+                        _terminatingOwnedCleanupObligations.Add(new TerminatingOwnedCleanupObligation(
+                            cleanupBindingId,
+                            bindingName,
+                            payload,
+                            payloadTransferFlag,
+                            ExcludedProjectedField: null));
+                    }
+                    if (payloadTransferFlag is not null)
+                    {
+                        _borrowedOwnedTransferFlags[bindingName] = payloadTransferFlag;
+                    }
+                }
+            }
+            if (projectedOwner is not null)
+            {
+                _terminatingOwnedCleanupObligations.Add(new TerminatingOwnedCleanupObligation(
+                    cleanupBindingId,
+                    ownsPayload ? bindingName : null,
+                    projectedOwner,
+                    RetainedFlag: null,
+                    ownsPayload ? projectedField!.Name : null));
+            }
+            return EmitScopedBlockBody(body, expectedResultType);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+    }
+
+    private void DropOwnedRuntimeValueIfRetained(string retainedFlag, RuntimeValue value)
+    {
+        var retained = NextTemp("enum_payload_retained");
+        EmitLoad(retained, "i1", retainedFlag, 1);
+        var dropLabel = NextLabel("enum_payload_drop");
+        var doneLabel = NextLabel("enum_payload_drop_done");
+        EmitConditionalBranch(retained, dropLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(dropLabel);
+        _currentBlockLabel = dropLabel;
+        DropOwnedRuntimeValue(value);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private void DropOwnedStructFieldsExceptTransferredIfRetained(
+        string retainedFlag,
+        RuntimeStruct value,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths)
+    {
+        var retained = NextTemp("enum_payload_retained");
+        EmitLoad(retained, "i1", retainedFlag, 1);
+        var dropLabel = NextLabel("enum_payload_drop");
+        var doneLabel = NextLabel("enum_payload_drop_done");
+        EmitConditionalBranch(retained, dropLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(dropLabel);
+        _currentBlockLabel = dropLabel;
+        DropOwnedStructFieldsExceptTransferred(value, transferredPaths);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private void DropOwnedProjectedSubjectIfRetained(
+        string retainedFlag,
+        RuntimeStruct owner,
+        string projectedFieldName)
+    {
+        var retained = NextTemp("enum_payload_retained");
+        EmitLoad(retained, "i1", retainedFlag, 1);
+        var retainedLabel = NextLabel("enum_payload_owner_drop");
+        var movedLabel = NextLabel("enum_payload_owner_partial_drop");
+        var doneLabel = NextLabel("enum_payload_owner_drop_done");
+        EmitConditionalBranch(retained, retainedLabel, movedLabel);
+        EmitFunctionLine();
+        EmitLabel(retainedLabel);
+        _currentBlockLabel = retainedLabel;
+        DropOwnedRuntimeValue(owner);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(movedLabel);
+        _currentBlockLabel = movedLabel;
+        DropOwnedStructFieldsExcept(owner, projectedFieldName);
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private RuntimeValue ExtractEnumPayload(RuntimeEnum value, BoundType payloadType)
+    {
+        if (payloadType == BoundType.Unit)
+        {
+            return RuntimeUnit.Instance;
+        }
+        var llvmType = LlvmEnumType(value.Type);
+        var slot = NextTemp("enum_match_slot");
+        EmitAlloca(slot, llvmType, 8);
+        EmitStore(llvmType, value.ValueName, slot, 8);
+        var payloadAddress = NextTemp("enum_payload_addr");
+        EmitAssign(payloadAddress, $"getelementptr inbounds {llvmType}, ptr {slot}, i32 0, i32 1");
+        var payload = NextTemp("enum_payload");
+        EmitLoad(payload, LlvmType(payloadType), payloadAddress, RuntimeAlignment(payloadType));
+        return DematerializeAggregateValue(payloadType, payload);
+    }
+
+    private RuntimeValue EmitTryExpression(TryExpression expression)
+    {
+        var result = EmitExpression(expression.Value) as RuntimeEnum
+            ?? throw new SollangException("'?' expects a Result value");
+        if (!_program.Types.TryGetResultTypes(result.Type, out var operandTypes))
+        {
+            throw new SollangException("'?' expects a Result value");
+        }
+        var function = _currentFunction
+            ?? throw new SollangException("'?' requires an enclosing Result function");
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var outerTypes)
+            || outerTypes.Error != operandTypes.Error)
+        {
+            throw new SollangException("'?' enclosing function has an incompatible Result error type");
+        }
+        if ((_program.Types.ContainsOwnedStorage(operandTypes.Ok)
+                || _program.Types.ContainsOwnedStorage(operandTypes.Error))
+            && expression.Value is NameExpression consumedName)
+        {
+            RemoveLocal(consumedName.Name);
+        }
+
+        var tag = NextTemp("try_tag");
+        EmitAssign(tag, $"extractvalue {LlvmEnumType(result.Type)} {result.ValueName}, 0");
+        var isError = NextTemp("try_is_error");
+        EmitCompare(isError, "eq", "i32", tag, "1");
+        var errorLabel = NextLabel("try_error");
+        var okLabel = NextLabel("try_ok");
+        EmitConditionalBranch(isError, errorLabel, okLabel);
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var errorPayload = ExtractEnumPayload(result, operandTypes.Error);
+        var outerDefinition = _program.Types.GetEnum(function.ReturnType);
+        var errorVariant = outerDefinition.Variants.First(variant => variant.Name == "Err");
+        var propagated = EmitEnumValue(function.ReturnType, errorVariant, errorPayload);
+        DropOwnedLocals();
+        EmitPropagatedResultReturn(function, propagated);
+
+        EmitLabel(okLabel);
+        _currentBlockLabel = okLabel;
+        return ExtractEnumPayload(result, operandTypes.Ok);
+    }
+
+    private int RuntimeAlignment(BoundType type)
+    {
+        return _program.Types.AlignmentOf(type);
+    }
+
+    private sealed class EnumContinuingPath(
+        RuntimeValue? value,
+        LocalScope scope,
+        string label,
+        MemoryOutputSink cleanup)
+    {
+        public RuntimeValue? Value { get; } = value;
+        public LocalScope Scope { get; set; } = scope;
+        public string Label { get; set; } = label;
+        public MemoryOutputSink Cleanup { get; } = cleanup;
+    }
+}

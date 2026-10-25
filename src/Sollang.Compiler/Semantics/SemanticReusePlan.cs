@@ -4,7 +4,8 @@ internal sealed record SemanticFunctionReuse(
     string Identity,
     string ModuleName,
     IReadOnlyDictionary<string, string> Bindings,
-    IReadOnlyDictionary<string, string> CapturedBindings);
+    IReadOnlyDictionary<string, string> CapturedBindings,
+    IReadOnlyDictionary<string, string> TypeNames);
 
 internal sealed record SemanticSpecializationReuse(
     string Identity,

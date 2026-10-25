@@ -1053,7 +1053,7 @@ internal sealed partial class LlvmEmitter
         BoundAsyncSuspensionLocation location)
     {
         var module = AddGlobalString(location.Function.ModuleName);
-        var qualifiedName = location.Function.Name;
+        var qualifiedName = location.Function.DeclarationName ?? location.Function.Name;
         var separator = qualifiedName.LastIndexOf('.', StringComparison.Ordinal);
         var symbol = AddGlobalString(separator < 0 ? qualifiedName : qualifiedName[(separator + 1)..]);
         StoreDiagnosticRecordField(record, 4, "i32", resumeState.ToString(CultureInfo.InvariantCulture), 4);

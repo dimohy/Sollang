@@ -74,7 +74,8 @@ def semantic_facts(path):
     data = path.read_bytes()
     if hashlib.sha256(data[:-32]).digest() != data[-32:]:
         raise ValueError("CONTEXTUAL_NUMERIC_CACHE_CHECKSUM_CHANGED")
-    if struct.unpack_from("<Q", data, 8)[0] != 9:
+    # The inspected prefix is unchanged; schema10 appends per-function type names.
+    if struct.unpack_from("<Q", data, 8)[0] not in (9, 10):
         raise ValueError("CONTEXTUAL_NUMERIC_CACHE_SCHEMA_CHANGED")
     position = 13 * 8 + 32
 

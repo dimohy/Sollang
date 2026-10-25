@@ -17,6 +17,7 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<string, BoundType> MainBindings,
     IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionBindings,
     IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionCapturedBindings,
+    IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionTypeNames,
     StackFramePlan MainStackFrame,
     IReadOnlyDictionary<BoundFunction, StackFramePlan> FunctionStackFrames,
     IReadOnlyDictionary<BoundFunction, string> StableFunctionIdentities,
