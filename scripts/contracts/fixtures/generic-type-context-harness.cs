@@ -49,6 +49,7 @@ internal sealed partial class SemanticCompiler
     private static Exception Error(int line, int column, string message) => new InvalidOperationException(message);
     private bool IsNestedContainerElementType(BoundType type) => (bool)ReferenceCall("IsNestedContainerElementType", ReferenceType(type))!;
     private bool IsUnsupportedGrowableArrayElementType(BoundType type) => (bool)ReferenceCall("IsUnsupportedGrowableArrayElementType", ReferenceType(type))!;
+    private bool IsUnsupportedInlineArrayElementType(BoundType type) => (bool)ReferenceCall("IsUnsupportedInlineArrayElementType", ReferenceType(type))!;
     private bool IsSupportedDictionaryKeyType(BoundType type) => (bool)ReferenceCall("IsSupportedDictionaryKeyType", ReferenceType(type))!;
     private void EnsureTypeVisible(BoundType type, int line, int column) => ReferenceCall("EnsureTypeVisible", ReferenceType(type), line, column);
 
