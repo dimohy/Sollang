@@ -1,0 +1,38 @@
+953:         out BoundAsyncSuspensionLocation location)
+954:     {
+955:         if (_program.AsyncSuspensionLocations.TryGetValue(site, out location!))
+956:             return true;
+957:         if (_currentFunction is null)
+958:         {
+959:             location = null!;
+960:             return false;
+961:         }
+962:
+963:         var functionLocations = _program.AsyncSuspensionLocations.Values
+964:             .Where(candidate =>
+965:                 string.Equals(candidate.Function.ModuleName, _currentFunction.ModuleName, StringComparison.Ordinal)
+966:                 && string.Equals(candidate.Function.Name, _currentFunction.Name, StringComparison.Ordinal))
+967:             .Distinct()
+968:             .OrderBy(static candidate => candidate.ByteOffset)
+969:             .ToArray();
+970:         if (TryGetSuspensionCoordinates(site, out var byteOffset, out var line, out var column))
+971:         {
+972:             var exact = functionLocations.Where(candidate =>
+973:                     candidate.ByteOffset == byteOffset
+974:                     && candidate.Line == line
+975:                     && candidate.Column == column)
+976:                 .ToArray();
+977:             if (exact.Length == 1)
+978:             {
+979:                 location = exact[0];
+980:                 return true;
+981:             }
+982:         }
+983:         if (resumeState < 1 || resumeState > functionLocations.Length)
+984:         {
+985:             location = null!;
+986:             return false;
+987:         }
+988:         location = functionLocations[resumeState - 1];
+989:         return true;
+990:     }

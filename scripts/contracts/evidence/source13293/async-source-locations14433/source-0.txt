@@ -1,0 +1,108 @@
+7:     public static IReadOnlyDictionary<object, BoundAsyncSuspensionLocation> Index(
+8:         IEnumerable<BoundFunction> functions)
+9:     {
+10:         var result = new Dictionary<object, BoundAsyncSuspensionLocation>(
+11:             ReferenceEqualityComparer.Instance);
+12:         var visited = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+13:         foreach (var function in functions)
+14:         {
+15:             IndexFunction(function, result, visited);
+16:         }
+17:         return result;
+18:     }
+19:
+20:     private static void IndexFunction(
+21:         BoundFunction function,
+22:         IDictionary<object, BoundAsyncSuspensionLocation> result,
+23:         ISet<BoundFunction> visited)
+24:     {
+25:         if (!visited.Add(function))
+26:         {
+27:             return;
+28:         }
+29:
+30:         if (function.IsAsync)
+31:         {
+32:             IndexStatements(function, function.BlockBody, result);
+33:             if (function.Body is { } body)
+34:             {
+35:                 IndexExpression(function, body, body, result);
+36:             }
+37:         }
+38:
+39:         foreach (var local in function.LocalFunctions.Values)
+40:         {
+41:             IndexFunction(local, result, visited);
+42:         }
+43:     }
+44:
+48:         IDictionary<object, BoundAsyncSuspensionLocation> result)
+49:     {
+50:         foreach (var statement in statements)
+51:         {
+52:             switch (statement)
+53:             {
+54:                 case BindingStatement binding:
+55:                     IndexExpression(function, binding.Value, binding, result);
+56:                     break;
+57:                 case ExpressionStatement { Expression: NameExpression { Name: "yield" } yield } expression:
+58:                     Add(function, expression, yield.ByteOffset, yield.Line, yield.Column, result);
+59:                     break;
+60:                 case ExpressionStatement expression:
+61:                     IndexExpression(function, expression.Expression, expression, result);
+62:                     break;
+63:                 case BlockFunctionCallStatement block:
+64:                     IndexExpression(function, block.Source, block.Source, result);
+65:                     foreach (var argument in block.Arguments ?? [])
+66:                     {
+67:                         IndexExpression(function, argument, argument, result);
+68:                     }
+69:                     IndexStatements(function, block.Body, result);
+70:                     break;
+71:                 case BlockFunctionPipelineStatement pipeline:
+72:                     foreach (var block in pipeline.Calls)
+73:                     {
+74:                         IndexExpression(function, block.Source, block.Source, result);
+75:                         foreach (var argument in block.Arguments ?? [])
+76:                         {
+77:                             IndexExpression(function, argument, argument, result);
+78:                         }
+79:                         IndexStatements(function, block.Body, result);
+80:                     }
+81:                     break;
+82:             }
+83:         }
+84:     }
+85:
+86:     private static void IndexExpression(
+87:         BoundFunction function,
+88:         Expression expression,
+89:         object suspensionSite,
+90:         IDictionary<object, BoundAsyncSuspensionLocation> result)
+91:     {
+92:         if (expression is FlowExpression { Targets.Count: > 0 } flow
+93:             && flow.Targets[^1] is { Path.Count: 1 } target
+94:             && string.Equals(target.Path[0], "await", StringComparison.Ordinal)
+95:             && target.Arguments.Count == 0)
+96:         {
+97:             Add(function, suspensionSite, target.ByteOffset, target.Line, target.Column, result);
+98:         }
+99:
+100:         switch (expression)
+101:         {
+102:             case StringExpression value:
+263:         object site,
+264:         int byteOffset,
+265:         int line,
+266:         int column,
+267:         IDictionary<object, BoundAsyncSuspensionLocation> result)
+268:     {
+269:         if (byteOffset < 0)
+270:         {
+271:             throw new InvalidOperationException(
+272:                 $"async suspension locator for '{function.Name}' is missing its parser byte offset");
+273:         }
+274:
+275:         result[site] = new BoundAsyncSuspensionLocation(function, byteOffset, line, column);
+276:     }
+277: }

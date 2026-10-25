@@ -1,0 +1,39 @@
+783: emitAsyncDiagnosticSuspension point: typedIr.CoroutineSuspendPoint, producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+784:     context -> usesReachableAsyncDiagnostics(state)
+785:         -> unless { return }
+786:     context.ranges[point.sourceModule] => range
+787:     context.nodes[range.astStart + point.awaitAst] => site
+788:     context.tokens[range.tokenStart + site.payloadToken].span.start => byteOffset
+789:     context.sources[point.sourceModule] -> syntaxDiagnostics.sourceLocation(byteOffset) => location
+790:     point.functionIr -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
+791:     "  %diagnostic_suspend$(point.state)_header = getelementptr i8, ptr %async_context, i64 $(headerOffset)" -> println
+792:     producerIndex >= 0 -> if {
+793:         "  %diagnostic_suspend$(point.state)_child_slot = getelementptr %sollang.diagnostic_task_control, ptr %v$(point.awaitIr)_pending_handle, i32 0, i32 1" -> println
+794:         "  %diagnostic_suspend$(point.state)_child = load ptr, ptr %diagnostic_suspend$(point.state)_child_slot, align 8" -> println
+795:     }
+796:     context.symbols[range.symbolStart + context.ir[point.functionIr].symbol] => symbol
+797:     context.tokens[range.tokenStart + symbol.nameToken].span.length => symbolLength
+798:     context.modules -> each module {
+799:         module.sourceIndex == point.sourceModule -> if {
+800:             "  call void @sollang_diagnostic_suspend(ptr %diagnostic_suspend$(point.state)_header, ptr " -> print
+801:             producerIndex >= 0 -> if { "%diagnostic_suspend$(point.state)_child" -> print } else { "null" -> print }
+802:             ", i32 $(point.state), ptr @sollang_diagnostic_module$(point.functionIr), i64 $(module.pathLength), ptr @sollang_diagnostic_symbol$(point.functionIr), i64 $(symbolLength), i64 $(byteOffset), i64 $(location.line), i64 $(location.column), i64 0)" -> println
+803:             producerIndex -> diagnosticSleepProducer(context, state) => producer
+804:             producer >= 0 and context.ir[producer].opcode == -113
+805:                 -> if {
+806:                     producer -> diagnosticSleepProducerOffset(context) => producerOffset
+807:                     producerOffset < 0 -> if {
+808:                         "; sollang internal error: diagnostic sleep producer source site is unresolved" -> println
+809:                         process.exit(1)
+810:                     }
+811:                     context.sources[point.sourceModule] -> syntaxDiagnostics.sourceLocation(UIntSize(producerOffset)) => producerLocation
+812:                     "  %diagnostic_suspend$(point.state)_deadline_slot = getelementptr %sollang.task_control, ptr %v$(point.awaitIr)_pending_handle, i32 0, i32 8" -> println
+813:                     "  %diagnostic_suspend$(point.state)_deadline = load i64, ptr %diagnostic_suspend$(point.state)_deadline_slot, align 8" -> println
+814:                     "  call void @sollang_diagnostic_suspend(ptr %diagnostic_suspend$(point.state)_child, ptr null, i32 $(point.state), ptr @sollang_diagnostic_module$(point.functionIr), i64 $(module.pathLength), ptr @sollang_diagnostic_symbol$(point.functionIr), i64 $(symbolLength), i64 $(producerOffset), i64 $(producerLocation.line), i64 $(producerLocation.column), i64 %diagnostic_suspend$(point.state)_deadline)" -> println
+815:                 }
+816:         }
+817:     }
+818: }
+819:
+820: emitAsyncDiagnosticCompletion functionIndex: Int, completionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+821:     context -> usesReachableAsyncDiagnostics(state)

@@ -1,0 +1,135 @@
+475: # one-based resume state in source order. Kind distinguishes child await from
+476: # cooperative yield. awaitIr is -1 until a corresponding node is available;
+477: # awaitAst is the stable source-site AST index for either kind.
+478: public struct CoroutineSuspendPoint {
+479:     public functionIr: Int
+480:     public sourceModule: Int
+481:     public awaitAst: Int
+482:     public awaitIr: Int
+483:     public state: Int
+484:     # 0 awaits a child Task; 1 cooperatively yields the current Task.
+485:     public kind: Int
+486: }
+487:
+488: # One frame slot records a binding that is defined before a suspension and
+1987:     functionSearch! < (ir -> len) and not hasAsyncFunction!
+1988:         -> while {
+1989:             ir[functionSearch!] => candidate
+1990:             candidate.kind == 0 and candidate.flags / 8 % 2 == 1
+1991:                 and ((selectedFunctions -> len) == 0 or selectedFunctions[functionSearch!])
+1992:                 -> if { true => hasAsyncFunction! }
+1993:             functionSearch! + 1 => functionSearch!
+1994:         }
+1995:     not hasAsyncFunction! -> if {
+1996:         CoroutineTables { points: points!, slots: [CoroutineFrameSlot; ~], destroys: [CoroutineFrameSlot; ~] } -> return
+1997:     }
+1998:     0 => sourceIndex!
+1999:     sourceIndex! < (sources -> len)
+2000:         -> while {
+2001:             sources[sourceIndex!] -> len => sourceLength
+2002:             sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+2003:             ranges[sourceIndex!] => sourceRange
+2004:             0 => awaitAstIndex!
+2005:             awaitAstIndex! < sourceRange.astCount -> while {
+2006:                 nodes[sourceRange.astStart + awaitAstIndex!] => awaitAst
+2007:                 false => isAwait!
+2008:                 false => isYield!
+2009:                 awaitAst.kind == 16 and awaitAst.parent >= 0 and nodes[sourceRange.astStart + awaitAst.parent].kind == 10 and awaitAst.payloadToken >= 0
+2010:                     -> if {
+2011:                         tokens[sourceRange.tokenStart + awaitAst.payloadToken] => awaitToken
+2012:                         awaitToken.span.length == 5 -> if {
+2013:                             source -> byte(awaitToken.span.start) => awaitByte0
+2014:                             source -> byte(awaitToken.span.start + 1) => awaitByte1
+2015:                             source -> byte(awaitToken.span.start + 2) => awaitByte2
+2016:                             source -> byte(awaitToken.span.start + 3) => awaitByte3
+2017:                             source -> byte(awaitToken.span.start + 4) => awaitByte4
+2018:                             awaitByte0 == 97 and awaitByte1 == 119 and awaitByte2 == 97 and awaitByte3 == 105 and awaitByte4 == 116
+2019:                                 -> if {
+2020:                                     true => isAwait!
+2021:                                 }
+2022:                         }
+2023:                     }
+2024:                 awaitAst.kind == 15 and awaitAst.payloadToken >= 0
+2025:                     -> if {
+2026:                         tokens[sourceRange.tokenStart + awaitAst.payloadToken] => yieldToken
+2027:                         source -> ast.bareYieldStatement(awaitAst, yieldToken)
+2028:                             -> if { true => isYield! }
+2029:                     }
+2030:                 isAwait! or isYield! -> if {
+2031:                     awaitAst.parent => functionAstIndex!
+2032:                     functionAstIndex! >= 0 and nodes[sourceRange.astStart + functionAstIndex!].kind != 7 and nodes[sourceRange.astStart + functionAstIndex!].kind != 31 and nodes[sourceRange.astStart + functionAstIndex!].kind != 8
+2033:                         -> while {
+2034:                             nodes[sourceRange.astStart + functionAstIndex!].parent => functionAstIndex!
+2035:                         }
+2036:                     functionAstIndex! >= 0 and (nodes[sourceRange.astStart + functionAstIndex!].flags / 8) % 2 == 1
+2037:                         -> if {
+2038:                             -1 => functionIr!
+2039:                             -1 => awaitIr!
+2040:                             awaitAstIndex! => suspendSourceAst!
+2041:                             isAwait! -> if {
+2042:                                 -1 => suspendSourceAst!
+2043:                                 0 => flowChild!
+2044:                                 flowChild! < sourceRange.astCount -> while {
+2045:                                     nodes[sourceRange.astStart + flowChild!] => child
+2046:                                     child.parent == awaitAst.parent
+2047:                                         and (suspendSourceAst! < 0 or child.start < nodes[sourceRange.astStart + suspendSourceAst!].start)
+2048:                                         -> if { flowChild! => suspendSourceAst! }
+2049:                                     flowChild! + 1 => flowChild!
+2050:                                 }
+2051:                             }
+2052:                             0 => irIndex!
+2053:                             irIndex! < (ir -> len) -> while {
+2054:                                 ir[irIndex!] => node
+2055:                                 node.sourceModule == sourceIndex! and node.astNode == functionAstIndex! and node.kind == 0
+2056:                                     and ((selectedFunctions -> len) == 0 or selectedFunctions[irIndex!])
+2057:                                     -> if {
+2058:                                         irIndex! => functionIr!
+2059:                                     }
+2060:                                 node.sourceModule == sourceIndex! and node.astNode == suspendSourceAst!
+2061:                                     and ((isYield! and node.kind == 44) or (isAwait! and node.kind == 5))
+2062:                                     -> if {
+2063:                                         irIndex! => awaitIr!
+2064:                                     }
+2065:                                 irIndex! + 1 => irIndex!
+2066:                             }
+2067:                             functionIr! >= 0 -> if {
+2068:                                 1 => state!
+2069:                                 0 => pointSearch!
+2070:                                 pointSearch! < (points! -> len) -> while {
+2071:                                     points![pointSearch!].functionIr == functionIr!
+2072:                                         -> if { state! + 1 => state! }
+2073:                                     pointSearch! + 1 => pointSearch!
+2074:                                 }
+2075:                                 0 => suspendKind!
+2076:                                 isYield! -> if { 1 => suspendKind! }
+2077:                                 points! -> push(CoroutineSuspendPoint {
+2078:                                     functionIr: functionIr!
+2079:                                     sourceModule: sourceIndex!
+2080:                                     awaitAst: awaitAstIndex!
+2081:                                     awaitIr: awaitIr!
+2082:                                     state: state!
+2083:                                     kind: suspendKind!
+2084:                                 })
+2085:                             }
+2086:                         }
+2087:                 }
+2088:                 awaitAstIndex! + 1 => awaitAstIndex!
+2089:             }
+2090:             sourceIndex! + 1 => sourceIndex!
+2091:         }
+2092:     [CoroutineFrameSlot; ~] => slots!
+2093:     0 => pointIndex!
+2094:     pointIndex! < (points! -> len) -> while {
+2095:         points![pointIndex!] => point
+2096:         ranges[point.sourceModule] => sourceRange
+2097:         ir[point.functionIr].astNode => functionAst
+2098:         nodes[sourceRange.astStart + point.awaitAst].start => awaitStart
+2099:         point.awaitAst => awaitBindingAst!
+2100:         awaitBindingAst! >= 0 and nodes[sourceRange.astStart + awaitBindingAst!].kind != 9
+2101:             -> while {
+2102:                 nodes[sourceRange.astStart + awaitBindingAst!].parent => awaitBindingAst!
+2103:             }
+2104:         0 => definitionIndex!
+2105:         definitionIndex! < (ir -> len) -> while {
+2106:             ir[definitionIndex!] => definition
+2107:             false => belongsToFunction!
