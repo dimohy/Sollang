@@ -144,7 +144,8 @@ class ArtifactLifecycleTests(unittest.TestCase):
 
     def test_active_output(self):
         output = self.output()
-        plan = policy.create_plan(self.repo, self.root, 0, active={str(output).casefold()})
+        plan = policy.create_plan(self.repo, self.root, 0, active={str(output).casefold()},
+                                  reusable_directories=[])
         self.assertEqual(plan['files'], 0)
 
     def test_outside_artifacts(self):
@@ -620,8 +621,9 @@ class ArtifactLifecycleTests(unittest.TestCase):
 
     def test_cli_single_output_includes_private_cache_directory(self):
         output = self.output()
+        reusable = self.output('explicit-reusable')
         destination = self.repo / 'single-output-plan.json'
-        run = subprocess.run(['python', str(Path(__file__).parent / 'completed_artifact_plan.py'), '--repo', str(self.repo), '--output-directory', str(output), '--plan', str(destination)], capture_output=True, text=True)
+        run = subprocess.run(['python', str(Path(__file__).parent / 'completed_artifact_plan.py'), '--repo', str(self.repo), '--output-directory', str(output), '--plan', str(destination), '--reusable-directory', str(reusable)], capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         plan = json.loads(destination.read_text())
         self.assertEqual(plan['directories'], 1)
@@ -891,6 +893,72 @@ class CompilerConsumerClosureTests(unittest.TestCase):
         inner_path.write_text(json.dumps(changed))
         with self.assertRaises(ValueError):
             policy.verified_consumer_closure(self.repo, old)
+
+    def partial_catalog_timeout(self):
+        old, replacement, consumer, child, inner_path = self.catalog_timeout()
+        record = json.loads(consumer.read_text())
+        case_id = 'completed-prefix'
+        case_root = consumer.parent / 'cases' / hashlib.sha256(case_id.encode()).hexdigest()[:20]
+        prior = case_root / 'runner/result.json'
+        prior.parent.mkdir(parents=True)
+        observed = dict(status='passed', completed=1, total=1, inputsStable=True,
+                        processesStopped=True, compiler=str(old / 'compiler.exe'),
+                        selectedCatalog=[case_id], inputHashes=record['inputHashes'])
+        prior.write_text(json.dumps(observed))
+        process = copy.deepcopy(child['processes'][0])
+        process.update(exit=0)
+        process['command'][-3:] = [str(prior.parent), '--exact', case_id]
+        supervisor = dict(status='passed', completed=1, total=1, inputsStable=True,
+                          processesStopped=True, processes=[process],
+                          authoritativeRunnerResult=str(prior),
+                          authoritativeRunnerResultSha256=hashlib.sha256(prior.read_bytes()).hexdigest())
+        (case_root / 'result.json').write_text(json.dumps(supervisor))
+        record.update(completed=1, total=2, selectedCatalog=[case_id, *record['selectedCatalog']],
+                      cases=[dict(id=case_id, status='passed', processesStopped=True,
+                                  resultPath=str(prior)), *record['cases']])
+        consumer.write_text(json.dumps(record))
+        return old, replacement, consumer, prior, inner_path
+
+    def test_partial_catalog_timeout_retires_product_and_preserves_original_failure(self):
+        old, replacement, consumer, prior, unfinished = self.partial_catalog_timeout()
+        before = {p: p.read_bytes() for p in (consumer, prior, unfinished)}
+        closure = policy.close_compiler_consumers(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        result = json.loads(closure.read_text())
+        audit = result['consumers'][0]['shutdownAudit']
+        self.assertTrue(result['verificationFailed'])
+        self.assertFalse(audit['claimsTestPassed'])
+        self.assertEqual(1, audit['observedCompleted'])
+        self.assertEqual(0, result['consumers'][0]['completed'])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        policy.verified_consumer_closure(self.repo, old)
+        self.assertIn(str(old / 'compiler.exe'), [row['path'] for row in self.plan(retention_terminal=True)['targets']])
+        observed = json.loads(prior.read_text())
+        observed['processesStopped'] = False
+        prior.write_text(json.dumps(observed))
+        with self.assertRaises(ValueError):
+            policy.verified_consumer_closure(self.repo, old)
+
+    def test_partial_catalog_timeout_rejects_unproven_prefix_and_missing_final_shutdown(self):
+        old, replacement, consumer, prior, unfinished = self.partial_catalog_timeout()
+        original, previous = json.loads(consumer.read_text()), json.loads(prior.read_text())
+        final_path = unfinished.parent.parent / 'result.json'
+        final = json.loads(final_path.read_text())
+        for kind in ('count', 'boolean-count', 'order', 'prefix-status', 'prefix-path',
+                     'prefix-drift', 'prefix-orphan', 'final-job'):
+            record, observed, last = copy.deepcopy(original), copy.deepcopy(previous), copy.deepcopy(final)
+            if kind == 'count': record['completed'] = 0
+            elif kind == 'boolean-count': record['completed'] = True
+            elif kind == 'order': record['selectedCatalog'].reverse()
+            elif kind == 'prefix-status': record['cases'][0]['status'] = 'running'
+            elif kind == 'prefix-path': record['cases'][0]['resultPath'] = str(self.root / 'other/result.json')
+            elif kind == 'prefix-drift': observed['compiler'] = 'other.exe'
+            elif kind == 'prefix-orphan': observed['orphanProcessIds'] = [456]
+            else: last['processes'][0]['shutdownConfirmed'] = False
+            consumer.write_text(json.dumps(record))
+            prior.write_text(json.dumps(observed))
+            final_path.write_text(json.dumps(last))
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                policy.consumer_closure_record(self.repo, old, [consumer], replacement, legacy_terminal=True)
 
     def test_catalog_timeout_rejects_missing_or_mismatched_shutdown(self):
         old, replacement, consumer, child, inner_path = self.catalog_timeout()

@@ -56,62 +56,35 @@ function MapsEqual($Left, $Right) { (($Left | ConvertTo-Json -Compress) -ceq ($R
 function BytesEqual([byte[]]$Left, [byte[]]$Right) {
     $Left.Length -eq $Right.Length -and [Convert]::ToHexString($Left) -ceq [Convert]::ToHexString($Right)
 }
-function Get-LiveDescendants([int]$RootProcessId) {
-    if (-not $IsWindows) { return @() }
-    $records = @(Get-CimInstance Win32_Process)
-    $known = [Collections.Generic.HashSet[int]]::new()
-    [void]$known.Add($RootProcessId)
-    $frontier = @($RootProcessId)
-    while ($frontier.Count -gt 0) {
-        $next = @()
-        foreach ($processRecord in $records | Where-Object { $frontier -contains [int]$_.ParentProcessId }) {
-            $processId = [int]$processRecord.ProcessId
-            if ($known.Add($processId)) { $next += $processId }
-        }
-        $frontier = $next
-    }
-    @($known | Where-Object { $_ -ne $RootProcessId })
-}
+# Reuse the owned Windows job supervisor. PID ancestry snapshots can outlive
+# exited processes and cannot prove that a descendant still belongs to a job.
+$processBridge = Join-Path $PSScriptRoot 'verification_process_bridge.py'
+$processPython = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 function Run([string]$File, [string[]]$Arguments, [string]$Description) {
-    $startInfo = [Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $File
-    $startInfo.WorkingDirectory = $root
-    $startInfo.UseShellExecute = $false
-    $startInfo.CreateNoWindow = $true
-    $startInfo.RedirectStandardOutput = $true
-    $startInfo.RedirectStandardError = $true
-    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
-    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
-    foreach ($argument in $Arguments) { [void]$startInfo.ArgumentList.Add($argument) }
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $startInfo
-    try {
-        if (-not $process.Start()) { throw "$Description could not start '$File'" }
-        $rootProcessId = $process.Id
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $descendants = [Collections.Generic.HashSet[int]]::new()
-        $deadline = [DateTimeOffset]::Now.AddMilliseconds(120000)
-        while (-not $process.WaitForExit(100) -and [DateTimeOffset]::Now -lt $deadline) {
-            foreach ($processId in @(Get-LiveDescendants $rootProcessId)) { [void]$descendants.Add($processId) }
+    $captureDirectory = Join-Path $OutputDirectory ('process-' + [Guid]::NewGuid().ToString('N'))
+    & $processPython $processBridge --repo $root --output $captureDirectory --timeout-seconds 120 -- $File @Arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "$Description did not complete with confirmed owned-process shutdown: $captureDirectory" }
+    $evidence = Get-Content -LiteralPath (Join-Path $captureDirectory 'result.json') -Raw | ConvertFrom-Json
+    if (-not $evidence.inputsStable -or -not $evidence.processesStopped -or @($evidence.processes).Count -ne 1) {
+        throw "$Description has incomplete owned-process evidence"
+    }
+    $owned = $evidence.processes[0]
+    if (-not $owned.shutdownConfirmed) { throw "$Description left an unconfirmed process tree" }
+    $observedDescendants = @(
+        foreach ($sample in @($owned.naturalShutdownObservation.samples)) {
+            foreach ($observedId in @($sample.ownedPids)) {
+                if ($observedId -ne $owned.pid) { $observedId }
+            }
         }
-        if (-not $process.HasExited) {
-            $process.Kill($true)
-            $process.WaitForExit()
-            throw "$Description exceeded 120000 ms"
-        }
-        $process.WaitForExit()
-        $orphans = @(Get-LiveDescendants $rootProcessId)
-        foreach ($processId in $orphans) { [void]$descendants.Add($processId) }
-        [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            StdoutBytes = [Text.Encoding]::UTF8.GetBytes($stdoutTask.GetAwaiter().GetResult())
-            StderrBytes = [Text.Encoding]::UTF8.GetBytes($stderrTask.GetAwaiter().GetResult())
-            RootProcessId = $rootProcessId
-            DescendantProcessIds = @($descendants | Sort-Object)
-            OrphanProcessIds = $orphans
-        }
-    } finally { $process.Dispose() }
+    )
+    [pscustomobject]@{
+        ExitCode = $evidence.programExit
+        StdoutBytes = [IO.File]::ReadAllBytes((Join-Path $captureDirectory 'command.stdout'))
+        StderrBytes = [IO.File]::ReadAllBytes((Join-Path $captureDirectory 'command.stderr'))
+        RootProcessId = $owned.pid
+        DescendantProcessIds = @($observedDescendants | Sort-Object -Unique)
+        OrphanProcessIds = @()
+    }
 }
 function Save-Capture([string]$Directory, [string]$Stem, $Capture) {
     [IO.File]::WriteAllBytes((Join-Path $Directory "$Stem.stdout.txt"), $Capture.StdoutBytes)
@@ -128,7 +101,7 @@ foreach ($case in $cases) {
     $expectedExit = if ($case.expectation -ceq 'compiler-rejected') { 1 } else { 0 }
     if ($case.expectedBuildExit -ne $expectedExit) { throw "managed observability exit contract mismatch: $($case.id)" }
 }
-$paths = @{ compiler=$Compiler; contract=$contractPath; schema=$schemaPath; verifier=$PSCommandPath; closure=$closurePath; auditShim=$auditShim; llvmAs=$llvmAs; clang=$clang }
+$paths = @{ processBridge=$processBridge; processPython=$processPython; processSupervisor=(Join-Path $PSScriptRoot 'verification_execution.py'); compiler=$Compiler; contract=$contractPath; schema=$schemaPath; verifier=$PSCommandPath; closure=$closurePath; auditShim=$auditShim; llvmAs=$llvmAs; clang=$clang }
 foreach ($case in $cases) {
     $paths["source:$($case.id)"] = Join-Path $root $case.source
     if ($expectedById.ContainsKey($case.id)) {

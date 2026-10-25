@@ -1,0 +1,102 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+
+main {
+    """"
+    number<T>: -> async Int {
+        yield
+        Option<T>.None => value
+        value -> when {
+            Some(item) { 1 }
+            None { 7 }
+        }
+    }
+    
+    main {
+        number<Int>() => integerTask
+        integerTask -> await -> println
+        number<Bool>() => booleanTask
+        booleanTask -> await -> println
+    }
+    """" => source
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => resolved!
+    prepared -> semanticDiagnostics.firstPreparedSignatureTypeDiagnostic => signature
+    "signature=$(signature.code)" -> println
+    prepared -> semanticDiagnostics.firstCallArityDiagnostic(resolved!) => arity
+    "arity=$(arity.sourceModule < 0)" -> println
+    prepared -> typedIr.lowerResolvedContext(resolved!) => nodes!
+    nodes! -> typedIr.planResolvedGenericCalls(prepared, resolved!) => plans
+    0 => valid!
+    plans -> each plan {
+        plan.status == 0 and (plan.inputTemplates -> len) == 1 and (plan.actualInputs -> len) == 1
+            -> if { valid! + 1 => valid! }
+    }
+    nodes! -> typedIr.materializeGenericClosure(prepared, resolved!) => instances
+    0 => concrete!
+    0 => unresolved!
+    -1 => firstFunction!
+    -1 => secondFunction!
+    instances -> each instance {
+        instance.status == 0 -> if {
+            concrete! + 1 => concrete!
+            firstFunction! < 0 -> if { instance.functionNode => firstFunction! } else { instance.functionNode => secondFunction! }
+            instance.functionNode => cursor!
+            cursor! < instance.functionNode + instance.nodeCount
+                -> while {
+                    nodes![cursor!].typeId => typeId
+                    typeId >= 0 and resolved!.types[typeId].containsParameter
+                        -> if { unresolved! + 1 => unresolved! }
+                    cursor! + 1 => cursor!
+                }
+        }
+    }
+    "plans=$(plans -> len),valid=$(valid!),instances=$(concrete!),distinct=$(firstFunction! >= 0 and secondFunction! >= 0 and firstFunction! != secondFunction!),unresolved=$(unresolved!)" -> println
+    """"
+    number<T>: -> async Int {
+        yield
+        7
+    }
+    
+    main {
+        number() => pending
+        pending -> await -> println
+    }
+    """" => negative
+    [negative,; ~] -> semanticContext.prepare => missingPrepared
+    missingPrepared -> expressionTypeIds.resolveContext => missingResolved
+    missingPrepared -> semanticDiagnostics.firstCallArityDiagnostic(missingResolved) => missing
+    "missing=$(missing.genericTypeArguments),count=$(missing.expectedAdditionalArguments)" -> println
+    """"
+    work<T> value: T -> async Unit {
+        1 => ignored
+    }
+    
+    main {
+        work<Int>(1) => pending
+        pending -> await
+    }
+    """" => inputSource
+    [inputSource,; ~] -> semanticContext.prepare => inputPrepared
+    inputPrepared -> semanticDiagnostics.firstPreparedSignatureTypeDiagnostic => inputDiagnostic
+    "input=$(inputDiagnostic.code)" -> println
+    """"
+    outer: -> async Unit {
+        child: -> async Unit {
+            yield
+        }
+        child() => pending
+        pending -> await
+    }
+    
+    main {
+        outer() => pending
+        pending -> await
+    }
+    """" => localSource
+    [localSource,; ~] -> semanticContext.prepare => localPrepared
+    localPrepared -> semanticDiagnostics.firstPreparedSignatureTypeDiagnostic => localDiagnostic
+    "local=$(localDiagnostic.code)" -> println
+}

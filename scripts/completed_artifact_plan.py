@@ -849,12 +849,75 @@ def captured_validate_timeout_prefix(path: Path, record: dict, product: Path) ->
     return True
 
 
+def partial_catalog_timeout_shutdown(repo: Path, path: Path, record: dict, product: Path) -> dict:
+    """Audit a completed prefix and the final timeout without crediting any test."""
+    cases, total, done = record.get('cases'), record.get('total'), record.get('completed')
+    if (record.get('status') != 'timed-out' or type(total) is not int or total <= 1
+            or type(done) is not int or done != total - 1
+            or not isinstance(cases, list) or len(cases) != total
+            or any(not isinstance(case, dict) for case in cases)
+            or record.get('selectedCatalog') != [case.get('id') for case in cases]
+            or len(set(record['selectedCatalog'])) != total):
+        raise ValueError('ARTIFACT_CATALOG_TIMEOUT_PREFIX_INVALID')
+    prefix = []
+    for case in cases[:-1]:
+        case_id = case.get('id')
+        if (not isinstance(case_id, str) or not case_id or case.get('status') != 'passed'
+                or case.get('processesStopped') is not True):
+            raise ValueError('ARTIFACT_CATALOG_TIMEOUT_PREFIX_CASE_INVALID')
+        case_root = path.parent / 'cases' / hashlib.sha256(case_id.encode()).hexdigest()[:20]
+        inner_path = assert_artifact_path(repo, case_root / 'runner/result.json')
+        supervisor_path = assert_artifact_path(repo, case_root / 'result.json')
+        if case.get('resultPath') != str(inner_path):
+            raise ValueError('ARTIFACT_CATALOG_TIMEOUT_PREFIX_PATH_INVALID')
+        inner = json.loads(inner_path.read_text(encoding='utf-8-sig'))
+        supervisor = json.loads(supervisor_path.read_text(encoding='utf-8-sig'))
+        for observed in (inner, supervisor):
+            if (observed.get('status') != 'passed' or type(observed.get('completed')) is not int
+                    or type(observed.get('total')) is not int
+                    or observed['completed'] != 1 or observed['total'] != 1
+                    or observed.get('inputsStable') is not True
+                    or observed.get('processesStopped') is not True or active_record(observed)):
+                raise ValueError('ARTIFACT_CATALOG_TIMEOUT_PREFIX_SHUTDOWN_INVALID')
+        digest = hashlib.sha256(inner_path.read_bytes()).hexdigest()
+        rows = supervisor.get('processes')
+        expected = [record.get('runner'), '--compiler', str(product), '--skip-bootstrap', '--suite', 'full',
+                    '--target', 'windows-x64', '--jobs', '1', '--output-directory', str(inner_path.parent),
+                    '--exact', case_id]
+        if isinstance(rows, list) and len(rows) == 1 and '--selfhost-driver-build' in rows[0].get('command', []):
+            expected += ['--selfhost-driver-build', str(product.parent)]
+        if (supervisor.get('authoritativeRunnerResult') != str(inner_path)
+                or str(supervisor.get('authoritativeRunnerResultSha256', '')).casefold() != digest
+                or inner.get('selectedCatalog') != [case_id] or inner.get('compiler') != str(product)
+                or inner.get('inputHashes', {}).get(str(product)) != record.get('inputHashes', {}).get(str(product))
+                or not isinstance(rows, list) or len(rows) != 1
+                or not terminal_consumer_process(repo, case_root, rows[0])
+                or rows[0].get('exit') != 0 or rows[0].get('shutdownConfirmed') is not True
+                or rows[0].get('shutdownScope') != 'owned-windows-job'
+                or not rows[0].get('command')
+                or Path(rows[0]['command'][0]).name.casefold() not in ('dotnet', 'dotnet.exe')
+                or rows[0]['command'][1:] != expected):
+            raise ValueError('ARTIFACT_CATALOG_TIMEOUT_PREFIX_RUNNER_INVALID')
+        assert_output_shutdown(repo, case_root)
+        prefix.append({'caseId': case_id, 'runnerResult': str(inner_path), 'runnerSha256': digest,
+                       'supervisorResult': str(supervisor_path),
+                       'supervisorSha256': hashlib.sha256(supervisor_path.read_bytes()).hexdigest()})
+    # The existing strict single-case audit authenticates the same final job and
+    # original nested paths. The immutable multi-case catalog is never rewritten.
+    final = dict(record, completed=0, total=1, selectedCatalog=[cases[-1].get('id')], cases=[cases[-1]])
+    audit = catalog_timeout_shutdown(repo, path, final, product)
+    audit.update(completedPrefix=prefix, observedCompleted=done, claimsTestPassed=False)
+    return audit
+
+
 def catalog_timeout_shutdown(repo: Path, path: Path, record: dict, product: Path) -> dict:
     """Authenticate one catalog timeout through its stopped runner's owned job.
 
     The catalog owns fingerprints; its nested supervisor owns process lifetime.
     This retires the verified producer only and never completes the failed test.
     """
+    if type(record.get('total')) is int and record['total'] > 1:
+        return partial_catalog_timeout_shutdown(repo, path, record, product)
     cases = record.get('cases')
     if (record.get('status') != 'timed-out' or type(record.get('completed')) is not int
             or type(record.get('total')) is not int or record.get('completed') != 0
