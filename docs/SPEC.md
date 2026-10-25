@@ -1283,7 +1283,10 @@ carrier with the canonical static length. S036 rejects that projection when
 element or length metadata is not canonical.
 Binding a copyable fixed scalar array or fixed-storage struct from a named
 value or a named field projection creates independent backing, including a
-projection through a borrowed struct reference. The copy owns its cleanup; the source retains its
+projection through a borrowed struct reference. The copy decision uses the
+projected field type even when its containing struct also owns noncopyable storage;
+unrelated owned fields retain their existing borrow and transfer rules.
+The copy owns its cleanup; the source retains its
 original lifetime. Function bodies and nested control regions apply the same
 copy decision and read the resulting copied value.
 Placing a copyable fixed-storage name or field projection in a struct or
