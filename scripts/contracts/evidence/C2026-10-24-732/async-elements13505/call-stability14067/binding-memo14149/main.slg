@@ -1,0 +1,78 @@
+import sollang.compiler.semantic.context as semanticContext
+import sys.process as process
+import sys.runtime as runtime
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        paths! -> push(arguments[index!])
+        index! + 1 => index!
+    }
+    "prepare-files" -> println
+    paths! -> semanticContext.prepareFiles => prepared
+    "call-parameter-memo" -> println
+    "source-modules" -> println
+    prepared.package.sources -> len -> println
+    "call-records" -> println
+    prepared.calls -> len -> println
+    runtime.nowMillis() => baselineStarted
+    prepared.package -> semanticContext.resolveCallArgumentBindings(prepared.calls) => baseline
+    runtime.nowMillis() - baselineStarted => baselineElapsed
+    runtime.nowMillis() => memoStarted
+    prepared.package -> semanticContext.probeMemoCallBindings14149(prepared.calls) => memo
+    runtime.nowMillis() - memoStarted => memoElapsed
+    (baseline -> len) == (memo.bindings -> len) => equal!
+    0 => compared!
+    0 => checksum!
+    0 => rowIndex!
+    rowIndex! < (baseline -> len) and rowIndex! < (memo.bindings -> len)
+        -> while {
+            baseline[rowIndex!] => left
+            memo.bindings[rowIndex!] => right
+            left.sourceModule != right.sourceModule -> if { false => equal! }
+            checksum! + left.sourceModule => checksum!
+            compared! + 1 => compared!
+            left.callAst != right.callAst -> if { false => equal! }
+            checksum! + left.callAst => checksum!
+            compared! + 1 => compared!
+            left.argumentAst != right.argumentAst -> if { false => equal! }
+            checksum! + left.argumentAst => checksum!
+            compared! + 1 => compared!
+            left.targetSourceModule != right.targetSourceModule
+                -> if { false => equal! }
+            checksum! + left.targetSourceModule => checksum!
+            compared! + 1 => compared!
+            left.functionSymbol != right.functionSymbol -> if { false => equal! }
+            checksum! + left.functionSymbol => checksum!
+            compared! + 1 => compared!
+            left.parameterSymbol != right.parameterSymbol
+                -> if { false => equal! }
+            checksum! + left.parameterSymbol => checksum!
+            compared! + 1 => compared!
+            left.parameterOrdinal != right.parameterOrdinal
+                -> if { false => equal! }
+            checksum! + left.parameterOrdinal => checksum!
+            compared! + 1 => compared!
+            rowIndex! + 1 => rowIndex!
+        }
+    "baseline-ms" -> println
+    baselineElapsed -> println
+    "memo-ms" -> println
+    memoElapsed -> println
+    "binding-records" -> println
+    baseline -> len -> println
+    "memo-records" -> println
+    memo.bindings -> len -> println
+    "equal" -> println
+    equal! -> if { 1 } else { 0 } -> println
+    "compared-fields" -> println
+    compared! -> println
+    "binding-checksum" -> println
+    checksum! -> println
+    "cache-hits" -> println
+    memo.cacheHits -> println
+    "cache-misses" -> println
+    memo.cacheMisses -> println
+}

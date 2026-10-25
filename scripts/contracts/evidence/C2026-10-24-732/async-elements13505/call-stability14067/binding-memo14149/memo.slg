@@ -1,0 +1,88 @@
+namespace sollang.compiler.semantic.context
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+
+public struct DiagnosticBindingMemo14149 {
+    public bindings: [CallArgumentBinding; ~]
+    public cacheHits: Int
+    public cacheMisses: Int
+}
+
+public probeMemoCallBindings14149 package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> DiagnosticBindingMemo14149 {
+    [CallArgumentBinding; ~] => bindings!
+    [Int; ~] => parameterStarts!
+    [Int; ~] => parameterCounts!
+    [Int; ~] => parameterSymbols!
+    0 => cacheHits!
+    0 => cacheMisses!
+    package.symbols -> each symbol {
+        parameterStarts! -> push(-1)
+        parameterCounts! -> push(0)
+    }
+    [Int; ~] => firstChildByAst!
+    [Int; ~] => nextSiblingByAst!
+    package.nodes -> each node {
+        firstChildByAst! -> push(-1)
+        nextSiblingByAst! -> push(-1)
+    }
+    package.ranges -> each range {
+        range.astCount => childAst!
+        childAst! > 0 -> while {
+            childAst! - 1 => childAst!
+            range.astStart + childAst! => globalChild
+            package.nodes[globalChild].parent => parent
+            parent >= 0 and parent < range.astCount -> if {
+                range.astStart + parent => globalParent
+                firstChildByAst![globalParent] => nextSiblingByAst![globalChild]
+                globalChild => firstChildByAst![globalParent]
+            }
+        }
+    }
+    package -> indexFlowSourcesByAst => flowSources
+    resolvedCalls -> each call {
+        call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (package.ranges -> len)
+            and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
+            and call.functionSymbol >= 0
+            -> if {
+                package.ranges[call.sourceModule] => sourceRange
+                package.ranges[call.targetSourceModule] => targetRange
+                call.callAst >= 0 and call.callAst < sourceRange.astCount
+                    and call.functionSymbol < targetRange.symbolCount
+                    and (package.nodes[sourceRange.astStart + call.callAst].kind == 10
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 11
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 48
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
+                    -> if {
+                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
+                        targetRange.symbolStart + call.functionSymbol => parameterSlot
+                        parameterStarts![parameterSlot] < 0 -> if {
+                            parameterSymbols! -> len => parameterStarts![parameterSlot]
+                            package -> functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => orderedParameters
+                            orderedParameters -> len => parameterCounts![parameterSlot]
+                            orderedParameters -> each parameter { parameterSymbols! -> push(parameter) }
+                            cacheMisses! + 1 => cacheMisses!
+                        } else {
+                            cacheHits! + 1 => cacheHits!
+                        }
+                        0 => parameterOrdinal!
+                        parameterOrdinal! < parameterCounts![parameterSlot] and parameterOrdinal! < (argumentAsts -> len)
+                            -> while {
+                                parameterSymbols![parameterStarts![parameterSlot] + parameterOrdinal!] => selectedParam
+                                argumentAsts[parameterOrdinal!] => argumentAst
+                                bindings! -> push(CallArgumentBinding {
+                                    sourceModule: call.sourceModule
+                                    callAst: call.callAst
+                                    argumentAst: argumentAst - sourceRange.astStart
+                                    targetSourceModule: call.targetSourceModule
+                                    functionSymbol: call.functionSymbol
+                                    parameterSymbol: selectedParam
+                                    parameterOrdinal: parameterOrdinal!
+                                })
+                                parameterOrdinal! + 1 => parameterOrdinal!
+                            }
+                    }
+            }
+    }
+    DiagnosticBindingMemo14149 { bindings: bindings!, cacheHits: cacheHits!, cacheMisses: cacheMisses! }
+}

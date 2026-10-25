@@ -1,0 +1,51 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+
+public struct DiagnosticCallFactObservation14145 {
+    public count: Int
+    public checksum: Int
+}
+
+public probeReferenceIndex14145 package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~] -> DiagnosticCallFactObservation14145 {
+    package -> indexTypedMethodReferences(references) => indexed
+    0 => checksum!
+    indexed.heads -> each value { checksum! + value => checksum! }
+    indexed.previous -> each value { checksum! + value => checksum! }
+    DiagnosticCallFactObservation14145 { count: (indexed.heads -> len) + (indexed.previous -> len), checksum: checksum! }
+}
+
+public probeMethodDeclarations14145 package: ref analysis.PackageAnalysis, references: ref [typeIds.TypeReference; ~], identities: ref [modules.ModuleIdentity; ~], imports: ref [moduleResolve.ResolvedImport; ~] -> DiagnosticCallFactObservation14145 {
+    package -> prepareTypedMethodDeclarationFacts(references, identities, imports) => facts
+    0 => checksum!
+    0 => count!
+    count! + (facts.ownerTypes -> len) => count!
+    facts.ownerTypes -> each value { checksum! + value => checksum! }
+    count! + (facts.primaryMatches -> len) => count!
+    facts.primaryMatches -> each value { checksum! + (value -> if { 1 } else { 0 }) => checksum! }
+    count! + (facts.traitAsts -> len) => count!
+    facts.traitAsts -> each value { checksum! + value => checksum! }
+    count! + (facts.methodSymbols -> len) => count!
+    facts.methodSymbols -> each value { checksum! + value => checksum! }
+    count! + (facts.methodStarts -> len) => count!
+    facts.methodStarts -> each value { checksum! + value => checksum! }
+    count! + (facts.methodCounts -> len) => count!
+    facts.methodCounts -> each value { checksum! + value => checksum! }
+    count! + (facts.importReachability -> len) => count!
+    facts.importReachability -> each value { checksum! + (value -> if { 1 } else { 0 }) => checksum! }
+    DiagnosticCallFactObservation14145 { count: count!, checksum: checksum! }
+}
+
+public probeIntrinsicNames14145 package: ref analysis.PackageAnalysis -> DiagnosticCallFactObservation14145 {
+    package -> declaredIntrinsicCallableNames => names
+    0 => checksum!
+    names -> each item {
+        checksum! + item.sourceModule + item.nameToken
+            + (item.sourceFunction -> if { 1 } else { 0 })
+            + (item.publicDeclaration -> if { 1 } else { 0 }) => checksum!
+    }
+    DiagnosticCallFactObservation14145 { count: names -> len, checksum: checksum! }
+}

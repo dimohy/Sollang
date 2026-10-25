@@ -1,0 +1,59 @@
+public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [CallArgumentBinding; ~] {
+    [CallArgumentBinding; ~] => bindings!
+    [Int; ~] => firstChildByAst!
+    [Int; ~] => nextSiblingByAst!
+    package.nodes -> each node {
+        firstChildByAst! -> push(-1)
+        nextSiblingByAst! -> push(-1)
+    }
+    package.ranges -> each range {
+        range.astCount => childAst!
+        childAst! > 0 -> while {
+            childAst! - 1 => childAst!
+            range.astStart + childAst! => globalChild
+            package.nodes[globalChild].parent => parent
+            parent >= 0 and parent < range.astCount -> if {
+                range.astStart + parent => globalParent
+                firstChildByAst![globalParent] => nextSiblingByAst![globalChild]
+                globalChild => firstChildByAst![globalParent]
+            }
+        }
+    }
+    package -> indexFlowSourcesByAst => flowSources
+    resolvedCalls -> each call {
+        call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (package.ranges -> len)
+            and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
+            and call.functionSymbol >= 0
+            -> if {
+                package.ranges[call.sourceModule] => sourceRange
+                package.ranges[call.targetSourceModule] => targetRange
+                call.callAst >= 0 and call.callAst < sourceRange.astCount
+                    and call.functionSymbol < targetRange.symbolCount
+                    and (package.nodes[sourceRange.astStart + call.callAst].kind == 10
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 11
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 48
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
+                    -> if {
+                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
+                        package -> functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => parameterSymbols
+                        0 => parameterOrdinal!
+                        parameterOrdinal! < (parameterSymbols -> len) and parameterOrdinal! < (argumentAsts -> len)
+                            -> while {
+                                parameterSymbols[parameterOrdinal!] => selectedParam
+                                argumentAsts[parameterOrdinal!] => argumentAst
+                                bindings! -> push(CallArgumentBinding {
+                                    sourceModule: call.sourceModule
+                                    callAst: call.callAst
+                                    argumentAst: argumentAst - sourceRange.astStart
+                                    targetSourceModule: call.targetSourceModule
+                                    functionSymbol: call.functionSymbol
+                                    parameterSymbol: selectedParam
+                                    parameterOrdinal: parameterOrdinal!
+                                })
+                                parameterOrdinal! + 1 => parameterOrdinal!
+                            }
+                    }
+            }
+    }
+    bindings!
+}
