@@ -1,0 +1,104 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+import sys.runtime as runtime
+
+public struct ProbeCallPhases14160 {
+    resolved: ResolvedCallContext
+    matchingMilliseconds: Long
+    indexMilliseconds: Long
+    coreMilliseconds: Long
+    argumentMilliseconds: Long
+    enumMilliseconds: Long
+    rounds: Long
+}
+
+public probeCallPhases14160 initialPrepared: move semanticContext.SemanticSnapshot -> ProbeCallPhases14160 uses Clock {
+    emptyCallContextSeeds() => seeds
+    [ExpressionTypeId; ~] => externalResults
+    initialPrepared -> resolveContextCore => initialTypes
+    initialPrepared -> probeRefine14160(initialTypes, seeds, externalResults, false)
+}
+
+probeRefine14160 initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ProbeCallPhases14160 uses Clock {
+    runtime.nowMillis() => started
+    initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypeByCallAst!
+    initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        initialPrepared.package.ranges[expression.sourceModule] => range
+        initialPrepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0
+            and node.parent < range.astCount
+            and expression.status == 0
+            and expression.typeId >= 0
+            and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                initialPrepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if {
+                        expression.typeId => receiverTypeByCallAst![range.astStart + node.parent]
+                    }
+            }
+    }
+    initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+    initialPrepared.semantic,
+    receiverTypeByCallAst!,
+    initialTypes.types,
+    seeds.ownerBySource,
+    initialPrepared.calls,
+    initialPrepared.modules,
+    initialPrepared.imports,
+    initialPrepared.resolvedImports,
+    initialPrepared.qualified
+    ) => resolvedCalls
+    runtime.nowMillis() - started => matchingElapsed
+    not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+    # A committed round already owns the types for this exact prepared call
+    # table. Equality covers every call field; its binding and move indexes
+    # were derived from the same package/calls with the same readonly seeds
+    # and external results. Publish that completed pair before rebuilding
+    # identical indexes and running the full type core again.
+    committedTypes and not decisionsChanged -> if {
+        ProbeCallPhases14160 {
+            resolved: ResolvedCallContext { prepared: initialPrepared, types: initialTypes }
+            matchingMilliseconds: matchingElapsed
+            indexMilliseconds: 0
+            coreMilliseconds: 0
+            argumentMilliseconds: 0
+            enumMilliseconds: 0
+            rounds: 1
+        } -> return
+    }
+    runtime.nowMillis() => indexStarted
+    initialPrepared => prepared!
+    resolvedCalls => prepared!.calls
+    prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
+    prepared!.package -> semanticContext.indexCallResultMembersByAst(prepared!.calls) => prepared!.callResultMemberByAst
+    prepared!.package -> semanticContext.resolveCallArgumentBindings(prepared!.calls) => finalBindings
+    prepared!.package -> semanticContext.indexDeclaredMoveArgumentBindingsByAst(finalBindings) => prepared!.declaredMoveArgumentByAst
+    prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+    prepared! -> semanticContext.freeze => finalPrepared
+    runtime.nowMillis() - indexStarted => indexElapsed
+    runtime.nowMillis() => coreStarted
+    finalPrepared -> resolveContextCoreSeeded(seeds, externalResults) => finalTypes!
+    runtime.nowMillis() - coreStarted => coreElapsed
+    runtime.nowMillis() => argumentStarted
+    resolveSemanticCallArgumentBindingsSeeded(finalPrepared, finalTypes!, finalBindings, seeds)
+    runtime.nowMillis() - argumentStarted => argumentElapsed
+    runtime.nowMillis() => enumStarted
+    resolveEnumConstructorArguments(finalPrepared, finalTypes!)
+    runtime.nowMillis() - enumStarted => enumElapsed
+    finalPrepared -> probeRefine14160(finalTypes!, seeds, externalResults, true) => next
+    ProbeCallPhases14160 {
+        resolved: next.resolved
+        matchingMilliseconds: next.matchingMilliseconds + matchingElapsed
+        indexMilliseconds: next.indexMilliseconds + indexElapsed
+        coreMilliseconds: next.coreMilliseconds + coreElapsed
+        argumentMilliseconds: next.argumentMilliseconds + argumentElapsed
+        enumMilliseconds: next.enumMilliseconds + enumElapsed
+        rounds: next.rounds + 1
+    }
+}

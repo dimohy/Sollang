@@ -1,0 +1,52 @@
+refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
+    initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypeByCallAst!
+    initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        initialPrepared.package.ranges[expression.sourceModule] => range
+        initialPrepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0
+            and node.parent < range.astCount
+            and expression.status == 0
+            and expression.typeId >= 0
+            and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                initialPrepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if {
+                        expression.typeId => receiverTypeByCallAst![range.astStart + node.parent]
+                    }
+            }
+    }
+    initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+    initialPrepared.semantic,
+    receiverTypeByCallAst!,
+    initialTypes.types,
+    seeds.ownerBySource,
+    initialPrepared.calls,
+    initialPrepared.modules,
+    initialPrepared.imports,
+    initialPrepared.resolvedImports,
+    initialPrepared.qualified
+    ) => resolvedCalls
+    not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+    # A committed round already owns the types for this exact prepared call
+    # table. Equality covers every call field; its binding and move indexes
+    # were derived from the same package/calls with the same readonly seeds
+    # and external results. Publish that completed pair before rebuilding
+    # identical indexes and running the full type core again.
+    committedTypes and not decisionsChanged -> if {
+        ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
+    }
+    initialPrepared => prepared!
+    resolvedCalls => prepared!.calls
+    prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
+    prepared!.package -> semanticContext.indexCallResultMembersByAst(prepared!.calls) => prepared!.callResultMemberByAst
+    prepared!.package -> semanticContext.resolveCallArgumentBindings(prepared!.calls) => finalBindings
+    prepared!.package -> semanticContext.indexDeclaredMoveArgumentBindingsByAst(finalBindings) => prepared!.declaredMoveArgumentByAst
+    prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+    prepared! -> semanticContext.freeze => finalPrepared
+    finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
+    finalPrepared -> refineResolvedCallContext(finalTypes, seeds, externalResults, true)
+}
