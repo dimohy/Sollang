@@ -1,0 +1,63 @@
+import std.algorithm as algorithm
+
+struct IntegerComparison { }
+struct Entry { key: Int, id: Int }
+struct EntryComparison { }
+impl algorithm.Comparison for IntegerComparison {
+    type Item = Int
+    public compare: self, left: ref Int, right: ref Int -> Int {
+        left < right -> if { -2_147_483_648 } else {
+            left > right -> if { 2_147_483_647 } else { 0 }
+        }
+    }
+}
+
+impl algorithm.Comparison for EntryComparison {
+    type Item = Entry
+    public compare: self, left: ref Entry, right: ref Entry -> Int {
+        left.key < right.key -> if { -1 -> return }
+        left.key > right.key -> if { 1 -> return }
+        left.id < right.id -> if { -1 } else {
+            left.id > right.id -> if { 1 } else { 0 }
+        }
+    }
+}
+
+printValues values: [Int; ~] -> Unit uses Console {
+    values -> each value { "$value," -> print }
+    "" -> println
+}
+
+main {
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    algorithm.Ordering { direction: algorithm.Direction.Descending } => descending
+    IntegerComparison { } => comparison
+    [Int; ~] => values!
+    values! -> reserve(129)
+    0..<128 -> each index {
+        values! -> push((index * 73 + 19) % 101 - 50)
+    }
+    values! -> capacity => capacity
+    ascending -> sort(values!, comparison)
+    values! -> printValues
+    descending -> sort(values!, comparison)
+    values! -> printValues
+    "storage=$(values! -> len),$capacity,$(values! -> capacity)" -> println
+    # The same owner remains available after both operations.
+    values! -> push(999)
+    "reuse=$(values! -> len),$(values![128])" -> println
+    [Int; ~] => empty!
+    ascending -> sort(empty!, comparison)
+    "empty=$(empty! -> len)" -> println
+    [7; ~] => single!
+    descending -> sort(single!, comparison)
+    "single=$(single![0])" -> println
+    [2_147_483_647, 0, -2_147_483_648, 0; ~] => extremes!
+    ascending -> sort(extremes!, comparison)
+    extremes! -> printValues
+    [Entry; { key: 2, id: 7 }, { key: -1, id: 9 }, { key: 2, id: 3 }; ~] => records!
+    EntryComparison { } => entryComparison
+    ascending -> sort(records!, entryComparison)
+    records! -> each record { "$(record.key):$(record.id)," -> print }
+    "" -> println
+}
