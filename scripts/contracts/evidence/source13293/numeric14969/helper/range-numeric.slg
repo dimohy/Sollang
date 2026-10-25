@@ -1,0 +1,69 @@
+namespace sollang.compiler.semantic.numeric_literal_range
+import c394.type_ids as typeIds
+public magnitudeLimit symbol: Int, pointerBitWidth: Int, negative: Bool -> Text {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical == 3 -> if { negative -> if { "128" -> return } else { "127" -> return } }
+    canonical == 4 -> if { negative -> if { "32768" -> return } else { "32767" -> return } }
+    canonical == 2 -> if { negative -> if { "2147483648" -> return } else { "2147483647" -> return } }
+    canonical == 8 -> if { "255" -> return }
+    canonical == 9 -> if { "65535" -> return }
+    canonical == 10 -> if { "4294967295" -> return }
+    canonical == 14 -> if { "1114111" -> return }
+    canonical == 11 -> if { "18446744073709551615" -> return }
+    canonical == 13 -> if {
+        pointerBitWidth == 32 -> if { "4294967295" -> return }
+        "18446744073709551615" -> return
+    }
+    canonical == 12 and pointerBitWidth == 32 -> if {
+        negative -> if { "2147483648" -> return } else { "2147483647" -> return }
+    }
+    negative -> if { "9223372036854775808" -> return }
+    "9223372036854775807"
+}
+public integerLiteralStatus source: ref Text, start: UIntSize, end: UIntSize, symbol: Int, pointerBitWidth: Int, negative: Bool, foldedLiteral: Bool, foldedValue: Long, foldedPlace: Long -> Int {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical -> magnitudeLimit(pointerBitWidth, negative) => limit
+    canonical == 8 or canonical == 9 or canonical == 10 or canonical == 11
+        or canonical == 13 or canonical == 14 => unsigned
+    start => cursor!
+    foldedPlace => place!
+    UIntSize(0) => digits!
+    false => significant!
+    false => sawDigit!
+    false => previousDigit!
+    0 => comparison!
+    0 => codePoint!
+    cursor! < end -> while {
+        UInt8(0) => digit!
+        foldedLiteral -> if {
+            UInt8(-(foldedValue / place! % 10) + 48) => digit!
+            place! / 10 => place!
+        } else { source -> byte(cursor!) => digit! }
+        digit! == 95 -> if {
+            not previousDigit! -> if { 0 -> return }
+            false => previousDigit!
+        } else {
+            digit! < 48 or digit! > 57 -> if { 0 -> return }
+            true => sawDigit!
+            true => previousDigit!
+            digit! != 48 -> if { true => significant! }
+            significant! -> if {
+                digits! < (limit -> len) and comparison! == 0
+                    -> if {
+                        digit! < (limit -> byte(digits!)) -> if { -1 => comparison! }
+                        digit! > (limit -> byte(digits!)) -> if { 1 => comparison! }
+                    }
+                canonical == 14 and digits! < 7 -> if { codePoint! * 10 + Int(digit!) - 48 => codePoint! }
+                digits! + 1 => digits!
+            }
+        }
+        cursor! + 1 => cursor!
+    }
+    not sawDigit! or not previousDigit! or (negative and unsigned and significant!)
+        -> if { 0 -> return }
+    canonical == 14 and codePoint! >= 55_296 and codePoint! <= 57_343
+        -> if { 2 -> return }
+    digits! < (limit -> len) or (digits! == (limit -> len) and comparison! <= 0)
+        -> if { 1 -> return }
+    0
+}

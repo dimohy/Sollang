@@ -1,0 +1,184 @@
+namespace sollang.compiler.llvm.text
+import sys.file as file
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.path as path
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.semantic.context as semantic
+import sollang.compiler.llvm.target as target
+import sys.process as process
+import sollang.compiler.llvm.emitter.async_runtime as asyncRuntime
+import sollang.compiler.parser as parser
+
+validateSources sources: ref [Text; ~] -> Unit uses Process {
+    sources -> each source {
+        source -> parser.parseEvents => events
+        events -> each event {
+            event.kind == 3 and event.value != 1 -> if { process.exit(6) }
+        }
+    }
+}
+
+checkLegacy sources: move [Text; ~] -> Unit uses Console, Process {
+    sources -> validateSources
+    sources -> semantic.prepare => prepared
+    prepared -> typed.coroutinePlanContext => legacy
+    (legacy.points -> len) == 4 and (legacy.destroys -> len) == 0
+        -> if { "legacy-ok" -> println } else { process.exit(3) }
+}
+
+checkCore sources: move [Text; ~], mode: Int -> Unit uses Console, Process {
+    sources -> validateSources
+    target.windowsX64() => platform
+    PrepareRequest {
+        sources: sources
+        standardLibrarySourceStart: 0
+        standardLibrarySourceCount: 0
+        pointerBitWidth: platform.pointerBitWidth
+        targetArchitecture: platform.architecture
+        cpuDispatchPolicy: platform.dispatchPolicy
+        requiredCpuFeatures: platform.requiredFeatures
+        allowedCpuFeatures: platform.allowedFeatures
+        forbiddenCpuFeatures: platform.forbiddenFeatures
+        supportsComputePool: false
+        expectedPathStyle: 1
+    } => request
+    request -> prepare => context
+    context -> prepareCoreEmitterState => state
+    mode == 1 -> if {
+        (state.coroutine.points -> len) == 2
+            and state.frozenReachableFunctions[state.coroutine.points[0].functionIr]
+            and state.frozenReachableFunctions[state.coroutine.points[1].functionIr]
+            -> if { "reachable-ok" -> println } else { process.exit(4) }
+    } else {
+        (state.coroutine.points -> len) == 0
+            and (state.coroutine.slots -> len) == 0
+            and (state.coroutine.destroys -> len) == 0
+            -> if { "sync-ok" -> println } else { process.exit(5) }
+    }
+}
+
+
+
+inspectDiagnosticIdentity sourcePath: Text, declarationPath: Text -> Int uses Console, File {
+    sourcePath -> file.mapText => owner
+    owner -> sourceDecoding.utf8Text => source
+    declarationPath -> file.mapText => declarationOwner
+    declarationOwner -> sourceDecoding.utf8Text => declarationSource
+    [declarationSource, source; ~] => sources
+    target.windowsX64() => platform
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: 1, pointerBitWidth: platform.pointerBitWidth, targetArchitecture: platform.architecture, cpuDispatchPolicy: platform.dispatchPolicy, requiredCpuFeatures: platform.requiredFeatures, allowedCpuFeatures: platform.allowedFeatures, forbiddenCpuFeatures: platform.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareCheckedLibraryFiles([declarationPath, sourcePath; ~], "windows-x64", path.nativeStyle()) -> when {
+        Rejected(rejection) { 7 -> return }
+        ImportRejected(rejection) { 7 -> return }
+        Ready(context) { context }
+    } => context
+    (context -> checkedContextDiagnosticCount) != 0
+        -> if { context -> diagnostics.emitBlockingDiagnostics
+            context -> emitIrInvariantDiagnostics
+            9 -> return }
+    context.ir -> each taskNode {
+        taskNode.kind != 0 and taskNode.typeId >= 0
+            and context.types[taskNode.typeId].kind == 7
+            and context.types[taskNode.typeId].origin == 4
+            and context.types[taskNode.typeId].symbol == 2
+            -> if {
+                not (taskNode -> typed.isAsyncTaskValue(context.ir))
+                    -> if { 11 -> return }
+            }
+    }
+    false => start!
+    false => track!
+    false => snapshot!
+    false => close!
+    context.ir -> each node {
+        node.kind == 6 or node.kind == 9 -> if {
+            node.opcode == -324 -> if { true => start! }
+            node.opcode == -325 -> if { true => track! }
+            node.opcode == -326 -> if { true => snapshot! }
+            node.opcode == -327 -> if { true => close! }
+            node.opcode <= -324 and node.opcode >= -327
+                and node.flags / 8 % 2 == 1 -> if { 8 -> return }
+        }
+    }
+    "start=$(start!),track=$(track!),snapshot=$(snapshot!),close=$(close!)" -> println
+    0
+}
+
+main {
+    Int((process.arguments())[UIntSize(1)] -> len) => mode
+    mode >= 22 -> if {
+        [(process.arguments())[UIntSize(2)]; ~] -> emitWasmCheckedFiles => browserCode
+        process.exit(browserCode)
+    }
+    mode >= 21 -> if {
+        asyncRuntime.emitDiagnosticSessionRuntime()
+        process.exit(0)
+    }
+    mode >= 20 -> if {
+        (process.arguments())[UIntSize(2)] -> inspectDiagnosticIdentity((process.arguments())[UIntSize(3)]) => identityCode
+        process.exit(identityCode)
+    }
+    mode >= 4 -> if {
+        (process.arguments())[UIntSize(2)] => sourcePath
+        [sourcePath,; ~] => paths!
+        process.arguments() => sourceArguments
+        UIntSize(3) => sourcePathIndex!
+        sourcePathIndex! < (sourceArguments -> len) -> while {
+            paths! -> push(sourceArguments[sourcePathIndex!])
+            sourcePathIndex! + 1 => sourcePathIndex!
+        }
+        paths! -> emitCheckedFiles => code
+        process.exit(code)
+    }
+    mode -> when {
+        == 2 {
+            [
+            """
+            namespace probes.cooperative_yield_order
+            public dormant: -> async Unit uses Console {
+                yield
+                "between" -> println
+                yield
+                "done" -> println
+            }
+            main { "sync" -> println }
+            """; ~
+            ]
+        }
+        else {
+            [
+            """
+            namespace probes.cooperative_yield_order
+            
+            public first: -> async Unit uses Console {
+                "A1" -> println
+                yield
+                "A2" -> println
+            }
+            
+            public second: -> async Unit uses Console {
+                "B1" -> println
+                yield
+                "B2" -> println
+            }
+            
+            public dormant: -> async Unit uses Console {
+                yield
+                "between" -> println
+                yield
+                "done" -> println
+            }
+            
+            main {
+                probes.cooperative_yield_order.first() => firstTask
+                probes.cooperative_yield_order.second() => secondTask
+                firstTask -> await
+                secondTask -> await
+            }
+            """; ~
+            ]
+        }
+    } => sources
+    mode == 3 -> if { sources -> checkLegacy } else { sources -> checkCore(mode) }
+}
