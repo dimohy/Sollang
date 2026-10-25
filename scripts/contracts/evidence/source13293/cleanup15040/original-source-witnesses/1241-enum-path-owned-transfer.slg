@@ -1,0 +1,56 @@
+# An owned value moved by one terminating enum arm must remain alive on the
+# continuing arm. A payload consumed as an additional move argument must not be
+# dropped again through its original Result carrier.
+struct Packet {
+    bytes: [UInt8; ~]
+}
+
+struct Sink {
+    marker: Int
+}
+
+enum Decision {
+    Retry
+    Ready
+}
+
+enum Error {
+    Exhausted
+}
+
+decide attempt: Int -> Decision {
+    attempt == 0 -> if { Decision.Retry } else { Decision.Ready }
+}
+
+build: -> Result<Packet, Error> {
+    [UInt8; ~] => bytes!
+    bytes! -> push(10)
+    bytes! -> push(20)
+    bytes! -> push(30)
+    bytes! -> push(40)
+    Packet { bytes: bytes! } => packet
+    0 => attempt!
+    attempt! < 2 -> while {
+        attempt! -> decide -> when {
+            Retry { attempt! + 1 => attempt! }
+            Ready { Result<Packet, Error>.Ok(packet) -> return }
+        }
+    }
+    Result<Packet, Error>.Err(Error.Exhausted)
+}
+
+impl Sink {
+    consume: self, packet: move Packet -> Result<Int, Error> {
+        Result<Int, Error>.Ok(packet.bytes -> len)
+    }
+}
+
+main {
+    build() -> when {
+        Err(_) { "enum-path-owned-transfer=failed" -> println }
+        Ok(packet) => Sink { marker: 0 } -> consume(packet) -> when {
+            Err(_) { "enum-path-owned-transfer=failed" -> println }
+            Ok(count) { "enum-path-owned-transfer=$count" -> println }
+        }
+    }
+}
