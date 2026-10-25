@@ -22,7 +22,7 @@ def generic_closure_inputs():
             FIXTURES / "generic-unrelated-a.slg", FIXTURES / "generic-unrelated-b.slg"]
 
 
-def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kind):
+def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kind, reusable_directories=None):
     main_source, expected_path, *versions = generic_closure_inputs()
     expected = expected_path.read_text(encoding="utf-8-sig").strip()
     control_output = output / "generic-closure"
@@ -30,7 +30,8 @@ def verify_generic_closure(compiler, output, inputs, parent_result, compiler_kin
               "total": 2, "cases": [], "claimsGoalComplete": False}
     parent_result["genericClosureControl"] = {"status": "running", "result": str(control_output / "result.json")}
     try:
-        with VerificationOutput(ROOT, control_output, inputs, result, timeout_seconds=180) as execution:
+        with VerificationOutput(ROOT, control_output, inputs, result, timeout_seconds=180,
+                                reusable_directories=reusable_directories) as execution:
             helper, executable = control_output / "unrelated.slg", control_output / "probe.exe"
             for label, version in zip(("cold", "warm"), versions):
                 shutil.copyfile(version, helper)
@@ -205,7 +206,8 @@ def native_semantic_facts(output, source):
     return matches[0]
 
 
-def verify_link_failure(compiler, output, inputs, parent_result, main_source, provider, expected):
+def verify_link_failure(compiler, output, inputs, parent_result, main_source, provider, expected,
+                        reusable_directories=None):
     """Exercise the real native publication boundary with an existing cache.
 
     Reuse the C476 injected-clang failure technique; do not manufacture a bad
@@ -225,7 +227,8 @@ def verify_link_failure(compiler, output, inputs, parent_result, main_source, pr
     }, indent=2) + "\n", encoding="utf-8")
     parent_result["linkFailureControl"] = {"status": "running", "result": str(control / "result.json")}
     try:
-        with VerificationOutput(ROOT, control, [*inputs, clang, main_source, provider, cache, executable, contract], result) as execution:
+        with VerificationOutput(ROOT, control, [*inputs, clang, main_source, provider, cache, executable, contract], result,
+                                reusable_directories=reusable_directories) as execution:
             source, fake_llvm = control / "fail-clang.c", control / "fake-llvm"
             (fake_llvm / "bin").mkdir(parents=True)
             fake_clang = fake_llvm / "bin/clang.exe"
@@ -265,6 +268,7 @@ def main():
     parser.add_argument("--compiler", type=Path, required=True)
     parser.add_argument("--compiler-kind", choices=("managed", "native"), default="managed")
     parser.add_argument("--verify-link-failure", action="store_true")
+    parser.add_argument("--reusable-compiler-directory", type=Path, action="append", default=None)
     parser.add_argument("--fixtures", type=Path, default=FIXTURES)
     parser.add_argument("--expected-binding", action="append", default=[], metavar="NAME=IDENTITY")
     args = parser.parse_args()
@@ -289,7 +293,8 @@ def main():
               *sorted((ROOT / "stdlib").rglob("*.slg")), *lifecycle_inputs(ROOT)]
     result = {"schemaVersion": 1, "scope": "C543 cold/warm semantic numeric type restoration",
               "compilerKind": args.compiler_kind, "total": 2, "cases": [], "claimsGoalComplete": False}
-    with VerificationOutput(ROOT, output, inputs, result, timeout_seconds=180) as execution:
+    with VerificationOutput(ROOT, output, inputs, result, timeout_seconds=180,
+                            reusable_directories=args.reusable_compiler_directory) as execution:
         (output / "numeric_cache").mkdir()
         main_source, provider = output / "main.slg", output / "numeric_cache/provider.slg"
         shutil.copyfile(versions[0], main_source)
@@ -338,8 +343,10 @@ def main():
             execution.save()
             print(f"{label}: PASS", flush=True)
         if args.verify_link_failure:
-            verify_link_failure(compiler, output, inputs, result, main_source, provider, "4,4,4,2")
-        verify_generic_closure(compiler, output, inputs, result, args.compiler_kind)
+            verify_link_failure(compiler, output, inputs, result, main_source, provider, "4,4,4,2",
+                                args.reusable_compiler_directory)
+        verify_generic_closure(compiler, output, inputs, result, args.compiler_kind,
+                               args.reusable_compiler_directory)
         execution.save()
 
 

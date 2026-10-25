@@ -28,15 +28,41 @@ class FocusedOutputTests(unittest.TestCase):
 
     def session(self, timeout=10):
         return VerificationOutput(ROOT, self.output, [self.source], self.record,
-                                  cleanup_mode='plan-only', timeout_seconds=timeout)
+                                  cleanup_mode='plan-only', timeout_seconds=timeout,
+                                  reusable_directories=[])
+
+    def test_explicit_selection_reaches_admission_and_cleanup(self):
+        selected = [self.parent / 'compiler']
+        with patch('focused_verification_output.initialize_output') as admit, \
+                patch('focused_verification_output.cleanup_output') as cleanup:
+            with VerificationOutput(ROOT, self.output, [self.source], self.record,
+                                    reusable_directories=selected):
+                self.record['cases'][0].update(status='passed', passed=True)
+            admit.assert_called_once_with(ROOT, self.output, reusable_directories=selected)
+            cleanup.assert_called_once_with(ROOT, self.output, execute=True,
+                                            reusable_directories=selected)
+
+    def test_four_compilers_rejected_before_output_creation(self):
+        selected = [self.parent / ('compiler' + str(i)) for i in range(4)]
+        with self.assertRaisesRegex(ValueError, 'REUSABLE_COMPILER_LIMIT_EXCEEDED'):
+            VerificationOutput(ROOT, self.output, [self.source], self.record,
+                               reusable_directories=selected)
+        self.assertFalse(self.output.exists())
+
+    def test_explicit_selection_cannot_escape_artifacts(self):
+        with self.assertRaisesRegex(ValueError, 'OUTSIDE_ROOT'):
+            VerificationOutput(ROOT, self.output, [self.source], self.record,
+                               reusable_directories=[ROOT / 'outside-owned-compiler'])
+        self.assertFalse(self.output.exists())
 
     def test_completed_records_saved_before_cleanup(self):
-        def cleanup(repo, output, execute):
+        def cleanup(repo, output, execute, reusable_directories):
             result = self.read()
             self.assertEqual('passed', result['status'])
             self.assertTrue(result['processesStopped'])
             self.assertTrue(result['inputsStable'])
             self.assertFalse(execute)
+            self.assertEqual([], reusable_directories)
         with patch('focused_verification_output.cleanup_output', side_effect=cleanup) as call:
             with self.session() as execution:
                 code = execution.run([sys.executable, '-c', 'print("ok")'], self.output/'stdout.log', self.output/'stderr.log')

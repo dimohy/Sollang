@@ -23,11 +23,13 @@ def lifecycle_inputs(root):
 
 
 class VerificationOutput:
-    def __init__(self, root, output, inputs, result, cleanup_mode="execute", timeout_seconds=180):
+    def __init__(self, root, output, inputs, result, cleanup_mode="execute", timeout_seconds=180,
+                 reusable_directories=None):
         if cleanup_mode not in ("execute", "plan-only") or timeout_seconds <= 0:
             raise ValueError("FOCUSED_OUTPUT_CONFIGURATION_INVALID")
         self.root, self.output = Path(root).resolve(), Path(output).resolve()
-        initialize_output(self.root, self.output)
+        self.reusable_directories = reusable_directories
+        initialize_output(self.root, self.output, reusable_directories=reusable_directories)
         self.inputs = list(dict.fromkeys(Path(path).resolve() for path in inputs))
         self.hashes = {str(path): sha(path) for path in self.inputs}
         self.result = result
@@ -106,5 +108,7 @@ class VerificationOutput:
                                   or ".sollang-cache" in path.parts)}
         self.save()
         if success:
-            cleanup_output(self.root, self.output, execute=self.cleanup_mode == "execute")
+            selection = ({} if self.reusable_directories is None else
+                         {"reusable_directories": self.reusable_directories})
+            cleanup_output(self.root, self.output, execute=self.cleanup_mode == "execute", **selection)
         return False
