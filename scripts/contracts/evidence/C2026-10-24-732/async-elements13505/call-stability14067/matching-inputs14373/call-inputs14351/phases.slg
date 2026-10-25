@@ -1,0 +1,185 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.type_ids as typeIds
+import std.time as time
+
+public struct ProbeCallPhases14160 {
+    public resolved: ResolvedCallContext
+    public matchingMilliseconds: Long
+    public indexMilliseconds: Long
+    public coreMilliseconds: Long
+    public argumentMilliseconds: Long
+    public enumMilliseconds: Long
+    public rounds: Long
+    public sameReceiverRounds: Int
+    public sameTypeRounds: Int
+    public sameSeedRounds: Int
+    public sameAllRounds: Int
+    public sameInputResultDifferences: Int
+    public inputComparisonMilliseconds: Long
+    public eligibleQueryMilliseconds: Long
+}
+
+public probeCallPhases14160 initialPrepared: move semanticContext.SemanticSnapshot -> Result<ProbeCallPhases14160, time.Error> uses Clock {
+    emptyCallContextSeeds() => seeds
+    [ExpressionTypeId; ~] => externalResults
+    initialPrepared -> resolveContextCore => initialTypes
+    [Int; ~] => previousReceivers
+    [typeIds.SemanticType; ~] => previousTypes
+    [calls.ModuleCallResolution; ~] => previousOwnedCalls
+    initialPrepared -> probeRefine14160(initialTypes, seeds, externalResults, false, false, previousReceivers, previousTypes, previousOwnedCalls)
+}
+
+probeRefine14160 initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPrevious: Bool, previousReceivers: ref [Int; ~], previousTypes: ref [typeIds.SemanticType; ~], previousOwnedCalls: ref [calls.ModuleCallResolution; ~] -> Result<ProbeCallPhases14160, time.Error> uses Clock {
+    time.monotonicClock() => clock
+    clock -> now => started
+    initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypeByCallAst!
+    initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        initialPrepared.package.ranges[expression.sourceModule] => range
+        initialPrepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0
+            and node.parent < range.astCount
+            and expression.status == 0
+            and expression.typeId >= 0
+            and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                initialPrepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if {
+                        expression.typeId => receiverTypeByCallAst![range.astStart + node.parent]
+                    }
+            }
+    }
+    clock -> now => comparisonStarted
+    [calls.ModuleCallResolution; ~] => ownedCalls!
+    initialPrepared.calls -> each call {
+        call.sourceModule >= 0 and call.sourceModule < (seeds.ownerBySource -> len) and seeds.ownerBySource[call.sourceModule]
+            -> if { ownedCalls! -> push(call) }
+    }
+    hasPrevious and probeReceiverInputsEqual14349(previousReceivers, receiverTypeByCallAst!) => sameReceivers
+    hasPrevious and probeTypeInputsEqual14349(previousTypes, initialTypes.types) => sameTypes
+    hasPrevious and callContextDecisionsEqual(previousOwnedCalls, ownedCalls!) => sameSeeds
+    committedTypes and sameReceivers and sameTypes and sameSeeds => sameAll
+    clock -> now => queryStarted
+    queryStarted -> durationSince(comparisonStarted)? -> asMilliseconds => comparisonElapsed
+    initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+    initialPrepared.semantic,
+    receiverTypeByCallAst!,
+    initialTypes.types,
+    seeds.ownerBySource,
+    initialPrepared.calls,
+    initialPrepared.modules,
+    initialPrepared.imports,
+    initialPrepared.resolvedImports,
+    initialPrepared.qualified
+    ) => resolvedCalls
+    clock -> now => queryCompleted
+    queryCompleted -> durationSince(queryStarted)? -> asMilliseconds => queryElapsed
+    clock -> now => matchingElapsedCompleted
+    matchingElapsedCompleted -> durationSince(started)? => matchingElapsedDuration
+    matchingElapsedDuration -> asMilliseconds => matchingElapsed
+    not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+    sameAll and not decisionsChanged -> if { queryElapsed } else { Long(0) } => eligibleElapsed
+    sameReceivers -> if { 1 } else { 0 } => receiverEqualCount
+    sameTypes -> if { 1 } else { 0 } => typeEqualCount
+    sameSeeds -> if { 1 } else { 0 } => seedEqualCount
+    sameAll -> if { 1 } else { 0 } => allEqualCount
+    sameAll and decisionsChanged -> if { 1 } else { 0 } => resultDifferenceCount
+    # A committed round already owns the types for this exact prepared call
+    # table. Equality covers every call field; its binding and move indexes
+    # were derived from the same package/calls with the same readonly seeds
+    # and external results. Publish that completed pair before rebuilding
+    # identical indexes and running the full type core again.
+    committedTypes and not decisionsChanged -> if {
+        ProbeCallPhases14160 {
+            resolved: ResolvedCallContext { prepared: initialPrepared, types: initialTypes }
+            matchingMilliseconds: matchingElapsed
+            indexMilliseconds: 0
+            coreMilliseconds: 0
+            argumentMilliseconds: 0
+            enumMilliseconds: 0
+            rounds: 1
+            sameReceiverRounds: receiverEqualCount
+            sameTypeRounds: typeEqualCount
+            sameSeedRounds: seedEqualCount
+            sameAllRounds: allEqualCount
+            sameInputResultDifferences: resultDifferenceCount
+            inputComparisonMilliseconds: comparisonElapsed
+            eligibleQueryMilliseconds: eligibleElapsed
+        } -> Result<ProbeCallPhases14160, time.Error>.Ok -> return
+    }
+    clock -> now => indexStarted
+    initialPrepared => prepared!
+    resolvedCalls => prepared!.calls
+    prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
+    prepared!.package -> semanticContext.indexCallResultMembersByAst(prepared!.calls) => prepared!.callResultMemberByAst
+    prepared!.package -> semanticContext.resolveCallArgumentBindings(prepared!.calls) => finalBindings
+    prepared!.package -> semanticContext.indexDeclaredMoveArgumentBindingsByAst(finalBindings) => prepared!.declaredMoveArgumentByAst
+    prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+    prepared! -> semanticContext.freeze => finalPrepared
+    clock -> now => indexElapsedCompleted
+    indexElapsedCompleted -> durationSince(indexStarted)? => indexElapsedDuration
+    indexElapsedDuration -> asMilliseconds => indexElapsed
+    clock -> now => coreStarted
+    finalPrepared -> resolveContextCoreSeeded(seeds, externalResults) => finalTypes!
+    clock -> now => coreElapsedCompleted
+    coreElapsedCompleted -> durationSince(coreStarted)? => coreElapsedDuration
+    coreElapsedDuration -> asMilliseconds => coreElapsed
+    clock -> now => argumentStarted
+    resolveSemanticCallArgumentBindingsSeeded(finalPrepared, finalTypes!, finalBindings, seeds)
+    clock -> now => argumentElapsedCompleted
+    argumentElapsedCompleted -> durationSince(argumentStarted)? => argumentElapsedDuration
+    argumentElapsedDuration -> asMilliseconds => argumentElapsed
+    clock -> now => enumStarted
+    resolveEnumConstructorArguments(finalPrepared, finalTypes!)
+    clock -> now => enumElapsedCompleted
+    enumElapsedCompleted -> durationSince(enumStarted)? => enumElapsedDuration
+    enumElapsedDuration -> asMilliseconds => enumElapsed
+    finalPrepared -> probeRefine14160(finalTypes!, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, ownedCalls!)? => next
+    ProbeCallPhases14160 {
+        resolved: next.resolved
+        matchingMilliseconds: next.matchingMilliseconds + matchingElapsed
+        indexMilliseconds: next.indexMilliseconds + indexElapsed
+        coreMilliseconds: next.coreMilliseconds + coreElapsed
+        argumentMilliseconds: next.argumentMilliseconds + argumentElapsed
+        enumMilliseconds: next.enumMilliseconds + enumElapsed
+        rounds: next.rounds + 1
+        sameReceiverRounds: next.sameReceiverRounds + receiverEqualCount
+        sameTypeRounds: next.sameTypeRounds + typeEqualCount
+        sameSeedRounds: next.sameSeedRounds + seedEqualCount
+        sameAllRounds: next.sameAllRounds + allEqualCount
+        sameInputResultDifferences: next.sameInputResultDifferences + resultDifferenceCount
+        inputComparisonMilliseconds: next.inputComparisonMilliseconds + comparisonElapsed
+        eligibleQueryMilliseconds: next.eligibleQueryMilliseconds + eligibleElapsed
+    } -> Result<ProbeCallPhases14160, time.Error>.Ok
+}
+
+probeReceiverInputsEqual14349 left: ref [Int; ~], right: ref [Int; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+probeTypeInputsEqual14349 left: ref [typeIds.SemanticType; ~], right: ref [typeIds.SemanticType; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] => previous
+        right[index!] => current
+        previous.kind != current.kind or previous.origin != current.origin or previous.module != current.module or previous.symbol != current.symbol
+            or previous.first != current.first or previous.second != current.second or previous.length != current.length
+            or previous.lengthHash != current.lengthHash or (previous.containsParameter and not current.containsParameter) or (not previous.containsParameter and current.containsParameter) or previous.status != current.status
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
