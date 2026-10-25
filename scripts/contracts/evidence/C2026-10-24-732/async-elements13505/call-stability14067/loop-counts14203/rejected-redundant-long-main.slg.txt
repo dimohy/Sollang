@@ -1,0 +1,69 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.calls as calls
+import sys.process as process
+import sys.runtime as runtime
+
+main {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    UIntSize(1) => argumentIndex!
+    argumentIndex! < (arguments -> len) -> while {
+        paths! -> push(arguments[argumentIndex!])
+        argumentIndex! + 1 => argumentIndex!
+    }
+    "prepare-files" -> println
+    paths! -> semanticContext.prepareFiles => prepared
+    prepared -> expressionTypeIds.probeInitialTypedSource14188 => initialTypes
+    prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+    [Int; ~] => receiverTypes!
+    prepared.package.nodes -> each node { receiverTypes! -> push(-1) }
+    initialTypes.expressions -> each expression {
+        prepared.package.ranges[expression.sourceModule] => range
+        prepared.package.nodes[range.astStart + expression.astNode] => node
+        node.parent >= 0 and node.parent < range.astCount and expression.status == 0
+            and expression.typeId >= 0 and expression.typeId < (initialTypes.types -> len)
+            and not initialTypes.types[expression.typeId].containsParameter
+            -> if {
+                prepared.package.nodes[range.astStart + node.parent] => call
+                call.kind == 10 and flowSources[range.astStart + node.parent] == range.astStart + expression.astNode
+                    -> if { expression.typeId => receiverTypes![range.astStart + node.parent] }
+            }
+    }
+    runtime.nowMillis() => factsStarted
+    calls.probePrepareTypedSource14188(prepared.package, prepared.semantic, prepared.modules, prepared.resolvedImports) => facts
+    runtime.nowMillis() - factsStarted => factsElapsed
+    "typed-source-counts" -> println
+    "source-count" -> println
+    prepared.package.ranges -> len -> println
+    "facts-ms" -> println
+    factsElapsed -> println
+    0 => sourceIndex!
+    0 => totalCalls!
+    sourceIndex! < (prepared.package.ranges -> len)
+        -> while {
+            [Long; ~] => counters!
+            0 => counterSeed!
+            counterSeed! < 12 -> while {
+                counters! -> push(Long(0))
+                counterSeed! + 1 => counterSeed!
+            }
+            runtime.nowMillis() => started
+            calls.probeTypedSource14188(sourceIndex!, prepared.package, prepared.semantic, prepared.modules, prepared.imports, prepared.resolvedImports, prepared.qualified, receiverTypes!, initialTypes.types, facts, counters!) => selected
+            runtime.nowMillis() - started => elapsed
+            "source-$(sourceIndex!)-ms" -> println
+            elapsed -> println
+            "source-$(sourceIndex!)-calls" -> println
+            selected -> len -> println
+            0 => counterIndex!
+            counterIndex! < (counters! -> len) -> while {
+                "source-$(sourceIndex!)-counter-$(counterIndex!)" -> println
+                counters![counterIndex!] -> println
+                counterIndex! + 1 => counterIndex!
+            }
+            totalCalls! + Int(selected -> len) => totalCalls!
+            sourceIndex! + 1 => sourceIndex!
+        }
+    "total-calls" -> println
+    totalCalls! -> println
+}
