@@ -1,0 +1,59 @@
+import sollang.compiler.semantic.expression_type_ids as facts
+import sollang.compiler.semantic.semantic_generations as generations
+
+report sources: [Text; ~], label: Text -> Unit uses Console {
+    sources -> facts.checkStable(label) => words
+    words -> generations.checksum(words -> len) => hash
+    hash -> each byte { byte -> println }
+}
+
+main {
+    facts.checkCallFields()
+    [
+    """
+    echo value: Int -> Int => value
+    main { echo(4) => answer }
+    """; ~
+    ] -> report("basic")
+    [
+    """
+    afterSteps<T> value: T, count: Int -> T { count == 0 -> if { value } else { value -> afterSteps(count - 1) } }
+    main { 3 -> afterSteps(2) => first
+    true -> afterSteps(1) => second }
+    """; ~
+    ] -> report("generic")
+    [
+    """
+    struct Token { value: Int }
+    impl Token { public read: self -> Int => self.value }
+    main { Token { value: 7 } -> read => answer }
+    """; ~
+    ] -> report("methods")
+    [
+    """
+    take values: move [Int; ~] -> Int { values[0] }
+    main { [1, 2; ~] => values
+    values -> take => answer }
+    """; ~
+    ] -> report("move")
+    [
+    """
+    namespace sample.stable_left
+    public echo value: Int -> Int => value
+    """,
+    """
+    namespace sample.stable_right
+    import sample.stable_left as left
+    public echo value: Bool -> Bool => value
+    main { left.echo(9) => answer }
+    """; ~
+    ] -> report("qualified")
+    [
+    """
+    struct Token { value: Int }
+    make: -> Token => Token { value: 9 }
+    impl Token { public read: self -> Int => self.value }
+    main { make() -> read => answer }
+    """; ~
+    ] -> report("call-result")
+}

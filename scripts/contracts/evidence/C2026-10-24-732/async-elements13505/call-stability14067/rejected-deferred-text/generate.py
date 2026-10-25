@@ -1,0 +1,42 @@
+import hashlib,json,re
+from pathlib import Path
+root=Path.cwd();out=Path(__file__).resolve().parent
+expr=root/'selfhost/semantic/expression_type_ids.slg';typefile=root/'selfhost/semantic/type_ids.slg';callsfile=root/'selfhost/semantic/calls.slg'
+def fields(text,name):
+ body=text.split('public struct '+name+' {',1)[1].split('\n}',1)[0]
+ result=re.findall(r'(?m)^    public (\w+): ([^\n]+)$',body)
+ assert result and len(result)==len(set(n for n,t in result)),name
+ return result
+text=expr.read_text();type_text=typefile.read_text();table=fields(text,'ExpressionTypeIdSet');assert len(table)==34
+call_fields=fields(callsfile.read_text(),'ModuleCallResolution');assert len(call_fields)==7
+mutable=[('calls','calls.ModuleCallResolution'),('callIndexByAst','Int'),('callResultMemberByAst','Bool'),('declaredMoveArgumentByAst','Bool'),('declaredMoveReadByAst','Bool')]
+lines=['namespace sollang.compiler.semantic.expression_type_ids','','import sollang.compiler.semantic.context as semanticContext','import sollang.compiler.semantic.calls as calls','import std.crypto.sha256 as sha256','','fingerprint context: ref ResolvedCallContext -> [Text; ~] {','    [Text; ~] => values!']
+coverage=[]
+for owner,items in [('types',table),('prepared',[(n,'['+t+'; ~]') for n,t in mutable])]:
+ for name,typ in items:
+  m=re.fullmatch(r'\[([^;]+); ~\]',typ);assert m,(name,typ);kind=m.group(1);source='context.'+owner+'.'+name
+  lines+=['    values! -> push("'+owner+'.'+name+'")','    values! -> push("$('+source+' -> len)")','    '+source+' -> each entry {']
+  if kind in ['Int','Bool']:leaves=[('',kind)];lines.append('        values! -> push("$entry")')
+  else:
+   schema=callsfile.read_text() if kind.startswith('calls.') else type_text if kind.startswith('typeIds.') else text
+   leaves=fields(schema,kind.split('.')[-1]);assert all(t in ['Int','Bool','UInt64'] for n,t in leaves),(kind,leaves)
+   lines += ['        values! -> push("$(entry.'+n+')")' for n,t in leaves]
+  lines.append('    }');coverage.append({'owner':owner,'field':name,'elementType':kind,'leaves':leaves})
+lines+=['    values!','}','','digest values: ref [Text; ~] -> [UInt8; 32] {','    sha256.create() => hash!','    values -> each word {','        [UInt8; ~] => bytes!','        UIntSize(0) => index!','        index! < (word -> len) -> while {','            bytes! -> push(word -> byte(index!))','            index! + 1 => index!','        }','        bytes! -> push(0)','        hash! -> update(bytes!)','    }','    hash! -> finish','}','','public checkStable sources: [Text; ~], label: Text -> Unit uses Console {','    sources -> semanticContext.prepare => prepared','    prepared -> resolveCallContext => completed','    completed -> fingerprint => before','    completed.prepared => committedPrepared','    completed.types => committedTypes','    emptyCallContextSeeds() => seeds','    [ExpressionTypeId; ~] => externalResults','    committedPrepared -> refineResolvedCallContext(committedTypes, seeds, externalResults, true) => repeated','    repeated -> fingerprint => after','    (before -> len) > 0 and (before -> len) == (after -> len) => same!','    0 => index!','    same! and index! < (before -> len) -> while {','        before[index!] != after[index!] -> if { false => same! }','        index! + 1 => index!','    }','    "$label:$(same!):$(before -> len)" -> println','    before -> digest => hash','    hash -> each byte { byte -> println }','}','','public checkCallFields: -> Unit uses Console {','    calls.ModuleCallResolution { sourceModule: 0, callAst: 1, origin: 2, targetModule: 3, targetSourceModule: 4, functionSymbol: 5, status: 0 } => original','    [original; ~] => left','    left -> callContextDecisionsEqual([original; ~]) => allFields!','    left -> callContextDecisionsEqual([calls.ModuleCallResolution; ~]) -> if { false => allFields! }']
+for n,t in call_fields:
+ lines+=['    original => changed'+n+'!','    original.'+n+' + 1 => changed'+n+'!.'+n,'    left -> callContextDecisionsEqual([changed'+n+'!; ~]) -> if { false => allFields! }']
+lines+=['    "call-fields:$(allFields!)" -> println','}']
+extra=['    0 => selectedCalls!', '    0 => crossModuleCalls!', '    completed.prepared.calls -> each call {', '        call.status == 0 and call.functionSymbol >= 0 and call.targetSourceModule >= 0 -> if {', '            selectedCalls! + 1 => selectedCalls!', '            call.sourceModule != call.targetSourceModule -> if { crossModuleCalls! + 1 => crossModuleCalls! }', '        }', '    }', '    0 => moveArguments!', '    completed.prepared.declaredMoveArgumentByAst -> each moved { moved -> if { moveArguments! + 1 => moveArguments! } }', '    0 => genericArguments!', '    completed.types.callArguments -> each argument { argument.genericParameterSymbol >= 0 -> if { genericArguments! + 1 => genericArguments! } }', '    selectedCalls! > 0 and (completed.types.expressions -> len) > 0 => hasFacts!', '    label == "move" and moveArguments! == 0 -> if { false => hasFacts! }', '    label == "generic" and genericArguments! == 0 -> if { false => hasFacts! }', '    label == "qualified" and crossModuleCalls! == 0 -> if { false => hasFacts! }', '    label == "call-result" and selectedCalls! < 2 -> if { false => hasFacts! }']
+index=lines.index('    completed -> fingerprint => before');lines[index:index]=extra
+lines=[line.replace('    (before -> len) > 0 and (before -> len) == (after -> len) => same!','    hasFacts! and (before -> len) > 0 and (before -> len) == (after -> len) => same!').replace('"$label:$(same!):$(before -> len)"','"$label:$(same!):$(before -> len):$(selectedCalls!):$(genericArguments!):$(moveArguments!):$(crossModuleCalls!)"') for line in lines]
+helper=root/'scripts/probes/call-context-stability-facts.slg';assert not helper.exists();helper.write_text('\n'.join(lines)+'\n',encoding='utf-8',newline='\n')
+corpus=[('basic',['echo value: Int -> Int => value\nmain { echo(4) => answer }']),('generic',['afterSteps<T> value: T, count: Int -> T { count == 0 -> if { value } else { value -> afterSteps(count - 1) } }\nmain { 3 -> afterSteps(2) => first\ntrue -> afterSteps(1) => second }']),('methods',['struct Token { value: Int }\nimpl Token { public read: self -> Int => self.value }\nmain { Token { value: 7 } -> read => answer }']),('move',['take values: move [Int; ~] -> Int { values[0] }\nmain { [1, 2; ~] => values\nvalues -> take => answer }']),('qualified',['namespace sample.stable_left\npublic echo value: Int -> Int => value','namespace sample.stable_right\nimport sample.stable_left as left\npublic echo value: Bool -> Bool => value\nmain { left.echo(9) => answer }']),('call-result',['struct Token { value: Int }\nmake: -> Token => Token { value: 9 }\nimpl Token { public read: self -> Int => self.value }\nmain { make() -> read => answer }'])]
+main=['import sollang.compiler.semantic.expression_type_ids as facts','','main {','    facts.checkCallFields()']
+for label,sources in corpus:
+ main.append('    [')
+ for i,s in enumerate(sources):
+  main.append('        """');main += ['        '+line for line in s.splitlines()];main.append('        """'+(',' if i<len(sources)-1 else '; ~'))
+ main.append('    ] -> facts.checkStable("'+label+'")')
+main.append('}');p=root/'scripts/probes/call-context-stability.slg';assert not p.exists();p.write_text('\n'.join(main)+'\n',encoding='utf-8',newline='\n')
+sha=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest().upper();meta=dict(schemaVersion=1,status='generated-before-production-edit',expressionTypeSetFieldCount=len(table),preparedMutableFieldCount=len(mutable),callResolutionFieldCount=len(call_fields),coverage=coverage,sourceHashes={str(p.relative_to(root)):sha(p) for p in [expr,typefile,callsfile,root/'selfhost/semantic/context.slg']},fixtureSources=[str(p.relative_to(root)),str(helper.relative_to(root))],corpus=[name for name,sources in corpus],oracle='Every before/after field entry must match; each baseline full fingerprint SHA256 is retained as an immutable pre-edit behavior reference. No initial/uncommitted type reuse accepted.',claimsGoalComplete=False)
+(out/'schema.json').write_text(json.dumps(meta,indent=2)+'\n');sources=[meta['fixtureSources'][0],meta['fixtureSources'][1],*json.loads((root/'artifacts/scratch/resume-20261006-owner-continuation22/context13817-contract.json').read_text())['cases'][0]['additionalSources']];(out/'sources.txt').write_text('\n'.join(sources)+'\n',encoding='utf-8',newline='\n');print('GENERATED_EXHAUSTIVE_FACT_TABLE_BASELINE',len(table),len(mutable),len(corpus))

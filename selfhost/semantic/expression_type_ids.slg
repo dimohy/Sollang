@@ -3563,6 +3563,14 @@ refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot
     initialPrepared.qualified
     ) => resolvedCalls
     not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
+    # A committed round already owns the types for this exact prepared call
+    # table. Equality covers every call field; its binding and move indexes
+    # were derived from the same package/calls with the same readonly seeds
+    # and external results. Publish that completed pair before rebuilding
+    # identical indexes and running the full type core again.
+    committedTypes and not decisionsChanged -> if {
+        ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
+    }
     initialPrepared => prepared!
     resolvedCalls => prepared!.calls
     prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
@@ -3572,9 +3580,6 @@ refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot
     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
     prepared! -> semanticContext.freeze => finalPrepared
     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
-    committedTypes and not decisionsChanged -> if {
-        ResolvedCallContext { prepared: finalPrepared, types: finalTypes } -> return
-    }
     finalPrepared -> refineResolvedCallContext(finalTypes, seeds, externalResults, true)
 }
 

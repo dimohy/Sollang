@@ -1,0 +1,52 @@
+import sollang.compiler.semantic.expression_type_ids as facts
+
+main {
+    facts.checkCallFields()
+    [
+    """
+    echo value: Int -> Int => value
+    main { echo(4) => answer }
+    """; ~
+    ] -> facts.checkStable("basic")
+    [
+    """
+    afterSteps<T> value: T, count: Int -> T { count == 0 -> if { value } else { value -> afterSteps(count - 1) } }
+    main { 3 -> afterSteps(2) => first
+    true -> afterSteps(1) => second }
+    """; ~
+    ] -> facts.checkStable("generic")
+    [
+    """
+    struct Token { value: Int }
+    impl Token { public read: self -> Int => self.value }
+    main { Token { value: 7 } -> read => answer }
+    """; ~
+    ] -> facts.checkStable("methods")
+    [
+    """
+    take values: move [Int; ~] -> Int { values[0] }
+    main { [1, 2; ~] => values
+    values -> take => answer }
+    """; ~
+    ] -> facts.checkStable("move")
+    [
+    """
+    namespace sample.stable_left
+    public echo value: Int -> Int => value
+    """,
+    """
+    namespace sample.stable_right
+    import sample.stable_left as left
+    public echo value: Bool -> Bool => value
+    main { left.echo(9) => answer }
+    """; ~
+    ] -> facts.checkStable("qualified")
+    [
+    """
+    struct Token { value: Int }
+    make: -> Token => Token { value: 9 }
+    impl Token { public read: self -> Int => self.value }
+    main { make() -> read => answer }
+    """; ~
+    ] -> facts.checkStable("call-result")
+}

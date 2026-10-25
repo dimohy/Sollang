@@ -1,0 +1,396 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.calls as calls
+
+signedProbeWord value: Int -> UInt64 {
+    value >= 0 -> if {
+        UInt64(value) * 2
+    } else {
+        UInt64(-(value + 1)) * 2 + 1
+    }
+}
+
+boolProbeWord value: Bool -> UInt64 {
+    value -> if { 1 } else { 0 }
+}
+
+fingerprint context: ref ResolvedCallContext -> [UInt64; ~] {
+    [UInt64; ~] => values!
+    values! -> push(1)
+    values! -> push(UInt64(context.types.types -> len))
+    context.types.types -> each entry {
+        values! -> push(entry.kind -> signedProbeWord)
+        values! -> push(entry.origin -> signedProbeWord)
+        values! -> push(entry.module -> signedProbeWord)
+        values! -> push(entry.symbol -> signedProbeWord)
+        values! -> push(entry.first -> signedProbeWord)
+        values! -> push(entry.second -> signedProbeWord)
+        values! -> push(entry.length -> signedProbeWord)
+        values! -> push(entry.lengthHash)
+        values! -> push(entry.containsParameter -> boolProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(2)
+    values! -> push(UInt64(context.types.references -> len))
+    context.types.references -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.typeAst -> signedProbeWord)
+        values! -> push(entry.typeId -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(3)
+    values! -> push(UInt64(context.types.fields -> len))
+    context.types.fields -> each entry {
+        values! -> push(entry.ownerType -> signedProbeWord)
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.ownerSymbol -> signedProbeWord)
+        values! -> push(entry.fieldSymbol -> signedProbeWord)
+        values! -> push(entry.labelToken -> signedProbeWord)
+        values! -> push(entry.ordinal -> signedProbeWord)
+        values! -> push(entry.fieldType -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(4)
+    values! -> push(UInt64(context.types.expressions -> len))
+    context.types.expressions -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.astNode -> signedProbeWord)
+        values! -> push(entry.typeId -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(5)
+    values! -> push(UInt64(context.types.externalCallResults -> len))
+    context.types.externalCallResults -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.astNode -> signedProbeWord)
+        values! -> push(entry.typeId -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(6)
+    values! -> push(UInt64(context.types.callArguments -> len))
+    context.types.callArguments -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.callAst -> signedProbeWord)
+        values! -> push(entry.argumentAst -> signedProbeWord)
+        values! -> push(entry.targetSourceModule -> signedProbeWord)
+        values! -> push(entry.functionSymbol -> signedProbeWord)
+        values! -> push(entry.parameterSymbol -> signedProbeWord)
+        values! -> push(entry.parameterOrdinal -> signedProbeWord)
+        values! -> push(entry.expectedTypeId -> signedProbeWord)
+        values! -> push(entry.actualTypeId -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+        values! -> push(entry.suppressNumericWarning -> boolProbeWord)
+        values! -> push(entry.contextualInput -> boolProbeWord)
+        values! -> push(entry.genericParameterSymbol -> signedProbeWord)
+        values! -> push(entry.genericFirstActualTypeId -> signedProbeWord)
+        values! -> push(entry.genericActualTypeId -> signedProbeWord)
+        values! -> push(entry.mismatchExpectedTypeId -> signedProbeWord)
+        values! -> push(entry.mismatchActualTypeId -> signedProbeWord)
+    }
+    values! -> push(7)
+    values! -> push(UInt64(context.types.enumConstructorArguments -> len))
+    context.types.enumConstructorArguments -> each entry {
+        values! -> push(entry.memberStatus -> signedProbeWord)
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.callAst -> signedProbeWord)
+        values! -> push(entry.argumentAst -> signedProbeWord)
+        values! -> push(entry.callNode -> signedProbeWord)
+        values! -> push(entry.argumentNode -> signedProbeWord)
+        values! -> push(entry.enumTypeId -> signedProbeWord)
+        values! -> push(entry.targetSourceModule -> signedProbeWord)
+        values! -> push(entry.variantSymbol -> signedProbeWord)
+        values! -> push(entry.variantTag -> signedProbeWord)
+        values! -> push(entry.variantToken -> signedProbeWord)
+        values! -> push(entry.expectedTypeId -> signedProbeWord)
+        values! -> push(entry.actualTypeId -> signedProbeWord)
+    }
+    values! -> push(8)
+    values! -> push(UInt64(context.types.enumConstructorIndexByAst -> len))
+    context.types.enumConstructorIndexByAst -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(9)
+    values! -> push(UInt64(context.types.enumConstructorIndexByInterpolationNode -> len))
+    context.types.enumConstructorIndexByInterpolationNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(10)
+    values! -> push(UInt64(context.types.referenceIndexByTypeAst -> len))
+    context.types.referenceIndexByTypeAst -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(11)
+    values! -> push(UInt64(context.types.lexicalBindingTypeBySymbol -> len))
+    context.types.lexicalBindingTypeBySymbol -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(12)
+    values! -> push(UInt64(context.types.mutableBindingOwners -> len))
+    context.types.mutableBindingOwners -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(13)
+    values! -> push(UInt64(context.types.contextualRecordLabelByAst -> len))
+    context.types.contextualRecordLabelByAst -> each entry {
+        values! -> push(entry -> boolProbeWord)
+    }
+    values! -> push(14)
+    values! -> push(UInt64(context.types.directEachRoleTypeBySymbol -> len))
+    context.types.directEachRoleTypeBySymbol -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(15)
+    values! -> push(UInt64(context.types.streamRoleTypeBySymbol -> len))
+    context.types.streamRoleTypeBySymbol -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(16)
+    values! -> push(UInt64(context.types.interpolationArrayByNode -> len))
+    context.types.interpolationArrayByNode -> each entry {
+        values! -> push(entry.typeId -> signedProbeWord)
+        values! -> push(entry.elementTypeId -> signedProbeWord)
+        values! -> push(entry.valueAst -> signedProbeWord)
+        values! -> push(entry.dynamic -> boolProbeWord)
+        values! -> push(entry.bounded -> boolProbeWord)
+        values! -> push(entry.storageLength -> signedProbeWord)
+        values! -> push(entry.elementCount -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+        values! -> push(entry.diagnosticNode -> signedProbeWord)
+        values! -> push(entry.diagnosticContext -> signedProbeWord)
+        values! -> push(entry.contextNode -> signedProbeWord)
+        values! -> push(entry.expectedTypeId -> signedProbeWord)
+        values! -> push(entry.actualTypeId -> signedProbeWord)
+    }
+    values! -> push(17)
+    values! -> push(UInt64(context.types.interpolationCallTypeByNode -> len))
+    context.types.interpolationCallTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(18)
+    values! -> push(UInt64(context.types.interpolationCallSourceByNode -> len))
+    context.types.interpolationCallSourceByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(19)
+    values! -> push(UInt64(context.types.interpolationCallSymbolByNode -> len))
+    context.types.interpolationCallSymbolByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(20)
+    values! -> push(UInt64(context.types.interpolationMethodByNode -> len))
+    context.types.interpolationMethodByNode -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.symbol -> signedProbeWord)
+        values! -> push(entry.receiverType -> signedProbeWord)
+        values! -> push(entry.ownerType -> signedProbeWord)
+        values! -> push(entry.traitModule -> signedProbeWord)
+        values! -> push(entry.traitSymbol -> signedProbeWord)
+        values! -> push(entry.expectedAdditionalArguments -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(21)
+    values! -> push(UInt64(context.types.interpolationCallArguments -> len))
+    context.types.interpolationCallArguments -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.callNode -> signedProbeWord)
+        values! -> push(entry.argumentNode -> signedProbeWord)
+        values! -> push(entry.inputFromFlow -> boolProbeWord)
+        values! -> push(entry.parameterSymbol -> signedProbeWord)
+        values! -> push(entry.parameterOrdinal -> signedProbeWord)
+        values! -> push(entry.targetSourceModule -> signedProbeWord)
+        values! -> push(entry.functionSymbol -> signedProbeWord)
+        values! -> push(entry.expectedTypeId -> signedProbeWord)
+        values! -> push(entry.actualTypeId -> signedProbeWord)
+    }
+    values! -> push(22)
+    values! -> push(UInt64(context.types.interpolationLexicalTypeByNode -> len))
+    context.types.interpolationLexicalTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(23)
+    values! -> push(UInt64(context.types.interpolationMemberTypeByNode -> len))
+    context.types.interpolationMemberTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(24)
+    values! -> push(UInt64(context.types.interpolationIndexedTypeByNode -> len))
+    context.types.interpolationIndexedTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(25)
+    values! -> push(UInt64(context.types.interpolationContextualStructTypeByNode -> len))
+    context.types.interpolationContextualStructTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(26)
+    values! -> push(UInt64(context.types.interpolationContextualFieldByNode -> len))
+    context.types.interpolationContextualFieldByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(27)
+    values! -> push(UInt64(context.types.interpolationContextualDiagnosticByNode -> len))
+    context.types.interpolationContextualDiagnosticByNode -> each entry {
+        values! -> push(entry.code -> signedProbeWord)
+        values! -> push(entry.locationNode -> signedProbeWord)
+        values! -> push(entry.fieldIndex -> signedProbeWord)
+        values! -> push(entry.actualType -> signedProbeWord)
+        values! -> push(entry.ownerType -> signedProbeWord)
+    }
+    values! -> push(28)
+    values! -> push(UInt64(context.types.interpolationIndexExpectedTypeByNode -> len))
+    context.types.interpolationIndexExpectedTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(29)
+    values! -> push(UInt64(context.types.interpolationUnsupportedIndexOwnerTypeByNode -> len))
+    context.types.interpolationUnsupportedIndexOwnerTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(30)
+    values! -> push(UInt64(context.types.interpolationOwnedIndexElementTypeByNode -> len))
+    context.types.interpolationOwnedIndexElementTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(31)
+    values! -> push(UInt64(context.types.interpolationOwnedIndexContainerByNode -> len))
+    context.types.interpolationOwnedIndexContainerByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(32)
+    values! -> push(UInt64(context.types.interpolationUnaryTypeByNode -> len))
+    context.types.interpolationUnaryTypeByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(33)
+    values! -> push(UInt64(context.types.interpolationUnaryStatusByNode -> len))
+    context.types.interpolationUnaryStatusByNode -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(34)
+    values! -> push(UInt64(context.types.activeDeclarationBodyByAst -> len))
+    context.types.activeDeclarationBodyByAst -> each entry {
+        values! -> push(entry -> boolProbeWord)
+    }
+    values! -> push(35)
+    values! -> push(UInt64(context.prepared.calls -> len))
+    context.prepared.calls -> each entry {
+        values! -> push(entry.sourceModule -> signedProbeWord)
+        values! -> push(entry.callAst -> signedProbeWord)
+        values! -> push(entry.origin -> signedProbeWord)
+        values! -> push(entry.targetModule -> signedProbeWord)
+        values! -> push(entry.targetSourceModule -> signedProbeWord)
+        values! -> push(entry.functionSymbol -> signedProbeWord)
+        values! -> push(entry.status -> signedProbeWord)
+    }
+    values! -> push(36)
+    values! -> push(UInt64(context.prepared.callIndexByAst -> len))
+    context.prepared.callIndexByAst -> each entry {
+        values! -> push(entry -> signedProbeWord)
+    }
+    values! -> push(37)
+    values! -> push(UInt64(context.prepared.callResultMemberByAst -> len))
+    context.prepared.callResultMemberByAst -> each entry {
+        values! -> push(entry -> boolProbeWord)
+    }
+    values! -> push(38)
+    values! -> push(UInt64(context.prepared.declaredMoveArgumentByAst -> len))
+    context.prepared.declaredMoveArgumentByAst -> each entry {
+        values! -> push(entry -> boolProbeWord)
+    }
+    values! -> push(39)
+    values! -> push(UInt64(context.prepared.declaredMoveReadByAst -> len))
+    context.prepared.declaredMoveReadByAst -> each entry {
+        values! -> push(entry -> boolProbeWord)
+    }
+    values!
+}
+
+public checkStable sources: [Text; ~], label: Text -> [UInt64; ~] uses Console {
+    sources -> semanticContext.prepare => prepared
+    prepared -> resolveCallContext => completed
+    0 => selectedCalls!
+    0 => crossModuleCalls!
+    completed.prepared.calls -> each call {
+        call.status == 0 and call.functionSymbol >= 0 and call.targetSourceModule >= 0
+            -> if {
+                selectedCalls! + 1 => selectedCalls!
+                call.sourceModule != call.targetSourceModule -> if { crossModuleCalls! + 1 => crossModuleCalls! }
+            }
+    }
+    0 => moveArguments!
+    completed.prepared.declaredMoveArgumentByAst -> each moved { moved -> if { moveArguments! + 1 => moveArguments! } }
+    0 => genericArguments!
+    completed.types.callArguments -> each argument { argument.genericParameterSymbol >= 0 -> if { genericArguments! + 1 => genericArguments! } }
+    selectedCalls! > 0 and (completed.types.expressions -> len) > 0 => hasFacts!
+    label == "move" and moveArguments! == 0 -> if { false => hasFacts! }
+    label == "generic" and genericArguments! == 0
+        -> if { false => hasFacts! }
+    label == "qualified" and crossModuleCalls! == 0
+        -> if { false => hasFacts! }
+    label == "call-result" and selectedCalls! < 2
+        -> if { false => hasFacts! }
+    completed -> fingerprint => before
+    completed.prepared => committedPrepared
+    completed.types => committedTypes
+    emptyCallContextSeeds() => seeds
+    [ExpressionTypeId; ~] => externalResults
+    committedPrepared -> refineResolvedCallContext(committedTypes, seeds, externalResults, true) => repeated
+    repeated -> fingerprint => after
+    hasFacts! and (before -> len) > 0 and (before -> len) == (after -> len) => same!
+    0 => index!
+    same! and index! < (before -> len) -> while {
+        before[index!] != after[index!] -> if { false => same! }
+        index! + 1 => index!
+    }
+    "$label:$(same!):$(before -> len):$(selectedCalls!):$(genericArguments!):$(moveArguments!):$(crossModuleCalls!)" -> println
+    before
+}
+
+public checkCallFields: -> Unit uses Console {
+    calls.ModuleCallResolution { sourceModule: 0, callAst: 1, origin: 2, targetModule: 3, targetSourceModule: 4, functionSymbol: 5, status: 0 } => original
+    [calls.ModuleCallResolution; ~] => left!
+    left! -> push(original)
+    [calls.ModuleCallResolution; ~] => right!
+    right! -> push(original)
+    left! -> callContextDecisionsEqual(right!) => allFields!
+    [calls.ModuleCallResolution; ~] => empty
+    left! -> callContextDecisionsEqual(empty)
+        -> if { false => allFields! }
+    original => changedsourceModule!
+    original.sourceModule + 1 => changedsourceModule!.sourceModule
+    changedsourceModule! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedcallAst!
+    original.callAst + 1 => changedcallAst!.callAst
+    changedcallAst! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedorigin!
+    original.origin + 1 => changedorigin!.origin
+    changedorigin! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedtargetModule!
+    original.targetModule + 1 => changedtargetModule!.targetModule
+    changedtargetModule! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedtargetSourceModule!
+    original.targetSourceModule + 1 => changedtargetSourceModule!.targetSourceModule
+    changedtargetSourceModule! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedfunctionSymbol!
+    original.functionSymbol + 1 => changedfunctionSymbol!.functionSymbol
+    changedfunctionSymbol! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    original => changedstatus!
+    original.status + 1 => changedstatus!.status
+    changedstatus! => right![0]
+    left! -> callContextDecisionsEqual(right!)
+        -> if { false => allFields! }
+    "call-fields:$(allFields!)" -> println
+}
