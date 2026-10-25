@@ -1702,26 +1702,36 @@ firstPreparedAsyncDeclarationDiagnostic prepared: ref semanticContext.SemanticSn
                     # Ordinary async declarations must establish transferable
                     # signature values before any call specializes their body.
                     # Runtime intrinsic declarations keep their separate contract.
-                    function.flags / 128 % 2 == 0 -> if {
-                        [function.typeNode, function.secondaryTypeNode,; ~] => roots!
-                        0 => parameterIndex!
-                        parameterIndex! < range.symbolCount -> while {
-                            prepared.package.symbols[range.symbolStart + parameterIndex!] => parameter
-                            parameter.kind == 35 and parameter.parent == functionIndex!
-                                -> if { roots! -> push(parameter.typeNode) }
-                            parameterIndex! + 1 => parameterIndex!
-                        }
-                        roots! -> each root {
-                            root >= 0 and root < range.astCount -> if {
-                                referenceByAst![range.astStart + root] => typeId
-                                typeId >= 0 and typeId < (prepared.semantic.types -> len)
-                                    and (prepared -> preparedSignatureHasUnboundTypeParameter(typeId))
-                                    -> if {
-                                        SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: root, nameToken: function.nameToken, genericToken: -1 } -> return
-                                    }
+                    false => deferredValueGeneric!
+                    0 => clauseIndex!
+                    clauseIndex! < range.astCount -> while {
+                        prepared.package.nodes[range.astStart + clauseIndex!] => clause
+                        clause.kind == 32 and clause.parent == function.astNode and clause.payloadToken >= 0
+                            and (prepared.package -> signatureFirstGenericIsValue(range.sourceModule, function.astNode, clause.payloadToken))
+                            -> if { true => deferredValueGeneric! }
+                        clauseIndex! + 1 => clauseIndex!
+                    }
+                    function.flags / 128 % 2 == 0 and not deferredValueGeneric!
+                        -> if {
+                            [function.typeNode, function.secondaryTypeNode,; ~] => roots!
+                            0 => parameterIndex!
+                            parameterIndex! < range.symbolCount -> while {
+                                prepared.package.symbols[range.symbolStart + parameterIndex!] => parameter
+                                parameter.kind == 35 and parameter.parent == functionIndex!
+                                    -> if { roots! -> push(parameter.typeNode) }
+                                parameterIndex! + 1 => parameterIndex!
+                            }
+                            roots! -> each root {
+                                root >= 0 and root < range.astCount -> if {
+                                    referenceByAst![range.astStart + root] => typeId
+                                    typeId >= 0 and typeId < (prepared.semantic.types -> len)
+                                        and (prepared -> preparedSignatureHasUnboundTypeParameter(typeId))
+                                        -> if {
+                                            SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: root, nameToken: function.nameToken, genericToken: -1 } -> return
+                                        }
+                                }
                             }
                         }
-                    }
                 }
             functionIndex! + 1 => functionIndex!
         }

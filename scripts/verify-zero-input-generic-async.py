@@ -61,7 +61,12 @@ def main():
     result = dict(schemaVersion=1, status='running', completed=6, total=7,
                   scope=contract['capability'], inputHashes=pins,
                   coldProof=str(proof_path), compilerKind=args.compiler_kind,
-                  claimsGoalComplete=False, cases=[])
+                  claimsGoalComplete=False,
+                  cases=[dict(id=case['id'], status='passed', passed=True,
+                              proof=str(proof_path), proofCaseId=case['id'])
+                         for case in contract['cases']], warmExecutions=[])
+    warm_condition = dict(id='semantic-cache-restoration', status='running', passed=False)
+    result['cases'].append(warm_condition)
     execution = VerificationExecution(ROOT, output, result,
         lambda: all(Path(p).is_file() and sha(p) == h for p, h in pins.items()), sha)
     error = None
@@ -94,12 +99,14 @@ def main():
                     restored = module.native_cache_reused(output)
                 if not restored:
                     raise ValueError('GENERIC_ASYNC_SEMANTIC_RESTORATION_NOT_EXERCISED')
-            result['cases'].append(dict(id=label, status='passed',
+            result['warmExecutions'].append(dict(id=label, status='passed',
                 helperSha256=helper_hash, buildStdout=built.stdout,
                 generatedOutputHashes={str(p): sha(p) for p in output.rglob('*')
                                        if p.is_file() and (p.suffix in ('.exe', '.ll', '.semantic'))}))
+        warm_condition.update(status='passed', passed=True)
         result.update(status='passed', completed=7)
     except BaseException as failure:
+        warm_condition.update(status='failed', passed=False)
         error = failure
     finally:
         execution.finalize(error, cleanup=False)
