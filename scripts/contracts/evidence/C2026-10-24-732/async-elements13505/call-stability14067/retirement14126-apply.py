@@ -1,0 +1,10 @@
+from pathlib import Path
+import json,sys,shutil,datetime
+root=Path.cwd();b=root/'artifacts/scratch/resume-20261006-owner-continuation22';e=root/'scripts/contracts/evidence/C2026-10-24-732/async-elements13505/call-stability14067';sys.path.insert(0,str(root/'scripts'))
+from completed_artifact_plan import close_compiler_consumers,verified_consumer_closure,cleanup_output
+read=lambda p:json.loads(Path(p).read_text(encoding='utf-8-sig'))
+for name,count in [('typed14088-source6',6),('typed14097-source94',94),('exchange14101-source1',1)]:
+ p=read(b/name/'result.json');assert p['status']=='passed' and p['completed']==p['total']==count and p['inputsStable'] and p['processesStopped'],name
+old=(b/'v13800/compiler-build01').resolve();replacement=(b/'v14010/compiler-build01').resolve();assert old.is_relative_to(root.resolve()) and old.name=='compiler-build01' and old.parent.name=='v13800';proposal=read(e/'native13800-proposed-closure14105.json');consumers=[Path(row['path']) for row in proposal['consumers']];assert len(consumers)==20
+out=e/'native-retirement14126';out.mkdir(exist_ok=False);shutil.copy2(old/'result.json',out/'retired-build-result.json');closure=close_compiler_consumers(root,old,consumers,replacement,legacy_terminal=True);verified_consumer_closure(root,old);plan=cleanup_output(root,old,execute=True,retention_terminal=True,reusable_directories=[b/'v12432/compiler-build01',replacement]);assert not (old/'compiler.exe').exists();verified_consumer_closure(root,old,allow_missing_product=True)
+shutil.copy2(closure,out/'consumer-closure.json');shutil.copy2(plan,out/'artifact-cleanup-plan.json');record={'schemaVersion':1,'status':'canonical-retirement-completed','observedAtUtc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'retiredDirectory':str(old),'retainedDirectories':[str(b/'v12432/compiler-build01'),str(replacement)],'reservedNewProduct':str(b/'v14112/compiler-build01'),'consumerCount':20,'failedConsumerOutputsPreserved':True,'originalTestCompletionAdded':0,'claimsGoalComplete':False};(out/'retirement-observation.json').write_text(json.dumps(record,indent=2)+'\n',encoding='utf-8');print(json.dumps(record))
