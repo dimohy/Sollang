@@ -959,10 +959,13 @@ emitAsyncCancelledInputs functionIndex: Int, beforeAst: Int, cancelState: Int, c
 
 emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
     context.ir[requestedFunctionIndex] => function
+    Arena(0) => instanceNameStorage!
+    context -> emitterContext.isGenericInstance(requestedFunctionIndex)
+        -> if { "_g$(requestedFunctionIndex)" } else { "" } -> materialize(instanceNameStorage!) => instanceSuffix
     context -> usesReachableAsyncDiagnostics(state) => diagnosticsEnabled
     diagnosticsEnabled -> if {
         requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
-        "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_destroy(ptr %context) {" -> println
+        "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_destroy(ptr %context) {" -> println
         "entry:" -> println
         "  %header = getelementptr i8, ptr %context, i64 $(headerOffset)" -> println
         "  call void @sollang_diagnostic_release_header(ptr %header, i32 2)" -> println
@@ -970,9 +973,9 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         "  ret void" -> println
         "}" -> println
     }
-    requestedFunctionIndex -> emitFunctionNamed("_async_worker", context, state) => functionEnd
+    requestedFunctionIndex -> emitFunctionNamed("$(instanceSuffix)_async_worker", context, state) => functionEnd
 
-    "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)_async_cancel(ptr %control) {" -> println
+    "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_cancel(ptr %control) {" -> println
     "entry:" -> println
     "  %async_cancel_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
     "  %async_cancel_context = load ptr, ptr %async_cancel_context_slot, align 8" -> println
@@ -1048,7 +1051,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
     "  ret void" -> println
     "}" -> println
 
-    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)(" -> print
+    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)(" -> print
     diagnosticsEnabled -> if {
         "ptr %diagnostic_parent" -> print
         function.operand1 >= 0 or function.nextOperand >= 0
@@ -1130,11 +1133,11 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
         asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!
         asyncStoredAdditionalParameterOrdinal! + 1 => asyncStoredAdditionalParameterOrdinal!
     }
-    "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_worker, ptr " -> print
+    "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_worker, ptr " -> print
     diagnosticsEnabled -> if {
-        "@sollang_m$(function.sourceModule)_s$(function.symbol)_async_destroy" -> print
+        "@sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_destroy" -> print
     } else { "@free" -> print }
-    ", ptr @sollang_m$(function.sourceModule)_s$(function.symbol)_async_cancel, ptr %async_context)" -> println
+    ", ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_cancel, ptr %async_context)" -> println
     "  %async_started = icmp ne ptr %async_handle, null" -> println
     "  br i1 %async_started, label %async_ready, label %async_start_failed" -> println
     "async_start_failed:" -> println

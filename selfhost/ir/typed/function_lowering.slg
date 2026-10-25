@@ -1,6 +1,8 @@
 namespace sollang.compiler.ir.typed
 
 import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.resolve as resolution
@@ -14,6 +16,23 @@ struct SourceTypedIr {
 struct FunctionLowerRequest {
     sourceIndex: Int
     symbolIndex: Int
+}
+
+# Type parameters can be used only in the body, or deliberately unused. The
+# declaration remains a template even when its entire signature is concrete.
+public functionDeclaresGenericParameters function: TypedIrNode, ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {
+    function.kind != 0 or function.sourceModule < 0 or function.sourceModule >= (ranges -> len)
+        or function.symbol < 0 -> if { false -> return }
+    ranges[function.sourceModule] => range
+    function.symbol >= range.symbolCount -> if { false -> return }
+    0 => index!
+    index! < range.symbolCount -> while {
+        declarations[range.symbolStart + index!] => candidate
+        candidate.kind == 32 and candidate.parent == function.symbol
+            -> if { true -> return }
+        index! + 1 => index!
+    }
+    false
 }
 
 # The same signature identifies retained templates for materialization and
@@ -285,7 +304,7 @@ public materializeGenericClosure nodes: mut [TypedIrNode; ~], prepared: ref sema
         false => progress!
         (processed! -> len) < (nodes -> len) -> while { processed! -> push(false) }
         nodes -> functionTemplatesBySymbol(prepared) => functionsBySymbol
-        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, functionsBySymbol) => plans!
+        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functionsBySymbol) => plans!
         nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functionsBySymbol)
         # A helper's result parameter belongs to its caller after substitution,
         # even while that caller is still a generic template.
@@ -720,10 +739,15 @@ public sealMaterializedTaskProducts nodes: mut [TypedIrNode; ~], prepared: ref s
 
 public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~] -> [GenericCallPlan; ~] {
     nodes -> functionTemplatesBySymbol(prepared) => functions
-    nodes -> planGenericCallsWithTemplates(prepared, types, functions)
+    nodes -> planGenericCallsWithTemplates(prepared, types, prepared.semantic.references, functions)
 }
 
-planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
+public planResolvedGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericCallPlan; ~] {
+    nodes -> functionTemplatesBySymbol(prepared) => functions
+    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functions)
+}
+
+planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
     [GenericCallPlan; ~] => plans!
     0 => callIndex!
     callIndex! < (nodes -> len) -> while {
@@ -739,10 +763,68 @@ planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanti
             }
         target! >= 0 -> if {
             nodes[target!] => function
-            nodes -> functionSignatureContainsParameter(types, target!)
+            (nodes -> functionSignatureContainsParameter(types, target!))
+                or (function -> functionDeclaresGenericParameters(prepared.package.ranges, prepared.package.symbols))
                 -> if {
                     [Int; ~] => templates!
                     [Int; ~] => actuals!
+                    # Explicit applications bind declaration parameters even if
+                    # no value input or result mentions them. Use canonical type
+                    # references; runtime code must never parse source spellings.
+                    call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
+                        and call.astNode >= 0 -> if {
+                            prepared.package.ranges[call.sourceModule] => callRange
+                            call.astNode < callRange.astCount -> if {
+                                prepared.package.nodes[callRange.astStart + call.astNode] => callAst
+                                callAst.cstRuleId == grammar.ruleIdTypeApplicationExpression()
+                                    -> if {
+                                        prepared.package.ranges[function.sourceModule] => targetRange
+                                        [Int; ~] => explicitTypes!
+                                        0 => childIndex!
+                                        childIndex! < callRange.astCount -> while {
+                                            prepared.package.nodes[callRange.astStart + childIndex!] => child
+                                            child.parent == call.astNode and child.kind == 12
+                                                -> if {
+                                                    -1 => actualType!
+                                                    references -> each reference {
+                                                        reference.sourceModule == call.sourceModule and reference.typeAst == childIndex!
+                                                            and reference.status == 0 -> if { reference.typeId => actualType! }
+                                                    }
+                                                    explicitTypes! -> push(actualType!)
+                                                }
+                                            childIndex! + 1 => childIndex!
+                                        }
+                                        0 => genericIndex!
+                                        0 => explicitIndex!
+                                        genericIndex! < targetRange.symbolCount -> while {
+                                            prepared.package.symbols[targetRange.symbolStart + genericIndex!] => parameter
+                                            parameter.kind == 32 and parameter.parent == function.symbol
+                                                -> if {
+                                                    explicitIndex! < (explicitTypes! -> len) -> if {
+                                                        -1 => parameterType!
+                                                        0 => typeIndex!
+                                                        typeIndex! < (types -> len) and parameterType! < 0
+                                                            -> while {
+                                                                types[typeIndex!] => candidate
+                                                                candidate.kind == 1 and candidate.origin == 3
+                                                                    and candidate.module == function.sourceModule and candidate.symbol == genericIndex!
+                                                                    -> if { typeIndex! => parameterType! }
+                                                                typeIndex! + 1 => typeIndex!
+                                                            }
+                                                        parameterType! < 0 -> if {
+                                                            types -> len => parameterType!
+                                                            types -> push(typeIds.SemanticType { kind: 1, origin: 3, module: function.sourceModule, symbol: genericIndex!, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: true, status: 0 })
+                                                        }
+                                                        templates! -> push(parameterType!)
+                                                        actuals! -> push(explicitTypes![explicitIndex!])
+                                                    }
+                                                    explicitIndex! + 1 => explicitIndex!
+                                                }
+                                            genericIndex! + 1 => genericIndex!
+                                        }
+                                    }
+                            }
+                        }
                     function.operand1 => templateIndex!
                     0 => templateOrdinal!
                     templateIndex! >= 0 and templateIndex! < (nodes -> len)

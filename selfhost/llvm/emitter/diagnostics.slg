@@ -8407,6 +8407,15 @@ emitCallArityDiagnostic context: ref emitterContext.EmitContext -> Unit uses Con
         "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] sys.path.nativeStyle does not accept arguments" -> println
         return
     }
+    diagnostic.genericTypeArguments -> if {
+        context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(directCall.start) => location
+        context.ranges[diagnostic.targetSourceModule] => declarationRange
+        context.symbols[declarationRange.symbolStart + diagnostic.functionSymbol] => declaration
+        context.tokens[declarationRange.tokenStart + declaration.nameToken] => nameToken
+        context.sources[diagnostic.targetSourceModule] -> slice(nameToken.span.start, nameToken.span.length) => name
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] generic function '$name' expects $(diagnostic.expectedAdditionalArguments) argument(s)" -> println
+        return
+    }
     diagnostic.runtimeRequest and diagnostic.targetPathAst >= 0
         -> if {
             directCall.start => offset!

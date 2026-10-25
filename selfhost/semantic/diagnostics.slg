@@ -260,6 +260,7 @@ public struct BindingDeclarationDiagnostic {
 public struct CallArityDiagnostic {
     public nativePathStyle: Bool
     public runtimeRequest: Bool
+    public genericTypeArguments: Bool
     public sourceModule: Int
     public callAst: Int
     public targetPathAst: Int
@@ -351,7 +352,7 @@ directArityOwnsUnknownName prepared: ref semanticContext.SemanticSnapshot, resol
 }
 
 public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> CallArityDiagnostic {
-    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
+    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, genericTypeArguments: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
     prepared.package -> semanticContext.indexDirectFlowTargetPathsByAst => targetPaths
     prepared.calls -> each call {
@@ -360,6 +361,43 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, 
             and call.functionSymbol >= 0 and call.functionSymbol < prepared.package.ranges[call.targetSourceModule].symbolCount
             -> if {
                 prepared.package.ranges[call.sourceModule] => range
+                # A zero-input generic declaration has no value argument from
+                # which to infer its type parameters. Missing explicit arguments
+                # are a source diagnostic, before body materialization or LLVM.
+                call.callAst >= 0 and call.callAst < range.astCount
+                    and prepared.package.nodes[range.astStart + call.callAst].kind == 11
+                    and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.callAst))
+                    -> if {
+                        prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => valueParameters
+                        (valueParameters -> len) == 0 -> if {
+                            prepared.package.ranges[call.targetSourceModule] => genericRange
+                            0 => genericCount!
+                            0 => genericIndex!
+                            genericIndex! < genericRange.symbolCount -> while {
+                                prepared.package.symbols[genericRange.symbolStart + genericIndex!] => parameter
+                                parameter.kind == 32 and parameter.parent == call.functionSymbol
+                                    -> if { genericCount! + 1 => genericCount! }
+                                genericIndex! + 1 => genericIndex!
+                            }
+                            -1 => pathAst!
+                            prepared.package.nodes[range.astStart + call.callAst].cstRuleId == grammar.ruleIdTypeApplicationExpression() => explicitTypes!
+                            0 => childIndex!
+                            childIndex! < range.astCount -> while {
+                                prepared.package.nodes[range.astStart + childIndex!] => child
+                                child.parent == call.callAst -> if {
+                                    child.kind == 16 -> if { childIndex! => pathAst! }
+                                    child.cstRuleId == grammar.ruleIdTypeApplicationExpression()
+                                        -> if { true => explicitTypes! }
+                                }
+                                childIndex! + 1 => childIndex!
+                            }
+                            genericCount! > 0 and not explicitTypes!
+                                and (prepared.package -> diagnosticOriginBefore(call.sourceModule, call.callAst, selected!.sourceModule, selected!.callAst))
+                                -> if {
+                                    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, genericTypeArguments: true, sourceModule: call.sourceModule, callAst: call.callAst, targetPathAst: pathAst!, targetSourceModule: call.targetSourceModule, functionSymbol: call.functionSymbol, expectedAdditionalArguments: genericCount! } => selected!
+                                }
+                        }
+                    }
                 prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol) => nativePathStyle
                 prepared -> directCallExpectedArguments(call) => directExpected
                 call.callAst >= 0 and call.callAst < range.astCount
@@ -409,6 +447,7 @@ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, 
                                     }
                                 CallArityDiagnostic {
                                     nativePathStyle: nativePathStyle
+                                    genericTypeArguments: false
                                     runtimeRequest: prepared.package -> calls.isProcessAdditionalRuntimeIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)
                                     sourceModule: call.sourceModule
                                     callAst: call.callAst
@@ -1199,6 +1238,11 @@ firstGenericInputUsageDiagnostic package: ref analysis.PackageAnalysis -> Signat
                     function.typeNode => inputType!
                     function.kind == 7 and function.flags / 16 % 2 == 1
                         -> if { -1 => inputType! }
+                    # Without a primary input, typeNode is the result annotation.
+                    # Keep unnamed inputs (and omitted-result inputs) distinct.
+                    function.kind == 7 and function.secondaryTypeNode < 0
+                        and function.flags / 32 % 2 == 0
+                        -> if { -1 => inputType! }
                     function.kind == 31 -> if {
                         -1 => inputType!
                         declaration.secondaryToken >= 0 and function.parent >= 0
@@ -1601,7 +1645,43 @@ firstPreparedArraySignatureDiagnostic prepared: ref semanticContext.SemanticSnap
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
-firstPreparedLocalAsyncDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+preparedSignatureHasUnboundTypeParameter prepared: ref semanticContext.SemanticSnapshot, root: Int -> Bool {
+    [root,; ~] => pending!
+    [Int; ~] => visited!
+    0 => cursor!
+    cursor! < (pending! -> len) -> while {
+        pending![cursor!] => typeId
+        false => seen!
+        visited! -> each previous { previous == typeId -> if { true => seen! } }
+        not seen! and typeId >= 0 and typeId < (prepared.semantic.types -> len)
+            -> if {
+                visited! -> push(typeId)
+                prepared.semantic.types[typeId] => type
+                type.kind == 1 and type.origin == 3 -> if { true -> return }
+                type.containsParameter -> if {
+                    type.first >= 0 -> if { pending! -> push(type.first) }
+                    type.second >= 0 -> if { pending! -> push(type.second) }
+                    prepared.semantic.fields -> each field {
+                        field.ownerType == typeId -> if { pending! -> push(field.fieldType) }
+                    }
+                }
+            }
+        cursor! + 1 => cursor!
+    }
+    # Symbolic array lengths are value parameters, not unsendable type values.
+    false
+}
+
+firstPreparedAsyncDeclarationDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+    [Int; ~] => referenceByAst!
+    prepared.package.nodes -> each node { referenceByAst! -> push(-1) }
+    prepared.semantic.references -> each reference {
+        reference.status == 0 and reference.typeAst >= 0
+            -> if {
+                prepared.package.ranges[reference.sourceModule] => range
+                reference.typeId => referenceByAst![range.astStart + reference.typeAst]
+            }
+    }
     prepared.package.ranges -> each range {
         0 => functionIndex!
         functionIndex! < range.symbolCount -> while {
@@ -1619,6 +1699,29 @@ firstPreparedLocalAsyncDiagnostic prepared: ref semanticContext.SemanticSnapshot
                                 }
                             owner.parent => ancestor!
                         }
+                    # Ordinary async declarations must establish transferable
+                    # signature values before any call specializes their body.
+                    # Runtime intrinsic declarations keep their separate contract.
+                    function.flags / 128 % 2 == 0 -> if {
+                        [function.typeNode, function.secondaryTypeNode,; ~] => roots!
+                        0 => parameterIndex!
+                        parameterIndex! < range.symbolCount -> while {
+                            prepared.package.symbols[range.symbolStart + parameterIndex!] => parameter
+                            parameter.kind == 35 and parameter.parent == functionIndex!
+                                -> if { roots! -> push(parameter.typeNode) }
+                            parameterIndex! + 1 => parameterIndex!
+                        }
+                        roots! -> each root {
+                            root >= 0 and root < range.astCount -> if {
+                                referenceByAst![range.astStart + root] => typeId
+                                typeId >= 0 and typeId < (prepared.semantic.types -> len)
+                                    and (prepared -> preparedSignatureHasUnboundTypeParameter(typeId))
+                                    -> if {
+                                        SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: root, nameToken: function.nameToken, genericToken: -1 } -> return
+                                    }
+                            }
+                        }
+                    }
                 }
             functionIndex! + 1 => functionIndex!
         }
@@ -1641,7 +1744,7 @@ public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.Semant
     # enter typed IR. Existing declaration/signature errors keep their priority.
     prepared -> firstPreparedPrivateNominalDiagnostic => privateDiagnostic
     privateDiagnostic.code != 0 -> if { privateDiagnostic -> return }
-    prepared -> firstPreparedLocalAsyncDiagnostic
+    prepared -> firstPreparedAsyncDeclarationDiagnostic
 }
 
 # Unchecked emission preserves its explicit-signature contract. Nominal path
