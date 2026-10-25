@@ -284,11 +284,13 @@ Write-Host '[detached selfhost verification] PASS AdditionalMoveOwnership route 
 $finalCandidateFixture = Join-Path $RepositoryRoot 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 $finalCandidateHash = (Get-FileHash -LiteralPath $finalCandidateFixture -Algorithm SHA256).Hash
 $c341GenerationFixture = Join-Path $PSScriptRoot 'contracts/c341-final-selfhost-candidate.json'
-$c341SeedFixture = Join-Path $RepositoryRoot 'artifacts/incremental-selfhost/selfhost-slg-seed.exe'
+# This route check authenticates paths and hashes without executing a seed.
+# Use the pinned non-executable probe input instead of a historical build product.
+$c341SeedFixture = Join-Path $PSScriptRoot 'contracts/fixtures/detached-verification-probe.ps1'
 $c341FinalOutput = Join-Path $scratchRoot "$runId-c341-final-output"
 $c394FinalOutput = Join-Path $scratchRoot "$runId-c394-final-output"
 
-foreach ($invalidFinalRoute in @('c341-partial', 'c341-hash', 'c394-partial', 'c394-hash', 'c394-outside', 'cross-mode')) {
+foreach ($invalidFinalRoute in @('c341-partial', 'c341-hash', 'c341-seed-missing', 'c394-partial', 'c394-hash', 'c394-outside', 'cross-mode')) {
     $rejected = $false
     try {
         switch ($invalidFinalRoute) {
@@ -301,6 +303,12 @@ foreach ($invalidFinalRoute in @('c341-partial', 'c341-hash', 'c394-partial', 'c
                 & $launcherPath -Verification C341FinalSelfhost -C341FinalCandidateCompiler $finalCandidateFixture `
                     -C341FinalExpectedCompilerSha256 ('0' * 64) -C341FinalOutputDirectory $c341FinalOutput `
                     -C341FinalGenerationRecord $c341GenerationFixture -C341FinalSeedCompiler $c341SeedFixture -ValidateInputsOnly | Out-Null
+            }
+            'c341-seed-missing' {
+                & $launcherPath -Verification C341FinalSelfhost -C341FinalCandidateCompiler $finalCandidateFixture `
+                    -C341FinalExpectedCompilerSha256 $finalCandidateHash -C341FinalOutputDirectory $c341FinalOutput `
+                    -C341FinalGenerationRecord $c341GenerationFixture `
+                    -C341FinalSeedCompiler (Join-Path $scratchRoot "$runId-missing-seed.exe") -ValidateInputsOnly | Out-Null
             }
             'c394-partial' {
                 & $launcherPath -Verification C394FinalCandidate -C394FinalCandidateCompiler $finalCandidateFixture `
@@ -319,7 +327,11 @@ foreach ($invalidFinalRoute in @('c341-partial', 'c341-hash', 'c394-partial', 'c
                     -C394FinalExpectedCompilerSha256 $finalCandidateHash -C394FinalOutputDirectory $c394FinalOutput | Out-Null
             }
         }
-    } catch { $rejected = $true }
+    } catch {
+        if ($invalidFinalRoute -eq 'c341-seed-missing' -and
+            $_.Exception.Message -notlike '*C341FinalSelfhost input does not exist:*') { throw }
+        $rejected = $true
+    }
     if (-not $rejected) { throw "Detached final-candidate route accepted invalid inputs: $invalidFinalRoute" }
 }
 
@@ -346,7 +358,7 @@ if (-not $c394FinalValidation.validated -or $c394FinalValidation.verification -c
 }
 $contractChecks.Add('c341-final-selfhost-route-and-input-controls')
 $contractChecks.Add('c394-final-candidate-route-and-input-controls')
-Write-Host '[detached selfhost verification] PASS C341/C394 final routes, exact immutable inputs, and 6 negative controls; candidate launches 0.'
+Write-Host '[detached selfhost verification] PASS C341/C394 final routes, exact immutable inputs, and 7 negative controls; candidate launches 0.'
 
 $genericCandidateFixture = Join-Path $RepositoryRoot 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
 $genericCandidateHash = (Get-FileHash -LiteralPath $genericCandidateFixture -Algorithm SHA256).Hash
