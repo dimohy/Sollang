@@ -5164,6 +5164,12 @@ internal sealed partial class SemanticCompiler
                         .Select(static transfer => transfer.OwnerName)
                         .Distinct(StringComparer.Ordinal)
                         .ToArray();
+                    RejectBorrowedOwnedStorageTransfers(
+                        aggregateLiteralSourceNames,
+                        binding.Value.Line,
+                        binding.Value.Column,
+                        $"owned binding '{binding.Name}'",
+                        bindings);
                     var transferredSourceNames = aggregateLiteralSourceNames
                         .Concat(bindingMutationConsumedSourceNames)
                         .Distinct(StringComparer.Ordinal)

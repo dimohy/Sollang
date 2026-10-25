@@ -5999,6 +5999,10 @@ Current backend:
   ownership transfers on insertion, and recursive drop releases inner storage
   before the outer buffer. A readonly borrow of an owned array cannot be copied
   into that owning storage.
+- an owning local struct-literal binding applies the same borrowed-source
+  check before acquiring cleanup responsibility. A readonly array input cannot
+  initialize an owned field in that local aggregate. Move inputs and independent
+  fixed-storage value copies retain their existing transfer and copy rules.
 - a borrowed parameter that transitively owns storage cannot be embedded in an
   owned function result; ownership must be transferred with `move`, or the API
   must return a borrow or an explicit copy. This is a compile-time error with a
