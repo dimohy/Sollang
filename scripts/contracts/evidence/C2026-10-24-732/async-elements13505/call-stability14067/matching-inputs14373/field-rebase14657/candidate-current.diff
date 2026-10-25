@@ -1,0 +1,78 @@
+--- canonical-current
++++ private-field-index
+@@ -312,0 +313,3 @@
++    receiverFieldOwnerByType: [Int; ~]
++    receiverFieldFirst: [Int; ~]
++    receiverFieldNext: [Int; ~]
+@@ -396 +399,49 @@
+-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability! }
++    TypedMethodDeclarationFacts { ownerTypes: ownerTypes!, primaryMatches: primaryMatches!, traitAsts: traitAsts!, methodSymbols: methodSymbols!, methodStarts: methodStarts!, methodCounts: methodCounts!, openFunctionSymbols: openFunctionSymbols!, openFunctionStarts: openFunctionStarts!, openFunctionCounts: openFunctionCounts!, importReachability: importReachability!, receiverFieldOwnerByType: [], receiverFieldFirst: [], receiverFieldNext: [] }
++}
++
++# Complete source-call facts include ordered receiver-field rows. The method-only
++# factory remains available to standalone method/reference consumers.
++prepareTypedSourceDeclarationFacts package: ref analysis.PackageAnalysis, semantic: ref typeIds.SemanticTypeSet, identities: ref [modules.ModuleIdentity; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~] -> TypedMethodDeclarationFacts {
++    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => facts!
++    [Int; ~] => fieldOwnerByType!
++    [Int; ~] => fieldFirst!
++    [Int; ~] => fieldLast!
++    0 => typeIndex!
++    typeIndex! < (semantic.types -> len) -> while {
++        typeIndex! => owner!
++        semantic.types[typeIndex!] => currentOwner
++        currentOwner.kind == 1 -> if {
++            0 => prior!
++            prior! < typeIndex! and owner! == typeIndex! -> while {
++                semantic.types[prior!] => previousOwner
++                previousOwner.kind == 1 and previousOwner.module == currentOwner.module
++                    and previousOwner.symbol == currentOwner.symbol
++                    -> if { fieldOwnerByType![prior!] => owner! }
++                prior! + 1 => prior!
++            }
++        }
++        fieldOwnerByType! -> push(owner!)
++        fieldFirst! -> push(-1)
++        fieldLast! -> push(-1)
++        typeIndex! + 1 => typeIndex!
++    }
++    [Int; ~] => fieldNext!
++    0 => fieldIndex!
++    fieldIndex! < (semantic.fields -> len) -> while {
++        fieldNext! -> push(-1)
++        semantic.fields[fieldIndex!] => field
++        field.ownerType >= 0 and field.ownerType < (fieldOwnerByType! -> len)
++            -> if {
++                fieldOwnerByType![field.ownerType] => owner
++                fieldLast![owner] => previous
++                previous >= 0 -> if { fieldIndex! => fieldNext![previous] } else {
++                    fieldIndex! => fieldFirst![owner]
++                }
++                fieldIndex! => fieldLast![owner]
++            }
++        fieldIndex! + 1 => fieldIndex!
++    }
++    fieldOwnerByType! => facts!.receiverFieldOwnerByType
++    fieldFirst! => facts!.receiverFieldFirst
++    fieldNext! => facts!.receiverFieldNext
++    facts!
+@@ -410 +461 @@
+-    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability } => declarations
++    TypedMethodDeclarationFacts { ownerTypes: ownerTypes, primaryMatches: primaryMatches, traitAsts: traitAsts, methodSymbols: methodSymbols, methodStarts: methodStarts, methodCounts: methodCounts, openFunctionSymbols: openFunctionSymbols, openFunctionStarts: openFunctionStarts, openFunctionCounts: openFunctionCounts, importReachability: importReachability, receiverFieldOwnerByType: [], receiverFieldFirst: [], receiverFieldNext: [] } => declarations
+@@ -2743,2 +2794,3 @@
+-                                                                    0 => bindingProjectionFieldIndex!
+-                                                                    bindingProjectionFieldIndex! < (semantic.fields -> len)
++                                                                    bindingProjectionOwnerTypeId! >= 0 and bindingProjectionOwnerTypeId! < (declarations.receiverFieldOwnerByType -> len) => bindingProjectionFieldsIndexed
++                                                                    bindingProjectionFieldsIndexed -> if { declarations.receiverFieldFirst[declarations.receiverFieldOwnerByType[bindingProjectionOwnerTypeId!]] } else { 0 } => bindingProjectionFieldIndex!
++                                                                    bindingProjectionFieldIndex! >= 0 and bindingProjectionFieldIndex! < (semantic.fields -> len)
+@@ -2806 +2858 @@
+-                                                                            bindingProjectionFieldIndex! + 1
++                                                                            bindingProjectionFieldsIndexed -> if { declarations.receiverFieldNext[bindingProjectionFieldIndex!] } else { bindingProjectionFieldIndex! + 1 }
+@@ -3836,2 +3888,3 @@
+-                                                0 => receiverFieldIndex!
+-                                                receiverFieldIndex! < (semantic.fields -> len)
++                                                receiverTypeId! >= 0 and receiverTypeId! < (declarations.receiverFieldOwnerByType -> len) => receiverFieldsIndexed
++                                                receiverFieldsIndexed -> if { declarations.receiverFieldFirst[declarations.receiverFieldOwnerByType[receiverTypeId!]] } else { 0 } => receiverFieldIndex!
++                                                receiverFieldIndex! >= 0 and receiverFieldIndex! < (semantic.fields -> len)
+@@ -3906 +3959 @@
+-                                                        receiverFieldIndex! + 1 => receiverFieldIndex!
++                                                        receiverFieldsIndexed -> if { declarations.receiverFieldNext[receiverFieldIndex!] } else { receiverFieldIndex! + 1 } => receiverFieldIndex!
