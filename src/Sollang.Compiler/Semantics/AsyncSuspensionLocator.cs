@@ -94,7 +94,9 @@ internal static class AsyncSuspensionLocator
             && string.Equals(target.Path[0], "await", StringComparison.Ordinal)
             && target.Arguments.Count == 0)
         {
-            Add(function, suspensionSite, target.ByteOffset, target.Line, target.Column, result);
+            Add(function, suspensionSite, target.ByteOffset,
+                target.SourceLine > 0 ? target.SourceLine : target.Line,
+                target.SourceColumn > 0 ? target.SourceColumn : target.Column, result);
         }
 
         switch (expression)

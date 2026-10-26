@@ -119,7 +119,26 @@ internal sealed partial class LlvmEmitter
         string ok,
         bool standardError)
     {
-        return EmitWriteValue(EmitExpression(interpolation.Expression), ok, standardError);
+        if (_activeAsyncCfg is null)
+        {
+            return EmitWriteValue(EmitExpression(interpolation.Expression), ok, standardError);
+        }
+
+        // A hole can suspend after an earlier literal was written. Keep that
+        // write status in the same typed frame as the other live values so
+        // the resumed block never reads a pre-suspension SSA temporary.
+        var statusName = NextAsyncBindingName("interpolation_write_status");
+        _locals.Add(statusName, new RuntimeBool(ok));
+        try
+        {
+            var value = EmitExpression(interpolation.Expression);
+            var resumedStatus = (RuntimeBool)_locals[statusName];
+            return EmitWriteValue(value, resumedStatus.ValueName, standardError);
+        }
+        finally
+        {
+            ForgetAsyncSpillCarrier(statusName);
+        }
     }
 
     private string EmitWriteValue(RuntimeValue value, string ok)

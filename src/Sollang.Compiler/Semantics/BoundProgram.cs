@@ -399,7 +399,8 @@ internal sealed record BoundStructDefinition(
     bool IsAbi = false,
     ComInterfaceMetadata? ComInterface = null,
     NativeHandleMetadata? NativeHandle = null,
-    bool IsProduct = false)
+    bool IsProduct = false,
+    IReadOnlyList<string?>? ProductLabels = null)
 {
     public BoundStructField GetField(string name)
     {
@@ -640,6 +641,15 @@ internal sealed partial class TypeDefinitionTable
     public bool IsProduct(TypeId type) =>
         _structs.TryGetValue(type, out var definition) && definition.IsProduct;
 
+    public IReadOnlyList<string?> GetProductLabels(TypeId type)
+    {
+        var product = GetStruct(type);
+        if (!product.IsProduct || product.ProductLabels is not { } labels
+            || labels.Count != product.Fields.Count)
+            throw new InvalidOperationException("product type is missing matching label metadata");
+        return labels;
+    }
+
     public TypeId GetOrAddProduct(
         IReadOnlyList<(string? Label, TypeId Type)> fields,
         string displayName,
@@ -663,7 +673,8 @@ internal sealed partial class TypeDefinitionTable
             field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
         _structs.Add(id, new BoundStructDefinition(
             id, displayName, Array.AsReadOnly(boundFields), line, column,
-            ModuleName: string.Empty, IsPublic: true, IsProduct: true));
+            ModuleName: string.Empty, IsPublic: true, IsProduct: true,
+            ProductLabels: Array.AsReadOnly(fields.Select(static field => field.Label).ToArray())));
         RecordTypeGraphMutation();
         _productsByShape.Add(shape, id);
         _names.TryAdd(displayName, id);
@@ -1243,7 +1254,7 @@ internal sealed partial class TypeDefinitionTable
             ? elementType
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a Set");
 
-    private string DisplayTypeName(TypeId type) =>
+    internal string DisplayTypeName(TypeId type) =>
         _names.FirstOrDefault(item => item.Value == type).Key ?? ((int)type).ToString();
 
     internal static bool IsRuntimeResultAlias(string name) =>

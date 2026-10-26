@@ -367,7 +367,11 @@ internal sealed record FlowTarget(
     int Line,
     int Column,
     IReadOnlyList<OpenImportCandidate>? OpenImportCandidates = null,
-    int ByteOffset = -1);
+    int ByteOffset = -1)
+{
+    public int SourceLine { get; init; }
+    public int SourceColumn { get; init; }
+}
 
 internal enum BranchInputMode
 {

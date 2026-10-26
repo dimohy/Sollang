@@ -13921,8 +13921,9 @@ internal sealed partial class SemanticCompiler
         if (_types.IsProduct(type))
         {
             var definition = _types.GetStruct(type);
+            var labels = _types.GetProductLabels(type);
             var fields = definition.Fields.Select(field => (
-                Label: field.Name == $"_{field.Index}" ? null : field.Name,
+                Label: labels[field.Index],
                 Type: (TypeId)SubstituteGenericType(
                     field.Type, primaryType, secondaryType, tertiaryType))).ToArray();
             return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
@@ -14020,8 +14021,9 @@ internal sealed partial class SemanticCompiler
         if (_types.IsProduct(type))
         {
             var definition = _types.GetStruct(type);
+            var labels = _types.GetProductLabels(type);
             var fields = definition.Fields.Select(field => (
-                Label: field.Name == $"_{field.Index}" ? null : field.Name,
+                Label: labels[field.Index],
                 Type: (TypeId)SubstituteGenericType(field.Type, template, specializedTypes))).ToArray();
             return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
         }

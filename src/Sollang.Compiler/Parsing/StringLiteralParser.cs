@@ -1,6 +1,7 @@
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Lexing;
 using Sollang.Compiler.Syntax;
+using System.Text;
 
 namespace Sollang.Compiler.Parsing;
 
@@ -8,7 +9,7 @@ internal static class StringLiteralParser
 {
     public static IReadOnlyList<StringSegment> ParseStringSegments(
         Token token,
-        Func<string, Expression> parseExpression)
+        Func<string, Token, Expression> parseExpression)
     {
         if (token.IsRawString)
         {
@@ -68,7 +69,7 @@ internal static class StringLiteralParser
             }
 
             segments.Add(new InterpolationSegment(
-                ParseInterpolationExpression(expressionText, token, parseExpression),
+                ParseInterpolationExpression(expressionText, token, AtStringOffset(token, i + 2), parseExpression),
                 IsParenthesized: true));
             i = close;
             start = i + 1;
@@ -254,16 +255,33 @@ internal static class StringLiteralParser
     private static Expression ParseInterpolationExpression(
         string text,
         Token token,
-        Func<string, Expression> parseExpression)
+        Token origin,
+        Func<string, Token, Expression> parseExpression)
     {
         try
         {
-            return parseExpression(text);
+            return parseExpression(text, origin);
         }
         catch (SollangException ex)
         {
             throw ErrorAt(token, $"invalid interpolation expression '$({text})': {ex.Message}");
         }
+    }
+
+    private static Token AtStringOffset(Token token, int offset)
+    {
+        var prefix = token.Text.AsSpan(0, offset);
+        var lineBreaks = prefix.Count('\n');
+        var lastLineBreak = prefix.LastIndexOf('\n');
+        return token with
+        {
+            ByteOffset = token.ByteOffset < 0 ? -1
+                : token.ByteOffset + 1 + Encoding.UTF8.GetByteCount(prefix),
+            SourceLine = (token.SourceLine > 0 ? token.SourceLine : token.Line) + lineBreaks,
+            SourceColumn = lastLineBreak < 0
+                ? (token.SourceColumn > 0 ? token.SourceColumn : token.Column) + 1 + offset
+                : offset - lastLineBreak
+        };
     }
 
     private static bool IsIdentifierStart(char c)

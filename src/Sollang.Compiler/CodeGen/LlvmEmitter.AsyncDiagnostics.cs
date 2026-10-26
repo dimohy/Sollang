@@ -1015,8 +1015,8 @@ internal sealed partial class LlvmEmitter
             && target.Arguments.Count == 0)
         {
             byteOffset = target.ByteOffset;
-            line = target.Line;
-            column = target.Column;
+            line = target.SourceLine > 0 ? target.SourceLine : target.Line;
+            column = target.SourceColumn > 0 ? target.SourceColumn : target.Column;
             return byteOffset >= 0;
         }
 

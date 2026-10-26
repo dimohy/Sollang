@@ -1210,6 +1210,15 @@ internal sealed partial class LlvmEmitter
 
         switch (expression)
         {
+            case StringExpression text:
+                foreach (var segment in text.Segments.OfType<InterpolationSegment>())
+                {
+                    CollectCfgSuspensions(segment.Expression, candidates);
+                }
+                break;
+            case FlowExpression flow:
+                CollectCfgSuspensions(flow.Source, candidates);
+                break;
             case IfExpression conditional:
                 CollectCfgSuspensions(conditional.Then.Statements, candidates);
                 if (conditional.Then.Value is not null)

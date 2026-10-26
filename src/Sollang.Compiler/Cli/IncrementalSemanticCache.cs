@@ -16,7 +16,7 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 10;
+    private const ulong Schema = 11;
     private const int DigestLength = 32;
     private const int HeaderWords = 13;
     private const int MaximumRecords = 1_000_000;
