@@ -1,0 +1,114 @@
+namespace sys.directory
+
+import sys.path as path
+import sys.directory.kind as kinds
+
+# The runtime fills this private, length-prefixed byte snapshot in canonical
+# name order. The public layer decodes it into independently owned entries, so
+# no returned path borrows a native directory buffer or handle.
+public struct Raw {
+    public bytes: [UInt8; ~]
+    public count: UIntSize
+}
+
+public struct Entry {
+    public name: path.Path
+    public kind: kinds.Kind
+}
+
+public enum RawResult {
+    Ok(Raw)
+    Err(Text)
+}
+
+public enum ReadResult {
+    Ok([Entry; ~])
+    Err(Text)
+}
+
+public readRaw directory: path.Path -> RawResult uses File = intrinsic
+
+# Ensures that one directory exists. Parent directories must already exist.
+# Returns true when the path is a directory after the operation.
+public create directory: path.Path -> Bool uses File = intrinsic
+
+public rawByte raw: Raw, index: Int -> UInt8 => raw.bytes[index]
+
+copyRaw raw: ref Raw -> Raw {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < UIntSize(raw.bytes -> len) -> while {
+        bytes! -> push(raw.bytes[Int(index!)])
+        index! + 1 => index!
+    }
+    Raw { bytes: bytes!, count: raw.count } => copied
+    copied
+}
+
+failedRaw: -> Raw {
+    Raw { bytes: [255; ~], count: 0 } => failed
+    failed
+}
+
+# Bootstrap consumers that cannot yet retain an owned enum payload may flatten
+# the result immediately. A zero-count, one-byte snapshot is impossible for a
+# native directory encoding and therefore preserves the read-failure state.
+public readRawSnapshot directory: ref path.Path -> Raw {
+    directory -> pathText => directoryText
+    path.fromText(directoryText, directory -> styleKind) => ownedDirectory
+    readRaw(ownedDirectory) -> when {
+        Ok(raw) { raw -> copyRaw }
+        Err(error) { failedRaw() }
+    }
+}
+
+readError message: Text -> ReadResult {
+    sys.directory.ReadResult.Err(message)
+}
+
+entryKind code: UInt8 -> kinds.Kind {
+    code -> when {
+        == 0 { kinds.Kind.File }
+        == 1 { kinds.Kind.Directory }
+        == 2 { kinds.Kind.Symlink }
+        else { kinds.Kind.Other }
+    }
+}
+
+# A directory read is an owned, deterministic snapshot. Entries are sorted by
+# raw UTF-8 name bytes, exclude `.` and `..`, and never retain an OS handle.
+public read directory: path.Path -> ReadResult {
+    directory -> styleKind => style
+    readRawSnapshot(directory) => raw
+    raw.count == 0 and (raw.bytes -> len) == 1 -> if {
+        "io" -> readError => failure
+        failure -> return
+    }
+    raw.count => count
+    [Entry; ~] => entries!
+    UIntSize(0) => cursor!
+    UIntSize(0) => entryIndex!
+    entryIndex! < count -> while {
+        raw -> rawByte(Int(cursor!)) -> entryKind => kind
+        cursor! + 1 => cursor!
+        UIntSize(raw -> rawByte(Int(cursor!))) => length0
+        UIntSize(raw -> rawByte(Int(cursor! + 1))) * 256 => length1
+        UIntSize(raw -> rawByte(Int(cursor! + 2))) * 65536 => length2
+        UIntSize(raw -> rawByte(Int(cursor! + 3))) * 16777216 => length3
+        length0 + length1 + length2 + length3 => nameLength
+        cursor! + 4 => cursor!
+        [UInt8; ~] => nameBytes!
+        UIntSize(0) => nameIndex!
+        nameIndex! < nameLength -> while {
+            nameBytes! -> push(raw -> rawByte(Int(cursor! + nameIndex!)))
+            nameIndex! + 1 => nameIndex!
+        }
+        cursor! + nameLength => cursor!
+        path.fromBytes(nameBytes!, style) -> when {
+            Ok(name) { entries! -> push(Entry { name: name, kind: kind }) }
+            Err(error) { error -> readError -> return }
+        }
+        entryIndex! + 1 => entryIndex!
+    }
+    sys.directory.ReadResult.Ok(entries!)
+}

@@ -1,0 +1,166 @@
+namespace sys.file
+
+import sys.runtime as rt
+import sys.path as path
+
+# File is an affine native resource. Its private token cannot be constructed or
+# copied by user code, and leaving the owner scope closes it deterministically.
+public struct File {
+    public token: UInt64
+}
+
+# FileWriter is a separate affine capability, so read-only and write-only
+# handles cannot be mixed accidentally. openWrite creates or truncates a file.
+# Its syncAsync flow member is a durable-data barrier, not a user-buffer flush.
+public struct FileWriter {
+    public token: UInt64
+}
+
+public struct AtomicReplaceRequest {
+    public temporary: Text
+    public destination: Text
+}
+
+# SourceText is an affine compiler input. A borrowed literal has no mapping;
+# a mapped file owns its mapping until the SourceText owner is dropped.
+public struct SourceText {
+    public token: UInt64
+}
+
+public enum AsyncTransferError {
+    Io(Text)
+    InvalidRange
+    Cancelled
+}
+
+public struct ReadAtSuccess {
+    public file: File
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+    public end: Bool
+}
+
+public struct ReadAtFailure {
+    public file: File
+    public buffer: [UInt8; ~]
+    public error: AsyncTransferError
+}
+
+public struct WriteAtSuccess {
+    public writer: FileWriter
+    public buffer: [UInt8; ~]
+    public count: UIntSize
+}
+
+public struct WriteAtFailure {
+    public writer: FileWriter
+    public buffer: [UInt8; ~]
+    public error: AsyncTransferError
+}
+
+# User-defined values opt into binary serialization by constructing their own
+# canonical byte representation. This deliberately avoids writing a struct's
+# target-dependent in-memory ABI layout.
+public trait BinarySerializable {
+    serialize: self -> [UInt8; ~]
+}
+
+public borrowText text: Text -> SourceText = intrinsic
+
+public borrowBytes bytes: ref [UInt8; ~] -> SourceText = intrinsic
+
+public mapText path: Text -> SourceText uses File = intrinsic
+
+# Maps an owned target-explicit Path without manufacturing a Text view whose
+# lifetime could outlive the Path storage.
+public mapPath value: path.Path -> SourceText uses File = intrinsic
+
+public openRead path: Text -> Result<File, Text> uses File = intrinsic
+
+public openReadAsync path: Text -> async Result<File, Text> uses File = intrinsic
+
+# Reads standard input to EOF into an affine compiler-input buffer. The owner
+# releases the buffer deterministically at scope exit.
+public readStandardInput: -> SourceText uses File = intrinsic
+
+# Reads at most `capacity` bytes from standard input in one blocking operation.
+# A zero-length result is EOF. The returned SourceText owns its heap buffer.
+public readStandardInputChunk capacity: UIntSize -> SourceText uses File = intrinsic
+
+public openWrite path: Text -> Result<FileWriter, Text> uses File = intrinsic
+
+public openWriteAsync path: Text -> async Result<FileWriter, Text> uses File = intrinsic
+
+impl File {
+    # Reads directly into the caller-sized buffer at an explicit byte offset.
+    # The visible buffer length is unchanged; the returned count identifies the
+    # authoritative prefix written by the platform.
+    public readIntoAt: self, output: mut [UInt8; ~], offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic
+
+    # Both affine owners move into the Task. Ordinary completion returns them
+    # in either branch; Task cancellation drops them only after the native
+    # request has stopped observing the caller buffer.
+    public readIntoAtAsync: move self, output: move [UInt8; ~], offset: UInt64, cancelled: Bool -> async Result<ReadAtSuccess, ReadAtFailure> uses File = intrinsic
+}
+
+impl FileWriter {
+    # Writes a validated caller-owned byte range at an explicit byte offset.
+    # Invalid source ranges fail before the platform observes any write.
+    public writeRangeAt: self, input: ref [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64 -> Result<UIntSize, Text> uses File = intrinsic
+
+    # Invalid ranges and cooperative cancellation complete without issuing a
+    # platform write while preserving both affine owners in the failure value.
+    public writeRangeAtAsync: move self, input: move [UInt8; ~], inputOffset: UIntSize, length: UIntSize, offset: UInt64, cancelled: Bool -> async Result<WriteAtSuccess, WriteAtFailure> uses File = intrinsic
+}
+
+# Synchronous compiler/cache durability primitives. The affine writer closes
+# deterministically at scope exit before atomicReplace publishes its temp file.
+public sync writer: FileWriter -> Bool uses File = intrinsic
+
+public atomicReplace request: AtomicReplaceRequest -> Bool uses File = intrinsic
+
+openIntWriter path: Text -> Unit uses File {
+    path -> rt.openIntWriter
+}
+
+writeInt value: Int -> Unit uses File {
+    value -> rt.writeInt
+}
+
+closeIntWriter: -> Unit uses File {
+    rt.closeIntWriter()
+}
+
+openIntReader path: Text -> Unit uses File {
+    path -> rt.openIntReader
+}
+
+closestInt target: Int -> Int uses File {
+    target -> rt.closestInt
+}
+
+closeIntReader: -> Unit uses File {
+    rt.closeIntReader()
+}
+
+# Generic canonical binary writer. Existing Int-specific names remain for the
+# sorted Int64 demo format.
+public openWriter path: Text -> Unit uses File = intrinsic
+
+public write<T> value: T -> Unit uses File = intrinsic
+
+public closeWriter: -> Unit uses File = intrinsic
+
+# Generic canonical binary reader. Ok(None) is clean EOF; partial scalars,
+# invalid Bool/CodePoint encodings, and operating-system failures return
+# "truncated", "invalid", and "io" errors.
+public openReader path: Text -> Unit uses File = intrinsic
+
+public read<T>: -> Result<Option<T>, Text> uses File = intrinsic
+
+# Asynchronous scalar reads use the shared native file worker. The operation
+# returns an affine Task and therefore composes with the ordinary await and
+# cancellation rules without exposing callbacks or executor handles.
+public readAsync<T>: -> async Result<Option<T>, Text> uses File = intrinsic
+
+public closeReader: -> Unit uses File = intrinsic

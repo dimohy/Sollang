@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 . (Join-Path $PSScriptRoot 'verification-artifact-identity.ps1')
+. (Join-Path $PSScriptRoot 'verification-c527-historical-baseline.ps1')
 $resolvedContractPath = [IO.Path]::GetFullPath($ContractPath, $root)
 $contract = Get-Content -LiteralPath $resolvedContractPath -Raw | ConvertFrom-Json
 $llvmObservation = $contract.llvmObservationEvidence
@@ -2086,7 +2087,11 @@ $largePair = Get-Content -LiteralPath (Join-Path $root $largeLiteral.positivePai
 $signedPair = Get-Content -LiteralPath (Join-Path $root $largeLiteral.signedPair) -Raw | ConvertFrom-Json
 $largeCandidatePath = Join-Path (Split-Path -Parent (Join-Path $root $largeLiteral.candidateBuild)) 'compiler.exe'
 $largeManagedCodegen = Get-Content -LiteralPath (Join-Path $root $largeLiteral.managedCodegenSource) -Raw
-$largeBaselineLlvm = Get-Content -LiteralPath (Join-Path $root $largeLiteral.baselineLlvm) -Raw
+$largeBaselineAuthority = $null
+if ($contract.PSObject.Properties['largeIntegerFloatBaselineAuthority']) {
+    $largeBaselineAuthority = Get-Content -LiteralPath (Join-Path $root $contract.largeIntegerFloatBaselineAuthority) -Raw | ConvertFrom-Json
+}
+$largeBaselineLlvm = Get-C527HistoricalBaselineText -RepositoryRoot $root -OriginalEvidence $largeLiteral -Authority $largeBaselineAuthority
 $largeManagedOutput = Get-Content -LiteralPath (Join-Path $root $largeLiteral.managedFixedOutput) -Raw
 $signedManagedOutput = Get-Content -LiteralPath (Join-Path $root $largeLiteral.managedSignedOutput) -Raw
 if ($largeLiteral.status -cne 'passed-slice-unit-open' -or $largeLiteral.focusedPassed -cne '5/5' -or
@@ -2099,12 +2104,15 @@ if ($largeLiteral.status -cne 'passed-slice-unit-open' -or $largeLiteral.focused
     -not $largeBaselineLlvm.Contains('sitofp i32 4294967296 to double', [StringComparison]::Ordinal) -or
     $largeManagedOutput.Trim() -cne 'value=4294967296' -or
     ($signedManagedOutput.Trim() -replace "`r`n", "`n") -cne "negative=-4294967296`nfloat32=4294967296" -or
-    -not $largeManagedCodegen.Contains('TryGetIntegerLiteralText(expression.Arguments[0], out var floatingIntegerLiteral)', [StringComparison]::Ordinal) -or
-    -not $largeManagedCodegen.Contains('fptrunc double {constant} to float', [StringComparison]::Ordinal) -or
-    -not $interpolationCodegen.Contains('interpolationIntegerLiteralSyntax', [StringComparison]::Ordinal) -or
-    -not $interpolationCodegen.Contains('writeInterpolationFloatingIntegerLiteral', [StringComparison]::Ordinal)) {
+    -not $largeManagedCodegen.Contains('TryGetNumericLiteralText(expression.Arguments[0], out var floatingLiteral)', [StringComparison]::Ordinal) -or
+    -not $largeManagedCodegen.Contains('FormatLlvmFloatingLiteral(', [StringComparison]::Ordinal) -or
+    -not $managedCodegen.Contains('float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var single)', [StringComparison]::Ordinal) -or
+    -not $managedCodegen.Contains('BitConverter.DoubleToInt64Bits(value):X16', [StringComparison]::Ordinal) -or
+    -not $interpolationCodegen.Contains('interpolationNumericLiteralSyntax(nodes)', [StringComparison]::Ordinal) -or
+    -not $interpolationCodegen.Contains('node.operand0 -> writeInterpolationFloatingLiteral(width, nodes, sourceModule, context)', [StringComparison]::Ordinal)) {
     throw 'integer-shaped float literals lack matching source decisions and paired evidence'
 }
+Write-Host '[C527 integer-shaped float] PASS baseline, source and paired evidence; whole parity remains open'
 $characterConversion = Get-Content -LiteralPath (Join-Path $root $contract.characterConversionEvidence) -Raw | ConvertFrom-Json
 $characterBaselinePositive = Get-Content -LiteralPath (Join-Path $root $characterConversion.baselinePositivePair) -Raw | ConvertFrom-Json
 $characterBaselineNegative = Get-Content -LiteralPath (Join-Path $root $characterConversion.baselineNegativePair) -Raw | ConvertFrom-Json

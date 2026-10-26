@@ -4,12 +4,13 @@ param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+. (Join-Path $PSScriptRoot 'verification-artifact-identity.ps1')
 $unit = Get-Content -LiteralPath (Join-Path $root 'artifacts/scratch/c611-source-call-interpolation-semantic-owner-unit-20260929-01.json') -Raw | ConvertFrom-Json
-$build = Get-Content -LiteralPath $unit.steps[2].evidence -Raw | ConvertFrom-Json
+$build = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $unit.steps[2].evidence) -Raw | ConvertFrom-Json
 $focused = $unit.steps[3]
-$many = Get-Content -LiteralPath $focused.manyArgumentEvidence -Raw | ConvertFrom-Json
-$retained = Get-Content -LiteralPath $focused.retainedEvidence -Raw | ConvertFrom-Json
-$priorFailure = Get-Content -LiteralPath $focused.priorFailureEvidence -Raw | ConvertFrom-Json
+$many = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $focused.manyArgumentEvidence) -Raw | ConvertFrom-Json
+$retained = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $focused.retainedEvidence) -Raw | ConvertFrom-Json
+$priorFailure = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $focused.priorFailureEvidence) -Raw | ConvertFrom-Json
 $managed = Get-Content -LiteralPath (Join-Path $root 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs') -Raw
 $ir = Get-Content -LiteralPath (Join-Path $root 'selfhost/ir/interpolation.slg') -Raw
 $semantic = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/interpolation_inference.slg') -Raw
@@ -41,11 +42,12 @@ if ($unit.completed -ne 4 -or $unit.total -ne 4 -or
 }
 
 foreach ($path in $focused.negativeEvidence) {
-    $negative = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    $receiptDirectory = Split-Path -Parent $path
+    $resolvedNegativePath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $path
+    $negative = Get-Content -LiteralPath $resolvedNegativePath -Raw | ConvertFrom-Json
+    $receiptDirectory = Split-Path -Parent $resolvedNegativePath
     $managedStderr = [IO.File]::ReadAllText((Join-Path $receiptDirectory 'managed.stderr.txt')).Replace("`r`n", "`n")
     $selfhostStderr = [IO.File]::ReadAllText((Join-Path $receiptDirectory 'selfhost.stderr.txt')).Replace("`r`n", "`n")
-    $expected = [IO.File]::ReadAllText($negative.expected).Replace("`r`n", "`n")
+    $expected = [IO.File]::ReadAllText((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $negative.expected)).Replace("`r`n", "`n")
     if (-not $negative.inputsStable -or $negative.failureId -ne $null -or
         $negative.selfhostCompilerSha256 -cne $build.compilerSha256 -or
         $negative.managed.exitCode -ne 1 -or $negative.selfhost.exitCode -ne 1 -or

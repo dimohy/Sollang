@@ -4,11 +4,12 @@ param([string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot))
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+. (Join-Path $PSScriptRoot 'verification-artifact-identity.ps1')
 $unit = Get-Content -LiteralPath (Join-Path $root 'artifacts/scratch/c612-builtin-conversion-semantic-owner-unit-20260929-01.json') -Raw | ConvertFrom-Json
-$managedFirst = Get-Content -LiteralPath $unit.steps[0].evidence -Raw | ConvertFrom-Json
-$build = Get-Content -LiteralPath $unit.steps[2].evidence -Raw | ConvertFrom-Json
+$managedFirst = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $unit.steps[0].evidence) -Raw | ConvertFrom-Json
+$build = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $unit.steps[2].evidence) -Raw | ConvertFrom-Json
 $focused = $unit.steps[3]
-$positive = Get-Content -LiteralPath $focused.positiveEvidence -Raw | ConvertFrom-Json
+$positive = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $focused.positiveEvidence) -Raw | ConvertFrom-Json
 $managed = Get-Content -LiteralPath (Join-Path $root 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs') -Raw
 $semantic = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/interpolation_inference.slg') -Raw
 $preparation = Get-Content -LiteralPath (Join-Path $root 'selfhost/llvm/text/context_prepare.slg') -Raw
@@ -36,11 +37,12 @@ if ($unit.completed -ne 4 -or $unit.total -ne 4 -or
 }
 
 foreach ($path in $focused.negativeEvidence) {
-    $negative = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-    $directory = Split-Path -Parent $path
+    $resolvedNegativePath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $path
+    $negative = Get-Content -LiteralPath $resolvedNegativePath -Raw | ConvertFrom-Json
+    $directory = Split-Path -Parent $resolvedNegativePath
     $managedStderr = [IO.File]::ReadAllText((Join-Path $directory 'managed.stderr.txt')).Replace("`r`n", "`n")
     $selfhostStderr = [IO.File]::ReadAllText((Join-Path $directory 'selfhost.stderr.txt')).Replace("`r`n", "`n")
-    $expected = [IO.File]::ReadAllText($negative.expected).Replace("`r`n", "`n").TrimEnd("`n")
+    $expected = [IO.File]::ReadAllText((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $negative.expected)).Replace("`r`n", "`n").TrimEnd("`n")
     if (-not $negative.inputsStable -or $null -ne $negative.failureId -or
         $negative.selfhostCompilerSha256 -cne $build.compilerSha256 -or
         $negative.managed.exitCode -ne 1 -or $negative.selfhost.exitCode -ne 1 -or

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from datetime import datetime, timezone
 
 from context_suite_evidence import suite_required_inputs, validate_focused_suite
 from completed_artifact_plan import assert_artifact_path
@@ -142,6 +143,9 @@ def main() -> None:
 
     proof = {
         **baseline,
+        "previousProof": args.baseline,
+        "previousObservedAtUtc": baseline.get("observedAtUtc"),
+        "observedAtUtc": datetime.now(timezone.utc).isoformat(),
         "status": "passed" if covered == expected else "pending-pair",
         "contextSourceSha256": sha(context),
         "producerSourceSha256": sha(repo_file(baseline["producerSource"])),
