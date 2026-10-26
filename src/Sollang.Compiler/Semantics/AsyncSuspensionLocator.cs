@@ -137,8 +137,20 @@ internal static class AsyncSuspensionLocator
                 break;
             case FlowExpression value:
                 IndexExpression(function, value.Source, value.Source, result);
-                foreach (var argument in value.Targets.SelectMany(static target => target.Arguments))
-                    IndexExpression(function, argument, argument, result);
+                for (var index = 0; index < value.Targets.Count; index++)
+                {
+                    var flowTarget = value.Targets[index];
+                    foreach (var argument in flowTarget.Arguments)
+                        IndexExpression(function, argument, argument, result);
+                    if (index < value.Targets.Count - 1
+                        && flowTarget.Path.Count == 1 && flowTarget.Path[0] == "await"
+                        && flowTarget.Arguments.Count == 0)
+                    {
+                        Add(function, flowTarget, flowTarget.ByteOffset,
+                            flowTarget.SourceLine > 0 ? flowTarget.SourceLine : flowTarget.Line,
+                            flowTarget.SourceColumn > 0 ? flowTarget.SourceColumn : flowTarget.Column, result);
+                    }
+                }
                 break;
             case BranchExpression value:
                 IndexExpression(function, value.Source, value.Source, result);

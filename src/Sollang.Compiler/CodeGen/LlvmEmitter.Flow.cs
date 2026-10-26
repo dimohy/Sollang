@@ -536,6 +536,11 @@ internal sealed partial class LlvmEmitter
                 {
                     throw new SollangException("await does not accept arguments");
                 }
+                if (TryEmitCfgFlowAwait(source, target, task, out var suspendedValue))
+                {
+                    result = new RuntimeFlowResult(suspendedValue, null, _mainOk);
+                    return true;
+                }
                 var awaited = EmitAwaitTask(task);
                 if (source is NameExpression awaitedSource
                     && _locals.TryGetValue(awaitedSource.Name, out var sourceValue)

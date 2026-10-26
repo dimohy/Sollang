@@ -995,6 +995,14 @@ internal sealed partial class LlvmEmitter
         out int line,
         out int column)
     {
+        if (site is FlowTarget targetSite && targetSite.Path.Count == 1
+            && targetSite.Path[0] == "await" && targetSite.Arguments.Count == 0)
+        {
+            byteOffset = targetSite.ByteOffset;
+            line = targetSite.SourceLine > 0 ? targetSite.SourceLine : targetSite.Line;
+            column = targetSite.SourceColumn > 0 ? targetSite.SourceColumn : targetSite.Column;
+            return byteOffset >= 0;
+        }
         Expression? expression = site switch
         {
             BindingStatement binding => binding.Value,
