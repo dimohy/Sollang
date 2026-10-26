@@ -11,8 +11,9 @@ Set-StrictMode -Version Latest
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
 $stage2VerifierPath = Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1"
 $stage3VerifierPath = Join-Path $PSScriptRoot "verify-selfhost-stage3.ps1"
-$runtimeManifestPath = Join-Path $RepositoryRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-compiler-runtime.sources.txt"
 $closureVerifierPath = Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1"
+. (Join-Path $PSScriptRoot 'selfhost-stage-inputs.ps1')
+$standardLibrarySources = @(Get-SelfhostStandardLibrarySources -RepositoryRoot $RepositoryRoot)
 if ($AdditionalManifest.Count -gt 0 -and -not $RefreshManifestClosure) {
     throw 'FORMAL_CLOSURE_ADDITIONAL_REQUIRES_REFRESH: additional manifests are write-mode inputs'
 }
@@ -22,7 +23,9 @@ if ($RefreshManifestClosure) {
     $compilerManifestPath = Join-Path $RepositoryRoot 'tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt'
     $catalog = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
     $ambiguous = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    foreach ($entry in ([IO.File]::ReadAllLines($compilerManifestPath) + [IO.File]::ReadAllLines($runtimeManifestPath))) {
+    $catalogSources = @([IO.File]::ReadAllLines($compilerManifestPath)) +
+        @($standardLibrarySources | ForEach-Object { [IO.Path]::GetRelativePath($RepositoryRoot, $_) })
+    foreach ($entry in $catalogSources) {
         if ([string]::IsNullOrWhiteSpace($entry)) { continue }
         $relative = $entry.Trim().Replace('\', '/')
         $header = Get-SollangModuleHeader -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot $relative)))
@@ -38,7 +41,7 @@ if ($RefreshManifestClosure) {
 function Refresh-ExactClosure([string]$ManifestPath) {
     $existing = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $sources = [Collections.Generic.List[string]]::new()
-    foreach ($entry in ([IO.File]::ReadAllLines($ManifestPath) + [IO.File]::ReadAllLines($runtimeManifestPath))) {
+    foreach ($entry in [IO.File]::ReadAllLines($ManifestPath)) {
         if ([string]::IsNullOrWhiteSpace($entry)) { continue }
         $relative = $entry.Trim().Replace('\', '/')
         if ($existing.Add($relative)) { $sources.Add($relative) }
@@ -46,6 +49,10 @@ function Refresh-ExactClosure([string]$ManifestPath) {
     $added = [Collections.Generic.List[string]]::new()
     while ($true) {
         $modules = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($path in $standardLibrarySources) {
+            $standardHeader = Get-SollangModuleHeader -Source ([IO.File]::ReadAllText($path))
+            if (-not [string]::IsNullOrEmpty($standardHeader.Namespace)) { $modules.Add($standardHeader.Namespace) | Out-Null }
+        }
         $headers = [Collections.Generic.List[object]]::new()
         foreach ($relative in $sources) {
             $header = Get-SollangModuleHeader -Source ([IO.File]::ReadAllText((Join-Path $RepositoryRoot $relative)))
@@ -121,7 +128,8 @@ foreach ($fixtureName in $fixtureNames) {
     if ($RefreshManifestClosure) { Refresh-ExactClosure $manifestPath }
     try {
         & $closureVerifierPath `
-            -Manifest @($manifestPath, $runtimeManifestPath) `
+            -Manifest @($manifestPath) `
+            -SourcePath $standardLibrarySources `
             -RepositoryRoot $RepositoryRoot | Out-Null
         if (-not $?) { throw 'source closure verifier returned failure' }
     } catch {
@@ -139,7 +147,7 @@ foreach ($entry in $AdditionalManifest) {
         throw "FORMAL_CLOSURE_ADDITIONAL_INVALID: $entry"
     }
     Refresh-ExactClosure $manifestPath
-    & $closureVerifierPath -Manifest @($manifestPath, $runtimeManifestPath) -RepositoryRoot $RepositoryRoot | Out-Null
+    & $closureVerifierPath -Manifest @($manifestPath) -SourcePath $standardLibrarySources -RepositoryRoot $RepositoryRoot | Out-Null
 }
 
 Write-Host "[formal exact source closure] PASS $verifiedCount compiler fixtures before expensive contracts."

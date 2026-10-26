@@ -1,5 +1,16 @@
 Set-StrictMode -Version Latest
 
+function Get-SelfhostStandardLibrarySources {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$RepositoryRoot)
+    $stdlibRoot = Join-Path ([IO.Path]::GetFullPath($RepositoryRoot)) 'stdlib'
+    [string[]]$sources = @(Get-ChildItem -LiteralPath $stdlibRoot -Recurse -File -Filter '*.slg' -ErrorAction Stop |
+        ForEach-Object FullName)
+    if ($sources.Count -eq 0) { throw "Stage standard library is empty: $stdlibRoot" }
+    [Array]::Sort($sources, [StringComparer]::Ordinal)
+    return $sources
+}
+
 function Get-SelfhostStageCompilationInputs {
     [CmdletBinding()]
     param(
@@ -25,10 +36,7 @@ function Get-SelfhostStageCompilationInputs {
     }
     $compilerSources = @(Read-StageSourceManifest $compilerManifest)
     $runtimeSources = @(Read-StageSourceManifest $runtimeManifest)
-    [string[]]$stdlibSources = @(Get-ChildItem -LiteralPath $stdlibRoot -Recurse -File -Filter '*.slg' -ErrorAction Stop |
-        ForEach-Object FullName)
-    if ($stdlibSources.Count -eq 0) { throw "Stage standard library is empty: $stdlibRoot" }
-    [Array]::Sort($stdlibSources, [StringComparer]::Ordinal)
+    [string[]]$stdlibSources = @(Get-SelfhostStandardLibrarySources -RepositoryRoot $root)
     $fingerprintPaths = [Collections.Generic.List[string]]::new()
     $seenInputs = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     # Runtime projections remain inputs of the compatibility controls. The

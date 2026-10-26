@@ -2443,6 +2443,12 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                     ordinal! + 1 => ordinal!
                 }
             callIndex! -> callArgumentIndex(context, state) => interpolationArgumentIndex!
+            # Materialize consumes deferred Text through its flow source;
+            # its ordinary argument is the Arena. Use the same scratch planner
+            # and consumer label for that source as for other Text consumers.
+            call.opcode == -229 and call.operand0 >= 0 and call.operand1 >= 0
+                => materializedInterpolationSource
+            materializedInterpolationSource -> if { call.operand0 => interpolationArgumentIndex! }
             [Int; ~] => interpolationTextIndices!
             interpolationArgumentIndex! >= 0 -> while {
                 interpolationArgumentIndex! -> aggregateValueIndex(context, state) => interpolationArgumentValueIndex
@@ -2500,7 +2506,9 @@ emitHoistedReferenceArgumentAllocas ownerIndex: Int, startIndex: Int, endIndex: 
                                 }
                         }
                     }
-                context.ir[interpolationArgumentIndex!].nextOperand => interpolationArgumentIndex!
+                materializedInterpolationSource -> if {
+                    -1 => interpolationArgumentIndex!
+                } else { context.ir[interpolationArgumentIndex!].nextOperand => interpolationArgumentIndex! }
             }
         }
         callIndex! -> emitFormattingCallAllocas(ownerIndex, context, state)

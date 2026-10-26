@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
-    [string]$OutputDirectory = 'artifacts/scratch/portable-memory-io/contract',
+    [string]$OutputDirectory = '',
     [string]$Compiler = '',
     [ValidatePattern('^$|^[A-Fa-f0-9]{64}$')]
     [string]$ExpectedCompilerSha256 = ''
@@ -206,6 +206,8 @@ $managedEmitter = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/
 $managedFlow = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Flow.cs'))
 $managedStructsPath = Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Structs.cs'
 $managedStructs = [IO.File]::ReadAllText($managedStructsPath)
+$managedUtilitiesPath = Join-Path $root 'src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs'
+$managedUtilities = [IO.File]::ReadAllText($managedUtilitiesPath)
 $selfhostTyped = [IO.File]::ReadAllText((Join-Path $root 'selfhost/ir/typed.slg'))
 $selfhostEmitter = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/text/platform_io.slg'))
 $selfhostRuntime = [IO.File]::ReadAllText((Join-Path $root 'selfhost/llvm/runtime.slg'))
@@ -224,7 +226,10 @@ foreach ($check in @(
     @{ Text = $managedEmitter; Needle = 'EmitRuntimeErrorText("io")' },
     @{ Text = $managedFlow; Needle = 'RemoveLocal(cancelledSource.Name);' },
     @{ Text = $managedStructs; Needle = 'CollectOwnedLiteralTransfers' },
-    @{ Text = $managedStructs; Needle = 'DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths)' },
+    @{ Text = $managedStructs; Needle = 'RecordOwnedFieldProjectionTransfers(ownerName, transferredPaths)' },
+    @{ Text = $managedStructs; Needle = "MarkMovedOwnedStructField(ownerName, string.Join('.', path))" },
+    @{ Text = $managedUtilities; Needle = '_movedOwnedStructFields.ContainsKey(name)' },
+    @{ Text = $managedUtilities; Needle = 'DropOwnedStructFieldsExceptMoved(name, structure)' },
     @{ Text = $selfhostTyped; Needle = '-> if { -304 => opcode! }' },
     @{ Text = $selfhostTyped; Needle = '-> if { -305 => opcode! }' },
     @{ Text = $selfhostEmitter; Needle = 'call.opcode == -304 or call.opcode == -305' },
@@ -238,6 +243,9 @@ foreach ($check in @(
     if (-not $check.Text.Contains($check.Needle, [StringComparison]::Ordinal)) {
         throw "Portable file I/O managed/self-host lowering is missing: $($check.Needle)"
     }
+}
+if ($managedStructs.Contains('DropOwnedStructFieldsExceptMovedAndTransferred(ownerName, owner, transferredPaths)', [StringComparison]::Ordinal)) {
+    throw 'Portable file I/O projected transfers must retain independent owner fields until scope cleanup'
 }
 $windowsRuntime = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/WindowsLlvmRuntimePlatform.cs'))
 $linuxRuntime = [IO.File]::ReadAllText((Join-Path $root 'src/Sollang.Compiler/CodeGen/LinuxLlvmRuntimePlatform.cs'))
@@ -392,17 +400,23 @@ foreach ($gateName in @(
 }
 
 $llvmAsPath = Join-Path $root '.tools/llvm-22.1.8/bin/llvm-as.exe'
+$portableLlvmRoot = Join-Path $root '.tools/llvm-22.1.8'
+$clangPath = Join-Path $portableLlvmRoot 'bin/clang.exe'
 $closureVerifierPath = Join-Path $root 'scripts/verify-llvm-direct-call-closure.ps1'
-foreach ($toolPath in @($llvmAsPath, $closureVerifierPath)) {
+foreach ($toolPath in @($llvmAsPath, $clangPath, $closureVerifierPath)) {
     if (-not (Test-Path -LiteralPath $toolPath -PathType Leaf)) {
         throw "Portable memory I/O independent LLVM gate is missing: $toolPath"
     }
+}
+if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    $OutputDirectory = 'artifacts/scratch/portable-memory-io/contract-' + [Guid]::NewGuid().ToString('N')
 }
 $resolvedOutput = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
     [IO.Path]::GetFullPath($OutputDirectory)
 } else {
     [IO.Path]::GetFullPath((Join-Path $root $OutputDirectory))
 }
+if (Test-Path -LiteralPath $resolvedOutput) { throw "PORTABLE_MEMORY_IO_OUTPUT_ALREADY_EXISTS: $resolvedOutput" }
 [IO.Directory]::CreateDirectory($resolvedOutput) | Out-Null
 
 $formatSources = @($asyncSourcePath, $sysFilePath, $fileSourcePath) + @($contract.focusedProbes | ForEach-Object { Join-Path $root $_.source })
@@ -413,8 +427,10 @@ $inputPaths = @(
     $sysFilePath,
     $fileSourcePath,
     $managedStructsPath,
+    $managedUtilitiesPath,
     $compilerPath,
     $llvmAsPath,
+    $clangPath,
     $closureVerifierPath,
     $PSCommandPath
 ) + $formatSources
@@ -435,7 +451,7 @@ foreach ($probe in $contract.focusedProbes) {
     $target = if ($null -ne $probe.PSObject.Properties['target']) { $probe.target } else { 'windows-x64' }
     $extension = if ($target -ceq 'wasm32-browser') { '.wasm' } elseif ($target -ceq 'linux-x64') { '' } else { '.exe' }
     $executable = Join-Path $resolvedOutput "$($probe.id)$extension"
-    $compileArguments = @($compilerPath, 'build', $probePath, '-o', $executable, '--keep-temps', '-O0')
+    $compileArguments = @($compilerPath, 'build', $probePath, '-o', $executable, '--keep-temps', '-O0', '--llvm', $portableLlvmRoot)
     if ($target -cne 'windows-x64') {
         $compileArguments += @('--target', $target)
     }
@@ -452,7 +468,7 @@ foreach ($probe in $contract.focusedProbes) {
         if ($compileExitCode -ne 0) {
             throw "Portable memory I/O executable probe did not compile: $($probe.id):`n$compileLog"
         }
-        $llvmPath = [IO.Path]::ChangeExtension($executable, '.ll')
+        $llvmPath = $executable + '.ll'
         $bitcodePath = [IO.Path]::ChangeExtension($executable, '.bc')
         if (-not (Test-Path -LiteralPath $llvmPath -PathType Leaf)) {
             throw "Portable memory I/O successful probe emitted no LLVM: $($probe.id)"

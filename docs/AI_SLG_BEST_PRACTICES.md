@@ -1218,6 +1218,11 @@ Arena(64) => storage!
 ["prefix", text] => fields
 ```
 
+Native scratch planning must visit the deferred Text flow source of
+`materialize`, independently of its Arena argument. Hoist interpolation scratch
+under the same consumer identity used by emission, including nested logical
+expressions; ordinary functions with the same spelling retain normal dispatch.
+
 For constant text containing quotes or backslashes, prefer a raw literal over
 interpolation that would introduce an unnecessary materialization boundary.
 
@@ -1915,6 +1920,11 @@ exact node-inventory equality before attributing a failure to parallel result
 generation or merge.
 
 Finish integrating compiler and fixture changes before starting full suites.
+New regression fixture names use a numeric prefix. Preserve the existing
+identities listed in `scripts/contracts/regression-fixture-identities.json`,
+including frozen-catalog identifiers; the name validator rejects unregistered
+nonnumeric names and stale or duplicate legacy entries. Retaining an identity
+does not waive any source, oracle, or runtime verification.
 Run the full Windows managed reference suite through
 `scripts/verify-managed-reference.ps1` with an empty output directory under
 `artifacts/`. This wrapper preserves live logs and requires unchanged compiler,
