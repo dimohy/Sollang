@@ -4,11 +4,38 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Test-UnreferencedSplitHelper {
+    param([string]$Name, [string]$SourceText, [string]$LlvmText)
+    $escaped = [regex]::Escape($Name)
+    return [regex]::Matches($SourceText, '\b' + $escaped + '\b').Count -eq 1 -and
+        [regex]::Matches($LlvmText, '@sollang_fn_sollang_compiler_llvm_text_' + $escaped + '\(').Count -eq 0
+}
+function Get-SplitContextStateParameters {
+    param([string[]]$Parameters, [ValidateRange(0, 64)][int]$FollowingParameters)
+    if ($Parameters.Count -lt 2 + $FollowingParameters) { throw 'Split ABI parameter inventory is incomplete.' }
+    return @($Parameters[$Parameters.Count - 2 - $FollowingParameters], $Parameters[$Parameters.Count - 1 - $FollowingParameters])
+}
+function Get-SplitContextMaterializations {
+    param([string]$LlvmText)
+    foreach ($function in [regex]::Matches($LlvmText, '(?ms)^define [^\r\n]+\([^\r\n]*\)[^{]*\{(?<body>.*?)^\}')) {
+        $body = $function.Groups['body'].Value
+        $calls = [regex]::Matches($body, '(?m)^\s*(?:%[A-Za-z0-9_]+ = )?call [^\r\n]*@sollang_fn_sollang_compiler_llvm_text_emitCore\((?<arguments>[^\r\n]*)\)')
+        if ($calls.Count -eq 0) { continue }
+        if ($calls.Count -ne 1) { throw 'Entry function must invoke emitCore exactly once.' }
+        $arguments = @($calls[0].Groups['arguments'].Value.Split(',') | ForEach-Object { $_.Trim() })
+        $pointers = @(Get-SplitContextStateParameters -Parameters $arguments -FollowingParameters 0)
+        if ($pointers[0] -notmatch '^ptr (?<owner>%[A-Za-z0-9_]+)$') { throw 'Entry context argument is not a pointer.' }
+        $owner = [regex]::Escape($Matches.owner)
+        $allocations = [regex]::Matches($body, '(?m)^\s*(?<pointer>' + $owner + ') = alloca (?<type>%sollang\.struct\.[0-9]+), align [0-9]+\r?$')
+        if ($allocations.Count -ne 1) { throw 'Entry context must have exactly one owner in its own function.' }
+        $allocations[0]
+    }
+}
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compiler = Join-Path $repoRoot "src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll"
-$manifest = Join-Path $repoRoot "examples/regression/expected/613-selfhost-com-runtime.sources.txt"
+$manifest = Join-Path $repoRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt"
 $outputRoot = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
-    Join-Path $repoRoot "artifacts/llvm-emitter-split-abi"
+    Join-Path $repoRoot ("artifacts/scratch/llvm-emitter-split-abi-" + [guid]::NewGuid().ToString('N'))
 } else {
     [IO.Path]::GetFullPath($OutputDirectory)
 }
@@ -48,27 +75,30 @@ $sources[0] = "examples/regression/1195-selfhost-emitter-split-abi.slg"
 $stdlibSources = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'stdlib') -Recurse -File -Filter '*.slg' |
     ForEach-Object { $_.FullName })
 & (Join-Path $PSScriptRoot 'verify-source-manifest-closure.ps1') -SourcePath (@($sources) + $stdlibSources)
-& dotnet $compiler build @sources -o $output --keep-temps
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-if (-not (Test-Path -LiteralPath $llvm -PathType Leaf)) {
-    throw "Emitter split ABI LLVM was not produced: $llvm"
-}
 
 $declarationPattern = [regex]::new(
     '(?m)^([A-Za-z_][A-Za-z0-9_]*)[^\r\n{]*context: ref emitterContext\.EmitContext, state: ref CoreEmitterState[^\r\n{]*\{')
+$helperTrailingParameters = @{}
 $helperNames = foreach ($relativePath in $fragmentPaths) {
     $source = [IO.File]::ReadAllText((Join-Path $repoRoot $relativePath))
     foreach ($match in $declarationPattern.Matches($source)) {
+        $suffix = [regex]::Match($match.Value, 'state: ref CoreEmitterState(?<following>.*?) ->')
+        if (-not $suffix.Success -or $suffix.Groups['following'].Value -notmatch '^(?:, [A-Za-z_][A-Za-z0-9_]*: Int)*$') {
+            throw "Unsupported split helper parameter suffix: $($match.Value)"
+        }
+        $helperTrailingParameters[$match.Groups[1].Value] = [regex]::Matches($suffix.Groups['following'].Value, ', ').Count
         $match.Groups[1].Value
     }
 }
 $helperNames = @($helperNames | Sort-Object -Unique)
-if ($helperNames.Count -ne 342) {
-    throw "Expected 342 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
+if ($helperNames.Count -ne 549) {
+    throw "Expected 549 reachable stateful split helpers, found $($helperNames.Count). Update the ABI gate with the intentional split."
 }
 $requiredStatefulHelpers = @(
     "boundedIntrinsicDictionaryTypeId"
-    "emitAsyncFileReadCall"
+    "emitAsyncFileScalarCall"
+    "usesReachableAsyncFileRuntime"
+    "usesReachableAsyncRuntime"
     "emitBoundedDictionaryIndexAssignment"
     "emitBoundedDictionaryPut"
     "emitBoundedDictionaryTake"
@@ -95,7 +125,6 @@ foreach ($requiredStatefulHelper in $requiredStatefulHelpers) {
     }
 }
 
-$llvmText = [IO.File]::ReadAllText($llvm)
 $readonlyDeclarationPattern = [regex]::new(
     '(?m)^(?:public\s+)?([A-Za-z_][A-Za-z0-9_]*)\s+context: ref emitterContext\.EmitContext[^\r\n{]*\{')
 $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
@@ -114,8 +143,8 @@ $readonlyHelpers = foreach ($relativePath in $readonlyFragmentPaths) {
     }
 }
 $readonlyHelpers = @($readonlyHelpers | Sort-Object LlvmName -Unique)
-if ($readonlyHelpers.Count -ne 118) {
-    throw "Expected 118 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
+if ($readonlyHelpers.Count -ne 191) {
+    throw "Expected 191 readonly-context helpers, found $($readonlyHelpers.Count). Update the ABI gate with the intentional split."
 }
 $requiredDiagnosticReadonlyHelpers = @(
     "boundedDictionaryInitializerDiagnostics"
@@ -130,20 +159,29 @@ $requiredDiagnosticReadonlyHelpers = @(
     "invalidInterpolationFlowTargetNode"
     "isBlockingMappedIndexInterpolation"
     "isBlockingInvalidUnaryInterpolation"
-    "usesAsyncFileRuntime"
     "usesMappedBytesRuntime"
     "arrayElementLayoutDiagnosticCount"
     "emitArrayElementLayoutDiagnostics"
     "libraryImportDiagnosticCount"
     "emitLibraryImportDiagnostics"
     "emitOpenImportAmbiguity"
-    "usesAsyncRuntime"
 )
 foreach ($requiredDiagnosticReadonlyHelper in $requiredDiagnosticReadonlyHelpers) {
     if ($requiredDiagnosticReadonlyHelper -notin $readonlyHelpers.Name) {
         throw "Diagnostic helper '$requiredDiagnosticReadonlyHelper' is missing from the readonly pointer-ABI gate."
     }
 }
+# Inventory and closure checks finish before the expensive compiler build.
+$llvmHome = Join-Path $repoRoot '.tools/llvm-22.1.8'
+if (-not (Test-Path -LiteralPath (Join-Path $llvmHome 'bin/clang.exe') -PathType Leaf)) {
+    throw 'LLVM emitter split ABI pinned clang tool is missing.'
+}
+& dotnet $compiler build @sources -o $output --keep-temps --llvm $llvmHome
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not (Test-Path -LiteralPath $llvm -PathType Leaf)) {
+    throw "Emitter split ABI LLVM was not produced: $llvm"
+}
+$llvmText = [IO.File]::ReadAllText($llvm)
 foreach ($helper in $readonlyHelpers) {
     $helperName = $helper.Name
     $llvmName = $helper.LlvmName
@@ -161,6 +199,8 @@ foreach ($helper in $readonlyHelpers) {
 }
 
 $helperLlvmNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$unreferencedHelpers = [Collections.Generic.List[string]]::new()
+$selfhostSourceText = [string]::Join("`n", @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'selfhost') -Recurse -File -Filter '*.slg' | ForEach-Object { [IO.File]::ReadAllText($_.FullName) }))
 foreach ($helperName in $helperNames) {
     $llvmName = "sollang_fn_sollang_compiler_llvm_text_$helperName"
     $null = $helperLlvmNames.Add($llvmName)
@@ -169,13 +209,19 @@ foreach ($helperName in $helperNames) {
         $llvmText,
         "(?m)^define [^`r`n]*@$escapedName\((?<parameters>[^)]*)\)")
     if (-not $definition.Success) {
+        # The source inventory also includes unused declarations. Accept their
+        # omission only when the name appears exactly once in all selfhost
+        # source (its declaration); every referenced helper remains mandatory.
+        if (Test-UnreferencedSplitHelper -Name $helperName -SourceText $selfhostSourceText -LlvmText $llvmText) {
+            $unreferencedHelpers.Add($helperName)
+            continue
+        }
         throw "Generated LLVM omits split helper '$helperName'."
     }
 
     $parameters = @($definition.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
-    if ($parameters.Count -lt 2 `
-        -or $parameters[$parameters.Count - 2] -notmatch '^ptr %' `
-        -or $parameters[$parameters.Count - 1] -notmatch '^ptr %') {
+    $pointerParameters = @(Get-SplitContextStateParameters -Parameters $parameters -FollowingParameters $helperTrailingParameters[$helperName])
+    if ($pointerParameters[0] -notmatch '^ptr %' -or $pointerParameters[1] -notmatch '^ptr %') {
         throw "Split helper '$helperName' does not pass EmitContext/CoreEmitterState as two pointers: $($definition.Value)"
     }
 }
@@ -208,10 +254,7 @@ if (-not $stateFactory.Success) {
 }
 $stateType = $stateFactory.Groups["type"].Value
 
-$contextMaterializationPattern =
-    '(?ms)^\s*(?<pointer>%ref_arg[0-9]+) = alloca (?<type>%sollang\.struct\.[0-9]+), align [0-9]+\r?\n' +
-    '.*?^\s*call void @sollang_fn_sollang_compiler_llvm_text_emitCore\([^\r\n]*ptr \k<pointer>, ptr %[A-Za-z0-9_]+\)'
-$contextMaterializations = @([regex]::Matches($llvmText, $contextMaterializationPattern))
+$contextMaterializations = @(Get-SplitContextMaterializations -LlvmText $llvmText)
 if ($contextMaterializations.Count -ne 3) {
     throw "Expected the Windows, Linux, and Wasm entry points to each materialize one EmitContext owner; found $($contextMaterializations.Count)."
 }
@@ -229,8 +272,10 @@ $helperDefinitionPattern = [regex]::new(
 $forwardedCalls = 0
 foreach ($definition in $helperDefinitionPattern.Matches($llvmText)) {
     $parameters = @($definition.Groups["parameters"].Value.Split(",") | ForEach-Object { $_.Trim() })
-    $contextParameter = [regex]::Match($parameters[$parameters.Count - 2], '^ptr (?<pointer>%[A-Za-z0-9_]+)$')
-    $stateParameter = [regex]::Match($parameters[$parameters.Count - 1], '^ptr (?<pointer>%[A-Za-z0-9_]+)$')
+    $sourceHelperName = $definition.Groups['name'].Value.Substring('sollang_fn_sollang_compiler_llvm_text_'.Length)
+    $pointerParameters = @(Get-SplitContextStateParameters -Parameters $parameters -FollowingParameters $helperTrailingParameters[$sourceHelperName])
+    $contextParameter = [regex]::Match($pointerParameters[0], '^ptr (?<pointer>%[A-Za-z0-9_]+)$')
+    $stateParameter = [regex]::Match($pointerParameters[1], '^ptr (?<pointer>%[A-Za-z0-9_]+)$')
     if (-not $contextParameter.Success -or -not $stateParameter.Success) {
         throw "Split helper '$($definition.Groups["name"].Value)' has an invalid context/state pointer tail."
     }
@@ -245,7 +290,8 @@ foreach ($definition in $helperDefinitionPattern.Matches($llvmText)) {
         "(?m)^\s*(?:%[A-Za-z0-9_]+ = )?call [^@`r`n]+@(?<name>$helperNamePattern)\((?<arguments>[^`r`n]*)\)")
     foreach ($call in $calls) {
         $arguments = @($call.Groups["arguments"].Value.Split(",") | ForEach-Object { $_.Trim() })
-        $tail = @($arguments | Select-Object -Last 2)
+        $calleeHelperName = $call.Groups['name'].Value.Substring('sollang_fn_sollang_compiler_llvm_text_'.Length)
+        $tail = @(Get-SplitContextStateParameters -Parameters $arguments -FollowingParameters $helperTrailingParameters[$calleeHelperName])
         $expectedTail = @(
             "ptr $($contextParameter.Groups["pointer"].Value)",
             "ptr $($stateParameter.Groups["pointer"].Value)")
@@ -357,4 +403,4 @@ foreach ($typedResultQueryCall in $typedResultQueryCalls) {
     }
 }
 
-Write-Host "PASS LLVM emitter split ABI: stateful helpers=$($helperNames.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=0, helper forwards=$forwardedCalls, typed-borrowed-tables=5, typed-com-calls=$($typedComCalls.Count), typed-shape-calls=$($typedShapeCalls.Count), typed-result-query-calls=$($typedResultQueryCalls.Count), per-call aggregate copies=0"
+Write-Host "PASS LLVM emitter split ABI: source stateful helpers=$($helperNames.Count), emitted stateful helpers=$($helperNames.Count - $unreferencedHelpers.Count), unreferenced declarations=$($unreferencedHelpers.Count), readonly helpers=$($readonlyHelpers.Count), entry-context owners=3, core-state materializations=0, helper forwards=$forwardedCalls, typed-borrowed-tables=5, typed-com-calls=$($typedComCalls.Count), typed-shape-calls=$($typedShapeCalls.Count), typed-result-query-calls=$($typedResultQueryCalls.Count), per-call aggregate copies=0"

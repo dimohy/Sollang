@@ -3476,6 +3476,7 @@ $repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
 Invoke-CheckedContract -Name "verify-formal-exact-source-closures.ps1" -Parameters $repositoryParameters
 foreach ($name in @(
     "test-project-focused-gate-projection.ps1"
+    "test-llvm-emitter-split-abi-contract.ps1"
     "verify-project-progress.ps1"
     "verify-ai-slg-best-practices.ps1"
     "verify-process-child-try-wait-contract.ps1"
