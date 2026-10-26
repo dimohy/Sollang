@@ -2,10 +2,15 @@
 param(
     [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
     [switch]$StaticAssertionsOnly,
+    [switch]$CollectStaticAssertionFailures,
     [string]$LlvmEmitterSplitAbiOutputDirectory = ''
 )
 
 $ErrorActionPreference = "Stop"
+if ($CollectStaticAssertionFailures -and -not $StaticAssertionsOnly) {
+    throw "STATIC_ASSERTION_COLLECTION_REQUIRES_STATIC_ONLY"
+}
+$staticAssertionFailures = [Collections.Generic.List[string]]::new()
 Set-StrictMode -Version Latest
 
 & (Join-Path $PSScriptRoot 'verify-regression-fixture-names.ps1') -RepositoryRoot $RepositoryRoot
@@ -114,31 +119,38 @@ foreach ($name in @(
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 
+function Register-StaticAssertionFailure {
+    param([string]$Message)
+    if (-not $CollectStaticAssertionFailures) { throw $Message }
+    $staticAssertionFailures.Add($Message)
+    Write-Host "[static assertion failure] $Message"
+}
+
 function Assert-Contains {
     param([string]$Text, [string]$Expected, [string]$Description)
     if (-not $Text.Contains($Expected)) {
-        throw "$Description is missing: $Expected"
+        Register-StaticAssertionFailure "$Description is missing: $Expected"
     }
 }
 
 function Assert-NotContains {
     param([string]$Text, [string]$Forbidden, [string]$Description)
     if ($Text.Contains($Forbidden)) {
-        throw "$Description retained forbidden text: $Forbidden"
+        Register-StaticAssertionFailure "$Description retained forbidden text: $Forbidden"
     }
 }
 
 function Assert-Matches {
     param([string]$Text, [string]$Pattern, [string]$Description)
     if (-not [regex]::IsMatch($Text, $Pattern)) {
-        throw "$Description is missing: $Pattern"
+        Register-StaticAssertionFailure "$Description is missing: $Pattern"
     }
 }
 
 function Assert-NotMatches {
     param([string]$Text, [string]$Pattern, [string]$Description)
     if ([regex]::IsMatch($Text, $Pattern)) {
-        throw "$Description retained forbidden pattern: $Pattern"
+        Register-StaticAssertionFailure "$Description retained forbidden pattern: $Pattern"
     }
 }
 
@@ -146,7 +158,7 @@ function Assert-MatchCount {
     param([string]$Text, [string]$Pattern, [int]$ExpectedCount, [string]$Description)
     $actualCount = [regex]::Matches($Text, $Pattern).Count
     if ($actualCount -ne $ExpectedCount) {
-        throw "$Description count differs: expected $ExpectedCount, actual $actualCount"
+        Register-StaticAssertionFailure "$Description count differs: expected $ExpectedCount, actual $actualCount"
     }
 }
 
@@ -443,7 +455,7 @@ $typeCheck = [IO.File]::ReadAllText($typeCheckPath)
 $typeClassificationStart = $typeIds.IndexOf("public classify ", [StringComparison]::Ordinal)
 $typeClassificationEnd = $typeIds.IndexOf("# Resolves and globally interns", $typeClassificationStart, [StringComparison]::Ordinal)
 if ($typeClassificationStart -lt 0 -or $typeClassificationEnd -le $typeClassificationStart) {
-    throw "semantic type classification source boundary is missing"
+    Register-StaticAssertionFailure "semantic type classification source boundary is missing"
 }
 $typeClassification = $typeIds.Substring($typeClassificationStart, $typeClassificationEnd - $typeClassificationStart)
 $typed = [IO.File]::ReadAllText($typedPath)
@@ -790,7 +802,7 @@ if ($sourceLoweringDeclarationOffset -lt 0 -or
     $sourceFunctionDispatchOffset -le $sourceRequestCollectionOffset -or
     $sourceFunctionMergeOffset -le $sourceFunctionDispatchOffset -or
     $orderedSourceAssemblyOffset -lt 0) {
-    throw 'function lowering must collect, dispatch, merge, and release each source-local request batch before assembling the next source'
+    Register-StaticAssertionFailure 'function lowering must collect, dispatch, merge, and release each source-local request batch before assembling the next source'
 }
 Assert-Contains $typedFunctionLowering 'appendFunctionResult results: mut [TypedIrNode; ~], functionResult: ref SourceTypedIr -> Unit' "readonly deterministic function-result merge helper"
 Assert-Contains $typedFunctionLowering 'appendAndReleaseFunctionResults results: mut [TypedIrNode; ~], functionResults: mut [SourceTypedIr; ~] -> Unit' "prompt-release ordered source-local function-result merge"
@@ -904,16 +916,16 @@ Assert-Contains $semanticOwnership '(diagnostic.code >= 31 and diagnostic.code <
 Assert-Contains $semanticOwnership 'diagnostic.code == 24 -> if { not (diagnostic -> isConsumedBindingRead(typed)) }' "consumed binding reads retain their dedicated blocking path"
 Assert-Contains $semanticOwnership 'directOwnedCopy.kind == 17' "direct owned-copy binding classification"
 Assert-Contains $semanticOwnership 'typed[directOwnedCopy.operand0].kind == 5' "direct owned-copy source identity"
-Assert-Contains $semanticOwnership 'moves[directOwnedCopyMoveIndex!].siteIr == directOwnedCopy.operand0' "explicit direct ownership transfer exclusion"
+Assert-Contains $semanticOwnership 'moves![directOwnedCopyMoveIndex!].siteIr == directOwnedCopy.operand0' "explicit direct ownership transfer exclusion"
 Assert-Contains $semanticOwnership 'directOwnedCopySourceCandidate.kind == 10' "moved parameter alias exclusion"
 Assert-Contains $emitterDiagnostics 'owned container values must be created directly at their binding site' "direct owned-copy diagnostic contract"
-Assert-Contains $semanticOwnership 'partialMove.memberIr -> placeRootBinding => directFieldOwner' "direct owned-field owner uses canonical place root"
-Assert-Contains $semanticOwnership '(directFieldOwner! -> lexicalExecutableAst) == (partialMove.siteIr -> lexicalExecutableAst)' "captured direct owned-field owner is rejected across lexical executables"
-Assert-Contains $semanticOwnership 'directFieldOwnerNode.flags % 2 == 1 -> if { true => directFieldAllowed! }' "move input permits direct owned-field transfer"
+Assert-Contains $semanticOwnership 'partialMove -> fieldMoveOwner => partialMoveOwner!' "direct owned-field owner uses canonical place root"
+Assert-Contains $semanticOwnership '(ownerIr -> lexicalExecutableAst) == (fieldMove.siteIr -> lexicalExecutableAst)' "captured direct owned-field owner is rejected across lexical executables"
+Assert-Contains $semanticOwnership 'owner.flags % 2 == 1 -> if { 1 -> return }' "move input permits direct owned-field transfer"
 Assert-Contains $semanticOwnership 'partialMoveIndex! -> immediateInfallibleMemberRepair => directFieldAllowed!' "mutable direct owned-field transfer requires immediate repair"
 Assert-Contains $semanticOwnership 'candidateAst.parent == moveAst.parent and candidateAst.start > moveAst.start' "immediate repair uses exact next source statement"
 Assert-Matches $semanticOwnership '(?s)assignmentMayExitEarly.*?candidate\.kind == 47 or candidate\.kind == 82' "immediate repair rejects return and result propagation"
-Assert-Contains $semanticOwnership 'code: directFieldNeedsRepair! -> if { 36 } else { 34 }' "direct owned-field diagnostics distinguish readonly and missing repair"
+Assert-Contains $semanticOwnership 'code: directFieldNeedsRepair -> if { 36 } else { 34 }' "direct owned-field diagnostics distinguish readonly and missing repair"
 Assert-Contains $emitterDiagnostics 'diagnostic.code == 36 -> if {' "mutable direct owned-field repair diagnostic emission"
 Assert-Contains $emitterDiagnostics 'must be reinitialized by the immediately following infallible statement' "mutable direct owned-field repair diagnostic contract"
 Assert-Contains $semanticOwnership 'partialMove.memberIr -> placesOverlap(movedUseMember!)' "owned field reuse shares canonical place overlap"
@@ -945,10 +957,10 @@ Assert-NotContains $typedCore '# Function lowering owns the active parallel regi
 Assert-Contains $expressionTypeIds 'referenceIndexByTypeAst: [Int; ~]' "retained global-AST type-reference index"
 Assert-Contains $expressionTypeIds 'referenceIndexByTypeAst: referenceIndexByTypeAst!' "reference index ownership transfer"
 Assert-MatchCount $expressionTypeIds '\[Int; ~\] => referenceIndexByTypeAst!' 1 "single reference-index allocation"
-Assert-MatchCount $typedCore 'recursiveTypes\.referenceIndexByTypeAst\[' 8 "Typed IR direct indexed recursive-reference exact lookups"
+Assert-MatchCount $typedCore 'recursiveTypes\.referenceIndexByTypeAst\[' 9 "Typed IR direct indexed recursive-reference exact lookups"
 Assert-MatchCount $typeCheck 'recursiveTypes\.referenceIndexByTypeAst\[' 3 "type-check direct indexed exact reference lookups"
 Assert-NotContains $expressionTypeIds 'referenceIndexForTypeAst' "unused O0 recursive-reference lookup helper"
-Assert-Contains $expressionTypeIdsPaths 'resolveLateArrayTypes(prepared, types, expressions, expressionIndexByAst)' "late array semantic path phase integration"
+Assert-Contains $expressionTypeIdsPaths 'resolveLateArrayTypes(prepared, types, expressions, expressionIndexByAst, expectedContextByAst)' "late array semantic path phase integration"
 Assert-MatchCount ($expressionTypeIds + "`n" + $expressionTypeIdsPaths) 'resolveLateArrayTypes\(prepared, types!?, expressions!?, expressionIndexByAst!?\)' 1 "single late array semantic phase integration"
 Assert-Contains $lateArrayTypes '[Int; ~] => nearestDistanceByChild!' "late indexed-element direct-child distance table"
 Assert-Contains $lateArrayTypes 'ancestorNode.kind == 37' "late indexed-element array ancestor selection"
@@ -991,7 +1003,7 @@ Assert-Contains $typedResolvedContextNormalize '[Int; ~] => canonicalPatternHead
 Assert-Contains $typedResolvedContextNormalize '[Int; ~] => canonicalPatternNextByIr!' "canonical pattern same-symbol linked index"
 Assert-Contains $typedResolvedContextNormalize 'canonicalPatternHeadBySymbol![canonicalPatternRange.symbolStart + canonicalReference!.symbol] => canonicalPatternSearch!' "canonical reference indexed pattern lookup"
 Assert-Contains $typedResolvedContextNormalize 'canonicalPatternNextByIr![canonicalPatternSearch!] => canonicalPatternSearch!' "canonical reference same-symbol pattern traversal"
-Assert-Contains $typedResolvedContextNormalize 'canonicalReference!.kind == 5 and not canonicalPatternIndexed!' "unresolved pattern identity compatibility fallback"
+Assert-Contains $typedResolvedContextNormalize 'canonicalReference!.kind == 5 and canonicalReference!.symbol >= 0 and not canonicalPatternIndexed!' "unresolved pattern identity compatibility fallback"
 Assert-Contains $typedResolvedContextFinalize '[Int; ~] => finalSlotRootBySymbol!' "final mutable slot canonical-root index"
 Assert-Contains $typedResolvedContextFinalize 'finalSlotRootBySymbol![finalSlotGlobalSymbol] => finalSlotRootIndex' "final mutable slot indexed root lookup"
 Assert-NotContains $typedResolvedContextFinalize 'finalSlotRootSearch! < finalSlotBindingIndex!' "no per-final-slot prior-IR root scan"
@@ -1027,8 +1039,10 @@ Assert-Contains $projectedInterpolationCallOrder 'call void @sollang_runtime_pri
 Assert-Contains $projectedInterpolationTopologyFixture "and interpolations[node.operand0].kind == 5" "projected interpolation call-to-member topology fixture"
 Assert-Contains $projectedInterpolationTopologyFixture '"$(42 -> formatter.render)" -> println' "qualified interpolation target negative control"
 Assert-Contains $projectedInterpolationTopologyFixture '"projected-call-payload=$(projectedCallPayload!)" -> println' "projected interpolation complete call-span fixture"
-if ($projectedInterpolationTopologySources.Count -gt 10) {
-    throw "projected interpolation topology fixture exceeds its 10-source closure budget: $($projectedInterpolationTopologySources.Count)"
+# The lexer now imports source_decoding; retain the exact topology-only bound.
+Assert-Contains ($projectedInterpolationTopologySources -join "`n") 'selfhost/syntax/source_decoding.slg' "projected topology canonical source decoding dependency"
+if ($projectedInterpolationTopologySources.Count -gt 11) {
+    Register-StaticAssertionFailure "projected interpolation topology fixture exceeds its 11-source closure budget: $($projectedInterpolationTopologySources.Count)"
 }
 Assert-NotContains ($projectedInterpolationTopologySources -join "`n") 'selfhost/ir/typed.slg' "projected interpolation topology-only closure"
 Assert-Contains $rawStringNoInterpolationFixture '$(missing.receiver -> call)' "raw-string interpolation-shaped bytes fixture"
@@ -1086,7 +1100,7 @@ foreach ($formalVerifier in @($stage2Verifier, $stage3Verifier)) {
 }
 $productionRecursiveTypeResolutions = ([regex]::Matches($textContext, 'expressionTypeIds\.resolveContext')).Count
 if ($productionRecursiveTypeResolutions -ne 1) {
-    throw "native LLVM preparation must resolve recursive expression types exactly once; actual=$productionRecursiveTypeResolutions"
+    Register-StaticAssertionFailure "native LLVM preparation must resolve recursive expression types exactly once; actual=$productionRecursiveTypeResolutions"
 }
 $recursiveTypeResolutionOffset = $textContext.IndexOf("prepared -> expressionTypeIds.resolveContext => recursiveTypes!", [StringComparison]::Ordinal)
 $capabilityHelperOffset = $textContext.IndexOf("lowerPreparedIr prepared:", [StringComparison]::Ordinal)
@@ -1104,13 +1118,13 @@ if ($capabilityHelperOffset -lt 0 -or
     $capabilityRoutingOffset -le $recursiveTypeResolutionOffset -or
     $genericClosureOffset -le $capabilityRoutingOffset -or
     $streamPlanOffset -le $genericClosureOffset) {
-    throw "native LLVM recursive-type reuse order drifted"
+    Register-StaticAssertionFailure "native LLVM recursive-type reuse order drifted"
 }
 
 $nativePrepareCalls = ([regex]::Matches($entrypoints, 'prepareRequest -> prepareNative => context')).Count
 $serialPrepareCalls = ([regex]::Matches($entrypoints, 'prepareRequest -> prepare => context')).Count
 if ($nativePrepareCalls -ne 4 -or $serialPrepareCalls -ne 2) {
-    throw "target preparation routing drifted: native=$nativePrepareCalls, browser=$serialPrepareCalls"
+    Register-StaticAssertionFailure "target preparation routing drifted: native=$nativePrepareCalls, browser=$serialPrepareCalls"
 }
 
 Assert-Contains $typedCore "public isSocketRuntimeOpcode" "socket runtime opcode predicate"
@@ -1353,11 +1367,11 @@ foreach ($timeoutFunction in @(
     $windowsDefinitions = @(Get-LlvmFunctionDefinitions $windowsSocketRuntime $timeoutFunction)
     $linuxDefinitions = @(Get-LlvmFunctionDefinitions $linuxSocketRuntime $timeoutFunction)
     if ($selfhostDefinitions.Count -ne 2 -or $windowsDefinitions.Count -ne 1 -or $linuxDefinitions.Count -ne 1) {
-        throw "socket-timeout runtime parity definition count differs for $timeoutFunction"
+        Register-StaticAssertionFailure "socket-timeout runtime parity definition count differs for $timeoutFunction"
     }
     if ($selfhostDefinitions[0].Value -cne $windowsDefinitions[0].Value -or
         $selfhostDefinitions[1].Value -cne $linuxDefinitions[0].Value) {
-        throw "managed/self-host socket-timeout runtime differs for $timeoutFunction"
+        Register-StaticAssertionFailure "managed/self-host socket-timeout runtime differs for $timeoutFunction"
     }
 }
 foreach ($socketPolicyFunction in @(
@@ -1370,11 +1384,11 @@ foreach ($socketPolicyFunction in @(
     $windowsDefinitions = @(Get-LlvmFunctionDefinitions $windowsSocketRuntime $socketPolicyFunction)
     $linuxDefinitions = @(Get-LlvmFunctionDefinitions $linuxSocketRuntime $socketPolicyFunction)
     if ($selfhostDefinitions.Count -ne 2 -or $windowsDefinitions.Count -ne 1 -or $linuxDefinitions.Count -ne 1) {
-        throw "socket-policy runtime parity definition count differs for $socketPolicyFunction"
+        Register-StaticAssertionFailure "socket-policy runtime parity definition count differs for $socketPolicyFunction"
     }
     if ($selfhostDefinitions[0].Value -cne $windowsDefinitions[0].Value -or
         $selfhostDefinitions[1].Value -cne $linuxDefinitions[0].Value) {
-        throw "managed/self-host socket-policy runtime differs for $socketPolicyFunction"
+        Register-StaticAssertionFailure "managed/self-host socket-policy runtime differs for $socketPolicyFunction"
     }
 }
 Assert-Contains $typedCore "knownReserveExpression! -> if { -271 => expressionOpcode! }" "collection reserve opcode"
@@ -1408,11 +1422,11 @@ Assert-Contains $text "parallelBranchCallbackIndex! -> irNodeReachable(context, 
 $reachableParallelCallbacks = ([regex]::Matches($text, 'parallelCallbackIndex! -> irNodeReachable\(context, state\)')).Count
 $reachableParallelBranchCallbacks = ([regex]::Matches($text, 'parallelBranchCallbackIndex! -> irNodeReachable\(context, state\)')).Count
 if ($reachableParallelCallbacks -ne 1 -or $reachableParallelBranchCallbacks -ne 1) {
-    throw "parallel callback reachability consumers drifted: parallel=$reachableParallelCallbacks, branch=$reachableParallelBranchCallbacks"
+    Register-StaticAssertionFailure "parallel callback reachability consumers drifted: parallel=$reachableParallelCallbacks, branch=$reachableParallelBranchCallbacks"
 }
 $unfilteredParallelCallbacks = ([regex]::Matches($text, '(?m)^\s*parallelCallbackIndex! -> parallelUsesComputePool\(context, state\)')).Count
 if ($unfilteredParallelCallbacks -ne 0) {
-    throw "parallel callback emission regained an unfiltered all-IR consumer"
+    Register-StaticAssertionFailure "parallel callback emission regained an unfiltered all-IR consumer"
 }
 Assert-Contains $coreCalls 'parallelExpression.operand0 -> hasWorkerTransferArrayElement(context, state) => transferableInput' "recursively transferable parallel input classification"
 Assert-Contains $coreCalls 'transferableInput and transferableOutput! -> if { true => supported! }' "nominal worker-transfer input and output eligibility"
@@ -1460,7 +1474,7 @@ try {
     # C82 performance candidate.
 }
 if ($serialFallbackAccepted) {
-    throw "generated compiler callback verifier accepted the serial-fallback negative control"
+    Register-StaticAssertionFailure "generated compiler callback verifier accepted the serial-fallback negative control"
 }
 Assert-NotContains $text "(parallelBranchExpression.kind == 38 and context.supportsComputePool)" "parallel-branch callback emission"
 Assert-Contains $functionScheduling "scheduleNode -> typedIr.isConsoleRuntimeCall" "function materialized console scheduling"
@@ -1501,7 +1515,7 @@ Assert-NotContains $text "entryExpression.kind == 9 and entryExpression.opcode <
 Assert-Contains $invariants "not (node -> typedIr.isConsoleRuntimeCall)" "unsupported console-effect invariant"
 $transparentControlProducerExclusions = ([regex]::Matches($invariants, 'not \(node -> typedIr\.isTransparentControlProducerWrapper\)')).Count
 if ($transparentControlProducerExclusions -ne 2) {
-    throw "S047 and V006 must share exactly two transparent control-producer exclusions; found $transparentControlProducerExclusions"
+    Register-StaticAssertionFailure "S047 and V006 must share exactly two transparent control-producer exclusions; found $transparentControlProducerExclusions"
 }
 Assert-Contains $invariantDiagnostics "compiler verification failure V003" "unsupported console-effect compiler diagnostic"
 Assert-Matches $invariants '(?s)# No unresolved call sentinel.*?and \(node\.kind == 6.*?node\.kind == 9.*?irNodeHasSetType.*?node\.operand1 >= 0.*?nextOperand >= 0.*?and node\.symbol == -1.*?if \{ 50 => code! \}' "unresolved ordinary or materialized call sentinel invariant"
@@ -1628,7 +1642,7 @@ Assert-Contains $typedCore "finalizedSetAstReceiverTypeId" "late Set call-AST re
 $projectedMethodPosition = $typedResolvedContextFinalize.IndexOf("nodes -> resolveFinalProjectedMethods(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags)", [StringComparison]::Ordinal)
 $socketIntrinsicPosition = $typedResolvedContextFinalize.IndexOf("0 => finalSocketIntrinsicIndex!", [StringComparison]::Ordinal)
 if ($projectedMethodPosition -lt 0 -or $socketIntrinsicPosition -le $projectedMethodPosition) {
-    throw "canonical socket intrinsic classification must follow final projected method resolution"
+    Register-StaticAssertionFailure "canonical socket intrinsic classification must follow final projected method resolution"
 }
 Assert-Contains $invariants "irNodeHasSetType" "materialized Set V006 receiver classification"
 Assert-Contains $emitterDiagnostics "reachableCandidate.kind == 11 => reachableCandidateIsRoot" "executable entry reachability root"
@@ -1647,7 +1661,7 @@ Assert-NotContains $functionScheduling 'targetFunctionIndex! < (context.ir -> le
 $effectBindingScanStart = $functionScheduling.IndexOf('expressionStart => scheduleCallBindingSearch!', [StringComparison]::Ordinal)
 $effectBindingScanEnd = $functionScheduling.IndexOf('scheduleNode.opcode == -203', $effectBindingScanStart, [StringComparison]::Ordinal)
 if ($effectBindingScanStart -lt 0 -or $effectBindingScanEnd -le $effectBindingScanStart) {
-    throw "effectful-call binding scan contract markers are missing or reversed"
+    Register-StaticAssertionFailure "effectful-call binding scan contract markers are missing or reversed"
 }
 $effectBindingScan = $functionScheduling.Substring($effectBindingScanStart, $effectBindingScanEnd - $effectBindingScanStart)
 $effectBindingOrder = @(
@@ -1668,7 +1682,7 @@ $effectBindingOffset = 0
 foreach ($needle in $effectBindingOrder) {
     $nextEffectBindingOffset = $effectBindingScan.IndexOf($needle, $effectBindingOffset, [StringComparison]::Ordinal)
     if ($nextEffectBindingOffset -lt 0) {
-        throw "effectful-call binding scan lost ordered contract '$needle'"
+        Register-StaticAssertionFailure "effectful-call binding scan lost ordered contract '$needle'"
     }
     $effectBindingOffset = $nextEffectBindingOffset + $needle.Length
 }
@@ -1796,12 +1810,12 @@ foreach ($contextSource in Get-ChildItem @(
         $contextSourceText,
         '(?m)^\s*finalCallResolvedByAst\s*:').Count
     if ($contextFieldCount -ne $contextLiteralCount) {
-        throw "direct EmitContext literal field inventory differs in $($contextSource.FullName): literals $contextLiteralCount, final-call indexes $contextFieldCount"
+        Register-StaticAssertionFailure "direct EmitContext literal field inventory differs in $($contextSource.FullName): literals $contextLiteralCount, final-call indexes $contextFieldCount"
     }
     $directEmitContextLiteralCount += $contextLiteralCount
 }
 if ($directEmitContextLiteralCount -lt 4) {
-    throw "direct EmitContext literal inventory lost a production or invariant fixture constructor"
+    Register-StaticAssertionFailure "direct EmitContext literal inventory lost a production or invariant fixture constructor"
 }
 Assert-Contains $nonProcessCollectFixture "Collector { value: 42 } -> collect => value" "ordinary collect instance-call convergence fixture"
 Assert-NotContains $emitterDiagnostics "context.symbols[reachableCandidateGlobalSymbol].kind == 31" "unconditional instance-method reachability root"
@@ -1887,7 +1901,7 @@ $escapedMultilineSourceFiles = @(
         ForEach-Object { [IO.Path]::GetRelativePath($RepositoryRoot, $_.FullName) }
 )
 if ($escapedMultilineSourceFiles.Count -ne 0) {
-    throw "embedded multiline Sollang fixture source must use raw triple-quoted text: $($escapedMultilineSourceFiles -join ', ')"
+    Register-StaticAssertionFailure "embedded multiline Sollang fixture source must use raw triple-quoted text: $($escapedMultilineSourceFiles -join ', ')"
 }
 Assert-Contains $typeIds "[UInt64; ~] => lengthParameterHashes!" "value-generic fixed-array length-parameter identity"
 Assert-Contains $typeIds "lengthReplacements![lengthParameterIndex!] != actual.length" "value-generic fixed-array repeated-length unification"
@@ -2249,7 +2263,7 @@ Assert-Contains $incrementalVerifier 'verify-selfhost-compiler-contracts.ps1' "p
 Assert-Contains $incrementalVerifier 'format-authoritative-slg.ps1") -Check' "incremental pre-emission authoritative format gate"
 $eachCallResultGateCount = ([regex]::Matches($incrementalVerifier, 'verify-each-call-result-source-selection\.ps1')).Count
 if ($eachCallResultGateCount -ne 2) {
-    throw "incremental each-call-result source-selection gates drifted: expected pre-emission and rebuilt-candidate checks, actual $eachCallResultGateCount"
+    Register-StaticAssertionFailure "incremental each-call-result source-selection gates drifted: expected pre-emission and rebuilt-candidate checks, actual $eachCallResultGateCount"
 }
 Assert-Contains $eachCallResultVerifier '$stdlibRoot = Join-Path $root ''stdlib''' "candidate each-call-result authoritative stdlib root"
 Assert-Contains $eachCallResultVerifier '$required = @($fixture, $expectedPath, $typeIdsPath, $typesPath, $astPath, $functionExpressionsPath, $managed, $baseline) + $stdlibSources' "candidate each-call-result stdlib input fingerprint coverage"
@@ -2263,7 +2277,7 @@ Assert-Contains $nativeExactFixtureBatchVerifier '[int]$TimeoutMilliseconds = 36
 Assert-Contains $nativeExactFixtureBatchVerifier '-TimeoutMilliseconds $using:TimeoutMilliseconds' "native exact batch timeout routing"
 $sharedTimeoutDefaults = ([regex]::Matches($verificationProcess, '\[int\]\$TimeoutMilliseconds = 3600000')).Count
 if ($sharedTimeoutDefaults -ne 4) {
-    throw "shared verification timeout defaults drifted: expected 4, actual $sharedTimeoutDefaults"
+    Register-StaticAssertionFailure "shared verification timeout defaults drifted: expected 4, actual $sharedTimeoutDefaults"
 }
 foreach ($timeoutVerifier in @(
     [ordered]@{ Name = "Windows Stage2"; Text = $stage2Verifier; Variable = '$stage2TimeoutMilliseconds' },
@@ -2275,7 +2289,7 @@ foreach ($timeoutVerifier in @(
     Assert-Contains $timeoutVerifier.Text '-TimeoutMilliseconds $' "$($timeoutVerifier.Name) named timeout budget routing"
     Assert-Contains $timeoutVerifier.Text '-TimeoutStartedAt $' "$($timeoutVerifier.Name) original deadline routing"
     if ($timeoutVerifier.Text -match 'Wait-VerificationProcess[^\r\n]*\s1\s*(?:\r?\n|$)') {
-        throw "$($timeoutVerifier.Name) retains the misleading positional one-millisecond timeout"
+        Register-StaticAssertionFailure "$($timeoutVerifier.Name) retains the misleading positional one-millisecond timeout"
     }
 }
 Assert-Contains ([IO.File]::ReadAllText((Join-Path $RepositoryRoot 'scripts/measure-selfhost-compiler-emission.ps1'))) '[int]$TimeoutMilliseconds = 3600000' "compiler performance measured timeout"
@@ -2318,11 +2332,11 @@ Assert-Contains $stage2Verifier '-ExpectedStdoutLength 2097152' "Windows Stage2 
 $partitionExecutionOffset = $stage2Verifier.IndexOf('for ($streamExecutionIndex = 0;', [StringComparison]::Ordinal)
 $fullNativeBatchOffset = $stage2Verifier.LastIndexOf('verify-native-exact-fixture-batch.ps1', [StringComparison]::Ordinal)
 if ($partitionExecutionOffset -lt 0 -or $fullNativeBatchOffset -lt 0 -or $partitionExecutionOffset -gt $fullNativeBatchOffset) {
-    throw "Stage2 partition execution must fail fast before the full native exact batch"
+    Register-StaticAssertionFailure "Stage2 partition execution must fail fast before the full native exact batch"
 }
 $sourceWorkerGoldenProbeOffset = $stage2Verifier.IndexOf('--exact 377-selfhost-llvm-source-text-worker-transfer', [StringComparison]::Ordinal)
 if ($sourceWorkerGoldenProbeOffset -lt 0 -or $sourceWorkerGoldenProbeOffset -gt $fullNativeBatchOffset) {
-    throw "Stage2 source-worker LLVM golden probe must fail fast before the full native exact batch"
+    Register-StaticAssertionFailure "Stage2 source-worker LLVM golden probe must fail fast before the full native exact batch"
 }
 Assert-NotContains $stage2Verifier '--update-expected' "Stage2 verification never mutates golden output"
 Assert-Contains $typedValueAliases 'sealLateValueAliasTypes nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit' "late value alias type sealing helper"
@@ -2395,7 +2409,7 @@ Assert-Contains $incrementalVerifier 'Test-Path -LiteralPath $targetExpectedPath
 Assert-Contains $processStdioLinuxExpected 'stderr=13' "Linux process stdio target-specific stdout fixture"
 $incrementalClosureCalls = ([regex]::Matches($incrementalVerifier, 'verify-llvm-direct-call-closure\.ps1')).Count
 if ($incrementalClosureCalls -ne 2) {
-    throw "incremental LLVM direct-call closure gates drifted: expected host and focused checks, found $incrementalClosureCalls"
+    Register-StaticAssertionFailure "incremental LLVM direct-call closure gates drifted: expected host and focused checks, found $incrementalClosureCalls"
 }
 Assert-Contains $directCallClosure 'compiler verification failure V004' "unresolved direct-call compiler diagnostic"
 Assert-Contains $directCallClosure 'compiler verification failure V005' "duplicate LLVM function compiler diagnostic"
@@ -2405,14 +2419,14 @@ Assert-Contains $stage2Verifier 'Assert-VerifiedStage3SeedProvenance' "Windows S
 $windowsLateArraySeedGate = $stage2Verifier.IndexOf('"1217-selfhost-late-indexed-array-type-contract"', [StringComparison]::Ordinal)
 $windowsStage2Emission = $stage2Verifier.IndexOf('Write-Host "[stage2 2/7] Build or reuse the complete stage-2 compiler."', [StringComparison]::Ordinal)
 if ($windowsLateArraySeedGate -lt 0 -or $windowsStage2Emission -lt 0 -or $windowsLateArraySeedGate -gt $windowsStage2Emission) {
-    throw "Windows late indexed-array seed gate must run before complete Stage2 emission"
+    Register-StaticAssertionFailure "Windows late indexed-array seed gate must run before complete Stage2 emission"
 }
 $linuxCharacterLiteralSeedGate = $linuxStage2.IndexOf('-Label "linux-stage1-seed-character-literals"', [StringComparison]::Ordinal)
 $linuxLateArraySeedGate = $linuxStage2.IndexOf('-Label "linux-stage1-seed"', [StringComparison]::Ordinal)
 $linuxStage2Emission = $linuxStage2.IndexOf('Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compiler."', [StringComparison]::Ordinal)
 if ($linuxCharacterLiteralSeedGate -lt 0 -or $linuxLateArraySeedGate -lt 0 -or $linuxStage2Emission -lt 0 -or
     $linuxCharacterLiteralSeedGate -gt $linuxLateArraySeedGate -or $linuxLateArraySeedGate -gt $linuxStage2Emission) {
-    throw "Linux character-literal and late indexed-array seed gates must run in order before complete Stage2 emission"
+    Register-StaticAssertionFailure "Linux character-literal and late indexed-array seed gates must run in order before complete Stage2 emission"
 }
 Assert-Contains $linuxStage2 '-Fixture "1731-character-literals"' "Linux character-literal seed capability fixture"
 Assert-Contains $linuxStage2 '-CompilerHost windows' "Linux Stage1 seed exact gate declares its Windows compiler host"
@@ -2918,7 +2932,7 @@ Assert-Contains $browserStage2 'getelementptr %sollang\.source_text' "browser co
 $browserDiagnosticSuiteOffset = $browserStage2.IndexOf('foreach ($diagnosticCase in @(', [StringComparison]::Ordinal)
 $browserReceiptPublishOffset = $browserStage2.LastIndexOf('Write-Stage2ArtifactReceipt', [StringComparison]::Ordinal)
 if ($browserDiagnosticSuiteOffset -lt 0 -or $browserReceiptPublishOffset -le $browserDiagnosticSuiteOffset) {
-    throw "browser compiler receipts must publish only after the executable and diagnostic regression suites"
+    Register-StaticAssertionFailure "browser compiler receipts must publish only after the executable and diagnostic regression suites"
 }
 Assert-NotMatches $browserStage2 'Start-Process(?s:.*?)-Wait\b' "browser Stage2 unbounded compiler emission"
 Assert-NotMatches $browserStage2 '(?m)^\s*&\s+(?:node|\$llvmAs|\$clang|\$wasmLd)\b' "browser Stage2 direct unbounded toolchain or Node execution"
@@ -3052,7 +3066,7 @@ Assert-Contains $managedControlEmitter 'return first with { PointerName = pointe
 Assert-Contains $controlStructArrayResultFixture 'enabled -> if {' "growable struct-array value-producing if fixture"
 Assert-Contains $controlStructArrayResultFixture 'entries[0].value + 2 -> println' "growable struct-array merged owner use"
 if ($controlStructArrayResultExpected.Trim() -cne '42') {
-    throw "growable struct-array control-result expected output must be exactly 42"
+    Register-StaticAssertionFailure "growable struct-array control-result expected output must be exactly 42"
 }
 Assert-Contains $stage2Verifier '--exact 1197-control-struct-array-result' "Stage2 growable struct-array control-result fixture"
 Assert-Contains $stage3Verifier '--exact 1197-control-struct-array-result' "Stage3 growable struct-array control-result fixture"
@@ -3060,30 +3074,30 @@ Assert-Contains $parallelTransferableStructFixture 'struct Request {' "parallel 
 Assert-Contains $parallelTransferableStructFixture 'struct Batch {' "parallel worker-transfer result record fixture"
 Assert-Contains $parallelTransferableStructFixture 'requests -> parallel request {' "parallel worker-transfer nominal input fixture"
 if ($parallelTransferableStructExpected.Trim() -cne 'batches=2') {
-    throw "parallel worker-transfer expected output must be exactly batches=2"
+    Register-StaticAssertionFailure "parallel worker-transfer expected output must be exactly batches=2"
 }
 Assert-Contains $localParallelCallbackFixture 'map current: [Int; ~] -> [Int; ~] {' "reachable local parallel owner fixture"
 Assert-Contains $localParallelCallbackFixture 'current -> parallel value {' "local parallel callback fixture"
 if ($localParallelCallbackExpected.Trim() -cne 'mapped=3') {
-    throw "local parallel callback expected output must be exactly mapped=3"
+    Register-StaticAssertionFailure "local parallel callback expected output must be exactly mapped=3"
 }
 Assert-Contains $parallelNominalReadonlyCapturesFixture 'lowerAll requests: [Request; ~], config: ref LoweringConfig, scale: Int' "parallel nominal readonly-capture signature"
 Assert-Contains $parallelNominalReadonlyCapturesFixture 'requests -> parallel request {' "parallel nominal readonly-capture worker"
 Assert-Contains $parallelNominalReadonlyCapturesFixture 'request -> lower' "parallel local capture target"
 if ($parallelNominalReadonlyCapturesExpected.Trim() -cne 'batches=2') {
-    throw "parallel nominal readonly-capture expected output must be exactly batches=2"
+    Register-StaticAssertionFailure "parallel nominal readonly-capture expected output must be exactly batches=2"
 }
 Assert-Contains $parallelMoveParameterFixture 'mapOwned values: move [Int; ~], useParallel: Bool' "parallel move-parameter signature"
 Assert-Contains $parallelMoveParameterFixture 'values -> parallel value {' "control-region parallel move-parameter source"
 if ($parallelMoveParameterExpected.Trim() -cne 'mapped=3') {
-    throw "parallel move-parameter expected output must be exactly mapped=3"
+    Register-StaticAssertionFailure "parallel move-parameter expected output must be exactly mapped=3"
 }
 Assert-Contains $arrayElementOwnerReplacementFixture 'appendValues output: mut [Int; ~], chunk: ref Chunk' "readonly owned array-element helper"
 Assert-Contains $arrayElementOwnerReplacementFixture 'output -> appendValues(chunks[index])' "readonly owned array-element call before replacement"
 Assert-Contains $arrayElementOwnerReplacementFixture 'Chunk { values: [Int; ~] } => chunks[index]' "O(1) whole array-element owner replacement"
 Assert-NotContains $arrayElementOwnerReplacementFixture '-> take(' "no shifting array-element owner extraction"
 if ($arrayElementOwnerReplacementExpected.Trim() -cne 'sum=10 remaining=0,0') {
-    throw "array-element owner replacement expected output must be exactly sum=10 remaining=0,0"
+    Register-StaticAssertionFailure "array-element owner replacement expected output must be exactly sum=10 remaining=0,0"
 }
 Assert-Contains $enumPayloadBinaryBindingFixture 'DataBlocked(limit) { Result<Bool, errors.Error>.Ok(limit == 70_000) }' "enum payload binary binding baseline"
 Assert-Contains $enumPayloadBinaryBindingPermutedFixture 'struct Unrelated {' "enum payload binding table-shape permutation"
@@ -3117,7 +3131,7 @@ $sealLateTypesStart = $typedFunctionLowering.IndexOf(
     'sealLateTypes results:',
     [System.StringComparison]::Ordinal)
 if ($lateNominalMemberTypesStart -lt 0 -or $sealLateTypesStart -le $lateNominalMemberTypesStart) {
-    throw 'late nominal member type sealing contract cannot isolate its declaration'
+    Register-StaticAssertionFailure 'late nominal member type sealing contract cannot isolate its declaration'
 }
 $lateNominalMemberTypes = $typedFunctionLowering.Substring(
     $lateNominalMemberTypesStart,
@@ -3142,7 +3156,7 @@ $stage1SeedFixtureBlock = [regex]::Match(
     $stage2Verifier,
     '(?s)\$stage1SeedExactFixtures\s*=\s*@\((.*?)\)\s*# Every exact build')
 if (-not $stage1SeedFixtureBlock.Success) {
-    throw "Stage2 seed capability preflight must declare one authoritative fixture array"
+    Register-StaticAssertionFailure "Stage2 seed capability preflight must declare one authoritative fixture array"
 }
 foreach ($requiredStage1SeedFixture in @(
     '787-selfhost-file-write-match-subject-ir',
@@ -3173,7 +3187,7 @@ foreach ($requiredStage1SeedFixture in @(
     if (-not [regex]::IsMatch(
             $stage1SeedFixtureBlock.Groups[1].Value,
             '(?m)^\s*"' + [regex]::Escape($requiredStage1SeedFixture) + '"\s*$')) {
-        throw "Stage2 seed capability preflight is missing required fixture: $requiredStage1SeedFixture"
+        Register-StaticAssertionFailure "Stage2 seed capability preflight is missing required fixture: $requiredStage1SeedFixture"
     }
 }
 Assert-NotContains $stage1SeedFixtureBlock.Groups[1].Value '1393-selfhost-opaque-struct-diagnostics' "Stage2 seed avoids recompiling the 97-source diagnostic meta-fixture"
@@ -3413,7 +3427,7 @@ $staleRanges = Get-ChildItem -LiteralPath (Join-Path $RepositoryRoot "selfhost")
     Select-String -SimpleMatch ">= -274"
 if ($staleRanges) {
     $locations = $staleRanges | ForEach-Object { "$($_.Path):$($_.LineNumber)" }
-    throw "socket opcode consumers must use typed predicates instead of a contiguous range:`n$($locations -join "`n")"
+    Register-StaticAssertionFailure "socket opcode consumers must use typed predicates instead of a contiguous range:`n$($locations -join "`n")"
 }
 
 Assert-Contains $detachedVerification 'executionMode = "detached-supervisor"' "detached execution mode evidence"
@@ -3469,6 +3483,10 @@ Assert-Contains $detachedVerificationContract 'result schema accepted an orphan 
 Assert-Contains $detachedResultSchema '"status": { "const": "cancelled" }' "completion schema defines cancelled terminal state"
 Assert-Contains $detachedResultSchema '"failureIds": { "const": ["CANCELLATION_REQUESTED"] }' "cancelled completion requires the exact failure ID"
 Assert-Contains $detachedVerificationContract 'cooperative parent/child cancellation preserved cancelled, exit 130, exact acknowledgement, CANCELLATION_REQUESTED, and zero orphans' "supported cancellation behavior evidence"
+
+if ($staticAssertionFailures.Count -gt 0) {
+    throw "STATIC_ASSERTION_FAILURES: $($staticAssertionFailures.Count) assertion(s) failed"
+}
 
 if ($StaticAssertionsOnly) {
     Write-Host "[selfhost compiler static assertions] PASS source-contract assertions only; child contracts unverified by this invocation."

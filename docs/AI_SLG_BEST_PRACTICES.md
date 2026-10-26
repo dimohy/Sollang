@@ -1222,6 +1222,9 @@ Native scratch planning must visit the deferred Text flow source of
 `materialize`, independently of its Arena argument. Hoist interpolation scratch
 under the same consumer identity used by emission, including nested logical
 expressions; ordinary functions with the same spelling retain normal dispatch.
+A resolved final Console printer owns its call and Unit result. Earlier flow
+producers keep their own AST and intrinsic opcode; do not classify the printer
+by rescanning an earlier `materialize` or other intrinsic name in its source.
 
 For constant text containing quotes or backslashes, prefer a raw literal over
 interpolation that would introduce an unnecessary materialization boundary.

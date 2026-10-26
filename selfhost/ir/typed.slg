@@ -845,6 +845,9 @@ resolvedFlowIntrinsicOpcode source: Text, prepared: ref semanticContext.Semantic
                     -> if { -1 -> return }
             }
     }
+    # A selected final printer owns this call. Its producer keeps its own
+    # AST and intrinsic opcode; a broad flow scan must not replace the printer.
+    selectedConsole! -> if { -1 -> return }
     prepared.package.nodes[globalAst] => flowNode
     # Callback role names are bindings, not intrinsic targets. Use the
     # same direct target Path as managed BlockFunctionCallStatement lowering.
@@ -862,16 +865,12 @@ resolvedFlowIntrinsicOpcode source: Text, prepared: ref semanticContext.Semantic
                         targetToken.kind == grammar.tokenIdIdentifier()
                             -> if {
                                 IntrinsicNameRequest { source: source, token: targetToken } -> flowTargetIntrinsicOpcode => targetOpcode
-                                selectedConsole! and targetOpcode == -214 -> if { -1 -> return }
                                 targetOpcode -> return
                             }
                     }
             }
         }
     source -> flowIntrinsicOpcode(prepared.package.tokens, range.tokenStart, prepared.package.nodes[globalAst]) => flowOpcode
-    # Console is the selected final callee; a preceding mapPath hint belongs
-    # to its actual producer. Preserve combined materialize/Console opcodes.
-    selectedConsole! and flowOpcode == -214 -> if { -1 -> return }
     flowOpcode
 }
 
