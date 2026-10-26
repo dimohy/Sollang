@@ -157,18 +157,44 @@ if ($progress.currentGoal.compiler.knownResolvedDelta -ne ($authoritativeCompile
     $progress.currentGoal.stdlib.completeDelta -ne ($authoritativeStdlibComplete - 5)) {
     throw 'current goal delta is not derived from the frozen 08:28 baseline'
 }
-$focusedByName = @{}; foreach ($gate in @($progress.currentGoal.focusedGates)) { $focusedByName[[string]$gate.name] = $gate }
-foreach ($requiredName in @('C385 13-family wrapper static', 'C385 13-family paired actual')) {
-    if (-not $focusedByName.ContainsKey($requiredName)) { throw "missing current focused gate: $requiredName" }
+function Assert-ProjectFocusedGateProjection {
+    param([object]$CurrentGoal, [object]$Ledger, [object]$History)
+    $selectedName = [string]$Ledger.currentFocusedGate
+    $selected = @($CurrentGoal.focusedGates | Where-Object name -ceq $selectedName)
+    $declared = @($Ledger.focusedGates | Where-Object name -ceq $selectedName)
+    if ($selected.Count -ne 1 -or $declared.Count -ne 1 -or
+        $CurrentGoal.currentFocusedGate.name -cne $selectedName) {
+        throw 'PROJECT_CURRENT_FOCUSED_GATE_INVALID'
+    }
+    foreach ($field in @('status', 'completed', 'total', 'evidence')) {
+        if ($selected[0].$field -cne $declared[0].$field -or
+            $CurrentGoal.currentFocusedGate.$field -cne $declared[0].$field) {
+            throw 'PROJECT_CURRENT_FOCUSED_GATE_INVALID'
+        }
+    }
+    $historical = @($History.focusedGates)
+    foreach ($expected in @(
+        @{ name = 'C385 13-family wrapper static'; count = 5 },
+        @{ name = 'C385 13-family paired actual'; count = 1 }
+    )) {
+        $record = @($historical | Where-Object name -ceq $expected.name)
+        if ($record.Count -eq 0) { throw 'PROJECT_C385_HISTORICAL_FOCUS_MISSING' }
+        if ($record.Count -ne 1) { throw 'PROJECT_C385_HISTORICAL_FOCUS_AMBIGUOUS' }
+        if ($record[0].status -cne 'complete' -or
+            $record[0].completed -ne $expected.count -or $record[0].total -ne $expected.count) {
+            throw 'PROJECT_C385_HISTORICAL_FOCUS_CHANGED'
+        }
+    }
 }
-if ($focusedByName['C385 13-family wrapper static'].completed -ne 5 -or
-    $focusedByName['C385 13-family wrapper static'].total -ne 5 -or
-    $focusedByName['C385 13-family wrapper static'].status -cne 'complete' -or
-    $focusedByName['C385 13-family paired actual'].completed -ne 1 -or
-    $focusedByName['C385 13-family paired actual'].total -ne 1 -or
-    $focusedByName['C385 13-family paired actual'].status -cne 'complete') {
-    throw 'C385 static and paired actual focused results must remain separately complete'
+$activeGoalLedger = Get-Content -LiteralPath (Join-Path $RepositoryRoot 'scripts/contracts/active-goal-progress.json') -Raw | ConvertFrom-Json
+$focusedHistoryPath = [IO.Path]::GetFullPath($activeGoalLedger.focusedGateHistory, $RepositoryRoot)
+$focusedHistoryPrefix = [IO.Path]::TrimEndingDirectorySeparator($RepositoryRoot) + [IO.Path]::DirectorySeparatorChar
+if (-not $focusedHistoryPath.StartsWith($focusedHistoryPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+    -not (Test-Path -LiteralPath $focusedHistoryPath -PathType Leaf)) {
+    throw 'PROJECT_FOCUSED_HISTORY_MISSING'
 }
+$focusedHistory = Get-Content -LiteralPath $focusedHistoryPath -Raw | ConvertFrom-Json
+Assert-ProjectFocusedGateProjection -CurrentGoal $progress.currentGoal -Ledger $activeGoalLedger -History $focusedHistory
 foreach ($gate in @($progress.currentGoal.focusedGates)) {
     if ($gate.total -le 0 -or $gate.completed -lt 0 -or $gate.completed -gt $gate.total) {
         throw "invalid current focused gate progress: $($gate.name)"

@@ -14,12 +14,12 @@ $resolvedContractPath = [IO.Path]::GetFullPath($ContractPath, $root)
 $contract = Get-Content -LiteralPath $resolvedContractPath -Raw | ConvertFrom-Json
 $llvmObservation = $contract.llvmObservationEvidence
 function Read-CurrentLlvmObservations([object]$reference) {
-    $compiler = (Resolve-Path -LiteralPath (Join-Path $root $reference.compiler)).Path
+    $compiler = (Resolve-Path -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $reference.compiler)).Path
     if ((Get-FileHash -LiteralPath $compiler -Algorithm SHA256).Hash -cne $reference.compilerSha256) {
         throw 'Current LLVM observation compiler changed'
     }
     $json = & python -X utf8 (Join-Path $PSScriptRoot 'verification_llvm_observations.py') `
-        --repo $root --contract (Join-Path $root $reference.contract) --verify-proof (Join-Path $root $reference.proof)
+        --repo $root --contract (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $reference.contract) --verify-proof (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $reference.proof)
     if ($LASTEXITCODE -ne 0) { throw 'Current LLVM observations are invalid' }
     ($json | ConvertFrom-Json -AsHashtable)['fixtures']
 }

@@ -3475,6 +3475,8 @@ if (-not $childFailureRejected) {
 $repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
 Invoke-CheckedContract -Name "verify-formal-exact-source-closures.ps1" -Parameters $repositoryParameters
 foreach ($name in @(
+    "test-project-focused-gate-projection.ps1"
+    "verify-project-progress.ps1"
     "verify-ai-slg-best-practices.ps1"
     "verify-focused-slg-format.ps1"
     "verify-llvm-no-allocation-audit.ps1"
@@ -3483,7 +3485,6 @@ foreach ($name in @(
     "verify-async-result-propagation-contract.ps1"
     "verify-async-owned-array-cancellation-contract.ps1"
     "verify-portable-memory-io-contract.ps1"
-    "verify-project-progress.ps1"
     "verify-http-server-contract.ps1"
     "verify-socket-datagram-contract.ps1"
     "verify-socket-vectored-contract.ps1"
