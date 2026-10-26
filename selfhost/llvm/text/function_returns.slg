@@ -510,6 +510,14 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         }
                     }
                     ")" -> println
+                    # The element destructor consumes inline values, not their
+                    # descriptor backing. Heap literal storage has a separate owner.
+                    dropBindingNeedsInlineArrayReload!
+                        and context.ir[dropCandidateDropValueIndex].kind == 14
+                        and (dropCandidateDropValueIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                        -> if {
+                            "  call void @free(ptr %dropfixedbinding$(dropIndex!)_data)" -> println
+                        }
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {

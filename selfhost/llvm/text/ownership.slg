@@ -1951,6 +1951,13 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                     } else { dropTask -> emitDropValueName(context, state) }
                 }
                 ")" -> println
+                # Fixed-array element glue does not own the literal descriptor.
+                dropTaskNeedsFixedReload!
+                    and context.ir[dropTask.valueIndex].kind == 14
+                    and (dropTask.valueIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                    -> if {
+                        "  call void @free(ptr %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data)" -> println
+                    }
             } else {
                 not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)
                     -> if {

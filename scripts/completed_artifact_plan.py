@@ -544,6 +544,36 @@ def terminal_consumer_process(repo: Path, output: Path, row: dict) -> bool:
     return persisted == compared
 
 
+
+def legacy_paired_processes(repo: Path, path: Path, record: dict, compiler: Path) -> list[dict] | None:
+    """Read existing paired-runner journals for retirement only; do not rewrite receipts."""
+    if ('processes' in record or 'cases' in record
+            or record.get('schemaVersion') != 1 or record.get('status') != 'passed'
+            or record.get('inputStable') is not True
+            or type(record.get('total')) is not int or record['total'] <= 0
+            or record.get('completed') != record['total']
+            or not isinstance(record.get('inputHashesStart'), dict) or not record['inputHashesStart']
+            or record.get('inputHashesStart') != record.get('inputHashesEnd')
+            or not isinstance(record.get('runs'), list) or not record['runs']):
+        return None
+    processes = []
+    for journal in sorted(path.parent.glob('*.execution.json')):
+        if journal.name == 'artifact-cleanup-plan.json.execution.json':
+            continue
+        try:
+            assert_artifact_path(repo, journal)
+            capture = json.loads(journal.read_text(encoding='utf-8-sig'))
+            if (capture.get('status') != 'passed' or capture.get('exit') != 0
+                    or not terminal_consumer_process(repo, path.parent, capture)):
+                return None
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        processes.append(capture)
+    if not any(capture['command'][:2] == [str(compiler), 'build'] for capture in processes):
+        return None
+    return processes
+
+
 def canceled_consumer_shutdown(repo: Path, path: Path, record: dict) -> dict:
     """Accept an audited stopped cancellation for retirement, never completion."""
     reference = record.get('processShutdownAuditReference')
@@ -1357,6 +1387,8 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         cases = record.get('cases', [] if legacy_terminal else None)
         cases = list(cases.values()) if isinstance(cases, dict) else cases
         processes = record.get('processes')
+        if processes is None and legacy_terminal:
+            processes = legacy_paired_processes(repo, path, record, Path(producer['compilerPath']))
         # A paired runner can abort before sealing a case while retaining a
         # terminal role capture. Retire only the pinned compiler whose process
         # actually failed; never infer full case outcomes from those roles.
@@ -1498,6 +1530,8 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         if record['status'] == 'passed' and not completed(record) and not missing_expectations and not unpaired_start_pins or record['status'] == 'failed' and not failed and not input_drift and not pre_case_failure:
             raise ValueError('ARTIFACT_CONSUMER_CASE_OUTCOME_INVALID')
         processes = record.get('processes')
+        if processes is None and legacy_terminal:
+            processes = legacy_paired_processes(repo, path, record, Path(producer['compilerPath']))
         if not isinstance(processes, list) or not processes or not all(terminal_consumer_process(repo, path.parent, row) for row in processes):
             raise ValueError('ARTIFACT_CONSUMER_PROCESS_EXIT_MISSING')
         assert_output_shutdown(repo, path.parent)
