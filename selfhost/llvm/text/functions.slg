@@ -216,6 +216,10 @@ asyncArenaFrameDiagnosticCount context: ref emitterContext.EmitContext, state: r
         slot.typeOrigin == 1 and slot.typeSymbol == 15
             and state.frozenReachableFunctions[slot.functionIr]
             -> if {
+                slot.symbol < 0 -> if {
+                    "sollang: temporary value of type Arena cannot cross async suspension" -> println
+                    1 -> return
+                }
                 context.ranges[slot.sourceModule] => range
                 context.symbols[range.symbolStart + slot.symbol] => binding
                 context.tokens[range.tokenStart + binding.nameToken] => name
@@ -533,6 +537,8 @@ asyncPointFrameSize point: typedIr.CoroutineSuspendPoint, context: ref emitterCo
 }
 
 asyncFrameHasOwnershipFlag bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[bindingIndex] -> typedIr.isAsyncExpressionBinding
+        -> if { false -> return }
     (context.ir[bindingIndex].kind == 29
         and (bindingIndex -> patternBindingNeedsOwnershipFlag(context, state)))
         or (bindingIndex -> namedBindingNeedsOwnershipFlag(state))
@@ -922,13 +928,14 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                     "  br i1 %async_cancel_owned_flag$(point.state)_$(bindingIndex!), label %async_cancel_owned_run$(point.state)_$(bindingIndex!), label %async_cancel_owned_skip$(point.state)_$(bindingIndex!)" -> println
                     "async_cancel_owned_run$(point.state)_$(bindingIndex!):" -> println
                 }
-                cancelledBinding -> isAsyncTaskValue(context)
+                (cancelledBinding -> isAsyncTaskValue(context)) and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
                     -> if {
                         "  %async_cancel_spill_ok$(point.state)_$(bindingIndex!) = call i1 @sollang_task_cancel(ptr %async_cancel_spill_handle$(point.state)_$(bindingIndex!))" -> println
                         "  br i1 %async_cancel_spill_ok$(point.state)_$(bindingIndex!), label %async_cancel_spill_done$(point.state)_$(bindingIndex!), label %async_cancel_invalid" -> println
                         "async_cancel_spill_done$(point.state)_$(bindingIndex!):" -> println
                     } else {
                         cancelledBinding.typeId >= 0 and (cancelledBinding.typeId -> semanticTypeOwns(context, state))
+                            and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
                             -> if {
                                 context.types[cancelledBinding.typeId].kind == 4
                                     -> if {

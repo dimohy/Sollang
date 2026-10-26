@@ -308,6 +308,54 @@ def load_diagnostics_plan(path):
     return plan
 
 
+def audit_llvm_program(llvm, folder, expected_allocations, expected_stdout, run):
+    """Reuse the same pointer/ownership audit for emitted and direct program IR."""
+    if type(expected_allocations) is not int or expected_allocations < 0:
+        raise ValueError("EMISSION_AUDIT_INVALID_COUNT")
+    if not llvm.is_file():
+        raise ValueError("EMISSION_AUDIT_LLVM_MISSING")
+    row = {}
+    audit_text = read(llvm)
+    for source, target in (
+            ("call ptr @malloc(", "call ptr @audit_malloc("),
+            ("call ptr @sollang_alloc(", "call ptr @audit_malloc("),
+            ("call ptr @realloc(", "call ptr @audit_realloc("),
+            ("call void @free(", "call void @audit_free("),
+            ("call void @sollang_free(", "call void @audit_free("),
+            ("ptr @free,", "ptr @audit_free,"),
+            ("ptr @free)", "ptr @audit_free)"),
+            ("ptr @sollang_free,", "ptr @audit_free,"),
+            ("ptr @sollang_free)", "ptr @audit_free)"),
+            ("@sollang_start()", "@slg_program_main()"),
+            ("define i32 @main()", "define i32 @slg_program_main()"),
+            ("define dso_local i32 @main()", "define dso_local i32 @slg_program_main()")):
+        audit_text = audit_text.replace(source, target)
+    if len(re.findall(r"^define (?:dso_local )?i32 @slg_program_main\(\)", audit_text, re.M)) != 1:
+        raise ValueError("EMISSION_AUDIT_ENTRY_SHAPE")
+    audit_text += "\ndeclare ptr @audit_malloc(i64)\ndeclare ptr @audit_realloc(ptr,i64)\ndeclare void @audit_free(ptr)\n"
+    audit_llvm = folder / "audit.ll"
+    audit_llvm.write_text(audit_text, encoding="utf-8")
+    row["auditLlvmSha256"] = sha(audit_llvm)
+    audit_exe = folder / "audit.exe"
+    row["auditLinkExit"] = run([
+        str(ROOT / ".tools/llvm-22.1.8/bin/clang.exe"),
+        "-Wno-override-module", str(audit_llvm),
+        str(ROOT / "tests/native-interop/owned_array_audit.c"),
+        f"-DEXPECTED_ALLOCATIONS={expected_allocations}",
+        "-O1", "-o", str(audit_exe), *WINDOWS_RUNTIME_LIBRARIES],
+        folder / "audit-link")
+    passed = row["auditLinkExit"] == 0 and not read(folder / "audit-link.stderr").strip()
+    if passed:
+        row["auditRunExit"] = run([str(audit_exe)], folder / "audit-run")
+        row["auditRunStdout"] = read(folder / "audit-run.stdout").strip()
+        row["expectedAllocations"] = expected_allocations
+        audit_summary = f"allocations={expected_allocations},releases={expected_allocations}"
+        audit_expected = "\n".join(part for part in (expected_stdout, audit_summary) if part)
+        passed = (row["auditRunExit"] == 0 and row["auditRunStdout"] == audit_expected
+                  and not read(folder / "audit-run.stderr").strip())
+    return row, passed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("managed", "paired"), required=True)
@@ -390,7 +438,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             raise ValueError(f"NO_LLVM_REQUIRES_DIRECT_SEMANTIC_REJECTION: {case['id']}")
         if "expectedAllocations" in case and (
                 type(case["expectedAllocations"]) is not int or case["expectedAllocations"] < 0
-                or not case.get("emittedLlvm")):
+                or case["exit"] != 0):
             raise ValueError(f"EMISSION_AUDIT_INVALID_CONTRACT: {case['id']}")
         case_sources(case)
     format_sources = contract.get("formatCheckSources", [])
@@ -620,47 +668,21 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                         passed = (row["nativeRunExit"] == 0
                                   and row["nativeRunStdout"] == case["stdout"]
                                   and not read(folder / "native-run.stderr").strip())
-                    if passed and "expectedAllocations" in case:
-                        audit_text = read(llvm)
-                        for source, target in (
-                                ("call ptr @malloc(", "call ptr @audit_malloc("),
-                                ("call ptr @sollang_alloc(", "call ptr @audit_malloc("),
-                                ("call ptr @realloc(", "call ptr @audit_realloc("),
-                                ("call void @free(", "call void @audit_free("),
-                                ("call void @sollang_free(", "call void @audit_free("),
-                                ("ptr @free,", "ptr @audit_free,"),
-                                ("ptr @free)", "ptr @audit_free)"),
-                                ("ptr @sollang_free,", "ptr @audit_free,"),
-                                ("ptr @sollang_free)", "ptr @audit_free)"),
-                                ("@sollang_start()", "@slg_program_main()"),
-                                ("define i32 @main()", "define i32 @slg_program_main()"),
-                                ("define dso_local i32 @main()", "define dso_local i32 @slg_program_main()")):
-                            audit_text = audit_text.replace(source, target)
-                        if len(re.findall(r"^define (?:dso_local )?i32 @slg_program_main\(\)", audit_text, re.M)) != 1:
-                            raise ValueError("EMISSION_AUDIT_ENTRY_SHAPE")
-                        audit_text += "\ndeclare ptr @audit_malloc(i64)\ndeclare ptr @audit_realloc(ptr,i64)\ndeclare void @audit_free(ptr)\n"
-                        audit_llvm = folder / "audit.ll"
-                        audit_llvm.write_text(audit_text, encoding="utf-8")
-                        row["auditLlvmSha256"] = sha(audit_llvm)
-                        audit_exe = folder / "audit.exe"
-                        row["auditLinkExit"] = run([
-                            str(ROOT / ".tools/llvm-22.1.8/bin/clang.exe"),
-                            "-Wno-override-module", str(audit_llvm),
-                            str(ROOT / "tests/native-interop/owned_array_audit.c"),
-                            f"-DEXPECTED_ALLOCATIONS={case['expectedAllocations']}",
-                            "-O1", "-o", str(audit_exe), *WINDOWS_RUNTIME_LIBRARIES],
-                            folder / "audit-link")
-                        passed = row["auditLinkExit"] == 0 and not read(folder / "audit-link.stderr").strip()
-                        if passed:
-                            row["auditRunExit"] = run([str(audit_exe)], folder / "audit-run")
-                            row["auditRunStdout"] = read(folder / "audit-run.stdout").strip()
-                            row["expectedAllocations"] = case["expectedAllocations"]
-                            audit_summary = f"allocations={case['expectedAllocations']},releases={case['expectedAllocations']}"
-                            audit_expected = "\n".join(part for part in (case["stdout"], audit_summary) if part)
-                            passed = (row["auditRunExit"] == 0 and row["auditRunStdout"] == audit_expected
-                                      and not read(folder / "audit-run.stderr").strip())
+
                 else:
                     passed = passed and row["runStdout"] == case["stdout"]
+            if passed and "expectedAllocations" in case:
+                if case.get("emittedLlvm"):
+                    audit_source = folder / "emitted.ll"
+                else:
+                    candidates = list(folder.glob("*.exe.ll"))
+                    if len(candidates) != 1:
+                        raise ValueError("DIRECT_ALLOCATION_AUDIT_LLVM_AUTHORITY_MISSING")
+                    audit_source = candidates[0]
+                audit_row, audit_passed = audit_llvm_program(
+                    audit_source, folder, case["expectedAllocations"], case["stdout"], run)
+                row.update(audit_row)
+                passed = passed and audit_passed
             row["status"] = "passed" if passed else "failed"
             row["passed"] = passed
             result["completed"] += int(passed)

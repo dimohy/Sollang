@@ -285,16 +285,17 @@ isSchedulingValueCapture node: typedIr.TypedIrNode, context: ref emitterContext.
         (node.operand0 -> asyncFrameBindingRoot(readOwner!, context, state)) >= 0
             -> if { true -> return }
     }
-    node.kind == 17 and node.symbol >= 0 -> if {
-        node.parent => owner!
-        owner! >= 0 and context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
-        false => frameCapture!
-        state.coroutine.slots -> each slot {
-            slot.functionIr == owner! and slot.sourceModule == node.sourceModule and slot.symbol == node.symbol
-                -> if { true => frameCapture! }
+    node.kind == 17 and (node.symbol >= 0 or (node -> typedIr.isAsyncExpressionBinding))
+        -> if {
+            node.parent => owner!
+            owner! >= 0 and context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
+            false => frameCapture!
+            state.coroutine.slots -> each slot {
+                slot.functionIr == owner! and slot.sourceModule == node.sourceModule and slot.symbol == node.symbol
+                    -> if { true => frameCapture! }
+            }
+            frameCapture! -> if { true -> return }
         }
-        frameCapture! -> if { true -> return }
-    }
     node.kind == 12 or node.kind == 14 or node.kind == 16 or node.kind == 35
         or ((node.kind == 6 or node.kind == 9) and (node.opcode == -342 or node.opcode == -344))
         or (node -> isSchedulingComparisonTextProducer(context, state))

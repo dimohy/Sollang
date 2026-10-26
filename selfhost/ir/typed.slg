@@ -1387,6 +1387,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
     results! -> sealNestedStandardEnumConstructors(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags)
     results! -> sealReturnedSubjectWhenTypes
     results! -> sealDirectAwaitFunctionOrder => awaitRelocation
+    results! -> sealAsyncExpressionValues(prepared) => expressionRelocation
     results!
 }
 
@@ -2087,6 +2088,7 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                                         candidateIr! < (ir -> len) and awaitIr! < 0 -> while {
                                             ir[candidateIr!] => candidate
                                             candidate.sourceModule == sourceIndex! and candidate.astNode == suspendSourceAst!
+                                                and not (candidate -> isAsyncExpressionRead)
                                                 and ((isYield! and candidate.kind == 44) or (isAwait! and candidate.kind == 5))
                                                 -> if {
                                                     candidate.parent => ownerIr!
@@ -2160,7 +2162,9 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                         nodes[sourceRange.astStart + definitionAncestor!].parent => definitionAncestor!
                     }
                 }
-            (definition.kind == 17 or definition.kind == 29) and definition.sourceModule == point.sourceModule and definition.symbol >= 0 and definition.astNode != awaitBindingAst! and belongsToFunction! and nodes[sourceRange.astStart + definition.astNode].start < awaitStart
+            (definition.kind == 17 or definition.kind == 29) and definition.sourceModule == point.sourceModule
+                and (definition.symbol >= 0 or (definition -> isAsyncExpressionBinding))
+                and definition.astNode != awaitBindingAst! and belongsToFunction! and nodes[sourceRange.astStart + definition.astNode].start < awaitStart
                 -> if {
                     # A shared source symbol must not select the binding or
                     # concrete type of another generic materialization.
@@ -2177,6 +2181,22 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                                 true => activeAtSuspension!
                             } else { ir[scopeAncestor!].parent => scopeAncestor! }
                         }
+                    # A temporary containing this or a later suspension has
+                    # no value to store yet, even when its source starts early.
+                    definition -> isAsyncExpressionBinding -> if {
+                        points! -> each dependencyPoint {
+                            dependencyPoint.functionIr == point.functionIr and dependencyPoint.state >= point.state
+                                -> if {
+                                    dependencyPoint.awaitIr => dependency!
+                                    dependency! >= 0 -> while {
+                                        dependency! == definition.operand0 -> if {
+                                            false => activeAtSuspension!
+                                            -1 => dependency!
+                                        } else { ir[dependency!].parent => dependency! }
+                                    }
+                                }
+                        }
+                    }
                     # A prior await in the same lexical continuation has
                     # consumed this binding; no later spill may retain it.
                     -1 => suspensionScope!
@@ -2215,10 +2235,12 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                     activeAtSuspension! and (isTaskSlot or not (definition.typeOrigin == 1 and definition.typeSymbol == 0))
                         -> if {
                             definition.flags => frameFlags!
-                            (definition.typeFlags / 2) % 2 == 1 -> if {
-                                frameFlags! + 2 => frameFlags!
-                            }
-                            isTaskSlot -> if { frameFlags! + 4 => frameFlags! }
+                            (definition.typeFlags / 2) % 2 == 1 and not (definition -> isBorrowedAsyncExpressionBinding)
+                                -> if {
+                                    frameFlags! + 2 => frameFlags!
+                                }
+                            isTaskSlot and not (definition -> isBorrowedAsyncExpressionBinding)
+                                -> if { frameFlags! + 4 => frameFlags! }
                             false => recorded!
                             slots! -> each existing {
                                 existing.functionIr == point.functionIr and existing.state == point.state

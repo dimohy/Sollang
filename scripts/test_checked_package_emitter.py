@@ -247,6 +247,7 @@ class NumericCheckedProducerTests(unittest.TestCase):
                 'fixture.project', 'managed.exe', 'managed.dll',
                 'src/Sollang.Compiler/Semantics/SemanticCompiler.cs',
                 'scripts/verification_execution.py', 'scripts/verification_step_diagnostics.py',
+                'scripts/verification_json_records.py', 'scripts/verification_async_workers.py',
                 'scripts/verification_observed_sources.py', 'scripts/verification_contract_lease.py',
                 'scripts/verify-checked-package-emitter.py', 'scripts/generate-selection-result-emitter.py',
                 'scripts/contracts/checked-producer-reuse-acceptance.json',
@@ -316,7 +317,7 @@ class NumericCheckedProducerTests(unittest.TestCase):
         args = SimpleNamespace(contract=contract_path, output=root / 'output', mode='managed',
                                managed_compiler=root / 'managed.exe',
                                format_compiler=None, diagnostics_configuration=None,
-                               diagnostics_plan=None, artifact_cleanup='plan-only')
+                               diagnostics_plan=None, artifact_cleanup='plan-only', reusable_compiler_directory=None)
         error = None
         with patch.object(self.numeric, 'ROOT', root), \
                 patch.object(self.numeric, 'reusable_producer', return_value=group), \

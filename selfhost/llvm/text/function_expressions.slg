@@ -8,6 +8,7 @@ import sollang.compiler.syntax as syntax
 import sollang.compiler.semantic.type_ids as typeIds
 import syntax.generated.slg as grammar
 import sys.process as process
+import sys.runtime as runtime
 
 appendDiagnosticText bytes: mut [UInt8; ~], value: Text -> Unit {
     UIntSize(0) => index!
@@ -360,6 +361,20 @@ emitNamedPlaceRead expressionIndex: Int, functionIndex: Int, context: ref emitte
     context.ir[functionIndex] => function
     expression.kind == 5 and not (expressionIndex -> isAwaitSourceNode(context))
         -> if {
+            expression -> typedIr.isAsyncExpressionRead -> if {
+                expression.operand0 -> asyncFrameBindingRoot(functionIndex, context, state) => carrier
+                carrier < 0 -> if {
+                    "sollang compiler error S053: pending expression has no continuation frame slot" -> runtime.eprintln
+                    process.exit(1)
+                }
+                "  %v$(expressionIndex) = load " -> print
+                expression -> writeIrType(context, state)
+                ", ptr " -> print
+                carrier -> writeAsyncLocalAddress(context)
+                ", align " -> print
+                expression -> storageAlign(context, state) -> writeDecimalLine
+                return
+            }
             expressionIndex -> asyncIntIteratorForRole(expression.sourceModule, expression.symbol, context, state) => roleIterator
             roleIterator >= 0 -> if {
                 "  %v$(expressionIndex) = freeze i32 %each_role_m$(expression.sourceModule)_s$(expression.symbol)_at$(expressionIndex)" -> println

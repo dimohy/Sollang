@@ -244,8 +244,11 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
         ir! -> typedIr.sealCanonicalTaskAwaitTypes(prepared, recursiveTypes!)
     }
     ir! -> typedIr.sealDirectAwaitFunctionOrder => awaitRelocation
-    initialGenericCallPlans -> typedIr.relocateAwaitGenericPlans(awaitRelocation) => genericCallPlans
+    initialGenericCallPlans -> typedIr.relocateAwaitGenericPlans(awaitRelocation) => awaitGenericCallPlans
     awaitRelocation -> typedIr.relocateAwaitGenericInstances(ir!, genericInstances!)
+    ir! -> typedIr.sealAsyncExpressionValues(prepared) => expressionRelocation
+    awaitGenericCallPlans -> typedIr.relocateAwaitGenericPlans(expressionRelocation) => genericCallPlans
+    expressionRelocation -> typedIr.relocateAwaitGenericInstances(ir!, genericInstances!)
     ir! -> typedIr.bindGenericBodies(genericInstances!, prepared.interpolations -> len) => genericBodies
     ir! -> typedIr.sealLateResolvedCallNumericArguments(prepared)
     prepared.package -> semanticDiagnostics.firstExpressionOperandDiagnostic(prepared, recursiveTypes!, ir!, unresolvedMutableNames, pointerBitWidth) => sourceOperandDiagnostic

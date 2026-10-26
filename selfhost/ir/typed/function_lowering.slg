@@ -3520,6 +3520,7 @@ public repairDirectAsyncAwaitConsumers results: mut [TypedIrNode; ~], prepared: 
 
 # Late await repair can append a value after the function arena has been joined.
 typedNodeIsAwaitSource node: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    node -> isAsyncExpressionRead -> if { false -> return }
     node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len) and node.astNode >= 0
         -> if {
             prepared.package.ranges[node.sourceModule] => range
@@ -5569,4 +5570,178 @@ public userBlockLiteralInput sourceIndex: Int, nodes: ref [TypedIrNode; ~] -> In
     }
     nodes[resolved!].kind == 2
         -> if { resolved! } else { sourceIndex }
+}
+
+
+# Compiler-only aliases keep already evaluated operands in the ordinary typed
+# coroutine frame. Negative identities are local to the containing function;
+# they never index the source symbol table or create source declarations.
+public isAsyncExpressionBinding node: TypedIrNode -> Bool {
+    node.kind == 17 and node.symbol < -1 and node.flags / 268435456 % 2 == 1
+}
+
+public isAsyncExpressionRead node: TypedIrNode -> Bool {
+    node.kind == 5 and node.symbol < -1 and node.flags / 268435456 % 2 == 1
+}
+
+public isBorrowedAsyncExpressionBinding node: TypedIrNode -> Bool {
+    (node -> isAsyncExpressionBinding) and node.flags / 134217728 % 2 == 1
+}
+
+struct AsyncExpressionValuePlan {
+    value: Int
+    owner: Int
+    afterIr: Int
+    state: Int
+    symbol: Int
+}
+
+strictAsyncExpressionConsumer node: TypedIrNode -> Bool {
+    node.kind == 6 or node.kind == 9 or node.kind == 12 or node.kind == 14
+        or node.kind == 15 or node.kind == 16 or node.kind == 26
+        or node.kind == 31 or node.kind == 35
+        or (node.kind == 8 and node.opcode != -24 and node.opcode != -25)
+}
+
+asyncExpressionControlBoundary node: TypedIrNode -> Bool {
+    node.kind == 18 or node.kind == 19 or node.kind == 20 or node.kind == 27
+        or node.kind == 33 or node.kind == 34 or node.kind == 36
+        or node.kind == 37 or node.kind == 38 or node.kind >= 40
+        or (node.kind == 8 and (node.opcode == -24 or node.opcode == -25))
+}
+
+# All four IR edges use the same insertion map, including generic instances.
+# Reads depend on the last relevant suspension, while their carrier stores
+# remain ordered immediately after the original producer. No source is rerun.
+public sealAsyncExpressionValues nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
+    [Int; ~] => relocation!
+    prepared -> coroutineTablesForIr(nodes) => coroutine
+    (coroutine.points -> len) == 0 -> if { relocation! -> return }
+    nodes -> len => count
+    [Int; ~] => plansByValue!
+    0..<count -> each { plansByValue! -> push(-1) }
+    [AsyncExpressionValuePlan; ~] => plans!
+    -2 => nextSymbol!
+    nodes -> each node {
+        (node -> isAsyncExpressionBinding) and node.symbol <= nextSymbol!
+            -> if { node.symbol - 1 => nextSymbol! }
+    }
+    coroutine.points -> each point {
+        point.awaitIr => ancestor!
+        false => boundary!
+        ancestor! >= 0 and ancestor! < count and not boundary!
+            -> while {
+                nodes[ancestor!].parent => parent
+                parent < 0 or parent >= count or nodes[parent].kind == 0 or nodes[parent].kind == 11
+                    -> if { true => boundary! } else {
+                        nodes[parent] => consumer
+                        consumer -> asyncExpressionControlBoundary -> if { true => boundary! } else {
+                            consumer -> strictAsyncExpressionConsumer -> if {
+                                consumer.operand0 >= 0 -> if { consumer.operand0 } else { consumer.operand1 } => first
+                                first => probe!
+                                false => found!
+                                0 => walked!
+                                probe! >= 0 and probe! < count and walked! < count and not found!
+                                    -> while {
+                                        probe! == ancestor! -> if { true => found! } else {
+                                            nodes[probe!].parent != parent -> if { -1 => probe! } else { nodes[probe!].nextOperand => probe! }
+                                        }
+                                        walked! + 1 => walked!
+                                    }
+                                found! -> if {
+                                    first => value!
+                                    value! >= 0 and value! != ancestor! -> while {
+                                        nodes[value!] => candidate
+                                        candidate.kind != 2 and candidate.kind != 3 and candidate.kind != 4
+                                            and candidate.kind != 17 and candidate.kind != 29
+                                            and not (candidate -> isAsyncExpressionRead)
+                                            and not (candidate.typeOrigin == 1 and candidate.typeSymbol == 0)
+                                            -> if {
+                                                plansByValue![value!] => existing
+                                                existing < 0 -> if {
+                                                    plans! -> len => plansByValue![value!]
+                                                    plans! -> push(AsyncExpressionValuePlan { value: value!, owner: parent, afterIr: point.awaitIr, state: point.state, symbol: nextSymbol! })
+                                                    nextSymbol! - 1 => nextSymbol!
+                                                } else {
+                                                    plans![existing] => plan!
+                                                    point.state > plan!.state -> if {
+                                                        point.awaitIr => plan!.afterIr
+                                                        point.state => plan!.state
+                                                        plan! => plans![existing]
+                                                    }
+                                                }
+                                            }
+                                        candidate.nextOperand => value!
+                                    }
+                                }
+                            }
+                            parent => ancestor!
+                        }
+                    }
+            }
+    }
+    (plans! -> len) == 0 -> if { relocation! -> return }
+    0 => added!
+    0..<count -> each index {
+        relocation! -> push(index + added!)
+        plansByValue![index] >= 0 -> if { added! + 2 => added! }
+    }
+    [TypedIrNode; ~] => ordered!
+    0..<count -> each index {
+        nodes[index] => node!
+        node!.parent -> relocateAwaitEdge(relocation!) => node!.parent
+        node!.operand0 -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.operand0
+        node!.operand1 -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.operand1
+        node!.nextOperand -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.nextOperand
+        plansByValue![index] => planIndex
+        planIndex >= 0 -> if {
+            plans![planIndex] => plan
+            relocation![index] + 1 => node!.parent
+            -1 => node!.nextOperand
+            ordered! -> push(node!)
+            nodes[index] => binding!
+            17 => binding!.kind
+            relocation![plan.owner] => binding!.parent
+            plan.symbol => binding!.symbol
+            -1 => binding!.targetModule
+            -1 => binding!.payloadToken
+            -1 => binding!.opcode
+            relocation![index] => binding!.operand0
+            -1 => binding!.operand1
+            -1 => binding!.nextOperand
+            268435456 => binding!.flags
+            false => awaitedValue!
+            coroutine.points -> each earlier {
+                earlier.functionIr == asyncExpressionFunctionOwner(index, nodes) and earlier.awaitIr == index
+                    -> if { true => awaitedValue! }
+            }
+            (nodes[index].kind == 5 or nodes[index].kind == 13 or nodes[index].kind == 15) and not awaitedValue!
+                -> if { binding!.flags + 134217728 => binding!.flags }
+            ordered! -> push(binding!)
+            binding! => read!
+            5 => read!.kind
+            relocation![index] + 1 => read!.operand0
+            relocation![plan.afterIr] => read!.operand1
+            nodes[index].nextOperand -> asyncExpressionMappedValue(relocation!, plansByValue!) => read!.nextOperand
+            268435456 => read!.flags
+            ordered! -> push(read!)
+        } else { ordered! -> push(node!) }
+    }
+    0..<Int(ordered! -> len) -> each index {
+        index < count -> if { ordered![index] => nodes[index] } else { nodes -> push(ordered![index]) }
+    }
+    relocation!
+}
+
+asyncExpressionMappedValue edge: Int, relocation: ref [Int; ~], plansByValue: ref [Int; ~] -> Int {
+    edge >= 0 and edge < (relocation -> len) -> if {
+        relocation[edge] + (plansByValue[edge] >= 0 -> if { 2 } else { 0 })
+    } else { edge }
+}
+
+asyncExpressionFunctionOwner value: Int, nodes: ref [TypedIrNode; ~] -> Int {
+    value => owner!
+    owner! >= 0 and nodes[owner!].kind != 0 and nodes[owner!].kind != 11
+        -> while { nodes[owner!].parent => owner! }
+    owner!
 }
