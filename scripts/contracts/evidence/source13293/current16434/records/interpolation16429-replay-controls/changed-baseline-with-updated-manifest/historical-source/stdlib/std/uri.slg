@@ -1,0 +1,886 @@
+namespace std.uri
+
+import std.net as net
+import std.uri.error as errors
+import std.uri as model
+import sys.file as file
+
+# RFC 3986 URI references are parsed as pure structured text. Registered names
+# remain names: parsing never performs DNS, IDNA conversion, file access, or
+# scheme-specific network activity.
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public enum Host {
+    Registered(Span)
+    Ipv4(net.Ipv4Address)
+    Ipv6(net.Ipv6Address)
+}
+
+public struct Span {
+    public start: UIntSize
+    public length: UIntSize
+    public present: Bool
+}
+
+public enum PortComponent {
+    Absent
+    Present(UInt16)
+}
+
+public struct Authority {
+    public userInfo: Span
+    public host: Host
+    public port: PortComponent
+    raw: Span
+}
+
+public enum AuthorityComponent {
+    Absent
+    Present(Authority)
+}
+
+public struct Reference {
+    public source: file.SourceText
+    public scheme: Span
+    public authority: AuthorityComponent
+    public path: Span
+    public query: Span
+    public fragment: Span
+}
+
+# Normalization is pure and policy-owned. Scheme-specific default ports, IDNA,
+# DNS, and filesystem canonicalization are intentionally outside this value.
+public struct NormalizationPolicy {
+    public lowercaseScheme: Bool
+    public lowercaseRegisteredName: Bool
+    public decodeUnreserved: Bool
+    public uppercasePercentHex: Bool
+    public removeDotSegments: Bool
+}
+
+public canonicalNormalization: -> NormalizationPolicy => NormalizationPolicy {
+    lowercaseScheme: true
+    lowercaseRegisteredName: true
+    decodeUnreserved: true
+    uppercasePercentHex: true
+    removeDotSegments: true
+}
+
+errorReference kind: errors.Kind, offset: UIntSize -> Result<Reference, Error> {
+    Result<Reference, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorAuthority kind: errors.Kind, offset: UIntSize -> Result<Authority, Error> {
+    Result<Authority, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
+    Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+pushOutput output: mut [UInt8; ~], value: UInt8, maximum: Int, offset: UIntSize -> Result<Unit, Error> {
+    (output -> len) < maximum -> unless {
+        errorUnit(errors.Kind.InvalidLimit, offset) -> return
+    }
+    output -> push(value)
+    Result<Unit, Error>.Ok
+}
+
+hexValue byte: UInt8 -> UInt8 {
+    byte >= '0' and byte <= '9' -> if { byte - '0' } else {
+        byte >= 'A' and byte <= 'F' -> if { byte - 'A' + 10 } else { byte - 'a' + 10 }
+    }
+}
+
+uppercaseHex value: UInt8 -> UInt8 {
+    value < 10 -> if { value + '0' } else { value - 10 + 'A' }
+}
+
+lowerAscii byte: UInt8 -> UInt8 {
+    byte >= 'A' and byte <= 'Z' -> if { byte + UInt8('a' - 'A') } else { byte }
+}
+
+appendNormalizedSpan source: ref file.SourceText, span: Span, lowercase: Bool, policy: NormalizationPolicy, output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    span.start => index!
+    span.start + span.length => end
+    index! < end -> while {
+        source -> byte(index!) => byte
+        byte == '%' -> if {
+            source -> byte(index! + 1) -> hexValue => high
+            source -> byte(index! + 2) -> hexValue => low
+            UInt8(high * 16 + low) => decoded
+            policy.decodeUnreserved and (decoded -> isUnreserved)
+                -> if {
+                    lowercase -> if { decoded -> lowerAscii } else { decoded }
+                        => normalized
+                    output -> pushOutput(normalized, maximum, index!)?
+                } else {
+                    output -> pushOutput('%', maximum, index!)?
+                    policy.uppercasePercentHex -> if {
+                        output -> pushOutput(high -> uppercaseHex, maximum, index! + 1)?
+                        output -> pushOutput(low -> uppercaseHex, maximum, index! + 2)?
+                    } else {
+                        output -> pushOutput(source -> byte(index! + 1), maximum, index! + 1)?
+                        output -> pushOutput(source -> byte(index! + 2), maximum, index! + 2)?
+                    }
+                }
+            index! + 3 => index!
+        } else {
+            lowercase -> if { byte -> lowerAscii } else { byte } => normalized
+            output -> pushOutput(normalized, maximum, index!)?
+            index! + 1 => index!
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+removeLastPathSegment output: mut [UInt8; ~] -> Unit {
+    output -> len => remaining!
+    remaining! > 0 and output[remaining! - 1] != '/'
+        -> while {
+            output -> take(remaining! - 1) => discardedSegment
+            remaining! - 1 => remaining!
+        }
+    remaining! > 0 -> if {
+        output -> take(remaining! - 1) => discardedSlash
+    }
+}
+
+removeDotSegments input: move [UInt8; ~], maximum: Int -> Result<[UInt8; ~], Error> {
+    [UInt8; ~] => output!
+    0 => index!
+    input -> len => length
+    length > 0 and input[0] == '/' => absolute
+    index! < length -> while {
+        index! + 2 < length
+            and input[index!] == '.'
+            and input[index! + 1] == '.'
+            and input[index! + 2] == '/'
+            -> if {
+                index! + 3 => index!
+            } else {
+                index! + 1 < length
+                    and input[index!] == '.'
+                    and input[index! + 1] == '/'
+                    -> if {
+                        index! + 2 => index!
+                    } else {
+                        index! + 2 < length
+                            and input[index!] == '/'
+                            and input[index! + 1] == '.'
+                            and input[index! + 2] == '/'
+                            -> if {
+                                index! + 2 => index!
+                            } else {
+                                index! + 2 == length
+                                    and input[index!] == '/'
+                                    and input[index! + 1] == '.'
+                                    -> if {
+                                        output! -> pushOutput('/', maximum, UIntSize(index!))?
+                                        length => index!
+                                    } else {
+                                        index! + 3 < length
+                                            and input[index!] == '/'
+                                            and input[index! + 1] == '.'
+                                            and input[index! + 2] == '.'
+                                            and input[index! + 3] == '/'
+                                            -> if {
+                                                output! -> removeLastPathSegment
+                                                index! + 3 => index!
+                                            } else {
+                                                index! + 3 == length
+                                                    and input[index!] == '/'
+                                                    and input[index! + 1] == '.'
+                                                    and input[index! + 2] == '.'
+                                                    -> if {
+                                                        output! -> removeLastPathSegment
+                                                        output! -> pushOutput('/', maximum, UIntSize(index!))?
+                                                        length => index!
+                                                    } else {
+                                                        index! + 1 == length and input[index!] == '.'
+                                                            -> if {
+                                                                length => index!
+                                                            } else {
+                                                                index! + 2 == length
+                                                                    and input[index!] == '.'
+                                                                    and input[index! + 1] == '.'
+                                                                    -> if {
+                                                                        length => index!
+                                                                    } else {
+                                                                        input[index!] == '/' -> if {
+                                                                            output! -> pushOutput('/', maximum, UIntSize(index!))?
+                                                                            index! + 1 => index!
+                                                                        }
+                                                                        index! < length and input[index!] != '/' -> while {
+                                                                            output! -> pushOutput(input[index!], maximum, UIntSize(index!))?
+                                                                            index! + 1 => index!
+                                                                        }
+                                                                    }
+                                                            }
+                                                    }
+                                            }
+                                    }
+                            }
+                    }
+            }
+    }
+    not absolute and (output! -> len) > 0 and output![0] == '/'
+        -> if {
+            output! -> take(0) => discardedRelativeSeparator
+        }
+    Result<[UInt8; ~], Error>.Ok(output!)
+}
+
+appendAuthority source: ref file.SourceText, authority: Authority, policy: NormalizationPolicy, output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    authority.host -> when {
+        Registered(host) {
+            source -> appendNormalizedSpan(
+            presentSpan(authority.raw.start, host.start - authority.raw.start),
+            false,
+            policy,
+            output,
+            maximum)?
+            source -> appendNormalizedSpan(
+            host,
+            policy.lowercaseRegisteredName,
+            policy,
+            output,
+            maximum)?
+            host.start + host.length => suffixStart
+            source -> appendNormalizedSpan(
+            presentSpan(suffixStart, authority.raw.start + authority.raw.length - suffixStart),
+            false,
+            policy,
+            output,
+            maximum)?
+        }
+        Ipv4(value) {
+            source -> appendNormalizedSpan(authority.raw, false, policy, output, maximum)?
+        }
+        Ipv6(value) {
+            source -> appendNormalizedSpan(authority.raw, false, policy, output, maximum)?
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+normalizedPath source: ref file.SourceText, span: Span, policy: NormalizationPolicy, maximum: Int -> Result<[UInt8; ~], Error> {
+    [UInt8; ~] => path!
+    source -> appendNormalizedSpan(span, false, policy, path!, maximum)?
+    policy.removeDotSegments -> if {
+        path! -> removeDotSegments(maximum)
+    } else {
+        Result<[UInt8; ~], Error>.Ok(path!)
+    }
+}
+
+appendBytes values: move [UInt8; ~], output: mut [UInt8; ~], maximum: Int -> Result<Unit, Error> {
+    0 => index!
+    index! < (values -> len) -> while {
+        output -> pushOutput(values[index!], maximum, UIntSize(index!))?
+        index! + 1 => index!
+    }
+    Result<Unit, Error>.Ok
+}
+
+absentSpan: -> Span => Span { start: 0, length: 0, present: false }
+presentSpan start: UIntSize, length: UIntSize -> Span => Span {
+    start: start
+    length: length
+    present: true
+}
+absentPort: -> PortComponent => model.PortComponent.Absent
+registeredHost value: Span -> Host => model.Host.Registered(value)
+ipv4Host value: net.Ipv4Address -> Host => model.Host.Ipv4(value)
+absentAuthority: -> AuthorityComponent => model.AuthorityComponent.Absent
+presentAuthority value: Authority -> AuthorityComponent => model.AuthorityComponent.Present(value)
+
+isAlpha byte: UInt8 -> Bool {
+    (byte >= 'A' and byte <= 'Z') or (byte >= 'a' and byte <= 'z')
+}
+
+isAlphaNumeric byte: UInt8 -> Bool {
+    (byte -> isAlpha) or (byte >= '0' and byte <= '9')
+}
+
+isUnreserved byte: UInt8 -> Bool {
+    ((byte -> isAlphaNumeric)
+        or byte == '-'
+        or byte == '.'
+        or byte == '_'
+        or byte == '~')
+}
+
+isSubDelimiter byte: UInt8 -> Bool {
+    byte == '!'
+        or byte == '$'
+        or byte == '&'
+        or byte == '\''
+        or byte == '('
+        or byte == ')'
+        or byte == '*'
+        or byte == '+'
+        or byte == ','
+        or byte == ';'
+        or byte == '='
+}
+
+isHex byte: UInt8 -> Bool {
+    (byte >= '0' and byte <= '9')
+        or (byte >= 'A' and byte <= 'F')
+        or (byte >= 'a' and byte <= 'f')
+}
+
+validateComponent text: Text, start: UIntSize, end: UIntSize, component: Int -> Result<Unit, Error> {
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte == '%' -> if {
+            index! + 2 < end -> unless {
+                errorUnit(errors.Kind.InvalidPercentEncoding, index!) -> return
+            }
+            ((text -> byte(index! + 1)) -> isHex)
+                and ((text -> byte(index! + 2)) -> isHex)
+                -> unless {
+                    errorUnit(errors.Kind.InvalidPercentEncoding, index!) -> return
+                }
+            index! + 3 => index!
+        } else {
+            (byte -> isUnreserved) or (byte -> isSubDelimiter) => allowed!
+            component == 0 and byte == ':' -> if { true => allowed! }
+            component == 2 and (byte == ':' or byte == '@' or byte == '/')
+                -> if { true => allowed! }
+            (component == 3 or component == 4)
+                and (byte == ':' or byte == '@' or byte == '/' or byte == '?')
+                -> if { true => allowed! }
+            allowed! -> unless {
+                errorUnit(errors.Kind.InvalidCharacter, index!) -> return
+            }
+            index! + 1 => index!
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+
+validateScheme text: Text, start: UIntSize, end: UIntSize -> Result<Unit, Error> {
+    end > start -> unless {
+        errorUnit(errors.Kind.InvalidScheme, start) -> return
+    }
+    (text -> byte(start)) -> isAlpha -> unless {
+        errorUnit(errors.Kind.InvalidScheme, start) -> return
+    }
+    start + 1 => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        (byte -> isAlphaNumeric) or byte == '+' or byte == '-' or byte == '.'
+            -> unless {
+                errorUnit(errors.Kind.InvalidScheme, index!) -> return
+            }
+        index! + 1 => index!
+    }
+    Result<Unit, Error>.Ok
+}
+
+looksNumericIpv4 text: Text, start: UIntSize, end: UIntSize -> Bool {
+    false => hasDot!
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte == '.' -> if { true => hasDot! } else {
+            byte >= '0' and byte <= '9' -> unless { false -> return }
+        }
+        index! + 1 => index!
+    }
+    hasDot!
+}
+
+parsePort text: Text, start: UIntSize, end: UIntSize -> Result<PortComponent, Error> {
+    start < end -> unless {
+        Result<PortComponent, Error>.Err(Error {
+            kind: errors.Kind.InvalidPort
+            offset: start
+        }) -> return
+    }
+    0 => value!
+    start => index!
+    index! < end -> while {
+        text -> byte(index!) => byte
+        byte >= '0' and byte <= '9' -> unless {
+            Result<PortComponent, Error>.Err(Error {
+                kind: errors.Kind.InvalidPort
+                offset: index!
+            }) -> return
+        }
+        value! <= (65_535 - Int(byte - '0')) / 10 -> unless {
+            Result<PortComponent, Error>.Err(Error {
+                kind: errors.Kind.InvalidPort
+                offset: start
+            }) -> return
+        }
+        value! * 10 + Int(byte - '0') => value!
+        index! + 1 => index!
+    }
+    Result<PortComponent, Error>.Ok(model.PortComponent.Present(UInt16(value!)))
+}
+
+parseAuthority text: Text, start: UIntSize, end: UIntSize -> Result<Authority, Error> {
+    absentSpan() => userInfo!
+    start => hostStart!
+    start => scan!
+    false => foundAt!
+    scan! < end -> while {
+        (text -> byte(scan!)) == '@' -> if {
+            foundAt! -> if {
+                errorAuthority(errors.Kind.InvalidAuthority, scan!) -> return
+            }
+            presentSpan(start, scan! - start) => userInfo!
+            text -> validateComponent(start, scan!, 0)?
+            scan! + 1 => hostStart!
+            true => foundAt!
+        }
+        scan! + 1 => scan!
+    }
+
+    hostStart! < end
+        and (text -> byte(hostStart!)) == '['
+        -> if {
+            hostStart! + 1 => close!
+            close! < end and (text -> byte(close!)) != ']'
+                -> while {
+                    close! + 1 => close!
+                }
+            close! < end -> unless {
+                errorAuthority(errors.Kind.InvalidHost, hostStart!) -> return
+            }
+            close! > hostStart! + 1 -> unless {
+                errorAuthority(errors.Kind.InvalidHost, hostStart! + 1) -> return
+            }
+            text -> slice(hostStart! + 1, close! - hostStart! - 1) => hostText
+            net.parseIpv6(hostText) -> when {
+                Ok(address) {
+                    close! + 1 == end -> if {
+                        Result<Authority, Error>.Ok(Authority {
+                            userInfo: userInfo!
+                            host: model.Host.Ipv6(address)
+                            port: model.PortComponent.Absent
+                            raw: presentSpan(start, end - start)
+                        }) -> return
+                    }
+                    (text -> byte(close! + 1)) == ':' -> unless {
+                        errorAuthority(errors.Kind.InvalidAuthority, close! + 1) -> return
+                    }
+                    parsePort(text, close! + 2, end)? => port
+                    Result<Authority, Error>.Ok(Authority {
+                        userInfo: userInfo!
+                        host: model.Host.Ipv6(address)
+                        port: port
+                        raw: presentSpan(start, end - start)
+                    }) -> return
+                }
+                Err(error) {
+                    errorAuthority(errors.Kind.InvalidHost, hostStart! + 1 + error.offset) -> return
+                }
+            }
+        }
+
+    end => hostEnd!
+    UIntSize(0) => portStart!
+    false => hasPort!
+    hostStart! => colonScan!
+    colonScan! < end -> while {
+        (text -> byte(colonScan!)) == ':' -> if {
+            hasPort! -> if {
+                errorAuthority(errors.Kind.InvalidHost, colonScan!) -> return
+            }
+            colonScan! => hostEnd!
+            colonScan! + 1 => portStart!
+            true => hasPort!
+        }
+        colonScan! + 1 => colonScan!
+    }
+    text -> slice(hostStart!, hostEnd! - hostStart!) => hostText
+    text -> validateComponent(hostStart!, hostEnd!, 1)?
+    text
+        -> looksNumericIpv4(hostStart!, hostEnd!)
+        -> if {
+            net.parseIpv4(hostText) -> when {
+                Ok(address) { ipv4Host(address) }
+                Err(error) {
+                    errorAuthority(errors.Kind.InvalidHost, hostStart! + error.offset) -> return
+                }
+            }
+        } else {
+            registeredHost(presentSpan(hostStart!, hostEnd! - hostStart!))
+        } => host
+    hasPort! -> if {
+        parsePort(text, portStart!, end)?
+    } else { absentPort() } => port
+    Result<Authority, Error>.Ok(Authority {
+        userInfo: userInfo!
+        host: host
+        port: port
+        raw: presentSpan(start, end - start)
+    })
+}
+
+# Parses an RFC 3986 URI-reference. maxInputBytes is checked before any nested
+# parse or slice construction. Components remain in raw percent-encoded form.
+public parse text: Text, maxInputBytes: Int -> Result<Reference, Error> {
+    maxInputBytes >= 0 -> unless {
+        errorReference(errors.Kind.InvalidLimit, 0) -> return
+    }
+    text -> len => length
+    Int(length) <= maxInputBytes -> unless {
+        errorReference(errors.Kind.InvalidLimit, length) -> return
+    }
+
+    length => fragmentStart!
+    UIntSize(0) => scan!
+    scan! < length -> while {
+        (text -> byte(scan!)) == '#' -> if {
+        scan! => fragmentStart!
+        length => scan!
+    } else { scan! + 1 => scan! }
+}
+fragmentStart! < length -> if {
+    text -> validateComponent(fragmentStart! + 1, length, 4)?
+    presentSpan(fragmentStart! + 1, length - fragmentStart! - 1)
+} else { absentSpan() } => fragment
+
+fragmentStart! => queryStart!
+UIntSize(0) => queryScan!
+queryScan! < fragmentStart! -> while {
+    (text -> byte(queryScan!)) == '?' -> if {
+        queryScan! => queryStart!
+        fragmentStart! => queryScan!
+    } else { queryScan! + 1 => queryScan! }
+}
+queryStart! < fragmentStart! -> if {
+    text -> validateComponent(queryStart! + 1, fragmentStart!, 3)?
+    presentSpan(queryStart! + 1, fragmentStart! - queryStart! - 1)
+} else { absentSpan() } => query
+
+absentSpan() => scheme!
+UIntSize(0) => hierarchicalStart!
+UIntSize(0) => schemeScan!
+false => schemeDone!
+schemeScan! < queryStart!
+    and not schemeDone!
+    -> while {
+        text -> byte(schemeScan!) => byte
+        byte -> when {
+            == ':' {
+                text -> validateScheme(0, schemeScan!)?
+                presentSpan(0, schemeScan!) => scheme!
+                schemeScan! + 1 => hierarchicalStart!
+                true => schemeDone!
+            }
+            == '/' { true => schemeDone! }
+            else { false => schemeDone! }
+        }
+        schemeScan! + 1 => schemeScan!
+    }
+
+hierarchicalStart! + 1 < queryStart!
+    and (text -> byte(hierarchicalStart!)) == '/'
+    and (text -> byte(hierarchicalStart! + 1)) == '/'
+    => hasAuthorityPrefix
+hasAuthorityPrefix -> if {
+    hierarchicalStart! + 2 => authorityStart
+    authorityStart => authorityEnd!
+    authorityEnd! < queryStart! and (text -> byte(authorityEnd!)) != '/'
+        -> while { authorityEnd! + 1 => authorityEnd! }
+    text -> parseAuthority(authorityStart, authorityEnd!)? => parsedAuthority
+    authorityEnd! => hierarchicalStart!
+    presentAuthority(parsedAuthority)
+} else { absentAuthority() } => authority
+
+text -> validateComponent(hierarchicalStart!, queryStart!, 2)?
+scheme!.present -> unless {
+    authority -> when {
+        Present(value) { }
+        Absent {
+            hierarchicalStart! => firstSegment!
+            firstSegment! < queryStart!
+                and (text -> byte(firstSegment!)) != '/'
+                -> while {
+                    (text -> byte(firstSegment!)) == ':' -> if {
+                        errorReference(errors.Kind.RelativeFirstSegmentColon, firstSegment!) -> return
+                    }
+                    firstSegment! + 1 => firstSegment!
+                }
+        }
+    }
+}
+text -> file.borrowText => source
+Result<Reference, Error>.Ok(Reference {
+    source: source
+    scheme: scheme!
+    authority: authority
+    path: presentSpan(hierarchicalStart!, queryStart! - hierarchicalStart!)
+    query: query
+    fragment: fragment
+})
+}
+
+impl Reference {
+    # Returns caller-owned normalized UTF-8 bytes. The bound is checked before
+    # every append, so no partial result escapes on failure.
+    public normalizeBytes: self, policy: NormalizationPolicy, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        maxOutputBytes >= 0 -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidLimit
+                offset: 0
+            }) -> return
+        }
+        [UInt8; ~] => output!
+        self.scheme.present -> if {
+            self.source -> appendNormalizedSpan(
+            self.scheme,
+            policy.lowercaseScheme,
+            policy,
+            output!,
+            maxOutputBytes)?
+            output! -> pushOutput(':', maxOutputBytes, self.scheme.start + self.scheme.length)?
+        }
+        self.authority -> when {
+            Present(authority) {
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                self.source -> appendAuthority(authority, policy, output!, maxOutputBytes)?
+            }
+            Absent { }
+        }
+        self.source -> normalizedPath(self.path, policy, maxOutputBytes)? => path
+        path -> appendBytes(output!, maxOutputBytes)?
+        self.query.present -> if {
+            output! -> pushOutput('?', maxOutputBytes, self.query.start)?
+            self.source -> appendNormalizedSpan(
+            self.query,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        self.fragment.present -> if {
+            output! -> pushOutput('#', maxOutputBytes, self.fragment.start)?
+            self.source -> appendNormalizedSpan(
+            self.fragment,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    # Resolves one RFC 3986 reference against this absolute base and returns
+    # caller-owned normalized UTF-8 bytes. No DNS or scheme-specific behavior
+    # is performed.
+    public resolveBytes: self, reference: ref Reference, policy: NormalizationPolicy, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        maxOutputBytes >= 0 -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidLimit
+                offset: 0
+            }) -> return
+        }
+        reference.scheme.present -> if {
+            reference -> normalizeBytes(policy, maxOutputBytes) -> return
+        }
+        self.scheme.present -> unless {
+            Result<[UInt8; ~], Error>.Err(Error {
+                kind: errors.Kind.InvalidScheme
+                offset: 0
+            }) -> return
+        }
+
+        [UInt8; ~] => output!
+        self.source -> appendNormalizedSpan(
+        self.scheme,
+        policy.lowercaseScheme,
+        policy,
+        output!,
+        maxOutputBytes)?
+        output! -> pushOutput(':', maxOutputBytes, self.scheme.start + self.scheme.length)?
+
+        reference.authority -> when {
+            Present(authority) {
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                reference.source -> appendAuthority(
+                authority,
+                policy,
+                output!,
+                maxOutputBytes)?
+                reference.source -> normalizedPath(
+                reference.path,
+                policy,
+                maxOutputBytes)? => authorityPath
+                authorityPath -> appendBytes(output!, maxOutputBytes)?
+                reference.query.present -> if {
+                    output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
+                    reference.source -> appendNormalizedSpan(
+                    reference.query,
+                    false,
+                    policy,
+                    output!,
+                    maxOutputBytes)?
+                }
+            }
+            Absent {
+                self.authority -> when {
+                    Present(authority) {
+                        output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                        output! -> pushOutput('/', maxOutputBytes, authority.raw.start)?
+                        self.source -> appendAuthority(
+                        authority,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    }
+                    Absent { }
+                }
+
+                reference.path.length == 0 -> if {
+                    self.source -> normalizedPath(
+                    self.path,
+                    policy,
+                    maxOutputBytes)? => inheritedPath
+                    inheritedPath -> appendBytes(output!, maxOutputBytes)?
+                    reference.query.present -> if {
+                        output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
+                        reference.source -> appendNormalizedSpan(
+                        reference.query,
+                        false,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    } else {
+                        self.query.present -> if {
+                            output! -> pushOutput('?', maxOutputBytes, self.query.start)?
+                            self.source -> appendNormalizedSpan(
+                            self.query,
+                            false,
+                            policy,
+                            output!,
+                            maxOutputBytes)?
+                        }
+                    }
+                } else {
+                    (reference.source -> byte(reference.path.start)) == '/'
+                        -> if {
+                            reference.source -> normalizedPath(
+                            reference.path,
+                            policy,
+                            maxOutputBytes)? => absolutePath
+                            absolutePath -> appendBytes(output!, maxOutputBytes)?
+                        } else {
+                            [UInt8; ~] => merged!
+                            self.authority -> when {
+                                Present(authority) {
+                                    self.path.length == 0 -> if {
+                                        merged! -> pushOutput('/', maxOutputBytes, self.path.start)?
+                                    }
+                                }
+                                Absent { }
+                            }
+                            self.path.length > 0 -> if {
+                                self.path.start + self.path.length => prefixEnd!
+                                prefixEnd! > self.path.start
+                                    and (self.source -> byte(prefixEnd! - 1)) != '/'
+                                    -> while { prefixEnd! - 1 => prefixEnd! }
+                                self.source -> appendNormalizedSpan(
+                                presentSpan(self.path.start, prefixEnd! - self.path.start),
+                                false,
+                                policy,
+                                merged!,
+                                maxOutputBytes)?
+                            }
+                            reference.source -> appendNormalizedSpan(
+                            reference.path,
+                            false,
+                            policy,
+                            merged!,
+                            maxOutputBytes)?
+                            policy.removeDotSegments -> if {
+                                merged! -> removeDotSegments(maxOutputBytes)? => resolvedPath
+                                resolvedPath -> appendBytes(output!, maxOutputBytes)?
+                            } else {
+                                merged! -> appendBytes(output!, maxOutputBytes)?
+                            }
+                        }
+                    reference.query.present -> if {
+                        output! -> pushOutput('?', maxOutputBytes, reference.query.start)?
+                        reference.source -> appendNormalizedSpan(
+                        reference.query,
+                        false,
+                        policy,
+                        output!,
+                        maxOutputBytes)?
+                    }
+                }
+            }
+        }
+
+        reference.fragment.present -> if {
+            output! -> pushOutput('#', maxOutputBytes, reference.fragment.start)?
+            reference.source -> appendNormalizedSpan(
+            reference.fragment,
+            false,
+            policy,
+            output!,
+            maxOutputBytes)?
+        }
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+
+    public isAbsolute: self -> Bool => self.scheme.present
+
+    public hasAuthority: self -> Bool => self.authority -> when {
+        Present(value) { true }
+        Absent { false }
+    }
+
+    public schemeText: self -> Text => self.source -> slice(self.scheme.start, self.scheme.length)
+    public pathText: self -> Text => self.source -> slice(self.path.start, self.path.length)
+    public queryText: self -> Text => self.source -> slice(self.query.start, self.query.length)
+    public fragmentText: self -> Text => self.source -> slice(self.fragment.start, self.fragment.length)
+
+    public authorityUserInfoText: self -> Text => self.authority -> when {
+        Present(authority) { self.source -> slice(authority.userInfo.start, authority.userInfo.length) }
+        Absent { "" }
+    }
+
+    public registeredName: self -> Text => self.authority -> when {
+        Present(authority) => authority.host -> when {
+            Registered(span) { self.source -> slice(span.start, span.length) }
+            Ipv4(value) { "" }
+            Ipv6(value) { "" }
+        }
+        Absent { "" }
+    }
+}
+
+impl Authority {
+    public hasPort: self -> Bool => self.port -> when {
+        Present(value) { true }
+        Absent { false }
+    }
+
+    public portOr: self, fallback: UInt16 -> UInt16 => self.port -> when {
+        Present(value) { value }
+        Absent { fallback }
+    }
+
+}
+
+impl Host {
+    public isNumeric: self -> Bool => self -> when {
+        Registered(value) { false }
+        Ipv4(value) { true }
+        Ipv6(value) { true }
+    }
+}

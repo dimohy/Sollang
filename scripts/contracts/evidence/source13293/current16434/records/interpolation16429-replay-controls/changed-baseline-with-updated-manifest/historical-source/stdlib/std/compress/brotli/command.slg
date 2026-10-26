@@ -1,0 +1,914 @@
+namespace std.compress.brotli.command
+
+import std.compress.brotli.command as model
+import std.compress.brotli.command.error as errors
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.compressed_header.error as header_errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as table_errors
+import std.compress.brotli.static_dictionary as dictionary
+import std.compress.brotli.static_dictionary.error as dictionary_errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxOutputBytes: Int
+    public maxCommands: Int
+    public maxWindowBytes: Int
+}
+
+public struct Executor {
+    public header: headers.Parsed
+    public expectedOutputBytes: Int
+    public maxOutputBytes: Int
+    public maxCommands: Int
+    public maxWindowBytes: Int
+}
+
+public struct Decoded {
+    public output: [UInt8; ~]
+    public position: prefix.Position
+}
+
+public enum ReaderPhase {
+    BlockTypeSymbol
+    BlockLengthSymbol
+    BlockLengthExtra
+    CommandSymbol
+    InsertExtra
+    CopyExtra
+    LiteralSymbol
+    DistanceSymbol
+    DistanceExtra
+    Copy
+    Finished
+}
+
+# Reader owns command semantics and private output while the caller-owned
+# Window retains only the unread scalar bit suffix between writes.
+public struct Reader {
+    public header: headers.Parsed
+    public dictionary: dictionary.Resolver
+    public maxCommands: Int
+    public maxWindowBytes: Int
+    public targetOutputLength: Int
+    public output: [UInt8; ~]
+    public previousTypes: [Int; ~]
+    public currentTypes: [Int; ~]
+    public remaining: [Int; ~]
+    public distanceRing: [Int; ~]
+    public distanceIndex: Int
+    public commands: Int
+    public phase: ReaderPhase
+    public insertCode: Int
+    public copyCode: Int
+    public insertLength: Int
+    public copyLength: Int
+    public inserted: Int
+    public distanceCode: Int
+    public distanceExtraWidth: Int
+    public distancePostfix: Int
+    public distanceOffset: Int
+    public blockCategory: Int
+    public blockTypeCode: Int
+    public blockLengthCode: Int
+    public resumePhase: ReaderPhase
+}
+
+public enum ReaderRead {
+    NeedMore(Int)
+    Ready
+}
+
+public struct Streamed {
+    public output: [UInt8; ~]
+}
+
+enum WindowBits {
+    NeedMore(Int)
+    Ready(Int)
+}
+
+struct Bits {
+    value: Int
+    position: prefix.Position
+}
+
+errorExecutor kind: errors.Kind, offset: UIntSize -> Result<Executor, Error> {
+    Result<Executor, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDecoded kind: errors.Kind, offset: UIntSize -> Result<Decoded, Error> {
+    Result<Decoded, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBits kind: errors.Kind, offset: UIntSize -> Result<Bits, Error> {
+    Result<Bits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorPosition kind: errors.Kind, offset: UIntSize -> Result<prefix.Position, Error> {
+    Result<prefix.Position, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorSymbol kind: errors.Kind, offset: UIntSize -> Result<prefix.Decoded, Error> {
+    Result<prefix.Decoded, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReader kind: errors.Kind, offset: UIntSize -> Result<Reader, Error> {
+    Result<Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReaderRead kind: errors.Kind, offset: UIntSize -> Result<ReaderRead, Error> {
+    Result<ReaderRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorStreamed kind: errors.Kind, offset: UIntSize -> Result<Streamed, Error> {
+    Result<Streamed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+setAt values: mut [Int; ~], index: Int, value: Int -> Unit {
+    value => values[index]
+}
+
+readBits input: [UInt8], position: prefix.Position, width: Int -> Result<Bits, Error> {
+    input -> len => inputLength
+    position.byteIndex => byteIndex!
+    position.bitIndex => bitIndex!
+    0 => value!
+    1 => place!
+    0 => read!
+    read! < width -> while {
+        byteIndex! < inputLength
+            -> unless { errorBits(errors.Kind.TruncatedInput, UIntSize(byteIndex!)) -> return }
+        (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+        bit == 1 -> if { value! + place! => value! }
+        place! * 2 => place!
+        read! + 1 => read!
+        bitIndex! + 1 => bitIndex!
+        bitIndex! == 8 -> if {
+            0 => bitIndex!
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    Result<Bits, Error>.Ok(Bits {
+        value: value!
+        position: prefix.Position { byteIndex: byteIndex!, bitIndex: bitIndex! }
+    })
+}
+
+mapTableError kind: table_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidCommand }
+}
+
+mapHeaderError kind: header_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidBlockSwitch }
+}
+
+mapDictionaryError kind: dictionary_errors.Kind -> errors.Kind => kind -> when {
+    OutputLimitExceeded { errors.Kind.OutputLimitExceeded }
+    else { errors.Kind.InvalidDistance }
+}
+
+dictionaryResolver maximumOutputBytes: Int -> Result<dictionary.Resolver, Error> {
+    dictionary.Limits { maxOutputBytes: maximumOutputBytes } -> resolver -> when {
+        Err(error) { Result<dictionary.Resolver, Error>.Err(Error { kind: error.kind -> mapDictionaryError, offset: error.offset }) }
+        Ok(resolver) { Result<dictionary.Resolver, Error>.Ok(resolver) }
+    }
+}
+
+appendDictionary resolver: dictionary.Resolver, wordLength: Int, distance: Int, maximumBackwardDistance: Int, output: mut [UInt8; ~] -> Result<Int, Error> {
+    resolver -> append(wordLength, distance, maximumBackwardDistance, output) -> when {
+        Err(error) { errorInt(error.kind -> mapDictionaryError, error.offset) }
+        Ok(appended) { Result<Int, Error>.Ok(appended) }
+    }
+}
+
+blockTypeSymbol blockStream: ref headers.BlockStream, window: mut prefix.Window -> Result<prefix.Probe, Error> {
+    blockStream -> typeSymbol(window) -> when {
+        Err(error) { Result<prefix.Probe, Error>.Err(Error { kind: error.kind -> mapHeaderError, offset: error.offset }) }
+        Ok(probed) { Result<prefix.Probe, Error>.Ok(probed) }
+    }
+}
+
+blockLengthSymbol blockStream: ref headers.BlockStream, window: mut prefix.Window -> Result<prefix.Probe, Error> {
+    blockStream -> lengthSymbol(window) -> when {
+        Err(error) { Result<prefix.Probe, Error>.Err(Error { kind: error.kind -> mapHeaderError, offset: error.offset }) }
+        Ok(probed) { Result<prefix.Probe, Error>.Ok(probed) }
+    }
+}
+
+blockLengthExtraBits blockStream: ref headers.BlockStream, code: Int -> Result<Int, Error> {
+    blockStream -> lengthExtraBits(code) -> when {
+        Err(error) { Result<Int, Error>.Err(Error { kind: error.kind -> mapHeaderError, offset: error.offset }) }
+        Ok(width) { Result<Int, Error>.Ok(width) }
+    }
+}
+
+blockSwitchedType blockStream: ref headers.BlockStream, code: Int, previousType: Int, currentType: Int -> Result<Int, Error> {
+    blockStream -> switchedType(code, previousType, currentType) -> when {
+        Err(error) { Result<Int, Error>.Err(Error { kind: error.kind -> mapHeaderError, offset: error.offset }) }
+        Ok(value) { Result<Int, Error>.Ok(value) }
+    }
+}
+
+blockDecodedLength blockStream: ref headers.BlockStream, code: Int, extra: Int -> Result<Int, Error> {
+    blockStream -> decodedLength(code, extra) -> when {
+        Err(error) { Result<Int, Error>.Err(Error { kind: error.kind -> mapHeaderError, offset: error.offset }) }
+        Ok(value) { Result<Int, Error>.Ok(value) }
+    }
+}
+
+readWindowBits window: mut prefix.Window, width: Int -> Result<WindowBits, Error> {
+    window -> read(width) -> when {
+        Err(error) { Result<WindowBits, Error>.Err(Error { kind: error.kind -> mapTableError, offset: error.offset }) }
+        Ok(bits) {
+            bits -> when {
+                Incomplete(missing) { Result<WindowBits, Error>.Ok(model.WindowBits.NeedMore(missing)) }
+                Complete(value) { Result<WindowBits, Error>.Ok(model.WindowBits.Ready(Int(value))) }
+            }
+        }
+    }
+}
+
+readSymbol table: ref prefix.Table, input: [UInt8], position: prefix.Position -> Result<prefix.Decoded, Error> {
+    table -> read(input, position) -> when {
+        Ok(decoded) { Result<prefix.Decoded, Error>.Ok(decoded) }
+        Err(error) { errorSymbol(error.kind -> mapTableError, error.offset) }
+    }
+}
+
+ensureBlock value: ref headers.BlockStream, input: [UInt8], position: prefix.Position, category: Int, previousTypes: mut [Int; ~], currentTypes: mut [Int; ~], remaining: mut [Int; ~] -> Result<prefix.Position, Error> {
+    remaining[category] > 0 -> if { Result<prefix.Position, Error>.Ok(position) -> return }
+    value -> switch(input, position, previousTypes[category], currentTypes[category]) -> when {
+        Err(error) { errorPosition(error.kind -> mapHeaderError, error.offset) }
+        Ok(next) {
+            currentTypes[category] => previousTypes[category]
+            next.typeIndex => currentTypes[category]
+            next.length => remaining[category]
+            Result<prefix.Position, Error>.Ok(next.position)
+        }
+    }
+}
+
+insertRange index: Int -> Int => index -> when {
+    <= 1 { 0 }
+    <= 3 { 8 }
+    == 4 { 0 }
+    == 5 { 16 }
+    == 6 { 8 }
+    else { 16 }
+}
+
+copyRange index: Int -> Int => index -> when {
+    == 0 { 0 }
+    == 1 { 8 }
+    == 2 { 0 }
+    == 3 { 8 }
+    == 4 { 16 }
+    == 5 { 0 }
+    == 6 { 16 }
+    == 7 { 8 }
+    else { 16 }
+}
+
+insertOffset code: Int -> Int => code -> when {
+    == 0 { 0 }
+    == 1 { 1 }
+    == 2 { 2 }
+    == 3 { 3 }
+    == 4 { 4 }
+    == 5 { 5 }
+    == 6 { 6 }
+    == 7 { 8 }
+    == 8 { 10 }
+    == 9 { 14 }
+    == 10 { 18 }
+    == 11 { 26 }
+    == 12 { 34 }
+    == 13 { 50 }
+    == 14 { 66 }
+    == 15 { 98 }
+    == 16 { 130 }
+    == 17 { 194 }
+    == 18 { 322 }
+    == 19 { 578 }
+    == 20 { 1_090 }
+    == 21 { 2_114 }
+    == 22 { 6_210 }
+    else { 22_594 }
+}
+
+insertBits code: Int -> Int => code -> when {
+    <= 5 { 0 }
+    <= 7 { 1 }
+    <= 9 { 2 }
+    <= 11 { 3 }
+    <= 13 { 4 }
+    <= 15 { 5 }
+    == 16 { 6 }
+    == 17 { 7 }
+    == 18 { 8 }
+    == 19 { 9 }
+    == 20 { 10 }
+    == 21 { 12 }
+    == 22 { 14 }
+    else { 24 }
+}
+
+copyOffset code: Int -> Int => code -> when {
+    == 0 { 2 }
+    == 1 { 3 }
+    == 2 { 4 }
+    == 3 { 5 }
+    == 4 { 6 }
+    == 5 { 7 }
+    == 6 { 8 }
+    == 7 { 9 }
+    == 8 { 10 }
+    == 9 { 12 }
+    == 10 { 14 }
+    == 11 { 18 }
+    == 12 { 22 }
+    == 13 { 30 }
+    == 14 { 38 }
+    == 15 { 54 }
+    == 16 { 70 }
+    == 17 { 102 }
+    == 18 { 134 }
+    == 19 { 198 }
+    == 20 { 326 }
+    == 21 { 582 }
+    == 22 { 1_094 }
+    else { 2_118 }
+}
+
+copyBits code: Int -> Int => code -> when {
+    <= 7 { 0 }
+    <= 9 { 1 }
+    <= 11 { 2 }
+    <= 13 { 3 }
+    <= 15 { 4 }
+    <= 17 { 5 }
+    == 18 { 6 }
+    == 19 { 7 }
+    == 20 { 8 }
+    == 21 { 9 }
+    == 22 { 10 }
+    else { 24 }
+}
+
+shortIndexOffset code: Int -> Int => code -> when {
+    == 0 { 3 }
+    == 1 { 2 }
+    == 2 { 1 }
+    == 3 { 0 }
+    <= 9 { 3 }
+    else { 2 }
+}
+
+shortValueOffset code: Int -> Int => code -> when {
+    <= 3 { 0 }
+    == 4 { -1 }
+    == 5 { 1 }
+    == 6 { -2 }
+    == 7 { 2 }
+    == 8 { -3 }
+    == 9 { 3 }
+    == 10 { -1 }
+    == 11 { 1 }
+    == 12 { -2 }
+    == 13 { 2 }
+    == 14 { -3 }
+    else { 3 }
+}
+
+impl Limits {
+    public executor: self, header: move headers.Parsed, expectedOutputBytes: Int -> Result<Executor, Error> {
+        self.maxOutputBytes >= 0 and self.maxCommands > 0
+            and self.maxWindowBytes >= 1_008 and self.maxWindowBytes <= 16_777_200
+            and expectedOutputBytes >= 0 and expectedOutputBytes <= self.maxOutputBytes
+            -> unless { errorExecutor(errors.Kind.InvalidLimit, UIntSize(expectedOutputBytes)) -> return }
+        Result<Executor, Error>.Ok(Executor {
+            header: header
+            expectedOutputBytes: expectedOutputBytes
+            maxOutputBytes: self.maxOutputBytes
+            maxCommands: self.maxCommands
+            maxWindowBytes: self.maxWindowBytes
+        })
+    }
+}
+
+impl Executor {
+    public reader: move self, history: move [UInt8; ~] -> Result<Reader, Error> {
+        history => output!
+        (output! -> len) <= self.maxOutputBytes
+            and self.expectedOutputBytes <= self.maxOutputBytes - (output! -> len)
+            -> unless { errorReader(errors.Kind.OutputLimitExceeded, UIntSize((output! -> len) + self.expectedOutputBytes)) -> return }
+        [Int; ~] => previousTypes!
+        [Int; ~] => currentTypes!
+        [Int; ~] => remaining!
+        0 => category!
+        category! < 3 -> while {
+            previousTypes! -> push(1)
+            currentTypes! -> push(0)
+            remaining! -> push(self.header.blockStreams[category!].initialLength)
+            category! + 1 => category!
+        }
+        [Int; ~] => distanceRing!
+        distanceRing! -> push(16)
+        distanceRing! -> push(15)
+        distanceRing! -> push(11)
+        distanceRing! -> push(4)
+        (output! -> len) + self.expectedOutputBytes => targetOutputLength
+        output! -> reserve(targetOutputLength)
+        targetOutputLength -> dictionaryResolver? => dictionary
+        Result<Reader, Error>.Ok(Reader {
+            header: self.header
+            dictionary: dictionary
+            maxCommands: self.maxCommands
+            maxWindowBytes: self.maxWindowBytes
+            targetOutputLength: targetOutputLength
+            output: output!
+            previousTypes: previousTypes!
+            currentTypes: currentTypes!
+            remaining: remaining!
+            distanceRing: distanceRing!
+            distanceIndex: 0
+            commands: 0
+            phase: model.ReaderPhase.CommandSymbol
+            insertCode: 0
+            copyCode: 0
+            insertLength: 0
+            copyLength: 0
+            inserted: 0
+            distanceCode: 0
+            distanceExtraWidth: 0
+            distancePostfix: 0
+            distanceOffset: 0
+            blockCategory: 0
+            blockTypeCode: 0
+            blockLengthCode: 0
+            resumePhase: model.ReaderPhase.CommandSymbol
+        })
+    }
+
+    public decode: move self, input: [UInt8] -> Result<Decoded, Error> {
+        self -> decodeWithHistory(input, [UInt8; ~])
+    }
+
+    public decodeWithHistory: move self, input: [UInt8], history: move [UInt8; ~] -> Result<Decoded, Error> {
+        history => output!
+        self -> decodeInto(input, output!)? => position
+        Result<Decoded, Error>.Ok(Decoded { output: output!, position: position })
+    }
+
+    public decodeInto: move self, input: [UInt8], output: mut [UInt8; ~] -> Result<prefix.Position, Error> {
+        (output -> len) <= self.maxOutputBytes
+            and self.expectedOutputBytes <= self.maxOutputBytes - (output -> len)
+            -> unless { errorPosition(errors.Kind.OutputLimitExceeded, UIntSize((output -> len) + self.expectedOutputBytes)) -> return }
+        [Int; ~] => previousTypes!
+        [Int; ~] => currentTypes!
+        [Int; ~] => remaining!
+        [Int; ~] => distanceRing!
+        0 => category!
+        category! < 3 -> while {
+            previousTypes! -> push(1)
+            currentTypes! -> push(0)
+            remaining! -> push(self.header.blockStreams[category!].initialLength)
+            category! + 1 => category!
+        }
+        distanceRing! -> push(16)
+        distanceRing! -> push(15)
+        distanceRing! -> push(11)
+        distanceRing! -> push(4)
+        0 => distanceIndex!
+        self.header.position => current!
+        output -> len => outputLength!
+        outputLength! + self.expectedOutputBytes => targetOutputLength
+        output -> reserve(targetOutputLength)
+        targetOutputLength -> dictionaryResolver? => dictionary
+        0 => commands!
+        self.header.commandTrees -> len => commandTreeCount
+        self.header.contextModes -> len => contextModeCount
+        self.header.literalContextMap -> len => literalContextCount
+        self.header.literalTrees -> len => literalTreeCount
+        self.header.distanceContextMap -> len => distanceContextCount
+        self.header.distanceTrees -> len => distanceTreeCount
+
+        outputLength! < targetOutputLength -> while {
+            commands! + 1 => commands!
+            commands! <= self.maxCommands
+                -> unless { errorPosition(errors.Kind.CommandLimitExceeded, UIntSize(commands!)) -> return }
+            self.header.blockStreams[1] -> ensureBlock(
+            input,
+            current!,
+            1,
+            previousTypes!,
+            currentTypes!,
+            remaining!)? => current!
+            remaining![1] - 1 => remaining![1]
+            currentTypes![1] < commandTreeCount
+                -> unless { errorPosition(errors.Kind.InvalidCommand, UIntSize(currentTypes![1])) -> return }
+            self.header.commandTrees[currentTypes![1]] -> readSymbol(input, current!)? => command
+            command.position => current!
+            command.symbol >= 0 and command.symbol < 704
+                -> unless { errorPosition(errors.Kind.InvalidCommand, UIntSize(command.symbol)) -> return }
+            command.symbol / 64 => rangeIndex!
+            0 => distanceCode!
+            rangeIndex! >= 2 -> if {
+                rangeIndex! - 2 => rangeIndex!
+                -1 => distanceCode!
+            }
+            rangeIndex! >= 0 and rangeIndex! <= 8
+                -> unless { errorPosition(errors.Kind.InvalidCommand, UIntSize(rangeIndex!)) -> return }
+            (rangeIndex! -> insertRange) + (command.symbol / 8) % 8 => insertCode
+            (rangeIndex! -> copyRange) + command.symbol % 8 => copyCode
+            input -> readBits(current!, insertCode -> insertBits)? => insertExtra
+            input -> readBits(insertExtra.position, copyCode -> copyBits)? => copyExtra
+            copyExtra.position => current!
+            (insertCode -> insertOffset) + insertExtra.value => insertLength
+            (copyCode -> copyOffset) + copyExtra.value => copyLength
+            insertLength <= targetOutputLength - outputLength!
+                -> unless { errorPosition(errors.Kind.OutputLimitExceeded, UIntSize(outputLength! + insertLength)) -> return }
+
+            0 => inserted!
+            inserted! < insertLength -> while {
+                self.header.blockStreams[0] -> ensureBlock(
+                input,
+                current!,
+                0,
+                previousTypes!,
+                currentTypes!,
+                remaining!)? => current!
+                remaining![0] - 1 => remaining![0]
+                outputLength! > 0 -> if { Int(output[outputLength! - 1]) } else { 0 } => previous
+                outputLength! > 1 -> if { Int(output[outputLength! - 2]) } else { 0 } => secondPrevious
+                currentTypes![0] < contextModeCount
+                    -> unless { errorPosition(errors.Kind.InvalidLiteralTree, UIntSize(currentTypes![0])) -> return }
+                self.header.contextModes[currentTypes![0]] -> id(UInt8(previous), UInt8(secondPrevious)) => contextId
+                currentTypes![0] * 64 + contextId => mapIndex
+                mapIndex >= 0 and mapIndex < literalContextCount
+                    -> unless { errorPosition(errors.Kind.InvalidLiteralTree, UIntSize(mapIndex)) -> return }
+                self.header.literalContextMap[mapIndex] => treeIndex
+                treeIndex >= 0 and treeIndex < literalTreeCount
+                    -> unless { errorPosition(errors.Kind.InvalidLiteralTree, UIntSize(treeIndex)) -> return }
+                self.header.literalTrees[treeIndex] -> readSymbol(input, current!)? => literal
+                literal.position => current!
+                literal.symbol >= 0 and literal.symbol <= 255
+                    -> unless { errorPosition(errors.Kind.InvalidLiteralTree, UIntSize(literal.symbol)) -> return }
+                output -> push(UInt8(literal.symbol))
+                outputLength! + 1 => outputLength!
+                inserted! + 1 => inserted!
+            }
+
+            outputLength! == targetOutputLength -> if { break }
+            distanceCode! < 0 -> if {
+                self.header.blockStreams[2] -> ensureBlock(
+                input,
+                current!,
+                2,
+                previousTypes!,
+                currentTypes!,
+                remaining!)? => current!
+                remaining![2] - 1 => remaining![2]
+                copyLength > 4 -> if { 3 } else { copyLength - 2 } => distanceContext
+                currentTypes![2] * 4 + distanceContext => mapIndex
+                mapIndex >= 0 and mapIndex < distanceContextCount
+                    -> unless { errorPosition(errors.Kind.InvalidDistanceTree, UIntSize(mapIndex)) -> return }
+                self.header.distanceContextMap[mapIndex] => treeIndex
+                treeIndex >= 0 and treeIndex < distanceTreeCount
+                    -> unless { errorPosition(errors.Kind.InvalidDistanceTree, UIntSize(treeIndex)) -> return }
+                self.header.distanceTrees[treeIndex] -> readSymbol(input, current!)? => distanceSymbol
+                distanceSymbol.position => current!
+                distanceSymbol.symbol => distanceCode!
+                distanceCode! >= self.header.directDistanceCodes
+                    -> if {
+                        distanceCode! - self.header.directDistanceCodes => normalized
+                        self.header.distancePostfixBits -> powerOfTwo => postfixSize
+                        normalized % postfixSize => postfix
+                        normalized / postfixSize => prefixCode
+                        prefixCode / 2 + 1 => extraWidth
+                        ((2 + prefixCode % 2) * (extraWidth -> powerOfTwo)) - 4 => offset
+                        input -> readBits(current!, extraWidth)? => distanceExtra
+                        distanceExtra.position => current!
+                        self.header.directDistanceCodes + postfix + (offset + distanceExtra.value) * postfixSize => distanceCode!
+                    }
+            }
+
+            0 => distance!
+            distanceCode! < 16 -> if {
+                (distanceIndex! + (distanceCode! -> shortIndexOffset)) % 4 => ringIndex
+                distanceRing![ringIndex] + (distanceCode! -> shortValueOffset) => distance!
+            } else {
+                distanceCode! - 15 => distance!
+            }
+            distance! > 0
+                -> unless { errorPosition(errors.Kind.InvalidDistance, UIntSize(distance!)) -> return }
+            outputLength! < self.maxWindowBytes -> if { outputLength! } else { self.maxWindowBytes } => maxDistance
+            distance! <= maxDistance -> if {
+                copyLength <= targetOutputLength - outputLength!
+                    -> unless { errorPosition(errors.Kind.OutputLimitExceeded, UIntSize(outputLength! + copyLength)) -> return }
+                distanceCode! > 0 -> if {
+                    distance! => distanceRing![distanceIndex! % 4]
+                    distanceIndex! + 1 => distanceIndex!
+                }
+                0 => copied!
+                copied! < copyLength -> while {
+                    output -> push(output[outputLength! - distance!])
+                    outputLength! + 1 => outputLength!
+                    copied! + 1 => copied!
+                }
+            } else {
+                dictionary -> appendDictionary(copyLength, distance!, maxDistance, output)? => appended
+                outputLength! + appended => outputLength!
+            }
+        }
+
+        Result<prefix.Position, Error>.Ok(current!)
+    }
+}
+
+impl Reader {
+    public read: mut self, window: mut prefix.Window -> Result<ReaderRead, Error> {
+        true -> while {
+            self.phase -> when {
+                BlockTypeSymbol {
+                    self.header.blockStreams[self.blockCategory] -> blockTypeSymbol(window) -> when {
+                        Err(error) { errorReaderRead(error.kind, error.offset) -> return }
+                        Ok(probed) {
+                            probed -> when {
+                                NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                Ready(decoded) {
+                                    decoded.symbol => self.blockTypeCode
+                                    model.ReaderPhase.BlockLengthSymbol => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                BlockLengthSymbol {
+                    self.header.blockStreams[self.blockCategory] -> blockLengthSymbol(window) -> when {
+                        Err(error) { errorReaderRead(error.kind, error.offset) -> return }
+                        Ok(probed) {
+                            probed -> when {
+                                NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                Ready(decoded) {
+                                    decoded.symbol => self.blockLengthCode
+                                    model.ReaderPhase.BlockLengthExtra => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                BlockLengthExtra {
+                    self.header.blockStreams[self.blockCategory] -> blockLengthExtraBits(self.blockLengthCode)? => width
+                    window -> readWindowBits(width)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            self.header.blockStreams[self.blockCategory] -> blockSwitchedType(
+                            self.blockTypeCode,
+                            self.previousTypes[self.blockCategory],
+                            self.currentTypes[self.blockCategory])? => nextType
+                            self.header.blockStreams[self.blockCategory] -> blockDecodedLength(self.blockLengthCode, extra)? => length
+                            self.previousTypes -> setAt(self.blockCategory, self.currentTypes[self.blockCategory])
+                            self.currentTypes -> setAt(self.blockCategory, nextType)
+                            self.remaining -> setAt(self.blockCategory, length)
+                            self.resumePhase => self.phase
+                        }
+                    }
+                }
+                CommandSymbol {
+                    self.output -> len => outputLength
+                    outputLength >= self.targetOutputLength -> if {
+                        model.ReaderPhase.Finished => self.phase
+                    } else {
+                        self.remaining[1] > 0 -> unless {
+                            1 => self.blockCategory
+                            model.ReaderPhase.CommandSymbol => self.resumePhase
+                            model.ReaderPhase.BlockTypeSymbol => self.phase
+                            continue
+                        }
+                        self.commands + 1 => self.commands
+                        self.commands <= self.maxCommands
+                            -> unless { errorReaderRead(errors.Kind.CommandLimitExceeded, UIntSize(self.commands)) -> return }
+                        self.currentTypes[1] < (self.header.commandTrees -> len)
+                            -> unless { errorReaderRead(errors.Kind.InvalidCommand, UIntSize(self.currentTypes[1])) -> return }
+                        window -> symbol(self.header.commandTrees[self.currentTypes[1]]) -> when {
+                            Err(error) { errorReaderRead(error.kind -> mapTableError, error.offset) -> return }
+                            Ok(probed) {
+                                probed -> when {
+                                    NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                    Ready(decoded) {
+                                        self.remaining -> setAt(1, self.remaining[1] - 1)
+                                        decoded.symbol >= 0 and decoded.symbol < 704
+                                            -> unless { errorReaderRead(errors.Kind.InvalidCommand, UIntSize(decoded.symbol)) -> return }
+                                        decoded.symbol / 64 => rangeIndex!
+                                        0 => self.distanceCode
+                                        rangeIndex! >= 2 -> if {
+                                            rangeIndex! - 2 => rangeIndex!
+                                            -1 => self.distanceCode
+                                        }
+                                        rangeIndex! >= 0 and rangeIndex! <= 8
+                                            -> unless { errorReaderRead(errors.Kind.InvalidCommand, UIntSize(rangeIndex!)) -> return }
+                                        (rangeIndex! -> insertRange) + (decoded.symbol / 8) % 8 => self.insertCode
+                                        (rangeIndex! -> copyRange) + decoded.symbol % 8 => self.copyCode
+                                        model.ReaderPhase.InsertExtra => self.phase
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                InsertExtra {
+                    window -> readWindowBits(self.insertCode -> insertBits)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            (self.insertCode -> insertOffset) + extra => self.insertLength
+                            model.ReaderPhase.CopyExtra => self.phase
+                        }
+                    }
+                }
+                CopyExtra {
+                    window -> readWindowBits(self.copyCode -> copyBits)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            (self.copyCode -> copyOffset) + extra => self.copyLength
+                            self.insertLength <= self.targetOutputLength - (self.output -> len)
+                                -> unless { errorReaderRead(errors.Kind.OutputLimitExceeded, UIntSize((self.output -> len) + self.insertLength)) -> return }
+                            0 => self.inserted
+                            model.ReaderPhase.LiteralSymbol => self.phase
+                        }
+                    }
+                }
+                LiteralSymbol {
+                    self.inserted < self.insertLength -> if {
+                        self.remaining[0] > 0 -> unless {
+                            0 => self.blockCategory
+                            model.ReaderPhase.LiteralSymbol => self.resumePhase
+                            model.ReaderPhase.BlockTypeSymbol => self.phase
+                            continue
+                        }
+                        self.output -> len => outputLength
+                        outputLength > 0 -> if { Int(self.output[outputLength - 1]) } else { 0 } => previous
+                        outputLength > 1 -> if { Int(self.output[outputLength - 2]) } else { 0 } => secondPrevious
+                        self.currentTypes[0] < (self.header.contextModes -> len)
+                            -> unless { errorReaderRead(errors.Kind.InvalidLiteralTree, UIntSize(self.currentTypes[0])) -> return }
+                        self.header.contextModes[self.currentTypes[0]] -> id(UInt8(previous), UInt8(secondPrevious)) => contextId
+                        self.currentTypes[0] * 64 + contextId => mapIndex
+                        mapIndex >= 0 and mapIndex < (self.header.literalContextMap -> len)
+                            -> unless { errorReaderRead(errors.Kind.InvalidLiteralTree, UIntSize(mapIndex)) -> return }
+                        self.header.literalContextMap[mapIndex] => treeIndex
+                        treeIndex >= 0 and treeIndex < (self.header.literalTrees -> len)
+                            -> unless { errorReaderRead(errors.Kind.InvalidLiteralTree, UIntSize(treeIndex)) -> return }
+                        window -> symbol(self.header.literalTrees[treeIndex]) -> when {
+                            Err(error) { errorReaderRead(error.kind -> mapTableError, error.offset) -> return }
+                            Ok(probed) {
+                                probed -> when {
+                                    NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                    Ready(decoded) {
+                                        decoded.symbol >= 0 and decoded.symbol <= 255
+                                            -> unless { errorReaderRead(errors.Kind.InvalidLiteralTree, UIntSize(decoded.symbol)) -> return }
+                                        self.output -> push(UInt8(decoded.symbol))
+                                        self.remaining -> setAt(0, self.remaining[0] - 1)
+                                        self.inserted + 1 => self.inserted
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        self.output -> len => outputLength
+                        outputLength == self.targetOutputLength -> if {
+                            model.ReaderPhase.Finished => self.phase
+                        } else {
+                            self.distanceCode < 0 -> if {
+                                model.ReaderPhase.DistanceSymbol => self.phase
+                            } else {
+                                model.ReaderPhase.Copy => self.phase
+                            }
+                        }
+                    }
+                }
+                DistanceSymbol {
+                    self.remaining[2] > 0 -> unless {
+                        2 => self.blockCategory
+                        model.ReaderPhase.DistanceSymbol => self.resumePhase
+                        model.ReaderPhase.BlockTypeSymbol => self.phase
+                        continue
+                    }
+                    self.copyLength > 4 -> if { 3 } else { self.copyLength - 2 } => distanceContext
+                    self.currentTypes[2] * 4 + distanceContext => mapIndex
+                    mapIndex >= 0 and mapIndex < (self.header.distanceContextMap -> len)
+                        -> unless { errorReaderRead(errors.Kind.InvalidDistanceTree, UIntSize(mapIndex)) -> return }
+                    self.header.distanceContextMap[mapIndex] => treeIndex
+                    treeIndex >= 0 and treeIndex < (self.header.distanceTrees -> len)
+                        -> unless { errorReaderRead(errors.Kind.InvalidDistanceTree, UIntSize(treeIndex)) -> return }
+                    window -> symbol(self.header.distanceTrees[treeIndex]) -> when {
+                        Err(error) { errorReaderRead(error.kind -> mapTableError, error.offset) -> return }
+                        Ok(probed) {
+                            probed -> when {
+                                NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                Ready(decoded) {
+                                    self.remaining -> setAt(2, self.remaining[2] - 1)
+                                    decoded.symbol => self.distanceCode
+                                    self.distanceCode >= self.header.directDistanceCodes
+                                        -> if {
+                                            self.distanceCode - self.header.directDistanceCodes => normalized
+                                            self.header.distancePostfixBits -> powerOfTwo => postfixSize
+                                            normalized % postfixSize => self.distancePostfix
+                                            normalized / postfixSize => prefixCode
+                                            prefixCode / 2 + 1 => self.distanceExtraWidth
+                                            ((2 + prefixCode % 2) * (self.distanceExtraWidth -> powerOfTwo)) - 4 => self.distanceOffset
+                                            model.ReaderPhase.DistanceExtra => self.phase
+                                        } else {
+                                            model.ReaderPhase.Copy => self.phase
+                                        }
+                                }
+                            }
+                        }
+                    }
+                }
+                DistanceExtra {
+                    window -> readWindowBits(self.distanceExtraWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            self.header.directDistanceCodes + self.distancePostfix + (self.distanceOffset + extra) * (self.header.distancePostfixBits -> powerOfTwo) => self.distanceCode
+                            model.ReaderPhase.Copy => self.phase
+                        }
+                    }
+                }
+                Copy {
+                    0 => distance!
+                    self.distanceCode < 16 -> if {
+                        (self.distanceIndex + (self.distanceCode -> shortIndexOffset)) % 4 => ringIndex
+                        self.distanceRing[ringIndex] + (self.distanceCode -> shortValueOffset) => distance!
+                    } else {
+                        self.distanceCode - 15 => distance!
+                    }
+                    distance! > 0
+                        -> unless { errorReaderRead(errors.Kind.InvalidDistance, UIntSize(distance!)) -> return }
+                    (self.output -> len) < self.maxWindowBytes -> if { self.output -> len } else { self.maxWindowBytes } => maxDistance
+                    distance! <= maxDistance -> if {
+                        self.copyLength <= self.targetOutputLength - (self.output -> len)
+                            -> unless { errorReaderRead(errors.Kind.OutputLimitExceeded, UIntSize((self.output -> len) + self.copyLength)) -> return }
+                        self.distanceCode > 0 -> if {
+                            self.distanceRing -> setAt(self.distanceIndex % 4, distance!)
+                            self.distanceIndex + 1 => self.distanceIndex
+                        }
+                        0 => copied!
+                        copied! < self.copyLength -> while {
+                            self.output -> push(self.output[(self.output -> len) - distance!])
+                            copied! + 1 => copied!
+                        }
+                    } else {
+                        self.dictionary -> appendDictionary(self.copyLength, distance!, maxDistance, self.output)? => appended
+                        appended >= 0
+                            -> unless { errorReaderRead(errors.Kind.InvalidDistance, UIntSize(appended)) -> return }
+                    }
+                    model.ReaderPhase.CommandSymbol => self.phase
+                }
+                Finished { Result<ReaderRead, Error>.Ok(model.ReaderRead.Ready) -> return }
+            }
+        }
+        errorReaderRead(errors.Kind.InvalidCommand, UIntSize(self.output -> len))
+    }
+
+    public finish: move self -> Result<Streamed, Error> {
+        self.phase -> when {
+            Finished { true }
+            else { false }
+        } => finished
+        finished -> unless { errorStreamed(errors.Kind.TruncatedInput, UIntSize(self.output -> len)) -> return }
+        self.output => output
+        Result<Streamed, Error>.Ok(Streamed { output: output })
+    }
+}
+
+impl Streamed {
+    public intoOutput: move self -> [UInt8; ~] {
+        self.output => output
+        output
+    }
+}

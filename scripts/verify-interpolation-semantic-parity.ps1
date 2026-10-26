@@ -7,6 +7,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+function Invoke-InterpolationVerificationSource {
+    param([string]$Root, [string]$RelativePath)
+    if ($RelativePath -cne 'scripts/verify-utf8-each-runtime.ps1') {
+        throw "Unsupported interpolation verification script: $RelativePath"
+    }
+    $path = Join-Path $Root $RelativePath
+    $before = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    & $path -RepositoryRoot $Root
+    if (-not $?) { throw "Current interpolation verification script failed: $RelativePath" }
+    $after = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    if ($before -cne $after) { throw "Interpolation verification script changed during execution: $RelativePath" }
+    return $after
+}
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
 . (Join-Path $PSScriptRoot 'verification-artifact-identity.ps1')
 . (Join-Path $PSScriptRoot 'verification-c527-historical-baseline.ps1')
@@ -1850,8 +1863,17 @@ foreach ($layer in @(
         }
     }
 }
+# Verification scripts are executed as verification tools; their bytes are not
+# language compiler inputs. Keep the historical hash claim intact and validate
+# the current script before excluding it from the compiler-source pair closure.
+$verifiedVerificationSourceHashes = @{}
+foreach ($relative in @($currentSourceHashes.Keys)) {
+    if ([IO.Path]::GetExtension($relative) -cne '.ps1') { continue }
+    $verifiedVerificationSourceHashes[$relative] = Invoke-InterpolationVerificationSource -Root $root -RelativePath $relative
+}
 $mismatchedSourcePaths = @(
 foreach ($entry in $currentSourceHashes.GetEnumerator()) {
+    if ($verifiedVerificationSourceHashes.ContainsKey($entry.Key)) { continue }
     if ((Get-CompilerEvidenceHash -RepositoryRoot $root -ArchivedNativeBuild -LiteralPath (Join-Path $root $entry.Key) -Algorithm SHA256).Hash -cne $entry.Value) {
         $entry.Key
     }

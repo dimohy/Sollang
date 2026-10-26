@@ -1,0 +1,508 @@
+namespace std.io
+
+import std.io as model
+
+public enum ErrorKind {
+    InvalidLimit
+    UnexpectedEnd
+    OutputLimitExceeded
+    InvalidPosition
+    InvalidProgress
+    WriteZero
+}
+
+public struct Error {
+    public kind: ErrorKind
+    public offset: UIntSize
+}
+
+# End is distinct from a zero-sized request. Bytes owns the returned chunk, so
+# it can safely outlive the reader without retaining a hidden borrow.
+public enum Read {
+    Bytes([UInt8; ~])
+    End
+}
+
+# Portable byte streams expose exactly one caller-buffer primitive per
+# direction. The progress shape is fixed while the associated failure preserves
+# each domain's exact error without a wrapper object or dynamic dispatch.
+public trait Reader {
+    type Failure
+    readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Failure>
+}
+
+public trait Writer {
+    type Failure
+    writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Failure>
+}
+
+public enum CopyCompletion {
+    End
+    Limit
+}
+
+public struct CopyOutcome {
+    public bytes: Int
+    public completion: CopyCompletion
+}
+
+# The policy owns both resource ceilings. copy is synchronous because Reader
+# and Writer are synchronous protocols; asynchronous file/socket adapters use a
+# distinct task-returning contract instead of blocking behind this surface.
+public struct TransferPolicy {
+    public maxBytes: Int
+    public bufferBytes: Int
+}
+
+# ReplayBuffer makes exact reads transactional at the caller boundary without
+# claiming that the underlying stream cursor can move backward. Storage and
+# scratch capacity are allocated once and bounded by maxReplayBytes.
+public struct ReplayBuffer {
+    bytes: [UInt8; ~]
+    start: Int
+    scratch: [UInt8; ~]
+    maxReplayBytes: Int
+    logicalOffset: Int
+}
+
+# MemoryReader owns its backing bytes. Reads advance an explicit cursor and
+# never perform an unbounded read. readExact is transactional on failure.
+public struct MemoryReader {
+    public bytes: [UInt8; ~]
+    public offset: Int
+    public maxReadBytes: Int
+}
+
+# write exposes partial progress; writeAll is the checked all-or-nothing helper.
+public struct MemoryWriter {
+    public bytes: [UInt8; ~]
+    public maxOutputBytes: Int
+}
+
+error kind: ErrorKind, offset: UIntSize -> Error => Error {
+    kind: kind
+    offset: offset
+}
+
+appendRange source: [UInt8], start: Int, count: Int, output: mut [UInt8; ~] -> Unit {
+    output -> reserve((output -> len) + count)
+    0 => index!
+    index! < count -> while {
+        output -> push(source[start + index!])
+        index! + 1 => index!
+    }
+}
+
+compactPrefix bytes: mut [UInt8; ~], start: Int -> Unit {
+    (bytes -> len) - start => retained
+    0 => index!
+    index! < retained -> while {
+        bytes[start + index!] => bytes[index!]
+        index! + 1 => index!
+    }
+    (bytes -> len) > retained -> while {
+        bytes -> take((bytes -> len) - 1) => discarded
+    }
+}
+
+public memoryReader bytes: move [UInt8; ~], maxReadBytes: Int -> Result<MemoryReader, Error> {
+    maxReadBytes >= 0 -> unless {
+        Result<MemoryReader, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<MemoryReader, Error>.Ok(MemoryReader {
+        bytes: bytes
+        offset: 0
+        maxReadBytes: maxReadBytes
+    })
+}
+
+public memoryWriter maxOutputBytes: Int -> Result<MemoryWriter, Error> {
+    maxOutputBytes >= 0 -> unless {
+        Result<MemoryWriter, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<MemoryWriter, Error>.Ok(MemoryWriter {
+        bytes: [UInt8; ~]
+        maxOutputBytes: maxOutputBytes
+    })
+}
+
+public transferPolicy maxBytes: Int, bufferBytes: Int -> Result<TransferPolicy, Error> {
+    maxBytes >= 0 and bufferBytes > 0 -> unless {
+        Result<TransferPolicy, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    Result<TransferPolicy, Error>.Ok(TransferPolicy {
+        maxBytes: maxBytes
+        bufferBytes: bufferBytes
+    })
+}
+
+public replayBuffer maxReplayBytes: Int -> Result<ReplayBuffer, Error> {
+    maxReplayBytes >= 0 -> unless {
+        Result<ReplayBuffer, Error>.Err(error(model.ErrorKind.InvalidLimit, 0)) -> return
+    }
+    [UInt8; ~] => bytes!
+    [UInt8; ~] => scratch!
+    bytes! -> reserve(maxReplayBytes)
+    scratch! -> reserve(maxReplayBytes)
+    Result<ReplayBuffer, Error>.Ok(ReplayBuffer {
+        bytes: bytes!
+        start: 0
+        scratch: scratch!
+        maxReplayBytes: maxReplayBytes
+        logicalOffset: 0
+    })
+}
+
+impl Error {
+    public errorKind: self -> ErrorKind => self.kind
+
+    public errorOffset: self -> UIntSize => self.offset
+}
+
+impl MemoryReader {
+    public position: self -> UIntSize => UIntSize(self.offset)
+
+    public remaining: self -> Int => (self.bytes -> len) - self.offset
+
+    public isEnd: self -> Bool => self.offset == (self.bytes -> len)
+
+    # The caller owns and sizes output. A successful transfer performs no
+    # allocation; zero means either an empty destination or end of input.
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        self -> remaining => available
+        (output -> len) < available -> if { output -> len } else { available } => count
+        0 => index!
+        index! < count -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count => self.offset
+        Result<Int, Error>.Ok(count)
+    }
+
+    # Failure is transactional: validate the configured limit and full source
+    # range before mutating either the destination or the reader cursor.
+    public readExactInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        (output -> len) <= (self -> remaining) -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.UnexpectedEnd, UIntSize(self.offset))) -> return
+        }
+        0 => index!
+        index! < (output -> len) -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + (output -> len) => self.offset
+        Result<Int, Error>.Ok(output -> len)
+    }
+
+    public read: mut self, maxBytes: Int -> Result<Read, Error> {
+        maxBytes >= 0 and maxBytes <= self.maxReadBytes
+            -> unless {
+                Result<Read, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+            }
+        self -> isEnd -> if { Result<Read, Error>.Ok(model.Read.End) -> return }
+
+        self -> remaining => available
+        maxBytes < available -> if { maxBytes } else { available } => count
+        [UInt8; ~] => chunk!
+        appendRange(self.bytes, self.offset, count, chunk!)
+        self.offset + count => self.offset
+        Result<Read, Error>.Ok(model.Read.Bytes(chunk!))
+    }
+
+    public readExact: mut self, count: Int -> Result<[UInt8; ~], Error> {
+        count >= 0 and count <= self.maxReadBytes -> unless {
+            Result<[UInt8; ~], Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        count <= (self -> remaining) -> unless {
+            Result<[UInt8; ~], Error>.Err(error(model.ErrorKind.UnexpectedEnd, UIntSize(self.offset))) -> return
+        }
+        [UInt8; ~] => chunk!
+        appendRange(self.bytes, self.offset, count, chunk!)
+        self.offset + count => self.offset
+        Result<[UInt8; ~], Error>.Ok(chunk!)
+    }
+
+    public seek: mut self, position: UIntSize -> Result<Unit, Error> {
+        position <= UIntSize(self.bytes -> len) -> unless {
+            Result<Unit, Error>.Err(error(model.ErrorKind.InvalidPosition, position)) -> return
+        }
+        Int(position) => self.offset
+        Result<Unit, Error>.Ok
+    }
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}
+
+impl Reader for MemoryReader {
+    type Failure = Error
+
+    public readInto: mut self, output: mut [UInt8; ~] -> Result<Int, Error> {
+        (output -> len) <= self.maxReadBytes -> unless {
+            Result<Int, Error>.Err(error(model.ErrorKind.InvalidLimit, UIntSize(self.offset))) -> return
+        }
+        self -> remaining => available
+        (output -> len) < available -> if { output -> len } else { available } => count
+        0 => index!
+        index! < count -> while {
+            self.bytes[self.offset + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.offset + count => self.offset
+        Result<Int, Error>.Ok(count)
+    }
+}
+
+impl MemoryWriter {
+    public byteCount: self -> Int => self.bytes -> len
+
+    public remainingCapacity: self -> Int => self.maxOutputBytes - (self.bytes -> len)
+
+    public write: mut self, input: [UInt8] -> Int {
+        self -> remainingCapacity => available
+        (input -> len) < available -> if { input -> len } else { available } => count
+        appendRange(input, 0, count, self.bytes)
+        count
+    }
+
+    public writeRange: mut self, input: [UInt8], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
+        UIntSize(input -> len) => inputLength
+        offset <= inputLength and length <= inputLength - offset
+            -> unless {
+                Result<Int, Error>.Err(error(model.ErrorKind.InvalidPosition, offset)) -> return
+            }
+        self -> remainingCapacity => available
+        Int(length) < available -> if { Int(length) } else { available } => count
+        appendRange(input, Int(offset), count, self.bytes)
+        Result<Int, Error>.Ok(count)
+    }
+
+    public writeAll: mut self, input: [UInt8] -> Result<Int, Error> {
+        (input -> len) <= (self -> remainingCapacity)
+            -> unless {
+                Result<Int, Error>.Err(
+                error(model.ErrorKind.OutputLimitExceeded, UIntSize(self.bytes -> len))) -> return
+            }
+        appendRange(input, 0, input -> len, self.bytes)
+        Result<Int, Error>.Ok(input -> len)
+    }
+
+    public flush: self -> Unit { }
+
+    public intoBytes: move self -> [UInt8; ~] {
+        self.bytes => bytes
+        bytes
+    }
+}
+
+impl Writer for MemoryWriter {
+    type Failure = Error
+
+    public writeRange: mut self, input: ref [UInt8; ~], offset: UIntSize, length: UIntSize -> Result<Int, Error> {
+        UIntSize(input -> len) => inputLength
+        offset <= inputLength and length <= inputLength - offset
+            -> unless {
+                Result<Int, Error>.Err(error(model.ErrorKind.InvalidPosition, offset)) -> return
+            }
+        self -> remainingCapacity => available
+        Int(length) < available -> if { Int(length) } else { available } => count
+        appendRange(input, Int(offset), count, self.bytes)
+        Result<Int, Error>.Ok(count)
+    }
+}
+
+impl CopyOutcome {
+    public byteCount: self -> Int => self.bytes
+
+    public reachedEnd: self -> Bool => self.completion -> when {
+        End { true }
+        Limit { false }
+    }
+}
+
+impl TransferPolicy {
+    # Copies through one reusable caller-owned buffer. The source is never read
+    # beyond maxBytes, so Limit is observable without consuming a probe byte.
+    # A writer that reports successful zero progress fails deterministically.
+    public copy<R, W>: self, reader: mut R, writer: mut W -> Result<CopyOutcome, Error> where R: Reader, R.Failure == Error, W: Writer, W.Failure == Error {
+        [UInt8; ~] => buffer!
+        0 => initialized!
+        initialized! < self.bufferBytes -> while {
+            buffer! -> push(0)
+            initialized! + 1 => initialized!
+        }
+
+        0 => transferred!
+        false => ended!
+        transferred! < self.maxBytes and not ended! -> while {
+            self.maxBytes - transferred! => remaining
+            (buffer! -> len) > remaining -> while {
+                buffer! -> take((buffer! -> len) - 1) => removed
+            }
+
+            reader -> model.Reader.readInto(buffer!)? => readCount
+            readCount >= 0 and readCount <= (buffer! -> len)
+                -> unless {
+                    Result<CopyOutcome, Error>.Err(
+                    error(model.ErrorKind.InvalidProgress, UIntSize(transferred!))) -> return
+                }
+            readCount == 0 -> if {
+                true => ended!
+            } else {
+                0 => written!
+                written! < readCount -> while {
+                    writer
+                        -> model.Writer.writeRange(
+                    buffer!,
+                    UIntSize(written!),
+                    UIntSize(readCount - written!))? => writeCount
+                    writeCount > 0 and writeCount <= readCount - written!
+                        -> unless {
+                            writeCount == 0 -> if {
+                                Result<CopyOutcome, Error>.Err(
+                                error(model.ErrorKind.WriteZero, UIntSize(transferred! + written!))) -> return
+                            }
+                            Result<CopyOutcome, Error>.Err(
+                            error(model.ErrorKind.InvalidProgress, UIntSize(transferred! + written!))) -> return
+                        }
+                    written! + writeCount => written!
+                }
+                transferred! + readCount => transferred!
+            }
+        }
+
+        ended! -> if { model.CopyCompletion.End } else { model.CopyCompletion.Limit } => completion
+        Result<CopyOutcome, Error>.Ok(CopyOutcome {
+            bytes: transferred!
+            completion: completion
+        })
+    }
+
+    # Reads through reusable scratch owned by replay and publishes one owned
+    # aggregate only after end is observed. replay must have room for the
+    # configured maximum plus one probe byte. An over-limit probe stays in the
+    # replay buffer, so a later call with a larger policy loses no source data.
+    public readAll<R>: self, replay: mut ReplayBuffer, reader: mut R -> Result<[UInt8; ~], Error> where R: Reader, R.Failure == Error {
+        self.maxBytes >= 0
+            and self.bufferBytes > 0
+            and self.maxBytes < replay.maxReplayBytes
+            -> unless {
+                Result<[UInt8; ~], Error>.Err(
+                error(model.ErrorKind.InvalidLimit, UIntSize(replay.logicalOffset))) -> return
+            }
+
+        replay.start > 0 -> if {
+            compactPrefix(replay.bytes, replay.start)
+            0 => replay.start
+        }
+        (replay -> bufferedBytes) > self.maxBytes -> if {
+            Result<[UInt8; ~], Error>.Err(error(
+            model.ErrorKind.OutputLimitExceeded,
+            UIntSize(replay.logicalOffset + self.maxBytes))) -> return
+        }
+
+        false => ended!
+        (replay -> bufferedBytes) <= self.maxBytes and not ended!
+            -> while {
+                (self.maxBytes + 1) - (replay -> bufferedBytes) => remaining
+                self.bufferBytes < remaining -> if { self.bufferBytes } else { remaining } => requested
+                (replay.scratch -> len) > requested -> while {
+                    replay.scratch -> take((replay.scratch -> len) - 1) => discarded
+                }
+                (replay.scratch -> len) < requested -> while {
+                    replay.scratch -> push(0)
+                }
+
+                reader -> model.Reader.readInto(replay.scratch)? => readCount
+                readCount >= 0 and readCount <= requested -> unless {
+                    Result<[UInt8; ~], Error>.Err(error(
+                    model.ErrorKind.InvalidProgress,
+                    UIntSize(replay.logicalOffset + (replay -> bufferedBytes)))) -> return
+                }
+                readCount == 0 -> if {
+                    true => ended!
+                } else {
+                    appendRange(replay.scratch, 0, readCount, replay.bytes)
+                }
+            }
+
+        (replay -> bufferedBytes) > self.maxBytes -> if {
+            Result<[UInt8; ~], Error>.Err(error(
+            model.ErrorKind.OutputLimitExceeded,
+            UIntSize(replay.logicalOffset + self.maxBytes))) -> return
+        }
+
+        replay -> bufferedBytes => count
+        [UInt8; ~] => output!
+        output! -> reserve(count)
+        appendRange(replay.bytes, replay.start, count, output!)
+        replay.start + count => replay.start
+        replay.logicalOffset + count => replay.logicalOffset
+        Result<[UInt8; ~], Error>.Ok(output!)
+    }
+}
+
+impl ReplayBuffer {
+    public position: self -> UIntSize => UIntSize(self.logicalOffset)
+
+    public bufferedBytes: self -> Int => (self.bytes -> len) - self.start
+
+    # A short read keeps its prefix inside the adapter for the next logical
+    # read. output and logicalOffset change only after the complete request is
+    # available. The source cursor itself is intentionally not rolled back.
+    public readExactFrom<R>: mut self, reader: mut R, output: mut [UInt8; ~] -> Result<Int, Error> where R: Reader, R.Failure == Error {
+        output -> len => requested
+        requested <= self.maxReplayBytes -> unless {
+            Result<Int, Error>.Err(
+            error(model.ErrorKind.InvalidLimit, UIntSize(self.logicalOffset))) -> return
+        }
+
+        # Reclaim consumed prefix storage before any source read. This keeps
+        # the physical replay buffer within the configured ceiling.
+        self.start > 0 -> if {
+            compactPrefix(self.bytes, self.start)
+            0 => self.start
+        }
+
+        (self -> bufferedBytes) < requested -> while {
+            requested - (self -> bufferedBytes) => needed
+            (self.scratch -> len) > needed -> while {
+                self.scratch -> take((self.scratch -> len) - 1) => discarded
+            }
+            (self.scratch -> len) < needed -> while {
+                self.scratch -> push(0)
+            }
+
+            reader -> model.Reader.readInto(self.scratch)? => readCount
+            readCount >= 0 and readCount <= needed -> unless {
+                Result<Int, Error>.Err(error(
+                model.ErrorKind.InvalidProgress,
+                UIntSize(self.logicalOffset + (self -> bufferedBytes)))) -> return
+            }
+            readCount > 0 -> unless {
+                Result<Int, Error>.Err(error(
+                model.ErrorKind.UnexpectedEnd,
+                UIntSize(self.logicalOffset + (self -> bufferedBytes)))) -> return
+            }
+            appendRange(self.scratch, 0, readCount, self.bytes)
+        }
+
+        0 => index!
+        index! < requested -> while {
+            self.bytes[self.start + index!] => output[index!]
+            index! + 1 => index!
+        }
+        self.start + requested => self.start
+        self.logicalOffset + requested => self.logicalOffset
+        Result<Int, Error>.Ok(requested)
+    }
+}

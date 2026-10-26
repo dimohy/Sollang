@@ -3499,6 +3499,7 @@ Invoke-CheckedContract -Name "test-verification-socket-completion-ir.ps1"
 # Keep source-only contracts ahead of formatter/compiler/runtime probes.
 foreach ($name in @(
     "verify-focused-slg-format.ps1"
+    "test-interpolation-verification-sources.ps1"
     "verify-llvm-no-allocation-audit.ps1"
     "verify-portable-memory-io-contract.ps1"
 )) {

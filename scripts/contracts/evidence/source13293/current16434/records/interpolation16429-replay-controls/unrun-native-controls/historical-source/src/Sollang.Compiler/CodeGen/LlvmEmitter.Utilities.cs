@@ -1,0 +1,2010 @@
+using System.Globalization;
+using System.Text;
+using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Syntax;
+
+namespace Sollang.Compiler.CodeGen;
+
+internal sealed partial class LlvmEmitter
+{
+    private void EmitGlobalLine(string line = "")
+    {
+        _activeGlobals.WriteLine(line);
+    }
+
+    private void EmitGlobalBlock(string block)
+    {
+        _activeGlobals.Write(EnsureTrailingNewLine(block));
+    }
+
+    private void EmitFunctionLine(string line = "")
+    {
+        _activeFunctions.WriteLine(line);
+        if (line.EndsWith(':'))
+        {
+            _currentBlockTerminated = false;
+        }
+    }
+
+    private void EmitFunctionBlock(string block)
+    {
+        _activeFunctions.Write(EnsureTrailingNewLine(block));
+    }
+
+    private void EmitPlatformGlobalBlock(Action<StringBuilder> emit)
+    {
+        var block = new StringBuilder();
+        emit(block);
+        EmitGlobalBlock(block.ToString());
+    }
+
+    private void EmitPlatformFunctionBlock(Action<StringBuilder> emit)
+    {
+        var block = new StringBuilder();
+        emit(block);
+        EmitFunctionBlock(block.ToString());
+    }
+
+    private static string EnsureTrailingNewLine(string block)
+    {
+        return block.EndsWith(Environment.NewLine, StringComparison.Ordinal)
+            ? block
+            : block + Environment.NewLine;
+    }
+
+    private bool TryResolveFunction(IReadOnlyList<string> path, out BoundFunction function)
+    {
+        var name = string.Join('.', path);
+        if (!name.Contains('.', StringComparison.Ordinal)
+            && _currentFunction is { ModuleName.Length: > 0 } currentFunction
+            && _currentFunctions.TryGetValue(currentFunction.ModuleName + "." + name, out function!))
+        {
+            return true;
+        }
+
+        return _currentFunctions.TryGetValue(name, out function!);
+    }
+
+    private bool TryResolveCalledFunction(CallExpression call, out BoundFunction function)
+    {
+        return _program.ResolvedGenericCalls.TryGetValue(call, out function!)
+            || TryResolveFunction(call.Path, out function);
+    }
+
+    private bool TryResolveFlowTargetFunction(
+        FlowTarget target,
+        BoundType? sourceType,
+        out BoundFunction function)
+    {
+        var path = string.Join('.', target.Path);
+        return (sourceType is { } receiverType
+                && TryResolveInstanceMethod(receiverType, path, out function!))
+            || _program.ResolvedGenericCalls.TryGetValue(target, out function!)
+            || TryResolveFunction(target.Path, out function!);
+    }
+
+    private static IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
+        IReadOnlyDictionary<string, BoundFunction> parentFunctions,
+        IReadOnlyDictionary<string, BoundFunction> localFunctions)
+    {
+        if (localFunctions.Count == 0)
+        {
+            return parentFunctions;
+        }
+
+        var functions = new Dictionary<string, BoundFunction>(parentFunctions, StringComparer.Ordinal);
+        foreach (var (name, function) in localFunctions)
+        {
+            functions[name] = function;
+        }
+
+        return functions;
+    }
+
+    private IReadOnlyDictionary<string, BoundFunction> FunctionScope(BoundFunction function)
+    {
+        return _functionScopes.TryGetValue(function, out var scope)
+            ? scope
+            : CreateFunctionScope(_program.Functions, function.LocalFunctions);
+    }
+
+    private RuntimeValue ResolveLocal(string name)
+    {
+        var value = _locals.TryGetValue(name, out var local)
+            ? local
+            : throw new SollangException($"unknown runtime binding '{name}' while emitting '{_currentFunction?.Name ?? "main"}'");
+
+        if (_mutableStructSlots.TryGetValue(name, out var pointer))
+        {
+            var loaded = NextTemp("mutable_struct");
+            EmitLoad(loaded, LlvmStructType(value.Type), pointer, 8);
+            return new RuntimeStruct(value.Type, loaded);
+        }
+        if (_mutableScalarSlots.TryGetValue(name, out var scalarPointer))
+        {
+            var loaded = NextTemp("mutable_scalar");
+            EmitLoad(loaded, LlvmType(value.Type), scalarPointer, RuntimeAlignment(value.Type));
+            return DematerializeAggregateValue(value.Type, loaded);
+        }
+
+        return LoadMutableContainer(name, value);
+    }
+
+    private RuntimeValue EmitYield(
+        RuntimeValue value,
+        IReadOnlyList<RuntimeValue> additionalValues,
+        RuntimeBlockInvocation invocation)
+    {
+        var blockFunctionLocals = CaptureLocals();
+        var blockFunctionFunctions = _currentFunctions;
+        var blockFunction = _currentFunction;
+        RestoreLocals(invocation.CallerLocals);
+        var callbackOuterLocals = CaptureLocals();
+        _locals[invocation.ItemName] = value;
+        if (additionalValues.Count != invocation.AdditionalItems.Count)
+        {
+            throw new SollangException(
+                $"block callback expects {invocation.AdditionalItems.Count} additional value(s)");
+        }
+        for (var index = 0; index < additionalValues.Count; index++)
+        {
+            var item = invocation.AdditionalItems[index];
+            EnsureRuntimeType(additionalValues[index], item.Type, item.Name);
+            _locals[item.Name] = additionalValues[index];
+        }
+        var yieldedBlockLocals = invocation.OwnsItem
+            ? callbackOuterLocals
+            : CaptureLocals();
+        _currentFunctions = invocation.CallerFunctions;
+        _currentFunction = invocation.CallerFunction;
+        var adjustedLoopContext = false;
+        if (invocation.OwnsItem && _loopContexts.TryPeek(out var activeLoop))
+        {
+            _loopContexts.Push(activeLoop with { OuterScope = callbackOuterLocals });
+            adjustedLoopContext = true;
+        }
+        RuntimeValue result = RuntimeUnit.Instance;
+        try
+        {
+            if (invocation.ResultType == BoundType.Unit)
+            {
+                EmitStatements(invocation.Body);
+                if (!_currentBlockTerminated)
+                {
+                    DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
+                }
+            }
+            else
+            {
+                if (invocation.Body.Count == 0
+                    || invocation.Body[^1] is not ExpressionStatement callbackResult)
+                {
+                    throw new SollangException("result-producing block callback requires a final expression");
+                }
+
+                EmitStatements(invocation.Body.Take(invocation.Body.Count - 1).ToArray());
+                result = EmitExpression(callbackResult.Expression);
+                EnsureRuntimeType(result, invocation.ResultType, "block callback");
+                var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
+                    ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
+                    : null;
+                DropOwnedLocalsCreatedSince(
+                    yieldedBlockLocals,
+                    transferredOwnerName,
+                    callbackResult.Expression);
+            }
+        }
+        finally
+        {
+            if (adjustedLoopContext)
+            {
+                _loopContexts.Pop();
+            }
+            _currentFunctions = blockFunctionFunctions;
+            _currentFunction = blockFunction;
+            RestoreLocals(blockFunctionLocals);
+        }
+
+        return result;
+    }
+
+    private void EmitStreamValue(RuntimeValue value, RuntimeStreamSink sink)
+    {
+        switch (sink)
+        {
+            case RuntimeStreamConsumer consumer:
+                _ = EmitYield(value, [], consumer.Invocation);
+                return;
+            case RuntimeStreamStage stage:
+                EmitUserBlockFunctionCall(
+                    stage.Call with { ResultName = null, ResultIsSynthetic = false },
+                    stage.Function,
+                    stage.Next,
+                    streamedArgument: value,
+                    callSite: stage.CallSite,
+                    streamedAdditionalArguments: stage.AdditionalArguments);
+                return;
+            case RuntimeUserStreamStage stage:
+                EmitUserStreamStage(value, stage);
+                return;
+            case RuntimeStreamTerminalStage terminal:
+                EmitUserBlockFunctionCall(
+                    terminal.Call with { ResultName = null, ResultIsSynthetic = false },
+                    terminal.Function,
+                    streamedArgument: value,
+                    callSite: terminal.CallSite,
+                    streamedAdditionalArguments: terminal.AdditionalArguments);
+                return;
+            default:
+                throw new SollangException("unknown runtime stream sink");
+        }
+    }
+
+    private void EmitUserStreamStage(RuntimeValue value, RuntimeUserStreamStage stage)
+    {
+        var returnLocals = CaptureLocals();
+        var previousInvocation = _currentBlockInvocation;
+        var previousFunction = _currentFunction;
+        var previousFunctions = _currentFunctions;
+        var previousContinuation = _currentStreamContinuation;
+        try
+        {
+            RestoreLocals(stage.StateLocals);
+            _locals[stage.Function.InputName ?? "it"] = value;
+            if (stage.Function.BlockInputType is not null)
+            {
+                var additionalBlockParameters = stage.Function.AdditionalBlockParameters ?? [];
+                var additionalItemNames = stage.Call.AdditionalItemNames ?? [];
+                if (additionalItemNames.Count != additionalBlockParameters.Count)
+                {
+                    throw new SollangException(
+                        $"block function '{stage.Function.Name}' expects "
+                        + $"{1 + additionalBlockParameters.Count} block item name(s)");
+                }
+                _currentBlockInvocation = new RuntimeBlockInvocation(
+                    stage.Call.ItemName,
+                    additionalItemNames.Select((name, index) =>
+                        (name, additionalBlockParameters[index].Type)).ToArray(),
+                    stage.Call.Body,
+                    stage.CallSite.Locals,
+                    stage.CallSite.Functions,
+                    stage.CallSite.Function,
+                    stage.Function.BlockResultType ?? BoundType.Unit,
+                    OwnsItem: false);
+            }
+            _currentFunction = stage.Function;
+            _currentFunctions = CreateFunctionScope(stage.CallSite.Functions, stage.Function.LocalFunctions);
+            _currentStreamContinuation = stage.Next;
+            EmitStatements(stage.Function.BlockBody
+                .Where(static statement => statement is not BindingStatement { IsStreamState: true })
+                .ToArray());
+            if (!_currentBlockTerminated && stage.Function.Body is not null)
+            {
+                var result = EmitExpression(stage.Function.Body);
+                EnsureRuntimeType(result, stage.Function.ReturnType, stage.Function.Name);
+            }
+        }
+        finally
+        {
+            _currentBlockInvocation = previousInvocation;
+            _currentFunction = previousFunction;
+            _currentFunctions = previousFunctions;
+            _currentStreamContinuation = previousContinuation;
+            RestoreLocals(returnLocals);
+        }
+    }
+
+    private LocalScope CaptureLocals()
+    {
+        return new LocalScope(
+            new Dictionary<string, RuntimeValue>(_locals, StringComparer.Ordinal),
+            new HashSet<string>(_mutableLocals, StringComparer.Ordinal),
+            new HashSet<string>(_borrowedMutableLocals, StringComparer.Ordinal),
+            new HashSet<string>(_borrowedOwnedLocals, StringComparer.Ordinal),
+            _movedOwnedStructFields.ToDictionary(
+                static item => item.Key,
+                static item => new HashSet<string>(item.Value, StringComparer.Ordinal),
+                StringComparer.Ordinal),
+            new Dictionary<string, MutableContainerSlot>(_mutableContainerSlots, StringComparer.Ordinal),
+            new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal),
+            new Dictionary<string, string>(_mutableScalarSlots, StringComparer.Ordinal),
+            new Dictionary<string, string>(_readonlyCaptureBorrowPointers, StringComparer.Ordinal),
+            new Dictionary<RuntimeValue, string>(_readonlyValueSlots),
+            new Dictionary<string, string>(_borrowedOwnedTransferFlags, StringComparer.Ordinal),
+            [.. _terminatingOwnedCleanupObligations]);
+    }
+
+    private void ClearLocalState()
+    {
+        _currentHoistedAllocas = null;
+        _currentAsyncDiagnosticHeader = "null";
+        _locals.Clear();
+        _mutableLocals.Clear();
+        _borrowedMutableLocals.Clear();
+        _borrowedOwnedLocals.Clear();
+        _terminatingOwnedCleanupObligations.Clear();
+        _nextOwnedCleanupBindingId = 0;
+        _movedOwnedStructFields.Clear();
+        _mutableContainerSlots.Clear();
+        _mutableStructSlots.Clear();
+        _mutableScalarSlots.Clear();
+        _readonlyCaptureBorrowPointers.Clear();
+        _readonlyValueSlots.Clear();
+    }
+
+    private void SelectStackFrame(BoundFunction function)
+    {
+        _currentStackFramePlan = _program.FunctionStackFrames.TryGetValue(function, out var frame)
+            ? frame
+            : StackFramePlan.Empty;
+    }
+
+    private void EmitStackFrameAllocations()
+    {
+        foreach (var slot in _currentStackFramePlan.Slots)
+        {
+            EmitAlloca(
+                StackSlotPointer(slot.Index),
+                $"[{slot.Size.ToString(CultureInfo.InvariantCulture)} x i8]",
+                slot.Alignment);
+        }
+        _currentHoistedAllocas = _activeFunctions.CreateInsertionPoint();
+    }
+
+    private string EmitStackLifetimeStart(object unit)
+    {
+        if (!_currentStackFramePlan.TryGetAllocation(unit, out var allocation))
+        {
+            throw new SollangException("stack-promoted container has no frame allocation");
+        }
+
+        var pointer = StackSlotPointer(allocation.SlotIndex);
+        EmitInstruction(
+            $"call void @llvm.lifetime.start.p0(i64 {allocation.Size.ToString(CultureInfo.InvariantCulture)}, ptr {pointer})");
+        return pointer;
+    }
+
+    private void EmitStackLifetimeEndsAfter(object unit)
+    {
+        // Lifetime intrinsics are ordinary LLVM instructions and therefore
+        // cannot be appended after ret, br, unreachable, or another terminator.
+        // Omitting the hint on a terminating path is semantically harmless;
+        // emitting it would make every following label part of invalid IR.
+        if (_currentBlockTerminated)
+        {
+            return;
+        }
+        foreach (var allocation in _currentStackFramePlan.GetLifetimesEndingAfter(unit))
+        {
+            EmitStackLifetimeEnd(allocation);
+        }
+    }
+
+    private void EmitStackLifetimeEnd(StackAllocationPlan allocation)
+    {
+        EmitInstruction(
+            $"call void @llvm.lifetime.end.p0(i64 {allocation.Size.ToString(CultureInfo.InvariantCulture)}, ptr {StackSlotPointer(allocation.SlotIndex)})");
+    }
+
+    private static string StackSlotPointer(int slotIndex)
+    {
+        return $"%stack_slot{slotIndex.ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    private void RestoreLocals(LocalScope scope)
+    {
+        _locals.Clear();
+        foreach (var (name, value) in scope.Locals)
+        {
+            _locals.Add(name, value);
+        }
+
+        _mutableLocals.Clear();
+        foreach (var name in scope.MutableLocals)
+        {
+            _mutableLocals.Add(name);
+        }
+
+        _borrowedMutableLocals.Clear();
+        foreach (var name in scope.BorrowedMutableLocals)
+        {
+            _borrowedMutableLocals.Add(name);
+        }
+
+        _borrowedOwnedLocals.Clear();
+        foreach (var name in scope.BorrowedOwnedLocals)
+        {
+            _borrowedOwnedLocals.Add(name);
+        }
+
+        _borrowedOwnedTransferFlags.Clear();
+        foreach (var (name, pointer) in scope.BorrowedOwnedTransferFlags)
+        {
+            _borrowedOwnedTransferFlags.Add(name, pointer);
+        }
+
+        _movedOwnedStructFields.Clear();
+        foreach (var (name, fields) in scope.MovedOwnedStructFields)
+        {
+            _movedOwnedStructFields.Add(
+                name,
+                new HashSet<string>(fields, StringComparer.Ordinal));
+        }
+
+        _mutableContainerSlots.Clear();
+        foreach (var (name, slot) in scope.MutableContainerSlots)
+        {
+            _mutableContainerSlots.Add(name, slot);
+        }
+
+        _mutableStructSlots.Clear();
+        foreach (var (name, pointer) in scope.MutableStructSlots)
+        {
+            _mutableStructSlots.Add(name, pointer);
+        }
+
+        _mutableScalarSlots.Clear();
+        foreach (var (name, pointer) in scope.MutableScalarSlots)
+        {
+            _mutableScalarSlots.Add(name, pointer);
+        }
+
+        _readonlyCaptureBorrowPointers.Clear();
+        foreach (var (name, pointer) in scope.ReadonlyCaptureBorrowPointers)
+        {
+            _readonlyCaptureBorrowPointers.Add(name, pointer);
+        }
+
+        _readonlyValueSlots.Clear();
+        foreach (var (value, pointer) in scope.ReadonlyValueSlots)
+        {
+            _readonlyValueSlots.Add(value, pointer);
+        }
+
+        _terminatingOwnedCleanupObligations.Clear();
+        _terminatingOwnedCleanupObligations.AddRange(scope.TerminatingOwnedCleanupObligations);
+    }
+
+    private static LocalScope KeepLocalsInScope(LocalScope scope, IEnumerable<string> names)
+    {
+        var retainedNames = names.ToHashSet(StringComparer.Ordinal);
+        var retainedLocals = scope.Locals
+            .Where(local => retainedNames.Contains(local.Key))
+            .ToDictionary(static local => local.Key, static local => local.Value, StringComparer.Ordinal);
+        var retainedValues = retainedLocals.Values.ToHashSet();
+        return new LocalScope(
+            retainedLocals,
+            scope.MutableLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedMutableLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.BorrowedOwnedLocals.Where(retainedNames.Contains).ToHashSet(StringComparer.Ordinal),
+            scope.MovedOwnedStructFields
+                .Where(item => retainedNames.Contains(item.Key))
+                .ToDictionary(
+                    static item => item.Key,
+                    static item => new HashSet<string>(item.Value, StringComparer.Ordinal),
+                    StringComparer.Ordinal),
+            scope.MutableContainerSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableStructSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.MutableScalarSlots
+                .Where(slot => retainedNames.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value, StringComparer.Ordinal),
+            scope.ReadonlyCaptureBorrowPointers
+                .Where(pointer => retainedNames.Contains(pointer.Key))
+                .ToDictionary(static pointer => pointer.Key, static pointer => pointer.Value, StringComparer.Ordinal),
+            scope.ReadonlyValueSlots
+                .Where(slot => retainedValues.Contains(slot.Key))
+                .ToDictionary(static slot => slot.Key, static slot => slot.Value),
+            scope.BorrowedOwnedTransferFlags
+                .Where(flag => retainedNames.Contains(flag.Key))
+                .ToDictionary(static flag => flag.Key, static flag => flag.Value, StringComparer.Ordinal),
+            scope.TerminatingOwnedCleanupObligations
+                .Where(obligation => obligation.BindingName is null
+                    || retainedNames.Contains(obligation.BindingName))
+                .ToList());
+    }
+
+    private void DropOwnedLocals(
+        string? transferredOwnerName = null,
+        Expression? transferredExpression = null)
+    {
+        foreach (var (name, storedValue) in _locals.Reverse())
+        {
+            if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
+            {
+                if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
+                {
+                    continue;
+                }
+                EndMutableContainerSlotLifetime(name);
+                continue;
+            }
+            DropOwnedLocal(name, storedValue);
+        }
+        foreach (var obligation in _terminatingOwnedCleanupObligations.AsEnumerable().Reverse())
+        {
+            DropTerminatingOwnedCleanupObligation(obligation);
+        }
+    }
+
+    private void DropOwnedLocalsCreatedSince(
+        LocalScope outerScope,
+        string? transferredOwnerName,
+        Expression? transferredExpression = null)
+    {
+        foreach (var (name, storedValue) in _locals.Reverse())
+        {
+            if (outerScope.Locals.ContainsKey(name))
+            {
+                continue;
+            }
+
+            if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
+            {
+                if (TryDropTransferredOwnerSiblings(name, storedValue, transferredExpression))
+                {
+                    continue;
+                }
+                EndMutableContainerSlotLifetime(name);
+                continue;
+            }
+
+            DropOwnedLocal(name, storedValue);
+        }
+    }
+
+    private bool TryDropTransferredOwnerSiblings(
+        string ownerName,
+        RuntimeValue storedValue,
+        Expression? transferredExpression)
+    {
+        if (transferredExpression is null
+            || !_program.Types.IsStruct(storedValue.Type)
+            || GetTransferredOwnedStructFieldName(
+                transferredExpression,
+                ownerName,
+                storedValue.Type) is not { } transferredFieldName)
+        {
+            return false;
+        }
+
+        var owner = _mutableStructSlots.TryGetValue(ownerName, out var structPointer)
+            ? LoadMutableStruct(storedValue, structPointer)
+            : storedValue;
+        DropOwnedStructFieldsExceptMoved(
+            ownerName,
+            (RuntimeStruct)owner,
+            transferredFieldName);
+        EndMutableContainerSlotLifetime(ownerName);
+        return true;
+    }
+
+    private void DropOwnedLocal(string name, RuntimeValue storedValue)
+    {
+        if (_borrowedMutableLocals.Contains(name) || _borrowedOwnedLocals.Contains(name))
+        {
+            return;
+        }
+
+        var value = _mutableStructSlots.TryGetValue(name, out var structPointer)
+            ? LoadMutableStruct(storedValue, structPointer)
+            : LoadMutableContainer(name, storedValue);
+        if (value is RuntimeStruct structure
+            && _movedOwnedStructFields.ContainsKey(name))
+        {
+            DropOwnedStructFieldsExceptMoved(name, structure);
+        }
+        else
+        {
+            DropOwnedRuntimeValue(value);
+        }
+        EndMutableContainerSlotLifetime(name);
+    }
+
+    private void DropTerminatingOwnedCleanupObligation(TerminatingOwnedCleanupObligation obligation)
+    {
+        if (obligation.ExcludedProjectedField is { } excludedField
+            && obligation.Value is RuntimeStruct projectedOwner)
+        {
+            DropOwnedStructFieldsExcept(projectedOwner, excludedField);
+            return;
+        }
+        if (obligation.RetainedFlag is { } retainedFlag)
+        {
+            DropOwnedRuntimeValueIfRetained(retainedFlag, obligation.Value);
+            return;
+        }
+        DropOwnedRuntimeValue(obligation.Value);
+    }
+
+    private RuntimeValue LoadMutableStruct(RuntimeValue storedValue, string pointer)
+    {
+        var loaded = NextTemp("mutable_struct");
+        EmitLoad(loaded, LlvmStructType(storedValue.Type), pointer, 8);
+        return new RuntimeStruct(storedValue.Type, loaded);
+    }
+
+    private void DropOwnedRuntimeValue(RuntimeValue value)
+    {
+        if (IsCustomOwnedType(value.Type)
+            && value is not (RuntimeStaticIntArray or RuntimeStaticTextArray or RuntimeStaticInlineArray or RuntimeSourceText))
+        {
+            var materialized = MaterializeAggregateValue(value);
+            EmitOwnedDropCall(value.Type, materialized.ValueName);
+            return;
+        }
+
+        switch (value)
+        {
+            case RuntimeProducerStream stream:
+                var hasDrop = NextTemp("stream_has_drop");
+                EmitCompare(hasDrop, "ne", "ptr", stream.DropName, "null");
+                var dropLabel = NextLabel("stream_drop");
+                var doneLabel = NextLabel("stream_drop_done");
+                EmitConditionalBranch(hasDrop, dropLabel, doneLabel);
+                EmitFunctionLine();
+                EmitLabel(dropLabel);
+                EmitIndirectCall(target: null, "void", stream.DropName, $"ptr {stream.ContextName}");
+                EmitBranch(doneLabel);
+                EmitFunctionLine();
+                EmitLabel(doneLabel);
+                _currentBlockLabel = doneLabel;
+                break;
+            case RuntimeTask task:
+                EmitAwaitTask(task, discardResult: true);
+                break;
+            case RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeStaticTextArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap } array:
+                DropStaticInlineArrayElements(array);
+                EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap } array:
+                DropDynamicInlineArrayElements(array);
+                EmitCall(target: null, "void", "sollang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap } dictionary:
+                EmitCall(target: null, "void", "sollang_free", $"ptr {dictionary.PointerName}");
+                break;
+            case RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap } dictionary:
+                DropInlineDictionaryElements(dictionary);
+                EmitCall(target: null, "void", "sollang_free", $"ptr {dictionary.PointerName}");
+                break;
+            case RuntimeArena arena:
+                EmitCall(target: null, "void", "sollang_free", $"ptr {arena.PointerName}");
+                break;
+            case RuntimeMappedBytes mapped:
+                EmitCall(target: null, "void", "sollang_mapped_unmap",
+                    $"ptr {mapped.BasePointerName}, i64 {mapped.MappedLengthName}");
+                break;
+            case RuntimeSourceText source:
+                EmitSourceTextUnmap(source.BasePointerName, source.MappedLengthName);
+                break;
+        }
+
+    }
+
+    private void DropStaticInlineArrayElements(RuntimeStaticInlineArray array)
+    {
+        var definition = _program.Types.GetStaticArray(array.ArrayType);
+        if (!_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            return;
+        }
+
+        var llvmType = LlvmType(definition.ElementType);
+        for (var index = 0; index < array.Length; index++)
+        {
+            var slot = NextTemp("drop_array_slot");
+            EmitAssign(
+                slot,
+                $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            var value = NextTemp("drop_array_value");
+            EmitLoad(value, llvmType, slot, definition.ElementAlignment);
+            EmitOwnedDropCall(definition.ElementType, value);
+        }
+    }
+
+    private void DropDynamicInlineArrayElements(RuntimeDynamicInlineArray array)
+    {
+        var elementType = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementType
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementType;
+        var elementAlignment = _program.Types.IsBoundedArray(array.ArrayType)
+            ? _program.Types.GetBoundedArray(array.ArrayType).ElementAlignment
+            : _program.Types.GetDynamicArray(array.ArrayType).ElementAlignment;
+        if (!_program.Types.ContainsOwnedStorage(elementType))
+        {
+            return;
+        }
+
+        var entryLabel = _currentBlockLabel;
+        var loopLabel = NextLabel("drop_dynamic_array");
+        var bodyLabel = NextLabel("drop_dynamic_array_body");
+        var continueLabel = NextLabel("drop_dynamic_array_continue");
+        var doneLabel = NextLabel("drop_dynamic_array_done");
+        var nextIndex = NextTemp("drop_dynamic_array_next");
+        var llvmType = LlvmType(elementType);
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(loopLabel);
+        var index = NextTemp("drop_dynamic_array_index");
+        EmitPhi(index, "i64", ("0", entryLabel), (nextIndex, continueLabel));
+        var active = NextTemp("drop_dynamic_array_active");
+        EmitCompare(active, "ult", "i64", index, array.LengthName);
+        EmitConditionalBranch(active, bodyLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(bodyLabel);
+        string slot;
+        if (_program.Types.IsDeque(array.ArrayType))
+        {
+            slot = EmitDequeElementPointer(array, index, "drop_deque");
+        }
+        else
+        {
+            slot = NextTemp("drop_dynamic_array_slot");
+            EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        }
+        var value = NextTemp("drop_dynamic_array_value");
+        EmitLoad(value, llvmType, slot, elementAlignment);
+        EmitOwnedDropCall(elementType, value);
+        EmitBranch(continueLabel);
+        EmitFunctionLine();
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
+        EmitBinary(nextIndex, "add", "i64", index, "1");
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private static bool RequiresHeapAllocation(RuntimeValue value)
+    {
+        return value is RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeStaticTextArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeArena
+            or RuntimeBox
+            or RuntimeTask
+            or RuntimeProducerStream;
+    }
+
+    private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
+    {
+        return value is RuntimeDynamicIntArray or RuntimeDynamicInlineArray or RuntimeIntDictionary or RuntimeInlineDictionary
+            || _program.Types.ContainsOwnedStorage(value.Type);
+    }
+
+    private void RemoveLocal(string name)
+    {
+        if (_borrowedOwnedTransferFlags.TryGetValue(name, out var transferFlag))
+        {
+            EmitStore("i1", "false", transferFlag, 1);
+        }
+        EndMutableContainerSlotLifetime(name);
+        _locals.Remove(name);
+        _mutableLocals.Remove(name);
+        _borrowedMutableLocals.Remove(name);
+        _borrowedOwnedLocals.Remove(name);
+        _movedOwnedStructFields.Remove(name);
+        _mutableContainerSlots.Remove(name);
+        _mutableStructSlots.Remove(name);
+        _mutableScalarSlots.Remove(name);
+    }
+
+    private void MarkMovedOwnedStructField(string ownerName, string fieldName)
+    {
+        if (_locals.TryGetValue(ownerName, out var ownerValue)
+            && ownerValue is RuntimeStruct owner)
+        {
+            var movedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var existingFields)
+                ? existingFields
+                    .Append(fieldName)
+                    .Select(static path => (IReadOnlyList<string>)path.Split('.'))
+                    .ToArray()
+                : [(IReadOnlyList<string>)fieldName.Split('.')];
+            if (OwnedProjectionPathsCoverStorage(owner.Type, movedPaths))
+            {
+                if (_borrowedOwnedTransferFlags.TryGetValue(ownerName, out var transferFlag))
+                {
+                    EmitStore("i1", "false", transferFlag, 1);
+                }
+            }
+        }
+        if (!_movedOwnedStructFields.TryGetValue(ownerName, out var fields))
+        {
+            fields = new HashSet<string>(StringComparer.Ordinal);
+            _movedOwnedStructFields.Add(ownerName, fields);
+        }
+        fields.Add(fieldName);
+    }
+
+    private bool IsMovedOwnedStructField(string ownerName, string fieldName) =>
+        _movedOwnedStructFields.TryGetValue(ownerName, out var fields)
+        && fields.Contains(fieldName);
+
+    private bool IsMovedOwnedStructPath(string ownerName, IReadOnlyList<string> fieldPath, bool allowMovedDescendant)
+    {
+        if (!_movedOwnedStructFields.TryGetValue(ownerName, out var movedPaths))
+        {
+            return false;
+        }
+        return movedPaths.Any(path =>
+        {
+            var moved = path.Split('.');
+            var common = Math.Min(moved.Length, fieldPath.Count);
+            if (!moved.Take(common).SequenceEqual(fieldPath.Take(common), StringComparer.Ordinal))
+            {
+                return false;
+            }
+            return moved.Length <= fieldPath.Count || !allowMovedDescendant;
+        });
+    }
+
+    private void RepairMovedOwnedStructField(string ownerName, string fieldName)
+    {
+        if (!_movedOwnedStructFields.TryGetValue(ownerName, out var fields))
+        {
+            return;
+        }
+        fields.Remove(fieldName);
+        if (fields.Count == 0)
+        {
+            _movedOwnedStructFields.Remove(ownerName);
+        }
+    }
+
+    private void DropOwnedStructFieldsExceptMoved(
+        string ownerName,
+        RuntimeStruct owner,
+        params string[] additionallyExcludedFieldNames)
+    {
+        var transferredPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
+            ? movedFields.Select(static path => (IReadOnlyList<string>)path.Split('.')).ToList()
+            : [];
+        transferredPaths.AddRange(additionallyExcludedFieldNames.Select(static field =>
+            (IReadOnlyList<string>)new[] { field }));
+        DropOwnedStructFieldsExceptTransferred(owner, transferredPaths);
+    }
+
+    private void DropOwnedStructFieldsExceptMovedAndTransferred(
+        string ownerName,
+        RuntimeStruct owner,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths)
+    {
+        var combinedPaths = _movedOwnedStructFields.TryGetValue(ownerName, out var movedFields)
+            ? movedFields.Select(static path => (IReadOnlyList<string>)path.Split('.')).ToList()
+            : [];
+        combinedPaths.AddRange(transferredPaths);
+        DropOwnedStructFieldsExceptTransferred(owner, combinedPaths);
+    }
+
+    private void DropOwnedStructFieldsExceptTransferred(
+        RuntimeStruct owner,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths,
+        IReadOnlySet<string>? excludedFieldNames = null)
+    {
+        var definition = _program.Types.GetStruct(owner.Type);
+        var llvmType = LlvmStructType(owner.Type);
+        foreach (var field in definition.Fields.Where(field =>
+                     (excludedFieldNames is null || !excludedFieldNames.Contains(field.Name))
+                     && _program.Types.ContainsOwnedStorage(field.Type)))
+        {
+            var matchingPaths = transferredPaths
+                .Where(path => path.Count > 0 && string.Equals(path[0], field.Name, StringComparison.Ordinal))
+                .ToArray();
+            if (matchingPaths.Any(path => path.Count == 1))
+            {
+                continue;
+            }
+
+            var value = NextTemp("drop_untransferred_field");
+            EmitAssign(
+                value,
+                $"extractvalue {llvmType} {owner.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            if (matchingPaths.Length == 0)
+            {
+                EmitOwnedDropCall(field.Type, value);
+                continue;
+            }
+            if (!_program.Types.IsStruct(field.Type))
+            {
+                throw new SollangException(
+                    $"owned projection transfer path descends through non-struct field '{definition.Name}.{field.Name}'");
+            }
+
+            var nestedPaths = matchingPaths
+                .Select(path => (IReadOnlyList<string>)path.Skip(1).ToArray())
+                .ToArray();
+            DropOwnedStructFieldsExceptTransferred(
+                new RuntimeStruct(field.Type, value),
+                nestedPaths);
+        }
+    }
+
+    private void CreateMutableContainerSlot(BindingStatement binding, RuntimeValue value)
+    {
+        var isInlineBoundedContainer = value switch
+        {
+            RuntimeDynamicInlineArray array => _program.Types.IsBoundedArray(array.ArrayType),
+            RuntimeInlineDictionary dictionary => _program.Types.IsBoundedDictionary(dictionary.DictionaryType),
+            _ => false
+        };
+        if (!RequiresHeapAllocation(value) && !isInlineBoundedContainer)
+        {
+            // Copyable enums are mutable values too. Keeping only their initial
+            // SSA value loses rebindings when branch/loop scopes are restored.
+            // Owned enums retain their separate transfer/drop policy.
+            var isCopyableEnum = value is RuntimeEnum
+                && !_program.Types.ContainsOwnedStorage(value.Type);
+            if (value is not (RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText)
+                && !isCopyableEnum)
+            {
+                return;
+            }
+            var materialized = MaterializeAggregateValue(value);
+            var scalarPointer = NextTemp("mutable_scalar_slot");
+            EmitAlloca(scalarPointer, materialized.TypeName, RuntimeAlignment(value.Type));
+            EmitStore(materialized.TypeName, materialized.ValueName, scalarPointer, RuntimeAlignment(value.Type));
+            _mutableScalarSlots.Add(binding.Name, scalarPointer);
+            return;
+        }
+
+        MutableContainerSlot slot;
+        if (_currentStackFramePlan.TryGetAllocation(binding, out var allocation))
+        {
+            var pointerAddress = EmitStackLifetimeStart(binding);
+            var lengthAddress = NextTemp("mutable_len_addr");
+            EmitAssign(lengthAddress, $"getelementptr i8, ptr {pointerAddress}, i64 8");
+            var capacityAddress = NextTemp("mutable_capacity_addr");
+            EmitAssign(capacityAddress, $"getelementptr i8, ptr {pointerAddress}, i64 16");
+            slot = new MutableContainerSlot(
+                pointerAddress,
+                lengthAddress,
+                capacityAddress,
+                allocation);
+        }
+        else
+        {
+            slot = new MutableContainerSlot(
+                NextTemp("mutable_ptr_addr"),
+                NextTemp("mutable_len_addr"),
+                NextTemp("mutable_capacity_addr"),
+                StackAllocation: null);
+            EmitAlloca(slot.PointerAddress, "ptr", 8);
+            EmitAlloca(slot.LengthAddress, "i64", 8);
+            EmitAlloca(slot.CapacityAddress, "i64", 8);
+        }
+
+        _mutableContainerSlots[binding.Name] = slot;
+        StoreMutableContainer(binding.Name, value);
+    }
+
+    private void EndMutableContainerSlotLifetime(string name)
+    {
+        if (_mutableContainerSlots.TryGetValue(name, out var slot)
+            && slot.StackAllocation is not null)
+        {
+            EmitStackLifetimeEnd(slot.StackAllocation);
+        }
+    }
+
+    private RuntimeValue LoadMutableContainer(string name, RuntimeValue value)
+    {
+        if (!_mutableContainerSlots.TryGetValue(name, out var slot))
+        {
+            return value;
+        }
+
+        var pointer = NextTemp("mutable_ptr");
+        var length = NextTemp("mutable_len");
+        var capacity = NextTemp("mutable_capacity");
+        EmitLoad(pointer, "ptr", slot.PointerAddress, 8);
+        EmitLoad(length, "i64", slot.LengthAddress, 8);
+        EmitLoad(capacity, "i64", slot.CapacityAddress, 8);
+
+        return value switch
+        {
+            RuntimeStaticIntArray array => array with { PointerName = pointer, LengthName = length },
+            RuntimeStaticTextArray array => array with { PointerName = pointer, LengthName = length },
+            RuntimeStaticInlineArray array => array with { PointerName = pointer, LengthName = length },
+            RuntimeDynamicIntArray => new RuntimeDynamicIntArray(pointer, length, capacity),
+            RuntimeDynamicInlineArray array => array with
+            {
+                PointerName = pointer,
+                LengthName = length,
+                CapacityName = capacity
+            },
+            RuntimeIntDictionary => new RuntimeIntDictionary(pointer, length, capacity),
+            RuntimeArena => new RuntimeArena(pointer, length, capacity),
+            RuntimeInlineDictionary dictionary => dictionary with
+            {
+                PointerName = pointer,
+                LengthName = length,
+                CapacityName = capacity
+            },
+            _ => value
+        };
+    }
+
+    private void StoreMutableContainer(string name, RuntimeValue value)
+    {
+        if (!_mutableContainerSlots.TryGetValue(name, out var slot))
+        {
+            return;
+        }
+
+        switch (value)
+        {
+            case RuntimeStaticIntArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
+            case RuntimeStaticTextArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
+            case RuntimeStaticInlineArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.AllocatedLength.ToString(CultureInfo.InvariantCulture), slot.CapacityAddress, 8);
+                break;
+            case RuntimeDynamicIntArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeDynamicInlineArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeArena arena:
+                EmitStore("ptr", arena.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", arena.UsedName, slot.LengthAddress, 8);
+                EmitStore("i64", arena.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeIntDictionary dictionary:
+                EmitStore("ptr", dictionary.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", dictionary.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", dictionary.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeInlineDictionary dictionary:
+                EmitStore("ptr", dictionary.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", dictionary.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", dictionary.CapacityName, slot.CapacityAddress, 8);
+                break;
+        }
+    }
+
+    private string? GetMoveConsumingContainerSourceName(Expression expression)
+    {
+        if (expression is EnumMatchExpression match)
+        {
+            return GetMoveConsumingContainerSourceName(match.Subject);
+        }
+
+        if (expression is not FlowExpression flow || flow.Targets.Count == 0)
+        {
+            return null;
+        }
+
+        if (flow.Targets.Any(target =>
+                target.Path.Count == 1
+                && target.Path[0] is "await" or "cancel")
+            && TryGetOwnedFieldProjection(flow.Source, out var projectedOwnerName, out _))
+        {
+            return projectedOwnerName;
+        }
+
+        if (flow.Source is not NameExpression name)
+        {
+            return GetMoveConsumingContainerSourceName(flow.Source);
+        }
+
+        if (flow.Targets.Any(target =>
+                target.Path.Count == 1
+                && target.Path[0] is "await" or "cancel"))
+        {
+            return name.Name;
+        }
+
+        var lastTarget = flow.Targets[^1];
+        if (_program.ResolvedGenericCalls.ContainsKey(lastTarget))
+        {
+            return null;
+        }
+
+        if (lastTarget.Path.Count != 1
+            || lastTarget.Path[0] is not ("append" or "updated"))
+        {
+            return null;
+        }
+
+        return name.Name;
+    }
+
+    private bool IsAnonymousOwnedExpression(Expression expression)
+    {
+        return expression switch
+        {
+            NameExpression => false,
+            FieldAccessExpression field => IsAnonymousOwnedExpression(field.Source),
+            IndexExpression index => IsAnonymousOwnedExpression(index.Source),
+            _ => true
+        };
+    }
+
+    private IReadOnlyList<string> GetOwnedStructFieldSourceNames(Expression expression)
+    {
+        if (expression is not StructLiteralExpression literal
+            || !_program.Types.TryResolve(literal.TypeName, out var type)
+            || !_program.Types.IsStruct(type))
+        {
+            return [];
+        }
+
+        var definition = _program.Types.GetStruct(type);
+        var transferred = new List<string>();
+        foreach (var initializer in literal.Fields)
+        {
+            var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == initializer.Name);
+            if (field is not null
+                && _program.Types.ContainsOwnedStorage(field.Type)
+                && initializer.Value is NameExpression name
+                && _locals.TryGetValue(name.Name, out var source)
+                && source.Type == field.Type)
+            {
+                transferred.Add(name.Name);
+            }
+        }
+        return transferred;
+    }
+
+    private string? GetBlockResultTransferredOwnerName(Expression expression)
+    {
+        if (expression is NameExpression name)
+        {
+            return name.Name;
+        }
+
+        var transferredLocalNames = _locals
+            .Where(local => _program.Types.ContainsOwnedStorage(local.Value.Type)
+                && TransfersOwnerName(
+                    expression,
+                    local.Key,
+                    isResult: true,
+                    ownerType: local.Value.Type))
+            .Select(static local => local.Key)
+            .Distinct(StringComparer.Ordinal)
+            .Take(2)
+            .ToArray();
+        if (transferredLocalNames.Length == 1)
+        {
+            return transferredLocalNames[0];
+        }
+
+        var movedSourceName = GetMoveConsumingContainerSourceName(expression);
+        if (movedSourceName is not null)
+        {
+            return movedSourceName;
+        }
+
+        if (expression is CallExpression call
+            && TryResolveCalledFunction(call, out var callFunction)
+            && FunctionConsumesOwnedHeapInput(callFunction)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is NameExpression argumentName)
+        {
+            return argumentName.Name;
+        }
+
+        if (expression is FlowExpression flow
+            && flow.Source is NameExpression sourceName
+            && FlowTransfersOwnerName(flow, sourceName.Name, _locals.GetValueOrDefault(sourceName.Name)?.Type))
+        {
+            return sourceName.Name;
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return CommonTransferredOwnerName(
+                GetBlockTransferredOwnerName(conditional.Then),
+                GetBlockTransferredOwnerName(conditional.Else));
+        }
+
+        if (expression is WhenExpression whenExpression)
+        {
+            var transferredName = GetBlockTransferredOwnerName(whenExpression.Else);
+            foreach (var arm in whenExpression.Arms)
+            {
+                transferredName = CommonTransferredOwnerName(
+                    transferredName,
+                    GetBlockTransferredOwnerName(arm.Body));
+                if (transferredName is null)
+                {
+                    return null;
+                }
+            }
+
+            return transferredName;
+        }
+
+        return null;
+    }
+
+    private string? GetTransferredOwnedStructFieldName(
+        Expression expression,
+        string ownerName,
+        BoundType ownerType)
+    {
+        if (expression is FieldAccessExpression
+            {
+                Source: NameExpression fieldOwner,
+                FieldName: var fieldName
+            }
+            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
+            && _program.Types.GetStruct(ownerType).Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } field
+            && _program.Types.ContainsOwnedStorage(field.Type))
+        {
+            return fieldName;
+        }
+
+        if (expression is CallExpression enumConstructor
+            && enumConstructor.Path.Count >= 2
+            && _program.Types.TryResolve(
+                string.Join('.', enumConstructor.Path.Take(enumConstructor.Path.Count - 1)),
+                out var enumType)
+            && _program.Types.IsEnum(enumType))
+        {
+            return CommonTransferredFieldName(enumConstructor.Arguments, ownerName, ownerType);
+        }
+
+        if (expression is StructLiteralExpression structure)
+        {
+            return CommonTransferredFieldName(
+                structure.Fields.Select(static initializer => initializer.Value),
+                ownerName,
+                ownerType);
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            var thenField = conditional.Then.Value is { } thenValue
+                ? GetTransferredOwnedStructFieldName(thenValue, ownerName, ownerType)
+                : null;
+            var elseField = conditional.Else.Value is { } elseValue
+                ? GetTransferredOwnedStructFieldName(elseValue, ownerName, ownerType)
+                : null;
+            return thenField is not null
+                && string.Equals(thenField, elseField, StringComparison.Ordinal)
+                    ? thenField
+                    : null;
+        }
+
+        if (expression is WhenExpression whenExpression)
+        {
+            var branches = whenExpression.Arms.Select(static arm => arm.Body)
+                .Append(whenExpression.Else)
+                .ToArray();
+            if (branches.Any(static branch => branch.Value is null))
+            {
+                return null;
+            }
+            var fields = branches.Select(branch =>
+                    GetTransferredOwnedStructFieldName(branch.Value!, ownerName, ownerType))
+                .ToArray();
+            return fields[0] is { } firstField
+                && fields.All(field => string.Equals(field, firstField, StringComparison.Ordinal))
+                    ? firstField
+                    : null;
+        }
+
+        return null;
+    }
+
+    private string? CommonTransferredFieldName(
+        IEnumerable<Expression> expressions,
+        string ownerName,
+        BoundType ownerType)
+    {
+        string? common = null;
+        foreach (var expression in expressions)
+        {
+            var fieldName = GetTransferredOwnedStructFieldName(expression, ownerName, ownerType);
+            if (fieldName is null)
+            {
+                continue;
+            }
+            if (common is not null && !string.Equals(common, fieldName, StringComparison.Ordinal))
+            {
+                return null;
+            }
+            common = fieldName;
+        }
+        return common;
+    }
+
+    private string? GetFunctionResultTransferredOwnerName(
+        BoundFunction function,
+        Expression expression)
+    {
+        if (FunctionConsumesOwnedHeapInput(function)
+            && function.InputType == function.ReturnType)
+        {
+            var inputName = function.InputName ?? "it";
+            if (TransfersOwnerName(expression, inputName, isResult: true))
+            {
+                return inputName;
+            }
+        }
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            if (parameter.Ownership == BoundFunctionInputOwnership.Move
+                && parameter.Type == function.ReturnType
+                && TransfersOwnerName(expression, parameter.Name, isResult: true))
+            {
+                return parameter.Name;
+            }
+        }
+
+        return GetBlockResultTransferredOwnerName(expression);
+    }
+
+    private bool TransfersOwnerName(
+        Expression expression,
+        string ownerName,
+        bool isResult,
+        BoundType? ownerType = null)
+    {
+        if (isResult && expression is NameExpression name && name.Name == ownerName)
+        {
+            return true;
+        }
+
+        if (isResult
+            && expression is FieldAccessExpression
+            {
+                Source: NameExpression fieldOwner,
+                FieldName: var fieldName
+            }
+            && string.Equals(fieldOwner.Name, ownerName, StringComparison.Ordinal)
+            && ownerType is { } knownOwnerType
+            && _program.Types.IsStruct(knownOwnerType)
+            && _program.Types.GetStruct(knownOwnerType).Fields.FirstOrDefault(
+                field => string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is { } transferredField
+            && _program.Types.ContainsOwnedStorage(transferredField.Type))
+        {
+            return true;
+        }
+
+        if (string.Equals(
+            GetMoveConsumingContainerSourceName(expression),
+            ownerName,
+            StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (isResult
+            && expression is StructLiteralExpression structure
+            && _program.Types.TryResolve(structure.TypeName, out var structureType)
+            && _program.Types.IsStruct(structureType))
+        {
+            var definition = _program.Types.GetStruct(structureType);
+            if (structure.Fields.Any(initializer =>
+                definition.Fields.First(field => field.Name == initializer.Name) is { Type: var fieldType }
+                && _program.Types.ContainsOwnedStorage(fieldType)
+                && !CopiesFixedStorageField(initializer.Value, fieldType)
+                && TransfersOwnerName(initializer.Value, ownerName, isResult: true, ownerType: ownerType)))
+            {
+                return true;
+            }
+        }
+
+        if (isResult
+            && expression is CallExpression enumConstructor
+            && enumConstructor.Path.Count >= 2
+            && _program.Types.TryResolve(
+                string.Join('.', enumConstructor.Path.Take(enumConstructor.Path.Count - 1)),
+                out var enumType)
+            && _program.Types.IsEnum(enumType)
+            && _program.Types.GetEnum(enumType).Variants.FirstOrDefault(
+                variant => variant.Name == enumConstructor.Path[^1])?.PayloadType is { } payloadType
+            && _program.Types.ContainsOwnedStorage(payloadType)
+            && enumConstructor.Arguments.Any(argument =>
+                TransfersOwnerName(argument, ownerName, isResult: true, ownerType: ownerType)))
+        {
+            return true;
+        }
+
+        if (expression is CallExpression call
+            && TryResolveCalledFunction(call, out var callFunction)
+            && CallTransfersOwnerName(call, callFunction, ownerName))
+        {
+            return true;
+        }
+
+        if (expression is TryExpression attempt
+            && TransfersOwnerName(
+                attempt.Value,
+                ownerName,
+                isResult: false,
+                ownerType: ownerType))
+        {
+            return true;
+        }
+
+        if (expression is FlowExpression flow
+            && FlowTransfersOwnerName(flow, ownerName, ownerType))
+        {
+            return true;
+        }
+
+        if (expression is EnumMatchExpression
+            {
+                Subject: NameExpression enumSubject
+            } ownedEnumMatch
+            && string.Equals(enumSubject.Name, ownerName, StringComparison.Ordinal)
+            && ownerType is { } knownEnumType
+            && _program.Types.IsEnum(knownEnumType)
+            && ownedEnumMatch.Arms.Any(arm =>
+                arm.Condition is EnumPatternExpression { BindingName: { } bindingName } pattern
+                && _program.Types.GetEnum(knownEnumType).Variants.First(
+                    variant => variant.Name == pattern.VariantName).PayloadType is { } payloadType
+                && _program.Types.ContainsOwnedStorage(payloadType)
+                && TransfersOwnerName(
+                    arm.Body,
+                    bindingName,
+                    payloadType)))
+        {
+            return true;
+        }
+
+        if (expression is EnumMatchExpression enumMatch
+            && TransfersOwnerName(
+                enumMatch.Subject,
+                ownerName,
+                isResult: false,
+                ownerType: ownerType))
+        {
+            return true;
+        }
+
+        if (expression is WhenExpression { Subject: { } whenSubject }
+            && TransfersOwnerName(
+                whenSubject,
+                ownerName,
+                isResult: false,
+                ownerType: ownerType))
+        {
+            return true;
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return TransfersOwnerName(conditional.Then, ownerName, ownerType)
+                && TransfersOwnerName(conditional.Else, ownerName, ownerType);
+        }
+
+        return expression is WhenExpression whenExpression
+            && TransfersOwnerName(whenExpression.Else, ownerName, ownerType)
+            && whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName, ownerType));
+    }
+
+    private bool FlowTransfersOwnerName(
+        FlowExpression flow,
+        string ownerName,
+        BoundType? ownerType)
+    {
+        BoundType? currentType = flow.Source is NameExpression sourceName
+            ? _locals.TryGetValue(sourceName.Name, out var sourceValue)
+                ? sourceValue.Type
+                : string.Equals(sourceName.Name, ownerName, StringComparison.Ordinal)
+                    ? ownerType
+                    : null
+            : null;
+        var currentIsOwner = flow.Source is NameExpression ownerSource
+            && string.Equals(ownerSource.Name, ownerName, StringComparison.Ordinal);
+
+        foreach (var target in flow.Targets)
+        {
+            if (!TryResolveFlowTargetFunction(target, currentType, out var function))
+            {
+                currentType = null;
+                currentIsOwner = false;
+                continue;
+            }
+
+            if (currentIsOwner && FunctionConsumesOwnedHeapInput(function))
+            {
+                return true;
+            }
+
+            var parameters = function.AdditionalParameters ?? [];
+            if (parameters.Count == target.Arguments.Count)
+            {
+                for (var index = 0; index < parameters.Count; index++)
+                {
+                    if (parameters[index].Ownership == BoundFunctionInputOwnership.Move
+                        && TransfersOwnerName(
+                            target.Arguments[index],
+                            ownerName,
+                            isResult: true,
+                            ownerType: ownerType))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            currentType = function.ReturnType;
+            currentIsOwner = false;
+        }
+
+        return false;
+    }
+
+    private static bool CallTransfersOwnerName(
+        CallExpression call,
+        BoundFunction function,
+        string ownerName)
+    {
+        var parameters = function.AdditionalParameters ?? [];
+        var additionalArgumentOffset = call.Arguments.Count == parameters.Count ? 0 : 1;
+        if (FunctionConsumesOwnedHeapInput(function)
+            && additionalArgumentOffset == 1
+            && call.Arguments[0] is NameExpression inputName
+            && string.Equals(inputName.Name, ownerName, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            if (parameters[index].Ownership == BoundFunctionInputOwnership.Move
+                && call.Arguments[additionalArgumentOffset + index] is NameExpression argumentName
+                && string.Equals(argumentName.Name, ownerName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool TransfersOwnerName(BlockBody body, string ownerName, BoundType? ownerType = null)
+    {
+        foreach (var statement in body.Statements)
+        {
+            var (expression, isTransferDestination) = statement switch
+            {
+                BindingStatement binding => (binding.Value, true),
+                FieldAssignmentStatement assignment => (assignment.Value, true),
+                IndexAssignmentStatement assignment => (assignment.Value, true),
+                ReturnStatement { Value: { } value } => (value, true),
+                ExpressionStatement expressionStatement => (expressionStatement.Expression, false),
+                _ => (null, false)
+            };
+            if (expression is not null
+                && TransfersOwnerName(
+                    expression,
+                    ownerName,
+                    isResult: isTransferDestination,
+                    ownerType: ownerType))
+            {
+                return true;
+            }
+        }
+
+        return body.Value is not null
+            && TransfersOwnerName(body.Value, ownerName, isResult: true, ownerType: ownerType);
+    }
+
+    private string? GetBlockTransferredOwnerName(BlockBody body)
+    {
+        foreach (var statement in body.Statements)
+        {
+            var expression = statement switch
+            {
+                BindingStatement binding => binding.Value,
+                ExpressionStatement expressionStatement => expressionStatement.Expression,
+                _ => null
+            };
+            if (expression is null)
+            {
+                continue;
+            }
+
+            var transferredName = GetBlockResultTransferredOwnerName(expression);
+            if (transferredName is not null)
+            {
+                return transferredName;
+            }
+        }
+
+        return body.Value is null ? null : GetBlockResultTransferredOwnerName(body.Value);
+    }
+
+    private static string? CommonTransferredOwnerName(string? left, string? right)
+    {
+        return left is not null && string.Equals(left, right, StringComparison.Ordinal)
+            ? left
+            : null;
+    }
+
+    private GlobalString AddGlobalString(string text)
+    {
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var name = "@.slg.str." + _activeUnitToken + "." + _stringId.ToString(CultureInfo.InvariantCulture);
+        _stringId++;
+        EmitGlobalLine($"""{name} = private unnamed_addr constant [{bytes.Length.ToString(CultureInfo.InvariantCulture)} x i8] c"{EscapeLlvmBytes(bytes)}", align 1""");
+        return new GlobalString(name, bytes.Length);
+    }
+
+    private static string GetPlainText(Expression expression, int line, int column)
+    {
+        if (expression is not StringExpression str)
+        {
+            throw new SollangException($"codegen error at {line}:{column}: expected a string literal");
+        }
+
+        var segments = new List<string>();
+        foreach (var segment in str.Segments)
+        {
+            if (segment is TextSegment text)
+            {
+                segments.Add(text.Text);
+                continue;
+            }
+
+            throw new SollangException($"codegen error at {line}:{column}: expected a plain string literal");
+        }
+
+        return string.Concat(segments);
+    }
+
+    private static long ParseNumber(NumberExpression expression)
+    {
+        return long.TryParse(
+            expression.Text,
+            NumberStyles.None,
+            CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : throw new SollangException($"codegen error at {expression.Line}:{expression.Column}: integer literal is out of range");
+    }
+
+    private static int DictionaryCapacityForLength(int length)
+    {
+        return IntDictionaryLayout.CapacityForLength(length);
+    }
+
+    private static string SymbolForFunction(string name)
+    {
+        return "@sollang_fn_" + string.Concat(name.Select(static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+    }
+
+    private static string SymbolForFunction(BoundFunction function)
+    {
+        var baseSymbol = SymbolForFunction(CanonicalFunctionName(function));
+        var module = string.Concat(function.ModuleName.Select(
+            static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        return function.IsLocal
+            ? $"{baseSymbol}_local_m{module}_{function.Line.ToString(CultureInfo.InvariantCulture)}_{function.Column.ToString(CultureInfo.InvariantCulture)}"
+            : baseSymbol;
+    }
+
+    private static string CanonicalFunctionName(BoundFunction function) =>
+        function.ModuleName.Length == 0
+        || function.Name.StartsWith(function.ModuleName + ".", StringComparison.Ordinal)
+            ? function.Name
+            : function.ModuleName + "." + function.Name;
+
+    private string NextTemp(string prefix)
+    {
+        var name = "%" + prefix + _tempId.ToString(CultureInfo.InvariantCulture);
+        _tempId++;
+        return name;
+    }
+
+    private string NextLabel(string prefix)
+    {
+        // LLVM local values and basic block labels share one function-local
+        // namespace. Keep generated block names structurally disjoint from
+        // every SSA temporary, even when both use the same semantic prefix.
+        var name = "bb_" + prefix + _labelId.ToString(CultureInfo.InvariantCulture);
+        _labelId++;
+        return name;
+    }
+
+    private string CurrentTemp(string prefix)
+    {
+        return "%" + prefix + (_tempId - 1).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string EscapeLlvmBytes(byte[] bytes)
+    {
+        return string.Concat(bytes.Select(static b =>
+            b is >= 0x20 and <= 0x7E && b != (byte)'\\' && b != (byte)'"'
+                ? ((char)b).ToString()
+                : "\\" + b.ToString("X2", CultureInfo.InvariantCulture)));
+    }
+
+    private sealed record GlobalString(string Name, int Length);
+
+    private abstract record RuntimeValue(BoundType Type);
+
+    private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
+
+    private sealed record RuntimeFormattedText(IReadOnlyList<RuntimeFormattedTextSegment> Segments)
+        : RuntimeValue(BoundType.Text);
+
+    private abstract record RuntimeFormattedTextSegment;
+
+    private sealed record RuntimeFormattedTextLiteral(RuntimeText Text) : RuntimeFormattedTextSegment;
+
+    private sealed record RuntimeFormattedTextValue(RuntimeValue Value) : RuntimeFormattedTextSegment;
+
+    private sealed record RuntimeInt(BoundType IntegerType, string ValueName) : RuntimeValue(IntegerType)
+    {
+        public RuntimeInt(string valueName) : this(BoundType.Int, valueName) { }
+    }
+
+    private sealed record RuntimeFloat(BoundType FloatType, string ValueName) : RuntimeValue(FloatType);
+
+    private sealed record RuntimeBool(string ValueName) : RuntimeValue(BoundType.Bool);
+
+    private sealed record RuntimeTask(
+        BoundType TaskType,
+        BoundType? InputType,
+        BoundType ResultType,
+        string HandleName,
+        string ContextName,
+        BoundFunction? RuntimeFunction = null,
+        string? DiagnosticHeaderName = null)
+        : RuntimeValue(TaskType);
+
+    private sealed record RuntimeProducerStream(
+        BoundType StreamType,
+        BoundType ElementType,
+        string ContextName,
+        string NextName,
+        string DropName,
+        bool IsEvent)
+        : RuntimeValue(StreamType);
+
+    private sealed record RuntimeStruct(BoundType StructType, string ValueName) : RuntimeValue(StructType);
+
+    private sealed record RuntimeEnum(BoundType EnumType, string ValueName) : RuntimeValue(EnumType);
+
+    private sealed record RuntimeBox(BoundType BoxType, BoundType ElementType, string PointerName)
+        : RuntimeValue(BoxType);
+
+    private sealed record RuntimeReference(BoundType ReferenceType, BoundType ElementType, string PointerName)
+        : RuntimeValue(ReferenceType);
+
+    private sealed record RuntimeDynTrait(
+        BoundType DynType,
+        string DataPointerName,
+        string VtablePointerName)
+        : RuntimeValue(DynType);
+
+    private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
+
+    private sealed record RuntimeInlineSlice(
+        BoundType SliceType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName)
+        : RuntimeValue(SliceType);
+
+    private sealed record RuntimeStaticIntArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Stack,
+        BoundType? ArrayType = null)
+        : RuntimeValue(ArrayType ?? BoundType.StaticIntArray);
+
+    private sealed record RuntimeStaticTextArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap,
+        BoundType? ArrayType = null)
+        : RuntimeValue(ArrayType ?? BoundType.StaticTextArray);
+
+    private sealed record RuntimeStaticInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        int Length,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+
+    private sealed record RuntimeDynamicIntArray(
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(BoundType.DynamicIntArray);
+
+    private sealed record RuntimeArena(string PointerName, string UsedName, string CapacityName)
+        : RuntimeValue(BoundType.Arena);
+
+    private sealed record RuntimeArguments(string LengthName)
+        : RuntimeValue(BoundType.Arguments);
+
+    private sealed record RuntimeMappedBytes(
+        BoundType MappedType,
+        string DataPointerName,
+        string LengthName,
+        string BasePointerName,
+        string MappedLengthName)
+        : RuntimeValue(MappedType);
+
+    private sealed record RuntimeSourceText(
+        string DataPointerName,
+        string LengthName,
+        string BasePointerName,
+        string MappedLengthName)
+        : RuntimeValue(BoundType.SourceText);
+
+    private sealed record RuntimeDynamicInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
+
+    private enum RuntimeContainerStorage
+    {
+        Heap,
+        Stack
+    }
+
+    private sealed record RuntimeIntDictionary(
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(BoundType.IntDictionary);
+
+    private sealed record RuntimeIntDictionaryView(string PointerName, string LengthName, string CapacityName)
+        : RuntimeValue(BoundType.IntDictionaryView);
+
+    private sealed record RuntimeInlineDictionary(
+        BoundType DictionaryType,
+        BoundType KeyType,
+        BoundType ValueType,
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(DictionaryType);
+
+    private sealed record RuntimeBitSet(BoundType BitSetType, string PointerName)
+        : RuntimeValue(BitSetType);
+
+    private sealed record RuntimeMutableContainerReference(
+        BoundType TargetType,
+        string PointerAddress,
+        string LengthAddress,
+        string CapacityAddress)
+        : RuntimeValue(TargetType);
+
+    private sealed record RuntimeMutableStructReference(BoundType TargetType, string PointerAddress)
+        : RuntimeValue(TargetType);
+
+    private sealed record DictionaryFindResult(string FoundName, string SlotName, string H2ByteName);
+
+    private sealed record RuntimeUnit() : RuntimeValue(BoundType.Unit)
+    {
+        public static RuntimeUnit Instance { get; } = new();
+    }
+
+    private sealed record BlockResult(RuntimeValue? Value, string EndLabel, LocalScope ExitScope);
+
+    private sealed record RuntimeFlowBinding(string Name, RuntimeValue Value);
+
+    private sealed record RuntimeFlowResult(RuntimeValue? Value, RuntimeFlowBinding? Binding, string Ok);
+
+    private sealed record MutableContainerSlot(
+        string PointerAddress,
+        string LengthAddress,
+        string CapacityAddress,
+        StackAllocationPlan? StackAllocation);
+
+    private sealed record LocalScope(
+        Dictionary<string, RuntimeValue> Locals,
+        HashSet<string> MutableLocals,
+        HashSet<string> BorrowedMutableLocals,
+        HashSet<string> BorrowedOwnedLocals,
+        Dictionary<string, HashSet<string>> MovedOwnedStructFields,
+        Dictionary<string, MutableContainerSlot> MutableContainerSlots,
+        Dictionary<string, string> MutableStructSlots,
+        Dictionary<string, string> MutableScalarSlots,
+        Dictionary<string, string> ReadonlyCaptureBorrowPointers,
+        Dictionary<RuntimeValue, string> ReadonlyValueSlots,
+        Dictionary<string, string> BorrowedOwnedTransferFlags,
+        List<TerminatingOwnedCleanupObligation> TerminatingOwnedCleanupObligations);
+
+    private sealed record TerminatingOwnedCleanupObligation(
+        long BindingId,
+        string? BindingName,
+        RuntimeValue Value,
+        string? RetainedFlag,
+        string? ExcludedProjectedField);
+
+    private sealed record LoopContext(
+        string ContinueLabel,
+        string BreakLabel,
+        LocalScope OuterScope,
+        List<(LocalScope Scope, string Label)>? ContinueEdges,
+        List<(LocalScope Scope, string Label)>? BreakEdges);
+
+    private sealed record RuntimeBlockInvocation(
+        string ItemName,
+        IReadOnlyList<(string Name, BoundType Type)> AdditionalItems,
+        IReadOnlyList<Statement> Body,
+        LocalScope CallerLocals,
+        IReadOnlyDictionary<string, BoundFunction> CallerFunctions,
+        BoundFunction? CallerFunction,
+        BoundType ResultType,
+        bool OwnsItem);
+
+    private sealed record RuntimeStreamCallSite(
+        LocalScope Locals,
+        IReadOnlyDictionary<string, BoundFunction> Functions,
+        BoundFunction? Function);
+
+    private abstract record RuntimeStreamSink;
+
+    private sealed record RuntimeStreamConsumer(RuntimeBlockInvocation Invocation) : RuntimeStreamSink;
+
+    private sealed record RuntimeStreamStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamSink Next,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
+
+    private sealed record RuntimeUserStreamStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamSink Next,
+        LocalScope StateLocals,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments,
+        string CancellationSlot) : RuntimeStreamSink;
+
+    private sealed record RuntimeStreamTerminalStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
+}
+

@@ -1,0 +1,58 @@
+namespace std.log
+
+public enum Level {
+    Trace
+    Debug
+    Info
+    Warn
+    Error
+}
+
+public struct Field {
+    public name: Text
+    public value: Text
+}
+
+public struct Error {
+    public message: Text
+}
+
+public struct Record {
+    public level: Level
+    public message: Text
+}
+
+# A sink owns serialization and destination effects. Logger owns only immutable
+# filtering policy, so there is no ambient mutable registry or hidden output.
+public trait Sink {
+    write: mut self, level: Level, message: Text, fields: [Field] -> Result<Unit, Error>
+}
+
+public struct Logger {
+    threshold: Level
+}
+
+levelRank level: Level -> UInt8 => level -> when {
+    Trace { 0 }
+    Debug { 1 }
+    Info { 2 }
+    Warn { 3 }
+    Error { 4 }
+}
+
+public logger minimumLevel: Level -> Logger => Logger { threshold: minimumLevel }
+
+impl Logger {
+    public minimumLevel: self -> Level => self.threshold
+
+    public enabled: self, level: Level -> Bool {
+        (level -> levelRank) >= (self.threshold -> levelRank)
+    }
+
+    public record: self, level: Level, message: Text -> Option<Record> {
+        self -> enabled(level) -> unless {
+            Option<Record>.None -> return
+        }
+        Option<Record>.Some(Record { level: level, message: message })
+    }
+}
