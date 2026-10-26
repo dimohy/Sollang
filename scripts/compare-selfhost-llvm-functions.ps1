@@ -29,16 +29,20 @@ function Get-FunctionHashes {
     $body = [System.Collections.Generic.List[string]]::new()
     foreach ($line in $lines) {
         if ($null -eq $name) {
-            if ($line -match '^define\s+.*?@(?<name>[-A-Za-z$._0-9]+)\(') {
-                $name = $Matches.name
-                $body.Clear()
-                $body.Add($line)
+            if ($line -notmatch '^define\s+.*?@(?<name>[-A-Za-z$._0-9]+)\(') { continue }
+            $name = $Matches.name
+            $body.Clear()
+            $body.Add($line)
+            # Runtime wrappers may contain their complete body on the header
+            # line. Close that definition before reading the next function.
+            if ($line -notmatch '\{.*\}\s*(?:;.*)?$') { continue }
+        } else {
+            if ($line -match '^define\s') {
+                throw "unterminated LLVM function definition '$name' in $Path"
             }
-            continue
+            $body.Add($line)
+            if ($line -notmatch '^\s*\}\s*(?:;.*)?$') { continue }
         }
-
-        $body.Add($line)
-        if ($line -cne '}') { continue }
 
         $text = [string]::Join("`n", $body)
         $hash = [Convert]::ToHexString(
