@@ -1,0 +1,2840 @@
+namespace sollang.compiler.semantic.interpolation_inference
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.numeric_literal_range as numericLiteralRange
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+public struct InterpolationBinaryArithmeticDiagnostic {
+    public code: Int
+    public leftTypeId: Int
+    public rightTypeId: Int
+}
+
+# One contextual literal contract is consumed by both diagnostics and LLVM.
+public struct InterpolationNumericLiteralContext {
+    public typeId: Int
+    # -1 no contextual literal, 0 out of range, 1 valid, 2 Unicode surrogate.
+    public status: Int
+}
+
+public struct CollectionMembershipDiagnostic {
+    # 0 valid/unresolved, 1 BitSet arity, 2 Set arity, 3 BitSet index, 4 Set element.
+    public code: Int
+    public expectedTypeId: Int
+    public actualTypeId: Int
+    public argumentNode: Int
+}
+
+public struct InterpolationBinaryComparisonDiagnostic {
+    public code: Int
+    public leftTypeId: Int
+    public rightTypeId: Int
+    public textEquality: Bool
+}
+
+struct InterpolationBinaryOperands {
+    leftBuiltin: Int
+    rightBuiltin: Int
+    leftTypeId: Int
+    rightTypeId: Int
+}
+
+public struct SemanticInterpolationCallTarget {
+    public sourceModule: Int
+    public symbol: Int
+    public receiverType: Int
+    public ownerType: Int
+    public traitModule: Int
+    public traitSymbol: Int
+    public expectedAdditionalArguments: Int
+    # -1 unresolved, 0 visible method, 1 inaccessible method, 2 ambiguous,
+    # 3 visible method with an invalid additional argument count.
+    public status: Int
+}
+
+public struct InterpolationCallArgumentDiagnostic {
+    # 0 valid, 1 incompatible concrete argument, 2 numeric literal outside its target range.
+    public code: Int
+    public sourceModule: Int
+    public callNode: Int
+    public argumentNode: Int
+    public targetSourceModule: Int
+    public functionSymbol: Int
+    public parameterSymbol: Int
+    public parameterOrdinal: Int
+    public expectedTypeId: Int
+    public actualTypeId: Int
+    public line: Int
+    public column: Int
+    public literalNode: Int
+    public literalTargetSymbol: Int
+}
+
+emptyCallArgumentDiagnostic: -> InterpolationCallArgumentDiagnostic => InterpolationCallArgumentDiagnostic {
+    code: 0
+    sourceModule: -1
+    callNode: -1
+    argumentNode: -1
+    targetSourceModule: -1
+    functionSymbol: -1
+    parameterSymbol: -1
+    parameterOrdinal: -1
+    expectedTypeId: -1
+    actualTypeId: -1
+    line: 0
+    column: 0
+    literalNode: -1
+    literalTargetSymbol: -1
+}
+
+# Commit argument failures before a consumer checks the call's result type.
+public callArgumentDiagnosticsByNode prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, pointerBitWidth: Int -> [InterpolationCallArgumentDiagnostic; ~] {
+    [InterpolationCallArgumentDiagnostic; ~] => diagnostics!
+    prepared.interpolations -> each node {
+        diagnostics! -> push(emptyCallArgumentDiagnostic())
+    }
+    0 => callIndex!
+    callIndex! < (prepared.interpolations -> len)
+        -> while {
+            resolved.interpolationCallArguments -> each argument {
+                argument.callNode == callIndex! and diagnostics![callIndex!].code == 0
+                    -> if {
+                        resolved.types[argument.expectedTypeId] => expected
+                        resolved.types[argument.actualTypeId] => actual
+                        expected.status == 0 and actual.status == 0
+                            and not expected.containsParameter and not actual.containsParameter
+                            -> if {
+                                prepared.interpolations[argument.argumentNode] => value
+                                argument.expectedTypeId => literalTypeId!
+                                argument.inputFromFlow and expected.kind == 1 and expected.origin == 1
+                                    and expected.symbol >= 19 and expected.symbol <= 22
+                                    -> if { -1 => literalTypeId! }
+                                argument.argumentNode => literalIndex!
+                                value.kind == 9 -> if {
+                                    value.typeSymbol -> numericBuiltinSymbol -> if {
+                                        resolved.types -> typeIds.builtinTypeId(value.typeSymbol) => literalTypeId!
+                                        value.operand0 => literalIndex!
+                                    }
+                                }
+                                literalIndex! => literalExpression
+                                false => negative!
+                                literalIndex! >= 0 and prepared.interpolations[literalIndex!].kind == 2
+                                    and prepared.interpolations[literalIndex!].opcode == grammar.tokenIdMinus()
+                                    -> if {
+                                        true => negative!
+                                        prepared.interpolations[literalIndex!].operand0 => literalIndex!
+                                    }
+                                0 => code!
+                                argument.argumentNode => diagnosticNode!
+                                -1 => diagnosticLiteralNode!
+                                argument.expectedTypeId => diagnosticType!
+                                literalIndex! >= 0 and literalTypeId! >= 0
+                                    and prepared.interpolations[literalIndex!].kind == 0
+                                    and resolved.types[literalTypeId!].kind == 1 and resolved.types[literalTypeId!].origin == 1
+                                    and (resolved.types[literalTypeId!].symbol -> numericBuiltinSymbol)
+                                    -> if {
+                                        prepared.interpolations[literalIndex!] => literal
+                                        prepared.package.sources[argument.sourceModule] -> len => sourceLength
+                                        prepared.package.sources[argument.sourceModule] -> slice(0, sourceLength) => source
+                                        resolved.types[literalTypeId!].symbol -> typeIds.canonicalBuiltinSymbol => symbol
+                                        true => valid!
+                                        (source -> byte(literal.payloadStart)) == '\'' -> if {
+                                            false => valid!
+                                            syntax.SourceSpan { fileId: argument.sourceModule, start: literal.payloadStart, length: literal.payloadLength } => span
+                                            source -> syntax.decodeCharacterLiteral(span) -> when {
+                                                Some(scalar) {
+                                                    symbol >= 19 and symbol <= 22 -> if { true => valid! } else {
+                                                        scalar -> numericLiteralRange.characterLiteralStatus(symbol, negative!) => status
+                                                        status == 1 => valid!
+                                                    }
+                                                }
+                                                None { }
+                                            }
+                                        } else { symbol >= 19 and symbol <= 22 -> if {
+                                                source -> numericLiteralRange.floatingLiteralWithinRange(literal.payloadStart, literal.payloadStart + literal.payloadLength, symbol) => valid!
+                                            } else {
+                                                source -> numericLiteralRange.literalUsesFloatingSyntax(literal.payloadStart, literal.payloadStart + literal.payloadLength) => floating
+                                                not floating -> if {
+                                                    source -> numericLiteralRange.integerLiteralStatus(literal.payloadStart, literal.payloadStart + literal.payloadLength, symbol, pointerBitWidth, negative!, false, 0, 1) => status
+                                                    status == 1 => valid!
+                                                }
+                                        } }
+                                        not valid! -> if {
+                                            2 => code!
+                                            literalTypeId! => diagnosticType!
+                                            literalExpression => diagnosticNode!
+                                            literalExpression => diagnosticLiteralNode!
+                                        }
+                                    }
+                                code! == 0 and not (resolved.types -> typeIds.functionArgumentCompatible(argument.actualTypeId, argument.expectedTypeId))
+                                    -> if {
+                                        1 => code!
+                                        argument.parameterOrdinal == 0 -> if { argument.callNode => diagnosticNode! }
+                                    }
+                                code! > 0 -> if {
+                                    prepared.package.sources[argument.sourceModule] -> len => sourceLength
+                                    prepared.package.sources[argument.sourceModule] -> slice(0, sourceLength) => source
+                                    prepared.interpolations -> semanticDiagnostics.interpolationSourceOffsetLocation(source, diagnosticNode!, prepared.interpolations[diagnosticNode!].payloadStart) => location
+                                    InterpolationCallArgumentDiagnostic {
+                                        code: code!
+                                        sourceModule: argument.sourceModule
+                                        callNode: argument.callNode
+                                        argumentNode: argument.argumentNode
+                                        targetSourceModule: argument.targetSourceModule
+                                        functionSymbol: argument.functionSymbol
+                                        parameterSymbol: argument.parameterSymbol
+                                        parameterOrdinal: argument.parameterOrdinal
+                                        expectedTypeId: diagnosticType!
+                                        actualTypeId: argument.actualTypeId
+                                        line: location.line
+                                        column: location.column
+                                        literalNode: diagnosticLiteralNode!
+                                        literalTargetSymbol: value.kind == 9 -> if { value.typeSymbol } else { -1 }
+                                    } => diagnostics![callIndex!]
+                                }
+                            }
+                    }
+            }
+            callIndex! + 1 => callIndex!
+        }
+    diagnostics!
+}
+
+public firstCallArgumentDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, pointerBitWidth: Int -> InterpolationCallArgumentDiagnostic {
+    prepared -> callArgumentDiagnosticsByNode(resolved, pointerBitWidth) => diagnostics
+    diagnostics -> each diagnostic {
+        diagnostic.code > 0 -> if { diagnostic -> return }
+    }
+    emptyCallArgumentDiagnostic()
+}
+
+# Compatibility entry point for numeric diagnostic probes.
+public firstCallNumericDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, pointerBitWidth: Int -> InterpolationCallArgumentDiagnostic {
+    prepared -> firstCallArgumentDiagnostic(resolved, pointerBitWidth)
+}
+
+public struct LocalEnumMemberDecision {
+    # 0 not an enum member, 1 missing variant, 2 payload required, 3 value.
+    public status: Int
+    public typeId: Int
+}
+
+public struct ResultPropagationDecision {
+    # -1 unrelated or unresolved operand; 0 valid; 1 non-Result operand;
+    # 2 non-Result function; 3 different error type; 4 owned source not consumable.
+    public status: Int
+    public operandTypeId: Int
+    public functionTypeId: Int
+    public okTypeId: Int
+    public operandErrorTypeId: Int
+    public functionErrorTypeId: Int
+}
+
+# Interpolation fragments have no ordinary AST expression node. Resolve their
+# prepared node identities against the same semantic types and typed bindings
+# used by the rest of the compiler before LLVM emission begins.
+sourceModuleAt prepared: ref semanticContext.SemanticSnapshot, nodeIndex: Int -> Int {
+    -1 => sourceModule!
+    prepared.interpolationRanges -> each range {
+        nodeIndex >= range.nodeStart and nodeIndex < range.nodeStart + range.nodeCount
+            -> if { range.sourceModule => sourceModule! }
+    }
+    sourceModule!
+}
+
+interpolationLexicalTypeFromIr prepared: ref semanticContext.SemanticSnapshot, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], sourceModule: Int, node: interpolation.InterpolationNode -> Int {
+    node.symbol < 0 or sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { -1 -> return }
+    prepared.package.ranges[sourceModule] => sourceRange
+    -1 => bindingTypeId!
+    UIntSize(0) => bindingStart!
+    0 => irIndex!
+    irIndex! < (ir -> len) -> while {
+        ir[irIndex!] => candidate
+        (candidate.kind == 17 or candidate.kind == 29)
+            and candidate.sourceModule == sourceModule and candidate.symbol == node.symbol
+            and candidate.astNode >= 0 and candidate.astNode < sourceRange.astCount
+            and candidate.typeId >= 0 -> if {
+                prepared.package.nodes[sourceRange.astStart + candidate.astNode].start => candidateStart
+                candidateStart <= node.payloadStart
+                    and (bindingTypeId! < 0 or candidateStart > bindingStart!)
+                    -> if {
+                        candidate.typeId => bindingTypeId!
+                        candidateStart => bindingStart!
+                    }
+            }
+        irIndex! + 1 => irIndex!
+    }
+    bindingTypeId! >= 0 and bindingTypeId! < (types -> len)
+        -> if { types -> typeIds.materializedReadTypeId(bindingTypeId!) -> return }
+    -1
+}
+
+
+
+expressionTypeId prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
+        -> if { -1 -> return }
+    prepared.interpolations[nodeIndex] => node
+    (node.kind == 0 or node.kind == 2 or node.kind == 16) and nodeIndex < (bindingFacts.interpolationContextualStructTypeByNode -> len)
+        and bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] >= 0
+        -> if { bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] -> return }
+    node.kind == 0 -> if {
+        prepared -> sourceModuleAt(nodeIndex) => literalModule
+        literalModule >= 0 -> if {
+            prepared.package.sources[literalModule] -> slice(node.payloadStart, node.payloadLength) => literalText
+            literalText -> numericLiteralRange.literalUsesFloatingSyntax(0, node.payloadLength)
+                -> if { types -> typeIds.builtinTypeId(20) -> return }
+        }
+        types -> typeIds.builtinTypeId(2) -> return
+    }
+    node.kind == 1 -> if {
+        nodeIndex < (bindingFacts.interpolationLexicalTypeByNode -> len)
+            and bindingFacts.interpolationLexicalTypeByNode[nodeIndex] >= 0
+            and bindingFacts.interpolationLexicalTypeByNode[nodeIndex] < (types -> len)
+            and not types[bindingFacts.interpolationLexicalTypeByNode[nodeIndex]].containsParameter
+            -> if { bindingFacts.interpolationLexicalTypeByNode[nodeIndex] -> return }
+        # Generic source facts remain provisional until the caller publishes
+        # its concrete binding; all consumers read that existing IR authority.
+        prepared -> interpolationLexicalTypeFromIr(ir, types, sourceModule, node) -> return
+    }
+    node.kind == 4 -> if { types -> typeIds.builtinTypeId(23) -> return }
+    node.kind == 14 and nodeIndex < (bindingFacts.interpolationContextualStructTypeByNode -> len)
+        -> if { bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] -> return }
+    node.kind == 6 -> if {
+        nodeIndex < (bindingFacts.interpolationCallTypeByNode -> len)
+            and bindingFacts.interpolationCallTypeByNode[nodeIndex] >= 0
+            -> if { bindingFacts.interpolationCallTypeByNode[nodeIndex] -> return }
+        prepared -> methodFlowFallback(plan, bindingFacts, ir, types, fields, nodeIndex) => methodFallback
+        methodFallback -> if {
+            prepared -> flowCallTargetAt(plan, bindingFacts, prepared.interpolations, ir, types, fields, nodeIndex, true) => target
+            target >= 0 and target < (ir -> len) -> if {
+                ir[target].typeId >= 0 and ir[target].typeId < (types -> len)
+                    -> if { ir[target].typeId -> return }
+            }
+            -1 -> return
+        }
+        prepared -> intrinsicFlowResultBuiltinSymbol(plan, bindingFacts, prepared.interpolations, ir, types, fields, sourceModule, nodeIndex) => builtin
+        builtin >= 0 -> if { types -> typeIds.builtinTypeId(builtin) -> return }
+    }
+    node.kind == 2 and node.operand0 >= 0 -> if {
+        nodeIndex < (bindingFacts.interpolationUnaryTypeByNode -> len)
+            and bindingFacts.interpolationUnaryTypeByNode[nodeIndex] >= 0
+            -> if { bindingFacts.interpolationUnaryTypeByNode[nodeIndex] -> return }
+        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => operandTypeId
+        operandTypeId >= 0 and operandTypeId < (types -> len)
+            -> if {
+                types[operandTypeId] => operandType
+                operandType.kind == 1 and operandType.origin == 1
+                    -> if {
+                        node.opcode == -26 and operandType.symbol == 23
+                            -> if { operandTypeId -> return }
+                        node.opcode == grammar.tokenIdMinus()
+                            and (operandType.symbol -> typeIds.isSignedNumericBuiltinSymbol)
+                            -> if { operandTypeId -> return }
+                    }
+            }
+    }
+    node.kind == 7 and node.operand0 >= 0 -> if {
+        nodeIndex < (bindingFacts.interpolationIndexedTypeByNode -> len)
+            and bindingFacts.interpolationIndexedTypeByNode[nodeIndex] >= 0
+            -> if { bindingFacts.interpolationIndexedTypeByNode[nodeIndex] -> return }
+        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => ownerTypeId!
+        ownerTypeId! >= 0 and ownerTypeId! < (types -> len) and types[ownerTypeId!].kind == 8
+            -> if { types[ownerTypeId!].first => ownerTypeId! }
+        ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+            -> if {
+                types[ownerTypeId!] => ownerType
+                ownerType.kind == 2 or ownerType.kind == 3 or ownerType.kind == 4 or ownerType.kind == 12
+                    -> if { ownerType.first -> return }
+                ownerType.kind == 5 or ownerType.kind == 13
+                    -> if { ownerType.second -> return }
+                ownerType.kind == 1 and ownerType.origin == 1
+                    -> if {
+                        ownerType.symbol == 16 -> if { types -> typeIds.builtinTypeId(1) -> return }
+                        ownerType.symbol == 17 or ownerType.symbol == 18
+                            -> if { types -> typeIds.builtinTypeId(8) -> return }
+                    }
+            }
+    }
+    node.kind == 5 and node.operand0 >= 0 -> if {
+        nodeIndex < (bindingFacts.interpolationMemberTypeByNode -> len)
+            and bindingFacts.interpolationMemberTypeByNode[nodeIndex] >= 0
+            -> if { bindingFacts.interpolationMemberTypeByNode[nodeIndex] -> return }
+        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => ownerTypeId
+        ownerTypeId >= 0 -> if {
+            prepared -> expressionTypeIds.memberFieldIndex(types, fields, sourceModule, ownerTypeId, nodeIndex) => fieldIndex
+            fieldIndex >= 0 -> if { fields[fieldIndex].fieldType -> return }
+            prepared -> flowCallTargetAt(plan, bindingFacts, prepared.interpolations, ir, types, fields, nodeIndex, false) => methodIndex
+            methodIndex >= 0 and methodIndex < (ir -> len)
+                -> if { ir[methodIndex].typeId -> return }
+        }
+    }
+    node.kind == 3 and node.operand0 >= 0 and node.operand1 >= 0
+        and (node.opcode == -24 or node.opcode == -25)
+        -> if {
+            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => leftTypeId
+            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand1) => rightTypeId
+            leftTypeId >= 0 and leftTypeId < (types -> len)
+                and rightTypeId >= 0 and rightTypeId < (types -> len)
+                -> if {
+                    types[leftTypeId] => leftType
+                    types[rightTypeId] => rightType
+                    leftType.kind == 1 and leftType.origin == 1 and leftType.symbol == 23
+                        and rightType.kind == 1 and rightType.origin == 1 and rightType.symbol == 23
+                        -> if { leftTypeId -> return }
+                }
+        }
+    node.kind == 3 and node.operand0 >= 0 and node.operand1 >= 0
+        and (node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual()
+        or node.opcode == grammar.tokenIdLess() or node.opcode == grammar.tokenIdLessEqual()
+        or node.opcode == grammar.tokenIdGreater() or node.opcode == grammar.tokenIdGreaterEqual())
+        -> if {
+            prepared -> comparisonDecision(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex) => decision
+            decision.code == 0 and decision.leftTypeId >= 0 and decision.rightTypeId >= 0
+                -> if { types -> typeIds.builtinTypeId(23) -> return }
+        }
+    node.kind == 3 and node.operand0 >= 0 and node.operand1 >= 0
+        and (node.opcode == grammar.tokenIdPlus() or node.opcode == grammar.tokenIdMinus()
+        or node.opcode == grammar.tokenIdStar() or node.opcode == grammar.tokenIdSlash()
+        or node.opcode == grammar.tokenIdPercent())
+        -> if {
+            prepared -> arithmeticDecision(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex) => decision
+            decision.code == 0 and decision.leftTypeId >= 0 and decision.rightTypeId >= 0
+                -> if { decision.leftTypeId -> return }
+        }
+    (node.kind == 8 or node.kind == 10 or node.kind == 15) and nodeIndex < (bindingFacts.interpolationCallTypeByNode -> len)
+        and bindingFacts.interpolationCallTypeByNode[nodeIndex] >= 0
+        -> if { bindingFacts.interpolationCallTypeByNode[nodeIndex] -> return }
+    node.kind == 8 and node.symbol >= 0 -> if {
+        prepared -> flowCallTargetAt(plan, bindingFacts, prepared.interpolations, ir, types, fields, nodeIndex, false) => target
+        target >= 0 and target < (ir -> len) and ir[target].typeId >= 0 and ir[target].typeId < (types -> len)
+            -> if { ir[target].typeId -> return }
+    }
+    node.kind == 10 and node.operand0 >= 0 -> if {
+        prepared -> flowCallTargetAt(plan, bindingFacts, prepared.interpolations, ir, types, fields, nodeIndex, false) => target
+        target >= 0 and target < (ir -> len) -> if {
+            ir[target].typeId >= 0 and ir[target].typeId < (types -> len)
+                -> if { ir[target].typeId -> return }
+        }
+    }
+    node.kind == 11 and node.operand0 >= 0 -> if {
+        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => resultTypeId
+        resultTypeId >= 0 and resultTypeId < (types -> len)
+            -> if {
+                types[resultTypeId] => resultType
+                resultType.kind == 7 and resultType.origin == 4 and resultType.symbol == 1
+                    -> if { resultType.first -> return }
+            }
+    }
+    node.kind == 9 and node.typeSymbol >= 0 -> if {
+        types -> typeIds.builtinTypeId(node.typeSymbol) -> return
+    }
+    -1
+}
+
+# A nominal initializer is validated after expression inference. The early
+# pass retains unknown-type and duplicate-name failures, while this pass checks
+# each field value in source order before the missing-field check.
+public nominalInitializerDiagnosticByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [expressionTypeIds.ContextualStructDiagnostic; ~] {
+    [expressionTypeIds.ContextualStructDiagnostic; ~] => diagnostics!
+    bindingFacts.interpolationContextualDiagnosticByNode -> each diagnostic {
+        diagnostics! -> push(diagnostic)
+    }
+    prepared.interpolationRanges -> each range {
+        range.nodeStart => literalIndex!
+        literalIndex! < range.nodeStart + range.nodeCount
+            -> while {
+                prepared.interpolations[literalIndex!] => literal
+                literal.kind == 14 and diagnostics![literalIndex!].code == 0
+                    and literalIndex! < (bindingFacts.interpolationContextualStructTypeByNode -> len)
+                    -> if {
+                        bindingFacts.interpolationContextualStructTypeByNode[literalIndex!] => ownerTypeId
+                        ownerTypeId >= 0 -> if {
+                            diagnostics![literalIndex!] => decision!
+                            ownerTypeId => decision!.ownerType
+                            literalIndex! + 1 => labelIndex!
+                            labelIndex! < range.nodeStart + range.nodeCount and decision!.code == 0
+                                -> while {
+                                    prepared.interpolations[labelIndex!] => label
+                                    label.parent == literalIndex! and label.kind == 13
+                                        -> if {
+                                            bindingFacts.interpolationContextualFieldByNode[labelIndex!] => fieldIndex
+                                            fieldIndex < 0 -> if {
+                                                expressionTypeIds.ContextualStructDiagnostic {
+                                                    code: 5
+                                                    locationNode: labelIndex!
+                                                    fieldIndex: -1
+                                                    actualType: -1
+                                                    ownerType: ownerTypeId
+                                                } => decision!
+                                            } else {
+                                                -1 => valueIndex!
+                                                labelIndex! + 1 => valueSearch!
+                                                valueSearch! < range.nodeStart + range.nodeCount and valueIndex! < 0
+                                                    -> while {
+                                                        prepared.interpolations[valueSearch!].parent == literalIndex!
+                                                            -> if { valueSearch! => valueIndex! }
+                                                        valueSearch! + 1 => valueSearch!
+                                                    }
+                                                valueIndex! >= 0 -> if {
+                                                    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, range.sourceModule, valueIndex!) => actualType!
+                                                    prepared.interpolations[valueIndex!] => value
+                                                    value.kind == 0 and fields[fieldIndex].fieldType >= 0
+                                                        and fields[fieldIndex].fieldType < (types -> len)
+                                                        -> if {
+                                                            types[fields[fieldIndex].fieldType] => expectedType
+                                                            expectedType.kind == 1 and expectedType.origin == 1
+                                                                and ((expectedType.symbol >= 2 and expectedType.symbol <= 14)
+                                                                or expectedType.symbol == 20 or expectedType.symbol == 21 or expectedType.symbol == 22)
+                                                                -> if { fields[fieldIndex].fieldType => actualType! }
+                                                        }
+                                                    actualType! >= 0 -> if {
+                                                        types -> typeIds.materializedReadTypeId(actualType!) => actualType!
+                                                        actualType! != fields[fieldIndex].fieldType -> if {
+                                                            expressionTypeIds.ContextualStructDiagnostic {
+                                                                code: 4
+                                                                locationNode: valueIndex!
+                                                                fieldIndex: fieldIndex
+                                                                actualType: actualType!
+                                                                ownerType: ownerTypeId
+                                                            } => decision!
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    labelIndex! + 1 => labelIndex!
+                                }
+                            decision!.code == 0 -> if {
+                                -1 => missingField!
+                                0 => candidateIndex!
+                                candidateIndex! < (fields -> len) -> while {
+                                    fields[candidateIndex!].status == 0 and fields[candidateIndex!].ownerType == ownerTypeId
+                                        -> if {
+                                            false => present!
+                                            literalIndex! + 1 => presentSearch!
+                                            presentSearch! < range.nodeStart + range.nodeCount
+                                                -> while {
+                                                    prepared.interpolations[presentSearch!].parent == literalIndex!
+                                                        and bindingFacts.interpolationContextualFieldByNode[presentSearch!] == candidateIndex!
+                                                        -> if { true => present! }
+                                                    presentSearch! + 1 => presentSearch!
+                                                }
+                                            not present! and (missingField! < 0 or fields[candidateIndex!].ordinal < fields[missingField!].ordinal)
+                                                -> if { candidateIndex! => missingField! }
+                                        }
+                                    candidateIndex! + 1 => candidateIndex!
+                                }
+                                missingField! >= 0 -> if {
+                                    expressionTypeIds.ContextualStructDiagnostic {
+                                        code: 3
+                                        locationNode: literalIndex!
+                                        fieldIndex: missingField!
+                                        actualType: -1
+                                        ownerType: ownerTypeId
+                                    } => decision!
+                                }
+                            }
+                            decision! => diagnostics![literalIndex!]
+                        }
+                    }
+                literalIndex! + 1 => literalIndex!
+            }
+    }
+    diagnostics!
+}
+
+consumableResultInterpolationOperand prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, operandIndex: Int -> Bool {
+    prepared.interpolations[operandIndex] => operand
+    operand.kind == 6 or operand.kind == 8 or operand.kind == 10
+        -> if { true -> return }
+    operand.kind == 5 and operand.operand0 >= 0
+        -> if {
+            prepared.interpolations[operand.operand0] => owner
+            owner.kind == 1 and owner.symbol < 0 -> if { true -> return }
+        }
+    operand.kind == 1 and operand.symbol >= 0
+        and sourceModule >= 0 and sourceModule < (prepared.package.ranges -> len)
+        -> if {
+            prepared.package.ranges[sourceModule] => sourceRange
+            operand.symbol < sourceRange.symbolCount -> if {
+                prepared.package.symbols[sourceRange.symbolStart + operand.symbol] => binding
+                binding.kind == 35 and binding.flags % 2 == 1
+                    -> if { true -> return }
+            }
+        }
+    false
+}
+
+resultPropagationDecision types: ref [typeIds.SemanticType; ~], typeTraits: ref [Int; ~], operandTypeId: Int, functionTypeId: Int, consumable: Bool -> ResultPropagationDecision {
+    -1 => status!
+    -1 => okTypeId!
+    -1 => operandErrorTypeId!
+    -1 => functionErrorTypeId!
+    operandTypeId >= 0 and operandTypeId < (types -> len)
+        -> if {
+            types[operandTypeId] => operandType
+            1 => status!
+            operandType.kind == 7 and operandType.origin == 4 and operandType.symbol == 1
+                -> if {
+                    operandType.first => okTypeId!
+                    operandType.second => operandErrorTypeId!
+
+                    2 => status!
+                    functionTypeId >= 0 and functionTypeId < (types -> len)
+                        -> if {
+                            types[functionTypeId] => functionType
+                            functionType.kind == 7 and functionType.origin == 4 and functionType.symbol == 1
+                                -> if {
+                                    functionType.second => functionErrorTypeId!
+                                    3 => status!
+                                    operandErrorTypeId! == functionErrorTypeId! -> if {
+                                        0 => status!
+                                        (okTypeId! >= 0 and okTypeId! < (typeTraits -> len)
+                                            and typeTraits[okTypeId!] % 2 == 1)
+                                            or (operandErrorTypeId! >= 0 and operandErrorTypeId! < (typeTraits -> len)
+                                            and typeTraits[operandErrorTypeId!] % 2 == 1)
+                                            -> if {
+
+                                                not consumable -> if { 4 => status! }
+                                            }
+                                    }
+                                }
+                        }
+                }
+        }
+    ResultPropagationDecision {
+        status: status!
+        operandTypeId: operandTypeId
+        functionTypeId: functionTypeId
+        okTypeId: okTypeId!
+        operandErrorTypeId: operandErrorTypeId!
+        functionErrorTypeId: functionErrorTypeId!
+    }
+}
+
+semanticInterpolationFunctionTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, sourceToken: Int -> Int {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { -1 -> return }
+    prepared.package.ranges[sourceModule] => range
+    sourceToken < 0 or sourceToken >= range.tokenCount
+        -> if { -1 -> return }
+    prepared.package.tokens[range.tokenStart + sourceToken].span.start => position
+    -1 => owner!
+    UIntSize(0) => ownerLength!
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        prepared.package.symbols[range.symbolStart + symbolIndex!] => candidate
+        (candidate.kind == 7 or candidate.kind == 31) and candidate.astNode >= 0 and candidate.astNode < range.astCount
+            -> if {
+                prepared.package.nodes[range.astStart + candidate.astNode] => declaration
+                declaration.start <= position and position < declaration.start + declaration.length
+                    and (owner! < 0 or declaration.length < ownerLength!)
+                    -> if {
+                        symbolIndex! => owner!
+                        declaration.length => ownerLength!
+                    }
+            }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    owner! < 0 -> if { -1 -> return }
+    prepared.package.symbols[range.symbolStart + owner!] => function
+    function.secondaryTypeNode => returnAst!
+    function.kind == 31 and prepared.package.nodes[range.astStart + function.astNode].secondaryToken >= 0
+        -> if { function.typeNode => returnAst! }
+    returnAst! < 0 -> if {
+        false => hasInput!
+        0 => parameterIndex!
+        parameterIndex! < range.symbolCount -> while {
+            prepared.package.symbols[range.symbolStart + parameterIndex!] => parameter
+            parameter.parent == owner! and parameter.kind == 35
+                -> if { true => hasInput! }
+            parameterIndex! + 1 => parameterIndex!
+        }
+        not hasInput! -> if { function.typeNode => returnAst! }
+    }
+    returnAst! < 0 or returnAst! >= range.astCount
+        -> if { -1 -> return }
+    bindingFacts.referenceIndexByTypeAst[range.astStart + returnAst!] => referenceIndex
+    referenceIndex < 0 or referenceIndex >= (bindingFacts.references -> len)
+        -> if { -1 -> return }
+    bindingFacts.references[referenceIndex] => reference
+    reference.status != 0 -> if { -1 -> return }
+    reference.typeId
+}
+
+public preIrResultPropagationDecisionByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, typeTraits: ref [Int; ~], callTargets: ref [SemanticInterpolationCallTarget; ~], pointerBitWidth: Int -> [ResultPropagationDecision; ~] {
+    prepared -> preIrCallMemberTypeByNode(bindingFacts, callTargets) => memberTypes
+    prepared -> invalidNumericConversionArityByNode => invalidConversionArity
+    prepared -> invalidNumericConversionLiteralByNode(pointerBitWidth) => invalidConversionLiteral
+    [Int; ~] => computedTypes!
+    [ResultPropagationDecision; ~] => decisions!
+    prepared.interpolations -> each node {
+        computedTypes! -> push(-1)
+        decisions! -> push(resultPropagationDecision(bindingFacts.types, typeTraits, -1, -1, false))
+    }
+    (prepared.interpolations -> len) - 1 => nodeIndex!
+    nodeIndex! >= 0 -> while {
+        prepared.interpolations[nodeIndex!] => node
+        prepared -> preIrDirectTypeId(bindingFacts, memberTypes, nodeIndex!) => computedTypes![nodeIndex!]
+        node.kind == 2 -> if {
+            prepared -> preIrDirectUnaryTypeId(bindingFacts, memberTypes, computedTypes!, nodeIndex!) => computedTypes![nodeIndex!]
+        }
+        node.kind == 3 -> if {
+            prepared -> preIrDirectBinaryTypeId(bindingFacts, memberTypes, computedTypes!, nodeIndex!) => computedTypes![nodeIndex!]
+        }
+        node.kind == 9 -> if {
+            prepared -> preIrDirectConversionTypeId(bindingFacts, memberTypes, computedTypes!, invalidConversionArity, invalidConversionLiteral, nodeIndex!) => computedTypes![nodeIndex!]
+        }
+        node.kind == 11 and node.operand0 >= 0 -> if {
+            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+            sourceModule >= 0 -> if {
+                prepared -> expressionTypeIds.preIrInterpolationReceiverTypeId(bindingFacts.types, bindingFacts.references, bindingFacts.referenceIndexByTypeAst, bindingFacts.interpolationLexicalTypeByNode, bindingFacts.interpolationMemberTypeByNode, bindingFacts.interpolationIndexedTypeByNode, bindingFacts.interpolationContextualStructTypeByNode, bindingFacts.interpolationCallTypeByNode, sourceModule, node.operand0) => operandTypeId!
+                node.operand0 > nodeIndex! and node.operand0 < (computedTypes! -> len)
+                    and computedTypes![node.operand0] >= 0
+                    -> if { computedTypes![node.operand0] => operandTypeId! }
+                prepared -> semanticInterpolationFunctionTypeId(bindingFacts, sourceModule, node.sourceToken) => functionTypeId
+                prepared -> consumableResultInterpolationOperand(sourceModule, node.operand0) => consumable
+                resultPropagationDecision(bindingFacts.types, typeTraits, operandTypeId!, functionTypeId, consumable) => decision
+                decision => decisions![nodeIndex!]
+                decision.status == 0 -> if { decision.okTypeId => computedTypes![nodeIndex!] }
+            }
+        }
+        nodeIndex! - 1 => nodeIndex!
+    }
+    decisions!
+}
+
+# Ownership and emission consume the same completed expression type decision.
+# In particular, a scalar projection of Text does not retain its Text loan.
+public resultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => resultTypeId
+            resultTypes! -> push(resultTypeId)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+public indexedResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 7 and node.operand0 >= 0 and node.operand1 >= 0
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => resultTypeId!
+                    }
+                }
+            resultTypes! -> push(resultTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+public memberResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, localEnumMembers: ref [LocalEnumMemberDecision; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 5 and node.operand0 >= 0
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => resultTypeId!
+                        localEnumMembers[nodeIndex!].status == 3
+                            -> if { localEnumMembers[nodeIndex!].typeId => resultTypeId! }
+                    }
+                }
+            resultTypes! -> push(resultTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+public memberFieldByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => fieldByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => fieldIndex!
+            prepared.interpolations[nodeIndex!] => member
+            member.kind == 5 and member.operand0 >= 0 -> if {
+                prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                sourceModule >= 0 -> if {
+                    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, member.operand0) => ownerTypeId
+                    ownerTypeId >= 0 -> if {
+                        prepared -> expressionTypeIds.memberFieldIndex(types, fields, sourceModule, ownerTypeId, nodeIndex!) => fieldIndex!
+                    }
+                }
+            }
+            fieldByNode! -> push(fieldIndex!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    fieldByNode!
+}
+
+public privateMemberFieldByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    prepared -> memberFieldByNode(plan, bindingFacts, ir, types, fields) => resolvedFields
+    prepared -> privateMemberFieldFromResolvedByNode(fields, resolvedFields)
+}
+
+public privateMemberFieldFromResolvedByNode prepared: ref semanticContext.SemanticSnapshot, fields: ref [typeIds.NominalField; ~], resolvedFields: ref [Int; ~] -> [Int; ~] {
+    [Int; ~] => privateFields!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => privateField!
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 5 and node.operand0 >= 0 -> if {
+                prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                sourceModule >= 0 -> if {
+                    resolvedFields[nodeIndex!] => fieldIndex
+                    fieldIndex >= 0 -> if {
+                        fields[fieldIndex] => field
+                        field.fieldSymbol >= 0 and field.sourceModule >= 0
+                            and not (prepared.package.sources -> modules.sameLogicalAnalyzedSource(prepared.modules, sourceModule, field.sourceModule, prepared.package.tokens, prepared.package.ranges))
+                            -> if {
+                                prepared.package.ranges[field.sourceModule] => fieldRange
+                                prepared.package.symbols[fieldRange.symbolStart + field.fieldSymbol] => declaration
+                                declaration.flags / 4 % 2 == 0 -> if { fieldIndex => privateField! }
+                            }
+                    }
+                }
+            }
+            privateFields! -> push(privateField!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    privateFields!
+}
+
+sourceNameMatchesToken prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, nameStart: UIntSize, nameLength: UIntSize, declarationModule: Int, tokenIndex: Int -> Bool {
+    prepared.package.ranges[declarationModule] => declarationRange
+    prepared.package.tokens[declarationRange.tokenStart + tokenIndex] => nameToken
+    nameToken.span.length != nameLength -> if { false -> return }
+    UIntSize(0) => byteIndex!
+    byteIndex! < nameLength -> while {
+        (prepared.package.sources[sourceModule] -> byte(nameStart + byteIndex!)) != (prepared.package.sources[declarationModule] -> byte(nameToken.span.start + byteIndex!))
+            -> if { false -> return }
+        byteIndex! + 1 => byteIndex!
+    }
+    true
+}
+
+public uninvokedAssociatedMemberByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet -> [Bool; ~] {
+    [Bool; ~] => uninvoked!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => matched!
+            prepared.interpolations[nodeIndex!] => member
+            member.kind == 5 and member.operand0 >= 0 -> if {
+                prepared.interpolations[member.operand0] => ownerName
+                ownerName.kind == 1 and ownerName.symbol < 0 -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    member.callNameStart => memberNameStart
+                    member.callNameLength => memberNameLength
+                    prepared.package.ranges[sourceModule] => sourceRange
+                    0 => functionIndex!
+                    functionIndex! < sourceRange.symbolCount and not matched!
+                        -> while {
+                            prepared.package.symbols[sourceRange.symbolStart + functionIndex!] => declaration
+                            declaration.kind == 7 or declaration.kind == 31
+                                -> if {
+                                    prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(sourceModule, functionIndex!) => parameters
+                                    (parameters -> len) == 0 -> if {
+                                        declaration.parent >= 0 and declaration.parent < sourceRange.symbolCount
+                                            and declaration.nameToken >= 0 -> if {
+                                                prepared.package.symbols[sourceRange.symbolStart + declaration.parent] => implSymbol
+                                                implSymbol.kind == 6 and implSymbol.astNode >= 0 and implSymbol.astNode < sourceRange.astCount
+                                                    -> if {
+                                                        prepared.package -> typeIds.implOwnerTypeId(bindingFacts.references, bindingFacts.referenceIndexByTypeAst, sourceModule, implSymbol.astNode) => ownerTypeId
+                                                        ownerTypeId >= 0 and ownerTypeId < (bindingFacts.types -> len)
+                                                            -> if {
+                                                                bindingFacts.types[ownerTypeId] => ownerType
+                                                                ownerType.kind == 1 and ownerType.origin == 0
+                                                                    and ownerType.module == sourceModule
+                                                                    and ownerType.symbol >= 0 and ownerType.symbol < sourceRange.symbolCount
+                                                                    -> if {
+                                                                        prepared.package.symbols[sourceRange.symbolStart + ownerType.symbol] => ownerTypeSymbol
+                                                                        ownerTypeSymbol.nameToken >= 0
+                                                                            and prepared -> sourceNameMatchesToken(sourceModule, ownerName.payloadStart, ownerName.payloadLength, sourceModule, ownerTypeSymbol.nameToken)
+                                                                            and prepared -> sourceNameMatchesToken(sourceModule, memberNameStart, memberNameLength, sourceModule, declaration.nameToken)
+                                                                            -> if { true => matched! }
+                                                                    }
+                                                            }
+                                                    }
+                                            }
+                                    }
+                                }
+                            functionIndex! + 1 => functionIndex!
+                        }
+                }
+            }
+            uninvoked! -> push(matched!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    uninvoked!
+}
+
+public missingLocalAssociatedMemberByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, uninvokedAssociatedMembers: ref [Bool; ~] -> [Bool; ~] {
+    [Bool; ~] => missingMembers!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => missing!
+            prepared.interpolations[nodeIndex!] => member
+            member.kind == 5 and member.operand0 >= 0 and not uninvokedAssociatedMembers[nodeIndex!]
+                -> if {
+                    prepared.interpolations[member.operand0] => ownerName
+                    ownerName.kind == 1 and ownerName.symbol < 0 -> if {
+                        prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                        sourceModule >= 0 -> if {
+                            prepared.package.ranges[sourceModule] => sourceRange
+                            0 => typeIndex!
+                            typeIndex! < (bindingFacts.types -> len) and not missing!
+                                -> while {
+                                    bindingFacts.types[typeIndex!] => candidate
+                                    candidate.kind == 1 and candidate.origin == 0 and candidate.module == sourceModule
+                                        and candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
+                                        -> if {
+                                            prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+                                            declaration.kind == 3 and declaration.nameToken >= 0
+                                                and prepared -> sourceNameMatchesToken(sourceModule, ownerName.payloadStart, ownerName.payloadLength, sourceModule, declaration.nameToken)
+                                                -> if { true => missing! }
+                                        }
+                                    typeIndex! + 1 => typeIndex!
+                                }
+                        }
+                    }
+                }
+            missingMembers! -> push(missing!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    missingMembers!
+}
+
+localNominalTypeIdInto types: mut [typeIds.SemanticType; ~], sourceModule: Int, symbol: Int -> Int {
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => candidate
+        candidate.kind == 1 and candidate.origin == 0 and candidate.module == sourceModule and candidate.symbol == symbol
+            -> if { typeIndex! -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    types -> len => typeId
+    types -> push(typeIds.SemanticType {
+        kind: 1
+        origin: 0
+        module: sourceModule
+        symbol: symbol
+        first: -1
+        second: -1
+        length: -1
+        lengthHash: 0
+        containsParameter: false
+        status: 0
+    })
+    typeId
+}
+
+genericEnumOwnerTypeIdInto prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], sourceModule: Int, memberIndex: Int -> Int {
+    prepared.interpolations[memberIndex] => member
+    member.kind != 5 or member.operand0 < 0 -> if { -1 -> return }
+    prepared.interpolations[member.operand0] => owner
+    owner.kind != 1 or owner.symbol >= 0 -> if { -1 -> return }
+    prepared.package.sources[sourceModule] -> slice(member.payloadStart, member.payloadLength) => fragment
+    fragment -> ast.lowerExpression => nodes
+    fragment -> lexer.lex => tokens
+    fragment -> typeTerms.lowerPrepared(nodes, tokens) => terms
+    [Int; ~] => termTypeIds!
+    terms -> each term { termTypeIds! -> push(-1) }
+    (terms -> len) - 1 => termIndex!
+    termIndex! >= 0 -> while {
+        terms[termIndex!] => term
+        term.nameToken >= 0 -> if {
+            tokens[term.nameToken] => nameToken
+            fragment -> slice(nameToken.span.start, nameToken.span.length) => name
+            term.kind == 1 -> if {
+                ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
+                0 => builtinIndex!
+                builtinIndex! < (builtinNames -> len) -> while {
+                    name == builtinNames[builtinIndex!] -> if {
+                        builtinIndex! -> typeIds.canonicalBuiltinSymbol => builtinSymbol
+                        types -> typeIds.builtinTypeId(builtinSymbol) => termTypeIds![termIndex!]
+                    }
+                    builtinIndex! + 1 => builtinIndex!
+                }
+                termTypeIds![termIndex!] < 0 -> if {
+                    prepared.package.ranges[sourceModule] => sourceRange
+                    0 => declarationIndex!
+                    declarationIndex! < sourceRange.symbolCount and termTypeIds![termIndex!] < 0
+                        -> while {
+                            prepared.package.symbols[sourceRange.symbolStart + declarationIndex!] => declaration
+                            (declaration.kind == 3 or declaration.kind == 4) and declaration.parent < 0 and declaration.nameToken >= 0
+                                and prepared -> sourceNameMatchesToken(sourceModule, member.payloadStart + nameToken.span.start, nameToken.span.length, sourceModule, declaration.nameToken)
+                                -> if {
+                                    types -> localNominalTypeIdInto(sourceModule, declarationIndex!) => localTypeId
+                                    localTypeId => termTypeIds![termIndex!]
+                                }
+                            declarationIndex! + 1 => declarationIndex!
+                        }
+                }
+            }
+            term.kind == 7 and term.firstArgument >= 0 -> if {
+                -1 => constructorSymbol!
+                name == "Option" and term.secondArgument < 0 -> if { 0 => constructorSymbol! }
+                name == "Result" and term.secondArgument >= 0
+                    -> if { 1 => constructorSymbol! }
+                termTypeIds![term.firstArgument] >= 0
+                    and (term.secondArgument < 0 or termTypeIds![term.secondArgument] >= 0)
+                    and constructorSymbol! >= 0 -> if {
+                        termTypeIds![term.firstArgument] => firstTypeId
+                        -1 => secondTypeId!
+                        term.secondArgument >= 0 -> if { termTypeIds![term.secondArgument] => secondTypeId! }
+                        0 => typeIndex!
+                        typeIndex! < (types -> len) and termTypeIds![termIndex!] < 0
+                            -> while {
+                                types[typeIndex!] => candidate
+                                candidate.kind == 7 and candidate.origin == 4 and candidate.symbol == constructorSymbol!
+                                    and candidate.first == firstTypeId and candidate.second == secondTypeId! and candidate.status == 0
+                                    -> if { typeIndex! => termTypeIds![termIndex!] }
+                                typeIndex! + 1 => typeIndex!
+                            }
+                        termTypeIds![termIndex!] < 0 -> if {
+                            types -> len => termTypeIds![termIndex!]
+                            types -> push(typeIds.SemanticType {
+                                kind: 7, origin: 4, module: -1, symbol: constructorSymbol!,
+                                first: firstTypeId, second: secondTypeId!, length: -1,
+                                lengthHash: 0, containsParameter: false, status: 0
+                            })
+                        }
+                    }
+            }
+        }
+        termIndex! - 1 => termIndex!
+    }
+    0 => ownerTermIndex!
+    ownerTermIndex! < (terms -> len) -> while {
+        terms[ownerTermIndex!] => term
+        term.kind == 7 and nodes[term.astNode].start == 0
+            and nodes[term.astNode].length == owner.payloadLength
+            and termTypeIds![ownerTermIndex!] >= 0
+            and types[termTypeIds![ownerTermIndex!]].kind == 7
+            and types[termTypeIds![ownerTermIndex!]].origin == 4
+            and types[termTypeIds![ownerTermIndex!]].symbol <= 1
+            -> if { termTypeIds![ownerTermIndex!] -> return }
+        ownerTermIndex! + 1 => ownerTermIndex!
+    }
+    -1
+}
+
+public localEnumMemberDecisionByNode prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], uninvokedAssociatedMembers: ref [Bool; ~] -> [LocalEnumMemberDecision; ~] {
+    [LocalEnumMemberDecision; ~] => decisions!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            0 => status!
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!] => member
+            member.kind == 5 and member.operand0 >= 0 and not uninvokedAssociatedMembers[nodeIndex!]
+                -> if {
+                    prepared.interpolations[member.operand0] => ownerName
+                    ownerName.kind == 1 and ownerName.symbol < 0 -> if {
+                        prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                        sourceModule >= 0 -> if {
+                            member.callNameStart => variantNameStart
+                            member.callNameLength => variantNameLength
+                            prepared -> genericEnumOwnerTypeIdInto(types, sourceModule, nodeIndex!) => genericOwnerTypeId
+                            genericOwnerTypeId >= 0 -> if {
+                                types[genericOwnerTypeId] => genericOwnerType
+                                prepared.package.sources[sourceModule] -> slice(variantNameStart, variantNameLength) => variantName
+                                1 => status!
+                                -1 => payloadTypeId!
+                                genericOwnerType.symbol == 0 -> if {
+                                    variantName == "None" -> if { 3 => status! }
+                                    variantName == "Some" -> if { genericOwnerType.first => payloadTypeId! }
+                                }
+                                genericOwnerType.symbol == 1 -> if {
+                                    variantName == "Ok" -> if { genericOwnerType.first => payloadTypeId! }
+                                    variantName == "Err" -> if { genericOwnerType.second => payloadTypeId! }
+                                }
+                                payloadTypeId! >= 0 -> if {
+                                    2 => status!
+                                    types[payloadTypeId!].kind == 1 and types[payloadTypeId!].origin == 1
+                                        and types[payloadTypeId!].symbol == 0 -> if { 3 => status! }
+                                }
+                                status! == 3 -> if { genericOwnerTypeId => resultTypeId! }
+                            }
+                            prepared.package.ranges[sourceModule] => sourceRange
+                            0 => declarationIndex!
+                            declarationIndex! < sourceRange.symbolCount and status! == 0
+                                -> while {
+                                    prepared.package.symbols[sourceRange.symbolStart + declarationIndex!] => declaration
+                                    declaration.kind == 4 and declaration.parent < 0 and declaration.nameToken >= 0
+                                        and prepared -> sourceNameMatchesToken(sourceModule, ownerName.payloadStart, ownerName.payloadLength, sourceModule, declaration.nameToken)
+                                        -> if {
+                                            1 => status!
+                                            0 => variantIndex!
+                                            variantIndex! < sourceRange.symbolCount and status! == 1
+                                                -> while {
+                                                    prepared.package.symbols[sourceRange.symbolStart + variantIndex!] => variant
+                                                    variant.kind == 27 and variant.parent == declarationIndex! and variant.nameToken >= 0
+                                                        and prepared -> sourceNameMatchesToken(sourceModule, variantNameStart, variantNameLength, sourceModule, variant.nameToken)
+                                                        -> if {
+                                                            variant.typeNode >= 0 -> if { 2 => status! } else {
+                                                                3 => status!
+                                                                types -> localNominalTypeIdInto(sourceModule, declarationIndex!) => resultTypeId!
+                                                            }
+                                                        }
+                                                    variantIndex! + 1 => variantIndex!
+                                                }
+                                        }
+                                    declarationIndex! + 1 => declarationIndex!
+                                }
+                        }
+                    }
+                }
+            decisions! -> push(LocalEnumMemberDecision { status: status!, typeId: resultTypeId! })
+            nodeIndex! + 1 => nodeIndex!
+        }
+    decisions!
+}
+
+# Commit semantic enum values before display inference and Typed IR consume them.
+public commitLocalEnumMemberTypes decisions: ref [LocalEnumMemberDecision; ~], memberTypes: mut [Int; ~] -> Unit {
+    0 => nodeIndex!
+    nodeIndex! < (decisions -> len) -> while {
+        decisions[nodeIndex!] => decision
+        decision.status == 3 and decision.typeId >= 0
+            -> if {
+                decision.typeId => memberTypes[nodeIndex!]
+            }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
+public missingReadonlyMemberOwnerTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, resultTypes: ref [Int; ~], callTargets: ref [Int; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => missingOwners!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => missingOwner!
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 5 and node.operand0 >= 0
+                and nodeIndex! < (resultTypes -> len) and resultTypes[nodeIndex!] < 0
+                and nodeIndex! < (callTargets -> len) and callTargets[nodeIndex!] == -1
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => ownerTypeId!
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+                            and types[ownerTypeId!].kind == 8
+                            -> if { types[ownerTypeId!].first => ownerTypeId! }
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+                            and types[ownerTypeId!].kind == 1 and types[ownerTypeId!].origin == 0
+                            -> if { ownerTypeId! => missingOwner! }
+                    }
+                }
+            missingOwners! -> push(missingOwner!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    missingOwners!
+}
+
+intrinsicFlowResultBuiltinSymbol prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (nodes -> len)
+        -> if { -1 -> return }
+    nodes[nodeIndex] => flow
+    flow.kind != 6 or (flow.opcode != -101 and flow.opcode != -236
+        and flow.opcode != -202 and flow.opcode != -203
+        and flow.opcode != -244 and flow.opcode != -243)
+        or flow.operand0 < 0 or sourceModule < 0
+        -> if { flow.typeSymbol -> return }
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, flow.operand0) => receiverTypeId
+    types -> typeIds.materializedReadTypeId(receiverTypeId) => receiverValueTypeId
+    receiverValueTypeId >= 0 and receiverValueTypeId < (types -> len)
+        -> if {
+            flow.opcode -> typeIds.collectionFlowResultBuiltinSymbol(types[receiverValueTypeId]) => builtin
+            builtin >= 0 -> if { builtin -> return }
+        }
+    flow.typeSymbol
+}
+
+public intrinsicFlowResultBuiltinByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => builtinByNode!
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len)
+        -> while {
+            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+            prepared -> intrinsicFlowResultBuiltinSymbol(plan, bindingFacts, nodes, ir, types, fields, sourceModule, nodeIndex!) => builtin
+            builtinByNode! -> push(builtin)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    builtinByNode!
+}
+
+public flowResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!].kind == 6
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => resultTypeId!
+                    }
+                }
+            resultTypes! -> push(resultTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+invalidTextIntrinsicIndexArgument prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, argumentIndex: Int -> Bool {
+    argumentIndex < 0 or argumentIndex >= (prepared.interpolations -> len)
+        -> if { false -> return }
+    prepared.interpolations[argumentIndex] => argument
+    argument.kind == 0 -> if {
+        (prepared.package.sources[sourceModule] -> byte(argument.payloadStart)) == 39 -> return
+        false -> return
+    }
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, argumentIndex) => argumentTypeId!
+    argumentTypeId! >= 0 and argumentTypeId! < (types -> len) and types[argumentTypeId!].kind == 8
+        -> if { types[argumentTypeId!].first => argumentTypeId! }
+    argumentTypeId! >= 0 and argumentTypeId! < (types -> len)
+        -> if {
+            types[argumentTypeId!] => argumentType
+            not (argumentType.kind == 1 and argumentType.origin == 1 and argumentType.symbol == 13) -> return
+            false -> return
+        }
+    prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, argumentIndex) => argumentBuiltin
+    argumentBuiltin >= 0 and argumentBuiltin != 13
+}
+
+intrinsicFlowReceiverSupported opcode: Int, receiver: typeIds.SemanticType -> Bool {
+    (opcode -> typeIds.collectionFlowResultBuiltinSymbol(receiver)) >= 0
+}
+
+methodFlowFallback prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], nodeIndex: Int -> Bool {
+    prepared.interpolations[nodeIndex] => node
+    node.kind == 6 and bindingFacts.interpolationMethodByNode[nodeIndex].status >= 0
+        -> if { true -> return }
+    node.kind != 6 or node.operand0 < 0
+        or (node.opcode != -101 and node.opcode != -236 and node.opcode != -244
+        and node.opcode != -243 and node.opcode != -202 and node.opcode != -203)
+        -> if { false -> return }
+    prepared -> sourceModuleAt(nodeIndex) => sourceModule
+    sourceModule < 0 -> if { false -> return }
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => receiverTypeId
+    receiverTypeId < 0 or receiverTypeId >= (types -> len)
+        -> if { false -> return }
+    types -> typeIds.materializedReadTypeId(receiverTypeId) => receiverValueTypeId
+    types[receiverValueTypeId] => receiverType
+    (node.opcode == -202 or node.opcode == -203 or node.opcode == -244
+        or node.opcode == -243 or node.argumentCount == 0)
+        and not (node.opcode -> intrinsicFlowReceiverSupported(receiverType))
+}
+
+public classifyIntrinsicFlowReceivers prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [interpolation.InterpolationNode; ~] {
+    [interpolation.InterpolationNode; ~] => classified!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => node
+            prepared -> methodFlowFallback(plan, bindingFacts, ir, types, fields, nodeIndex!) => methodFallback
+            methodFallback
+                -> if {
+                    classified! -> push(interpolation.InterpolationNode {
+                        kind: 10, segment: node.segment, parent: node.parent,
+                        symbol: node.symbol, ownerSymbol: node.ownerSymbol,
+                        prefixSymbol: node.prefixSymbol, bareFunctionStatus: node.bareFunctionStatus,
+                        qualifiedReceiverStatus: node.qualifiedReceiverStatus,
+                        opcode: -1, payloadStart: node.payloadStart, payloadLength: node.payloadLength,
+                        diagnosticStart: node.diagnosticStart,
+                        memberDotStart: node.memberDotStart,
+                        callNameStart: node.callNameStart, callNameLength: node.callNameLength,
+                        operand0: node.operand0, operand1: node.operand1, operand2: node.operand2,
+                        argumentCount: node.argumentCount, sourceToken: node.sourceToken,
+                        literalStart: node.literalStart, literalLength: node.literalLength,
+                        expressionStart: node.expressionStart, expressionLength: node.expressionLength,
+                        targetAst: node.targetAst
+                        typeAst: node.typeAst
+                        valueAst: node.valueAst
+                        typeSymbol: -1
+                    })
+                    nodeIndex! + 1 => nodeIndex!
+                    continue
+                }
+            classified! -> push(node)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    classified!
+}
+
+public invalidIntrinsicFlowArityByNode nodes: ref [interpolation.InterpolationNode; ~] -> [Bool; ~] {
+    [Bool; ~] => invalidByNode!
+    nodes -> each node {
+        (node.kind == 6 and node.opcode == -202 and node.argumentCount != 1)
+            or (node.kind == 6 and node.opcode == -203 and node.argumentCount != 2)
+            or (node.kind == 6 and (node.opcode == -101 or node.opcode == -236)
+            and node.argumentCount != 0)
+            or (node.kind == 6 and node.opcode == -244 and node.argumentCount != 0)
+            => invalid
+        invalidByNode! -> push(invalid)
+    }
+    invalidByNode!
+}
+
+public invalidTextIntrinsicArgumentByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => invalidByNode!
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len)
+        -> while {
+            -1 => invalidArgument!
+            nodes[nodeIndex!] => call
+            call.kind == 6 and ((call.opcode == -202 and call.argumentCount == 1)
+                or (call.opcode == -203 and call.argumentCount == 2))
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        call.operand1 >= 0
+                            and prepared -> invalidTextIntrinsicIndexArgument(plan, bindingFacts, ir, types, fields, sourceModule, call.operand1)
+                            -> if { call.operand1 => invalidArgument! }
+                        invalidArgument! < 0 and call.opcode == -203 and call.operand2 >= 0
+                            and prepared -> invalidTextIntrinsicIndexArgument(plan, bindingFacts, ir, types, fields, sourceModule, call.operand2)
+                            -> if { call.operand2 => invalidArgument! }
+                    }
+                }
+            invalidByNode! -> push(invalidArgument!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalidByNode!
+}
+
+public collectionMembershipDiagnosticByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [CollectionMembershipDiagnostic; ~] {
+    [CollectionMembershipDiagnostic; ~] => diagnostics!
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len) -> while {
+        nodes[nodeIndex!] => call
+        CollectionMembershipDiagnostic { code: 0, expectedTypeId: -1, actualTypeId: -1, argumentNode: call.operand1 } => diagnostic!
+        call.kind == 6 and call.opcode == -243 and call.operand0 >= 0
+            -> if {
+                prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                sourceModule >= 0 -> if {
+                    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, call.operand0) => receiverTypeId
+                    types -> typeIds.materializedReadTypeId(receiverTypeId) => valueTypeId
+                    valueTypeId >= 0 and valueTypeId < (types -> len)
+                        -> if {
+                            types[valueTypeId] => receiver
+                            types -> typeIds.collectionMembershipExpectedTypeId(receiver) => expectedType
+                            expectedType >= 0 -> if {
+                                expectedType => diagnostic!.expectedTypeId
+                                call.argumentCount != 1 -> if {
+                                    receiver.kind == 14 -> if { 1 } else { 2 } => diagnostic!.code
+                                } else {
+                                    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, call.operand1) => argumentTypeId
+                                    types -> typeIds.materializedReadTypeId(argumentTypeId) => actualType
+                                    actualType >= 0 and actualType < (types -> len) and actualType != expectedType
+                                        -> if {
+                                            actualType => diagnostic!.actualTypeId
+                                            receiver.kind == 14 -> if { 3 } else { 4 } => diagnostic!.code
+                                        }
+                                }
+                            }
+                        }
+                }
+            }
+        diagnostics! -> push(diagnostic!)
+        nodeIndex! + 1 => nodeIndex!
+    }
+    diagnostics!
+}
+
+preIrReceiverTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, sourceModule: Int, nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
+        -> if { -1 -> return }
+    prepared.interpolations[nodeIndex] => receiver
+    receiver.kind == 8 and receiver.symbol >= 0 -> if {
+        prepared.package.ranges[sourceModule] => sourceRange
+        receiver.symbol < sourceRange.symbolCount -> if {
+            prepared.package.symbols[sourceRange.symbolStart + receiver.symbol] => function
+            function.kind == 7 and function.secondaryTypeNode >= 0
+                and function.secondaryTypeNode < sourceRange.astCount
+                -> if {
+                    0 => providedArguments!
+                    receiver.operand0 >= 0 -> if { providedArguments! + 1 => providedArguments! }
+                    receiver.operand1 >= 0 -> if { providedArguments! + 1 => providedArguments! }
+                    receiver.operand2 >= 0 -> if { providedArguments! + 1 => providedArguments! }
+                    0 => expectedArguments!
+                    0 => parameterSymbol!
+                    parameterSymbol! < sourceRange.symbolCount -> while {
+                        prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => parameter
+                        parameter.kind == 35 and parameter.parent == receiver.symbol
+                            -> if { expectedArguments! + 1 => expectedArguments! }
+                        parameterSymbol! + 1 => parameterSymbol!
+                    }
+                    providedArguments! == expectedArguments! -> if {
+                        sourceRange.astStart + function.secondaryTypeNode => returnTypeAst
+                        returnTypeAst < (bindingFacts.referenceIndexByTypeAst -> len)
+                            -> if {
+                                bindingFacts.referenceIndexByTypeAst[returnTypeAst] => referenceIndex
+                                referenceIndex >= 0 and referenceIndex < (bindingFacts.references -> len)
+                                    -> if {
+                                        bindingFacts.references[referenceIndex] => reference
+                                        reference.status == 0 -> if { reference.typeId -> return }
+                                    }
+                            }
+                    }
+                }
+        }
+    }
+    receiver.kind == 1 and nodeIndex < (bindingFacts.interpolationLexicalTypeByNode -> len)
+        -> if { bindingFacts.interpolationLexicalTypeByNode[nodeIndex] -> return }
+    receiver.kind == 5 and receiver.operand0 >= 0
+        -> if {
+            prepared -> preIrReceiverTypeId(bindingFacts, sourceModule, receiver.operand0) => ownerType
+            ownerType >= 0 and ownerType < (bindingFacts.types -> len)
+                -> if {
+                    prepared -> expressionTypeIds.memberFieldIndex(bindingFacts.types, bindingFacts.fields, sourceModule, ownerType, nodeIndex) => fieldIndex
+                    fieldIndex >= 0 -> if { bindingFacts.fields[fieldIndex].fieldType -> return }
+                }
+        }
+    receiver.kind == 7 and receiver.operand0 >= 0 and receiver.operand1 >= 0
+        -> if {
+            prepared -> expressionTypeIds.preIrIntIndexExpression(bindingFacts.types, bindingFacts.interpolationLexicalTypeByNode, sourceModule, receiver.operand1)
+                -> if {
+                    prepared -> preIrReceiverTypeId(bindingFacts, sourceModule, receiver.operand0) => ownerType!
+                    ownerType! >= 0 and ownerType! < (bindingFacts.types -> len)
+                        -> if {
+                            bindingFacts.types -> typeIds.materializedReadTypeId(ownerType!) => ownerType!
+                            bindingFacts.types[ownerType!] => owner
+                            owner.kind == 2 or owner.kind == 3 or owner.kind == 4 or owner.kind == 12
+                                -> if { owner.first -> return }
+                        }
+                }
+        }
+    -1
+}
+
+# Commit imported receiver methods before the checked emitter classifies an
+# unresolved interpolation call. The ordinary flow path gives an instance
+# method priority over a free function with the same spelling.
+# A spelling-classified intrinsic is also a candidate here: nominal methods
+# commit their identity before later receiver classification changes its kind.
+public preIrFlowCallTargets prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet -> [SemanticInterpolationCallTarget; ~] {
+    [SemanticInterpolationCallTarget; ~] => targets!
+    bindingFacts.interpolationMethodByNode -> each decision {
+        targets! -> push(SemanticInterpolationCallTarget {
+            sourceModule: decision.sourceModule
+            symbol: decision.symbol
+            receiverType: decision.receiverType
+            ownerType: decision.ownerType
+            traitModule: decision.traitModule
+            traitSymbol: decision.traitSymbol
+            expectedAdditionalArguments: decision.expectedAdditionalArguments
+            status: decision.status
+        })
+    }
+    targets!
+}
+
+# A resolved instance method contributes its declared result before Typed IR.
+# Resolve following fields and indexes from the inside out, and stop when a
+# call, field, or index is invalid.
+public preIrCallMemberTypeByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, callTargets: ref [SemanticInterpolationCallTarget; ~] -> [Int; ~] {
+    [Int; ~] => memberTypes!
+    prepared.interpolations -> each interpolationNode {
+        memberTypes! -> push(-1)
+    }
+    prepared.interpolationRanges -> each interpolationRange {
+        interpolationRange.sourceModule >= 0
+            and interpolationRange.sourceModule < (prepared.package.ranges -> len)
+            -> if {
+                interpolationRange.nodeStart + interpolationRange.nodeCount => nodeIndex!
+                nodeIndex! > interpolationRange.nodeStart -> while {
+                    nodeIndex! - 1 => nodeIndex!
+                    bindingFacts.interpolationMemberTypeByNode[nodeIndex!] => memberTypes![nodeIndex!]
+                    prepared.interpolations[nodeIndex!] => member
+                    member.kind == 7 and nodeIndex! < (bindingFacts.interpolationIndexedTypeByNode -> len)
+                        -> if { bindingFacts.interpolationIndexedTypeByNode[nodeIndex!] => memberTypes![nodeIndex!] }
+                    member.kind == 5 and member.operand0 >= 0
+                        and member.operand0 < (prepared.interpolations -> len)
+                        -> if {
+                            prepared.interpolations[member.operand0] => receiver
+                            -1 => ownerTypeId!
+                            receiver.kind == 5 or receiver.kind == 7
+                                -> if { memberTypes![member.operand0] => ownerTypeId! }
+                            receiver.kind == 10 and member.operand0 < (callTargets -> len)
+                                -> if {
+                                    callTargets[member.operand0] => target
+                                    target.status == 0 and target.sourceModule >= 0
+                                        and target.sourceModule < (prepared.package.ranges -> len)
+                                        -> if {
+                                            prepared.package.ranges[target.sourceModule] => targetRange
+                                            target.symbol >= 0 and target.symbol < targetRange.symbolCount
+                                                -> if {
+                                                    prepared.package.symbols[targetRange.symbolStart + target.symbol] => method
+                                                    -1 => returnTypeNode!
+                                                    method.kind == 7 -> if { method.secondaryTypeNode => returnTypeNode! }
+                                                    method.kind == 31 -> if { method.typeNode => returnTypeNode! }
+                                                    returnTypeNode! >= 0 and returnTypeNode! < targetRange.astCount
+                                                        -> if {
+                                                            targetRange.astStart + returnTypeNode! => returnTypeAst
+                                                            bindingFacts.referenceIndexByTypeAst[returnTypeAst] => referenceIndex
+                                                            referenceIndex >= 0 and referenceIndex < (bindingFacts.references -> len)
+                                                                -> if {
+                                                                    bindingFacts.references[referenceIndex] => returnReference
+                                                                    returnReference.status == 0 -> if { returnReference.typeId => ownerTypeId! }
+                                                                }
+                                                        }
+                                                }
+                                        }
+                                }
+                            ownerTypeId! >= 0 and ownerTypeId! < (bindingFacts.types -> len)
+                                -> if {
+                                    prepared -> expressionTypeIds.memberFieldIndex(bindingFacts.types, bindingFacts.fields, interpolationRange.sourceModule, ownerTypeId!, nodeIndex!) => fieldIndex
+                                    prepared -> expressionTypeIds.accessibleMemberFieldType(bindingFacts.fields, interpolationRange.sourceModule, fieldIndex) => fieldTypeId
+                                    fieldTypeId >= 0 -> if { fieldTypeId => memberTypes![nodeIndex!] }
+                                }
+                        }
+                    member.kind == 7 and member.operand0 >= 0 and member.operand1 >= 0
+                        and member.operand0 < (prepared.interpolations -> len)
+                        -> if {
+                            prepared.interpolations[member.operand0] => receiver
+                            (receiver.kind == 5 or receiver.kind == 7)
+                                and memberTypes![member.operand0] >= 0
+                                -> if {
+                                    prepared -> expressionTypeIds.preIrIndexedResultTypeId(bindingFacts.types, bindingFacts.interpolationLexicalTypeByNode, interpolationRange.sourceModule, memberTypes![member.operand0], member.operand1)
+                                        => indexedTypeId
+                                    indexedTypeId >= 0 -> if { indexedTypeId => memberTypes![nodeIndex!] }
+                                }
+                        }
+                }
+            }
+    }
+    memberTypes!
+}
+
+flowCallTargetAt prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], nodeIndex: Int, includeIntrinsicFlow: Bool -> Int {
+    nodes[nodeIndex] => call
+    call.kind == 8 -> if {
+        -1 => directTarget!
+        prepared -> sourceModuleAt(nodeIndex) => sourceModule
+        call.symbol >= 0 and sourceModule >= 0 -> if {
+            0 => functionIndex!
+            functionIndex! < (ir -> len) -> while {
+                ir[functionIndex!] => function
+                function.kind == 0 and function.sourceModule == sourceModule and function.symbol == call.symbol
+                    -> if { functionIndex! => directTarget! }
+                functionIndex! + 1 => functionIndex!
+            }
+        }
+        directTarget! -> return
+    }
+    call.kind == 5 and nodeIndex < (bindingFacts.interpolationMemberTypeByNode -> len)
+        and bindingFacts.interpolationMemberTypeByNode[nodeIndex] >= 0
+        -> if { -1 -> return }
+    call.callNameStart => methodNameStart
+    call.callNameLength => methodNameLength
+    -1 => target!
+    -1 => inaccessible!
+    -1 => freeTarget!
+    (call.kind == 5 or call.kind == 10 or (includeIntrinsicFlow and call.kind == 6))
+        and call.operand0 >= 0 and methodNameLength > 0
+        -> if {
+            prepared -> sourceModuleAt(nodeIndex) => sourceModule
+            sourceModule >= 0 -> if {
+                prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, call.operand0) => receiverType
+                receiverType >= 0 and receiverType < (types -> len)
+                    -> if {
+                        types[receiverType] => receiver
+                        receiver.kind == 1 and receiver.origin == 0 -> if {
+                            1 => argumentCount!
+                            call.operand1 >= 0 -> if { argumentCount! + 1 => argumentCount! }
+                            call.operand2 >= 0 -> if { argumentCount! + 1 => argumentCount! }
+                            0 => functionIndex!
+                            functionIndex! < (ir -> len) -> while {
+                                ir[functionIndex!] => function
+                                function.kind == 0 and function.operand1 >= 0
+                                    and ir[function.operand1].typeId == receiverType
+                                    and function.sourceModule >= 0
+                                    -> if {
+                                        prepared.package.ranges[function.sourceModule] => functionRange
+                                        prepared.package.symbols[functionRange.symbolStart + function.symbol] => declaration
+                                        false => reachable!
+                                        function.sourceModule == sourceModule -> if { true => reachable! }
+                                        prepared.resolvedImports -> each imported {
+                                            imported.sourceModule == sourceModule and imported.status == 0
+                                                and modules.sameLogicalAnalyzedSource(prepared.package.sources, prepared.modules, prepared.modules[imported.targetModule].sourceIndex, prepared.modules[function.sourceModule].sourceIndex, prepared.package.tokens, prepared.package.ranges)
+                                                -> if { true => reachable! }
+                                        }
+                                        reachable! and declaration.nameToken >= 0
+                                            and not (declaration -> symbols.hasQualifiedFunctionName(prepared.package.tokens, functionRange.tokenStart, functionRange.tokenCount))
+                                            -> if {
+                                                prepared.package.tokens[functionRange.tokenStart + declaration.nameToken] => name
+                                                name.span.length == methodNameLength -> if {
+                                                    true => equal!
+                                                    UIntSize(0) => byteIndex!
+                                                    byteIndex! < methodNameLength -> while {
+                                                        (prepared.package.sources[sourceModule] -> byte(methodNameStart + byteIndex!)) != (prepared.package.sources[function.sourceModule] -> byte(name.span.start + byteIndex!))
+                                                            -> if { false => equal! }
+                                                        byteIndex! + 1 => byteIndex!
+                                                    }
+                                                    equal! -> if {
+                                                        1 => parameterCount!
+                                                        function.nextOperand => parameterIndex!
+                                                        parameterIndex! >= 0 -> while {
+                                                            parameterCount! + 1 => parameterCount!
+                                                            ir[parameterIndex!].nextOperand => parameterIndex!
+                                                        }
+                                                        parameterCount! == argumentCount! -> if {
+                                                            false => instanceMethod!
+                                                            declaration.parent >= 0 -> if {
+                                                                prepared.package.symbols[functionRange.symbolStart + declaration.parent].kind == 6
+                                                                    -> if { true => instanceMethod! }
+                                                            }
+                                                            instanceMethod! -> if {
+                                                                function.sourceModule == sourceModule or declaration.flags / 4 % 2 == 1
+                                                                    -> if {
+                                                                        target! == -1 -> if { functionIndex! => target! } else { -2 => target! }
+                                                                    } else {
+                                                                        inaccessible! < 0 -> if { functionIndex! => inaccessible! }
+                                                                    }
+                                                            } else {
+                                                                freeTarget! < 0 -> if { functionIndex! => freeTarget! }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                    }
+                                functionIndex! + 1 => functionIndex!
+                            }
+                        }
+                    }
+            }
+        }
+    target! == -1 and inaccessible! >= 0 -> if { -inaccessible! - 3 => target! }
+    target! == -1 and freeTarget! >= 0 and call.kind != 5
+        -> if { freeTarget! => target! }
+    target!
+}
+
+public importedFlowCallTargets prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, semanticTargets: ref [SemanticInterpolationCallTarget; ~], nodes: ref [interpolation.InterpolationNode; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => targets!
+    0 => nodeIndex!
+    nodeIndex! < (nodes -> len)
+        -> while {
+            -1 => target!
+            nodeIndex! < (bindingFacts.interpolationCallSourceByNode -> len)
+                and bindingFacts.interpolationCallSourceByNode[nodeIndex!] >= 0
+                -> if {
+                    0 => functionIndex!
+                    functionIndex! < (ir -> len) and target! < 0 -> while {
+                        ir[functionIndex!] => function
+                        function.kind == 0 and function.sourceModule == bindingFacts.interpolationCallSourceByNode[nodeIndex!]
+                            and function.symbol == bindingFacts.interpolationCallSymbolByNode[nodeIndex!]
+                            -> if { functionIndex! => target! }
+                        functionIndex! + 1 => functionIndex!
+                    }
+                }
+            nodeIndex! < (semanticTargets -> len) -> if {
+                semanticTargets[nodeIndex!] => semanticTarget
+                semanticTarget.status == 2 or semanticTarget.status == 3
+                    -> if { -2 => target! }
+                (semanticTarget.status == 0 or semanticTarget.status == 1) and semanticTarget.receiverType >= 0
+                    -> if {
+                        semanticTarget.status == 1 and target! >= 0
+                            -> if { -target! - 3 => target! }
+                        0 => functionIndex!
+                        functionIndex! < (ir -> len) and target! < 0 -> while {
+                            ir[functionIndex!] => function
+                            function.kind == 0 and function.sourceModule == semanticTarget.sourceModule
+                                and function.symbol == semanticTarget.symbol and function.operand1 >= 0
+                                -> if {
+                                    functionIndex! => target!
+                                    semanticTarget.status == 1 -> if { -functionIndex! - 3 => target! }
+                                }
+                            functionIndex! + 1 => functionIndex!
+                        }
+                    }
+            }
+            target! == -1 and (nodeIndex! >= (semanticTargets -> len) or semanticTargets[nodeIndex!].status < 0)
+                -> if {
+                    prepared -> flowCallTargetAt(plan, bindingFacts, nodes, ir, types, fields, nodeIndex!, false) => target!
+                }
+            targets! -> push(target!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    targets!
+}
+
+public directCallExpectedArityByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => expectedByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => invalidExpected!
+            prepared.interpolations[nodeIndex!] => call
+            call.kind == 8 and bindingFacts.interpolationMethodByNode[nodeIndex!].status < 0
+                -> if {
+                    prepared -> flowCallTargetAt(plan, bindingFacts, prepared.interpolations, ir, types, fields, nodeIndex!, false) => target
+                    target >= 0 -> if {
+                        0 => expected!
+                        ir[target].operand1 >= 0 -> if { 1 => expected! }
+                        ir[target].nextOperand => parameterIndex!
+                        parameterIndex! >= 0 -> while {
+                            expected! + 1 => expected!
+                            ir[parameterIndex!].nextOperand => parameterIndex!
+                        }
+                        call.argumentCount => provided
+                        expected! != provided -> if { expected! => invalidExpected! }
+                    }
+                }
+            expectedByNode! -> push(invalidExpected!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    expectedByNode!
+}
+
+scalarBuiltinSymbol prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
+        -> if { -1 -> return }
+    prepared.interpolations[nodeIndex] => node
+    node.kind == 0 or node.kind == 1 or node.kind == 4 or node.kind == 5 or node.kind == 6 or node.kind == 8 or node.kind == 9 or node.kind == 10 or node.kind == 11
+        -> if {
+            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex) => typeId
+            typeId >= 0 and typeId < (types -> len) -> if {
+                types[typeId] => expressionType
+                expressionType.kind == 1 and expressionType.origin == 1
+                    -> if { expressionType.symbol -> return }
+            }
+        }
+    node.kind == 7 and node.operand0 >= 0 -> if {
+        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex) => resultTypeId
+        resultTypeId >= 0 and resultTypeId < (types -> len)
+            -> if {
+                types[resultTypeId] => resultType
+                resultType.kind == 1 and resultType.origin == 1
+                    -> if { resultType.symbol -> return }
+            }
+    }
+    node.kind == 2 and node.operand0 >= 0 -> if {
+        node.opcode == -26 -> if { 23 -> return }
+        prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => operandBuiltin
+        operandBuiltin -> typeIds.isSignedNumericBuiltinSymbol
+            -> if { operandBuiltin -> return }
+    }
+    node.kind == 3 and node.operand0 >= 0 and node.operand1 >= 0
+        -> if {
+            node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual()
+                or node.opcode == grammar.tokenIdLess() or node.opcode == grammar.tokenIdLessEqual()
+                or node.opcode == grammar.tokenIdGreater() or node.opcode == grammar.tokenIdGreaterEqual()
+                or node.opcode == -24 or node.opcode == -25 -> if { 23 -> return }
+            node.opcode == grammar.tokenIdPlus() or node.opcode == grammar.tokenIdMinus()
+                or node.opcode == grammar.tokenIdStar() or node.opcode == grammar.tokenIdSlash()
+                or node.opcode == grammar.tokenIdPercent() -> if {
+                    prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => leftBuiltin
+                    prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, node.operand1) => rightBuiltin
+                    leftBuiltin >= 0 and leftBuiltin == rightBuiltin
+                        -> if { leftBuiltin -> return }
+                    leftBuiltin >= 0 and prepared.interpolations[node.operand1].kind == 0
+                        -> if { leftBuiltin -> return }
+                    rightBuiltin >= 0 and prepared.interpolations[node.operand0].kind == 0
+                        -> if { rightBuiltin -> return }
+                }
+        }
+    -1
+}
+
+public invalidMappedIndexByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Bool; ~] {
+    [Bool; ~] => invalid!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => isInvalid!
+            prepared.interpolations[nodeIndex!] => indexed
+            indexed.kind == 7 and indexed.operand0 >= 0 and indexed.operand1 >= 0
+                -> if {
+                    prepared.interpolations[indexed.operand1] => index
+                    index.kind != 0 -> if {
+                        prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                        sourceModule >= 0 -> if {
+                            prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand0) => ownerTypeId!
+                            ownerTypeId! >= 0 and ownerTypeId! < (types -> len) and types[ownerTypeId!].kind == 8
+                                -> if { types[ownerTypeId!].first => ownerTypeId! }
+                            ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+                                -> if {
+                                    types[ownerTypeId!] => ownerType
+                                    ownerType.kind == 1 and ownerType.origin == 1
+                                        and (ownerType.symbol == 17 or ownerType.symbol == 18)
+                                        -> if {
+                                            prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand1) => indexBuiltin
+                                            indexBuiltin >= 0 and indexBuiltin != 13 -> if { true => isInvalid! }
+                                        }
+                                }
+                        }
+                    }
+                }
+            invalid! -> push(isInvalid!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalid!
+}
+
+public invalidSignedUnaryByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Bool; ~] {
+    [Bool; ~] => invalid!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => isInvalid!
+            prepared.interpolations[nodeIndex!] => unary
+            unary.kind == 2 and unary.opcode == grammar.tokenIdMinus() and unary.operand0 >= 0
+                -> if {
+                    nodeIndex! < (bindingFacts.interpolationUnaryStatusByNode -> len)
+                        and bindingFacts.interpolationUnaryStatusByNode[nodeIndex!] >= 0
+                        -> if {
+                            bindingFacts.interpolationUnaryStatusByNode[nodeIndex!] == 1
+                                -> if { true => isInvalid! }
+                        } else {
+                            prepared.interpolations[unary.operand0].kind != 0
+                                -> if {
+                                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                                    sourceModule >= 0 -> if {
+                                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandTypeId!
+                                        operandTypeId! >= 0 and operandTypeId! < (types -> len) and types[operandTypeId!].kind == 8
+                                            -> if { types[operandTypeId!].first => operandTypeId! }
+                                        operandTypeId! >= 0 and operandTypeId! < (types -> len)
+                                            -> if {
+                                                types[operandTypeId!] => operandType
+                                                operandType.kind == 1 and operandType.origin == 1
+                                                    -> if {
+                                                        not (operandType.symbol -> typeIds.isSignedNumericBuiltinSymbol)
+                                                            -> if { true => isInvalid! }
+                                                    } else { true => isInvalid! }
+                                            } else {
+                                                prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandBuiltin
+                                                operandBuiltin >= 0 and not (operandBuiltin -> typeIds.isSignedNumericBuiltinSymbol)
+                                                    -> if { true => isInvalid! }
+                                            }
+                                    }
+                                }
+                        }
+                }
+            invalid! -> push(isInvalid!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalid!
+}
+
+public invalidNotUnaryByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Bool; ~] {
+    [Bool; ~] => invalid!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => isInvalid!
+            prepared.interpolations[nodeIndex!] => unary
+            unary.kind == 2 and unary.opcode == -26 and unary.operand0 >= 0
+                -> if {
+                    nodeIndex! < (bindingFacts.interpolationUnaryStatusByNode -> len)
+                        and bindingFacts.interpolationUnaryStatusByNode[nodeIndex!] >= 0
+                        -> if {
+                            bindingFacts.interpolationUnaryStatusByNode[nodeIndex!] == 1
+                                -> if { true => isInvalid! }
+                        } else {
+                            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                            sourceModule >= 0 -> if {
+                                prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandTypeId
+                                operandTypeId >= 0 and operandTypeId < (types -> len)
+                                    -> if {
+                                        types[operandTypeId] => operandType
+                                        not (operandType.kind == 1 and operandType.origin == 1 and operandType.symbol == 23)
+                                            -> if { true => isInvalid! }
+                                    } else {
+                                        prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandBuiltin
+                                        operandBuiltin >= 0 and operandBuiltin != 23 -> if { true => isInvalid! }
+                                    }
+                            }
+                        }
+                }
+            invalid! -> push(isInvalid!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalid!
+}
+
+public unaryResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], invalidSigned: ref [Bool; ~], invalidNot: ref [Bool; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    prepared.interpolations -> each node { resultTypes! -> push(-1) }
+    (prepared.interpolations -> len) - 1 => nodeIndex!
+    nodeIndex! >= 0 -> while {
+        prepared.interpolations[nodeIndex!] => unary
+        unary.kind == 2 and unary.operand0 >= 0 -> if {
+            false => rejected!
+            unary.opcode == grammar.tokenIdMinus() and nodeIndex! < (invalidSigned -> len)
+                -> if { invalidSigned[nodeIndex!] => rejected! }
+            unary.opcode == -26 and nodeIndex! < (invalidNot -> len)
+                -> if { invalidNot[nodeIndex!] => rejected! }
+            not rejected! -> if {
+                -1 => resultTypeId!
+                nodeIndex! < (bindingFacts.interpolationUnaryTypeByNode -> len)
+                    -> if { bindingFacts.interpolationUnaryTypeByNode[nodeIndex!] => resultTypeId! }
+                resultTypeId! < 0 -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandTypeId!
+                        prepared.interpolations[unary.operand0].kind == 2
+                            and unary.operand0 < (resultTypes! -> len)
+                            -> if { resultTypes![unary.operand0] => operandTypeId! }
+                        operandTypeId! >= 0 and operandTypeId! < (types -> len)
+                            and types[operandTypeId!].kind == 8
+                            -> if { types[operandTypeId!].first => operandTypeId! }
+                        operandTypeId! < 0 -> if {
+                            prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, unary.operand0) => operandBuiltin
+                            operandBuiltin >= 0 -> if { types -> typeIds.builtinTypeId(operandBuiltin) => operandTypeId! }
+                        }
+                        operandTypeId! >= 0 and operandTypeId! < (types -> len)
+                            -> if {
+                                types[operandTypeId!] => operandType
+                                operandType.kind == 1 and operandType.origin == 1
+                                    -> if {
+                                        unary.opcode == grammar.tokenIdMinus()
+                                            and (operandType.symbol -> typeIds.isSignedNumericBuiltinSymbol)
+                                            -> if { operandTypeId! => resultTypeId! }
+                                        unary.opcode == -26 and operandType.symbol == 23
+                                            -> if { operandTypeId! => resultTypeId! }
+                                    }
+                            }
+                    }
+                }
+                resultTypeId! => resultTypes![nodeIndex!]
+            }
+        }
+        nodeIndex! - 1 => nodeIndex!
+    }
+    resultTypes!
+}
+
+interpolationNumericBuiltin symbol: Int, integerOnly: Bool -> Bool {
+    symbol -> expressionTypeIds.interpolationNumericBuiltin(integerOnly)
+}
+
+interpolationBinaryOperands prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, leftIndex: Int, rightIndex: Int -> InterpolationBinaryOperands {
+    prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, leftIndex) => leftBuiltin
+    prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, rightIndex) => rightBuiltin
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, leftIndex) => leftTypeId!
+    prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, rightIndex) => rightTypeId!
+    leftBuiltin >= 0 and leftTypeId! < 0 -> if {
+        types -> typeIds.builtinTypeId(leftBuiltin) => leftTypeId!
+    }
+    rightBuiltin >= 0 and rightTypeId! < 0 -> if {
+        types -> typeIds.builtinTypeId(rightBuiltin) => rightTypeId!
+    }
+    prepared -> expressionTypeIds.interpolationBinaryOperandsForNodes(types, sourceModule, leftIndex, rightIndex, leftTypeId!, rightTypeId!) => operands
+    InterpolationBinaryOperands {
+        leftBuiltin: operands.leftBuiltin
+        rightBuiltin: operands.rightBuiltin
+        leftTypeId: operands.leftTypeId
+        rightTypeId: operands.rightTypeId
+    }
+}
+
+arithmeticDecisionForOperands opcode: Int, operands: InterpolationBinaryOperands -> InterpolationBinaryArithmeticDiagnostic {
+    expressionTypeIds.BinaryOperands {
+        leftBuiltin: operands.leftBuiltin
+        rightBuiltin: operands.rightBuiltin
+        leftTypeId: operands.leftTypeId
+        rightTypeId: operands.rightTypeId
+    } => semanticOperands
+    opcode -> expressionTypeIds.interpolationArithmeticDecision(semanticOperands) => decision
+    InterpolationBinaryArithmeticDiagnostic {
+        code: decision.code
+        leftTypeId: decision.leftTypeId
+        rightTypeId: decision.rightTypeId
+    }
+}
+
+arithmeticDecision prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int -> InterpolationBinaryArithmeticDiagnostic {
+    prepared.interpolations[nodeIndex] => binary
+    binary.kind == 3 and binary.operand0 >= 0 and binary.operand1 >= 0
+        and (binary.opcode == grammar.tokenIdPlus() or binary.opcode == grammar.tokenIdMinus()
+        or binary.opcode == grammar.tokenIdStar() or binary.opcode == grammar.tokenIdSlash()
+        or binary.opcode == grammar.tokenIdPercent())
+        and sourceModule >= 0 -> if {
+            prepared -> interpolationBinaryOperands(plan, bindingFacts, ir, types, fields, sourceModule, binary.operand0, binary.operand1) => operands
+            binary.opcode -> arithmeticDecisionForOperands(operands) -> return
+        }
+    InterpolationBinaryArithmeticDiagnostic {
+        code: 0
+        leftTypeId: -1
+        rightTypeId: -1
+    }
+}
+
+public binaryArithmeticDiagnosticByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [InterpolationBinaryArithmeticDiagnostic; ~] {
+    [InterpolationBinaryArithmeticDiagnostic; ~] => diagnostics!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+            prepared -> arithmeticDecision(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => diagnostic
+            diagnostics! -> push(diagnostic)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    diagnostics!
+}
+
+comparisonDecisionForOperands opcode: Int, operands: InterpolationBinaryOperands -> InterpolationBinaryComparisonDiagnostic {
+    expressionTypeIds.BinaryOperands {
+        leftBuiltin: operands.leftBuiltin
+        rightBuiltin: operands.rightBuiltin
+        leftTypeId: operands.leftTypeId
+        rightTypeId: operands.rightTypeId
+    } => semanticOperands
+    opcode -> expressionTypeIds.interpolationComparisonDecision(semanticOperands) => decision
+    InterpolationBinaryComparisonDiagnostic {
+        code: decision.code
+        leftTypeId: decision.leftTypeId
+        rightTypeId: decision.rightTypeId
+        textEquality: decision.textEquality
+    }
+}
+
+comparisonDecision prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], sourceModule: Int, nodeIndex: Int -> InterpolationBinaryComparisonDiagnostic {
+    prepared.interpolations[nodeIndex] => binary
+    binary.kind == 3 and binary.operand0 >= 0 and binary.operand1 >= 0
+        and (binary.opcode == grammar.tokenIdEqualEqual() or binary.opcode == grammar.tokenIdBangEqual()
+        or binary.opcode == grammar.tokenIdLess() or binary.opcode == grammar.tokenIdLessEqual()
+        or binary.opcode == grammar.tokenIdGreater() or binary.opcode == grammar.tokenIdGreaterEqual())
+        and sourceModule >= 0 -> if {
+            prepared -> interpolationBinaryOperands(plan, bindingFacts, ir, types, fields, sourceModule, binary.operand0, binary.operand1) => operands
+            binary.opcode -> comparisonDecisionForOperands(operands) -> return
+        }
+    InterpolationBinaryComparisonDiagnostic {
+        code: 0
+        leftTypeId: -1
+        rightTypeId: -1
+        textEquality: false
+    }
+}
+
+public binaryComparisonDiagnosticByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [InterpolationBinaryComparisonDiagnostic; ~] {
+    [InterpolationBinaryComparisonDiagnostic; ~] => diagnostics!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+            prepared -> comparisonDecision(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => diagnostic
+            diagnostics! -> push(diagnostic)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    diagnostics!
+}
+
+numericLiteralConversion nodes: ref [interpolation.InterpolationNode; ~], index: Int, operandSymbol: Int -> Bool {
+    index < 0 or index >= (nodes -> len) -> if { false -> return }
+    nodes[index] => conversion
+    conversion.kind != 9 or conversion.operand0 < 0 or conversion.operand0 >= (nodes -> len)
+        or conversion.operand1 >= 0 or conversion.typeSymbol < 0
+        -> if { false -> return }
+    conversion.typeSymbol -> typeIds.canonicalBuiltinSymbol => conversionCanonical
+    operandSymbol -> typeIds.canonicalBuiltinSymbol => operandCanonical
+    conversionCanonical != operandCanonical -> if { false -> return }
+    nodes[conversion.operand0] => argument
+    argument.kind == 0 -> if { true -> return }
+    argument.kind == 2 and argument.opcode == grammar.tokenIdMinus()
+        and argument.operand0 >= 0 and argument.operand0 < (nodes -> len)
+        and nodes[argument.operand0].kind == 0
+}
+
+public callNumericWarningByNode prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> [Int; ~] {
+    [Int; ~] => warnings!
+    prepared.interpolations -> each node { warnings! -> push(-1) }
+    resolved.interpolationCallArguments -> each argument {
+        not argument.inputFromFlow and argument.expectedTypeId >= 0 and argument.actualTypeId >= 0
+            -> if {
+                resolved.types[argument.expectedTypeId] => expected
+                resolved.types[argument.actualTypeId] => actual
+                expected.kind == 1 and expected.origin == 1 and actual.kind == 1 and actual.origin == 1
+                    and (expected.symbol -> interpolationNumericBuiltin(false))
+                    and (expected.symbol -> typeIds.canonicalBuiltinSymbol) == (actual.symbol -> typeIds.canonicalBuiltinSymbol)
+                    and (prepared.interpolations -> numericLiteralConversion(argument.argumentNode, expected.symbol))
+                    -> if { expected.symbol -> typeIds.canonicalBuiltinSymbol => warnings![argument.argumentNode] }
+            }
+    }
+    warnings!
+}
+
+contextualNumericLiteral nodes: ref [interpolation.InterpolationNode; ~], index: Int -> Bool {
+    nodes -> expressionTypeIds.interpolationNumericLiteral(index)
+}
+
+# The C# comparison and arithmetic paths warn only after operand validation.
+# An explicit literal conversion on the right is redundant when the left is
+# independently typed; with two conversions, the left remains the type anchor.
+public redundantNumericBinaryConversion nodes: ref [interpolation.InterpolationNode; ~], types: ref [typeIds.SemanticType; ~], arithmetic: ref [InterpolationBinaryArithmeticDiagnostic; ~], comparison: ref [InterpolationBinaryComparisonDiagnostic; ~], nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (nodes -> len) -> if { -1 -> return }
+    nodes[nodeIndex] => binary
+    binary.kind != 3 or binary.operand0 < 0 or binary.operand1 < 0
+        -> if { -1 -> return }
+    -1 => operandSymbol!
+    binary.opcode == grammar.tokenIdPlus() or binary.opcode == grammar.tokenIdMinus()
+        or binary.opcode == grammar.tokenIdStar() or binary.opcode == grammar.tokenIdSlash()
+        or binary.opcode == grammar.tokenIdPercent() -> if {
+            arithmetic[nodeIndex].code == 0 and arithmetic[nodeIndex].leftTypeId >= 0
+                -> if { arithmetic[nodeIndex].leftTypeId => operandSymbol! }
+        }
+    binary.opcode == grammar.tokenIdEqualEqual() or binary.opcode == grammar.tokenIdBangEqual()
+        or binary.opcode == grammar.tokenIdLess() or binary.opcode == grammar.tokenIdLessEqual()
+        or binary.opcode == grammar.tokenIdGreater() or binary.opcode == grammar.tokenIdGreaterEqual()
+        -> if {
+            comparison[nodeIndex].code == 0 and comparison[nodeIndex].leftTypeId >= 0
+                -> if { comparison[nodeIndex].leftTypeId => operandSymbol! }
+        }
+    operandSymbol! < 0 or operandSymbol! >= (types -> len)
+        -> if { -1 -> return }
+    types[operandSymbol!] => operandType
+    operandType.kind != 1 or operandType.origin != 1
+        or not (operandType.symbol -> interpolationNumericBuiltin(false))
+        -> if { -1 -> return }
+    nodes -> numericLiteralConversion(binary.operand0, operandType.symbol)
+        and not (nodes -> contextualNumericLiteral(binary.operand1))
+        and not (nodes -> numericLiteralConversion(binary.operand1, operandType.symbol))
+        -> if { binary.operand0 -> return }
+    nodes -> numericLiteralConversion(binary.operand1, operandType.symbol)
+        and not (nodes -> contextualNumericLiteral(binary.operand0))
+        -> if { binary.operand1 -> return }
+    -1
+}
+
+public binaryLogicalDiagnosticByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => diagnostics!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => binary
+            0 => code!
+            binary.kind == 3 and binary.operand0 >= 0 and binary.operand1 >= 0
+                and (binary.opcode == -24 or binary.opcode == -25)
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> interpolationBinaryOperands(plan, bindingFacts, ir, types, fields, sourceModule, binary.operand0, binary.operand1) => operands
+                        operands.leftBuiltin -> typeIds.canonicalBuiltinSymbol => leftCanonical
+                        operands.rightBuiltin -> typeIds.canonicalBuiltinSymbol => rightCanonical
+                        operands.leftTypeId >= 0 and leftCanonical != 23
+                            -> if { 1 => code! }
+                        code! == 0 and operands.rightTypeId >= 0 and rightCanonical != 23
+                            -> if { 2 => code! }
+                    }
+                }
+            diagnostics! -> push(code!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    diagnostics!
+}
+
+public binaryResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~], arithmetic: ref [InterpolationBinaryArithmeticDiagnostic; ~], comparison: ref [InterpolationBinaryComparisonDiagnostic; ~], logical: ref [Int; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!] => binary
+            binary.kind == 3 and binary.operand0 >= 0 and binary.operand1 >= 0
+                -> if {
+                    binary.opcode == grammar.tokenIdPlus() or binary.opcode == grammar.tokenIdMinus()
+                        or binary.opcode == grammar.tokenIdStar() or binary.opcode == grammar.tokenIdSlash()
+                        or binary.opcode == grammar.tokenIdPercent() -> if {
+                            arithmetic[nodeIndex!] => decision
+                            decision.code == 0 and decision.leftTypeId >= 0 and decision.rightTypeId >= 0
+                                -> if { decision.leftTypeId => resultTypeId! }
+                        }
+                    binary.opcode == grammar.tokenIdEqualEqual() or binary.opcode == grammar.tokenIdBangEqual()
+                        or binary.opcode == grammar.tokenIdLess() or binary.opcode == grammar.tokenIdLessEqual()
+                        or binary.opcode == grammar.tokenIdGreater() or binary.opcode == grammar.tokenIdGreaterEqual()
+                        -> if {
+                            comparison[nodeIndex!] => decision
+                            decision.code == 0 and decision.leftTypeId >= 0 and decision.rightTypeId >= 0
+                                -> if { types -> typeIds.builtinTypeId(23) => resultTypeId! }
+                        }
+                    binary.opcode == -24 or binary.opcode == -25 -> if {
+                        logical[nodeIndex!] == 0 -> if {
+                            prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                            sourceModule >= 0 -> if {
+                                prepared -> interpolationBinaryOperands(plan, bindingFacts, ir, types, fields, sourceModule, binary.operand0, binary.operand1) => operands
+                                operands.leftBuiltin -> typeIds.canonicalBuiltinSymbol => leftCanonical
+                                operands.rightBuiltin -> typeIds.canonicalBuiltinSymbol => rightCanonical
+                                operands.leftTypeId >= 0 and operands.rightTypeId >= 0
+                                    and leftCanonical == 23 and rightCanonical == 23
+                                    -> if { types -> typeIds.builtinTypeId(23) => resultTypeId! }
+                            }
+                        }
+                    }
+                }
+            resultTypes! -> push(resultTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+contextualNumericLiteralStatus prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], sourceModule: Int, nodeIndex: Int, typeId: Int, pointerBitWidth: Int -> Int {
+    types[typeId].symbol -> typeIds.canonicalBuiltinSymbol => builtin
+    # C# floating context supplies a type without an integer magnitude check.
+    builtin == 20 or builtin == 21 -> if { 1 -> return }
+    prepared.interpolations[nodeIndex] => root
+    root.kind == 2 => negative
+    negative -> if { root.operand0 } else { nodeIndex } => literalIndex
+    prepared.interpolations[literalIndex] => literal
+    prepared.package.sources[sourceModule] -> slice(0, prepared.package.sources[sourceModule] -> len) => source
+    (source -> byte(literal.payloadStart)) == '\'' -> if {
+        syntax.SourceSpan { fileId: sourceModule, start: literal.payloadStart, length: literal.payloadLength } => span
+        source -> syntax.decodeCharacterLiteral(span) -> when {
+            Some(scalar) { scalar -> numericLiteralRange.characterLiteralStatus(builtin, negative) -> return }
+            None { 0 -> return }
+        }
+    }
+    source -> numericLiteralRange.integerLiteralStatus(literal.payloadStart, literal.payloadStart + literal.payloadLength, builtin, pointerBitWidth, negative, false, 0, 1)
+}
+
+public numericLiteralContextByNode prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], arithmetic: ref [InterpolationBinaryArithmeticDiagnostic; ~], comparison: ref [InterpolationBinaryComparisonDiagnostic; ~], pointerBitWidth: Int -> [InterpolationNumericLiteralContext; ~] {
+    [InterpolationNumericLiteralContext; ~] => contexts!
+    prepared.interpolations -> each node {
+        contexts! -> push(InterpolationNumericLiteralContext { typeId: -1, status: -1 })
+    }
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => binary
+            binary.kind == 3 and binary.operand0 >= 0 and binary.operand1 >= 0
+                -> if {
+                    prepared.interpolations -> expressionTypeIds.interpolationNumericLiteral(binary.operand0) => leftLiteral
+                    prepared.interpolations -> expressionTypeIds.interpolationNumericLiteral(binary.operand1) => rightLiteral
+                    leftLiteral and not rightLiteral or rightLiteral and not leftLiteral
+                        -> if {
+                            -1 => expectedType!
+                            arithmetic[nodeIndex!] => arithmeticDecision
+                            arithmeticDecision.leftTypeId >= 0
+                                and arithmeticDecision.leftTypeId == arithmeticDecision.rightTypeId
+                                -> if { arithmeticDecision.leftTypeId => expectedType! }
+                            comparison[nodeIndex!] => comparisonDecision
+                            not comparisonDecision.textEquality
+                                and comparisonDecision.leftTypeId >= 0
+                                and comparisonDecision.leftTypeId == comparisonDecision.rightTypeId
+                                -> if { comparisonDecision.leftTypeId => expectedType! }
+                            expectedType! >= 0 and expectedType! < (types -> len)
+                                and types[expectedType!].kind == 1 and types[expectedType!].origin == 1
+                                and (types[expectedType!].symbol -> numericBuiltinSymbol)
+                                -> if {
+                                    leftLiteral -> if { binary.operand0 } else { binary.operand1 } => literalIndex
+                                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                                    sourceModule >= 0 -> if {
+                                        prepared -> contextualNumericLiteralStatus(types, sourceModule, literalIndex, expectedType!, pointerBitWidth) => status
+                                        InterpolationNumericLiteralContext { typeId: expectedType!, status: status } => contexts![literalIndex]
+                                        prepared.interpolations[literalIndex] => literal
+                                        literal.kind == 2 -> if {
+                                            InterpolationNumericLiteralContext { typeId: expectedType!, status: 1 } => contexts![literal.operand0]
+                                        }
+                                    }
+                                }
+                        }
+                }
+            nodeIndex! + 1 => nodeIndex!
+        }
+    contexts!
+}
+
+numericBuiltinSymbol symbol: Int -> Bool {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical == 2 or canonical == 3 or canonical == 4 or canonical == 6
+        or canonical == 8 or canonical == 9 or canonical == 10 or canonical == 11
+        or canonical == 12 or canonical == 13 or canonical == 14
+        or canonical == 20 or canonical == 21
+}
+
+public invalidNumericConversionArityByNode prepared: ref semanticContext.SemanticSnapshot -> [Bool; ~] {
+    [Bool; ~] => invalidByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 9 and (node.typeSymbol -> numericBuiltinSymbol)
+                and (node.operand0 < 0 or node.operand1 >= 0) => invalid
+            invalidByNode! -> push(invalid)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalidByNode!
+}
+
+# C# validates the argument before returning a numeric conversion's target type.
+# Publish a known nonnumeric operand type before LLVM attempts any conversion.
+public invalidNumericConversionTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => invalidByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => invalidTypeId!
+            prepared.interpolations[nodeIndex!] => node
+            node.kind == 9 and node.operand0 >= 0 and node.operand1 < 0
+                and (node.typeSymbol -> numericBuiltinSymbol)
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, node.operand0) => operandTypeId
+                        operandTypeId >= 0 and operandTypeId < (types -> len)
+                            -> if {
+                                types[operandTypeId] => operandType
+                                operandType.kind == 1 and operandType.origin == 1
+                                    -> if {
+                                        not (operandType.symbol -> numericBuiltinSymbol)
+                                            -> if { operandTypeId => invalidTypeId! }
+                                    } else { operandTypeId => invalidTypeId! }
+                            }
+                    }
+                }
+            invalidByNode! -> push(invalidTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalidByNode!
+}
+
+public invalidCodePointFloatConversionByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Bool; ~] {
+    [Bool; ~] => invalidByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            false => invalid!
+            prepared.interpolations[nodeIndex!] => conversion
+            conversion.kind == 9 and conversion.typeSymbol == 14
+                and conversion.operand0 >= 0 and conversion.operand1 < 0
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, conversion.operand0) => operandTypeId
+                        operandTypeId >= 0 and operandTypeId < (types -> len)
+                            -> if {
+                                types[operandTypeId] => operandType
+                                operandType.kind == 1 and operandType.origin == 1
+                                    -> if {
+                                        operandType.symbol -> typeIds.canonicalBuiltinSymbol => builtin
+                                        builtin == 20 or builtin == 21 -> if { true => invalid! }
+                                    }
+                            }
+                    }
+                }
+            invalidByNode! -> push(invalid!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalidByNode!
+}
+
+public invalidNumericConversionLiteralByNode prepared: ref semanticContext.SemanticSnapshot, pointerBitWidth: Int -> [Int; ~] {
+    [Int; ~] => statusByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => invalidStatus!
+            prepared.interpolations[nodeIndex!] => conversion
+            conversion.kind == 9 and conversion.operand0 >= 0 and conversion.operand1 < 0
+                and ((conversion.typeSymbol >= 2 and conversion.typeSymbol <= 14)
+                or (conversion.typeSymbol >= 19 and conversion.typeSymbol <= 22))
+                -> if {
+                    conversion.operand0 => literalIndex!
+                    false => negative!
+                    prepared.interpolations[literalIndex!] => operand
+                    operand.kind == 2 and operand.opcode == grammar.tokenIdMinus() and operand.operand0 >= 0
+                        -> if {
+                            operand.operand0 => literalIndex!
+                            true => negative!
+                        }
+                    prepared.interpolations[literalIndex!] => literal
+                    literal.kind == 0 -> if {
+                        prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                        sourceModule >= 0 -> if {
+                            literal.payloadStart + literal.payloadLength => literalEnd
+                            literal.payloadLength > 0 and literalEnd <= (prepared.package.sources[sourceModule] -> len)
+                                -> if {
+                                    prepared.package.sources[sourceModule] -> slice(literal.payloadStart, literal.payloadLength) => literalText
+                                    (prepared.package.sources[sourceModule] -> byte(literal.payloadStart)) == 39 => characterLiteral
+                                    false => characterValid!
+                                    0 => characterScalar!
+                                    characterLiteral
+                                        -> if {
+                                            syntax.SourceSpan { fileId: sourceModule, start: 0, length: literal.payloadLength } => characterSpan
+                                            literalText -> syntax.decodeCharacterLiteral(characterSpan) -> when {
+                                                Some(value) {
+                                                    true => characterValid!
+                                                    value => characterScalar!
+                                                }
+                                                None { }
+                                            }
+                                        }
+                                    conversion.typeSymbol -> typeIds.canonicalBuiltinSymbol => targetBuiltin
+                                    targetBuiltin == 20 or targetBuiltin == 21 -> if {
+                                        characterLiteral -> if {
+                                            not characterValid! -> if { 3 => invalidStatus! }
+                                        } else {
+                                            literalText -> numericLiteralRange.floatingLiteralWithinRange(0, literal.payloadLength, conversion.typeSymbol) => withinRange
+                                            not withinRange -> if { 3 => invalidStatus! }
+                                        }
+                                    } else {
+                                        characterLiteral -> if {
+                                            characterValid! -> if {
+                                                characterScalar! -> numericLiteralRange.characterLiteralStatus(conversion.typeSymbol, negative!) => status
+                                                status != 1 -> if { status => invalidStatus! }
+                                            } else { 0 => invalidStatus! }
+                                        } else {
+                                            literalText -> numericLiteralRange.literalUsesFloatingSyntax(0, literal.payloadLength)
+                                                -> if {
+                                                    targetBuiltin != 14 -> if { 4 => invalidStatus! }
+                                                } else {
+                                                    literalText -> numericLiteralRange.integerLiteralStatus(0, literal.payloadLength, conversion.typeSymbol, pointerBitWidth, negative!, false, 0, 1) => status
+                                                    status != 1 -> if { status => invalidStatus! }
+                                                }
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            statusByNode! -> push(invalidStatus!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    statusByNode!
+}
+
+public numericConversionResultTypeByNode prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], invalidArity: ref [Bool; ~], invalidOperandType: ref [Int; ~], invalidCodePointFloat: ref [Bool; ~], invalidLiteral: ref [Int; ~] -> [Int; ~] {
+    [Int; ~] => resultTypes!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => resultTypeId!
+            prepared.interpolations[nodeIndex!] => conversion
+            conversion.kind == 9 and (conversion.typeSymbol -> numericBuiltinSymbol)
+                and not invalidArity[nodeIndex!]
+                and invalidOperandType[nodeIndex!] < 0
+                and not invalidCodePointFloat[nodeIndex!]
+                and invalidLiteral[nodeIndex!] < 0
+                -> if { types -> typeIds.builtinTypeId(conversion.typeSymbol) => resultTypeId! }
+            resultTypes! -> push(resultTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    resultTypes!
+}
+
+displayableBuiltinSymbol symbol: Int -> Bool {
+    symbol -> typeIds.canonicalBuiltinSymbol => canonical
+    canonical == 1 or canonical == 23
+        or canonical == 2 or canonical == 3 or canonical == 4 or canonical == 6
+        or canonical == 8 or canonical == 9 or canonical == 10 or canonical == 11
+        or canonical == 12 or canonical == 13 or canonical == 14
+}
+
+preIrDirectTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, memberTypes: ref [Int; ~], nodeIndex: Int -> Int {
+    nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
+        -> if { -1 -> return }
+    prepared.interpolations[nodeIndex] => node
+    (node.kind == 0 or node.kind == 2 or node.kind == 16) and nodeIndex < (bindingFacts.interpolationContextualStructTypeByNode -> len)
+        and bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] >= 0
+        -> if { bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] -> return }
+    node.kind == 0 -> if {
+        prepared -> sourceModuleAt(nodeIndex) => sourceModule
+        sourceModule >= 0 -> if {
+            prepared.package.sources[sourceModule] -> slice(node.payloadStart, node.payloadLength) => literalText
+            literalText -> numericLiteralRange.literalUsesFloatingSyntax(0, node.payloadLength)
+                -> if { bindingFacts.types -> typeIds.builtinTypeId(20) -> return }
+            bindingFacts.types -> typeIds.builtinTypeId(2) -> return
+        }
+    }
+    node.kind == 1 and nodeIndex < (bindingFacts.interpolationLexicalTypeByNode -> len)
+        -> if { bindingFacts.interpolationLexicalTypeByNode[nodeIndex] -> return }
+    node.kind == 2 and nodeIndex < (bindingFacts.interpolationUnaryTypeByNode -> len)
+        and bindingFacts.interpolationUnaryStatusByNode[nodeIndex] == 0
+        -> if { bindingFacts.interpolationUnaryTypeByNode[nodeIndex] -> return }
+    node.kind == 4 -> if { bindingFacts.types -> typeIds.builtinTypeId(23) -> return }
+    (node.kind == 5 or node.kind == 7) and nodeIndex < (memberTypes -> len)
+        -> if { memberTypes[nodeIndex] -> return }
+    node.kind == 14 and nodeIndex < (bindingFacts.interpolationContextualStructTypeByNode -> len)
+        -> if { bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] -> return }
+    (node.kind == 6 or node.kind == 8 or node.kind == 10 or node.kind == 15) and nodeIndex < (bindingFacts.interpolationCallTypeByNode -> len)
+        -> if { bindingFacts.interpolationCallTypeByNode[nodeIndex] -> return }
+    -1
+}
+
+preIrComposedOperandTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, memberTypes: ref [Int; ~], computedTypes: ref [Int; ~], parentIndex: Int, operandIndex: Int -> Int {
+    prepared -> preIrDirectTypeId(bindingFacts, memberTypes, operandIndex) => typeId!
+    operandIndex > parentIndex and operandIndex < (computedTypes -> len)
+        and computedTypes[operandIndex] >= 0
+        -> if { computedTypes[operandIndex] => typeId! }
+    typeId!
+}
+
+preIrDirectBinaryTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, memberTypes: ref [Int; ~], computedTypes: ref [Int; ~], nodeIndex: Int -> Int {
+    prepared.interpolations[nodeIndex] => binary
+    binary.kind != 3 or binary.operand0 < 0 or binary.operand1 < 0
+        -> if { -1 -> return }
+    prepared -> preIrComposedOperandTypeId(bindingFacts, memberTypes, computedTypes, nodeIndex, binary.operand0) => leftTypeId
+    prepared -> preIrComposedOperandTypeId(bindingFacts, memberTypes, computedTypes, nodeIndex, binary.operand1) => rightTypeId
+    prepared -> sourceModuleAt(nodeIndex) => sourceModule
+    prepared -> expressionTypeIds.interpolationBinaryOperandsForNodes(bindingFacts.types, sourceModule, binary.operand0, binary.operand1, leftTypeId, rightTypeId) => operands
+    bindingFacts.types -> expressionTypeIds.interpolationBinaryTypeId(binary.opcode, operands.leftTypeId, operands.rightTypeId, false, false)
+}
+
+preIrDirectConversionTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, memberTypes: ref [Int; ~], computedTypes: ref [Int; ~], invalidArity: ref [Bool; ~], invalidLiteral: ref [Int; ~], nodeIndex: Int -> Int {
+    prepared.interpolations[nodeIndex] => conversion
+    conversion.kind != 9 or not (conversion.typeSymbol -> numericBuiltinSymbol)
+        or invalidArity[nodeIndex] or invalidLiteral[nodeIndex] >= 0
+        -> if { -1 -> return }
+    prepared -> preIrComposedOperandTypeId(bindingFacts, memberTypes, computedTypes, nodeIndex, conversion.operand0) => operandTypeId
+    operandTypeId < 0 or operandTypeId >= (bindingFacts.types -> len)
+        -> if { -1 -> return }
+    bindingFacts.types[operandTypeId] => operandType
+    operandType.kind != 1 or operandType.origin != 1
+        or not (operandType.symbol -> numericBuiltinSymbol)
+        -> if { -1 -> return }
+    operandType.symbol -> typeIds.canonicalBuiltinSymbol => operandBuiltin
+    conversion.typeSymbol == 14 and (operandBuiltin == 20 or operandBuiltin == 21)
+        -> if { -1 -> return }
+    bindingFacts.types -> typeIds.builtinTypeId(conversion.typeSymbol)
+}
+
+preIrDirectUnaryTypeId prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, memberTypes: ref [Int; ~], computedTypes: ref [Int; ~], nodeIndex: Int -> Int {
+    prepared.interpolations[nodeIndex] => unary
+    unary.kind != 2 or unary.operand0 < 0
+        -> if { -1 -> return }
+    prepared -> preIrComposedOperandTypeId(bindingFacts, memberTypes, computedTypes, nodeIndex, unary.operand0) => operandTypeId
+    operandTypeId < 0 or operandTypeId >= (bindingFacts.types -> len)
+        -> if { -1 -> return }
+    bindingFacts.types[operandTypeId] => operandType
+    operandType.kind != 1 or operandType.origin != 1
+        -> if { -1 -> return }
+    unary.opcode == grammar.tokenIdMinus()
+        and (operandType.symbol -> typeIds.isSignedNumericBuiltinSymbol)
+        -> if { operandTypeId -> return }
+    unary.opcode == -26 and operandType.symbol == 23
+        -> if { operandTypeId -> return }
+    -1
+}
+
+# A resolved name or accessible member path can be checked from semantic type
+# facts before Typed IR. Other expressions stay undecided.
+public preIrInvalidDirectDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, callTargets: ref [SemanticInterpolationCallTarget; ~], pointerBitWidth: Int -> [Int; ~] {
+    [ResultPropagationDecision; ~] => propagationDecisions
+    prepared -> preIrInvalidDisplayTypeByNode(bindingFacts, callTargets, propagationDecisions, pointerBitWidth)
+}
+
+# A successful Result propagation contributes its semantic payload type to the
+# same composed expression table as unary, binary and conversion expressions.
+# Compatibility projection for callers that need only invalid display types.
+public preIrInvalidDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, callTargets: ref [SemanticInterpolationCallTarget; ~], propagationDecisions: ref [ResultPropagationDecision; ~], pointerBitWidth: Int -> [Int; ~] {
+    prepared -> preIrDisplayTypeByNode(bindingFacts, callTargets, propagationDecisions, pointerBitWidth) => displayTypes
+    [Int; ~] => invalidByNode!
+    displayTypes -> each typeId {
+        -1 => invalidTypeId!
+        typeId >= 0 and typeId < (bindingFacts.types -> len)
+            -> if {
+                bindingFacts.types[typeId] => expressionType
+                expressionType.kind != 1 or expressionType.origin != 1
+                    or not (expressionType.symbol -> displayableBuiltinSymbol)
+                    -> if { typeId => invalidTypeId! }
+            }
+        invalidByNode! -> push(invalidTypeId!)
+    }
+    invalidByNode!
+}
+
+public preIrDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, callTargets: ref [SemanticInterpolationCallTarget; ~], propagationDecisions: ref [ResultPropagationDecision; ~], pointerBitWidth: Int -> [Int; ~] {
+    prepared -> preIrCallMemberTypeByNode(bindingFacts, callTargets) => memberTypes
+    prepared -> invalidNumericConversionArityByNode => invalidConversionArity
+    prepared -> invalidNumericConversionLiteralByNode(pointerBitWidth) => invalidConversionLiteral
+    [Int; ~] => computedTypes!
+    prepared.interpolations -> each interpolationNode {
+        computedTypes! -> push(-1)
+    }
+    (prepared.interpolations -> len) - 1 => composedIndex!
+    composedIndex! >= 0 -> while {
+        prepared.interpolations[composedIndex!] => candidate
+        candidate.kind == 11 and composedIndex! < (propagationDecisions -> len)
+            and propagationDecisions[composedIndex!].status == 0
+            -> if {
+                propagationDecisions[composedIndex!].okTypeId => computedTypes![composedIndex!]
+            }
+        candidate.kind == 2 -> if {
+            prepared -> preIrDirectUnaryTypeId(bindingFacts, memberTypes, computedTypes!, composedIndex!)
+                => computedTypes![composedIndex!]
+        }
+        candidate.kind == 3 -> if {
+            prepared -> preIrDirectBinaryTypeId(bindingFacts, memberTypes, computedTypes!, composedIndex!)
+                => computedTypes![composedIndex!]
+        }
+        candidate.kind == 9 -> if {
+            prepared -> preIrDirectConversionTypeId(bindingFacts, memberTypes, computedTypes!, invalidConversionArity, invalidConversionLiteral, composedIndex!)
+                => computedTypes![composedIndex!]
+        }
+        composedIndex! - 1 => composedIndex!
+    }
+    [Int; ~] => typesByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            prepared.interpolations[nodeIndex!] => node
+            -1 => typeId!
+            node.parent < 0 -> if {
+                prepared -> preIrDirectTypeId(bindingFacts, memberTypes, nodeIndex!) => typeId!
+                node.kind == 2 or node.kind == 3 or node.kind == 9 or node.kind == 11
+                    -> if {
+                        computedTypes![nodeIndex!] => typeId!
+                    }
+
+            }
+            typesByNode! -> push(typeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    typesByNode!
+}
+
+# C# infers each interpolation root and accepts only Text, Bool or an integer.
+# An unresolved type remains undecided; a known incompatible type is reported
+# before LLVM emits a printer call for it.
+public invalidDisplayTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, genericInstances: ref [typedIr.GenericFunctionInstance; ~], preIrDisplayTypes: ref [Int; ~], invalidIndexExpected: ref [Int; ~], propagationDecisions: ref [ResultPropagationDecision; ~], contextualDiagnostics: ref [expressionTypeIds.ContextualStructDiagnostic; ~], localEnumMembers: ref [LocalEnumMemberDecision; ~], invalidConversionArity: ref [Bool; ~], invalidConversionType: ref [Int; ~], invalidCodePointConversion: ref [Bool; ~], invalidConversionLiteral: ref [Int; ~], callNumericDiagnostics: ref [InterpolationCallArgumentDiagnostic; ~], ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Bool; ~] => rootHasPriorError!
+    prepared.interpolations -> each interpolationNode {
+        rootHasPriorError! -> push(false)
+    }
+    0 => diagnosticNode!
+    diagnosticNode! < (prepared.interpolations -> len)
+        -> while {
+            false => hasPriorError!
+            diagnosticNode! < (invalidIndexExpected -> len)
+                and invalidIndexExpected[diagnosticNode!] >= 0
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (localEnumMembers -> len)
+                and (localEnumMembers[diagnosticNode!].status == 1 or localEnumMembers[diagnosticNode!].status == 2)
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (propagationDecisions -> len)
+                and propagationDecisions[diagnosticNode!].status > 0
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (contextualDiagnostics -> len)
+                and contextualDiagnostics[diagnosticNode!].code > 0
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (invalidConversionArity -> len)
+                and invalidConversionArity[diagnosticNode!]
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (invalidConversionType -> len)
+                and invalidConversionType[diagnosticNode!] >= 0
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (invalidCodePointConversion -> len)
+                and invalidCodePointConversion[diagnosticNode!]
+                -> if { true => hasPriorError! }
+            diagnosticNode! < (invalidConversionLiteral -> len)
+                and invalidConversionLiteral[diagnosticNode!] >= 0
+                -> if { true => hasPriorError! }
+            callNumericDiagnostics[diagnosticNode!].code > 0
+                -> if { true => hasPriorError! }
+            hasPriorError! -> if {
+                diagnosticNode! => ancestor!
+                0 => ancestorDepth!
+                ancestor! >= 0 and ancestor! < (prepared.interpolations -> len)
+                    and prepared.interpolations[ancestor!].parent >= 0
+                    and ancestorDepth! < (prepared.interpolations -> len)
+                    -> while {
+                        prepared.interpolations[ancestor!].parent => ancestor!
+                        ancestorDepth! + 1 => ancestorDepth!
+                    }
+                ancestor! >= 0 and ancestor! < (rootHasPriorError! -> len)
+                    and prepared.interpolations[ancestor!].parent < 0
+                    -> if { true => rootHasPriorError![ancestor!] }
+            }
+            diagnosticNode! + 1 => diagnosticNode!
+        }
+    [Int; ~] => invalidByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => invalidTypeId!
+            prepared.interpolations[nodeIndex!] => displayNode
+            displayNode.parent < 0 and not rootHasPriorError![nodeIndex!]
+                -> if {
+                    false => concreteSeen!
+                    true => allConcrete!
+                    -1 => invalidConcreteType!
+                    genericInstances -> each instance {
+                        instance.status == 0 and instance.interpolationNode == nodeIndex!
+                            -> if {
+                                true => concreteSeen!
+                                ir[instance.functionNode].typeId => concreteTypeId
+                                concreteTypeId < 0 or concreteTypeId >= (types -> len)
+                                    -> if { false => allConcrete! } else {
+                                        types[concreteTypeId] => concreteType
+                                        concreteType.containsParameter -> if { false => allConcrete! }
+                                        concreteType.kind != 1 or concreteType.origin != 1
+                                            or not (concreteType.symbol -> displayableBuiltinSymbol)
+                                            -> if {
+                                                invalidConcreteType! < 0 -> if { concreteTypeId => invalidConcreteType! }
+                                            }
+                                    }
+                            }
+                    }
+                    concreteSeen! and allConcrete! -> if {
+                        invalidByNode! -> push(invalidConcreteType!)
+                        nodeIndex! + 1 => nodeIndex!
+                        continue
+                    }
+                }
+            preIrDisplayTypes[nodeIndex!] => committedTypeId
+            committedTypeId >= 0 and committedTypeId < (bindingFacts.types -> len)
+                and not bindingFacts.types[committedTypeId].containsParameter
+                -> if {
+                    bindingFacts.types[committedTypeId] => expressionType
+                    expressionType.kind != 1 or expressionType.origin != 1
+                        or not (expressionType.symbol -> displayableBuiltinSymbol)
+                        -> if { committedTypeId => invalidTypeId! }
+                }
+            prepared.interpolations[nodeIndex!] => node
+            node.parent < 0 and rootHasPriorError![nodeIndex!]
+                -> if { -1 => invalidTypeId! }
+            node.parent < 0 and committedTypeId < 0 and not rootHasPriorError![nodeIndex!]
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => typeId!
+                        localEnumMembers[nodeIndex!].status == 3
+                            -> if { localEnumMembers[nodeIndex!].typeId => typeId! }
+                        typeId! >= 0 and typeId! < (types -> len) -> if {
+                            types[typeId!] => expressionType
+                            expressionType.kind == 1 and expressionType.origin == 1
+                                -> if {
+                                    not (expressionType.symbol -> displayableBuiltinSymbol)
+                                        -> if { typeId! => invalidTypeId! }
+                                } else { typeId! => invalidTypeId! }
+                        } else {
+                            prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, nodeIndex!) => builtin
+                            builtin >= 0 and not (builtin -> displayableBuiltinSymbol)
+                                -> if { types -> typeIds.builtinTypeId(builtin) => invalidTypeId! }
+                        }
+                    }
+                }
+            invalidByNode! -> push(invalidTypeId!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    invalidByNode!
+}
+
+# Preserve the C# index source check before any index operand diagnosis.
+# Unknown owner types stay undecided until a later semantic rule can prove one.
+public unsupportedIndexOwnerTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => ownerByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => unsupportedOwner!
+            nodeIndex! < (bindingFacts.interpolationUnsupportedIndexOwnerTypeByNode -> len)
+                -> if {
+                    bindingFacts.interpolationUnsupportedIndexOwnerTypeByNode[nodeIndex!] => unsupportedOwner!
+                }
+            prepared.interpolations[nodeIndex!] => indexed
+            indexed.kind == 7 and indexed.operand0 >= 0 and unsupportedOwner! < 0
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand0) => ownerTypeId!
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len) and types[ownerTypeId!].kind == 8
+                            -> if { types[ownerTypeId!].first => ownerTypeId! }
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+                            -> if {
+                                types[ownerTypeId!] => ownerType
+                                false => supported!
+                                ownerType.kind == 2 or ownerType.kind == 3 or ownerType.kind == 4
+                                    or ownerType.kind == 5 or ownerType.kind == 12 or ownerType.kind == 13
+                                    -> if { true => supported! }
+                                ownerType.kind == 1 and ownerType.origin == 1
+                                    and (ownerType.symbol == 16 or ownerType.symbol == 17 or ownerType.symbol == 18)
+                                    -> if { true => supported! }
+                                not supported! -> if { ownerTypeId! => unsupportedOwner! }
+                            }
+                    }
+                }
+            ownerByNode! -> push(unsupportedOwner!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    ownerByNode!
+}
+
+# Return the expected type only for a proven mismatch. The index expression's
+# source span stays on its prepared interpolation node for the diagnostic.
+public invalidCollectionIndexExpectedTypeByNode prepared: ref semanticContext.SemanticSnapshot, plan: ref streamIr.StreamPlan, bindingFacts: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], types: ref [typeIds.SemanticType; ~], fields: ref [typeIds.NominalField; ~] -> [Int; ~] {
+    [Int; ~] => expectedByNode!
+    0 => nodeIndex!
+    nodeIndex! < (prepared.interpolations -> len)
+        -> while {
+            -1 => invalidExpected!
+            nodeIndex! < (bindingFacts.interpolationIndexExpectedTypeByNode -> len)
+                -> if { bindingFacts.interpolationIndexExpectedTypeByNode[nodeIndex!] => invalidExpected! }
+            prepared.interpolations[nodeIndex!] => indexed
+            indexed.kind == 7 and indexed.operand0 >= 0 and indexed.operand1 >= 0 and invalidExpected! < 0
+                -> if {
+                    prepared -> sourceModuleAt(nodeIndex!) => sourceModule
+                    sourceModule >= 0 -> if {
+                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand0) => ownerTypeId!
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len) and types[ownerTypeId!].kind == 8
+                            -> if { types[ownerTypeId!].first => ownerTypeId! }
+                        ownerTypeId! >= 0 and ownerTypeId! < (types -> len)
+                            -> if {
+                                types[ownerTypeId!] => ownerType
+                                -1 => expectedTypeId!
+                                ownerType.kind == 2 or ownerType.kind == 3 or ownerType.kind == 4 or ownerType.kind == 12
+                                    -> if { types -> typeIds.builtinTypeId(2) => expectedTypeId! }
+                                ownerType.kind == 5 or ownerType.kind == 13
+                                    -> if { ownerType.first => expectedTypeId! }
+                                expectedTypeId! >= 0 and expectedTypeId! < (types -> len)
+                                    -> if {
+                                        prepared -> scalarBuiltinSymbol(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand1) => actualBuiltin
+                                        prepared -> expressionTypeId(plan, bindingFacts, ir, types, fields, sourceModule, indexed.operand1) => actualTypeId
+                                        types[expectedTypeId!] => expectedType
+                                        expectedType.kind == 1 and expectedType.origin == 1
+                                            -> if {
+                                                actualBuiltin >= 0 and actualBuiltin != expectedType.symbol
+                                                    -> if { expectedTypeId! => invalidExpected! }
+                                                actualBuiltin < 0 and actualTypeId >= 0 and actualTypeId < (types -> len)
+                                                    and types[actualTypeId].kind == 1 and types[actualTypeId].origin == 1
+                                                    and types[actualTypeId].symbol != expectedType.symbol
+                                                    -> if { expectedTypeId! => invalidExpected! }
+                                            } else {
+                                                actualTypeId >= 0 and actualTypeId != expectedTypeId!
+                                                    -> if { expectedTypeId! => invalidExpected! }
+                                            }
+                                    }
+                            }
+                    }
+                }
+            expectedByNode! -> push(invalidExpected!)
+            nodeIndex! + 1 => nodeIndex!
+        }
+    expectedByNode!
+}

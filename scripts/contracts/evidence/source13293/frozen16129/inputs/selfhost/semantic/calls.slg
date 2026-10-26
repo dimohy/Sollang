@@ -1,0 +1,1329 @@
+namespace sollang.compiler.semantic.calls
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+# Both resolution paths use the same source invocation boundary.
+hasExplicitQualifiedInvocation tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, afterPathToken: Int -> Bool {
+    afterPathToken => invocationToken!
+    invocationToken! < tokenCount
+        and (tokens[tokenStart + invocationToken!].kind == grammar.triviaIdWhitespace()
+        or tokens[tokenStart + invocationToken!].kind == grammar.triviaIdComment())
+        -> while { invocationToken! + 1 => invocationToken! }
+    invocationToken! < tokenCount
+        and tokens[tokenStart + invocationToken!].kind == grammar.tokenIdLeftParen()
+}
+
+public struct CallResolution {
+    public callAst: Int
+    public nameToken: Int
+    public functionSymbol: Int
+    public status: Int
+}
+
+public struct ModuleCallResolution {
+    public sourceModule: Int
+    public callAst: Int
+    public origin: Int
+    public targetModule: Int
+    public targetSourceModule: Int
+    public functionSymbol: Int
+    public status: Int
+}
+
+public struct ModuleCallRequest {
+    public sources: [Text; ~]
+    public modules: [modules.ModuleIdentity; ~]
+    public qualified: [qualified.QualifiedResolution; ~]
+}
+
+# A target constant is identified by its declaring namespace and intrinsic
+# declaration. Ordinary functions with the same name retain their own body.
+public isNativePathStyleIntrinsic package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], targetSource: Int, targetSymbol: Int -> Bool {
+    targetSource < 0 or targetSource >= (package.ranges -> len)
+        -> if { false -> return }
+    package.ranges[targetSource] => range
+    targetSymbol < 0 or targetSymbol >= range.symbolCount
+        -> if { false -> return }
+    package.symbols[range.symbolStart + targetSymbol] => declaration
+    declaration.kind != 7 or declaration.parent >= 0 or declaration.flags / 128 % 2 != 1
+        -> if { false -> return }
+    package.tokens[range.tokenStart + declaration.nameToken] => name
+    (package.sources[targetSource] -> slice(name.span.start, name.span.length)) != "nativeStyle"
+        -> if { false -> return }
+    identities -> each identity {
+        identity.sourceIndex == targetSource and identity.pathHash == 7794543808165292697
+            and (package.sources[targetSource] -> slice(identity.pathStart, identity.pathLength)) == "sys.path"
+            -> if { true -> return }
+    }
+    false
+}
+
+# The caller supplies a real target span and an already materialized receiver.
+# Qualified path resolution and trait-prefix resolution are separate identities.
+# No AST or interpolation index is reused across their distinct domains.
+public struct TypedMethodRequest {
+    public sourceModule: Int
+    public receiverTypeId: Int
+    public targetStart: UIntSize
+    public targetLength: UIntSize
+    public qualifiedTargetModule: Int
+    public qualifiedTargetSymbol: Int
+    public qualifiedTargetStatus: Int
+    public qualifiedTraitModule: Int
+    public qualifiedTraitSymbol: Int
+    public blockMethod: Bool
+}
+
+public struct TypedMethodResolution {
+    public targetModule: Int
+    public targetSourceModule: Int
+    public functionSymbol: Int
+    # The declaration's canonical owner may be a slice view of an array receiver.
+    public ownerTypeId: Int
+    # Canonical trait identity is retained for diagnostics; inherent methods use -1.
+    public traitModule: Int
+    public traitSymbol: Int
+    # -1 not found, 0 selected, 1 inaccessible, 2 ambiguous.
+    # Arity and argument checks follow selection and cannot reopen free fallback.
+    public status: Int
+}
+
+public struct TypedMethodQualifier {
+    public targetModule: Int
+    public targetSymbol: Int
+    # -1 not a resolved trait prefix, 0 selected, 1 inaccessible, 2 ambiguous.
+    public status: Int
+}
+
+# Builtin flow borrowing follows the C# first-target decision. A committed
+# declaration (including mut/move shadows) takes precedence over the builtin.
+public readonlyIntrinsicFlowSource source: Text, sourceModule: Int, flowAst: Int, nodes: ref [ast.AstNode; ~], nodeOffset: Int, nodeCount: Int, tokens: ref [syntax.SyntaxToken; ~], tokenOffset: Int, resolved: ref [ModuleCallResolution; ~] -> Bool {
+    nodes[nodeOffset + flowAst].kind != 10 -> if { false -> return }
+    resolved -> each call {
+        call.sourceModule == sourceModule and call.callAst == flowAst
+            -> if { false -> return }
+    }
+    -1 => firstTarget!
+    0 => index!
+    index! < nodeCount -> while {
+        nodes[nodeOffset + index!] => target
+        target.parent == flowAst and target.kind == 16 and target.payloadToken >= 0
+            -> if {
+                firstTarget! < 0 or target.payloadToken < nodes[nodeOffset + firstTarget!].payloadToken
+                    -> if { index! => firstTarget! }
+            }
+        index! + 1 => index!
+    }
+    firstTarget! < 0 -> if { false -> return }
+    nodes[nodeOffset + firstTarget!] => target
+    target.firstToken => tokenIndex!
+    tokenIndex! < target.firstToken + target.tokenCount
+        -> while {
+            tokens[tokenOffset + tokenIndex!].kind == grammar.tokenIdDot()
+                -> if { false -> return }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    tokens[tokenOffset + target.payloadToken] => name
+    (TokenNameRequest { source: source, token: name, expected: "len" } -> tokenNameIs)
+        or (TokenNameRequest { source: source, token: name, expected: "byte" } -> tokenNameIs)
+        or (TokenNameRequest { source: source, token: name, expected: "slice" } -> tokenNameIs)
+}
+
+struct TokenNameRequest {
+    source: Text
+    token: syntax.SyntaxToken
+    expected: Text
+}
+
+struct RuntimeNameRequest {
+    source: Text
+    token: syntax.SyntaxToken
+}
+
+struct DeclaredMethodName {
+    sourceModule: Int
+    nameToken: Int
+}
+
+struct TypedCallCandidate {
+    callAst: Int
+    nameToken: Int
+    functionSymbol: Int
+    status: Int
+    intrinsicFallback: Bool
+}
+
+tokenNameIs request: TokenNameRequest -> Bool {
+    request.token.span.length == (request.expected -> len) => equal!
+    UIntSize(0) => index!
+    equal! and index! < request.token.span.length
+        -> while {
+            (request.source -> byte(request.token.span.start + index!)) != (request.expected -> byte(index!))
+                -> if { false => equal! }
+            index! + 1 => index!
+        }
+    equal!
+}
+
+# Index every path ancestor that already contains a real call-expression
+# owner. Qualified value projections can then reject borrowed call identity in
+# O(1) instead of rescanning the AST for each qualified candidate.
+indexQualifiedPathCallOwners nodes: ref [ast.AstNode; ~], nodeOffset: Int, nodeCount: Int -> [Int; ~] {
+    [Int; ~] => owners!
+    0 => ownerSeed!
+    ownerSeed! < nodeCount
+        -> while {
+            owners! -> push(-1)
+            ownerSeed! + 1 => ownerSeed!
+        }
+    0 => callOwnerSearch!
+    callOwnerSearch! < nodeCount
+        -> while {
+            nodes[nodeOffset + callOwnerSearch!] => candidate
+            candidate.kind == 11 and candidate.cstRuleId == grammar.ruleIdCallExpression()
+                -> if {
+                    candidate.parent => ancestor!
+                    ancestor! >= 0 -> while {
+                        nodes[nodeOffset + ancestor!] => ancestorNode
+                        ancestorNode.kind == 36 and ancestorNode.start == candidate.start
+                            -> if {
+                                owners![ancestor!] => existingOwner
+                                existingOwner < 0 or candidate.length < nodes[nodeOffset + existingOwner].length
+                                    -> if { callOwnerSearch! => owners![ancestor!] }
+                            }
+                        ancestorNode.parent => ancestor!
+                    }
+                }
+            callOwnerSearch! + 1 => callOwnerSearch!
+        }
+    owners!
+}
+
+# Negative symbols are stable built-in aliases used before stdlib-qualified
+# resolution. -101/-102 are retained for typed-IR compatibility.
+runtimeFunctionSymbol request: RuntimeNameRequest -> Int {
+    -1 => runtimeSymbol!
+    TokenNameRequest { source: request.source, token: request.token, expected: "print" } -> tokenNameIs
+        -> if { -101 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "println" } -> tokenNameIs
+        -> if { -102 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "readInt" } -> tokenNameIs
+        -> if { -103 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "seedRandom" } -> tokenNameIs
+        -> if { -104 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "randomBelow" } -> tokenNameIs
+        -> if { -105 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntWriter" } -> tokenNameIs
+        -> if { -106 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "writeInt" } -> tokenNameIs
+        -> if { -107 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntWriter" } -> tokenNameIs
+        -> if { -108 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntReader" } -> tokenNameIs
+        -> if { -109 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closestInt" } -> tokenNameIs
+        -> if { -110 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntReader" } -> tokenNameIs
+        -> if { -111 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "flush" } -> tokenNameIs
+        -> if { -114 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "limitParallelWorkers" } -> tokenNameIs
+        -> if { -115 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "parallelWorkers" } -> tokenNameIs
+        -> if { -118 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "parallelPeakWorkers" } -> tokenNameIs
+        -> if { -119 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "parallel" } -> tokenNameIs
+        -> if { -120 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "tryParallel" } -> tokenNameIs
+        -> if { -121 => runtimeSymbol! }
+    runtimeSymbol!
+}
+
+# These temporary name markers never become an ABI: bind the actual canonical
+# declaration before returning a module call table.
+struct GlobalFunctionAlias {
+    marker: Int
+    sourceModule: Int
+    functionSymbol: Int
+    exported: Bool
+}
+
+public struct GlobalFunctionAliasDiagnostic {
+    public code: Int
+    public marker: Int
+    public targetSourceModule: Int
+    public functionSymbol: Int
+    public contextSourceModule: Int
+}
+
+public noGlobalFunctionAliasDiagnostic: -> GlobalFunctionAliasDiagnostic => GlobalFunctionAliasDiagnostic { code: 0, marker: -1, targetSourceModule: -1, functionSymbol: -1, contextSourceModule: -1 }
+
+public globalFunctionAliasName marker: Int -> Text {
+    marker -> when {
+        == -101 => "print"
+        == -102 => "println"
+        == -103 => "readInt"
+        == -104 => "seedRandom"
+        == -105 => "randomBelow"
+        == -106 => "openIntWriter"
+        == -107 => "writeInt"
+        == -108 => "closeIntWriter"
+        == -109 => "openIntReader"
+        == -110 => "closestInt"
+        == -111 => "closeIntReader"
+        == -120 => "parallel"
+        == -121 => "tryParallel"
+        == -115 => "limitParallelWorkers"
+        == -118 => "parallelWorkers"
+        == -119 => "parallelPeakWorkers"
+        else => ""
+    }
+}
+
+public canonicalGlobalFunctionAliasName marker: Int -> Text {
+    marker == -104 -> if { "seed" -> return }
+    marker == -105 -> if { "below" -> return }
+    marker -> globalFunctionAliasName
+}
+
+public globalFunctionAliasModule marker: Int -> Text => marker -> globalAliasNamespace
+
+public firstGlobalFunctionAliasDiagnostic package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], libraryStart: Int, libraryCount: Int -> GlobalFunctionAliasDiagnostic {
+    [GlobalFunctionAlias; ~] => aliases!
+    [Int; ~] => conflicts!
+    -1 => contextSource!
+    package.ranges -> each range {
+        identities[range.sourceModule] => identity
+        package.sources[range.sourceModule] -> slice(UIntSize(0), package.sources[range.sourceModule] -> len) => source
+        source -> slice(identity.pathStart, identity.pathLength) => moduleName
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => declaration
+            (declaration.kind == 7 and declaration.parent < 0) or declaration.kind == 31
+                -> if { range.sourceModule => contextSource! }
+            declaration.kind == 7 and declaration.parent < 0 and declaration.nameToken >= 0 and (moduleName -> len) == 0
+                and not (declaration -> symbols.hasQualifiedFunctionName(package.tokens, range.tokenStart, range.tokenCount))
+                -> if {
+                    RuntimeNameRequest { source: source, token: package.tokens[range.tokenStart + declaration.nameToken] } -> runtimeFunctionSymbol => marker
+                    marker -> globalFunctionAlias -> if { conflicts! -> push(marker) }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        range.sourceModule >= libraryStart and range.sourceModule - libraryStart < libraryCount
+            -> if {
+                moduleName == "sys.io" or moduleName == "sys.random" or moduleName == "sys.file" or moduleName == "sys.runtime"
+                    -> if {
+                        source -> collectGlobalFunctionAliases(range.sourceModule, moduleName, package.tokens, range.tokenStart, package.symbols, range.symbolStart, range.symbolCount) => fragment
+                        fragment -> each target { aliases! -> push(target) }
+                    }
+            }
+    }
+    [-101, -102, -103, -104, -105, -106, -107, -108, -109, -110, -111, -120, -121, -115, -118, -119] => order
+    order -> each marker {
+        -1 => selected!
+        0 => aliasIndex!
+        aliases! -> each target {
+            target.marker == marker -> if { aliasIndex! => selected! }
+            aliasIndex! + 1 => aliasIndex!
+        }
+        selected! < 0 -> if {
+            GlobalFunctionAliasDiagnostic { code: 1, marker: marker, targetSourceModule: -1, functionSymbol: -1, contextSourceModule: contextSource! } -> return
+        }
+        conflicts! -> each conflict {
+            conflict == marker -> if {
+                aliases![selected!] => target
+                GlobalFunctionAliasDiagnostic { code: 2, marker: marker, targetSourceModule: target.sourceModule, functionSymbol: target.functionSymbol, contextSourceModule: contextSource! } -> return
+            }
+        }
+    }
+    noGlobalFunctionAliasDiagnostic()
+}
+
+globalAliasNamespace marker: Int -> Text {
+    marker <= -101 and marker >= -103 -> if { "sys.io" -> return }
+    marker == -104 or marker == -105 -> if { "sys.random" -> return }
+    marker <= -106 and marker >= -111 -> if { "sys.file" -> return }
+    marker == -115 or (marker <= -118 and marker >= -121)
+        -> if { "sys.runtime" -> return }
+    ""
+}
+
+globalFunctionAlias marker: Int -> Bool => (marker -> globalAliasNamespace -> len) > 0
+
+canonicalAliasMarker source: Text, token: syntax.SyntaxToken, moduleName: Text -> Int {
+    moduleName == "sys.random" -> if {
+        TokenNameRequest { source: source, token: token, expected: "seed" } -> tokenNameIs
+            -> if { -104 -> return }
+        TokenNameRequest { source: source, token: token, expected: "below" } -> tokenNameIs
+            -> if { -105 -> return }
+        -1 -> return
+    }
+    RuntimeNameRequest { source: source, token: token } -> runtimeFunctionSymbol => marker
+    (marker -> globalAliasNamespace) == moduleName
+        -> if { marker -> return }
+    -1
+}
+
+hasGlobalFunctionAliases resolutions: ref [ModuleCallResolution; ~] -> Bool {
+    resolutions -> each call {
+        call.origin == 2 and (call.functionSymbol -> globalFunctionAlias)
+            -> if { true -> return }
+    }
+    false
+}
+
+collectGlobalFunctionAliases source: Text, sourceIndex: Int, moduleName: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, table: ref [symbols.Symbol; ~], symbolStart: Int, symbolCount: Int -> [GlobalFunctionAlias; ~] {
+    [GlobalFunctionAlias; ~] => aliases!
+    0 => symbolIndex!
+    symbolIndex! < symbolCount -> while {
+        table[symbolStart + symbolIndex!] => target
+        target.kind == 7 and target.parent < 0 and target.nameToken >= 0
+            -> if {
+                source -> canonicalAliasMarker(tokens[tokenStart + target.nameToken], moduleName) => marker
+                marker -> globalFunctionAlias -> if {
+                    aliases! -> push(GlobalFunctionAlias { marker: marker, sourceModule: sourceIndex, functionSymbol: symbolIndex!, exported: target.flags / 4 % 2 == 1 })
+                }
+            }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    aliases!
+}
+
+commitGlobalFunctionAlias call: ModuleCallResolution, aliases: ref [GlobalFunctionAlias; ~], callerModuleName: Text -> ModuleCallResolution {
+    call => committed!
+    0 => matches!
+    aliases -> each target {
+        target.marker == call.functionSymbol -> if {
+            matches! + 1 => matches!
+            target.sourceModule => committed!.targetModule
+            target.sourceModule => committed!.targetSourceModule
+            target.functionSymbol => committed!.functionSymbol
+            call.sourceModule == target.sourceModule -> if { 0 } else { 1 } => committed!.origin
+            not target.exported and callerModuleName != (target.marker -> globalAliasNamespace)
+                -> if { 1 => committed!.status }
+        }
+    }
+    matches! != 1 -> if {
+        0 => committed!.origin
+        -1 => committed!.targetModule
+        -1 => committed!.functionSymbol
+        -1 => committed!.targetSourceModule
+        2 => committed!.status
+    }
+    committed!
+}
+
+commitTextGlobalFunctionAliases resolutions: mut [ModuleCallResolution; ~], sources: ref [Text; ~], identities: ref [modules.ModuleIdentity; ~] -> Unit {
+    resolutions -> hasGlobalFunctionAliases -> unless { return }
+    [GlobalFunctionAlias; ~] => aliases!
+    identities -> each identity {
+        sources[identity.sourceIndex] => source
+        source -> slice(identity.pathStart, identity.pathLength) => moduleName
+        moduleName == "sys.io" or moduleName == "sys.random" or moduleName == "sys.file" or moduleName == "sys.runtime"
+            -> if {
+                source -> ast.lower => nodes
+                source -> lexer.lex => tokens
+                nodes -> symbols.collectPrepared => table
+                source -> collectGlobalFunctionAliases(identity.sourceIndex, moduleName, tokens, 0, table, 0, table -> len) => fragment
+                fragment -> each target { aliases! -> push(target) }
+            }
+    }
+    0 => callIndex!
+    callIndex! < (resolutions -> len) -> while {
+        resolutions[callIndex!] => call
+        call.origin == 2 and (call.functionSymbol -> globalFunctionAlias)
+            -> if {
+                identities[call.sourceModule] => caller
+                sources[call.sourceModule] -> slice(caller.pathStart, caller.pathLength) => callerModuleName
+                call -> commitGlobalFunctionAlias(aliases!, callerModuleName) => resolutions[callIndex!]
+            }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+commitAnalyzedGlobalFunctionAliases resolutions: mut [ModuleCallResolution; ~], package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> Unit {
+    resolutions -> hasGlobalFunctionAliases -> unless { return }
+    [GlobalFunctionAlias; ~] => aliases!
+    identities -> each identity {
+        package.sources[identity.sourceIndex] -> slice(UIntSize(0), package.sources[identity.sourceIndex] -> len) => source
+        source -> slice(identity.pathStart, identity.pathLength) => moduleName
+        moduleName == "sys.io" or moduleName == "sys.random" or moduleName == "sys.file" or moduleName == "sys.runtime"
+            -> if {
+                package.ranges[identity.sourceIndex] => range
+                source -> collectGlobalFunctionAliases(identity.sourceIndex, moduleName, package.tokens, range.tokenStart, package.symbols, range.symbolStart, range.symbolCount) => fragment
+                fragment -> each target { aliases! -> push(target) }
+            }
+    }
+    0 => callIndex!
+    callIndex! < (resolutions -> len) -> while {
+        resolutions[callIndex!] => call
+        call.origin == 2 and (call.functionSymbol -> globalFunctionAlias)
+            -> if {
+                identities[call.sourceModule] => caller
+                package.sources[call.sourceModule] -> slice(caller.pathStart, caller.pathLength) => callerModuleName
+                call -> commitGlobalFunctionAlias(aliases!, callerModuleName) => resolutions[callIndex!]
+            }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+public displayFunctionSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int, functionSymbol: Int, libraryStart: Int, libraryCount: Int -> Int {
+    sourceModule < libraryStart or sourceModule - libraryStart >= libraryCount
+        or sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        or functionSymbol < 0
+        -> if { -1 -> return }
+    package.ranges[sourceModule] => range
+    functionSymbol >= range.symbolCount -> if { -1 -> return }
+    package.symbols[range.symbolStart + functionSymbol] => declaration
+    declaration.kind != 7 or declaration.parent >= 0 or declaration.nameToken < 0
+        -> if { -1 -> return }
+    identities[sourceModule] => identity
+    package.sources[sourceModule] -> slice(identity.pathStart, identity.pathLength) => moduleName
+    moduleName != "sys.io" and not (moduleName == "sys.runtime" and declaration.flags / 128 % 2 == 1)
+        -> if { -1 -> return }
+    package.tokens[range.tokenStart + declaration.nameToken] => token
+    package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
+    name == "print" -> if { -101 -> return }
+    name == "println" -> if { -102 -> return }
+    -1
+}
+
+# These stable ABI aliases name internal wrappers in the current runtime slice.
+# Their visibility belongs to the canonical wrapper, including calls from main.
+public internalRuntimeAliasModule functionSymbol: Int -> Text {
+    functionSymbol == -104 or functionSymbol == -105
+        -> if { "sys.random" -> return }
+    functionSymbol <= -106 and functionSymbol >= -111
+        -> if { "sys.file" -> return }
+    ""
+}
+
+public internalRuntimeAliasName functionSymbol: Int -> Text {
+    functionSymbol -> when {
+        == -104 => "seed"
+        == -105 => "below"
+        == -106 => "openIntWriter"
+        == -107 => "writeInt"
+        == -108 => "closeIntWriter"
+        == -109 => "openIntReader"
+        == -110 => "closestInt"
+        == -111 => "closeIntReader"
+        else => ""
+    }
+}
+
+public moveConsumingIntrinsicTarget name: Text -> Bool => name == "append" or name == "updated" or name == "await" or name == "cancel"
+
+intrinsicFlowTarget request: RuntimeNameRequest -> Bool {
+    false => intrinsic!
+    TokenNameRequest { source: request.source, token: request.token, expected: "each" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "yield" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "emit" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "await" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "cancel" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "parallel" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "tryParallel" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "used" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "alloc" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "store" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "load" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "reset" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "materialize" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "flush" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "len" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "byte" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "slice" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "capacity" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "reserve" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "push" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "take" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "append" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "put" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "putIfAbsent" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "set" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "clear" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "contains" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "count" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "pushFront" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "pushBack" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "front" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "back" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "popFront" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "popBack" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "peek" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "pop" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "insert" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "remove" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "updated" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "readAt" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "readAtAsync" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "writeAt" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "readIntoAt" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "writeRangeAt" } -> tokenNameIs
+        -> if { true => intrinsic! }
+    intrinsic!
+}
+
+# Intrinsic vocabulary is contextual, not reserved. Index only declarations
+# whose spelling can collide, once per package, then preserve matching flow
+# calls for exact typed-receiver resolution.
+declaredIntrinsicMethodNames package: ref analysis.PackageAnalysis -> [DeclaredMethodName; ~] {
+    [DeclaredMethodName; ~] => names!
+    0 => rangeIndex!
+    rangeIndex! < (package.ranges -> len) -> while {
+        package.ranges[rangeIndex!] => candidateRange
+        package.sources[candidateRange.sourceModule] -> len => candidateSourceLength
+        package.sources[candidateRange.sourceModule]
+            -> slice(UIntSize(0), candidateSourceLength) => candidateSource
+        0 => symbolOffset!
+        symbolOffset! < candidateRange.symbolCount -> while {
+            package.symbols[candidateRange.symbolStart + symbolOffset!] => candidate
+            candidate.kind == 31 and candidate.nameToken >= 0
+                -> if {
+                    candidateRange.tokenStart + candidate.nameToken => candidateNameToken
+                    package.tokens[candidateNameToken] => candidateName
+                    RuntimeNameRequest { source: candidateSource, token: candidateName }
+                        -> intrinsicFlowTarget => intrinsicName
+                    intrinsicName -> if {
+                        names! -> push(DeclaredMethodName {
+                            sourceModule: candidateRange.sourceModule
+                            nameToken: candidateNameToken
+                        })
+                    }
+                }
+            symbolOffset! + 1 => symbolOffset!
+        }
+        rangeIndex! + 1 => rangeIndex!
+    }
+    names!
+}
+
+declaredPackageMethodNamed package: ref analysis.PackageAnalysis, sourceIndex: Int, name: syntax.SyntaxToken, names: ref [DeclaredMethodName; ~] -> Bool {
+    false => found!
+    0 => nameIndex!
+    nameIndex! < (names -> len) and not found! -> while {
+        names[nameIndex!] => candidate
+        package.tokens[candidate.nameToken] => candidateName
+        candidateName.span.length == name.span.length => equal!
+        UIntSize(0) => byteIndex!
+        equal! and byteIndex! < name.span.length -> while {
+            package.sources[candidate.sourceModule]
+                -> byte(candidateName.span.start + byteIndex!) => candidateByte
+            package.sources[sourceIndex]
+                -> byte(name.span.start + byteIndex!) => nameByte
+            candidateByte != nameByte -> if { false => equal! }
+            byteIndex! + 1 => byteIndex!
+        }
+        equal! -> if {
+            true => found!
+        }
+        nameIndex! + 1 => nameIndex!
+    }
+    found!
+}
+
+# Search each lexical scope before its parent so local declarations shadow
+# module functions. Both single-source and package calls share this authority.
+resolveLexicalFunction source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], table: ref [symbols.Symbol; ~], nodeStart: Int, tokenStart: Int, tokenCount: Int, symbolStart: Int, symbolCount: Int, parentAst: Int, nameToken: Int, callKind: Int -> Int {
+    parentAst => callerAst!
+    -1 => callerFunctionAst!
+    callerAst! >= 0 and callerFunctionAst! < 0 -> while {
+        nodes[nodeStart + callerAst!] => callerNode
+        callerNode.kind == 7 or callerNode.kind == 31
+            -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+    }
+    -1 => scope!
+    0 => callerIndex!
+    callerIndex! < symbolCount and scope! < 0 -> while {
+        table[symbolStart + callerIndex!] => declaration
+        (declaration.kind == 7 or declaration.kind == 31) and declaration.astNode == callerFunctionAst!
+            -> if { callerIndex! => scope! }
+        callerIndex! + 1 => callerIndex!
+    }
+    tokens[tokenStart + nameToken] => callName
+    scope! >= -1 -> while {
+        0 => symbolIndex!
+        symbolIndex! < symbolCount -> while {
+            table[symbolStart + symbolIndex!] => candidate
+            (candidate.kind == 7 or candidate.kind == 31) and candidate.parent == scope!
+                and not (candidate -> symbols.hasQualifiedFunctionName(tokens, tokenStart, tokenCount))
+                -> if {
+                    tokens[tokenStart + candidate.nameToken] => functionName
+                    callName.span.length == functionName.span.length => equal!
+                    UIntSize(0) => nameByte!
+                    equal! and nameByte! < callName.span.length -> while {
+                        (source -> byte(callName.span.start + nameByte!)) != (source -> byte(functionName.span.start + nameByte!))
+                            -> if { false => equal! }
+                        nameByte! + 1 => nameByte!
+                    }
+                    equal! and (callKind == 10 or callKind == 11 or callKind == 48 or callKind == 77 or candidate.secondaryTypeNode < 0)
+                        -> if { symbolIndex! -> return }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        scope! >= 0 -> if { table[symbolStart + scope!].parent => scope! } else { -2 => scope! }
+    }
+    -1
+}
+
+# Compiler-provided scalar File members belong to the canonical resource
+# receiver, before a same-name free function can infer generic arguments.
+compilerProvidedFileScalarReceiver package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], types: ref [typeIds.SemanticType; ~], receiverTypeId: Int, writer: Bool -> Bool {
+    types -> typeIds.materializedReadTypeId(receiverTypeId) => typeId
+    typeId < 0 or typeId >= (types -> len) -> if { false -> return }
+    types[typeId] => receiver
+    receiver.kind != 1 or (receiver.origin != 0 and receiver.origin != 2)
+        or receiver.module < 0 or receiver.module >= (package.ranges -> len)
+        -> if { false -> return }
+    false => fileModule!
+    identities -> each identity {
+        identity.sourceIndex == receiver.module -> if {
+            (package.sources[identity.sourceIndex] -> slice(identity.pathStart, identity.pathLength)) == "sys.file"
+                -> if { true => fileModule! }
+        }
+    }
+    not fileModule! -> if { false -> return }
+    package.ranges[receiver.module] => range
+    receiver.symbol < 0 or receiver.symbol >= range.symbolCount
+        -> if { false -> return }
+    package.symbols[range.symbolStart + receiver.symbol] => declaration
+    declaration.kind != 3 or declaration.parent >= 0 or declaration.nameToken < 0
+        -> if { false -> return }
+    package.tokens[range.tokenStart + declaration.nameToken] => token
+    package.sources[receiver.module] -> slice(token.span.start, token.span.length) => name
+    writer -> if { name == "FileWriter" } else { name == "File" }
+}
+
+# Status 0 is a resolved local function and 2 is an unresolved call target.
+public resolve source: Text -> [CallResolution; ~] {
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> symbols.collectPrepared => table
+    [CallResolution; ~] => resolved!
+    0 => astIndex!
+    astIndex! < (nodes -> len) -> while {
+        nodes[astIndex!] => node
+        false => hasControlTarget!
+        false => hasFlowCallTarget!
+        false => hasQualifiedFlowTarget!
+        0 => controlTargetSearch!
+        controlTargetSearch! < (nodes -> len) -> while {
+            nodes[controlTargetSearch!].parent == astIndex! and (nodes[controlTargetSearch!].kind == 42 or nodes[controlTargetSearch!].kind == 44)
+                -> if { true => hasControlTarget! }
+            controlTargetSearch! + 1 => controlTargetSearch!
+        }
+        0 => flowTargetSearch!
+        flowTargetSearch! < (nodes -> len) -> while {
+            nodes[flowTargetSearch!].parent == astIndex! and nodes[flowTargetSearch!].kind == 16
+                -> if { true => hasFlowCallTarget! }
+            flowTargetSearch! + 1 => flowTargetSearch!
+        }
+        node.firstToken => flowTokenIndex!
+        node.kind == 10 and flowTokenIndex! < node.firstToken + node.tokenCount
+            -> while {
+                tokens[flowTokenIndex!].kind == grammar.tokenIdDot()
+                    -> if { true => hasQualifiedFlowTarget! }
+                flowTokenIndex! + 1 => flowTokenIndex!
+            }
+        (node.kind == 10 and hasFlowCallTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression() or node.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or node.kind == 48 or node.kind == 77
+            -> if {
+                -1 => callNameToken!
+                node.kind == 48 or node.kind == 77 -> if { node.payloadToken => callNameToken! }
+                node.kind == 10 -> if {
+                    0 => flowNameSearch!
+                    flowNameSearch! < (nodes -> len) -> while {
+                        nodes[flowNameSearch!].parent == astIndex!
+                            and nodes[flowNameSearch!].kind == 16
+                            and nodes[flowNameSearch!].payloadToken > callNameToken!
+                            -> if {
+                                nodes[flowNameSearch!].payloadToken => callNameToken!
+                            }
+                        flowNameSearch! + 1 => flowNameSearch!
+                    }
+                }
+                node.firstToken => tokenIndex!
+                false => inFlowTypeArgument!
+                false => inFlowCallArguments!
+                tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and node.kind != 77 and callNameToken! < 0
+                    -> while {
+                        tokens[tokenIndex!].kind == grammar.tokenIdLess()
+                            -> if { true => inFlowTypeArgument! }
+                        tokens[tokenIndex!].kind == grammar.tokenIdGreater()
+                            -> if { false => inFlowTypeArgument! }
+                        tokens[tokenIndex!].kind == grammar.tokenIdLeftParen()
+                            -> if { true => inFlowCallArguments! }
+                        tokens[tokenIndex!].kind == grammar.tokenIdRightParen()
+                            -> if { false => inFlowCallArguments! }
+                        tokens[tokenIndex!].kind == grammar.tokenIdIdentifier() and not inFlowTypeArgument! and not inFlowCallArguments!
+                            -> if { tokenIndex! => callNameToken! }
+                        tokenIndex! + 1 => tokenIndex!
+                    }
+                callNameToken! >= 0 -> if {
+                    resolveLexicalFunction(source, nodes, tokens, table, 0, 0, tokens -> len, 0, table -> len, node.parent, callNameToken!, node.kind) => functionSymbol
+                    RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
+                    callNameToken! > node.firstToken and tokens[callNameToken! - 1].kind == grammar.tokenIdDot()
+                        -> if { false => intrinsicFlow! }
+                    functionSymbol >= 0 or (not intrinsicFlow! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or node.kind == 77))
+                        -> if {
+                            2 => callStatus!
+                            functionSymbol >= 0 -> if { 0 => callStatus! }
+                            resolved! -> push(CallResolution {
+                                callAst: astIndex!
+                                nameToken: callNameToken!
+                                functionSymbol: functionSymbol
+                                status: callStatus!
+                            })
+                        }
+                }
+            }
+        astIndex! + 1 => astIndex!
+    }
+    resolved!
+}
+
+# Origins: 0 local function, 1 imported function. Imported statuses preserve
+# qualified lookup: 0 public, 2 missing/non-function, 3 non-public.
+public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallResolution; ~] {
+    request.sources -> analysis.analyze => identityPackage
+    [modules.ModuleIdentity; ~] => identities!
+    0 => identityCopyIndex180!
+    identityCopyIndex180! < (request.modules -> len)
+        -> while {
+            request.modules[identityCopyIndex180!] => identity
+            identities! -> push(identity)
+            identityCopyIndex180! + 1 => identityCopyIndex180!
+        }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    0 => qualifiedResultCopyIndex182!
+    qualifiedResultCopyIndex182! < (request.qualified -> len)
+        -> while {
+            request.qualified[qualifiedResultCopyIndex182!] => qualifiedResult
+            qualifiedResults! -> push(qualifiedResult)
+            qualifiedResultCopyIndex182! + 1 => qualifiedResultCopyIndex182!
+        }
+    [ModuleCallResolution; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (request.sources -> len) -> while {
+        request.sources[sourceIndex!] => source
+        source -> ast.lower => nodes
+        source -> lexer.lex => tokens
+        nodes -> symbols.collectPrepared => table
+        [CallResolution; ~] => localCalls!
+        nodes -> indexQualifiedPathCallOwners(0, nodes -> len) => qualifiedPathCallOwners
+        0 => callAstIndex!
+        callAstIndex! < (nodes -> len) -> while {
+            nodes[callAstIndex!] => callNode
+            false => moduleHasControlTarget!
+            false => moduleHasFlowCallTarget!
+            false => moduleHasQualifiedFlowTarget!
+            0 => moduleControlTargetSearch!
+            moduleControlTargetSearch! < (nodes -> len) -> while {
+                nodes[moduleControlTargetSearch!].parent == callAstIndex! and (nodes[moduleControlTargetSearch!].kind == 42 or nodes[moduleControlTargetSearch!].kind == 44)
+                    -> if { true => moduleHasControlTarget! }
+                moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
+            }
+            0 => moduleFlowTargetSearch!
+            moduleFlowTargetSearch! < (nodes -> len) -> while {
+                nodes[moduleFlowTargetSearch!].parent == callAstIndex! and nodes[moduleFlowTargetSearch!].kind == 16
+                    -> if { true => moduleHasFlowCallTarget! }
+                moduleFlowTargetSearch! + 1 => moduleFlowTargetSearch!
+            }
+            callNode.firstToken => moduleFlowTokenIndex!
+            callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount
+                -> while {
+                    tokens[moduleFlowTokenIndex!].kind == grammar.tokenIdDot()
+                        -> if { true => moduleHasQualifiedFlowTarget! }
+                    moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
+                }
+            false => moduleHasQualifiedCallTarget!
+            0 => moduleQualifiedCallSearch!
+            moduleQualifiedCallSearch! < (qualifiedResults! -> len)
+                -> while {
+                    qualifiedResults![moduleQualifiedCallSearch!] => moduleQualifiedCall
+                    moduleQualifiedCall.sourceModule == sourceIndex!
+                        and moduleQualifiedCall.pathAst >= 0
+                        and moduleQualifiedCall.pathAst < (nodes -> len)
+                        and nodes[moduleQualifiedCall.pathAst].kind == 36
+                        and ((nodes[moduleQualifiedCall.pathAst].parent == callAstIndex! and qualifiedPathCallOwners[moduleQualifiedCall.pathAst] < 0)
+                        or qualifiedPathCallOwners[moduleQualifiedCall.pathAst] == callAstIndex!)
+                        -> if {
+                            false => moduleQualifiedTargetCallable!
+                            moduleQualifiedCall.status == 0
+                                and moduleQualifiedCall.targetModule >= 0
+                                and moduleQualifiedCall.targetModule < (identities! -> len)
+                                -> if {
+                                    identities![moduleQualifiedCall.targetModule].sourceIndex => moduleQualifiedTargetSource
+                                    moduleQualifiedTargetSource >= 0 and moduleQualifiedTargetSource < (request.sources -> len)
+                                        -> if {
+                                            request.sources[moduleQualifiedTargetSource] -> symbols.collect => moduleQualifiedTargetSymbols
+                                            moduleQualifiedCall.targetSymbol >= 0 and moduleQualifiedCall.targetSymbol < (moduleQualifiedTargetSymbols -> len)
+                                                -> if {
+                                                    moduleQualifiedTargetSymbols[moduleQualifiedCall.targetSymbol].kind => moduleQualifiedTargetKind
+                                                    moduleQualifiedTargetKind == 7 or moduleQualifiedTargetKind == 31 or moduleQualifiedTargetKind == 36
+                                                        -> if {
+                                                            true => moduleQualifiedTargetCallable!
+                                                        }
+                                                }
+                                        }
+                                }
+                            moduleQualifiedTargetCallable!
+                                -> if { true => moduleHasQualifiedCallTarget! }
+                        }
+                    moduleQualifiedCallSearch! + 1 => moduleQualifiedCallSearch!
+                }
+            false => moduleHasGeneratedComTarget!
+            0 => moduleComQualifiedSearch!
+            moduleComQualifiedSearch! < (qualifiedResults! -> len)
+                -> while {
+                    qualifiedResults![moduleComQualifiedSearch!] => moduleComQualified
+                    moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < (table -> len)
+                        -> if {
+                            table[moduleComQualified.targetSymbol].kind == 36
+                                -> if { true => moduleHasGeneratedComTarget! }
+                        }
+                    moduleComQualifiedSearch! + 1 => moduleComQualifiedSearch!
+                }
+            false => moduleGeneratedComHasCallOwner!
+            callNode.kind == 36 and callNode.parent >= 0
+                -> if {
+                    nodes[callNode.parent] => generatedComParent
+                    generatedComParent.kind == 10
+                        or generatedComParent.kind == 11
+                        or generatedComParent.kind == 48 -> if {
+                            true => moduleGeneratedComHasCallOwner!
+                        }
+                }
+            (callNode.kind == 10 and (moduleHasFlowCallTarget! or moduleHasQualifiedCallTarget!)) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression() or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression())) or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget! and not moduleGeneratedComHasCallOwner!)
+                -> if {
+                    -1 => callNameToken!
+                    callNode.kind == 48 or callNode.kind == 77 -> if { callNode.payloadToken => callNameToken! }
+                    callNode.kind == 36 -> if {
+                        callNode.firstToken => comCallNameSearch!
+                        comCallNameSearch! < callNode.firstToken + callNode.tokenCount
+                            -> while {
+                                tokens[comCallNameSearch!].kind == grammar.tokenIdIdentifier()
+                                    -> if { comCallNameSearch! => callNameToken! }
+                                comCallNameSearch! + 1 => comCallNameSearch!
+                            }
+                    }
+                    callNode.kind == 10 -> if {
+                        0 => moduleFlowNameSearch!
+                        moduleFlowNameSearch! < (nodes -> len) -> while {
+                            nodes[moduleFlowNameSearch!].parent == callAstIndex!
+                                and nodes[moduleFlowNameSearch!].kind == 16
+                                and nodes[moduleFlowNameSearch!].payloadToken > callNameToken!
+                                -> if {
+                                    nodes[moduleFlowNameSearch!].payloadToken => callNameToken!
+                                }
+                            moduleFlowNameSearch! + 1 => moduleFlowNameSearch!
+                        }
+                    }
+                    callNode.firstToken => callTokenIndex!
+                    false => moduleInFlowTypeArgument!
+                    false => moduleInFlowCallArguments!
+                    callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNode.kind != 77 and callNameToken! < 0
+                        -> while {
+                            tokens[callTokenIndex!].kind == grammar.tokenIdLess()
+                                -> if { true => moduleInFlowTypeArgument! }
+                            tokens[callTokenIndex!].kind == grammar.tokenIdGreater()
+                                -> if { false => moduleInFlowTypeArgument! }
+                            tokens[callTokenIndex!].kind == grammar.tokenIdLeftParen()
+                                -> if { true => moduleInFlowCallArguments! }
+                            tokens[callTokenIndex!].kind == grammar.tokenIdRightParen()
+                                -> if { false => moduleInFlowCallArguments! }
+                            tokens[callTokenIndex!].kind == grammar.tokenIdIdentifier() and not moduleInFlowTypeArgument! and not moduleInFlowCallArguments!
+                                -> if { callTokenIndex! => callNameToken! }
+                            callTokenIndex! + 1 => callTokenIndex!
+                        }
+                    callNameToken! >= 0 -> if {
+                        resolveLexicalFunction(source, nodes, tokens, table, 0, 0, tokens -> len, 0, table -> len, callNode.parent, callNameToken!, callNode.kind) => localFunctionSymbol!
+                        # Direct println calls use the stable runtime symbol so the
+                        # explicit empty form println() does not inherit wrapper arity.
+                        callNode.kind == 11 -> if {
+                            RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
+                            directRuntimeSymbol == -102 -> if { directRuntimeSymbol => localFunctionSymbol! }
+                        }
+                        (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77) and localFunctionSymbol! < 0
+                            -> if {
+                                RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
+                                runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
+                            }
+                        RuntimeNameRequest { source: source, token: tokens[callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
+                        callNameToken! > callNode.firstToken and tokens[callNameToken! - 1].kind == grammar.tokenIdDot()
+                            -> if { false => intrinsicFlow! }
+                        localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or callNode.kind == 77 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))
+                            -> if {
+                                2 => localCallStatus!
+                                localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
+                                localCalls! -> push(CallResolution {
+                                    callAst: callAstIndex!
+                                    nameToken: callNameToken!
+                                    functionSymbol: localFunctionSymbol!
+                                    status: localCallStatus!
+                                })
+                            }
+                    }
+                }
+            callAstIndex! + 1 => callAstIndex!
+        }
+        0 => localIndex!
+        localIndex! < (localCalls! -> len) -> while {
+            localCalls![localIndex!] => local
+            nodes[local.callAst] => localCallNode
+            localCallNode.firstToken + localCallNode.tokenCount => callLeftParenToken!
+            localCallNode.firstToken => callScanToken!
+            callScanToken! < localCallNode.firstToken + localCallNode.tokenCount
+                -> while {
+                    tokens[callScanToken!].kind == grammar.tokenIdLeftParen()
+                        -> if {
+                            callScanToken! => callLeftParenToken!
+                            localCallNode.firstToken + localCallNode.tokenCount => callScanToken!
+                        } else {
+                            callScanToken! + 1 => callScanToken!
+                        }
+                }
+            -1 => importedIndex!
+            0 => qualifiedIndex!
+            qualifiedIndex! < (qualifiedResults! -> len)
+                -> while {
+                    qualifiedResults![qualifiedIndex!] => candidate
+                    candidate.sourceModule == sourceIndex! -> if {
+                        candidate.pathAst => ancestor!
+                        0 => callPathDistance!
+                        false => belongsToCall!
+                        ancestor! >= 0 and not belongsToCall! -> while {
+                            ancestor! == local.callAst -> if {
+                                true => belongsToCall!
+                            } else {
+                                nodes[ancestor!].parent => ancestor!
+                                callPathDistance! + 1 => callPathDistance!
+                            }
+                        }
+                        nodes[candidate.pathAst] => candidatePath
+                        # A provisional runtime spelling cannot preempt the
+                        # qualified target, including its visibility failure.
+                        belongsToCall!
+                            and candidatePath.firstToken <= local.nameToken
+                            and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount
+                            and (localCallNode.kind == 10
+                            or candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!)
+                            -> if { qualifiedIndex! => importedIndex! }
+                    }
+                    qualifiedIndex! + 1 => qualifiedIndex!
+                }
+            0 => resolvedOrigin!
+            sourceIndex! => resolvedTargetModule!
+            sourceIndex! => resolvedTargetSource!
+            local.functionSymbol => resolvedFunctionSymbol!
+            local.status => resolvedStatus!
+            importedIndex! >= 0 -> if {
+                qualifiedResults![importedIndex!] => imported
+                -1 => targetSourceModule!
+                imported.targetModule >= 0 -> if {
+                    identities![imported.targetModule].sourceIndex => targetSourceModule!
+                }
+                imported.targetModule => importedResolvedModule
+                targetSourceModule! => importedResolvedSource
+                imported.status => importedStatus!
+                imported.status == 0 -> if {
+                    request.sources[targetSourceModule!] -> symbols.collect => targetSymbols
+                    targetSymbols[imported.targetSymbol].kind != 7 and targetSymbols[imported.targetSymbol].kind != 31 and targetSymbols[imported.targetSymbol].kind != 36
+                        -> if { 2 => importedStatus! }
+                    targetSymbols[imported.targetSymbol] => importedDeclaration
+                    importedStatus! == 0 and importedDeclaration.kind == 36
+                        and importedDeclaration.flags / 4096 % 2 == 1
+                        -> if {
+                            nodes[imported.pathAst] => activationPath
+                            not (tokens -> hasExplicitQualifiedInvocation(0, tokens -> len, activationPath.firstToken + activationPath.tokenCount))
+                                -> if { 5 => importedStatus! }
+                        }
+                }
+                1 => resolvedOrigin!
+                imported.targetModule => resolvedTargetModule!
+                targetSourceModule! => resolvedTargetSource!
+                imported.targetSymbol => resolvedFunctionSymbol!
+                importedStatus! => resolvedStatus!
+            } else {
+                false => siblingFound!
+                false => siblingAmbiguous!
+                local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48 or localCallNode.kind == 77)
+                    -> if {
+                        identities![sourceIndex!] => currentIdentity
+                        0 => siblingModuleIndex!
+                        siblingModuleIndex! < (identities! -> len) -> while {
+                            identities![siblingModuleIndex!] => siblingIdentity
+                            siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash
+                                and modules.sameLogicalAnalyzedSource(identityPackage.sources, identities!, sourceIndex!, siblingIdentity.sourceIndex, identityPackage.tokens, identityPackage.ranges)
+                                -> if {
+                                    siblingIdentity.sourceIndex => siblingSource
+                                    request.sources[siblingSource] => siblingText
+                                    siblingText -> lexer.lex => siblingTokens
+                                    siblingText -> symbols.collect => siblingSymbols
+                                    0 => siblingSymbolIndex!
+                                    siblingSymbolIndex! < (siblingSymbols -> len)
+                                        -> while {
+                                            siblingSymbols[siblingSymbolIndex!] => siblingCandidate
+                                            (siblingCandidate.kind == 7 or siblingCandidate.kind == 31)
+                                                and not (siblingCandidate -> symbols.hasQualifiedFunctionName(siblingTokens, 0, siblingTokens -> len))
+                                                -> if {
+                                                    tokens[local.nameToken] => siblingCallName
+                                                    siblingTokens[siblingCandidate.nameToken] => siblingFunctionName
+                                                    siblingCallName.span.length == siblingFunctionName.span.length => siblingNameEqual!
+                                                    UIntSize(0) => siblingNameByte!
+                                                    siblingNameEqual! and siblingNameByte! < siblingCallName.span.length
+                                                        -> while {
+                                                            (source -> byte(siblingCallName.span.start + siblingNameByte!)) != (siblingText -> byte(siblingFunctionName.span.start + siblingNameByte!))
+                                                                -> if {
+                                                                    false => siblingNameEqual!
+                                                                }
+                                                            siblingNameByte! + 1 => siblingNameByte!
+                                                        }
+                                                    siblingNameEqual! -> if {
+                                                        siblingFound! -> if {
+                                                            true => siblingAmbiguous!
+                                                        } else {
+                                                            true => siblingFound!
+                                                            siblingModuleIndex! => resolvedTargetModule!
+                                                            siblingSource => resolvedTargetSource!
+                                                            siblingSymbolIndex! => resolvedFunctionSymbol!
+                                                            0 => resolvedStatus!
+                                                        }
+                                                    }
+                                                }
+                                            siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                        }
+                                }
+                            siblingModuleIndex! + 1 => siblingModuleIndex!
+                        }
+                        siblingAmbiguous! -> if {
+                            sourceIndex! => resolvedTargetModule!
+                            sourceIndex! => resolvedTargetSource!
+                            -1 => resolvedFunctionSymbol!
+                            2 => resolvedStatus!
+                        }
+                    }
+                not siblingFound! -> if {
+                    local.functionSymbol < -1 => runtimeCall
+                    runtimeCall -> if {
+                        2 => resolvedOrigin!
+                        -1 => resolvedTargetSource!
+                    }
+                }
+            }
+            results! -> push(ModuleCallResolution {
+                sourceModule: sourceIndex!
+                callAst: local.callAst
+                origin: resolvedOrigin!
+                targetModule: resolvedTargetModule!
+                targetSourceModule: resolvedTargetSource!
+                functionSymbol: resolvedFunctionSymbol!
+                status: resolvedStatus!
+            })
+            localIndex! + 1 => localIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results! -> commitTextGlobalFunctionAliases(request.sources, identities!)
+    results!
+}
+
+public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
+    sources -> modules.identities => identities
+    sources -> qualified.resolve => qualifiedResults
+    [Text; ~] => preparedSources!
+    0 => preparedSourceCopyIndex367!
+    preparedSourceCopyIndex367! < (sources -> len)
+        -> while {
+            sources[preparedSourceCopyIndex367!] => preparedSource
+            preparedSources! -> push(preparedSource)
+            preparedSourceCopyIndex367! + 1 => preparedSourceCopyIndex367!
+        }
+    ModuleCallRequest {
+        sources: preparedSources!
+        modules: identities
+        qualified: qualifiedResults
+    } => request
+    request -> resolveModulesPrepared => results
+    results
+}
+
+public resolveModulesTypedWithReceiverTypes package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~] -> [ModuleCallResolution; ~] {
+    [Bool; ~] => owners
+    [ModuleCallResolution; ~] => calls
+    package -> resolveModulesTypedWithReceiverTypeSeeds(semantic, receiverTypeByCallAst, resolvedTypes, owners, calls)
+}
+
+public resolveModulesTypedWithReceiverTypeSeeds package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet, receiverTypeByCallAst: ref [Int; ~], resolvedTypes: ref [typeIds.SemanticType; ~], seededOwners: ref [Bool; ~], seededCalls: ref [ModuleCallResolution; ~] -> [ModuleCallResolution; ~] {
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package -> prepareTypedMethodDeclarationFacts(semantic.references, identities, resolvedImports) => declarations
+    package -> qualified.resolveAnalyzed => qualifiedResults
+    package -> declaredIntrinsicMethodNames => declaredIntrinsicNames
+    [Bool; ~] => resolvedNameByAst!
+    package.nodes -> each node { resolvedNameByAst! -> push(false) }
+    [ModuleCallResolution; ~] => results!
+    seededCalls -> each call {
+        call.sourceModule >= 0 and call.sourceModule < (seededOwners -> len) and seededOwners[call.sourceModule]
+            -> if { results! -> push(call) }
+    }
+    0 => bareSourceIndex!
+    bareSourceIndex! < (package.ranges -> len) -> while {
+        bareSourceIndex! < (seededOwners -> len) and seededOwners[bareSourceIndex!]
+            -> if {
+                bareSourceIndex! + 1 => bareSourceIndex!
+                continue
+            }
+        package.ranges[bareSourceIndex!] => bareRange
+        package.sources[bareSourceIndex!] -> len => bareSourceLength
+        package.sources[bareSourceIndex!] -> slice(UIntSize(0), bareSourceLength) => bareSource
+        0 => bareNameOffset!
+        bareNameOffset! < bareRange.nameCount -> while {
+            package.names[bareRange.nameStart + bareNameOffset!] => bareName
+            bareName.astNode >= 0 and bareName.astNode < bareRange.astCount
+                -> if { true => resolvedNameByAst![bareRange.astStart + bareName.astNode] }
+            bareName.astNode >= 0 and bareName.astNode < bareRange.astCount
+                and bareName.symbol >= 0 and bareName.symbol < bareRange.symbolCount
+                -> if {
+                    package.nodes[bareRange.astStart + bareName.astNode] => bareNameNode
+                    package.symbols[bareRange.symbolStart + bareName.symbol] => bareTarget
+                    bareNameNode.kind == 15 and (bareTarget.kind == 7 or bareTarget.kind == 31)
+                        -> if {
+                            results! -> push(ModuleCallResolution {
+                                sourceModule: bareSourceIndex!
+                                callAst: bareName.astNode
+                                origin: 0
+                                targetModule: bareSourceIndex!
+                                targetSourceModule: bareSourceIndex!
+                                functionSymbol: bareName.symbol
+                                status: bareTarget.secondaryTypeNode >= 0 -> if { 4 } else { 5 }
+                            })
+                        }
+                }
+            bareNameOffset! + 1 => bareNameOffset!
+        }
+        0 => bareAstOffset!
+        bareAstOffset! < bareRange.astCount -> while {
+            package.nodes[bareRange.astStart + bareAstOffset!] => bareNode
+            bareNode.kind == 15 -> if {
+                resolvedNameByAst![bareRange.astStart + bareAstOffset!] => bareResolved
+                not bareResolved -> if {
+                    package.tokens[bareRange.tokenStart + bareNode.payloadToken] => bareToken
+                    RuntimeNameRequest { source: bareSource, token: bareToken } -> runtimeFunctionSymbol => bareRuntimeSymbol
+                    bareRuntimeSymbol < -1 -> if {
+                        results! -> push(ModuleCallResolution {
+                            sourceModule: bareSourceIndex!
+                            callAst: bareAstOffset!
+                            origin: 2
+                            targetModule: bareSourceIndex!
+                            targetSourceModule: -1
+                            functionSymbol: bareRuntimeSymbol
+                            status: bareRuntimeSymbol == -108 or bareRuntimeSymbol == -111 or bareRuntimeSymbol == -112 or bareRuntimeSymbol == -114 or bareRuntimeSymbol == -118 or bareRuntimeSymbol == -119
+                                -> if { 5 } else { 4 }
+                        })
+                    }
+                }
+            }
+            bareAstOffset! + 1 => bareAstOffset!
+        }
+        bareSourceIndex! + 1 => bareSourceIndex!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        sourceIndex! < (seededOwners -> len) and seededOwners[sourceIndex!]
+            -> if {
+                sourceIndex! + 1 => sourceIndex!
+                continue
+            }
+        sourceIndex! -> resolveSourceTypedWithDeclarations(package, semantic, identities, imports, resolvedImports, qualifiedResults, declaredIntrinsicNames, receiverTypeByCallAst, resolvedTypes, declarations) => sourceResults
+        0 => sourceResultIndex!
+        sourceResultIndex! < (sourceResults -> len) -> while {
+            results! -> push(sourceResults[sourceResultIndex!])
+            sourceResultIndex! + 1 => sourceResultIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    [ModuleCallResolution; ~] => filteredResults!
+    0 => resultIndex!
+    resultIndex! < (results! -> len) -> while {
+        results![resultIndex!] => result
+        result.status != 6 -> if {
+            false => duplicateError!
+            result.status == 5 -> if {
+                filteredResults! -> each previous {
+                    previous.status == 5 and previous.sourceModule == result.sourceModule
+                        and previous.callAst == result.callAst and previous.functionSymbol == result.functionSymbol
+                        -> if { true => duplicateError! }
+                }
+            }
+            not duplicateError! -> if { filteredResults! -> push(result) }
+        }
+        resultIndex! + 1 => resultIndex!
+    }
+    filteredResults! -> commitAnalyzedGlobalFunctionAliases(package, identities)
+    filteredResults!
+}
+
+public resolveModulesTyped package: analysis.PackageAnalysis, semantic: typeIds.SemanticTypeSet -> [ModuleCallResolution; ~] {
+    [Int; ~] => unresolvedReceiverTypeByCallAst!
+    package.nodes -> each node { unresolvedReceiverTypeByCallAst! -> push(-1) }
+    package -> resolveModulesTypedWithReceiverTypes(semantic, unresolvedReceiverTypeByCallAst!, semantic.types)
+}
+
+public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallResolution; ~] {
+    package -> typeIds.resolveAnalyzed => semantic
+    package -> resolveModulesTyped(semantic)
+}

@@ -1,0 +1,267 @@
+namespace sollang.compiler.semantic.semantic_cache
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import sollang.compiler.semantic.library_interfaces as libraryInterfaces
+import sys.file as file
+import std.crypto.sha256 as sha256
+
+public struct Request {
+    public enabled: Bool
+    public destination: Text
+    public staged: Text
+    public identity: generations.CompilationIdentity
+}
+
+public disabled: -> Request {
+    Request { enabled: false, destination: "", staged: "", identity: generations.CompilationIdentity { compiler: 0, target: 0, configuration: 0 } }
+}
+
+differentPaths left: Text, right: Text -> Bool {
+    (left -> len) == 0 or (right -> len) == 0 -> if { false -> return }
+    (left -> len) != (right -> len) -> if { true -> return }
+    UIntSize(0) => index!
+    index! < (left -> len) -> while {
+        (left -> byte(index!)) != (right -> byte(index!))
+            -> if { true -> return }
+        index! + 1 => index!
+    }
+    false
+}
+
+public validRequest request: ref Request -> Bool {
+    not request.enabled or differentPaths(request.destination, request.staged)
+}
+
+public struct Loaded {
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+public struct Resolution {
+    public resolved: expressions.ResolvedCallContext
+    public words: [UInt64; ~]
+    public loadStatus: Int
+    public reused: Int
+    public rejected: Int
+    public skipped: Int
+}
+
+failedLoad status: Int -> Loaded => Loaded { words: [UInt64; ~], status: status }
+
+readWord bytes: Text, offset: UIntSize -> UInt64 {
+    UInt64(0) => word!
+    UInt64(1) => factor!
+    0..<8 -> each index {
+        word! + UInt64(bytes -> byte(offset + UIntSize(index))) * factor! => word!
+        index < 7 -> if { factor! * 256 => factor! }
+    }
+    word!
+}
+
+# These are framing limits, not cache admission. Every successful row still
+# passes the current compiler/target/config/declaration/module/owner checks.
+public validate words: ref [UInt64; ~] -> Int {
+    (words -> len) < 41 or (words -> len) > 16000000
+        -> if { 21 -> return }
+    words[0] != 6002245308512486735 or words[1] != 1 or words[2] != UInt64(words -> len)
+        or words[3] > UInt64(((words -> len) - 41) / 2) or words[4] > 255 or words[5] > words[3] or words[6] > 16000000 or words[7] > words[3] or words[8] != 0
+        -> if { 21 -> return }
+    Int(words -> len) - 32 => end
+    words -> generations.checksum(end) => digest
+    0..<32 -> each index { words[end + index] != UInt64(digest[index]) -> if { 23 -> return } }
+    9 => cursor!
+    UInt64(0) => row!
+    row! < words[3] -> while {
+        cursor! > end - 2 -> if { 21 -> return }
+        words[cursor!] => status
+        words[cursor! + 1] => length
+        status > 255 or length > UInt64(end - cursor! - 2)
+            or (status == 0 and length < 72) or (status != 0 and length != 0)
+            -> if { 21 -> return }
+        cursor! + 2 + Int(length) => cursor!
+        row! + 1 => row!
+    }
+    cursor! != end -> if { 21 -> return }
+    0
+}
+
+public load path: Text -> Loaded uses File {
+    path -> libraryInterfaces.readSourcePath -> when {
+        Err(code) { code -> failedLoad -> return }
+        Ok(mapped) {
+            mapped -> len => length
+            length < 328 or length > 128000000 or length % 8 != 0
+                -> if { 21 -> failedLoad -> return }
+            mapped -> slice(UIntSize(0), length) => bytes
+            bytes -> readWord(16) != UInt64(length / 8)
+                -> if { 21 -> failedLoad -> return }
+            [UInt64; ~] => words!
+            UIntSize(0) => offset!
+            offset! < length -> while {
+                words! -> push(bytes -> readWord(offset!))
+                offset! + 8 => offset!
+            }
+            words! -> validate => status
+            status != 0 -> if { status -> failedLoad -> return }
+            Loaded { words: words!, status: 0 } -> return
+        }
+    }
+}
+
+public configurationIdentity configuration: Text -> UInt64 {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => offset!
+    offset! < (configuration -> len) -> while {
+        bytes! -> push(configuration -> byte(offset!))
+        offset! + 1 => offset!
+    }
+    sha256.create() => hasher!
+    hasher! -> update(bytes!)
+    hasher! -> finish => digest
+    UInt64(0) => identity!
+    UInt64(1) => factor!
+    0..<8 -> each index {
+        identity! + UInt64(digest[index]) * factor! => identity!
+        index < 7 -> if { factor! * 256 => factor! }
+    }
+    identity!
+}
+
+public compilerIdentity executable: Text -> Result<UInt64, Int> uses File {
+    executable -> libraryInterfaces.readSourcePath -> when {
+        Err(code) { code -> Result<UInt64, Int>.Err -> return }
+        Ok(mapped) {
+            mapped -> slice(UIntSize(0), mapped -> len) => source
+            [UInt8; ~] => bytes!
+            UIntSize(0) => offset!
+            offset! < (source -> len) -> while {
+                bytes! -> push(source -> byte(offset!))
+                offset! + 1 => offset!
+            }
+            sha256.create() => hasher!
+            hasher! -> update(bytes!)
+            hasher! -> finish => digest
+            UInt64(0) => identity!
+            UInt64(1) => factor!
+            0..<8 -> each index {
+                identity! + UInt64(digest[index]) * factor! => identity!
+                index < 7 -> if { factor! * 256 => factor! }
+            }
+            identity! -> Result<UInt64, Int>.Ok -> return
+        }
+    }
+}
+
+public resolve initialPrepared: move context.SemanticSnapshot, loaded: ref Loaded, paths: ref [Text; ~], identity: generations.CompilationIdentity -> Result<Resolution, Int> {
+    initialPrepared -> fingerprints.capture => fingerprint
+    fingerprint.status != 0 -> if { 15 -> Result<Resolution, Int>.Err -> return }
+    initialPrepared -> generations.emptySeeds => seeds!
+    initialPrepared => prepared!
+    0 => reused!
+    0 => rejected!
+    loaded.status => loadStatus!
+    loaded.status == 0 -> if {
+        loaded.words -> validate => loadStatus!
+        loadStatus! == 0 -> if {
+            9 => cursor!
+            UInt64(0) => row!
+            row! < loaded.words[3] -> while {
+                Int(loaded.words[cursor! + 1]) => length
+                loaded.words[cursor!] == 0 -> if {
+                    [UInt64; ~] => payload!
+                    0..<length -> each index { payload! -> push(loaded.words[cursor! + 2 + index]) }
+                    payload! -> generations.restore(prepared!, paths, identity, fingerprint.bytes) => restored
+                    # The owning restoration result is consumed on both paths;
+                    # appendRestoredOwner rejects failed admission before mutation.
+                    restored -> generations.appendRestoredOwner(prepared!, seeds!) => status
+                    status == 0 -> if { reused! + 1 => reused! } else {
+                        status == 16 or status == 17 -> if { status -> Result<Resolution, Int>.Err -> return }
+                        rejected! + 1 => rejected!
+                    }
+                } else { rejected! + 1 => rejected! }
+                cursor! + 2 + length => cursor!
+                row! + 1 => row!
+            }
+        }
+    }
+    prepared! -> context.freeze -> expressions.resolveCallContextSeeded(seeds!) -> when {
+        Err(code) { (90 + code) -> Result<Resolution, Int>.Err -> return }
+        Ok(resolved) {
+            [UInt64(6002245308512486735), 1, 0, UInt64(resolved.prepared.package.ranges -> len), UInt64(loadStatus!), UInt64(reused!), UInt64(rejected!), 0, 0; ~] => words!
+            0 => skipped!
+            0..<Int(resolved.prepared.package.ranges -> len) -> each source {
+                resolved.prepared -> generations.capture(resolved.types, paths, source, identity, fingerprint.bytes) => encoded
+                words! -> push(UInt64(encoded.status))
+                words! -> push(UInt64(encoded.words -> len))
+                encoded.status == 0 -> if {
+                    encoded.words -> each word { words! -> push(word) }
+                } else { skipped! + 1 => skipped! }
+            }
+            UInt64(skipped!) => words![7]
+            UInt64((words! -> len) + 32) => words![2]
+            words! -> generations.checksum(words! -> len) => digest
+            digest -> each byte { words! -> push(UInt64(byte)) }
+            Resolution { resolved: resolved, words: words!, loadStatus: loadStatus!, reused: reused!, rejected: rejected!, skipped: skipped! } -> Result<Resolution, Int>.Ok -> return
+        }
+    }
+}
+
+writeStage words: ref [UInt64; ~], temporary: Text, claimNew: Bool -> Int uses File {
+    words -> validate => status
+    status != 0 -> if { status -> return }
+    claimNew and (temporary -> file.createExclusive) != 1
+        -> if { 36 -> return }
+    [UInt8; ~] => bytes!
+    words -> each word {
+        word => value!
+        0..<8 -> each {
+            bytes! -> push(UInt8(value! % 256))
+            value! / 256 => value!
+        }
+    }
+    temporary -> file.openWrite -> when {
+        Err(_) { 30 -> return }
+        Ok(writer) {
+            writer -> writeRangeAt(bytes!, 0, UIntSize(bytes! -> len), 0) -> when {
+                Err(_) { 31 -> return }
+                Ok(count) { count != UIntSize(bytes! -> len) -> if { 31 -> return } }
+            }
+            not (writer -> file.sync) -> if { 32 -> return }
+        }
+    }
+    temporary -> load => readback
+    readback.status != 0 -> if { readback.status -> return }
+    (readback.words -> len) != (words -> len) -> if { 33 -> return }
+    0..<Int(words -> len) -> each index { readback.words[index] != words[index] -> if { 33 -> return } }
+    0
+}
+
+# Low-level callers already own their stage. Normal compilation claims only
+# after its checked semantic admission, without validating the payload twice.
+public stage words: ref [UInt64; ~], temporary: Text -> Int uses File {
+    words -> writeStage(temporary, false)
+}
+
+public stageExclusive words: ref [UInt64; ~], temporary: Text -> Int uses File {
+    words -> writeStage(temporary, true)
+}
+
+public struct Publication {
+    public loadStatus: Int
+    public reused: Int
+    public rejected: Int
+    public skipped: Int
+    public total: Int
+}
+
+public publish temporary: Text, destination: Text -> Result<Publication, Int> uses File {
+    not differentPaths(temporary, destination) -> if { 35 -> Result<Publication, Int>.Err -> return }
+    temporary -> load => staged
+    staged.status != 0 -> if { staged.status -> Result<Publication, Int>.Err -> return }
+    file.AtomicReplaceRequest { temporary: temporary, destination: destination } -> file.atomicReplace
+        -> unless { 34 -> Result<Publication, Int>.Err -> return }
+    Publication { loadStatus: Int(staged.words[4]), reused: Int(staged.words[5]), rejected: Int(staged.words[6]), skipped: Int(staged.words[7]), total: Int(staged.words[3]) } -> Result<Publication, Int>.Ok
+}

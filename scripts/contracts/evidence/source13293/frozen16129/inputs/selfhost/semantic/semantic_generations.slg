@@ -1,0 +1,238 @@
+namespace sollang.compiler.semantic.semantic_generations
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.owner_call_facts as owners
+import sollang.compiler.semantic.module_source_digests as digests
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.declaration_fingerprints as fingerprints
+import std.crypto.sha256 as sha256
+
+public struct CompilationIdentity {
+    public compiler: UInt64
+    public target: UInt64
+    public configuration: UInt64
+}
+
+# Normal callers compute the declaration universe from the current frontend;
+# the lower-level entry points retain explicit fingerprint inputs for codecs.
+public captureCurrent prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, paths: ref [Text; ~], sourceModule: Int, identity: CompilationIdentity -> owners.EncodedOwnerCalls {
+    prepared -> fingerprints.capture => fingerprint
+    fingerprint.status != 0 -> if {
+        owners.EncodedOwnerCalls { words: [UInt64; ~], status: 15 } -> return
+    }
+    prepared -> capture(finalTypes, paths, sourceModule, identity, fingerprint.bytes)
+}
+
+public restoreCurrent words: ref [UInt64; ~], prepared: ref context.SemanticSnapshot, paths: ref [Text; ~], identity: CompilationIdentity -> owners.RestoredOwnerCalls {
+    prepared -> fingerprints.capture => fingerprint
+    fingerprint.status != 0 -> if { 15 -> owners.failedRestoration -> return }
+    words -> restore(prepared, paths, identity, fingerprint.bytes)
+}
+
+setSeedBinding bindings: mut [Int; ~], symbol: Int, typeId: Int -> Unit {
+    typeId => bindings[symbol]
+}
+
+setSeedOwner owners: mut [Bool; ~], source: Int -> Unit {
+    true => owners[source]
+}
+
+public emptySeeds prepared: ref context.SemanticSnapshot -> expressions.CallContextSeeds {
+    expressions.emptyCallContextSeeds() => seeds!
+    prepared.package.ranges -> each range { seeds!.ownerBySource -> push(false) }
+    prepared.package.symbols -> each symbol { seeds!.bindingTypeBySymbol -> push(-1) }
+    seeds!
+}
+
+# Commit only a fully admitted/rebound owner. The returned semantic arena keeps
+# the previous prefix, so earlier admitted owners retain their current type IDs.
+public appendRestoredOwner restored: move owners.RestoredOwnerCalls, prepared: mut context.SemanticSnapshot, seeds: mut expressions.CallContextSeeds -> Int {
+    restored.status != 0 -> if { restored.status -> return }
+    restored.owner.sourceModule => source
+    source < 0 or source >= (prepared.package.ranges -> len)
+        or (seeds.ownerBySource -> len) != (prepared.package.ranges -> len)
+        or (seeds.bindingTypeBySymbol -> len) != (prepared.package.symbols -> len)
+        -> if { 16 -> return }
+    seeds.ownerBySource[source] -> if { 17 -> return }
+    prepared.package.ranges[source] => range
+    restored.owner.bindings -> each binding {
+        seeds.bindingTypeBySymbol -> setSeedBinding(range.symbolStart + binding.symbol, binding.typeId)
+    }
+    restored.owner.values -> each value { seeds.values -> push(value) }
+    restored.calls -> each call { seeds.calls -> push(call) }
+    restored.arguments -> each argument { seeds.arguments -> push(argument) }
+    restored.owner.semantic => semantic
+    semantic => prepared.semantic
+    seeds.ownerBySource -> setSeedOwner(source)
+    0
+}
+
+# This is the actual existing solver consumer, rather than a codec-only probe.
+# Normal persistent callers can append several independently admitted owners
+# with one current declaration fingerprint before resolving the compilation.
+public resolveCurrent words: ref [UInt64; ~], initialPrepared: move context.SemanticSnapshot, paths: ref [Text; ~], identity: CompilationIdentity -> Result<expressions.ResolvedCallContext, Int> {
+    words -> restoreCurrent(initialPrepared, paths, identity) => restored
+    restored.status != 0 -> if { restored.status -> Result<expressions.ResolvedCallContext, Int>.Err -> return }
+    initialPrepared -> emptySeeds => seeds!
+    initialPrepared => prepared!
+    restored -> appendRestoredOwner(prepared!, seeds!) => status
+    status != 0 -> if { status -> Result<expressions.ResolvedCallContext, Int>.Err -> return }
+    prepared! -> context.freeze -> expressions.resolveCallContextSeeded(seeds!)
+}
+
+public checksum words: ref [UInt64; ~], count: Int -> [UInt8; 32] {
+    sha256.create() => hasher!
+    [UInt8; ~] => bytes!
+    0 => index!
+    index! < count -> while {
+        words[index!] => word!
+        0..<8 -> each {
+            bytes! -> push(UInt8(word! % 256))
+            word! / 256 => word!
+        }
+        index! + 1 => index!
+    }
+    hasher! -> update(bytes!)
+    hasher! -> finish
+}
+
+included prepared: ref context.SemanticSnapshot, sources: ref [Int; ~], sourceModule: Int -> Bool {
+    sources -> each source {
+        modules.sameLogicalAnalyzedSource(prepared.package.sources, prepared.modules, source, sourceModule, prepared.package.tokens, prepared.package.ranges)
+            -> if { true -> return }
+    }
+    false
+}
+
+genericTarget prepared: ref context.SemanticSnapshot, sourceModule: Int, functionSymbol: Int -> Bool {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len) or functionSymbol < 0
+        -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    functionSymbol >= range.symbolCount -> if { false -> return }
+    functionSymbol => owner!
+    0 => depth!
+    owner! >= 0 and owner! < range.symbolCount and depth! <= range.symbolCount
+        -> while {
+            0 => symbol!
+            symbol! < range.symbolCount -> while {
+                prepared.package.symbols[range.symbolStart + symbol!] => declaration
+                declaration.kind == 32 and declaration.parent == owner!
+                    -> if { true -> return }
+                symbol! + 1 => symbol!
+            }
+            prepared.package.symbols[range.symbolStart + owner!].parent => owner!
+            depth! + 1 => depth!
+        }
+    false
+}
+
+# declarationFingerprint is a trusted current-compilation input, never a value
+# taken from this artifact. The normal caller still has to compute it, connect
+# the admitted facts to the solver and publish only after a successful link.
+public capture prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, paths: ref [Text; ~], sourceModule: Int, identity: CompilationIdentity, declarationFingerprint: [UInt8] -> owners.EncodedOwnerCalls {
+    owners.EncodedOwnerCalls { words: [UInt64; ~], status: 10 } => invalid
+    (declarationFingerprint -> len) != 32 -> if { invalid -> return }
+    prepared -> owners.capture(finalTypes, sourceModule) => payload
+    payload.status != 0 -> if { payload -> return }
+    [sourceModule,; ~] => required!
+    prepared.package.ranges[sourceModule] => range
+    0..<range.astCount -> each ast {
+        prepared.callIndexByAst[range.astStart + ast] => callIndex
+        callIndex >= 0 and callIndex < (prepared.calls -> len)
+            -> if {
+                prepared.calls[callIndex] => call
+                (prepared -> genericTarget(call.targetSourceModule, call.functionSymbol))
+                    and not (prepared -> included(required!, call.targetSourceModule))
+                    -> if { required! -> push(call.targetSourceModule) }
+            }
+    }
+    [UInt64(6002245308512486734), 1, 0, identity.compiler, identity.target, identity.configuration, UInt64(payload.words -> len), UInt64(required! -> len); ~] => words!
+    declarationFingerprint -> each byte { words! -> push(UInt64(byte)) }
+    required! -> each requiredSource {
+        prepared.package -> digests.capture(prepared.modules, paths, requiredSource) => module
+        module.status != 0 -> if { invalid -> return }
+        words! -> push(UInt64(module.name -> len))
+        module.name -> each word { words! -> push(word) }
+        module.bytes -> each byte { words! -> push(UInt64(byte)) }
+    }
+    payload.words -> each word { words! -> push(word) }
+    UInt64((words! -> len) + 32) => words![2]
+    words! -> checksum(words! -> len) => digest
+    digest -> each byte { words! -> push(UInt64(byte)) }
+    owners.EncodedOwnerCalls { words: words!, status: 0 }
+}
+
+# Check the complete envelope before decoding its owner. The owner module and
+# every generic target module must be in the exact namespace-group set; a
+# recomputed checksum cannot make an omitted dependency admissible.
+public restore words: ref [UInt64; ~], prepared: ref context.SemanticSnapshot, paths: ref [Text; ~], identity: CompilationIdentity, declarationFingerprint: [UInt8] -> owners.RestoredOwnerCalls {
+    (words -> len) < 72 or (words -> len) > 16000000 or (declarationFingerprint -> len) != 32
+        -> if { 10 -> owners.failedRestoration -> return }
+    words[0] != 6002245308512486734 or words[1] != 1 or words[2] != UInt64(words -> len)
+        -> if { 10 -> owners.failedRestoration -> return }
+    (words -> len) - 32 => contentLength
+    words -> checksum(contentLength) => digest
+    0..<32 -> each index {
+        words[contentLength + index] != UInt64(digest[index])
+            -> if { 11 -> owners.failedRestoration -> return }
+    }
+    words[3] != identity.compiler or words[4] != identity.target or words[5] != identity.configuration
+        -> if { 12 -> owners.failedRestoration -> return }
+    0..<32 -> each index {
+        words[8 + index] != UInt64(declarationFingerprint[index])
+            -> if { 13 -> owners.failedRestoration -> return }
+    }
+    words[6] > UInt64(contentLength - 40) or words[7] > UInt64((contentLength - 40) / 33)
+        -> if { 10 -> owners.failedRestoration -> return }
+    Int(words[6]) => payloadLength
+    Int(words[7]) => moduleCount
+    [Int; ~] => exactModules!
+    40 => cursor!
+    0 => moduleIndex!
+    moduleIndex! < moduleCount -> while {
+        cursor! >= contentLength or words[cursor!] > UInt64(contentLength - cursor! - 1)
+            -> if { 10 -> owners.failedRestoration -> return }
+        Int(words[cursor!]) => nameLength
+        cursor! + 1 => cursor!
+        nameLength > contentLength - cursor! - 32 -> if { 10 -> owners.failedRestoration -> return }
+        [UInt64; ~] => name!
+        0..<nameLength -> each index {
+            words[cursor! + index] > 255 -> if { 10 -> owners.failedRestoration -> return }
+            name! -> push(words[cursor! + index])
+        }
+        cursor! + nameLength => cursor!
+        -1 => selected!
+        0 => source!
+        source! < (prepared.package.sources -> len) and selected! < 0
+            -> while {
+                prepared.package -> digests.logicalName(prepared.modules, source!) => currentName
+                name! -> digests.sameName(currentName) -> if { source! => selected! }
+                source! + 1 => source!
+            }
+        selected! < 0 or (prepared -> included(exactModules!, selected!))
+            -> if { 14 -> owners.failedRestoration -> return }
+        prepared.package -> digests.capture(prepared.modules, paths, selected!) => current
+        current.status != 0 -> if { 14 -> owners.failedRestoration -> return }
+        0..<32 -> each index {
+            words[cursor! + index] != UInt64(current.bytes[index])
+                -> if { 14 -> owners.failedRestoration -> return }
+        }
+        cursor! + 32 => cursor!
+        exactModules! -> push(selected!)
+        moduleIndex! + 1 => moduleIndex!
+    }
+    payloadLength != contentLength - cursor! -> if { 10 -> owners.failedRestoration -> return }
+    [UInt64; ~] => payload!
+    0..<payloadLength -> each index { payload! -> push(words[cursor! + index]) }
+    payload! -> owners.restore(prepared.package, prepared.semantic) => restored
+    restored.status != 0 -> if { restored -> return }
+    not (prepared -> included(exactModules!, restored.owner.sourceModule))
+        -> if { 14 -> owners.failedRestoration -> return }
+    restored.calls -> each call {
+        (prepared -> genericTarget(call.targetSourceModule, call.functionSymbol))
+            and not (prepared -> included(exactModules!, call.targetSourceModule))
+            -> if { 14 -> owners.failedRestoration -> return }
+    }
+    restored
+}

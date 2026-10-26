@@ -1,0 +1,578 @@
+namespace sollang.compiler.semantic.library_imports
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.syntax as syntax
+import sollang.compiler.library_paths as libraryPaths
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+
+# One binding connects a source-level alias to one validated interface.
+# sources retain exact metadata input owners; interface spans address the
+# decoded strings owned by interfaces[interfaceIndex].
+public struct LibraryBinding {
+    public sourceModule: Int
+    public astNode: Int
+    public aliasToken: Int
+    public interfaceIndex: Int
+    public status: Int
+    public errorOffset: UIntSize
+}
+
+public struct LibraryCatalog {
+    public diagnosticCount: Int
+    public bindings: [LibraryBinding; ~]
+    public sources: [file.SourceText; ~]
+    public interfaces: [interfaces.LibraryInterface; ~]
+    public runtimeLibraries: [path.Path; ~]
+}
+
+public struct LibraryFunctionResolution {
+    public sourceModule: Int
+    public pathAst: Int
+    public callAst: Int
+    public bindingIndex: Int
+    public exportIndex: Int
+    public status: Int
+}
+
+public struct LibraryCallDiagnostic {
+    public sourceModule: Int
+    public pathAst: Int
+    # 1 projection missing, 2 argument count, 3 argument type.
+    public code: Int
+    public expected: Int
+    public actual: Int
+}
+
+public struct LibraryAnalysis {
+    public package: analysis.PackageAnalysis
+    public catalog: LibraryCatalog
+    public resolutions: [LibraryFunctionResolution; ~]
+}
+
+public empty: -> LibraryCatalog {
+    LibraryCatalog {
+        diagnosticCount: 0
+        bindings: [LibraryBinding; ~]
+        sources: [file.SourceText; ~]
+        interfaces: [interfaces.LibraryInterface; ~]
+        runtimeLibraries: [path.Path; ~]
+    } => catalog
+    catalog
+}
+
+public exportNameEquals catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int, expected: Text -> Bool {
+    catalog.interfaces[interfaceIndex].strings -> file.borrowBytes => decoded
+    decoded -> slice(UIntSize(0), decoded -> len) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].name => name
+    source -> interfaces.spanEquals(name, expected)
+}
+
+abiTypeCode source: Text, span: interfaces.MetadataSpan -> Int {
+    -1 => code!
+    source -> interfaces.spanEquals(span, "Unit")
+        -> if { 0 => code! }
+    source -> interfaces.spanEquals(span, "Int8")
+        -> if { 1 => code! }
+    source -> interfaces.spanEquals(span, "Int16")
+        -> if { 2 => code! }
+    source -> interfaces.spanEquals(span, "Int32")
+        -> if { 3 => code! }
+    source -> interfaces.spanEquals(span, "Int64")
+        -> if { 4 => code! }
+    source -> interfaces.spanEquals(span, "UInt8")
+        -> if { 5 => code! }
+    source -> interfaces.spanEquals(span, "UInt16")
+        -> if { 6 => code! }
+    source -> interfaces.spanEquals(span, "UInt32")
+        -> if { 7 => code! }
+    source -> interfaces.spanEquals(span, "UInt64")
+        -> if { 8 => code! }
+    source -> interfaces.spanEquals(span, "Float32")
+        -> if { 9 => code! }
+    source -> interfaces.spanEquals(span, "Float64")
+        -> if { 10 => code! }
+    code!
+}
+
+public exportResultTypeCode catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> Int {
+    catalog.interfaces[interfaceIndex].strings -> file.borrowBytes => decoded
+    decoded -> slice(UIntSize(0), decoded -> len) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].resultType => resultType
+    source -> abiTypeCode(resultType)
+}
+
+public exportParameterTypeCode catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int, parameterOrdinal: Int -> Int {
+    catalog.interfaces[interfaceIndex].strings -> file.borrowBytes => decoded
+    decoded -> slice(UIntSize(0), decoded -> len) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].parameterStart + parameterOrdinal => parameterIndex
+    catalog.interfaces[interfaceIndex].parameters[parameterIndex].typeName => parameterType
+    source -> abiTypeCode(parameterType)
+}
+
+public exportParameterCount catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> Int {
+    catalog.interfaces[interfaceIndex].exports[exportIndex].parameterCount
+}
+
+public interfaceExportCount catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    Int(catalog.interfaces[interfaceIndex].exports -> len)
+}
+
+public interfaceLibraryFile catalog: ref LibraryCatalog, interfaceIndex: Int -> interfaces.MetadataSpan {
+    catalog.interfaces[interfaceIndex].libraryFile
+}
+
+public exportSymbol catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> interfaces.MetadataSpan {
+    catalog.interfaces[interfaceIndex].exports[exportIndex].symbol
+}
+
+public runtimeLibraryLength catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    Int(catalog.runtimeLibraries[interfaceIndex] -> byteCount)
+}
+
+public runtimeLibraryStyle catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    catalog.runtimeLibraries[interfaceIndex] -> styleKind -> when {
+        Posix { 0 }
+        Windows { 1 }
+    }
+}
+
+runtimePathByte value: path.Path, byteIndex: Int -> UInt8 {
+    value -> byteAt(UIntSize(byteIndex))
+}
+
+public runtimeLibraryByte catalog: ref LibraryCatalog, interfaceIndex: Int, byteIndex: Int -> UInt8 {
+    catalog.runtimeLibraries[interfaceIndex] -> runtimePathByte(byteIndex)
+}
+
+runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfaces.MetadataSpan -> Result<path.Path, Text> {
+    [UInt8; ~] => bytes!
+    0 => directoryLength!
+    UIntSize(0) => pathIndex!
+    pathIndex! < (manifestPath -> byteCount)
+        -> while {
+            manifestPath -> byteAt(pathIndex!) => current
+            current == 47 or current == 92 -> if { Int(pathIndex! + 1) => directoryLength! }
+            pathIndex! + 1 => pathIndex!
+        }
+    0 => directoryIndex!
+    directoryIndex! < directoryLength! -> while {
+        bytes! -> push(manifestPath -> byteAt(UIntSize(directoryIndex!)))
+        directoryIndex! + 1 => directoryIndex!
+    }
+    UIntSize(0) => libraryIndex!
+    libraryIndex! < libraryFile.length -> while {
+        bytes! -> push(manifest -> byte(libraryFile.start + libraryIndex!))
+        libraryIndex! + 1 => libraryIndex!
+    }
+    path.fromBytes(bytes!, manifestPath -> styleKind)
+}
+
+sameTokenText source: Text, left: syntax.SyntaxToken, right: syntax.SyntaxToken -> Bool {
+    left.span.length == right.span.length => same!
+    UIntSize(0) => index!
+    same! and index! < left.span.length -> while {
+        (source -> byte(left.span.start + index!)) != (source -> byte(right.span.start + index!))
+            -> if {
+                false => same!
+            }
+        index! + 1 => index!
+    }
+    same!
+}
+
+tokenEqualsInterfaceSpan source: Text, token: syntax.SyntaxToken, interfaceSource: Text, span: interfaces.MetadataSpan -> Bool {
+    token.span.length == span.length => same!
+    UIntSize(0) => index!
+    same! and index! < span.length -> while {
+        (source -> byte(token.span.start + index!)) != (interfaceSource -> byte(span.start + index!))
+            -> if {
+                false => same!
+            }
+        index! + 1 => index!
+    }
+    same!
+}
+
+ordinaryImportOwnsAlias package: ref analysis.PackageAnalysis, sourceIndex: Int, source: Text, aliasReference: syntax.SyntaxToken -> Bool {
+    package.ranges[sourceIndex] => range
+    false => found!
+    0 => nodeIndex!
+    not found! and nodeIndex! < range.astCount -> while {
+        package.nodes[range.astStart + nodeIndex!] => node
+        node.kind == 2 -> if {
+            -1 => aliasToken!
+            node.firstToken + 1 => tokenIndex!
+            node.firstToken + node.tokenCount => tokenEnd
+            tokenIndex! < tokenEnd -> while {
+                package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                    -> if { tokenIndex! => aliasToken! }
+                tokenIndex! + 1 => tokenIndex!
+            }
+            aliasToken! >= 0 -> if {
+                package.tokens[range.tokenStart + aliasToken!] => importAlias
+                source -> sameTokenText(aliasReference, importAlias) => found!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    found!
+}
+
+public resolveQualified package: ref analysis.PackageAnalysis, catalog: ref LibraryCatalog -> [LibraryFunctionResolution; ~] {
+    [LibraryFunctionResolution; ~] => results!
+    catalog.bindings -> len == 0 -> if { results! -> return }
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        # Resolve lexical ownership once per source, as qualified.resolve does;
+        # member paths must not rescan the entire name table.
+        [Bool; ~] => valueRootByToken!
+        0 => rootToken!
+        rootToken! < range.tokenCount -> while {
+            valueRootByToken! -> push(false)
+            rootToken! + 1 => rootToken!
+        }
+        0 => nameIndex!
+        nameIndex! < range.nameCount -> while {
+            package.names[range.nameStart + nameIndex!] => reference
+            reference.symbol >= 0 -> if {
+                package.symbols[range.symbolStart + reference.symbol] => symbol
+                symbol.kind != 3 and symbol.kind != 4 and symbol.kind != 5 and symbol.kind != 6
+                    -> if { true => valueRootByToken![reference.nameToken] }
+            }
+            nameIndex! + 1 => nameIndex!
+        }
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            package.nodes[range.astStart + astIndex!] => node
+            # Only the member-access node owns the qualified alias/export
+            # pair. Scanning its enclosing identifier path also captures later
+            # flow targets (for example `fixture.add(...) -> println`) and can
+            # incorrectly project the outer call as the library function.
+            node.kind == 36 -> if {
+                -1 => firstIdentifier!
+                -1 => secondIdentifier!
+                -1 => lastIdentifier!
+                -1 => libraryIdentifier!
+                0 => identifierCount!
+                node.firstToken => tokenIndex!
+                node.firstToken + node.tokenCount => tokenEnd
+                tokenIndex! < tokenEnd -> while {
+                    package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                        -> if {
+                            firstIdentifier! < 0 -> if { tokenIndex! => firstIdentifier! }
+                            identifierCount! == 1 -> if { tokenIndex! => secondIdentifier! }
+                            lastIdentifier! => libraryIdentifier!
+                            tokenIndex! => lastIdentifier!
+                            identifierCount! + 1 => identifierCount!
+                        }
+                    tokenIndex! + 1 => tokenIndex!
+                }
+                firstIdentifier! >= 0 and lastIdentifier! != firstIdentifier!
+                    -> if {
+                        package.tokens[range.tokenStart + firstIdentifier!] => aliasReference
+                        package.tokens[range.tokenStart + lastIdentifier!] => memberReference
+                        # Canonical qualified function names use the complete
+                        # namespace prefix; import aliases are an additional
+                        # spelling, not a substitute for the declaration name.
+                        UInt64(1469598103934665603) => ownerPathHash!
+                        0 => ownerIdentifierCount!
+                        UIntSize(0) => ownerPathLength!
+                        node.firstToken => ownerToken!
+                        ownerToken! < libraryIdentifier! -> while {
+                            package.tokens[range.tokenStart + ownerToken!] => prefixToken
+                            prefixToken.kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    ownerIdentifierCount! > 0 -> if { ownerPathHash! * 1099511628211 + 46 => ownerPathHash! }
+                                    UIntSize(0) => prefixByte!
+                                    prefixByte! < prefixToken.span.length -> while {
+                                        ownerPathHash! * 1099511628211 + UInt64(source -> byte(prefixToken.span.start + prefixByte!)) => ownerPathHash!
+                                        prefixByte! + 1 => prefixByte!
+                                    }
+                                    ownerIdentifierCount! + 1 => ownerIdentifierCount!
+                                    prefixToken.span.start + prefixToken.span.length - aliasReference.span.start => ownerPathLength!
+                                }
+                            ownerToken! + 1 => ownerToken!
+                        }
+                        0 => bindingIndex!
+                        bindingIndex! < (catalog.bindings -> len) -> while {
+                            catalog.bindings[bindingIndex!] => binding
+                            binding.status == 0 and not valueRootByToken![firstIdentifier!]
+                                -> if {
+                                    package.ranges[binding.sourceModule] => bindingRange
+                                    package.tokens[bindingRange.tokenStart + binding.aliasToken] => aliasDeclaration
+                                    package.sources[binding.sourceModule] -> slice(aliasDeclaration.span.start, aliasDeclaration.span.length) => declaredAlias
+                                    source -> slice(aliasReference.span.start, aliasReference.span.length) => rootName
+                                    package.sources -> modules.sameLogicalAnalyzedSource(identities, sourceIndex!, binding.sourceModule, package.tokens, package.ranges) => sameModule
+                                    identifierCount! == 2 and sameModule and rootName == declaredAlias
+                                        and not (package -> ordinaryImportOwnsAlias(sourceIndex!, source, aliasReference)) => ownsPath!
+                                    ownerIdentifierCount! > 0
+                                        and (package -> modules.importTargetsAnalyzedModule(identities, modules.ImportEdge { sourceModule: sourceIndex!, targetHash: ownerPathHash!, pathStart: aliasReference.span.start, pathLength: ownerPathLength!, aliasToken: -1 }, binding.sourceModule))
+                                        -> if {
+                                            package.tokens[range.tokenStart + libraryIdentifier!] => libraryReference
+                                            (source -> slice(libraryReference.span.start, libraryReference.span.length)) == declaredAlias
+                                                -> if { true => ownsPath! }
+                                        }
+                                    identifierCount! == 3 -> if {
+                                        package.tokens[range.tokenStart + secondIdentifier!] => libraryReference
+                                        (source -> slice(libraryReference.span.start, libraryReference.span.length)) == declaredAlias
+                                            -> if {
+                                                resolvedImports -> each resolvedImport {
+                                                    resolvedImport.status == 0 and resolvedImport.sourceModule == sourceIndex!
+                                                        -> if {
+                                                            imports[resolvedImport.edge] => edge
+                                                            package.tokens[range.tokenStart + edge.aliasToken] => importAlias
+                                                            rootName == (source -> slice(importAlias.span.start, importAlias.span.length))
+                                                                and (package.sources -> modules.sameLogicalAnalyzedSource(identities, identities[resolvedImport.targetModule].sourceIndex, binding.sourceModule, package.tokens, package.ranges))
+                                                                -> if { true => ownsPath! }
+                                                        }
+                                                }
+                                            }
+                                    }
+                                    ownsPath!
+                                        -> if {
+                                            catalog.interfaces[binding.interfaceIndex].strings -> file.borrowBytes => decoded
+                                            decoded -> slice(UIntSize(0), decoded -> len) => interfaceSource
+                                            -1 => matchedExport!
+                                            catalog.interfaces[binding.interfaceIndex].exports -> len => exportCount
+                                            0 => exportIndex!
+                                            exportIndex! < exportCount -> while {
+                                                catalog.interfaces[binding.interfaceIndex].exports[exportIndex!].name => exportName
+                                                source -> tokenEqualsInterfaceSpan(memberReference, interfaceSource, exportName)
+                                                    -> if {
+                                                        exportIndex! => matchedExport!
+                                                    }
+                                                exportIndex! + 1 => exportIndex!
+                                            }
+                                            results! -> push(LibraryFunctionResolution {
+                                                sourceModule: sourceIndex!
+                                                pathAst: astIndex!
+                                                callAst: package -> invocationAst(sourceIndex!, astIndex!)
+                                                bindingIndex: bindingIndex!
+                                                exportIndex: matchedExport!
+                                                status: matchedExport! >= 0 -> if { sameModule
+                                                        -> if { 0 } else { 3 } } else { 2 }
+                                            })
+                                        }
+                                }
+                            bindingIndex! + 1 => bindingIndex!
+                        }
+                    }
+            }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results!
+}
+
+public abiBuiltinSymbol code: Int -> Int {
+    code -> when {
+        == 0 { 0 }
+        == 1 { 3 }
+        == 2 { 4 }
+        == 3 { 5 }
+        == 4 { 6 }
+        == 5 { 8 }
+        == 6 { 9 }
+        == 7 { 10 }
+        == 8 { 11 }
+        == 9 { 20 }
+        == 10 { 21 }
+        else { -1 }
+    }
+}
+
+public invocationAst package: ref analysis.PackageAnalysis, sourceModule: Int, pathAst: Int -> Int {
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { -1 -> return }
+    package.ranges[sourceModule] => range
+    pathAst < 0 or pathAst >= range.astCount -> if { -1 -> return }
+    0 => search!
+    search! < range.astCount -> while {
+        package.nodes[range.astStart + search!] => candidate
+        candidate.parent == pathAst and candidate.kind == 11
+            -> if { search! -> return }
+        search! + 1 => search!
+    }
+    pathAst => current!
+    current! >= 0 and current! < range.astCount -> while {
+        package.nodes[range.astStart + current!] => candidate
+        candidate.kind == 11 or candidate.kind == 10 or candidate.kind == 48
+            -> if { current! -> return }
+        candidate.parent => current!
+    }
+    -1
+}
+
+public resolveCallResultTypes package: ref analysis.PackageAnalysis, resolved: mut expressionTypeIds.ExpressionTypeIdSet, catalog: ref LibraryCatalog, resolutions: ref [LibraryFunctionResolution; ~] -> Unit {
+    replaceExpression expressions: mut [expressionTypeIds.ExpressionTypeId; ~], index: Int, result: expressionTypeIds.ExpressionTypeId -> Unit {
+        result => expressions[index]
+    }
+    resolutions -> each call {
+        call.status == 0 and call.bindingIndex >= 0 and call.bindingIndex < (catalog.bindings -> len)
+            -> if {
+                catalog.bindings[call.bindingIndex] => binding
+                binding.status == 0 and binding.interfaceIndex >= 0 and binding.interfaceIndex < (catalog.interfaces -> len)
+                    and call.exportIndex >= 0 and call.exportIndex < (catalog.interfaces[binding.interfaceIndex].exports -> len)
+                    -> if {
+                        package -> invocationAst(call.sourceModule, call.pathAst) => ast
+                        catalog -> exportResultTypeCode(binding.interfaceIndex, call.exportIndex) -> abiBuiltinSymbol => symbol
+                        -1 => typeId!
+                        0 => typeIndex!
+                        typeIndex! < (resolved.types -> len) -> while {
+                            resolved.types[typeIndex!] => candidate
+                            candidate.status == 0 and candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == symbol
+                                -> if { typeIndex! => typeId! }
+                            typeIndex! + 1 => typeIndex!
+                        }
+                        ast >= 0 and typeId! >= 0 -> if {
+                            expressionTypeIds.ExpressionTypeId { sourceModule: call.sourceModule, astNode: ast, typeId: typeId!, status: 0 } => result
+                            -1 => existing!
+                            0 => expressionIndex!
+                            expressionIndex! < (resolved.expressions -> len)
+                                -> while {
+                                    resolved.expressions[expressionIndex!] => expression
+                                    expression.sourceModule == call.sourceModule and expression.astNode == ast
+                                        -> if { expressionIndex! => existing! }
+                                    expressionIndex! + 1 => expressionIndex!
+                                }
+                            existing! >= 0 -> if {
+                                resolved.expressions -> replaceExpression(existing!, result)
+                            } else {
+                                resolved.expressions -> push(result)
+                            }
+                        }
+                    }
+            }
+    }
+}
+
+public load package: ref analysis.PackageAnalysis, sourcePaths: [Text; ~], target: Text, style: path.Style -> LibraryCatalog uses File {
+    [LibraryBinding; ~] => bindings!
+    [file.SourceText; ~] => manifestSources!
+    [interfaces.LibraryInterface; ~] => documents!
+    [path.Path; ~] => runtimeLibraries!
+    0 => diagnosticCount!
+
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            package.nodes[range.astStart + astIndex!] => node
+            node.kind == 69 -> if {
+                LibraryBinding {
+                    sourceModule: sourceIndex!
+                    astNode: astIndex!
+                    aliasToken: node.payloadToken
+                    interfaceIndex: -1
+                    status: 0
+                    errorOffset: 0
+                } => binding!
+                sourceIndex! < (sourcePaths -> len) -> if {
+                    node.secondaryToken >= 0 and node.secondaryToken < range.tokenCount
+                        -> if {
+                            package.tokens[range.tokenStart + node.secondaryToken] => libraryToken
+                            sourcePaths[sourceIndex!] -> libraryPaths.manifestPath(source, libraryToken, target, style) => resolved
+                            resolved.status == 0 -> if {
+                                resolved.value -> pathText -> interfaces.readSourcePath -> when {
+                                    Ok(manifestSource) {
+                                        manifestSource -> interfaces.parseSourceForTarget(target) => document
+                                        documents! -> len => interfaceIndex
+                                        interfaceIndex => binding!.interfaceIndex
+                                        document.strings -> file.borrowBytes => decoded
+                                        decoded -> slice(UIntSize(0), decoded -> len) => manifestText
+                                        resolved.value -> runtimeLibraryPath(manifestText, document.libraryFile) -> when {
+                                            Ok(value) { value }
+                                            Err(error) {
+                                                3 => binding!.status
+                                                path.fromText("", style)
+                                            }
+                                        } => runtimeLibrary
+                                        document.status == 0 -> if {
+                                            manifestText -> interfaces.spanEquals(document.target, target)
+                                                -> if {
+                                                    0 => exportIndex!
+                                                    binding!.status == 0 and exportIndex! < (document.exports -> len)
+                                                        -> while {
+                                                            document.exports[exportIndex!] => exported
+                                                            manifestText -> abiTypeCode(exported.resultType) => resultTypeCode
+                                                            resultTypeCode < 0 -> if { 7 => binding!.status }
+                                                            0 => parameterOrdinal!
+                                                            binding!.status == 0 and parameterOrdinal! < exported.parameterCount
+                                                                -> while {
+                                                                    document.parameters[exported.parameterStart + parameterOrdinal!].typeName => parameterType
+                                                                    manifestText -> abiTypeCode(parameterType) => parameterTypeCode
+                                                                    parameterTypeCode < 0 -> if { 7 => binding!.status }
+                                                                    parameterOrdinal! + 1 => parameterOrdinal!
+                                                                }
+                                                            exportIndex! + 1 => exportIndex!
+                                                        }
+                                                } else {
+                                                    4 => binding!.status
+                                                }
+                                        } else {
+                                            document.status == 23 -> if { 4 } else { document.status + 100 } => binding!.status
+                                            document.errorOffset => binding!.errorOffset
+                                        }
+                                        manifestSources! -> push(manifestSource)
+                                        documents! -> push(document)
+                                        runtimeLibraries! -> push(runtimeLibrary)
+                                    }
+                                    Err(status) { status + 100 => binding!.status }
+                                }
+                            } else {
+                                resolved.status => binding!.status
+                            }
+                        } else {
+                            5 => binding!.status
+                        }
+                } else {
+                    6 => binding!.status
+                }
+                binding!.status != 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+                bindings! -> push(binding!)
+            }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+
+    LibraryCatalog {
+        diagnosticCount: diagnosticCount!
+        bindings: bindings!
+        sources: manifestSources!
+        interfaces: documents!
+        runtimeLibraries: runtimeLibraries!
+    } => catalog
+    catalog
+}
+
+public analyzeFiles sourcePaths: [Text; ~], target: Text, style: path.Style -> LibraryAnalysis uses File {
+    [file.SourceText; ~] => sourceOwners!
+    0 => pathIndex!
+    pathIndex! < (sourcePaths -> len) -> while {
+        sourcePaths[pathIndex!] -> file.mapText => sourceOwner
+        sourceOwners! -> push(sourceOwner)
+        pathIndex! + 1 => pathIndex!
+    }
+    sourceOwners! -> analysis.analyzeSources => package
+    package -> load(sourcePaths, target, style) => catalog
+    package -> resolveQualified(catalog) => resolutions
+    LibraryAnalysis { package: package, catalog: catalog, resolutions: resolutions } => result
+    result
+}

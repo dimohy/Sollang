@@ -6,6 +6,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+if (args.Length > 0 && args[0] == "--selfhost-product-tests")
+{
+    if (args.Length != 2) throw new ArgumentException("Expected a new result path.");
+    return SelfHostCompilerProductTests.Run(args[1]);
+}
+
 if (args.Length > 0 && args[0] == "--llvm-assertion-tests")
 {
     if (args.Length != 3) throw new ArgumentException("Expected LLVM input and new result path.");
@@ -70,6 +76,7 @@ var testTarget = TestTarget.WindowsX64;
 var wslDistribution = "Ubuntu";
 string? explicitCompilerPath = null;
 string? selfHostCompilerBuildDirectory = null;
+string? selfHostProductionRoot = null;
 string? resultOutputDirectory = null;
 string? baselineCandidatePlan = null;
 string[]? comparisonResults = null;
@@ -158,6 +165,14 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
             }
             selfHostCompilerBuildDirectory = args[argumentIndex];
             break;
+        case "--selfhost-production-root":
+            if (++argumentIndex >= args.Length || string.IsNullOrWhiteSpace(args[argumentIndex]))
+            {
+                Console.Error.WriteLine("--selfhost-production-root requires the reused compiler's production source root.");
+                return 2;
+            }
+            selfHostProductionRoot = args[argumentIndex];
+            break;
         case "--compare-results":
             if (argumentIndex + 2 >= args.Length)
             {
@@ -224,6 +239,11 @@ if (baselineCandidatePlan is not null && (!compareCompilers || resultOutputDirec
     Console.Error.WriteLine("BASELINE_CANDIDATE_REQUIRES_PINNED_MANAGED_REFERENCE_AND_SELFHOST_WINDOWS_RUN");
     return 2;
 }
+if (selfHostProductionRoot is not null && selfHostCompilerBuildDirectory is null)
+{
+    Console.Error.WriteLine("--selfhost-production-root requires --selfhost-driver-build.");
+    return 2;
+}
 if (selfHostCompilerBuildDirectory is not null && resultOutputDirectory is null)
 {
     Console.Error.WriteLine("--selfhost-driver-build requires --output-directory to protect the reused product and record its inputs.");
@@ -279,7 +299,8 @@ if (selfHostCompilerBuildDirectory is not null)
 {
     try
     {
-        reusedSelfHostCompiler = SelfHostCompilerProduct.Validate(repoRoot, selfHostCompilerBuildDirectory);
+        reusedSelfHostCompiler = SelfHostCompilerProduct.Validate(repoRoot,
+            selfHostCompilerBuildDirectory, selfHostProductionRoot);
     }
     catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException
         or System.Text.Json.JsonException or KeyNotFoundException or ArgumentException)

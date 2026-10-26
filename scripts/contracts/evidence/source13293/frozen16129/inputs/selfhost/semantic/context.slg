@@ -1,0 +1,1256 @@
+namespace sollang.compiler.semantic.context
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Explicit read-only barrier for whole-compilation facts. Consumers borrow this
+# aggregate after freeze; its flat arrays move once and are never copied or
+# mutated between semantic, typed-IR, and LLVM workers.
+public struct AnalyzedInterpolations {
+    public ranges: [interpolation.InterpolationSourceRange; ~]
+    public nodes: [interpolation.InterpolationNode; ~]
+}
+
+public struct SemanticSnapshot {
+    public standardLibrarySourceStart: Int
+    public standardLibrarySourceCount: Int
+    public semantic: typeIds.SemanticTypeSet
+    public package: analysis.PackageAnalysis
+    public interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+    public interpolations: [interpolation.InterpolationNode; ~]
+    public nominal: [nominalTypes.NominalType; ~]
+    public composite: [compositeTypes.CompositeType; ~]
+    public modules: [modules.ModuleIdentity; ~]
+    public imports: [modules.ImportEdge; ~]
+    public resolvedImports: [moduleResolve.ResolvedImport; ~]
+    public qualified: [qualified.QualifiedResolution; ~]
+    public qualifiedFunctionByParentAst: [Int; ~]
+    public calls: [calls.ModuleCallResolution; ~]
+    public callIndexByAst: [Int; ~]
+    public callResultMemberByAst: [Bool; ~]
+    public controlProducerWrapperByAst: [Bool; ~]
+    public directFlowTargetPathByAst: [Int; ~]
+    public awaitSourceByAst: [Bool; ~]
+    public declaredMoveArgumentByAst: [Bool; ~]
+    public declaredMoveReadByAst: [Bool; ~]
+}
+
+# Yield belongs to a declared block producer. Ordinary control regions keep
+# that authority; a resolved user-block callback starts a separate scope.
+public lexicalYieldScope prepared: ref SemanticSnapshot, sourceModule: Int, flowAst: Int -> (functionAst: Int, valid: Bool) {
+    prepared.package.ranges[sourceModule] => range
+    flowAst => childAst!
+    prepared.package.nodes[range.astStart + flowAst].parent => ownerAst!
+    false => callbackBoundary!
+    ownerAst! >= 0 and ownerAst! < range.astCount
+        -> while {
+            prepared.package.nodes[range.astStart + ownerAst!] => owner
+            owner.kind == 7 or owner.kind == 31 or owner.kind == 8
+                -> if {
+                    owner.kind == 8 or callbackBoundary!
+                        -> if { (functionAst: ownerAst!, valid: false) -> return }
+                    0 => symbolIndex!
+                    symbolIndex! < range.symbolCount -> while {
+                        prepared.package.symbols[range.symbolStart + symbolIndex!] => declaration
+                        (declaration.kind == 7 or declaration.kind == 31)
+                            and declaration.astNode == ownerAst!
+                            -> if { (functionAst: ownerAst!, valid: declaration.blockTypeNode >= 0) -> return }
+                        symbolIndex! + 1 => symbolIndex!
+                    }
+                    (functionAst: ownerAst!, valid: false) -> return
+                }
+            owner.kind == 48
+                and prepared.package.nodes[range.astStart + childAst!].start >= (prepared.package -> blockCallbackStartOffset(sourceModule, ownerAst!))
+                -> if {
+                    prepared.callIndexByAst[range.astStart + ownerAst!] => callIndex
+                    callIndex >= 0 -> if {
+                        prepared.calls[callIndex] => call
+                        call.targetSourceModule >= 0 and call.targetSourceModule < (prepared.package.ranges -> len)
+                            and call.functionSymbol >= 0
+                            -> if {
+                                prepared.package.ranges[call.targetSourceModule] => targetRange
+                                call.functionSymbol < targetRange.symbolCount
+                                    -> if {
+                                        prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => declaration
+                                        declaration.blockTypeNode >= 0 -> if { true => callbackBoundary! }
+                                        # Intrinsic declarations have no materialized block signature
+                                        # nodes. Their callback authority is the canonical runtime kind.
+                                        call.targetSourceModule >= prepared.standardLibrarySourceStart
+                                            and call.targetSourceModule - prepared.standardLibrarySourceStart < prepared.standardLibrarySourceCount
+                                            and declaration.kind == 7 and declaration.parent < 0
+                                            and declaration.flags / 128 % 2 == 1 and declaration.nameToken >= 0
+                                            -> if {
+                                                prepared.modules[call.targetSourceModule] => identity
+                                                prepared.package.sources[call.targetSourceModule] -> len => targetSourceLength
+                                                prepared.package.sources[call.targetSourceModule] -> slice(UIntSize(0), targetSourceLength) => targetSource
+                                                (targetSource -> slice(identity.pathStart, identity.pathLength)) == "sys.runtime"
+                                                    -> if {
+                                                        prepared.package.tokens[targetRange.tokenStart + declaration.nameToken] => nameToken
+                                                        targetSource -> slice(nameToken.span.start, nameToken.span.length) => name
+                                                        name == "parallel" or name == "tryParallel"
+                                                            -> if { true => callbackBoundary! }
+                                                    }
+                                            }
+                                    }
+                            }
+                    }
+                }
+            ownerAst! => childAst!
+            owner.parent => ownerAst!
+        }
+    (functionAst: -1, valid: false)
+}
+
+public declarationScope package: ref analysis.PackageAnalysis, sourceModule: Int, astNode: Int -> Int {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + astNode].parent => parent!
+    parent! >= 0 -> while {
+        package.nodes[range.astStart + parent!] => node
+        node.kind == 7 or node.kind == 8 or node.kind == 31 or node.kind == 43 or node.kind == 48 or node.kind == 58
+            -> if { parent! -> return }
+        node.parent => parent!
+    }
+    -1
+}
+
+public declarationAncestor package: ref analysis.PackageAnalysis, sourceModule: Int, ancestor: Int, astNode: Int -> Bool {
+    ancestor < 0 -> if { false -> return }
+    package.ranges[sourceModule] => range
+    astNode => current!
+    current! >= 0 -> while {
+        current! == ancestor -> if { true -> return }
+        package.nodes[range.astStart + current!].parent => current!
+    }
+    false
+}
+
+# Mutable stores and rebindings resolve the same nearest visible declaration.
+# AST ancestry excludes sibling lexical scopes even when symbol parents agree.
+public nearestVisibleMutableBinding package: ref analysis.PackageAnalysis, sourceModule: Int, astNode: Int, nameToken: Int -> Int {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + astNode] => currentAst
+    package.tokens[range.tokenStart + nameToken] => currentName
+    -1 => selected!
+    UIntSize(0) => selectedStart!
+    0 => candidateIndex!
+    candidateIndex! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + candidateIndex!] => candidate
+        (candidate.kind == 9 or candidate.kind == 61) and candidate.flags % 2 == 1
+            -> if {
+                package.nodes[range.astStart + candidate.astNode] => candidateAst
+                candidateAst.start < currentAst.start and (selected! < 0 or candidateAst.start > selectedStart!)
+                    -> if {
+                        package -> declarationScope(sourceModule, candidate.astNode) => scope
+                        package -> declarationAncestor(sourceModule, scope, astNode)
+                            -> if {
+                                package.tokens[range.tokenStart + candidate.nameToken] => candidateName
+                                package.sources[sourceModule] -> slice(currentName.span.start, currentName.span.length) => name
+                                package.sources[sourceModule] -> slice(candidateName.span.start, candidateName.span.length) => previousName
+                                name == previousName -> if {
+                                    range.symbolStart + candidateIndex! => selected!
+                                    candidateAst.start => selectedStart!
+                                }
+                            }
+                    }
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    selected!
+}
+
+# Rebinding preserves a visible mutable declaration's identity. Symbol parents
+# alone omit branch blocks, so sibling declarations require AST scope ancestry.
+# Entries use package-global symbol indexes and retain self for new owners.
+public indexMutableBindingOwners package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => owners!
+    0 => seed!
+    seed! < (package.symbols -> len) -> while {
+        owners! -> push(seed!)
+        seed! + 1 => seed!
+    }
+    package.ranges -> each range {
+        0 => currentIndex!
+        currentIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + currentIndex!] => current
+            (current.kind == 9 or current.kind == 61) and current.flags % 2 == 1
+                -> if {
+                    package -> nearestVisibleMutableBinding(range.sourceModule, current.astNode, current.nameToken) => previous
+                    previous >= 0 -> if { previous => owners![range.symbolStart + currentIndex!] }
+                }
+            currentIndex! + 1 => currentIndex!
+        }
+    }
+    # Synthetic AST nodes need not be in source order. Resolve each strictly
+    # earlier-declaration chain after every immediate owner has been indexed.
+    0 => symbolIndex!
+    symbolIndex! < (owners! -> len) -> while {
+        owners![symbolIndex!] => owner!
+        owners![owner!] != owner! -> while { owners![owner!] => owner! }
+        owner! => owners![symbolIndex!]
+        symbolIndex! + 1 => symbolIndex!
+    }
+    owners!
+}
+
+# Keep actual initializer identity separate from the canonical mutable owner.
+# Contextual inference can type a literal without hiding a rejected type change.
+public indexBindingValueAsts package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => values!
+    [Int; ~] => symbolsByAst!
+    package.symbols -> each symbol { values! -> push(-1) }
+    package.nodes -> each node { symbolsByAst! -> push(-1) }
+    package.ranges -> each range {
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => symbol
+            (symbol.kind == 9 or symbol.kind == 61) and symbol.astNode >= 0
+                -> if { range.symbolStart + symbolIndex! => symbolsByAst![range.astStart + symbol.astNode] }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            range.astStart + astIndex! => globalAst
+            package.nodes[globalAst] => value
+            value.parent >= 0 and value.kind != 12 -> if {
+                symbolsByAst![range.astStart + value.parent] => bindingSymbol
+                bindingSymbol >= 0 -> if {
+                    values![bindingSymbol] => previous
+                    previous < 0 or value.start < package.nodes[previous].start
+                        or (value.start == package.nodes[previous].start and value.length > package.nodes[previous].length)
+                        -> if { globalAst => values![bindingSymbol] }
+                }
+            }
+            astIndex! + 1 => astIndex!
+        }
+    }
+    values!
+}
+
+# The first expression in a flow owns its source token, even when a target call
+# has additional argument expressions. Preserve that AST identity for both
+# suspension and declared move inputs before Typed IR lowering.
+# Source operands are structural identities. Parentheses may move the source's
+# byte start past its parent; subscript and call-target children remain separate.
+public indexExpressionSourceAsts package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => sources!
+    package.nodes -> each node { sources! -> push(-1) }
+    package.ranges -> each range {
+        0 => localAst!
+        localAst! < range.astCount -> while {
+            package.nodes[range.astStart + localAst!] => child
+            child.parent >= 0 and child.parent < range.astCount
+                -> if {
+                    range.astStart + child.parent => parentGlobal
+                    package.nodes[parentGlobal] => parent
+                    (parent.kind == 10 or parent.kind == 36 or parent.kind == 41)
+                        and child.kind != 12 -> if {
+                            sources![parentGlobal] => previous
+                            previous < 0 or child.start < package.nodes[range.astStart + previous].start
+                                or (child.start == package.nodes[range.astStart + previous].start
+                                and child.length > package.nodes[range.astStart + previous].length)
+                                -> if { localAst! => sources![parentGlobal] }
+                        }
+                }
+            localAst! + 1 => localAst!
+        }
+    }
+    sources!
+}
+
+public expressionBelongsToSource package: ref analysis.PackageAnalysis, sourceAsts: ref [Int; ~], sourceModule: Int, parentAst: Int, candidateAst: Int -> Bool {
+    package.ranges[sourceModule] => range
+    sourceAsts[range.astStart + parentAst] => sourceAst
+    sourceAst < 0 -> if { false -> return }
+    candidateAst => child!
+    child! >= 0 and child! != parentAst -> while {
+        child! == sourceAst -> if { true -> return }
+        package.nodes[range.astStart + child!].parent => child!
+    }
+    false
+}
+
+public indexFlowSourcesByAst package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => flowSource!
+    0 => astIndex!
+    astIndex! < (package.nodes -> len) -> while {
+        flowSource! -> push(-1)
+        astIndex! + 1 => astIndex!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        0 => localAst!
+        localAst! < range.astCount -> while {
+            package.nodes[range.astStart + localAst!] => node
+            node.parent >= 0 and node.parent < range.astCount
+                and package.nodes[range.astStart + node.parent].kind == 10
+                -> if {
+                    range.astStart + node.parent => parentGlobal
+                    flowSource![parentGlobal] => previous
+                    previous < 0 or node.start < package.nodes[previous].start
+                        -> if { range.astStart + localAst! => flowSource![parentGlobal] }
+                }
+            localAst! + 1 => localAst!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    flowSource!
+}
+
+# Flow targets belong to source syntax. Publish the exact source expression of
+# each await before Typed IR lowering so ownership and LLVM share one decision.
+public indexAwaitSourcesByAst package: ref analysis.PackageAnalysis -> [Bool; ~] {
+    [Bool; ~] => awaited!
+    0 => astIndex!
+    astIndex! < (package.nodes -> len) -> while {
+        awaited! -> push(false)
+        astIndex! + 1 => astIndex!
+    }
+    package -> indexFlowSourcesByAst => flowSource
+    0 => targetSource!
+    targetSource! < (package.ranges -> len) -> while {
+        package.ranges[targetSource!] => range
+        0 => targetAst!
+        targetAst! < range.astCount -> while {
+            package.nodes[range.astStart + targetAst!] => node
+            node.kind == 16 and node.payloadToken >= 0 and node.payloadToken < range.tokenCount
+                and node.parent >= 0 and node.parent < range.astCount
+                and package.nodes[range.astStart + node.parent].kind == 10
+                -> if {
+                    package.tokens[range.tokenStart + node.payloadToken] => token
+                    package.sources[targetSource!]
+                        -> slice(token.span.start, token.span.length) => targetName
+                    targetName == "await" -> if {
+                        flowSource[range.astStart + node.parent] => sourceAst
+                        sourceAst >= 0 -> if { true => awaited![sourceAst] }
+                    }
+                }
+            targetAst! + 1 => targetAst!
+        }
+        targetSource! + 1 => targetSource!
+    }
+    awaited!
+}
+
+# Keep source arguments paired with parameters in declaration order. The
+# compact symbol table may append `self` after later parameters, so its slot
+# order cannot decide the argument's contextual type or ownership.
+public struct CallArgumentBinding {
+    public sourceModule: Int
+    public callAst: Int
+    public argumentAst: Int
+    public targetSourceModule: Int
+    public functionSymbol: Int
+    public parameterSymbol: Int
+    public parameterOrdinal: Int
+}
+
+# Parameter slots are storage identities. AST positions decide declaration order.
+public functionParameterSymbolsInSourceOrder package: ref analysis.PackageAnalysis, sourceModule: Int, functionSymbol: Int -> [Int; ~] {
+    [Int; ~] => ordered!
+    package.ranges[sourceModule] => range
+    -1 => previousAst!
+    false => done!
+    not done! -> while {
+        -1 => selected!
+        0 => search!
+        search! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + search!] => parameter
+            parameter.kind == 35 and parameter.parent == functionSymbol
+                and parameter.astNode >= 0 and parameter.astNode < range.astCount
+                -> if {
+                    range.astStart + parameter.astNode => candidateAst
+                    (previousAst! < 0 or package.nodes[candidateAst].start > package.nodes[previousAst!].start)
+                        and (selected! < 0 or package.nodes[candidateAst].start < package.nodes[range.astStart + package.symbols[range.symbolStart + selected!].astNode].start)
+                        -> if { search! => selected! }
+                }
+            search! + 1 => search!
+        }
+        selected! < 0 -> if {
+            true => done!
+        } else {
+            ordered! -> push(selected!)
+            range.astStart + package.symbols[range.symbolStart + selected!].astNode => previousAst!
+        }
+    }
+    ordered!
+}
+
+# The callback boundary is shared by argument collection and lexical yield checks.
+public blockCallbackStartOffset package: ref analysis.PackageAnalysis, sourceModule: Int, callAst: Int -> UIntSize {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + callAst] => node
+    node.start + node.length => callbackStart!
+    node.kind == 48 -> if {
+        node.tertiaryToken >= 0 -> if {
+            package.tokens[range.tokenStart + node.tertiaryToken].span.start => callbackStart!
+        } else {
+            # An unnamed callback begins at the first brace outside its
+            # ordinary argument parentheses, after the resolved callee token.
+            node.payloadToken >= 0 -> if {
+                node.payloadToken + 1 => headerToken!
+                0 => parentheses!
+                headerToken! < node.firstToken + node.tokenCount
+                    -> while {
+                        package.tokens[range.tokenStart + headerToken!] => token
+                        token.kind == grammar.tokenIdLeftBrace() and parentheses! == 0
+                            -> if {
+                                token.span.start => callbackStart!
+                                break
+                            }
+                        token.kind == grammar.tokenIdLeftParen() -> if { parentheses! + 1 => parentheses! }
+                        token.kind == grammar.tokenIdRightParen() -> if { parentheses! - 1 => parentheses! }
+                        headerToken! + 1 => headerToken!
+                    }
+            }
+        }
+    }
+    callbackStart!
+}
+
+# Public queries retain source scanning; binding collection supplies one child index.
+# Both entry paths share argument ownership, exclusion and source-order decisions.
+public callArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~] -> [Int; ~] {
+    [Int; ~] => unusedChildIndex
+    package -> collectCallArgumentAsts(call, flowSources, unusedChildIndex, unusedChildIndex, false)
+}
+
+
+collectCallArgumentAsts package: ref analysis.PackageAnalysis, call: calls.ModuleCallResolution, flowSources: ref [Int; ~], firstChildByAst: ref [Int; ~], nextSiblingByAst: ref [Int; ~], indexed: Bool -> [Int; ~] {
+    [Int; ~] => arguments!
+    package.ranges[call.sourceModule] => range
+    range.astStart + call.callAst => globalCall
+    package.nodes[globalCall] => node
+    node.kind != 10 and node.parent >= 0 -> if {
+        package.nodes[range.astStart + node.parent] => parent
+        # Parentheses can offset the source call's start. Its AST identity,
+        # rather than byte order, distinguishes it from a flow target call.
+        parent.kind == 10 and flowSources[range.astStart + node.parent] != globalCall
+            -> if { arguments! -> return }
+    }
+    -1 => target!
+    node.kind == 10 -> if {
+        flowSources[globalCall] >= 0 -> if { arguments! -> push(flowSources[globalCall]) }
+        range.astStart => search!
+        indexed -> if { firstChildByAst[globalCall] => search! }
+        search! >= 0 and search! < range.astStart + range.astCount
+            -> while {
+                package.nodes[search!] => child
+                child.parent == call.callAst and search! != flowSources[globalCall]
+                    and (child.kind == 11 or child.kind == 48 or child.kind == 77)
+                    -> if { search! - range.astStart => target! }
+                indexed -> if { nextSiblingByAst[search!] => search! } else { search! + 1 => search! }
+            }
+    } else { call.callAst => target! }
+    target! < 0 -> if { arguments! -> return }
+    package.nodes[range.astStart + target!] => targetNode
+    package -> blockCallbackStartOffset(call.sourceModule, target!) => runtimeArgumentEnd
+    -1 => previous!
+    false => done!
+    not done! -> while {
+        -1 => selected!
+        range.astStart => search!
+        indexed -> if { firstChildByAst[range.astStart + target!] => search! }
+        search! >= 0 and search! < range.astStart + range.astCount
+            -> while {
+                package.nodes[search!] => child
+                child.kind == 16 and child.start == targetNode.start => calleePath!
+                targetNode.kind == 48 and child.kind == 16 and targetNode.payloadToken >= 0
+                    -> if {
+                        package.tokens[range.tokenStart + targetNode.payloadToken].span.start => calleeStart
+                        child.start <= calleeStart and calleeStart < child.start + child.length
+                            -> if { true => calleePath! }
+                    }
+                child.parent == target! and child.kind != 12
+                    and not calleePath! and child.start < runtimeArgumentEnd
+                    and (previous! < 0 or child.start > package.nodes[range.astStart + previous!].start)
+                    and (selected! < 0 or child.start < package.nodes[range.astStart + selected!].start)
+                    -> if { search! - range.astStart => selected! }
+                indexed -> if { nextSiblingByAst[search!] => search! } else { search! + 1 => search! }
+            }
+        selected! < 0 -> if { true => done! } else {
+            package.nodes[range.astStart + selected!] => selectedNode
+            targetNode.kind == 48 and selectedNode.kind == 11
+                and selectedNode.cstRuleId == grammar.ruleIdFlowTargetCall()
+                -> if {
+                    # A block keeps its parenthesized argument-list envelope
+                    # as a peer of the source. Infer from the envelope's values,
+                    # using the same ordering as an ordinary flow call.
+                    call => headerCall!
+                    selected! => headerCall!.callAst
+                    package -> collectCallArgumentAsts(headerCall!, flowSources, firstChildByAst, nextSiblingByAst, indexed) => headerArguments
+                    headerArguments -> each argument { arguments! -> push(argument) }
+                } else {
+                    arguments! -> push(range.astStart + selected!)
+                }
+            selected! => previous!
+        }
+    }
+    arguments!
+}
+
+public resolveCallArgumentBindings package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [CallArgumentBinding; ~] {
+    [CallArgumentBinding; ~] => bindings!
+    [Int; ~] => firstChildByAst!
+    [Int; ~] => nextSiblingByAst!
+    package.nodes -> each node {
+        firstChildByAst! -> push(-1)
+        nextSiblingByAst! -> push(-1)
+    }
+    package.ranges -> each range {
+        range.astCount => childAst!
+        childAst! > 0 -> while {
+            childAst! - 1 => childAst!
+            range.astStart + childAst! => globalChild
+            package.nodes[globalChild].parent => parent
+            parent >= 0 and parent < range.astCount -> if {
+                range.astStart + parent => globalParent
+                firstChildByAst![globalParent] => nextSiblingByAst![globalChild]
+                globalChild => firstChildByAst![globalParent]
+            }
+        }
+    }
+    package -> indexFlowSourcesByAst => flowSources
+    resolvedCalls -> each call {
+        call.status == 0 and call.sourceModule >= 0 and call.sourceModule < (package.ranges -> len)
+            and call.targetSourceModule >= 0 and call.targetSourceModule < (package.ranges -> len)
+            and call.functionSymbol >= 0
+            -> if {
+                package.ranges[call.sourceModule] => sourceRange
+                package.ranges[call.targetSourceModule] => targetRange
+                call.callAst >= 0 and call.callAst < sourceRange.astCount
+                    and call.functionSymbol < targetRange.symbolCount
+                    and (package.nodes[sourceRange.astStart + call.callAst].kind == 10
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 11
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 48
+                    or package.nodes[sourceRange.astStart + call.callAst].kind == 77)
+                    -> if {
+                        package -> collectCallArgumentAsts(call, flowSources, firstChildByAst!, nextSiblingByAst!, true) => argumentAsts
+                        package -> functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => parameterSymbols
+                        0 => parameterOrdinal!
+                        parameterOrdinal! < (parameterSymbols -> len) and parameterOrdinal! < (argumentAsts -> len)
+                            -> while {
+                                parameterSymbols[parameterOrdinal!] => selectedParam
+                                argumentAsts[parameterOrdinal!] => argumentAst
+                                bindings! -> push(CallArgumentBinding {
+                                    sourceModule: call.sourceModule
+                                    callAst: call.callAst
+                                    argumentAst: argumentAst - sourceRange.astStart
+                                    targetSourceModule: call.targetSourceModule
+                                    functionSymbol: call.functionSymbol
+                                    parameterSymbol: selectedParam
+                                    parameterOrdinal: parameterOrdinal!
+                                })
+                                parameterOrdinal! + 1 => parameterOrdinal!
+                            }
+                    }
+            }
+    }
+    bindings!
+}
+
+# A declared move parameter consumes the exact argument expression in source
+# order. Reuse the same argument-to-parameter binding as numeric context so
+# the two semantic decisions cannot disagree about an appended `self` slot.
+public indexDeclaredMoveArgumentsByAst package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [Bool; ~] {
+    package -> resolveCallArgumentBindings(resolvedCalls) => bindings
+    package -> indexDeclaredMoveArgumentBindingsByAst(bindings)
+}
+
+# Consume one caller-owned raw binding table; no type/target decisions are cached.
+public indexDeclaredMoveArgumentBindingsByAst package: ref analysis.PackageAnalysis, bindings: ref [CallArgumentBinding; ~] -> [Bool; ~] {
+    [Bool; ~] => moved!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        moved! -> push(false)
+        seed! + 1 => seed!
+    }
+    bindings -> each binding {
+        package.ranges[binding.sourceModule] => sourceRange
+        package.ranges[binding.targetSourceModule] => targetRange
+        sourceRange.astStart + binding.argumentAst => argumentGlobalAst
+        package.symbols[targetRange.symbolStart + binding.parameterSymbol] => parameter
+        parameter.flags % 2 == 1 and package.nodes[argumentGlobalAst].kind == 15
+            -> if { true => moved![argumentGlobalAst] }
+    }
+    moved!
+}
+
+# C# binding removes a consumed local before it types a following statement.
+# Mark only direct named moves in the same lexical statement block here;
+# mutable reinitialization and control joins remain with the ownership pass.
+public indexDeclaredMoveReadsByAst package: ref analysis.PackageAnalysis, moveArguments: ref [Bool; ~] -> [Bool; ~] {
+    [Bool; ~] => reads!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        reads! -> push(false)
+        seed! + 1 => seed!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        0 => movedNameIndex!
+        movedNameIndex! < range.nameCount -> while {
+            package.names[range.nameStart + movedNameIndex!] => movedName
+            movedName.astNode >= 0 and movedName.astNode < range.astCount
+                and movedName.symbol >= 0 and movedName.symbol < range.symbolCount
+                and moveArguments[range.astStart + movedName.astNode]
+                -> if {
+                    package.symbols[range.symbolStart + movedName.symbol] => owner
+                    (owner.kind == 9 and owner.flags % 2 == 0) or owner.kind == 35
+                        -> if {
+                            package.nodes[range.astStart + movedName.astNode].parent => movedAncestor!
+                            -1 => movedStatement!
+                            movedAncestor! >= 0 and movedStatement! < 0 -> while {
+                                package.nodes[range.astStart + movedAncestor!].kind == 9
+                                    -> if { movedAncestor! => movedStatement! }
+                                movedStatement! < 0 -> if {
+                                    package.nodes[range.astStart + movedAncestor!].parent => movedAncestor!
+                                }
+                            }
+                            movedStatement! >= 0 -> if {
+                                package.nodes[range.astStart + movedStatement!] => movedBinding
+                                movedBinding.start + movedBinding.length => consumedAfter
+                                0 => readNameIndex!
+                                readNameIndex! < range.nameCount -> while {
+                                    package.names[range.nameStart + readNameIndex!] => readName
+                                    readName.symbol == movedName.symbol
+                                        and readName.astNode >= 0 and readName.astNode < range.astCount
+                                        and package.nodes[range.astStart + readName.astNode].start >= consumedAfter
+                                        -> if {
+                                            package.nodes[range.astStart + readName.astNode].parent => readAncestor!
+                                            -1 => readStatement!
+                                            readAncestor! >= 0 and readStatement! < 0 -> while {
+                                                package.nodes[range.astStart + readAncestor!].kind == 9
+                                                    -> if { readAncestor! => readStatement! }
+                                                readStatement! < 0 -> if {
+                                                    package.nodes[range.astStart + readAncestor!].parent => readAncestor!
+                                                }
+                                            }
+                                            readStatement! >= 0 and package.nodes[range.astStart + readStatement!].parent == movedBinding.parent
+                                                -> if { true => reads![range.astStart + readName.astNode] }
+                                        }
+                                    readNameIndex! + 1 => readNameIndex!
+                                }
+                            }
+                        }
+                }
+            movedNameIndex! + 1 => movedNameIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    reads!
+}
+
+# A qualified function path belongs to the expression that directly contains
+# it. Publish that function-resolution index once for the complete package so
+# function, entry, and finalization lowering share one exact lookup instead of
+# rescanning every qualified resolution at each expression.
+public indexQualifiedFunctionsByParentAst package: ref analysis.PackageAnalysis, moduleIdentities: ref [modules.ModuleIdentity; ~], resolvedQualified: ref [qualified.QualifiedResolution; ~] -> [Int; ~] {
+    [Int; ~] => indices!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        indices! -> push(-1)
+        seed! + 1 => seed!
+    }
+    0 => qualifiedIndex!
+    qualifiedIndex! < (resolvedQualified -> len) -> while {
+        resolvedQualified[qualifiedIndex!] => candidate
+        candidate.status == 0
+            and candidate.sourceModule >= 0
+            and candidate.sourceModule < (package.ranges -> len)
+            and candidate.targetModule >= 0
+            and candidate.targetModule < (moduleIdentities -> len)
+            -> if {
+                package.ranges[candidate.sourceModule] => sourceRange
+                candidate.pathAst >= 0 and candidate.pathAst < sourceRange.astCount
+                    -> if {
+                        package.nodes[sourceRange.astStart + candidate.pathAst].parent => parentAst
+                        moduleIdentities[candidate.targetModule].sourceIndex => targetSource
+                        parentAst >= 0
+                            and parentAst < sourceRange.astCount
+                            and targetSource >= 0
+                            and targetSource < (package.ranges -> len)
+                            -> if {
+                                package.ranges[targetSource] => targetRange
+                                candidate.targetSymbol >= 0 and candidate.targetSymbol < targetRange.symbolCount
+                                    -> if {
+                                        package.symbols[targetRange.symbolStart + candidate.targetSymbol] => targetSymbol
+                                        targetSymbol.kind == 7
+                                            and indices![sourceRange.astStart + parentAst] < 0
+                                            -> if { qualifiedIndex! => indices![sourceRange.astStart + parentAst] }
+                                    }
+                            }
+                    }
+            }
+        qualifiedIndex! + 1 => qualifiedIndex!
+    }
+    indices!
+}
+
+# Module-call resolution publishes one record for each call AST. Build the
+# global-AST lookup once so Typed IR workers never rescan the complete call
+# table for an exact source/call identity.
+# A selected declaration remains authoritative even when its arguments fail.
+# Spelling-based intrinsics must not replace that call's type or effects.
+public hasDeclaredCallTarget prepared: ref SemanticSnapshot, globalCallAst: Int -> Bool {
+    prepared.callIndexByAst[globalCallAst] => callIndex
+    callIndex < 0 -> if { false -> return }
+    prepared.calls[callIndex].functionSymbol >= 0
+}
+
+public indexCallsByAst package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [Int; ~] {
+    [Int; ~] => indices!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        indices! -> push(-1)
+        seed! + 1 => seed!
+    }
+    0 => callIndex!
+    callIndex! < (resolvedCalls -> len) -> while {
+        resolvedCalls[callIndex!] => candidate
+        candidate.sourceModule >= 0 and candidate.sourceModule < (package.ranges -> len)
+            -> if {
+                package.ranges[candidate.sourceModule] => sourceRange
+                candidate.callAst >= 0 and candidate.callAst < sourceRange.astCount
+                    -> if { callIndex! => indices![sourceRange.astStart + candidate.callAst] }
+            }
+        callIndex! + 1 => callIndex!
+    }
+    indices!
+}
+
+# A resolved call can be wrapped by multiple same-start paths before a real
+# trailing field. The final member token must begin after the resolved call;
+# a longer wrapper caused only by the call parentheses is still the callee.
+# Publish that ancestry once with the semantic snapshot so
+# parallel Typed IR workers perform one indexed lookup instead of rescanning
+# every call for every function.
+public indexCallResultMembersByAst package: ref analysis.PackageAnalysis, resolvedCalls: ref [calls.ModuleCallResolution; ~] -> [Bool; ~] {
+    [Bool; ~] => members!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        members! -> push(false)
+        seed! + 1 => seed!
+    }
+    0 => callIndex!
+    callIndex! < (resolvedCalls -> len) -> while {
+        resolvedCalls[callIndex!] => call
+        call.status == 0
+            and call.sourceModule >= 0
+            and call.sourceModule < (package.ranges -> len)
+            -> if {
+                package.ranges[call.sourceModule] => sourceRange
+                call.callAst >= 0 and call.callAst < sourceRange.astCount
+                    -> if {
+                        package.nodes[sourceRange.astStart + call.callAst] => callNode
+                        callNode.parent => pathAncestor!
+                        pathAncestor! >= 0 -> while {
+                            package.nodes[sourceRange.astStart + pathAncestor!] => pathNode
+                            pathNode.kind == 36 and pathNode.start == callNode.start
+                                -> if {
+                                    pathNode.payloadToken >= 0
+                                        and package.tokens[sourceRange.tokenStart + pathNode.payloadToken].span.start >= callNode.start + callNode.length
+                                        and callNode.start + callNode.length < pathNode.start + pathNode.length
+                                        -> if { true => members![sourceRange.astStart + pathAncestor!] }
+                                    pathNode.parent => pathAncestor!
+                                } else { -1 => pathAncestor! }
+                        }
+                    }
+            }
+        callIndex! + 1 => callIndex!
+    }
+    members!
+}
+
+# Parent identity is authoritative even when synthetic flow parents were
+# appended after their children. Build once; lowering queries in constant time.
+public indexDirectFlowTargetPathsByAst package: ref analysis.PackageAnalysis -> [Int; ~] {
+    [Int; ~] => targets!
+    0 => initializeIndex!
+    initializeIndex! < (package.nodes -> len) -> while {
+        targets! -> push(-1)
+        initializeIndex! + 1 => initializeIndex!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        0 => pathIndex!
+        pathIndex! < sourceRange.astCount -> while {
+            package.nodes[sourceRange.astStart + pathIndex!] => path
+            path.kind == 16 and path.parent >= 0 and path.parent < sourceRange.astCount
+                -> if {
+                    sourceRange.astStart + path.parent => parentIndex
+                    targets![parentIndex] => previous
+                    previous < 0 -> if {
+                        pathIndex! => targets![parentIndex]
+                    } else {
+                        path.start > package.nodes[sourceRange.astStart + previous].start
+                            -> if { pathIndex! => targets![parentIndex] }
+                    }
+                }
+            pathIndex! + 1 => pathIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    targets!
+}
+
+# ControlFlowExpression owns the completed control, while its shorter
+# same-start prefix owns the intrinsic producer. Index only the outer wrapper
+# that has both structural children; synthetic prefix wrappers remain absent.
+public indexControlProducerWrappersByAst package: ref analysis.PackageAnalysis -> [Bool; ~] {
+    [Bool; ~] => hasPrefix!
+    [Bool; ~] => hasControl!
+    [Bool; ~] => hasContinuation!
+    [Bool; ~] => wrappers!
+    0 => seed!
+    seed! < (package.nodes -> len) -> while {
+        hasPrefix! -> push(false)
+        hasControl! -> push(false)
+        hasContinuation! -> push(false)
+        wrappers! -> push(false)
+        seed! + 1 => seed!
+    }
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        0 => astIndex!
+        astIndex! < sourceRange.astCount -> while {
+            package.nodes[sourceRange.astStart + astIndex!] => child
+            child.parent >= 0 and child.parent < sourceRange.astCount
+                -> if {
+                    sourceRange.astStart + child.parent => parentIndex
+                    package.nodes[parentIndex] => parent
+                    child.kind == 10
+                        and child.start == parent.start
+                        and child.length < parent.length
+                        -> if {
+                            true => hasPrefix![parentIndex]
+                            parent.kind == 10 -> if {
+                                true => hasContinuation![sourceRange.astStart + astIndex!]
+                            }
+                        }
+                    child.kind == 42 or child.kind == 44 or child.kind == 56
+                        or child.kind == 64 or child.kind == 73 or child.kind == 74
+                        or child.kind == 76 or child.kind == 78 or child.kind == 81
+                        -> if { true => hasControl![parentIndex] }
+                }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    0 => nodeIndex!
+    nodeIndex! < (package.nodes -> len) -> while {
+        package.nodes[nodeIndex!] => node
+        node.kind == 10
+            and node.cstRuleId == grammar.ruleIdControlFlowExpression()
+            and hasPrefix![nodeIndex!] and hasControl![nodeIndex!]
+            or node.kind == 10
+            and node.cstRuleId == grammar.ruleIdFlowExpression()
+            and hasPrefix![nodeIndex!] and hasControl![nodeIndex!]
+            -> if { true => wrappers![nodeIndex!] }
+        # A completed control prefix can itself feed a later flow target.
+        # Its direct source is a name rather than another flow prefix.
+        node.kind == 10 and hasControl![nodeIndex!]
+            and hasContinuation![nodeIndex!]
+            and (node.cstRuleId == grammar.ruleIdFlowExpression()
+            or node.cstRuleId == grammar.ruleIdControlFlowExpression())
+            -> if { true => wrappers![nodeIndex!] }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    wrappers!
+}
+
+spanIs source: Text, start: UIntSize, length: UIntSize, expected: Text -> Bool {
+    length == (expected -> len) => equal!
+    UIntSize(0) => byteIndex!
+    equal! and byteIndex! < length -> while {
+        (source -> byte(start + byteIndex!)) != (expected -> byte(byteIndex!))
+            -> if { false => equal! }
+        byteIndex! + 1 => byteIndex!
+    }
+    equal!
+}
+
+# Affine native resources have scalar ABI storage but a unique drop obligation.
+# This snapshot query is the single semantic authority shared by ownership
+# validation and Typed IR move analysis.
+public nominalIsOwnedResource snapshot: SemanticSnapshot, typeId: Int -> Bool {
+    typeId >= 0 and typeId < (snapshot.semantic.types -> len)
+        -> if {
+            snapshot -> nominalTypeIsOwnedResource(snapshot.semantic.types[typeId])
+        } else { false }
+}
+
+# A nominal value moves only when its canonical type owns storage or a unique
+# resource. Expression origin alone cannot distinguish an inline imported
+# struct from one with an owned field.
+public typeContainsOwnedStorage snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    [Int; ~] => pending!
+    [Int; ~] => visited!
+    false => contains!
+    typeId >= 0 -> if { pending! -> push(typeId) }
+    0 => pendingIndex!
+    not contains! and pendingIndex! < (pending! -> len)
+        -> while {
+            pending![pendingIndex!] => currentTypeId
+            false => seen!
+            0 => seenIndex!
+            seenIndex! < (visited! -> len) -> while {
+                visited![seenIndex!] == currentTypeId -> if { true => seen! }
+                seenIndex! + 1 => seenIndex!
+            }
+            not seen! and currentTypeId >= 0 and currentTypeId < (types -> len)
+                -> if {
+                    visited! -> push(currentTypeId)
+                    types[currentTypeId] => current
+                    current -> typeIds.hasDirectOwnedStorage
+                        -> if {
+                            true => contains!
+                        } else {
+                            current -> typeIds.inheritsChildOwnedStorage -> if {
+                                current.first >= 0 -> if { pending! -> push(current.first) }
+                                current.second >= 0 -> if { pending! -> push(current.second) }
+                            }
+                            current.kind == 1 and (current.origin == 0 or current.origin == 2)
+                                -> if {
+                                    snapshot -> nominalIsOwnedResource(currentTypeId)
+                                        -> if { true => contains! } else {
+                                            0 => fieldIndex!
+                                            fieldIndex! < (snapshot.semantic.fields -> len)
+                                                -> while {
+                                                    snapshot.semantic.fields[fieldIndex!] => field
+                                                    field.status == 0 and field.ownerType == currentTypeId
+                                                        and field.fieldType >= 0
+                                                        -> if { pending! -> push(field.fieldType) }
+                                                    fieldIndex! + 1 => fieldIndex!
+                                                }
+                                            current.module >= 0 and current.module < (snapshot.package.ranges -> len)
+                                                -> if {
+                                                    snapshot.package.ranges[current.module] => range
+                                                    0 => variantIndex!
+                                                    variantIndex! < range.symbolCount -> while {
+                                                        snapshot.package.symbols[range.symbolStart + variantIndex!] => variant
+                                                        variant.kind == 27 and variant.parent == current.symbol and variant.typeNode >= 0
+                                                            -> if {
+                                                                0 => referenceIndex!
+                                                                referenceIndex! < (snapshot.semantic.references -> len)
+                                                                    -> while {
+                                                                        snapshot.semantic.references[referenceIndex!] => reference
+                                                                        reference.status == 0 and reference.sourceModule == current.module
+                                                                            and reference.typeAst == variant.typeNode and reference.typeId >= 0
+                                                                            -> if { pending! -> push(reference.typeId) }
+                                                                        referenceIndex! + 1 => referenceIndex!
+                                                                    }
+                                                            }
+                                                        variantIndex! + 1 => variantIndex!
+                                                    }
+                                                }
+                                        }
+                                }
+                        }
+                }
+            pendingIndex! + 1 => pendingIndex!
+        }
+    contains!
+}
+
+# Copyable fixed backing creates an independent aggregate field owner. It must
+# not become a move of the source merely because that source owns storage.
+# Keep this query separate from storage responsibility and explicit move calls.
+typeRequiresFixedStorageCopyDepth snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int, depth: Int -> Bool {
+    typeId < 0 or typeId >= (types -> len) or depth >= (types -> len)
+        -> if { false -> return }
+    types[typeId] => current
+    current.kind == 4 -> if {
+        current.first >= 0 -> unless { false -> return }
+        snapshot -> typeContainsOwnedStorage(types, current.first)
+            -> if { false -> return }
+        true -> return
+    }
+    (current.kind == 1 and (current.origin == 0 or current.origin == 2)) or current.kind == 10
+        -> unless { false -> return }
+    snapshot -> nominalTypeIsOwnedResource(current)
+        -> if { false -> return }
+    current.kind == 1 and current.module >= 0 and current.module < (snapshot.package.ranges -> len)
+        -> if {
+            snapshot.package.ranges[current.module] => range
+            current.symbol >= 0 and current.symbol < range.symbolCount
+                -> if {
+                    snapshot.package.symbols[range.symbolStart + current.symbol].astNode => declaration
+                    declaration >= 0 and snapshot.package.nodes[range.astStart + declaration].kind == 4
+                        -> if { false -> return }
+                }
+        }
+    false => copiesStorage!
+    0 => fieldIndex!
+    fieldIndex! < (snapshot.semantic.fields -> len)
+        -> while {
+            snapshot.semantic.fields[fieldIndex!] => field
+            field.status == 0 and field.ownerType == typeId and field.fieldType >= 0
+                and (snapshot -> typeContainsOwnedStorage(types, field.fieldType))
+                -> if {
+                    snapshot -> typeRequiresFixedStorageCopyDepth(types, field.fieldType, depth + 1)
+                        -> unless { false -> return }
+                    true => copiesStorage!
+                }
+            fieldIndex! + 1 => fieldIndex!
+        }
+    copiesStorage!
+}
+
+public typeRequiresFixedStorageCopy snapshot: ref SemanticSnapshot, types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    snapshot -> typeRequiresFixedStorageCopyDepth(types, typeId, 0)
+}
+
+# Canonical semantic modules are source indices, including imported nominals.
+# The type value, rather than an index into the original snapshot arena, also
+# supports types appended by expression inference and generic substitution.
+public nominalTypeIsOwnedResource snapshot: SemanticSnapshot, candidate: typeIds.SemanticType -> Bool {
+    false => ownedResource!
+    candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)
+        -> if {
+            candidate.module => sourceModule
+            false => fileModule!
+            false => socketModule!
+            false => processModule!
+            false => diagnosticsModule!
+            0 => moduleIndex!
+            moduleIndex! < (snapshot.modules -> len) -> while {
+                snapshot.modules[moduleIndex!] => identity
+                identity.sourceIndex == sourceModule -> if {
+                    snapshot.package.sources[identity.sourceIndex] -> len => moduleSourceLength
+                    snapshot.package.sources[identity.sourceIndex] -> slice(UIntSize(0), moduleSourceLength) => moduleSource
+                    moduleSource -> spanIs(identity.pathStart, identity.pathLength, "sys.file")
+                        -> if { true => fileModule! }
+                    moduleSource -> spanIs(identity.pathStart, identity.pathLength, "std.net.socket")
+                        -> if { true => socketModule! }
+                    moduleSource -> spanIs(identity.pathStart, identity.pathLength, "sys.process")
+                        -> if { true => processModule! }
+                    moduleSource -> spanIs(identity.pathStart, identity.pathLength, "std.async.diagnostics")
+                        -> if { true => diagnosticsModule! }
+                }
+                moduleIndex! + 1 => moduleIndex!
+            }
+            (fileModule! or socketModule! or processModule! or diagnosticsModule!)
+                and sourceModule >= 0
+                and sourceModule < (snapshot.package.ranges -> len)
+                -> if {
+                    snapshot.package.ranges[sourceModule] => sourceRange
+                    candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount
+                        -> if {
+                            snapshot.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+                            declaration.parent < 0 and declaration.nameToken >= 0
+                                -> if {
+                                    snapshot.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
+                                    snapshot.package.sources[sourceModule] -> len => sourceLength
+                                    snapshot.package.sources[sourceModule] -> slice(UIntSize(0), sourceLength) => source
+                                    fileModule! -> if {
+                                        source -> spanIs(name.span.start, name.span.length, "File")
+                                            -> if { true => ownedResource! }
+                                        source -> spanIs(name.span.start, name.span.length, "FileWriter")
+                                            -> if { true => ownedResource! }
+                                        source -> spanIs(name.span.start, name.span.length, "SourceText")
+                                            -> if { true => ownedResource! }
+                                    }
+                                    socketModule! -> if {
+                                        source -> spanIs(name.span.start, name.span.length, "TcpListener")
+                                            -> if { true => ownedResource! }
+                                        source -> spanIs(name.span.start, name.span.length, "TcpStream")
+                                            -> if { true => ownedResource! }
+                                        source -> spanIs(name.span.start, name.span.length, "UdpSocket")
+                                            -> if { true => ownedResource! }
+                                        source -> spanIs(name.span.start, name.span.length, "CompletionReactor")
+                                            -> if { true => ownedResource! }
+                                    }
+                                    processModule! -> if {
+                                        source -> spanIs(name.span.start, name.span.length, "Child")
+                                            -> if { true => ownedResource! }
+                                    }
+                                    diagnosticsModule! -> if {
+                                        source -> spanIs(name.span.start, name.span.length, "DiagnosticSession")
+                                            -> if { true => ownedResource! }
+                                    }
+                                }
+                        }
+                }
+        }
+    ownedResource!
+}
+
+public ownedResourceSeeds snapshot: SemanticSnapshot, sourceTypes: ref [typeIds.SemanticType; ~] -> [Bool; ~] {
+    [Bool; ~] => seeds!
+    sourceTypes -> each candidate {
+        snapshot -> nominalTypeIsOwnedResource(candidate) => resource
+        seeds! -> push(resource)
+    }
+    seeds!
+}
+
+public freeze snapshot: move SemanticSnapshot -> SemanticSnapshot {
+    snapshot
+}
+
+# Parse each source's interpolation expressions once, before the semantic
+# snapshot is frozen. Downstream checks and emission use these same node ids.
+public lowerAnalyzedInterpolations package: ref analysis.PackageAnalysis -> AnalyzedInterpolations {
+    # Canonical query only. Owned prepared adapters complete the real product
+    # before constructing indexes; this query never reparses or drops its AST.
+    [interpolation.InterpolationSourceRange; ~] => ranges!
+    [interpolation.InterpolationNode; ~] => nodes!
+    package.interpolationRanges -> each range { ranges! -> push(range) }
+    package.interpolations -> each node { nodes! -> push(node) }
+    AnalyzedInterpolations { ranges: ranges!, nodes: nodes! }
+}
+
+prepareAnalyzed packageAnalysis: move analysis.PackageAnalysis -> SemanticSnapshot {
+    packageAnalysis -> typeIds.resolveAnalyzed => semanticSet
+    packageAnalysis -> nominalTypes.resolveAnalyzed => nominalTypes
+    packageAnalysis -> compositeTypes.resolveAnalyzed(semanticSet) => compositeTypes
+    packageAnalysis -> modules.identitiesAnalyzed => moduleIdentities
+    packageAnalysis -> modules.importsAnalyzed => importEdges
+    packageAnalysis -> moduleResolve.resolveAnalyzed => resolvedImports
+    packageAnalysis -> qualified.resolveAnalyzed => qualifiedResults
+    packageAnalysis -> indexQualifiedFunctionsByParentAst(moduleIdentities, qualifiedResults) => qualifiedFunctionByParentAst
+    packageAnalysis -> calls.resolveModulesTyped(semanticSet) => resolvedCalls
+    packageAnalysis -> indexCallsByAst(resolvedCalls) => callIndexByAst
+    packageAnalysis -> indexCallResultMembersByAst(resolvedCalls) => callResultMemberByAst
+    packageAnalysis -> indexControlProducerWrappersByAst => controlProducerWrapperByAst
+    packageAnalysis -> indexDirectFlowTargetPathsByAst => directFlowTargetPathByAst
+    packageAnalysis -> indexAwaitSourcesByAst => awaitSourceByAst
+    packageAnalysis -> indexDeclaredMoveArgumentsByAst(resolvedCalls) => declaredMoveArgumentByAst
+    packageAnalysis -> indexDeclaredMoveReadsByAst(declaredMoveArgumentByAst) => declaredMoveReadByAst
+    packageAnalysis -> lowerAnalyzedInterpolations => analyzedInterpolations
+
+    SemanticSnapshot {
+        standardLibrarySourceStart: 0
+        standardLibrarySourceCount: 0
+        semantic: semanticSet
+        package: packageAnalysis
+        interpolationRanges: analyzedInterpolations.ranges
+        interpolations: analyzedInterpolations.nodes
+        nominal: nominalTypes
+        composite: compositeTypes
+        modules: moduleIdentities
+        imports: importEdges
+        resolvedImports: resolvedImports
+        qualified: qualifiedResults
+        qualifiedFunctionByParentAst: qualifiedFunctionByParentAst
+        calls: resolvedCalls
+        callIndexByAst: callIndexByAst
+        callResultMemberByAst: callResultMemberByAst
+        controlProducerWrapperByAst: controlProducerWrapperByAst
+        directFlowTargetPathByAst: directFlowTargetPathByAst
+        awaitSourceByAst: awaitSourceByAst
+        declaredMoveArgumentByAst: declaredMoveArgumentByAst
+        declaredMoveReadByAst: declaredMoveReadByAst
+    } => snapshot
+    snapshot -> freeze
+}
+
+public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeSources => packageAnalysis
+    packageAnalysis -> prepareAnalyzed
+}
+
+public prepareSourcesParallel sources: move [file.SourceText; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeSourcesParallel => packageAnalysis
+    packageAnalysis -> prepareAnalyzed
+}
+
+public prepareTestSources sources: move [file.SourceText; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeTestSources(sourceIndices, symbolIndices) => packageAnalysis
+    packageAnalysis -> prepareAnalyzed
+}
+
+public prepare sources: [Text; ~] -> SemanticSnapshot {
+    [file.SourceText; ~] => ownedSources!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> file.borrowText => ownedSource
+        ownedSources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ownedSources! -> prepareSources
+}
+
+public prepareParallel sources: [Text; ~] -> SemanticSnapshot {
+    [file.SourceText; ~] => ownedSources!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> file.borrowText => ownedSource
+        ownedSources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ownedSources! -> prepareSourcesParallel
+}
+
+# Only the selected standard-library root owns this prefix. Namespace spelling
+# and direct file/text inputs do not grant standard-library source authority.
+public prepareWithStandardLibrarySources sources: [Text; ~], standardLibrarySourceCount: Int -> SemanticSnapshot {
+    sources -> prepare => snapshot!
+    standardLibrarySourceCount => snapshot!.standardLibrarySourceCount
+    snapshot! -> freeze
+}
+
+public prepareParallelWithStandardLibrarySources sources: [Text; ~], standardLibrarySourceCount: Int -> SemanticSnapshot {
+    sources -> prepareParallel => snapshot!
+    standardLibrarySourceCount => snapshot!.standardLibrarySourceCount
+    snapshot! -> freeze
+}
+
+public prepareTests sources: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~] -> SemanticSnapshot {
+    [file.SourceText; ~] => ownedSources!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> file.borrowText => ownedSource
+        ownedSources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ownedSources! -> prepareTestSources(sourceIndices, symbolIndices)
+}
+
+# Test inputs precede the selected standard-library loader's sources. The
+# generated harness follows both ranges and retains ordinary user authority.
+public prepareTestsWithStandardLibrarySources sources: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], standardLibrarySourceStart: Int, standardLibrarySourceCount: Int -> SemanticSnapshot {
+    sources -> prepareTests(sourceIndices, symbolIndices) => snapshot!
+    standardLibrarySourceStart => snapshot!.standardLibrarySourceStart
+    standardLibrarySourceCount => snapshot!.standardLibrarySourceCount
+    snapshot! -> freeze
+}
+
+public isStandardLibrarySource snapshot: ref SemanticSnapshot, sourceIndex: Int -> Bool {
+    sourceIndex >= snapshot.standardLibrarySourceStart
+        and sourceIndex - snapshot.standardLibrarySourceStart < snapshot.standardLibrarySourceCount
+        and sourceIndex < (snapshot.package.sources -> len)
+}
+
+public prepareFiles paths: [Text; ~] -> SemanticSnapshot uses File {
+    [file.SourceText; ~] => ownedSources!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => ownedSource
+        ownedSources! -> push(ownedSource)
+        pathIndex! + 1 => pathIndex!
+    }
+    ownedSources! -> prepareSources
+}

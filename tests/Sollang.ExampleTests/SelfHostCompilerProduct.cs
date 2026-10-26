@@ -5,9 +5,14 @@ using System.Text.Json;
 // This proves product identity and current inputs, not compiler equivalence.
 internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<string, string> InputHashes)
 {
-    internal static SelfHostCompilerProduct Validate(string repoRoot, string directory)
+    internal static SelfHostCompilerProduct Validate(string repoRoot, string directory,
+        string? productionRoot = null)
     {
         directory = Path.GetFullPath(directory, repoRoot);
+        // A frozen fixture tree can differ from the source tree that produced
+        // the reused compiler. Its production closure must still match every
+        // absolute path and hash in the original build record.
+        productionRoot = Path.GetFullPath(productionRoot ?? repoRoot, repoRoot);
         var recordPath = Path.Combine(directory, "result.json");
         var compilerPath = Path.Combine(directory, "compiler.exe");
         var recordBytes = File.ReadAllBytes(recordPath);
@@ -30,10 +35,10 @@ internal sealed record SelfHostCompilerProduct(string CompilerPath, Dictionary<s
         if (start.Count == 0 || start.Count != end.Count
             || start.Any(pin => !end.TryGetValue(pin.Key, out var hash) || hash != pin.Value))
             throw new InvalidOperationException("SELFHOST_PRODUCT_INPUT_PROOF_INCOMPLETE");
-        var manifest = Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Fixtures", "selfhost-sollangc-driver.sources.txt");
+        var manifest = Path.Combine(productionRoot, "tests", "Sollang.ExampleTests", "Fixtures", "selfhost-sollangc-driver.sources.txt");
         var sources = File.ReadLines(manifest).Where(line => !string.IsNullOrWhiteSpace(line))
-            .Select(line => Path.GetFullPath(line.Trim(), repoRoot)).ToArray();
-        var stdlib = Directory.GetFiles(Path.Combine(repoRoot, "stdlib"), "*.slg", SearchOption.AllDirectories);
+            .Select(line => Path.GetFullPath(line.Trim(), productionRoot)).ToArray();
+        var stdlib = Directory.GetFiles(Path.Combine(productionRoot, "stdlib"), "*.slg", SearchOption.AllDirectories);
         if (sources.Length == 0 || sources.Distinct(StringComparer.OrdinalIgnoreCase).Count() != sources.Length
             || sources.Length != record.GetProperty("compilerSourceCount").GetInt32()
             || stdlib.Length != record.GetProperty("stdlibSourceCount").GetInt32()

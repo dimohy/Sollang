@@ -1921,6 +1921,15 @@ Run the full Windows managed reference suite through
 runner, source, expectation, and tool inputs before publishing success. An
 interrupted run is partial evidence; changed inputs require fresh verification.
 
+When the example runner is hosted in a frozen fixture tree, specify
+`--selfhost-production-root` with `--selfhost-driver-build` to identify the
+source tree that actually produced the reused compiler. The original build's
+absolute source paths, hashes and binary identity still require verification;
+the fixture tree retains its own separately pinned original inputs.
+For `verify-example-test-catalog.py`, identify that tree with `--fixture-root`;
+the runner must belong to that exact repository root. Generated output and
+compiler retention remain owned by the controller's repository.
+
 For a focused comparison of user-program behavior, invoke the verified current
 C# and SLG compiler binaries on the same program inputs. Reuse the existing
 checked-emission producer for its declared source-proof purpose; compiling the

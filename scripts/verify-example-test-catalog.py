@@ -34,6 +34,10 @@ def main() -> None:
     parser.add_argument('--runner', required=True, type=Path)
     parser.add_argument('--compiler', required=True, type=Path)
     parser.add_argument('--selfhost-driver-build', required=True, type=Path)
+    parser.add_argument('--selfhost-production-root', type=Path,
+                        help='Explicit source root of the reused product when fixtures are a frozen snapshot')
+    parser.add_argument('--fixture-root', type=Path,
+                        help='Frozen fixture tree hosting the runner; artifact ownership remains with this repository')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--source-closure-result', type=Path,
                         help='Fresh receipt under repository artifacts; allows case outputs on another approved volume')
@@ -48,6 +52,7 @@ def main() -> None:
                         help='Explicit retained compiler roots for initialization and cleanup; maximum three')
     args = parser.parse_args()
     repo = Path(__file__).resolve().parent.parent
+    fixture_repo = args.fixture_root.resolve() if args.fixture_root is not None else repo
     proof_path, runner, compiler, driver, output = (
         path.resolve() for path in (args.preflight, args.runner, args.compiler,
                                    args.selfhost_driver_build, args.output))
@@ -56,6 +61,14 @@ def main() -> None:
                 if args.reusable_compiler_directory is not None else None)
     closure_result = (args.source_closure_result or output / 'source-closure.json').resolve()
     proof = read(proof_path)
+    if args.fixture_root is not None:
+        fixture_pins = proof.get('fixtureInputHashes', {})
+        runner_root = next((parent for parent in runner.parents
+                            if (parent / 'Sollang.slnx').is_file()), None)
+        if (not fixture_pins or not (fixture_repo / 'Sollang.slnx').is_file()
+                or any(not Path(path).is_relative_to(fixture_repo) for path in fixture_pins)
+                or runner_root != fixture_repo):
+            raise ValueError('CATALOG_FIXTURE_ROOT_MISMATCH')
     if (proof.get('status') != 'validated' or proof.get('completed') != 0
             or proof.get('verificationScope', 'regression') != 'regression'
             or proof.get('inputsStable') is not True or proof.get('processesStopped') is not True
@@ -93,11 +106,11 @@ def main() -> None:
     pins = dict(proof['inputHashes'])
     if candidate_plan is not None:
         pins[str(candidate_plan)] = sha(candidate_plan)
-    closure_tool = repo / 'scripts/update-example-source-manifests.ps1'
+    closure_tool = fixture_repo / 'scripts/update-example-source-manifests.ps1'
     for path in (proof_path, runner, compiler, Path(__file__).resolve(),
                  repo / 'scripts/verification_execution.py',
                  repo / 'scripts/completed_artifact_plan.py', closure_tool,
-                 repo / 'scripts/source-module-header.ps1',
+                 fixture_repo / 'scripts/source-module-header.ps1',
                  repo / 'scripts/verification_json_records.py'):
         pins[str(path)] = sha(path)
 
@@ -120,9 +133,12 @@ def main() -> None:
                   sourceManifests=[str(path) for row in rows
                                    if not row['requiresSelfHostCompiler']
                                    and not row['id'].startswith('diagnostic/')
-                                   and (path := repo / 'examples/regression/expected'
+                                   and (path := fixture_repo / 'examples/regression/expected'
                                         / (row['id'] + '.sources.txt')).is_file()],
                   compiler=str(compiler), runner=str(runner), selfHostDriverBuild=str(driver),
+                  fixtureRoot=str(fixture_repo), artifactRepositoryRoot=str(repo),
+                  selfHostProductionRoot=str(args.selfhost_production_root.resolve())
+                      if args.selfhost_production_root is not None else None,
                   managedReference=args.managed_reference,
                   inputHashes=pins, inputsStable=True, processesStopped=True, cases=[],
                   retryPolicy='no-automatic-retry', executionOrder='sequential',
@@ -183,6 +199,9 @@ def main() -> None:
                 command.extend(['--stage-linked-llvm-baselines', str(candidate_plan)])
             if row['requiresSelfHostCompiler']:
                 command.extend(['--selfhost-driver-build', str(driver)])
+                if args.selfhost_production_root is not None:
+                    command.extend(['--selfhost-production-root',
+                                    str(args.selfhost_production_root.resolve())])
             case_result = dict(status='running', verificationScope=scope, completed=0, total=1,
                                cases=[dict(id=row['id'], status='running', expectedBuildExit=0)])
             execution = VerificationExecution(repo, case_root, case_result, stable, sha)

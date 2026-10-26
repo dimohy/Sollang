@@ -1,0 +1,282 @@
+namespace sollang.compiler.semantic.owner_call_facts
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.owner_type_facts as ownerTypes
+
+public struct EncodedOwnerCalls {
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+public struct RestoredOwnerCalls {
+    public owner: ownerTypes.RestoredOwnerTypeFacts
+    public calls: [calls.ModuleCallResolution; ~]
+    public arguments: [expressions.ResolvedCallArgument; ~]
+    public status: Int
+}
+
+struct ReferenceRead {
+    sourceModule: Int
+    symbol: Int
+    next: Int
+    status: Int
+}
+
+failedEncoding status: Int -> EncodedOwnerCalls {
+    EncodedOwnerCalls { words: [UInt64; ~], status: status }
+}
+
+public failedRestoration status: Int -> RestoredOwnerCalls {
+    typeIds.SemanticTypeSet { types: [typeIds.SemanticType; ~], references: [typeIds.TypeReference; ~], fields: [typeIds.NominalField; ~] } => semantic
+    ownerTypes.RestoredOwnerTypeFacts { sourceModule: -1, semantic: semantic, bindings: [ownerTypes.BindingTypeFact; ~], values: [expressions.ExpressionTypeId; ~], recipeTypes: [Int; ~], status: status } => owner
+    RestoredOwnerCalls { owner: owner, calls: [calls.ModuleCallResolution; ~], arguments: [expressions.ResolvedCallArgument; ~], status: status }
+}
+
+# Declaration references carry full keys. Negative intrinsic codes are stable
+# only under the enclosing generation's compiler/target/config admission.
+appendReference prepared: ref context.SemanticSnapshot, sourceModule: Int, symbol: Int, words: mut [UInt64; ~] -> Bool {
+    symbol == -1 -> if {
+        words -> push(0)
+        words -> push(0)
+        true -> return
+    }
+    symbol < -1 -> if {
+        words -> push(2)
+        words -> push(UInt64(-(symbol + 1)) + 1)
+        true -> return
+    }
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { false -> return }
+    prepared.package -> interfaces.declarationIdentityAnalyzed(prepared.modules, sourceModule, symbol) => key
+    key.status != 0 -> if { false -> return }
+    words -> push(1)
+    words -> push(UInt64(key.words -> len))
+    key.words -> each word { words -> push(word) }
+    true
+}
+
+readReference words: ref [UInt64; ~], cursor: Int, declarations: ref interfaces.DeclarationIdentityIndex -> ReferenceRead {
+    ReferenceRead { sourceModule: -1, symbol: -1, next: cursor, status: 1 } => invalid
+    cursor < 0 or cursor > (words -> len) or (words -> len) - cursor < 2
+        -> if { invalid -> return }
+    words[cursor] => kind
+    words[cursor + 1] => value
+    kind == 0 and value == 0 -> if {
+        ReferenceRead { sourceModule: -1, symbol: -1, next: cursor + 2, status: 0 } -> return
+    }
+    kind == 2 and value >= 2 and value <= 2147483648
+        -> if {
+            ReferenceRead { sourceModule: -1, symbol: -1 - Int(value - 1), next: cursor + 2, status: 0 } -> return
+        }
+    kind != 1 or value == 0 or value > UInt64((words -> len) - cursor - 2)
+        -> if { invalid -> return }
+    declarations -> interfaces.findDeclarationIdentityRange(words, cursor + 2, Int(value)) => target
+    target.status != 0 -> if {
+        ReferenceRead { sourceModule: -1, symbol: -1, next: cursor, status: target.status } -> return
+    }
+    ReferenceRead { sourceModule: target.sourceModule, symbol: target.symbol, next: cursor + 2 + Int(value), status: 0 }
+}
+
+appendType typeId: Int, mapped: ref [Int; ~], words: mut [UInt64; ~] -> Bool {
+    typeId < -1 or typeId >= (mapped -> len) -> if { false -> return }
+    typeId == -1 -> if { words -> push(0) } else {
+        mapped[typeId] < 0 -> if { false -> return }
+        words -> push(UInt64(mapped[typeId]) + 1)
+    }
+    true
+}
+
+readType word: UInt64, mapped: ref [Int; ~] -> Int {
+    word > UInt64(mapped -> len) -> if { -2 -> return }
+    word == 0 -> if { -1 } else { mapped[Int(word - 1)] }
+}
+
+argumentTypes argument: expressions.ResolvedCallArgument -> [Int; ~] {
+    [argument.expectedTypeId, argument.actualTypeId, argument.genericFirstActualTypeId, argument.genericActualTypeId, argument.mismatchExpectedTypeId, argument.mismatchActualTypeId; ~]
+}
+
+callable package: ref analysis.PackageAnalysis, sourceModule: Int, symbol: Int -> Bool {
+    symbol < -1 -> if { true -> return }
+    sourceModule < 0 or sourceModule >= (package.ranges -> len) or symbol < 0
+        -> if { false -> return }
+    package.ranges[sourceModule] => range
+    symbol >= range.symbolCount -> if { false -> return }
+    package.symbols[range.symbolStart + symbol].kind => kind
+    kind == 7 or kind == 29 or kind == 31
+}
+
+# Auxiliary owner call payload; normal-cache context and checksum admission
+# remain mandatory. The SLG specialization environment is the declared target
+# plus exact typed call arguments, rather than a C# cloned BoundFunction name.
+public capture prepared: ref context.SemanticSnapshot, finalTypes: ref expressions.ExpressionTypeIdSet, sourceModule: Int -> EncodedOwnerCalls {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { 1 -> failedEncoding -> return }
+    prepared.package.ranges[sourceModule] => range
+    [calls.ModuleCallResolution; ~] => targets!
+    0 => ast!
+    ast! < range.astCount -> while {
+        prepared.callIndexByAst[range.astStart + ast!] => index
+        index >= 0 -> if {
+            index >= (prepared.calls -> len) -> if { 1 -> failedEncoding -> return }
+            prepared.calls[index] => target
+            target.sourceModule != sourceModule or target.callAst != ast!
+                -> if { 1 -> failedEncoding -> return }
+            (target.targetSourceModule >= 0 and target.functionSymbol >= 0) or target.functionSymbol < -1
+                -> if { targets! -> push(target) }
+        }
+        ast! + 1 => ast!
+    }
+    [expressions.ResolvedCallArgument; ~] => arguments!
+    [Int; ~] => roots!
+    finalTypes.callArguments -> each argument {
+        argument.sourceModule == sourceModule -> if {
+            arguments! -> push(argument)
+            argument -> argumentTypes -> each typeId {
+                typeId < -1 -> if { 1 -> failedEncoding -> return }
+                typeId >= 0 -> if { roots! -> push(typeId) }
+            }
+        }
+    }
+    prepared -> ownerTypes.captureWithRoots(finalTypes, sourceModule, roots!) => owner
+    owner.status != 0 -> if { owner.status -> failedEncoding -> return }
+    [UInt64(6002245308495514451), 1, 6, UInt64(owner.words -> len), UInt64(targets! -> len), UInt64(arguments! -> len); ~] => words!
+    owner.words -> each word { words! -> push(word) }
+    targets! -> each target {
+        prepared.package -> callable(target.targetSourceModule, target.functionSymbol)
+            -> unless { 1 -> failedEncoding -> return }
+        target.origin < 0 or target.origin > 2 or target.status < 0 or target.status > 5
+            -> if { 1 -> failedEncoding -> return }
+        words! -> push(UInt64(target.callAst))
+        words! -> push(UInt64(target.origin))
+        words! -> push(UInt64(target.status))
+        prepared -> appendReference(target.targetSourceModule, target.functionSymbol, words!)
+            -> unless { 1 -> failedEncoding -> return }
+    }
+    arguments! -> each argument {
+        argument.callAst < 0 or argument.callAst >= range.astCount or argument.argumentAst < -1
+            or argument.argumentAst >= range.astCount or argument.parameterOrdinal < -1 or argument.parameterOrdinal == 2147483647
+            or argument.status < 0 or argument.status > 3
+            -> if { 1 -> failedEncoding -> return }
+        words! -> push(UInt64(argument.callAst))
+        words! -> push(UInt64(argument.argumentAst + 1))
+        words! -> push(UInt64(argument.parameterOrdinal + 1))
+        words! -> push(UInt64(argument.status))
+        argument.suppressNumericWarning -> if { words! -> push(1) } else { words! -> push(0) }
+        argument -> argumentTypes -> each typeId {
+            typeId -> appendType(owner.recipeBySourceType, words!)
+                -> unless { 1 -> failedEncoding -> return }
+        }
+        prepared -> appendReference(argument.targetSourceModule, argument.functionSymbol, words!)
+            -> unless { 1 -> failedEncoding -> return }
+        prepared -> appendReference(argument.targetSourceModule, argument.parameterSymbol, words!)
+            -> unless { 1 -> failedEncoding -> return }
+        prepared -> appendReference(argument.targetSourceModule, argument.genericParameterSymbol, words!)
+            -> unless { 1 -> failedEncoding -> return }
+    }
+    UInt64(words! -> len) => words![2]
+    EncodedOwnerCalls { words: words!, status: 0 }
+}
+
+public restore words: ref [UInt64; ~], package: ref analysis.PackageAnalysis, current: ref typeIds.SemanticTypeSet -> RestoredOwnerCalls {
+    (words -> len) < 6 -> if { 1 -> failedRestoration -> return }
+    words[0] != 6002245308495514451 or words[1] != 1 or words[2] != UInt64(words -> len)
+        or words[3] > UInt64((words -> len) - 6)
+        -> if { 1 -> failedRestoration -> return }
+    6 + Int(words[3]) => cursor!
+    words[4] > UInt64(((words -> len) - cursor!) / 5)
+        or words[5] > UInt64(((words -> len) - cursor!) / 17)
+        -> if { 1 -> failedRestoration -> return }
+    [UInt64; ~] => ownerWords!
+    0..<Int(words[3]) -> each index { ownerWords! -> push(words[6 + index]) }
+    ownerWords! -> ownerTypes.restore(package, current) => owner
+    owner.status != 0 -> if { owner.status -> failedRestoration -> return }
+    package.ranges[owner.sourceModule] => range
+    package -> modules.identitiesAnalyzed => moduleIds
+    package -> interfaces.declarationIdentitiesAnalyzed(moduleIds) => declarations
+    [calls.ModuleCallResolution; ~] => targets!
+    [expressions.ResolvedCallArgument; ~] => arguments!
+    [Bool; ~] => seen!
+    0..<range.astCount -> each { seen! -> push(false) }
+    0 => targetIndex!
+    targetIndex! < Int(words[4]) -> while {
+        (words -> len) - cursor! < 5 -> if { 1 -> failedRestoration -> return }
+        words[cursor!] => ast
+        words[cursor! + 1] => origin
+        words[cursor! + 2] => status
+        ast >= UInt64(range.astCount) or origin > 2 or status > 5
+            -> if { 1 -> failedRestoration -> return }
+        seen![Int(ast)] -> if { 1 -> failedRestoration -> return }
+        true => seen![Int(ast)]
+        words -> readReference(cursor! + 3, declarations) => target
+        target.status != 0 or target.symbol == -1 -> if { 2 -> failedRestoration -> return }
+        package -> callable(target.sourceModule, target.symbol)
+            -> unless { 2 -> failedRestoration -> return }
+        target.sourceModule >= 0 -> if { target.sourceModule } else { owner.sourceModule } => targetModule
+        targets! -> push(calls.ModuleCallResolution { sourceModule: owner.sourceModule, callAst: Int(ast), origin: Int(origin), targetModule: targetModule, targetSourceModule: target.sourceModule, functionSymbol: target.symbol, status: Int(status) })
+        target.next => cursor!
+        targetIndex! + 1 => targetIndex!
+    }
+    0 => argumentIndex!
+    argumentIndex! < Int(words[5]) -> while {
+        (words -> len) - cursor! < 17 -> if { 1 -> failedRestoration -> return }
+        cursor! => start
+        words[start] >= UInt64(range.astCount) or words[start + 1] > UInt64(range.astCount)
+            or words[start + 2] > 2147483647 or words[start + 3] > 3 or words[start + 4] > 1
+            -> if { 1 -> failedRestoration -> return }
+        [Int; ~] => types!
+        0..<6 -> each column {
+            words[start + 5 + column] -> readType(owner.recipeTypes) => typeId
+            typeId < -1 -> if { 1 -> failedRestoration -> return }
+            types! -> push(typeId)
+        }
+        words -> readReference(start + 11, declarations) => function
+        function.status != 0 or function.sourceModule < 0 or function.symbol < 0
+            -> if { 2 -> failedRestoration -> return }
+        package -> callable(function.sourceModule, function.symbol)
+            -> unless { 2 -> failedRestoration -> return }
+        words -> readReference(function.next, declarations) => parameter
+        parameter.status != 0 or parameter.symbol < -1
+            -> if { 2 -> failedRestoration -> return }
+        words -> readReference(parameter.next, declarations) => generic
+        generic.status != 0 or generic.symbol < -1 -> if { 2 -> failedRestoration -> return }
+        parameter.symbol >= 0 -> if {
+            parameter.sourceModule != function.sourceModule
+                -> if { 2 -> failedRestoration -> return }
+            package.symbols[package.ranges[parameter.sourceModule].symbolStart + parameter.symbol] => declaration
+            declaration.kind != 35 or declaration.parent != function.symbol
+                -> if { 2 -> failedRestoration -> return }
+        }
+        generic.symbol >= 0 -> if {
+            generic.sourceModule != function.sourceModule
+                -> if { 2 -> failedRestoration -> return }
+            package.symbols[package.ranges[generic.sourceModule].symbolStart + generic.symbol] => declaration
+            declaration.kind != 32 or declaration.parent != function.symbol
+                -> if { 2 -> failedRestoration -> return }
+        }
+        words[start] => ast
+        Int(words[start + 2]) - 1 => ordinal
+        package -> context.functionParameterSymbolsInSourceOrder(function.sourceModule, function.symbol) => orderedParameters
+        ordinal < -1 or ordinal >= (orderedParameters -> len)
+            -> if { 2 -> failedRestoration -> return }
+        parameter.symbol >= 0 -> if {
+            ordinal < 0 -> if { 2 -> failedRestoration -> return }
+            orderedParameters[ordinal] != parameter.symbol
+                -> if { 2 -> failedRestoration -> return }
+        }
+        arguments! -> each previous {
+            previous.callAst == Int(ast) and previous.parameterOrdinal == ordinal
+                -> if { 1 -> failedRestoration -> return }
+        }
+        arguments! -> push(expressions.ResolvedCallArgument { sourceModule: owner.sourceModule, callAst: Int(ast), argumentAst: Int(words[start + 1]) - 1, targetSourceModule: function.sourceModule, functionSymbol: function.symbol, parameterSymbol: parameter.symbol, parameterOrdinal: ordinal, expectedTypeId: types![0], actualTypeId: types![1], status: Int(words[start + 3]), suppressNumericWarning: words[start + 4] == 1, genericParameterSymbol: generic.symbol, genericFirstActualTypeId: types![2], genericActualTypeId: types![3], mismatchExpectedTypeId: types![4], mismatchActualTypeId: types![5] })
+        generic.next => cursor!
+        argumentIndex! + 1 => argumentIndex!
+    }
+    cursor! != (words -> len) -> if { 1 -> failedRestoration -> return }
+    RestoredOwnerCalls { owner: owner, calls: targets!, arguments: arguments!, status: 0 }
+}

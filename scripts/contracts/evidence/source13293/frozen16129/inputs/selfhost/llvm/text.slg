@@ -1,0 +1,144 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.async_runtime as asyncRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+emitCore context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context -> emitCorePreambleFeatures(false, state) => coreFeatures
+    coreFeatures.usesArguments => usesArguments
+    coreFeatures.usesNativeInterop => usesNativeInterop
+    coreFeatures.usesComInterop => usesComInterop
+    context -> usesAes128CpuSpecialization(state) => usesAes128Specialization
+    context.pointerBitWidth / 8 => entryPointerAlignment
+    [Int; ~] => regularFunctionIndicesBeforeEntry!
+    [Int; ~] => regularFunctionIndicesAfterEntry!
+    [Int; ~] => aesFunctionIndicesBeforeEntry!
+    [Int; ~] => aesFunctionIndicesAfterEntry!
+    false => functionEntrySeen!
+    0 => functionIndexCollect!
+    functionIndexCollect! < (context.ir -> len) -> while {
+        context.ir[functionIndexCollect!].kind == 11
+            -> if { true => functionEntrySeen! }
+        context.ir[functionIndexCollect!].kind == 0
+            and (functionIndexCollect! -> nativeFunctionReachable(state))
+            and not (context.ir[functionIndexCollect!] -> isIntrinsicDeclaration)
+            and not (context.ir[functionIndexCollect!] -> isComFunction(context, state))
+            and not (functionIndexCollect! -> isStreamFunctionIr(context, state))
+            and not (functionIndexCollect! -> isRangeFunctionIr(context, state))
+            -> if {
+                usesAes128Specialization and (functionIndexCollect! -> isAes128EncryptBlockFunction(context, state))
+                    -> if {
+                        functionEntrySeen! -> if { aesFunctionIndicesAfterEntry! -> push(functionIndexCollect!) } else { aesFunctionIndicesBeforeEntry! -> push(functionIndexCollect!) }
+                    } else {
+                        functionEntrySeen! -> if { regularFunctionIndicesAfterEntry! -> push(functionIndexCollect!) } else { regularFunctionIndicesBeforeEntry! -> push(functionIndexCollect!) }
+                    }
+            }
+        functionIndexCollect! + 1 => functionIndexCollect!
+    }
+    regularFunctionIndicesBeforeEntry! -> parallel functionEmitIndex {
+        functionEmitIndex -> emitFunction(context, state)
+    } => functionEmissionStatusesBeforeEntry
+    0 => aesFunctionIndex!
+    aesFunctionIndex! < (aesFunctionIndicesBeforeEntry! -> len)
+        -> while {
+            aesFunctionIndicesBeforeEntry![aesFunctionIndex!] -> emitAes128FunctionSet(context, state) => aesFunctionEnd
+            aesFunctionIndex! + 1 => aesFunctionIndex!
+        }
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        function.kind == 11 -> if {
+            functionIndex! + 1 => entryEnd!
+            entryEnd! < (context.ir -> len) and context.ir[entryEnd!].kind != 0 and context.ir[entryEnd!].kind != 11
+                -> while { entryEnd! + 1 => entryEnd! }
+            context.pointerBitWidth == 32 -> if {
+                "define i32 @sollang_start() {" -> println
+            } else {
+                usesArguments and context.expectedPathStyle != 1
+                    -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
+            }
+            "entry:" -> println
+            functionIndex! -> emitHoistedControlAllocas(functionIndex! + 1, entryEnd!, true, false, context, state)
+            functionIndex! -> emitHoistedReferenceArgumentAllocas(functionIndex! + 1, entryEnd!, context, state)
+            usesNativeInterop -> if { "  call void @sollang_native_init()" -> println }
+            usesComInterop -> if { "  call void @sollang_com_init()" -> println }
+            usesArguments and context.pointerBitWidth != 32
+                -> if {
+                    context.expectedPathStyle == 1 -> if {
+                        "  call void @sollang_init_utf8_arguments()" -> println
+                    } else {
+                        "  %argc64 = zext i32 %argc to i64" -> println
+                        "  store i64 %argc64, ptr @sollang_argc, align 8" -> println
+                        "  store ptr %argv, ptr @sollang_argv, align 8" -> println
+                    }
+                }
+            functionIndex! -> bodyScheduleIndex(state) => entryScheduleIndex
+            state.bodySchedules[entryScheduleIndex] -> emitScheduledStreamBody(functionIndex!, entryEnd!, entryPointerAlignment, context, state)
+            OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
+            context -> usesReachableAsyncRuntime(state)
+                -> if { "  call void @sollang_async_shutdown()" -> println }
+            usesComInterop -> if { "  call void @sollang_com_cleanup()" -> println }
+            usesNativeInterop -> if { "  call void @sollang_native_cleanup()" -> println }
+            context.supportsComputePool and (context -> diagnostics.usesParallelRuntime)
+                -> if { "  call void @sollang_compute_shutdown()" -> println }
+            context.expectedPathStyle == 1 and (context -> diagnostics.usesEnvironmentRuntime)
+                -> if { "  call void @sollang_dispose_environment()" -> println }
+            context.expectedPathStyle == 1 and (context -> diagnostics.usesSocketRuntime)
+                -> if { "  call void @sollang_platform_socket_cleanup()" -> println }
+            usesArguments and context.expectedPathStyle == 1 and context.pointerBitWidth != 32
+                -> if {
+                    "  call void @sollang_dispose_utf8_arguments()" -> println
+                }
+            context -> diagnostics.usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
+            "  ret i32 0" -> println
+            "}" -> println
+            entryEnd! => functionIndex!
+        } else {
+            functionIndex! + 1 => functionIndex!
+        }
+    }
+    regularFunctionIndicesAfterEntry! -> parallel functionEmitIndex {
+        functionEmitIndex -> emitFunction(context, state)
+    } => functionEmissionStatusesAfterEntry
+    0 => aesFunctionIndex!
+    aesFunctionIndex! < (aesFunctionIndicesAfterEntry! -> len)
+        -> while {
+            aesFunctionIndicesAfterEntry![aesFunctionIndex!] -> emitAes128FunctionSet(context, state) => aesFunctionEnd
+            aesFunctionIndex! + 1 => aesFunctionIndex!
+        }
+    # Keep attribute group zero authoritative. LLVM assigns group zero to
+    # llvm.trap when this line is absent, which would make every runtime helper
+    # carrying #0 cold+noreturn and lets O1 miscompile returning platform calls.
+    context -> diagnostics.usesSocketRuntime
+        -> if {
+            "attributes #0 = { nounwind }" -> println
+        }
+}
