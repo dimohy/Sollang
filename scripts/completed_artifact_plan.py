@@ -563,7 +563,11 @@ def legacy_paired_processes(repo: Path, path: Path, record: dict, compiler: Path
         try:
             assert_artifact_path(repo, journal)
             capture = json.loads(journal.read_text(encoding='utf-8-sig'))
-            if (capture.get('status') != 'passed' or capture.get('exit') != 0
+            # A known nonzero exit also ends a consumer's lease. This bridge
+            # grants no case credit; runtime traps remain original observations.
+            if (capture.get('status') not in ('passed', 'failed')
+                    or type(capture.get('exit')) is not int
+                    or (capture['exit'] == 0) != (capture['status'] == 'passed')
                     or not terminal_consumer_process(repo, path.parent, capture)):
                 return None
         except (OSError, ValueError, KeyError, TypeError):
@@ -612,6 +616,70 @@ def canceled_consumer_shutdown(repo: Path, path: Path, record: dict) -> dict:
         raise ValueError('ARTIFACT_CANCELED_CONSUMER_PROCESS_NOT_TERMINAL')
     assert_output_shutdown(repo, path.parent)
     return {'path': str(audit_path), 'sha256': hashlib.sha256(audit_path.read_bytes()).hexdigest()}
+
+
+def recovered_interruption_shutdown(repo: Path, path: Path, record: dict) -> dict | None:
+    """Authenticate canonical recovery bytes for retirement, never acceptance."""
+    if record.get('status') != 'canceled' or 'cancellationShutdownEvidence' not in record:
+        return None
+    audit_path = assert_artifact_path(repo, path.with_name('interrupt-shutdown-result.json'))
+    original_path = assert_artifact_path(repo, path.with_name('interrupted-running-result.json'))
+    if (record['cancellationShutdownEvidence'] != str(audit_path)
+            or not audit_path.is_file() or not original_path.is_file()):
+        raise ValueError('ARTIFACT_RECOVERED_INTERRUPTION_FILES_INVALID')
+    original_bytes = original_path.read_bytes()
+    original = json.loads(original_bytes)
+    audit = json.loads(audit_path.read_text(encoding='utf-8-sig'))
+    processes, cases = original.get('processes'), original.get('cases')
+    done, total = original.get('completed'), original.get('total')
+    if (original.get('status') != 'running' or type(done) is not int or type(total) is not int
+            or not 0 <= done < total or not isinstance(processes, list) or not processes
+            or any(not isinstance(row, dict) or type(row.get('pid')) is not int or row['pid'] <= 0 for row in processes)
+            or original.get('claimsGoalComplete') is True or original.get('claimsAcceptancePassed') is True
+            or (cases is None and done != 0)
+            or (cases is not None and (not isinstance(cases, list) or len(cases) != done + 1
+                or not all(isinstance(case, dict) and case.get('status') == 'passed'
+                           and case.get('passed') is True for case in cases[:-1])
+                or not isinstance(cases[-1], dict) or cases[-1].get('status') != 'running'
+                or cases[-1].get('passed') is not False))):
+        raise ValueError('ARTIFACT_RECOVERED_INTERRUPTION_ORIGINAL_INVALID')
+    if (audit.get('schemaVersion') != 1 or audit.get('status') != 'shutdown-confirmed'
+            or audit.get('activeProcessIds') != [] or type(audit.get('inputsStable')) is not bool
+            or audit.get('originalResultSha256', '').casefold() != hashlib.sha256(original_bytes).hexdigest()
+            or audit.get('processIds') != [row['pid'] for row in processes]
+            or audit.get('exitCodesUnavailable') != [row['pid'] for row in processes if row.get('exit') is None]
+            or audit.get('outputDisposition') != 'preserve-canceled-unverified-output'
+            or not isinstance(audit.get('reason'), str) or not audit['reason']):
+        raise ValueError('ARTIFACT_RECOVERED_INTERRUPTION_AUDIT_INVALID')
+    expected = copy.deepcopy(original)
+    expected.update(status='canceled', inputsStable=audit['inputsStable'], processesStopped=True,
+                    cancellationReason=audit['reason'], cancellationShutdownEvidence=str(audit_path))
+    expected.pop('activeProcess', None)
+    for case in expected.get('cases', []):
+        if case.get('status') == 'running':
+            case.update(status='canceled', passed=False)
+    for row in expected['processes']:
+        if row.get('exit') is None:
+            row.update(terminationVerified=True, exitCodeUnavailable=True)
+    if record != expected:
+        raise ValueError('ARTIFACT_RECOVERED_INTERRUPTION_RECORD_CHANGED')
+    try:
+        observed = dt.datetime.fromisoformat(audit['observedAtUtc'])
+        if observed.tzinfo is None:
+            raise ValueError()
+        for row in processes:
+            started = dt.datetime.fromisoformat(row['startedAtUtc'])
+            if started.tzinfo is None or observed < started or row.get('shutdownScope') != 'owned-windows-job':
+                raise ValueError()
+            if row.get('exit') is not None and (not terminal_consumer_process(repo, path.parent, row)
+                    or row.get('shutdownConfirmed') is not True):
+                raise ValueError()
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError('ARTIFACT_RECOVERED_INTERRUPTION_SHUTDOWN_INVALID') from error
+    assert_output_shutdown(repo, path.parent)
+    return {'path': str(audit_path), 'sha256': hashlib.sha256(audit_path.read_bytes()).hexdigest(),
+            'originalPath': str(original_path), 'originalSha256': hashlib.sha256(original_bytes).hexdigest(),
+            'observedCompleted': done, 'claimsTestPassed': False, 'processesStopped': True}
 
 
 def terminal_input_drift(record: dict, consumer_directory: Path) -> bool:
@@ -790,6 +858,59 @@ def stopped_unsealed_capture(repo: Path, path: Path, record: dict, product: Path
             return False
     assert_output_shutdown(repo, path.parent)
     return True
+
+
+def stopped_partial_rejection_capture(repo: Path, path: Path, record: dict, product: Path) -> dict | None:
+    """Observe a drained legacy assertion failure; grant no test completion."""
+    cases, done, total = record.get('cases'), record.get('completed'), record.get('total')
+    if (record.get('status') != 'failed' or type(done) is not int or type(total) is not int
+            or not 0 < done < total or not isinstance(cases, list) or len(cases) != done + 1
+            or not isinstance(record.get('failure'), str)
+            or not record['failure'].startswith('AssertionError: ')
+            or not isinstance(cases[-1], dict) or cases[-1].get('status') != 'running'
+            or cases[-1].get('passed') is not False
+            or cases[-1].get('expectedBuildExit') != 1 or cases[-1].get('buildExit') != 1):
+        return None
+    if (record.get('inputsStable') is not True or record.get('processesStopped') is not True
+            or any(record.get(key) for key in ('activeProcess', 'activeProcessIds', 'running', 'orphanProcessIds'))
+            or any(not isinstance(case, dict) or not isinstance(case.get('id'), str)
+                   or not re.fullmatch(r'[A-Za-z0-9_.-]+', case['id'])
+                   or any(case.get(key) for key in ('activeProcess', 'activeProcessIds', 'running', 'orphanProcessIds'))
+                   for case in cases)
+            or len({case['id'] for case in cases}) != len(cases)
+            or not all(case.get('status') == 'passed' and case.get('passed') is True for case in cases[:-1])
+            or record.get('claimsAcceptancePassed') is True or record.get('claimsGoalComplete') is True):
+        raise ValueError('ARTIFACT_PARTIAL_REJECTION_CAPTURE_INVALID')
+    processes = record.get('processes')
+    if not isinstance(processes, list) or not processes:
+        raise ValueError('ARTIFACT_PARTIAL_REJECTION_PROCESSES_MISSING')
+    for row in processes:
+        if (not terminal_consumer_process(repo, path.parent, row)
+                or row.get('shutdownConfirmed') is not True or row.get('shutdownScope') != 'owned-windows-job'
+                or type(row.get('pid')) is not int or row['pid'] <= 0
+                or row.get('naturalShutdownObservation', {}).get('outcome') != 'drained'
+                or row.get('naturalShutdownObservation', {}).get('rootPid') != row['pid']):
+            raise ValueError('ARTIFACT_PARTIAL_REJECTION_PROCESS_NOT_TERMINAL')
+        try:
+            start, finish = (dt.datetime.fromisoformat(row[key]) for key in ('startedAtUtc', 'finishedAtUtc'))
+            if start.tzinfo is None or finish.tzinfo is None or finish < start:
+                raise ValueError()
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError('ARTIFACT_PARTIAL_REJECTION_PROCESS_TIME_INVALID') from error
+    last = processes[-1]
+    if (last.get('exit', last.get('exitCode')) != 1
+            or not isinstance(last.get('command'), list) or len(last['command']) < 2
+            or last['command'][0] != str(product) or last['command'][1] not in ('build', 'wasm-stdlib')):
+        raise ValueError('ARTIFACT_PARTIAL_REJECTION_PRODUCER_INVALID')
+    streams = []
+    for name in ('build.stdout', 'build.stderr'):
+        capture = assert_artifact_path(repo, path.parent / cases[-1]['id'] / name)
+        if not capture.is_file():
+            raise ValueError('ARTIFACT_PARTIAL_REJECTION_STREAM_MISSING')
+        streams.append({'path': str(capture), 'sha256': hashlib.sha256(capture.read_bytes()).hexdigest()})
+    assert_output_shutdown(repo, path.parent)
+    return {'observedCompleted': done, 'unsealedCaseId': cases[-1]['id'], 'streams': streams,
+            'processesStopped': True, 'claimsTestPassed': False}
 
 
 def passed_timeout_case(case: dict) -> bool:
@@ -1305,13 +1426,17 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
             continue
         canceled = legacy_terminal and record.get('status') == 'canceled'
         timed_out = legacy_terminal and record.get('status') == 'timed-out'
+        partial_rejection = (stopped_partial_rejection_capture(repo, path, record, Path(references[0]['compilerPath']))
+                             if legacy_terminal else None)
+        recovered_interruption = recovered_interruption_shutdown(repo, path, record) if legacy_terminal else None
         mismatch_capture = legacy_terminal and terminal_diagnostic_capture(record)
         if ((record.get('status') not in ('passed', 'failed') and not canceled and not timed_out and not mismatch_capture)
-                or (active_record(record) and not timed_out) or record.get('orphanProcessIds')):
+                or (active_record(record) and not timed_out and partial_rejection is None) or record.get('orphanProcessIds')):
             raise ValueError('ARTIFACT_CONSUMER_NOT_TERMINAL')
         stable_inputs = record.get('inputsStable', record.get('inputStable'))
         input_drift = terminal_input_drift(record, path.parent)
-        if record.get('processesStopped', record.get('processShutdownConfirmed')) is not True or (stable_inputs is not True and not input_drift):
+        if (record.get('processesStopped', record.get('processShutdownConfirmed')) is not True
+                or (stable_inputs is not True and not input_drift and recovered_interruption is None)):
             raise ValueError('ARTIFACT_CONSUMER_SHUTDOWN_OR_STABILITY_MISSING')
         pins = record.get('inputHashes', record.get('inputSha256', {}))
         unpaired_start_pins = False
@@ -1328,6 +1453,20 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         producer_pinned = isinstance(pins, dict) and str(pins.get(producer['path'], '')).casefold() == producer['sha256'].casefold()
         if not binary_pinned or not (producer_pinned or legacy_terminal and missing_producer_pin):
             raise ValueError('ARTIFACT_CONSUMER_BUILD_LINK_INVALID')
+        if recovered_interruption is not None:
+            rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                         'status': 'canceled', 'completed': 0, 'total': record['total'],
+                         'executed': 0, 'failed': 0, 'unexecuted': record['total'],
+                         'disposition': 'terminal-recovered-interruption', 'shutdownAudit': recovered_interruption,
+                         'unprovenReasons': ['interrupted-verification']})
+            continue
+        if partial_rejection is not None:
+            rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                         'status': 'failed', 'completed': 0, 'total': record['total'],
+                         'executed': 0, 'failed': 0, 'unexecuted': record['total'],
+                         'disposition': 'terminal-partial-rejection-capture', 'shutdownAudit': partial_rejection,
+                         'unprovenReasons': ['assertion-before-case-sealing']})
+            continue
         if mismatch_capture:
             processes = record.get('processes')
             if not isinstance(processes, list) or not processes or not all(

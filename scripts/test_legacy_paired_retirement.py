@@ -25,12 +25,17 @@ class LegacyPairedRetirementTests(unittest.TestCase):
                          startedAtUtc='2026-10-26T00:00:00+00:00',
                          finishedAtUtc='2026-10-26T00:00:01+00:00',exit=0,processesStopped=True,
                          stdoutPath=str(stdout),stderrPath=str(stderr),failure=None)
-            for case in ('valid','wrong-binary','active','drift','missing-log','missing-journal'):
+            for case in ('valid','wrong-binary','active','drift','missing-log','missing-journal',
+                         'terminal-failure','failed-zero','passed-nonzero','failed-active'):
                 with self.subTest(case=case):
                     record=dict(base)
                     capture=dict(event)
                     if case=='wrong-binary': capture['command']=['different.exe','build']
                     if case=='active': capture['processesStopped']=False
+                    if case in ('terminal-failure','failed-active'): capture.update(status='failed',exit=1)
+                    if case=='failed-active': capture['processesStopped']=False
+                    if case=='failed-zero': capture['status']='failed'
+                    if case=='passed-nonzero': capture['exit']=1
                     if case=='drift': record['inputHashesEnd']={}
                     journal.write_text(json.dumps(capture))
                     stdout.write_text('')
@@ -38,7 +43,7 @@ class LegacyPairedRetirementTests(unittest.TestCase):
                     if case=='missing-journal': journal.unlink()
                     result.write_text(json.dumps(record))
                     actual=legacy_paired_processes(root,result,record,compiler)
-                    self.assertEqual(actual is not None,case=='valid')
-                    if case=='valid': self.assertEqual(actual,[capture])
+                    self.assertEqual(actual is not None,case in ('valid','terminal-failure'))
+                    if case in ('valid','terminal-failure'): self.assertEqual(actual,[capture])
 
 if __name__=='__main__': unittest.main()
