@@ -40,4 +40,18 @@ Assert-Rejected { Assert-ProjectFocusedGateProjection $control.goal $control.led
 $control = New-Control
 $control.goal.currentFocusedGate.completed = 0
 Assert-Rejected { Assert-ProjectFocusedGateProjection $control.goal $control.ledger $control.history } 'PROJECT_CURRENT_FOCUSED_GATE_INVALID'
-@{ status = 'passed'; completed = 6; total = 6; currentAndHistoricalScopesPreserved = $true } | ConvertTo-Json
+$showPath = Join-Path $RepositoryRoot 'scripts/show-project-progress.ps1'
+$showAst = [Management.Automation.Language.Parser]::ParseFile($showPath, [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Project progress renderer has syntax errors' }
+$labelFunctions = @($showAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Assert-ProjectCurrentWorkStepLabels'}, $false))
+if ($labelFunctions.Count -ne 1) { throw 'Current step label authority is missing' }
+. ([scriptblock]::Create($labelFunctions[0].Extent.Text))
+Assert-ProjectCurrentWorkStepLabels $ledger.currentWork
+foreach ($kind in @('missing', 'blank', 'non-string')) {
+    $work = $ledger.currentWork | ConvertTo-Json -Depth 100 | ConvertFrom-Json
+    if ($kind -ceq 'missing') { $work.steps[0].PSObject.Properties.Remove('label') }
+    elseif ($kind -ceq 'blank') { $work.steps[0].label = ' ' }
+    else { $work.steps[0].label = 42 }
+    Assert-Rejected { Assert-ProjectCurrentWorkStepLabels $work } 'PROJECT_CURRENT_STEP_LABEL_REQUIRED'
+}
+@{ status = 'passed'; completed = 10; total = 10; currentAndHistoricalScopesPreserved = $true; currentWorkLabelsChecked = $true } | ConvertTo-Json

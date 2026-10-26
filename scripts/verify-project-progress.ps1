@@ -7,6 +7,8 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $RepositoryRoot = [IO.Path]::GetFullPath($RepositoryRoot)
+$progress = & (Join-Path $RepositoryRoot 'scripts\show-project-progress.ps1') `
+    -RepositoryRoot $RepositoryRoot -AsJson | ConvertFrom-Json
 & (Join-Path $PSScriptRoot 'verify-interpolation-semantic-parity.ps1') -RepositoryRoot $RepositoryRoot
 if (-not $?) { throw 'interpolation semantic parity mapping is invalid' }
 $ledgerPath = Join-Path $RepositoryRoot 'scripts\contracts\stabilization-progress.json'
@@ -45,8 +47,6 @@ if ($collaboration.Count -ne 3 -or
     throw 'collaboration progress must contain three unique gates'
 }
 
-$progress = & (Join-Path $RepositoryRoot 'scripts\show-project-progress.ps1') `
-    -RepositoryRoot $RepositoryRoot -AsJson | ConvertFrom-Json
 if ($progress.focused.total -ne 33 -or
     $progress.focused.passed + $progress.focused.timeout -ne 33) {
     throw 'reported focused progress does not preserve the frozen denominator'

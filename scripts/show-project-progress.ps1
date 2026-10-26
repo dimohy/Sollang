@@ -8,6 +8,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+function Assert-ProjectCurrentWorkStepLabels {
+    param([object]$Work)
+    if ($null -eq $Work -or $null -eq $Work.PSObject.Properties['steps']) {
+        throw 'PROJECT_CURRENT_WORK_STEPS_REQUIRED'
+    }
+    foreach ($step in @($Work.steps)) {
+        if ($null -eq $step.PSObject.Properties['label'] -or $step.label -isnot [string] -or
+            [string]::IsNullOrWhiteSpace($step.label)) {
+            throw 'PROJECT_CURRENT_STEP_LABEL_REQUIRED'
+        }
+    }
+}
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $compilerPath = Join-Path $RepositoryRoot 'scripts\contracts\compiler-defects.json'
@@ -33,6 +45,7 @@ $activeGoal = if (Test-Path -LiteralPath $activeGoalPath -PathType Leaf) {
 } else {
     $null
 }
+if ($null -ne $activeGoal) { Assert-ProjectCurrentWorkStepLabels -Work $activeGoal.currentWork }
 . (Join-Path $PSScriptRoot 'collaboration-evidence.ps1')
 Assert-CollaborationEvidence -RepositoryRoot $RepositoryRoot -Gates @($stabilization.collaborationGates)
 
