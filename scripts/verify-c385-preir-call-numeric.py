@@ -16,6 +16,8 @@ from verification_json_records import write_json_atomic
 from verification_step_diagnostics import SlowStepDiagnostics
 
 
+from verification_async_workers import validate_worker_contract, validate_workers
+
 ROOT = Path(__file__).resolve().parent.parent
 WINDOWS_RUNTIME_LIBRARIES = ("-lws2_32", "-lshell32", "-lbcrypt", "-lole32")
 
@@ -167,6 +169,7 @@ def producer_lease_paths(args, contract):
         return []
     managed = args.managed_compiler.resolve()
     paths = [*managed_runtime_inputs(managed), Path(__file__),
+             ROOT / "scripts/verification_async_workers.py",
              ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
              *[p for case in contract["cases"] for p in case_sources(case)],
              *sorted((ROOT / "stdlib").rglob("*.slg"))]
@@ -377,6 +380,10 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             raise ValueError(f"EMISSION_PREFLIGHT_INVALID_CONTRACT: {case['id']}")
         if case.get("emittedLlvm") and (case["exit"] != 0 or case["stderr"]):
             raise ValueError(f"EMISSION_PREFLIGHT_REQUIRES_SUCCESS: {case['id']}")
+        if "nativeCoroutineWorkers" in case:
+            validate_worker_contract(case["nativeCoroutineWorkers"])
+            if case["exit"] != 0 or group is not None or case.get("emittedLlvm"):
+                raise ValueError("ASYNC_WORKER_REQUIRES_DIRECT_SUCCESS")
         if not isinstance(case.get("requireNoLlvm", False), bool):
             raise ValueError(f"NO_LLVM_EXPECTATION_INVALID: {case['id']}")
         if case.get("requireNoLlvm") and (case["exit"] != 1 or group is not None):
@@ -414,6 +421,7 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
              ROOT / 'scripts/verification_execution.py', ROOT / 'scripts/verification_json_records.py', ROOT / 'scripts/verification_step_diagnostics.py',
              ROOT / 'scripts/verification_observed_sources.py', *observed, *runtime_inputs,
              ROOT / "scripts/verification_contract_lease.py",
+             ROOT / "scripts/verification_async_workers.py",
              ROOT / "src/Sollang.Compiler/Semantics/SemanticCompiler.cs",
              *[path for case in cases for path in case_sources(case)], *sorted((ROOT / "stdlib").rglob("*.slg"))]
     if format_paths:
@@ -563,6 +571,12 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                 row["buildExit"] = run(command, folder / "build")
                 row["buildStderr"] = read(folder / "build.stderr").strip()
             passed = row["buildExit"] == case["exit"] and row["buildStderr"] == case["stderr"]
+            if passed and args.mode == "paired" and "nativeCoroutineWorkers" in case:
+                worker_llvm = [path for path in (Path(str(exe) + ".ll"), exe.with_suffix(".ll")) if path.is_file()]
+                if len(worker_llvm) != 1:
+                    raise ValueError("ASYNC_WORKER_LLVM_AUTHORITY_MISSING")
+                row["nativeCoroutineWorkers"] = validate_workers(read(worker_llvm[0]), case["nativeCoroutineWorkers"])
+                row["nativeCoroutineLlvmSha256"] = sha(worker_llvm[0])
             if case.get("requireNoLlvm"):
                 row["unexpectedLlvmOutputs"] = sorted(
                     str(path.relative_to(folder)) for path in folder.rglob("*")
