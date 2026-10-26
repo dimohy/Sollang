@@ -6105,72 +6105,73 @@ public firstExpressionOperandDiagnostic package: ref analysis.PackageAnalysis, p
                                 }
                             }
                     }
-                flowSource! >= 0 and materializeTarget! >= 0 -> if {
-                    typeIdByAst![flowSource!] => receiverTypeId
-                    receiverTypeId >= 0 -> if {
-                        resolved.types[receiverTypeId] => receiverType
-                        receiverType.kind == 1 and receiverType.origin == 1
-                            and receiverType.symbol == 1 -> if {
-                                0 => argumentCount!
-                                -1 => argumentGlobal!
-                                materializeCall! >= 0 -> if {
-                                    firstChildByAst![materializeCall!] => argumentChild!
-                                    argumentChild! >= 0 -> while {
-                                        argumentCount! + 1 => argumentCount!
-                                        argumentChild! => argumentGlobal!
-                                        nextChildByAst![argumentChild!] => argumentChild!
+                flowSource! >= 0 and materializeTarget! >= 0 and not declaredArenaTarget!
+                    -> if {
+                        typeIdByAst![flowSource!] => receiverTypeId
+                        receiverTypeId >= 0 -> if {
+                            resolved.types[receiverTypeId] => receiverType
+                            receiverType.kind == 1 and receiverType.origin == 1
+                                and receiverType.symbol == 1 -> if {
+                                    0 => argumentCount!
+                                    -1 => argumentGlobal!
+                                    materializeCall! >= 0 -> if {
+                                        firstChildByAst![materializeCall!] => argumentChild!
+                                        argumentChild! >= 0 -> while {
+                                            argumentCount! + 1 => argumentCount!
+                                            argumentChild! => argumentGlobal!
+                                            nextChildByAst![argumentChild!] => argumentChild!
+                                        }
                                     }
-                                }
-                                0 => materializeFailure!
-                                -1 => materializeArgumentType!
-                                package.nodes[materializeTarget!].start => failureOffset!
-                                argumentCount! != 1 -> if { 12 => materializeFailure! } else {
-                                    typeIdByAst![argumentGlobal!] => materializeArgumentType!
-                                    materializeArgumentType! >= 0 -> if {
-                                        resolved.types[materializeArgumentType!] => argumentType
-                                        not (argumentType.kind == 1 and argumentType.origin == 1
-                                            and argumentType.symbol == 15) -> if {
-                                                13 => materializeFailure!
-                                                package.nodes[argumentGlobal!].start => failureOffset!
-                                            } else {
-                                                package.nodes[argumentGlobal!] => argumentNode
-                                                argumentNode.kind != 15 -> if {
-                                                    15 => materializeFailure!
-                                                    argumentNode.start => failureOffset!
+                                    0 => materializeFailure!
+                                    -1 => materializeArgumentType!
+                                    package.nodes[materializeTarget!].start => failureOffset!
+                                    argumentCount! != 1 -> if { 12 => materializeFailure! } else {
+                                        typeIdByAst![argumentGlobal!] => materializeArgumentType!
+                                        materializeArgumentType! >= 0 -> if {
+                                            resolved.types[materializeArgumentType!] => argumentType
+                                            not (argumentType.kind == 1 and argumentType.origin == 1
+                                                and argumentType.symbol == 15) -> if {
+                                                    13 => materializeFailure!
+                                                    package.nodes[argumentGlobal!].start => failureOffset!
                                                 } else {
-                                                    resolvedSymbolByAst![argumentGlobal!] => ownerSymbolIndex
-                                                    ownerSymbolIndex >= 0 -> if {
-                                                        package.symbols[ownerSymbolIndex] => ownerSymbol
-                                                        not (package -> mutableBorrowOwnerSymbol(sourceIndex!, ownerSymbol))
-                                                            -> if {
-                                                                14 => materializeFailure!
-                                                                argumentNode.start => failureOffset!
-                                                            }
+                                                    package.nodes[argumentGlobal!] => argumentNode
+                                                    argumentNode.kind != 15 -> if {
+                                                        15 => materializeFailure!
+                                                        argumentNode.start => failureOffset!
+                                                    } else {
+                                                        resolvedSymbolByAst![argumentGlobal!] => ownerSymbolIndex
+                                                        ownerSymbolIndex >= 0 -> if {
+                                                            package.symbols[ownerSymbolIndex] => ownerSymbol
+                                                            not (package -> mutableBorrowOwnerSymbol(sourceIndex!, ownerSymbol))
+                                                                -> if {
+                                                                    14 => materializeFailure!
+                                                                    argumentNode.start => failureOffset!
+                                                                }
+                                                        }
                                                     }
                                                 }
-                                            }
+                                        }
+                                    }
+                                    materializeFailure! > 0 -> if {
+                                        materializeFailure! == 12 -> if { materializeTarget! } else { argumentGlobal! }
+                                            => failureAst
+                                        ExpressionOperandDiagnostic {
+                                            code: materializeFailure!
+                                            sourceModule: sourceIndex!
+                                            astNode: astIndex!
+                                            operandAst: failureAst - range.astStart
+                                            operatorKind: -1
+                                            locationOffset: failureOffset!
+                                            operandTypeSymbol: -1
+                                            operandTypeId: materializeArgumentType!
+                                            firstTypeId: -1
+                                        } => candidate
+                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+                                            -> if { candidate => selected! }
                                     }
                                 }
-                                materializeFailure! > 0 -> if {
-                                    materializeFailure! == 12 -> if { materializeTarget! } else { argumentGlobal! }
-                                        => failureAst
-                                    ExpressionOperandDiagnostic {
-                                        code: materializeFailure!
-                                        sourceModule: sourceIndex!
-                                        astNode: astIndex!
-                                        operandAst: failureAst - range.astStart
-                                        operatorKind: -1
-                                        locationOffset: failureOffset!
-                                        operandTypeSymbol: -1
-                                        operandTypeId: materializeArgumentType!
-                                        firstTypeId: -1
-                                    } => candidate
-                                    package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
-                                        -> if { candidate => selected! }
-                                }
-                            }
+                        }
                     }
-                }
             }
             logical.kind == 22 and (logical.operatorKind == -26 or logical.operatorKind == 16)
                 -> if {

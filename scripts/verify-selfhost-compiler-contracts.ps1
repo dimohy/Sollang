@@ -961,7 +961,7 @@ Assert-MatchCount $typedCore 'recursiveTypes\.referenceIndexByTypeAst\[' 9 "Type
 Assert-MatchCount $typeCheck 'recursiveTypes\.referenceIndexByTypeAst\[' 3 "type-check direct indexed exact reference lookups"
 Assert-NotContains $expressionTypeIds 'referenceIndexForTypeAst' "unused O0 recursive-reference lookup helper"
 Assert-Contains $expressionTypeIdsPaths 'resolveLateArrayTypes(prepared, types, expressions, expressionIndexByAst, expectedContextByAst)' "late array semantic path phase integration"
-Assert-MatchCount ($expressionTypeIds + "`n" + $expressionTypeIdsPaths) 'resolveLateArrayTypes\(prepared, types!?, expressions!?, expressionIndexByAst!?\)' 1 "single late array semantic phase integration"
+Assert-MatchCount ($expressionTypeIds + "`n" + $expressionTypeIdsPaths) 'resolveLateArrayTypes\(prepared, types!?, expressions!?, expressionIndexByAst!?, expectedContextByAst\)' 1 "single late array semantic phase integration"
 Assert-Contains $lateArrayTypes '[Int; ~] => nearestDistanceByChild!' "late indexed-element direct-child distance table"
 Assert-Contains $lateArrayTypes 'ancestorNode.kind == 37' "late indexed-element array ancestor selection"
 Assert-Contains $lateArrayTypes 'typedChildCount![globalAst] == directChildCount![globalAst]' "late array complete direct-child gate"
@@ -1050,7 +1050,7 @@ Assert-Contains $functionScheduling "scheduleNode.operand0 -> aggregateValueInde
 Assert-Contains $text "entryScheduleNode.operand0 -> aggregateValueIndex(context, state) => entryScheduleAssignmentValue" "production canonical assignment-value scheduling"
 Assert-Contains $functionScheduling "context.ir[scheduleAssignmentChildSearch!].parent == scheduleNode.operand0" "canonical assignment direct-child scheduling"
 Assert-Contains $text "context.ir[entryScheduleAssignmentChildSearch!].parent == entryScheduleNode.operand0" "production canonical assignment direct-child scheduling"
-Assert-Contains $control "localCandidate.operand0 -> aggregateValueIndex(context, state) => localAssignmentValue" "control-region canonical assignment-value scheduling"
+Assert-Contains $control "localCandidate.operand0 -> aggregateValueIndex(context, state) -> regionValueScheduleIndex(regionTaskNode, context) => localAssignmentValue" "control-region canonical assignment-value scheduling"
 Assert-Contains $control "context.ir[localAssignmentChildSearch!].parent == localCandidate.operand0" "control-region canonical assignment direct-child scheduling"
 Assert-Contains $containers "assignment.operand0 -> aggregateValueIndex(context, state) => assignmentValueIndex" "canonical assignment-value emission"
 Assert-MatchCount $containers 'assignment\.operand0 -> aggregateValueIndex\(context, state\) => assignmentValueIndex' 2 "indexed/member canonical assignment-value paths"
@@ -1098,11 +1098,14 @@ foreach ($formalVerifier in @($stage2Verifier, $stage3Verifier)) {
     Assert-Contains $formalVerifier '--exact 1193-struct-field-collection-binding-baseline' "formal collection-binding baseline fixture"
     Assert-Contains $formalVerifier '--exact 1194-struct-field-collection-binding-perturbed' "formal collection-binding permutation fixture"
 }
-$productionRecursiveTypeResolutions = ([regex]::Matches($textContext, 'expressionTypeIds\.resolveContext')).Count
+$productionRecursiveTypeResolutions = ([regex]::Matches($textContext, 'expressionTypeIds\.resolveCallContextWithExternalResults')).Count
 if ($productionRecursiveTypeResolutions -ne 1) {
     Register-StaticAssertionFailure "native LLVM preparation must resolve recursive expression types exactly once; actual=$productionRecursiveTypeResolutions"
 }
-$recursiveTypeResolutionOffset = $textContext.IndexOf("prepared -> expressionTypeIds.resolveContext => recursiveTypes!", [StringComparison]::Ordinal)
+$recursiveTypeResolutionOffset = $textContext.IndexOf("initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResults(externalResults) => resolvedCallContext", [StringComparison]::Ordinal)
+Assert-Contains $textContext 'resolvedCallContext.prepared => prepared' "preparation consumes the completed call table"
+Assert-Contains $textContext 'resolvedCallContext.types => recursiveTypes!' "preparation consumes the matching completed type table"
+Assert-NotContains $textContext 'prepared -> expressionTypeIds.resolveContext' "preparation avoids a second disconnected type pass"
 $capabilityHelperOffset = $textContext.IndexOf("lowerPreparedIr prepared:", [StringComparison]::Ordinal)
 $parallelLoweringOffset = $textContext.IndexOf("prepared -> typedIr.lowerResolvedContextParallel(recursiveTypes)", [StringComparison]::Ordinal)
 $serialLoweringOffset = $textContext.IndexOf("prepared -> typedIr.lowerResolvedContext(recursiveTypes)", [StringComparison]::Ordinal)
@@ -1123,10 +1126,13 @@ if ($capabilityHelperOffset -lt 0 -or
 
 $nativePrepareCalls = ([regex]::Matches($entrypoints, 'prepareRequest -> prepareNative => context')).Count
 $serialPrepareCalls = ([regex]::Matches($entrypoints, 'prepareRequest -> prepare => context')).Count
-if ($nativePrepareCalls -ne 4 -or $serialPrepareCalls -ne 2) {
+if ($nativePrepareCalls -ne 2 -or $serialPrepareCalls -ne 1) {
     Register-StaticAssertionFailure "target preparation routing drifted: native=$nativePrepareCalls, browser=$serialPrepareCalls"
 }
 
+Assert-Matches $typedCore '(?s)resolvedFlowIntrinsicOpcode source:.*?selectedConsole! -> if \{ -1 -> return \}\s+prepared\.package\.nodes\[globalAst\] => flowNode' "selected final printer cannot inherit a producer intrinsic opcode"
+Assert-Contains $expressionTypeIdsPaths 'and sourceType.symbol == expectedReceiver and not selectedDeclaredFunction!' "declared materialize target precedes builtin type seeding"
+Assert-Contains $semanticDiagnostics 'flowSource! >= 0 and materializeTarget! >= 0 and not declaredArenaTarget!' "declared materialize target precedes builtin argument diagnosis"
 Assert-Contains $typedCore "public isSocketRuntimeOpcode" "socket runtime opcode predicate"
 Assert-Contains $ast "methodIntrinsicToken!" "inherent intrinsic declaration scan"
 Assert-Matches $ast '(?s)declaration!\.kind == 7 or declaration!\.kind == 31.*?methodHeaderToken\.kind == grammar\.tokenIdEqual\(\).*?methodIntrinsicEqual!.*?methodHeaderToken\.span\.length == 9.*?declaration!\.flags \+ 128' "exact global and inherent equals-intrinsic AST identity"
@@ -1305,19 +1311,19 @@ Assert-Contains $typedCore "or opcode == -280" "socket noDelay opcode"
 Assert-Contains $typedCore "opcode <= -281 and opcode >= -284" "socket timeout opcode interval"
 Assert-Contains $typedCore "or opcode == -287" "socket receiveFromInto opcode"
 Assert-Contains $typedCore "opcode <= -289 and opcode >= -296" "socket send-range, receive-append, peek, keep-alive, and linger opcode interval"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "setNoDelay")' "socket setNoDelay intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "noDelay")' "socket noDelay intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "setReadTimeout")' "socket setReadTimeout intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "readTimeout")' "socket readTimeout intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "setWriteTimeout")' "socket setWriteTimeout intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "writeTimeout")' "socket writeTimeout intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "receiveFromInto")' "socket receiveFromInto intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "peekFromInto")' "socket peekFromInto intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "peekInto")' "socket peekInto intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "setKeepAlive")' "socket setKeepAlive intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "keepAlive")' "socket keepAlive intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "setLinger")' "socket setLinger intrinsic identity"
-Assert-Contains $typedCore 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "linger")' "socket linger intrinsic identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "setNoDelay"\)\s+-> if \{ -279 => call!\.opcode \}' "socket setNoDelay canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "noDelay"\)\s+-> if \{ -280 => call!\.opcode \}' "socket noDelay canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "setReadTimeout"\)\s+-> if \{ -281 => call!\.opcode \}' "socket setReadTimeout canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "readTimeout"\)\s+-> if \{ -282 => call!\.opcode \}' "socket readTimeout canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "setWriteTimeout"\)\s+-> if \{ -283 => call!\.opcode \}' "socket setWriteTimeout canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "writeTimeout"\)\s+-> if \{ -284 => call!\.opcode \}' "socket writeTimeout canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "receiveFromInto"\)\s+-> if \{ -287 => call!\.opcode \}' "socket receiveFromInto canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "peekFromInto"\)\s+-> if \{ -291 => call!\.opcode \}' "socket peekFromInto canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "peekInto"\)\s+-> if \{ -292 => call!\.opcode \}' "socket peekInto canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "setKeepAlive"\)\s+-> if \{ -293 => call!\.opcode \}' "socket setKeepAlive canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "keepAlive"\)\s+-> if \{ -294 => call!\.opcode \}' "socket keepAlive canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "setLinger"\)\s+-> if \{ -295 => call!\.opcode \}' "socket setLinger canonical intrinsic opcode identity"
+Assert-Matches $typedResolvedContextNormalize 'sourceMatches\(name\.span\.start, name\.span\.length, "linger"\)\s+-> if \{ -296 => call!\.opcode \}' "socket linger canonical intrinsic opcode identity"
 Assert-Contains $coreCalls "context.ir[callIndex].opcode == -287" "socket receiveFromInto mutable-buffer ABI"
 Assert-Contains $coreCalls "context.ir[callIndex].opcode == -291" "socket peekFromInto mutable-buffer ABI"
 Assert-Contains $coreCalls "context.ir[callIndex].opcode == -292" "socket peekInto mutable-buffer ABI"
@@ -1709,8 +1715,8 @@ Assert-Contains $ownership 'sameNominalTypeIdentity leftTypeId: Int, rightTypeId
 Assert-Contains $textContext 'valueLayoutCycles' "by-value layout dependency graph"
 Assert-Matches $textContext '(?s)valueLayoutCycles\(semanticFields!.*?not hasCyclicLayout! => aggregateLayoutChanged!' "cycle rejection precedes numeric layout iteration"
 Assert-Contains $textContext 'recursiveTypes!.referenceIndexByTypeAst' "canonical annotation index reuse"
-Assert-Contains $textContext '((current.kind == 4 and current.length > 0) or current.kind == 12)' "fixed and bounded array dependency edges"
-Assert-Contains $textContext 'current.kind == 13' "bounded dictionary dependency edges"
+Assert-Contains $typeIds '((current.kind == 4 and current.length > 0) or current.kind == 12)' "fixed and bounded array dependency edges"
+Assert-Contains $typeIds 'current.kind == 13' "bounded dictionary dependency edges"
 Assert-Contains $invariants 'context.typeLayoutStatuses[index!] == 3' "invalid value-layout admission"
 Assert-Contains $invariants '(context -> invalidValueLayoutType) >= 0 -> if { 1 -> return }' "single pre-LLVM recursive layout diagnostic"
 Assert-Contains $invariantDiagnostics 'compiler error S058: type has a recursive by-value layout' "source-located recursive value diagnostic"
@@ -2347,7 +2353,7 @@ Assert-Contains $typedValueAliases 'nodes[nodes[binding!.operand0].operand0].ope
 Assert-Contains $typedFunctionLowering 'sealLateGrowablePushCollisions results: mut [TypedIrNode; ~]' "late growable push collision recovery helper"
 Assert-Contains $typedFunctionLowering 'arm.kind == 19 -> if { arm.nextOperand => armIndex! } else { -1 => armIndex! }' "direct final subject-when arm terminal closure"
 Assert-Contains $typedFunctionLowering 'types[growablePushReceiverTypeId!].kind == 3' "late push collision recovery requires a canonical growable-array receiver"
-Assert-Contains $typedFunctionLowering 'flowIntrinsicOpcode(' "late push collision recovery reuses canonical intrinsic spelling"
+Assert-Contains $typedFunctionLowering 'resolvedFlowIntrinsicOpcode(prepared, growablePush!.sourceModule, growablePush!.astNode)' "late push collision recovery preserves selected callee identity"
 Assert-Contains $typedResolvedContextFinalize 'nodes -> sealLateGrowablePushCollisions(prepared, frozenRecursiveSemanticTypes)' "late push collision recovery follows final nominal member sealing"
 Assert-Contains $typedResolvedContextNormalize 'postIndexBinding! -> mayRefreshValueAlias(postIndexBindingValue)' "post-index value alias no-downgrade gate"
 Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealLateResolvedCallResultTypes' 4 "bounded late resolved call result type sealing rounds"
@@ -3393,8 +3399,9 @@ Assert-Matches $ownership '(?s)regionFullyMovesBinding regionIndex:.*?context\.i
 Assert-Contains $ownership 'armIndex! -> enumMatchArmRegion(context, state) => armRegion' "enum ownership analysis resolves the emitted body region"
 Assert-Contains $control 'enumMatchArmRegion armIndex:' "canonical enum arm body resolver"
 Assert-Contains $control 'armIndex! -> enumMatchArmRegion(context, state) => emittedArmRegion' "enum emission shares the ownership body resolver"
-Assert-Contains $control '(match.operand0 -> enumMatchOwnsSubject(context, state))' "enum match derives fresh-producer ownership from its exact subject"
-Assert-Matches $control '(?s)subject\.kind == 5 and subject\.operand0 >= 0.*?context\.ir\[subject\.operand0\]\.kind == 17.*?kind == 29.*?state\.frozenEnumMatchConsumed -> ownershipEmitter\.enumMatchConsumes\(match\.operand0, subject\.kind, subject\.operand0\).*?=> matchOwnsSubject' "enum match also derives transferred binding ownership from the frozen consumption snapshot"
+Assert-Contains $control 'matchIndex -> enumMatchOwnsPayload(context, state) => matchOwnsSubject' "enum emission consumes shared payload ownership decision"
+Assert-Contains $ownership '(match.operand0 -> enumMatchOwnsSubject(context, state))' "enum match derives fresh-producer ownership from its exact subject"
+Assert-Matches $ownership '(?s)enumMatchOwnsPayload matchIndex:.*?subject\.kind == 5 and subject\.operand0 >= 0.*?context\.ir\[subject\.operand0\]\.kind == 17.*?kind == 29.*?state\.frozenEnumMatchConsumed -> ownershipEmitter\.enumMatchConsumes\(match\.operand0, subject\.kind, subject\.operand0\)' "enum match also derives transferred binding ownership from the frozen consumption snapshot"
 Assert-Matches $control 'armBindingIndex >= 0\s+and matchOwnsSubject\s+and context.ir\[armBindingIndex\].typeId >= 0' "borrowed enum payloads have no independent cleanup"
 $memberAssignmentSource = [IO.File]::ReadAllText($containerControlPath)
 Assert-Matches $memberAssignmentSource '(?s)store %sollang.struct.*?assignmentBinding -> storageAlign\(context, state\) -> writeDecimalLine\s+request.nodeIndex -> emitCompletedPatternBindingTransferMarks' "member assignment marks ownership transfer after the successful store"
