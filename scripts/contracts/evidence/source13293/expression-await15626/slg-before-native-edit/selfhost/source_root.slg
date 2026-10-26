@@ -1,0 +1,136 @@
+namespace sollang.compiler.source_root
+
+import sys.directory as directory
+import sys.path as path
+
+sourceError message: Text -> Result<[path.Path; ~], Text> {
+    Result<[path.Path; ~], Text>.Err(message)
+}
+
+# A source root is a confined source set. Each directory snapshot is already
+# raw-UTF-8 sorted; the work queue composes those snapshots in deterministic
+# breadth-first order. Symlinks and non-source files are never traversed.
+public discover root: ref path.Path -> Result<[path.Path; ~], Text> uses File {
+    [path.Path; ~] => directories!
+    root -> pathText => rootText
+    root -> styleKind => style
+    directories! -> push(path.fromText(rootText, style))
+    [path.Path; ~] => sources!
+    UIntSize(directories! -> len) > 0 -> while {
+        directories! -> take(0) => current
+        directory.readRawSnapshot(current) => raw
+        raw.count == 0 and (raw.bytes -> len) == 1 -> if {
+            "source root could not be read" -> sourceError => failure
+            failure -> return
+        }
+        UIntSize(0) => cursor!
+        UIntSize(0) => entryIndex!
+        entryIndex! < raw.count -> while {
+            raw -> directory.rawByte(Int(cursor!)) => kind
+            cursor! + 1 => cursor!
+            UIntSize(raw -> directory.rawByte(Int(cursor!))) => length0
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 1))) * 256 => length1
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 2))) * 65536 => length2
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 3))) * 16777216 => length3
+            length0 + length1 + length2 + length3 => nameLength
+            cursor! + 4 => cursor!
+            [UInt8; ~] => nameBytes!
+            UIntSize(0) => nameIndex!
+            nameIndex! < nameLength -> while {
+                nameBytes! -> push(raw -> directory.rawByte(Int(cursor! + nameIndex!)))
+                nameIndex! + 1 => nameIndex!
+            }
+            cursor! + nameLength => cursor!
+            path.fromBytes(nameBytes!, style)? => name
+            kind == 0 -> if {
+                name -> endsWithText(".slg") -> if {
+                    current -> joinPath(name)? => sourcePath
+                    sources! -> push(sourcePath)
+                }
+            } else {
+                kind == 1 -> if {
+                    current -> joinPath(name)? => directoryPath
+                    directories! -> push(directoryPath)
+                }
+            }
+            entryIndex! + 1 => entryIndex!
+        }
+    }
+    (sources! -> len) == 0 -> if {
+        "source root contains no .slg files" -> sourceError => failure
+        failure -> return
+    }
+    Result<[path.Path; ~], Text>.Ok(sources!)
+}
+
+# Native CLI discovery keeps the owned Path array out of a Result payload.
+# This avoids moving a nested affine container through an enum before every
+# mapped source has acquired its own lifetime.
+public discoverDirect root: ref path.Path -> [path.Path; ~] uses File {
+    [path.Path; ~] => directories!
+    root -> pathText => rootText
+    root -> styleKind => style
+    directories! -> push(path.fromText(rootText, style))
+    [path.Path; ~] => sources!
+    0 => directoryIndex!
+    directoryIndex! < (directories! -> len) -> while {
+        directories![directoryIndex!] -> pathText => currentText
+        currentText -> path.fromText(style) => current
+        directory.readRawSnapshot(current) => raw
+        raw.count == 0 and (raw.bytes -> len) == 1 -> if {
+            [path.Path; ~] => empty
+            empty -> return
+        }
+        UIntSize(0) => cursor!
+        UIntSize(0) => entryIndex!
+        entryIndex! < raw.count -> while {
+            raw -> directory.rawByte(Int(cursor!)) => kind
+            cursor! + 1 => cursor!
+            UIntSize(raw -> directory.rawByte(Int(cursor!))) => length0
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 1))) * 256 => length1
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 2))) * 65536 => length2
+            UIntSize(raw -> directory.rawByte(Int(cursor! + 3))) * 16777216 => length3
+            length0 + length1 + length2 + length3 => nameLength
+            cursor! + 4 => cursor!
+            [UInt8; ~] => nameBytes!
+            UIntSize(0) => nameIndex!
+            nameIndex! < nameLength -> while {
+                nameBytes! -> push(raw -> directory.rawByte(Int(cursor! + nameIndex!)))
+                nameIndex! + 1 => nameIndex!
+            }
+            cursor! + nameLength => cursor!
+            path.fromBytes(nameBytes!, style) -> when {
+                Ok(name) {
+                    kind == 0 -> if {
+                        name -> endsWithText(".slg") -> if {
+                            current -> joinPath(name) -> when {
+                                Ok(sourcePath) { sources! -> push(sourcePath) }
+                                Err(_) {
+                                    [path.Path; ~] => empty
+                                    empty -> return
+                                }
+                            }
+                        }
+                    } else {
+                        kind == 1 -> if {
+                            current -> joinPath(name) -> when {
+                                Ok(directoryPath) { directories! -> push(directoryPath) }
+                                Err(_) {
+                                    [path.Path; ~] => empty
+                                    empty -> return
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) {
+                    [path.Path; ~] => empty
+                    empty -> return
+                }
+            }
+            entryIndex! + 1 => entryIndex!
+        }
+        directoryIndex! + 1 => directoryIndex!
+    }
+    sources!
+}

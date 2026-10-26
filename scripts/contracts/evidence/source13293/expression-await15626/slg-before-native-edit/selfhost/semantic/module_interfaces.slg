@@ -1,0 +1,843 @@
+namespace sollang.compiler.semantic.module_interfaces
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import syntax.generated.slg as grammar
+import sys.file as file
+import std.algorithm as algorithm
+
+# Stable module cache identity is split deliberately: implementationHash sees
+# every non-trivia token, while interfaceHash sees only exported declarations
+# and their signature-bearing members. Consumers therefore survive body-only
+# edits, but never reuse an interface after a public ABI change.
+public struct ModuleFingerprint {
+    public sourceIndex: Int
+    public moduleHash: UInt64
+    public sourceHash: UInt64
+    public interfaceHash: UInt64
+    public implementationHash: UInt64
+    public importHash: UInt64
+    public publicSymbolCount: Int
+    public importCount: Int
+}
+
+# Canonical interface words are retained alongside their lookup hash. Every
+# source byte is one lossless word; persistent storage writes words in explicit
+# little-endian order. A cache reader compares the complete sequence after
+# locating an entry by
+# interfaceHash, so a hash collision can never silently accept a different API.
+public struct ModuleInterfaces {
+    public interfaceHashes: [UInt64; ~]
+    public wordStarts: [Int; ~]
+    public wordLengths: [Int; ~]
+    public words: [UInt64; ~]
+}
+
+public struct DeclarationIdentity {
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+public struct DeclarationIdentityIndex {
+    public keyIndexBySymbol: [Int; ~]
+    public sourceModules: [Int; ~]
+    public symbols: [Int; ~]
+    public starts: [Int; ~]
+    public lengths: [Int; ~]
+    public hashes: [UInt64; ~]
+    public words: [UInt64; ~]
+    public status: Int
+}
+
+# 0 unique match, 1 missing/invalid, 2 ambiguous. Never select a hash bucket's
+# first declaration without comparing the complete scoped identity.
+public struct DeclarationIdentityMatch {
+    public sourceModule: Int
+    public symbol: Int
+    public status: Int
+}
+
+public struct EncodedDeclarationKeys {
+    public words: [UInt64; ~]
+    public keyIds: [Int; ~]
+    public status: Int
+}
+
+struct DeclarationKeyComparison {
+    words: ref [UInt64; ~]
+    starts: ref [Int; ~]
+    lengths: ref [Int; ~]
+}
+
+borrowKeyData<T> values: ref [T; ~] -> ref [T; ~] => values
+
+impl algorithm.Comparison for DeclarationKeyComparison {
+    type Item = Int
+    public compare: self, left: ref Int, right: ref Int -> Int {
+        0 => wordIndex!
+        wordIndex! < self.lengths[left] and wordIndex! < self.lengths[right]
+            -> while {
+                self.words[self.starts[left] + wordIndex!] => a
+                self.words[self.starts[right] + wordIndex!] => b
+                a < b -> if { -1 -> return }
+                a > b -> if { 1 -> return }
+                wordIndex! + 1 => wordIndex!
+            }
+        self.lengths[left] < self.lengths[right] -> if { -1 -> return }
+        self.lengths[left] > self.lengths[right] -> if { 1 -> return }
+        0
+    }
+}
+
+# Auxiliary canonical key payload, not a standalone semantic-cache admission
+# envelope. The enclosing generation owns compiler/target/config and SHA-256.
+public encodeDeclarationKeys index: ref DeclarationIdentityIndex -> EncodedDeclarationKeys {
+    index.sourceModules -> len => count
+    index.status != 0 or (index.starts -> len) != count or (index.lengths -> len) != count
+        -> if { EncodedDeclarationKeys { words: [UInt64; ~], keyIds: [Int; ~], status: 1 } -> return }
+    [Int; ~] => order!
+    [Int; ~] => keyIds!
+    0 => keyIndex!
+    keyIndex! < count -> while {
+        index.starts[keyIndex!] => start
+        index.lengths[keyIndex!] => length
+        start < 0 or length <= 0 or start > (index.words -> len)
+            -> if { EncodedDeclarationKeys { words: [UInt64; ~], keyIds: [Int; ~], status: 1 } -> return }
+        length > (index.words -> len) - start -> if {
+            EncodedDeclarationKeys { words: [UInt64; ~], keyIds: [Int; ~], status: 1 } -> return
+        }
+        order! -> push(keyIndex!)
+        keyIds! -> push(-1)
+        keyIndex! + 1 => keyIndex!
+    }
+    DeclarationKeyComparison { words: index.words -> borrowKeyData, starts: index.starts -> borrowKeyData, lengths: index.lengths -> borrowKeyData } => comparison
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } -> sort(order!, comparison)
+    [UInt64(6002245308444529747), 1, 0, 0, 7, UInt64(count), 7; ~] => words!
+    0 => ordinal!
+    ordinal! < count -> while {
+        order![ordinal!] => selected
+        ordinal! > 0 -> if {
+            comparison -> compare(order![ordinal! - 1], selected) == 0
+                -> if {
+                    EncodedDeclarationKeys { words: [UInt64; ~], keyIds: [Int; ~], status: 2 } -> return
+                }
+        }
+        ordinal! => keyIds![selected]
+        index.lengths[selected] => length
+        words! -> push(UInt64(length))
+        0 => wordIndex!
+        wordIndex! < length -> while {
+            words! -> push(index.words[index.starts[selected] + wordIndex!])
+            wordIndex! + 1 => wordIndex!
+        }
+        ordinal! + 1 => ordinal!
+    }
+    UInt64(words! -> len) => words![4]
+    EncodedDeclarationKeys { words: words!, keyIds: keyIds!, status: 0 }
+}
+
+public decodeDeclarationKeys words: ref [UInt64; ~] -> DeclarationIdentityIndex {
+    [Int; ~] => sources!
+    [Int; ~] => symbols!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => hashes!
+    [UInt64; ~] => keys!
+    0 => status!
+    (words -> len) < 7 -> if { 1 => status! }
+    status! == 0 -> if {
+        words[0] != 6002245308444529747 or words[1] != 1 or words[2] != 0 or words[3] != 0
+            or words[4] != UInt64(words -> len) or words[6] != 7
+            or words[5] > UInt64((words -> len) - 7)
+            -> if { 1 => status! }
+    }
+    0 => count!
+    status! == 0 -> if { Int(words[5]) => count! }
+    7 => cursor!
+    0 => ordinal!
+    ordinal! < count! and status! == 0 -> while {
+        cursor! >= (words -> len) -> if { 1 => status! } else {
+            words[cursor!] => lengthWord
+            cursor! + 1 => cursor!
+            lengthWord == 0 or lengthWord > UInt64((words -> len) - cursor!)
+                -> if { 1 => status! } else {
+                    Int(lengthWord) => length
+                    starts! -> push(keys! -> len)
+                    lengths! -> push(length)
+                    sources! -> push(0)
+                    symbols! -> push(ordinal!)
+                    UInt64(7809847782465536322) => hash!
+                    0 => wordIndex!
+                    wordIndex! < length -> while {
+                        words[cursor!] => word
+                        keys! -> push(word)
+                        hash! -> mix(word) => hash!
+                        cursor! + 1 => cursor!
+                        wordIndex! + 1 => wordIndex!
+                    }
+                    hashes! -> push(hash!)
+                }
+        }
+        ordinal! + 1 => ordinal!
+    }
+    status! == 0 and cursor! != (words -> len) -> if { 1 => status! }
+    status! == 0 -> if {
+        DeclarationKeyComparison { words: keys! -> borrowKeyData, starts: starts! -> borrowKeyData, lengths: lengths! -> borrowKeyData } => comparison
+        1 => current!
+        current! < count! and status! == 0 -> while {
+            current! - 1 => previous
+            comparison -> compare(previous, current!) >= 0
+                -> if { 2 => status! }
+            current! + 1 => current!
+        }
+    }
+    status! != 0 -> if {
+        DeclarationIdentityIndex { keyIndexBySymbol: [Int; ~], sourceModules: [Int; ~], symbols: [Int; ~], starts: [Int; ~], lengths: [Int; ~], hashes: [UInt64; ~], words: [UInt64; ~], status: status! } -> return
+    }
+    DeclarationIdentityIndex { keyIndexBySymbol: [Int; ~], sourceModules: sources!, symbols: symbols!, starts: starts!, lengths: lengths!, hashes: hashes!, words: keys!, status: 0 }
+}
+
+mix hash: UInt64, value: UInt64 -> UInt64 {
+    hash * 1099511628211 + value + 97
+}
+
+# Raw source identity is deliberately available before lexing or semantic
+# analysis. It is a fast unchanged-file gate, never the sole proof that a
+# cached semantic or codegen artifact is compatible.
+public sourceIdentity source: Text -> UInt64 {
+    UInt64(1469598103934665603) => hash!
+    source -> len => sourceLength
+    UInt64(sourceLength) => sourceLengthWord
+    hash! -> mix(sourceLengthWord) => hash!
+    UIntSize(0) => index!
+    index! < sourceLength -> while {
+        source -> byte(index!) => sourceByte
+        UInt64(sourceByte) => sourceByteWord
+        hash! -> mix(sourceByteWord) => hash!
+        index! + 1 => index!
+    }
+    UInt64(0) => result!
+    true -> if { hash! => result! }
+    result!
+}
+
+mappedSourceIdentity source: file.SourceText -> UInt64 {
+    UInt64(1469598103934665603) => hash!
+    source -> len => sourceLength
+    UInt64(sourceLength) => sourceLengthWord
+    hash! -> mix(sourceLengthWord) => hash!
+    UIntSize(0) => index!
+    index! < sourceLength -> while {
+        source -> byte(index!) => sourceByte
+        UInt64(sourceByte) => sourceByteWord
+        hash! -> mix(sourceByteWord) => hash!
+        index! + 1 => index!
+    }
+    UInt64(0) => result!
+    true -> if { hash! => result! }
+    result!
+}
+
+public hashWords words: [UInt64; ~] -> UInt64 {
+    UInt64(7809847782465536322) => hash!
+    0 => index!
+    index! < (words -> len) -> while {
+        hash! -> mix(words[index!]) => hash!
+        index! + 1 => index!
+    }
+    hash!
+}
+
+hashToken package: analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int, seed: UInt64 -> UInt64 {
+    package.ranges[sourceIndex] => sourceRange
+    package.tokens[sourceRange.tokenStart + tokenIndex] => token
+    seed => hash!
+    token.kind == grammar.triviaIdWhitespace() -> unless {
+        token.kind == grammar.triviaIdComment() -> unless {
+            hash! -> mix(UInt64(token.kind + 1)) => hash!
+            UIntSize(0) => byteIndex!
+            byteIndex! < token.span.length -> while {
+                package.sources[sourceIndex] -> byte(token.span.start + byteIndex!) => value
+                hash! -> mix(UInt64(value)) => hash!
+                byteIndex! + 1 => byteIndex!
+            }
+            hash! -> mix(0) => hash!
+        }
+    }
+    hash!
+}
+
+# A dictionary annotation owns its braces. Only a brace outside every parsed
+# type span (or a fat arrow) begins the declaration body.
+public isDeclarationHeaderDelimiter package: ref analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int -> Bool {
+    package.tokens[tokenIndex].kind => kind
+    kind == grammar.tokenIdFatArrow() -> if { true -> return }
+    kind != grammar.tokenIdLeftBrace() -> if { false -> return }
+    package.ranges[sourceIndex] => range
+    tokenIndex - range.tokenStart => localToken
+    0 => typeIndex!
+    typeIndex! < range.typeCount -> while {
+        package.typeUses[range.typeStart + typeIndex!] => typeUse
+        package.nodes[range.astStart + typeUse.astNode] => node
+        localToken >= node.firstToken and localToken < node.firstToken + node.tokenCount
+            -> if { false -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    true
+}
+
+hashSymbol package: analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int, seed: UInt64 -> UInt64 {
+    package.ranges[sourceIndex] => sourceRange
+    package.symbols[sourceRange.symbolStart + symbolIndex] => symbol
+    package.nodes[sourceRange.astStart + symbol.astNode] => declaration
+    seed -> mix(UInt64(symbol.kind + 1)) => hash!
+    hash! -> mix(UInt64(symbol.flags + 1)) => hash!
+    declaration.firstToken => tokenIndex!
+    declaration.firstToken + declaration.tokenCount => tokenEnd!
+    tokenIndex! < tokenEnd! -> while {
+        package -> isDeclarationHeaderDelimiter(sourceIndex, sourceRange.tokenStart + tokenIndex!)
+            -> if {
+                tokenIndex! => tokenEnd!
+            } else {
+                package -> hashToken(sourceIndex, tokenIndex!, hash!) => hash!
+                tokenIndex! + 1 => tokenIndex!
+            }
+    }
+    hash!
+}
+
+appendNamespaceWords package: ref analysis.PackageAnalysis, identity: modules.ModuleIdentity, words: mut [UInt64; ~] -> Unit {
+    words -> len => lengthIndex
+    words -> push(0)
+    package.ranges[identity.sourceIndex] => sourceRange
+    sourceRange.tokenStart => tokenIndex!
+    sourceRange.tokenStart + sourceRange.tokenCount => tokenEnd
+    tokenIndex! < tokenEnd -> while {
+        package.tokens[tokenIndex!] => token
+        token.span.start >= identity.pathStart + identity.pathLength
+            -> if { tokenEnd => tokenIndex! } else {
+                token.span.start >= identity.pathStart
+                    and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                    -> if {
+                        UIntSize(0) => byteIndex!
+                        byteIndex! < token.span.length -> while {
+                            package.sources[identity.sourceIndex] -> byte(token.span.start + byteIndex!) => value
+                            words -> push(UInt64(value))
+                            byteIndex! + 1 => byteIndex!
+                        }
+                    }
+                tokenIndex! + 1 => tokenIndex!
+            }
+    }
+    UInt64((words -> len) - lengthIndex - 1) => words[lengthIndex]
+}
+
+nextHeaderToken package: ref analysis.PackageAnalysis, sourceIndex: Int, cursor: Int, tokenEnd: Int -> Int {
+    cursor => index!
+    index! < tokenEnd -> while {
+        package.tokens[index!].kind => kind
+        package -> isDeclarationHeaderDelimiter(sourceIndex, index!)
+            -> if { tokenEnd -> return }
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment()
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    tokenEnd
+}
+
+appendHeaderWords package: ref analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int, words: mut [UInt64; ~] -> Unit {
+    package.ranges[sourceIndex] => range
+    package.symbols[range.symbolStart + symbolIndex] => symbol
+    package.nodes[range.astStart + symbol.astNode] => node
+    range.tokenStart + node.firstToken + node.tokenCount => tokenEnd
+    package -> nextHeaderToken(sourceIndex, range.tokenStart + node.firstToken, tokenEnd) => index!
+    index! < tokenEnd -> while {
+        package.tokens[index!] => token
+        words -> push(UInt64(token.kind + 1))
+        words -> push(UInt64(token.span.length))
+        UIntSize(0) => byteIndex!
+        byteIndex! < token.span.length -> while {
+            words -> push(UInt64(package.sources[sourceIndex] -> byte(token.span.start + byteIndex!)))
+            byteIndex! + 1 => byteIndex!
+        }
+        package -> nextHeaderToken(sourceIndex, index! + 1, tokenEnd) => index!
+    }
+}
+
+# The key contains namespace bytes and the named/structural declaration scope.
+# Source, symbol, AST and token ordinals are lookup coordinates only.
+public declarationIdentityAnalyzed package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, symbolIndex: Int -> DeclarationIdentity {
+    sourceIndex < 0 or sourceIndex >= (package.ranges -> len) or sourceIndex >= (identities -> len)
+        -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+    identities[sourceIndex].sourceIndex != sourceIndex
+        -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+    package.ranges[sourceIndex] => range
+    symbolIndex < 0 or symbolIndex >= range.symbolCount
+        -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+    [Int; ~] => scopes!
+    symbolIndex => scope!
+    scope! >= 0 -> while {
+        scope! >= range.symbolCount or (scopes! -> len) >= range.symbolCount
+            -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+        scopes! -> push(scope!)
+        package.symbols[range.symbolStart + scope!].parent => scope!
+    }
+    scope! != -1 -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+    [UInt64; ~] => words!
+    package -> appendNamespaceWords(identities[sourceIndex], words!)
+    words! -> push(UInt64(scopes! -> len))
+    (scopes! -> len) - 1 => scopeOrdinal!
+    scopeOrdinal! >= 0 -> while {
+        scopes![scopeOrdinal!] => currentIndex
+        package.symbols[range.symbolStart + currentIndex] => symbol
+        symbol.nameToken < -1 or symbol.nameToken >= range.tokenCount
+            -> if { DeclarationIdentity { words: [UInt64; ~], status: 1 } -> return }
+        words! -> push(UInt64(symbol.kind))
+        symbol.nameToken >= 0 and symbol.nameToken < range.tokenCount
+            -> if {
+                package.tokens[range.tokenStart + symbol.nameToken] => name
+                words! -> push(1)
+                words! -> push(UInt64(name.span.length))
+                UIntSize(0) => byteIndex!
+                byteIndex! < name.span.length -> while {
+                    words! -> push(UInt64(package.sources[sourceIndex] -> byte(name.span.start + byteIndex!)))
+                    byteIndex! + 1 => byteIndex!
+                }
+            } else { words! -> push(0) }
+        words! -> len => headerLengthIndex
+        words! -> push(0)
+        symbol.kind == 6 or symbol.kind == 7 or symbol.kind == 31 or symbol.nameToken < 0
+            -> if { package -> appendHeaderWords(sourceIndex, currentIndex, words!) }
+        UInt64((words! -> len) - headerLengthIndex - 1) => words![headerLengthIndex]
+        scopeOrdinal! - 1 => scopeOrdinal!
+    }
+    DeclarationIdentity { words: words!, status: 0 }
+}
+
+public declarationIdentitiesAnalyzed package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~] -> DeclarationIdentityIndex {
+    [Int; ~] => keyIndexBySymbol!
+    package.symbols -> each { keyIndexBySymbol! -> push(-1) }
+    [Int; ~] => sourceModules!
+    [Int; ~] => symbols!
+    [Int; ~] => starts!
+    [Int; ~] => lengths!
+    [UInt64; ~] => hashes!
+    [UInt64; ~] => words!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!].kind => kind
+            kind == 3 or kind == 4 or kind == 5 or kind == 6 or kind == 7
+                or kind == 28 or kind == 31 or kind == 32 or kind == 35
+                -> if {
+                    package -> declarationIdentityAnalyzed(identities, sourceIndex!, symbolIndex!) => key
+                    key.status != 0 -> if {
+                        DeclarationIdentityIndex { keyIndexBySymbol: [Int; ~], sourceModules: [Int; ~], symbols: [Int; ~], starts: [Int; ~], lengths: [Int; ~], hashes: [UInt64; ~], words: [UInt64; ~], status: key.status } -> return
+                    }
+                    sourceModules! -> len => keyIndexBySymbol![range.symbolStart + symbolIndex!]
+                    sourceModules! -> push(sourceIndex!)
+                    symbols! -> push(symbolIndex!)
+                    starts! -> push(words! -> len)
+                    lengths! -> push(key.words -> len)
+                    hashes! -> push(key.words -> hashWords)
+                    key.words -> each word { words! -> push(word) }
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    DeclarationIdentityIndex { keyIndexBySymbol: keyIndexBySymbol!, sourceModules: sourceModules!, symbols: symbols!, starts: starts!, lengths: lengths!, hashes: hashes!, words: words!, status: 0 }
+}
+
+public findDeclarationIdentity index: ref DeclarationIdentityIndex, words: [UInt64; ~] -> DeclarationIdentityMatch {
+    index -> findDeclarationIdentityRange(words, 0, words -> len)
+}
+
+# Cached declaration dictionaries share one word arena. Compare a bounded key
+# directly rather than allocating a new growable array for every restored type.
+public findDeclarationIdentityRange index: ref DeclarationIdentityIndex, words: ref [UInt64; ~], start: Int, length: Int -> DeclarationIdentityMatch {
+    DeclarationIdentityMatch { sourceModule: -1, symbol: -1, status: 1 } => result!
+    index.status != 0 -> if { result! -> return }
+    start < 0 or length <= 0 or start > (words -> len)
+        -> if { result! -> return }
+    length > (words -> len) - start -> if { result! -> return }
+    UInt64(7809847782465536322) => hash!
+    0 => hashIndex!
+    hashIndex! < length -> while {
+        hash! -> mix(words[start + hashIndex!]) => hash!
+        hashIndex! + 1 => hashIndex!
+    }
+    0 => candidate!
+    candidate! < (index.sourceModules -> len) -> while {
+        index.hashes[candidate!] == hash! and index.lengths[candidate!] == length => matches!
+        0 => wordIndex!
+        matches! and wordIndex! < length
+            -> while {
+                index.words[index.starts[candidate!] + wordIndex!] != words[start + wordIndex!]
+                    -> if { false => matches! }
+                wordIndex! + 1 => wordIndex!
+            }
+        matches! -> if {
+            result!.status == 0 -> if {
+                DeclarationIdentityMatch { sourceModule: -1, symbol: -1, status: 2 } -> return
+            }
+            index.sourceModules[candidate!] => result!.sourceModule
+            index.symbols[candidate!] => result!.symbol
+            0 => result!.status
+        }
+        candidate! + 1 => candidate!
+    }
+    result!
+}
+
+rootPrecedes package: ref analysis.PackageAnalysis, sourceIndex: Int, left: Int, right: Int -> Bool {
+    package.ranges[sourceIndex] => range
+    package.symbols[range.symbolStart + left] => a
+    package.symbols[range.symbolStart + right] => b
+    a.kind != b.kind -> if { a.kind < b.kind -> return }
+    a.flags != b.flags -> if { a.flags < b.flags -> return }
+    package.nodes[range.astStart + a.astNode] => leftNode
+    package.nodes[range.astStart + b.astNode] => rightNode
+    range.tokenStart + leftNode.firstToken + leftNode.tokenCount => leftEnd
+    range.tokenStart + rightNode.firstToken + rightNode.tokenCount => rightEnd
+    package -> nextHeaderToken(sourceIndex, range.tokenStart + leftNode.firstToken, leftEnd) => leftToken!
+    package -> nextHeaderToken(sourceIndex, range.tokenStart + rightNode.firstToken, rightEnd) => rightToken!
+    leftToken! < leftEnd and rightToken! < rightEnd
+        -> while {
+            package.tokens[leftToken!] => x
+            package.tokens[rightToken!] => y
+            x.kind != y.kind -> if { x.kind < y.kind -> return }
+            UIntSize(0) => byteIndex!
+            byteIndex! < x.span.length and byteIndex! < y.span.length
+                -> while {
+                    package.sources[sourceIndex] -> byte(x.span.start + byteIndex!) => leftByte
+                    package.sources[sourceIndex] -> byte(y.span.start + byteIndex!) => rightByte
+                    leftByte != rightByte -> if { leftByte < rightByte -> return }
+                    byteIndex! + 1 => byteIndex!
+                }
+            x.span.length != y.span.length -> if { x.span.length < y.span.length -> return }
+            package -> nextHeaderToken(sourceIndex, leftToken! + 1, leftEnd) => leftToken!
+            package -> nextHeaderToken(sourceIndex, rightToken! + 1, rightEnd) => rightToken!
+        }
+    leftToken! == leftEnd and rightToken! < rightEnd
+}
+
+indexedRootPrecedes package: ref analysis.PackageAnalysis, sourceIndex: Int, left: Int, right: Int, index: ref DeclarationIdentityIndex -> Bool {
+    index.status != 0 -> if { package -> rootPrecedes(sourceIndex, left, right) -> return }
+    package.ranges[sourceIndex] => range
+    index.keyIndexBySymbol[range.symbolStart + left] => leftKey
+    index.keyIndexBySymbol[range.symbolStart + right] => rightKey
+    leftKey >= 0 and rightKey >= 0 -> if {
+        0 => wordIndex!
+        wordIndex! < index.lengths[leftKey] and wordIndex! < index.lengths[rightKey]
+            -> while {
+                index.words[index.starts[leftKey] + wordIndex!] => a
+                index.words[index.starts[rightKey] + wordIndex!] => b
+                a != b -> if { a < b -> return }
+                wordIndex! + 1 => wordIndex!
+            }
+        index.lengths[leftKey] != index.lengths[rightKey]
+            -> if { index.lengths[leftKey] < index.lengths[rightKey] -> return }
+    }
+    package -> rootPrecedes(sourceIndex, left, right)
+}
+
+canonicalSymbolOrder package: ref analysis.PackageAnalysis, sourceIndex: Int, index: ref DeclarationIdentityIndex -> [Int; ~] {
+    package.ranges[sourceIndex] => range
+    [Int; ~] => roots!
+    [Int; ~] => rootBySymbol!
+    [Bool; ~] => emitted!
+    0 => index!
+    index! < range.symbolCount -> while {
+        index! => root!
+        package.symbols[range.symbolStart + root!].parent => parent!
+        parent! >= 0 -> while {
+            parent! => root!
+            package.symbols[range.symbolStart + root!].parent => parent!
+        }
+        rootBySymbol! -> push(root!)
+        index! == root! and package.symbols[range.symbolStart + root!].flags / 4 % 2 == 1
+            -> if {
+                roots! -> push(root!)
+                emitted! -> push(false)
+            }
+        index! + 1 => index!
+    }
+    [Int; ~] => order!
+    0 => rootOrdinal!
+    rootOrdinal! < (roots! -> len) -> while {
+        -1 => selected!
+        0 => candidate!
+        candidate! < (roots! -> len) -> while {
+            not emitted![candidate!] -> if {
+                selected! < 0 -> if { candidate! => selected! } else {
+                    package -> indexedRootPrecedes(sourceIndex, roots![candidate!], roots![selected!], index)
+                        -> if { candidate! => selected! }
+                }
+            }
+            candidate! + 1 => candidate!
+        }
+        true => emitted![selected!]
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            rootBySymbol![symbolIndex!] == roots![selected!]
+                -> if { order! -> push(symbolIndex!) }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        rootOrdinal! + 1 => rootOrdinal!
+    }
+    order!
+}
+
+# Schema 2 is a deterministic UInt64 word stream (serialized little-endian):
+# magic, schema, module path hash, namespace byte length and non-trivia bytes,
+# public symbol count, then each exported
+# signature as kind, flags, token count-delimited records, and a symbol marker.
+# Source-local AST/symbol indices are deliberately absent.
+public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces {
+    package -> modules.identitiesAnalyzed => identities
+    package -> declarationIdentitiesAnalyzed(identities) => declarationIndex
+    [UInt64; ~] => interfaceHashes!
+    [Int; ~] => wordStarts!
+    [Int; ~] => wordLengths!
+    [UInt64; ~] => allWords!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        [UInt64; ~] => words!
+        words! -> push(4991188231678313299)
+        words! -> push(2)
+        words! -> push(identities[sourceIndex!].pathHash)
+        package -> appendNamespaceWords(identities[sourceIndex!], words!)
+
+        0 => publicSymbolCount!
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+            symbolIndex! => rootSymbolIndex!
+            symbol.parent => parentSymbol!
+            parentSymbol! >= 0 -> while {
+                parentSymbol! => rootSymbolIndex!
+                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+            }
+            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+            false => signatureSymbol!
+            exportedRoot and symbolIndex! == rootSymbolIndex!
+                -> if { true => signatureSymbol! }
+            exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
+                -> if {
+                    symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                        -> if { true => signatureSymbol! }
+                }
+            exportedRoot and rootSymbol.kind == 7 -> if {
+                symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
+                    -> if { true => signatureSymbol! }
+            }
+            signatureSymbol! -> if { publicSymbolCount! + 1 => publicSymbolCount! }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        words! -> push(UInt64(publicSymbolCount!))
+
+        0 => publicOrdinal!
+        package -> canonicalSymbolOrder(sourceIndex!, declarationIndex) => canonicalOrder
+        0 => canonicalSymbolIndex!
+        canonicalSymbolIndex! < (canonicalOrder -> len)
+            -> while {
+                canonicalOrder[canonicalSymbolIndex!] => selectedSymbolIndex
+                package.symbols[sourceRange.symbolStart + selectedSymbolIndex] => symbol
+                selectedSymbolIndex => rootSymbolIndex!
+                symbol.parent => parentSymbol!
+                parentSymbol! >= 0 -> while {
+                    parentSymbol! => rootSymbolIndex!
+                    package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+                }
+                package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+                rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+                false => signatureSymbol!
+                exportedRoot and selectedSymbolIndex == rootSymbolIndex!
+                    -> if { true => signatureSymbol! }
+                exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
+                    -> if {
+                        symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                            -> if { true => signatureSymbol! }
+                    }
+                exportedRoot and rootSymbol.kind == 7 -> if {
+                    symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
+                        -> if { true => signatureSymbol! }
+                }
+                signatureSymbol! -> if {
+                    words! -> push(UInt64(publicOrdinal! + 1))
+                    words! -> push(UInt64(symbol.kind + 1))
+                    words! -> push(UInt64(symbol.flags + 1))
+                    package.nodes[sourceRange.astStart + symbol.astNode] => declaration
+                    declaration.firstToken => tokenIndex!
+                    declaration.firstToken + declaration.tokenCount => tokenEnd!
+                    tokenIndex! < tokenEnd! -> while {
+                        package.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                        package -> isDeclarationHeaderDelimiter(sourceIndex!, sourceRange.tokenStart + tokenIndex!)
+                            -> if {
+                                tokenIndex! => tokenEnd!
+                            } else {
+                                token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment()
+                                    -> unless {
+                                        words! -> push(UInt64(token.kind + 1))
+                                        words! -> push(UInt64(token.span.length))
+                                        UIntSize(0) => tokenByteIndex!
+                                        tokenByteIndex! < token.span.length -> while {
+                                            package.sources[sourceIndex!] -> byte(token.span.start + tokenByteIndex!) => tokenByte
+                                            words! -> push(UInt64(tokenByte))
+                                            tokenByteIndex! + 1 => tokenByteIndex!
+                                        }
+                                    }
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                    }
+                    words! -> push(18446744073709551615)
+                    publicOrdinal! + 1 => publicOrdinal!
+                }
+                canonicalSymbolIndex! + 1 => canonicalSymbolIndex!
+            }
+
+        words! -> hashWords => interfaceHash
+        interfaceHashes! -> push(interfaceHash)
+        allWords! -> len => wordStart
+        words! -> len => wordLength
+        wordStarts! -> push(wordStart)
+        wordLengths! -> push(wordLength)
+        0 => copyIndex!
+        copyIndex! < (words! -> len) -> while {
+            allWords! -> push(words![copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ModuleInterfaces {
+        interfaceHashes: interfaceHashes!
+        wordStarts: wordStarts!
+        wordLengths: wordLengths!
+        words: allWords!
+    } => result
+    result
+}
+
+public interfaces sources: [Text; ~] -> ModuleInterfaces {
+    sources -> analysis.analyze => package
+    package -> interfacesAnalyzed => result
+    result
+}
+
+# Hashes are lookup accelerators only. Reuse is valid only when the complete
+# canonical interface stream is equal as well.
+public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterfaces, rightIndex: Int -> Bool {
+    left.interfaceHashes[leftIndex] == right.interfaceHashes[rightIndex] => matches!
+    left.wordLengths[leftIndex] == right.wordLengths[rightIndex]
+        -> unless {
+            false => matches!
+        }
+    matches! -> if {
+        left.wordStarts[leftIndex] => leftStart
+        right.wordStarts[rightIndex] => rightStart
+        left.wordLengths[leftIndex] => length
+        0 => index!
+        matches! and index! < length -> while {
+            left.words[leftStart + index!] == right.words[rightStart + index!]
+                -> unless {
+                    false => matches!
+                }
+            index! + 1 => index!
+        }
+    }
+    matches!
+}
+
+public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerprint; ~] {
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> interfacesAnalyzed => interfaces
+    [ModuleFingerprint; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        UInt64(1469598103934665603) => implementationHash!
+        -1 => lastImplementationKind!
+        0 => tokenIndex!
+        tokenIndex! < sourceRange.tokenCount -> while {
+            package.tokens[sourceRange.tokenStart + tokenIndex!] => implementationToken
+            false => skipImplementationToken!
+            implementationToken.kind == grammar.triviaIdWhitespace() or implementationToken.kind == grammar.triviaIdComment()
+                -> if { true => skipImplementationToken! }
+            implementationToken.kind == grammar.tokenIdNewLine() and lastImplementationKind! == grammar.tokenIdNewLine()
+                -> if { true => skipImplementationToken! }
+            not skipImplementationToken! -> if {
+                package -> hashToken(sourceIndex!, tokenIndex!, implementationHash!) => implementationHash!
+                implementationToken.kind => lastImplementationKind!
+            }
+            tokenIndex! + 1 => tokenIndex!
+        }
+
+        0 => publicSymbolCount!
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+            symbolIndex! => rootSymbolIndex!
+            symbol.parent => parentSymbol!
+            parentSymbol! >= 0 -> while {
+                parentSymbol! => rootSymbolIndex!
+                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+            }
+            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+            false => signatureSymbol!
+            exportedRoot and symbolIndex! == rootSymbolIndex!
+                -> if { true => signatureSymbol! }
+            exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)
+                -> if {
+                    symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34
+                        -> if { true => signatureSymbol! }
+                }
+            exportedRoot and rootSymbol.kind == 7 -> if {
+                symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35
+                    -> if { true => signatureSymbol! }
+            }
+            signatureSymbol! -> if {
+                publicSymbolCount! + 1 => publicSymbolCount!
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+
+        UInt64(12379813812177893520) => importHash!
+        0 => importCount!
+        0 => importIndex!
+        importIndex! < (imports -> len) -> while {
+            imports[importIndex!] => edge
+            edge.sourceModule == sourceIndex! -> if {
+                importHash! -> mix(edge.targetHash) => importHash!
+                importCount! + 1 => importCount!
+            }
+            importIndex! + 1 => importIndex!
+        }
+
+        interfaces.interfaceHashes[sourceIndex!] => interfaceHash
+        ModuleFingerprint {
+            sourceIndex: sourceIndex!
+            moduleHash: identities[sourceIndex!].pathHash
+            sourceHash: package.sources[sourceIndex!] -> mappedSourceIdentity
+            interfaceHash: interfaceHash
+            implementationHash: implementationHash!
+            importHash: importHash!
+            publicSymbolCount: publicSymbolCount!
+            importCount: importCount!
+        } => fingerprint
+        results! -> push(fingerprint)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results!
+}
+
+public fingerprint sources: [Text; ~] -> [ModuleFingerprint; ~] {
+    sources -> analysis.analyze => package
+    package -> fingerprintAnalyzed
+}

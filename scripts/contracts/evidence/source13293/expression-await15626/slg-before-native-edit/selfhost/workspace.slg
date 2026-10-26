@@ -1,0 +1,168 @@
+namespace sollang.compiler.workspace
+
+import sollang.compiler.lexer
+import sollang.compiler.syntax
+import sollang.compiler.manifest_diagnostics as manifestDiagnostics
+import syntax.generated.slg as grammar
+import sys.file as file
+
+public struct WorkspaceMember {
+    public start: UIntSize
+    public length: UIntSize
+}
+
+public struct WorkspaceManifest {
+    public status: Int
+    public diagnostic: manifestDiagnostics.ManifestDiagnostic
+    public members: [WorkspaceMember; ~]
+}
+
+textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
+    token.span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    matches! and index! < token.span.length -> while {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if {
+                false => matches!
+            }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
+    start => index!
+    tokens[index!].kind == grammar.tokenIdNewLine() or tokens[index!].kind == grammar.tokenIdComma()
+        -> while {
+            index! + 1 => index!
+        }
+    index!
+}
+
+sameMember source: Text, left: WorkspaceMember, right: WorkspaceMember -> Bool {
+    left.length == right.length => same!
+    UIntSize(0) => index!
+    same! and index! < left.length -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
+            -> if {
+                false => same!
+            }
+        index! + 1 => index!
+    }
+    same!
+}
+
+# Status is diagnostic.kind; valid empty members are rejected by load.
+# Nested decoded-string diagnostics remain explicit kind 8 until aligned.
+public parse source: Text -> WorkspaceManifest {
+    source -> lexer.lex => rawTokens
+    [syntax.SyntaxToken; ~] => tokens!
+    rawTokens -> each token {
+        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+            -> if { tokens! -> push(token) }
+    }
+    [WorkspaceMember; ~] => members!
+    manifestDiagnostics.none() => error!
+    false => sawMembers!
+    0 => index!
+    tokens![index!].kind == grammar.tokenIdNewLine()
+        -> while { index! + 1 => index! }
+    tokens![index!].kind != grammar.tokenIdIdentifier()
+        -> if {
+            manifestDiagnostics.atToken(1, 2, tokens![index!], 2) => error!
+        } else {
+            source -> textIs(tokens![index!], "workspace")
+                -> if { index! + 1 => index! } else {
+                    manifestDiagnostics.atToken(2, 2, tokens![index!], 0) => error!
+                }
+        }
+    error!.kind == 0 -> if {
+        tokens![index!].kind == grammar.tokenIdLeftBrace()
+            -> if { index! + 1 => index! } else {
+                manifestDiagnostics.atToken(1, 2, tokens![index!], 3) => error!
+            }
+    }
+    error!.kind == 0 -> if { index! -> skipSeparators(tokens!) => index! }
+    error!.kind == 0 and tokens![index!].kind != grammar.tokenIdRightBrace()
+        -> while {
+            tokens![index!] => field
+            field.kind != grammar.tokenIdIdentifier() -> if {
+                manifestDiagnostics.atToken(1, 2, field, 10) => error!
+            } else {
+                index! + 1 => index!
+                tokens![index!].kind != grammar.tokenIdColon()
+                    -> if {
+                        manifestDiagnostics.atToken(1, 2, tokens![index!], 5) => error!
+                    } else {
+                        index! + 1 => index!
+                        source -> textIs(field, "members") -> if {
+                            sawMembers! -> if {
+                                manifestDiagnostics.atToken(4, 2, field, 0) => error!
+                            } else {
+                                true => sawMembers!
+                                tokens![index!].kind != grammar.tokenIdLeftBracket()
+                                    -> if {
+                                        manifestDiagnostics.atToken(1, 2, tokens![index!], 7) => error!
+                                    } else {
+                                        index! + 1 => index!
+                                        index! -> skipSeparators(tokens!) => index!
+                                        error!.kind == 0 and tokens![index!].kind != grammar.tokenIdRightBracket()
+                                            -> while {
+                                                tokens![index!] => memberToken
+                                                memberToken.kind != grammar.tokenIdString() -> if {
+                                                    manifestDiagnostics.atToken(1, 2, memberToken, 6) => error!
+                                                } else {
+                                                    source -> syntax.rawStringTokenLayout(memberToken) => memberLayout
+                                                    WorkspaceMember { start: memberLayout.contentStart, length: memberLayout.contentEnd - memberLayout.contentStart } => member
+                                                    false => duplicate!
+                                                    0 => memberIndex!
+                                                    not duplicate! and memberIndex! < (members! -> len)
+                                                        -> while {
+                                                            source -> sameMember(members![memberIndex!], member)
+                                                                -> if { true => duplicate! }
+                                                            memberIndex! + 1 => memberIndex!
+                                                        }
+                                                    duplicate! -> if {
+                                                        manifestDiagnostics.atToken(8, 3, memberToken, 0) => error!
+                                                    } else {
+                                                        members! -> push(member)
+                                                        index! + 1 => index!
+                                                    }
+                                                }
+                                                error!.kind == 0 -> if {
+                                                    tokens![index!].kind != grammar.tokenIdRightBracket() and tokens![index!].kind != grammar.tokenIdNewLine() and tokens![index!].kind != grammar.tokenIdComma()
+                                                        -> if {
+                                                            manifestDiagnostics.atToken(5, 3, tokens![index!], 0) => error!
+                                                        } else { index! -> skipSeparators(tokens!) => index! }
+                                                }
+                                            }
+                                        error!.kind == 0 -> if { index! + 1 => index! }
+                                    }
+                            }
+                        } else { manifestDiagnostics.atToken(3, 2, field, 0) => error! }
+                    }
+            }
+            error!.kind == 0 -> if {
+                tokens![index!].kind != grammar.tokenIdRightBrace() and tokens![index!].kind != grammar.tokenIdNewLine() and tokens![index!].kind != grammar.tokenIdComma()
+                    -> if {
+                        manifestDiagnostics.atToken(5, 2, tokens![index!], 0) => error!
+                    } else { index! -> skipSeparators(tokens!) => index! }
+            }
+        }
+    error!.kind == 0 -> if {
+        index! + 1 => index!
+        tokens![index!].kind == grammar.tokenIdNewLine()
+            -> while { index! + 1 => index! }
+        tokens![index!].kind != grammar.tokenIdEnd() -> if {
+            manifestDiagnostics.atToken(1, 2, tokens![index!], 9) => error!
+        }
+    }
+    error!.kind == 0 and not sawMembers! -> if { manifestDiagnostics.withoutToken(6, 2, 3) => error! }
+    WorkspaceManifest { status: error!.kind, diagnostic: error!, members: members! }
+}
+
+public parseSource source: file.SourceText -> WorkspaceManifest {
+    source -> len => length
+    source -> slice(UIntSize(0), length) => view
+    view -> parse
+}

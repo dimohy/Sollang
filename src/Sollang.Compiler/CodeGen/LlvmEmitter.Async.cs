@@ -557,6 +557,32 @@ internal sealed partial class LlvmEmitter
         return true;
     }
 
+    private sealed record AsyncExpressionCarrier(string Name, bool Introduced);
+
+    private AsyncExpressionCarrier? PreserveAsyncExpressionValue(RuntimeValue value, bool ownsValue)
+    {
+        if (_activeAsyncCfg is null || value is RuntimeUnit)
+            return null;
+        foreach (var (name, local) in _locals)
+            if (!_mutableLocals.Contains(name) && ReferenceEquals(local, value))
+                return new AsyncExpressionCarrier(name, false);
+        var carrier = NextAsyncBindingName("expression_value");
+        _locals.Add(carrier, value);
+        if (!ownsValue)
+            _borrowedOwnedLocals.Add(carrier);
+        return new AsyncExpressionCarrier(carrier, true);
+    }
+
+    private RuntimeValue RestoreAsyncExpressionValue(AsyncExpressionCarrier? carrier, RuntimeValue original)
+    {
+        if (carrier is null)
+            return original;
+        var value = ResolveLocal(carrier.Name);
+        if (carrier.Introduced)
+            ForgetAsyncSpillCarrier(carrier.Name);
+        return value;
+    }
+
     private IReadOnlyList<AsyncSpillPlan> BuildCfgSpillPlans(
         AsyncCfgLowering lowering,
         string? excludedName)
@@ -1221,6 +1247,13 @@ internal sealed partial class LlvmEmitter
             case FlowExpression flow:
                 CollectCfgFlowSuspensions(flow, candidates, flow.Targets.Count);
                 break;
+            case CallExpression call:
+                foreach (var argument in call.Arguments)
+                    CollectCfgSuspensions(argument, candidates);
+                break;
+            case FieldAccessExpression field:
+                CollectCfgSuspensions(field.Source, candidates);
+                break;
             case IfExpression conditional:
                 CollectCfgSuspensions(conditional.Then.Statements, candidates);
                 if (conditional.Then.Value is not null)
@@ -1268,6 +1301,10 @@ internal sealed partial class LlvmEmitter
                         CollectCfgSuspensions(selection.Else.Value, candidates);
                     }
                 }
+                break;
+            default:
+                foreach (var child in ExpressionChildren(expression))
+                    CollectCfgSuspensions(child, candidates);
                 break;
         }
     }

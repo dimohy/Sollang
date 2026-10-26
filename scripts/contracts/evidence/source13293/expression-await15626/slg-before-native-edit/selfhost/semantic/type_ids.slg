@@ -1,0 +1,2668 @@
+namespace sollang.compiler.semantic.type_ids
+
+import sollang.compiler.ast
+import sollang.compiler.lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.modules
+import sollang.compiler.semantic.qualified
+import sollang.compiler.semantic.symbols
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+# Only the literal's own storage suffix contributes to its collection shape.
+# Nested arrays, records and calls retain independent storage contracts.
+public struct ArrayStorageSyntax {
+    public dynamic: Bool
+    public bounded: Bool
+    public length: Int
+    public isRepeat: Bool
+}
+
+# The ordinary literal itself must contain only numeric elements, optionally
+# negated once. Folded arithmetic, aliases and owning storage suffixes do not
+# acquire static lifetime. Balanced parentheses preserve the element shape,
+# like transparent grouping in the C# AST. Shared by return checking and backing.
+# Validated character tokens are integer literals, matching C# NumberExpression.
+public staticReadonlyArrayLiteral tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> Bool {
+    node.kind != 37 -> if { false -> return }
+    0 => state!
+    0 => groupingDepth!
+    node.firstToken => cursor!
+    cursor! < node.firstToken + node.tokenCount -> while {
+        tokens[tokenStart + cursor!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment() and kind != grammar.tokenIdNewLine()
+            -> if {
+                state! == 0 -> if {
+                    kind != grammar.tokenIdLeftBracket() -> if { false -> return }
+                    1 => state!
+                } else {
+                    state! == 1 -> if {
+                        kind == grammar.tokenIdLeftParen() -> if {
+                            groupingDepth! + 1 => groupingDepth!
+                        } else {
+                            kind == grammar.tokenIdRightBracket() and groupingDepth! == 0
+                                -> if { 4 => state! } else {
+                                    kind == grammar.tokenIdMinus() -> if { 2 => state! } else {
+                                        kind != grammar.tokenIdNumber() and kind != grammar.tokenIdCharacter()
+                                            -> if { false -> return }
+                                        3 => state!
+                                    }
+                                }
+                        }
+                    } else {
+                        state! == 2 -> if {
+                            kind == grammar.tokenIdLeftParen() -> if {
+                                groupingDepth! + 1 => groupingDepth!
+                            } else {
+                                kind != grammar.tokenIdNumber() and kind != grammar.tokenIdCharacter()
+                                    -> if { false -> return }
+                                3 => state!
+                            }
+                        } else {
+                            state! == 3 -> if {
+                                kind == grammar.tokenIdRightParen() and groupingDepth! > 0
+                                    -> if {
+                                        groupingDepth! - 1 => groupingDepth!
+                                    } else {
+                                        groupingDepth! != 0 -> if { false -> return }
+                                        kind == grammar.tokenIdComma() -> if { 1 => state! } else {
+                                            kind != grammar.tokenIdRightBracket() -> if { false -> return }
+                                            4 => state!
+                                        }
+                                    }
+                            } else { false -> return }
+                        }
+                    }
+                }
+            }
+        cursor! + 1 => cursor!
+    }
+    state! == 4
+}
+
+public arrayStorageSyntax package: ref analysis.PackageAnalysis, sourceIndex: Int, arrayAst: Int -> ArrayStorageSyntax {
+    package.ranges[sourceIndex] => range
+    package.sources[sourceIndex] -> len => sourceLength
+    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    arrayStorageSyntaxFromTokens(source, package.tokens, range.tokenStart, package.nodes[range.astStart + arrayAst])
+}
+
+public arrayStorageSyntaxFromTokens source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, node: ast.AstNode -> ArrayStorageSyntax {
+    false => dynamic!
+    false => bounded!
+    false => isRepeat!
+    false => afterSemicolon!
+    -1 => length!
+    0 => depth!
+    node.firstToken => tokenIndex!
+    tokenIndex! < node.firstToken + node.tokenCount
+        -> while {
+            tokens[tokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdLeftBracket()
+                or token.kind == grammar.tokenIdLeftBrace()
+                or token.kind == grammar.tokenIdLeftParen()
+                -> if { depth! + 1 => depth! }
+            token.kind == grammar.tokenIdRightBracket()
+                or token.kind == grammar.tokenIdRightBrace()
+                or token.kind == grammar.tokenIdRightParen()
+                -> if { depth! - 1 => depth! }
+            depth! == 1 -> if {
+                afterSemicolon! and not bounded! and (token.kind == grammar.tokenIdNumber() or token.kind == grammar.tokenIdIdentifier())
+                    -> if { true => isRepeat! }
+                token.kind == grammar.tokenIdSemicolon() -> if {
+                    true => afterSemicolon!
+                    false => dynamic!
+                    false => bounded!
+                    false => isRepeat!
+                    -1 => length!
+                }
+                afterSemicolon! -> if {
+                    token.kind == grammar.tokenIdTilde() -> if { true => dynamic! }
+                    token.kind == grammar.tokenIdLessEqual() -> if { true => bounded! }
+                    length! < 0 and token.kind == grammar.tokenIdNumber()
+                        -> if {
+                            0 => length!
+                            UIntSize(0) => digitIndex!
+                            digitIndex! < token.span.length -> while {
+                                source -> byte(token.span.start + digitIndex!) => digit
+                                digit != 95 -> if { length! * 10 + Int(digit - 48) => length! }
+                                digitIndex! + 1 => digitIndex!
+                            }
+                        }
+                }
+            }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    ArrayStorageSyntax { dynamic: dynamic!, bounded: bounded!, length: length!, isRepeat: isRepeat! }
+}
+
+# Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
+# array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
+# 9 affine external handle (COM interface or native opaque handle),
+# 12 bounded inline array, 13 bounded inline dictionary, 14 fixed inline BitSet.
+# Nominal origins: 0 local declaration, 1 builtin, 2 imported declaration,
+# 3 generic parameter, 4 intrinsic type constructor.
+public struct SemanticType {
+    public kind: Int
+    public origin: Int
+    public module: Int
+    public symbol: Int
+    public first: Int
+    public second: Int
+    public length: Int
+    public lengthHash: UInt64
+    public containsParameter: Bool
+    public status: Int
+}
+
+# Ordinary signature annotations follow the managed ParseType element policy.
+# Field definitions and contextual values have separate admission rules; this
+# source restriction is not a backend representation invariant.
+public unsupportedArraySignatureElement types: ref [SemanticType; ~], typeId: Int -> Bool {
+    typeId < 0 or typeId >= (types -> len) -> if { false -> return }
+    types[typeId] => outer
+    (outer.kind == 2 or outer.kind == 3 or outer.kind == 4 or outer.kind == 12)
+        and outer.first >= 0 and outer.first < (types -> len)
+        -> unless { false -> return }
+    types[outer.first] => element
+    element.kind == 1 and element.origin == 1 and element.symbol == 0
+        -> if { true -> return }
+    element.kind == 2 or element.kind == 3 or element.kind == 4
+        or element.kind == 5 or element.kind == 13
+        -> if { not (outer.kind == 3 and element.kind == 3) -> return }
+    false
+}
+
+public foldInputTypeSupported types: ref [SemanticType; ~], typeId: Int -> Bool {
+    types -> materializedReadTypeId(typeId) => valueTypeId
+    valueTypeId < 0 or valueTypeId >= (types -> len)
+        -> if { false -> return }
+    types[valueTypeId] => valueType
+    valueType.kind == 1 and valueType.origin == 1 and valueType.symbol == 25
+        -> if { true -> return }
+    (valueType.kind == 2 or valueType.kind == 3 or valueType.kind == 4)
+        and valueType.first >= 0 and valueType.first < (types -> len)
+        -> if {
+            types[valueType.first] => element
+            element.kind == 1 and element.origin == 1 and element.symbol == 2 -> return
+        }
+    false
+}
+
+public struct DynTraitResolution {
+    public targetSource: Int
+    public targetSymbol: Int
+    # 0 resolved, 2 missing, 3 internal to another module, 4 ambiguous.
+    public status: Int
+}
+
+public dynTraitTypeId types: ref [SemanticType; ~], sourceModule: Int, traitSymbol: Int -> Int {
+    0 => index!
+    index! < (types -> len) -> while {
+        types[index!] => candidate
+        candidate.kind == 1 and candidate.origin == 16 and candidate.status == 0
+            and candidate.module == sourceModule and candidate.symbol == traitSymbol
+            -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+nextDynPathToken package: ref analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int, tokenEnd: Int -> Int {
+    package.ranges[sourceIndex] => range
+    tokenIndex => cursor!
+    cursor! < tokenEnd -> while {
+        package.tokens[range.tokenStart + cursor!].kind => kind
+        kind == grammar.tokenIdIdentifier() or kind == grammar.tokenIdDot()
+            -> if { cursor! -> return }
+        cursor! + 1 => cursor!
+    }
+    tokenEnd
+}
+
+dynTraitPathMatches package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int, traitSource: Int, traitSymbol: Int -> Bool {
+    package.ranges[sourceIndex] => range
+    package.sources[sourceIndex] -> len => sourceLength
+    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    package.ranges[traitSource] => traitRange
+    package.symbols[traitRange.symbolStart + traitSymbol] => declaration
+    package.tokens[traitRange.tokenStart + declaration.nameToken] => declaredName
+    firstNameToken => lastNameToken!
+    firstNameToken => nameSearch!
+    nameSearch! < tokenEnd -> while {
+        package.tokens[range.tokenStart + nameSearch!].kind == grammar.tokenIdIdentifier()
+            -> if { nameSearch! => lastNameToken! }
+        nameSearch! + 1 => nameSearch!
+    }
+    package.tokens[range.tokenStart + lastNameToken!] => requestedName
+    package.sources[traitSource] -> slice(declaredName.span.start, declaredName.span.length) => spelling
+    SpanNameRequest { source: source, start: requestedName.span.start, length: requestedName.span.length, expected: spelling } -> spanNameIs
+        -> unless { false -> return }
+    firstNameToken == lastNameToken! -> if { true -> return }
+    identities[traitSource] => identity
+    identity.pathLength == 0 -> if { false -> return }
+    firstNameToken => requestedToken!
+    0 => moduleToken!
+    moduleToken! < traitRange.tokenCount -> while {
+        package.tokens[traitRange.tokenStart + moduleToken!] => token
+        token.span.start >= identity.pathStart and token.span.start < identity.pathStart + identity.pathLength
+            and (token.kind == grammar.tokenIdIdentifier() or token.kind == grammar.tokenIdDot())
+            -> if {
+                package -> nextDynPathToken(sourceIndex, requestedToken!, lastNameToken!) => requestedToken!
+                requestedToken! >= lastNameToken! -> if { false -> return }
+                package.tokens[range.tokenStart + requestedToken!] => requested
+                package.sources[traitSource] -> slice(token.span.start, token.span.length) => part
+                requested.kind != token.kind
+                    or not (SpanNameRequest { source: source, start: requested.span.start, length: requested.span.length, expected: part } -> spanNameIs)
+                    -> if { false -> return }
+                requestedToken! + 1 => requestedToken!
+            }
+        moduleToken! + 1 => moduleToken!
+    }
+    package -> nextDynPathToken(sourceIndex, requestedToken!, lastNameToken!) => requestedToken!
+    requestedToken! >= lastNameToken! -> if { false -> return }
+    package.tokens[range.tokenStart + requestedToken!].kind != grammar.tokenIdDot()
+        -> if { false -> return }
+    (package -> nextDynPathToken(sourceIndex, requestedToken! + 1, tokenEnd)) == lastNameToken!
+}
+
+# Match C# trait lookup before visibility: qualification disambiguates actual
+# declarations, and an import alias does not invent another trait identity.
+public resolveDynTrait package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceIndex: Int, firstNameToken: Int, tokenEnd: Int -> DynTraitResolution {
+    -1 => targetSource!
+    -1 => targetSymbol!
+    0 => count!
+    0 => candidateSource!
+    candidateSource! < (package.sources -> len) -> while {
+        package.ranges[candidateSource!] => range
+        0 => symbolIndex!
+        symbolIndex! < range.symbolCount -> while {
+            package.symbols[range.symbolStart + symbolIndex!] => candidate
+            candidate.kind == 5 and (package -> dynTraitPathMatches(identities, sourceIndex, firstNameToken, tokenEnd, candidateSource!, symbolIndex!))
+                -> if {
+                    count! + 1 => count!
+                    candidateSource! => targetSource!
+                    symbolIndex! => targetSymbol!
+                }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        candidateSource! + 1 => candidateSource!
+    }
+    count! == 0 -> if { DynTraitResolution { targetSource: -1, targetSymbol: -1, status: 2 } -> return }
+    count! > 1 -> if { DynTraitResolution { targetSource: -1, targetSymbol: -1, status: 4 } -> return }
+    package.ranges[targetSource!] => targetRange
+    package.symbols[targetRange.symbolStart + targetSymbol!] => target
+    target.flags / 4 % 2 == 0
+        and not (package.sources -> modules.sameLogicalAnalyzedSource(identities, sourceIndex, targetSource!, package.tokens, package.ranges))
+        -> if { DynTraitResolution { targetSource: targetSource!, targetSymbol: targetSymbol!, status: 3 } -> return }
+    DynTraitResolution { targetSource: targetSource!, targetSymbol: targetSymbol!, status: 0 }
+}
+
+# Receiver-sensitive collection flow types are semantic facts, not storage widths.
+public collectionFlowResultBuiltinSymbol opcode: Int, receiver: SemanticType -> Int {
+    opcode == -244 and receiver.kind == 14 -> if { 2 -> return }
+    opcode == -243 and (receiver.kind == 14
+        or (receiver.kind == 7 and receiver.origin == 4 and receiver.symbol == 5))
+        -> if { 23 -> return }
+    opcode == -202 or opcode == -203 -> if {
+        receiver.kind == 1 and receiver.origin == 1 and (receiver.symbol == 1 or receiver.symbol == 24)
+            -> if {
+                opcode == -202 -> if { 8 } else { 1 } => resultSymbol
+                resultSymbol -> return
+            }
+        -1 -> return
+    }
+    opcode == -236 -> if {
+        receiver.kind == 1 and receiver.origin == 1 and receiver.symbol == 15
+            -> if { 13 -> return }
+        receiver.kind == 3 or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
+            -> if { 2 -> return }
+        -1 -> return
+    }
+    opcode == -101 -> if {
+        receiver.kind == 1 and receiver.origin == 1
+            and (receiver.symbol == 1 or receiver.symbol == 16 or receiver.symbol == 17
+            or receiver.symbol == 18 or receiver.symbol == 24)
+            -> if { 13 -> return }
+        receiver.kind == 2 or receiver.kind == 3 or receiver.kind == 4
+            or receiver.kind == 5 or receiver.kind == 12 or receiver.kind == 13
+            or receiver.kind == 14 -> if { 2 -> return }
+    }
+    -1
+}
+
+# Membership uses the actual inferred key/index type, without numeric context coercion.
+public collectionMembershipExpectedTypeId types: ref [SemanticType; ~], receiver: SemanticType -> Int {
+    receiver.kind == 14 -> if { types -> builtinTypeId(2) -> return }
+    receiver.kind == 7 and receiver.origin == 4 and receiver.symbol == 5
+        and receiver.first >= 0 and receiver.first < (types -> len)
+        -> if { receiver.first -> return }
+    -1
+}
+
+# A name read copies the referenced value; its source still retains the
+# reference identity needed for borrowing and ABI loads.
+public materializedReadTypeId types: ref [SemanticType; ~], typeId: Int -> Int {
+    typeId >= 0 and typeId < (types -> len) and types[typeId].kind == 8
+        -> if { types[typeId].first } else { typeId }
+}
+
+# An already-typed array cannot change its stored element identity at a call.
+# Check the same identity before reference addressability and IR validation.
+public typedArrayArgumentElementMismatch types: ref [SemanticType; ~], actualTypeId: Int, expectedTypeId: Int -> Bool {
+    types -> materializedReadTypeId(actualTypeId) => actualId
+    types -> materializedReadTypeId(expectedTypeId) => expectedId
+    actualId < 0 or expectedId < 0 or actualId >= (types -> len) or expectedId >= (types -> len)
+        -> if { false -> return }
+    types[actualId] => actual
+    types[expectedId] => expected
+    (expected.kind == 2 or expected.kind == 3 or expected.kind == 4 or expected.kind == 12)
+        and (actual.kind == 2 or actual.kind == 3 or actual.kind == 4 or actual.kind == 12)
+        and expected.first >= 0 and actual.first >= 0
+        and not types[expected.first].containsParameter
+        and not types[actual.first].containsParameter
+        and expected.first != actual.first
+}
+
+# Function inputs preserve nominal identity and accept only the declared
+# readonly reference, slice, or fixed-array view of the actual value.
+public functionArgumentCompatible types: ref [SemanticType; ~], actualTypeId: Int, expectedTypeId: Int -> Bool {
+    actualTypeId < 0 or actualTypeId >= (types -> len)
+        or expectedTypeId < 0 or expectedTypeId >= (types -> len)
+        -> if { false -> return }
+    actualTypeId == expectedTypeId -> if { true -> return }
+    types[actualTypeId] => actual
+    types[expectedTypeId] => expected
+    actual.kind == 1 and actual.origin == 1 and expected.kind == 1 and expected.origin == 1
+        -> if {
+            (actual.symbol -> canonicalBuiltinSymbol) == (expected.symbol -> canonicalBuiltinSymbol) -> return
+        }
+    expected.kind == 8 and expected.first == actualTypeId
+        -> if { true -> return }
+    expected.kind == 2 and (actual.kind == 2 or actual.kind == 3 or actual.kind == 4 or actual.kind == 12)
+        -> if { actual.first == expected.first -> return }
+    expected.kind == 4 and actual.kind == 4 and actual.first == expected.first
+        -> if { expected.length < 0 or actual.length == expected.length -> return }
+    false
+}
+
+# Trait identity is a header decision. Method bodies cannot manufacture a
+# matching trait by mentioning its name. Semantic validation and implicit
+# codegen reachability consume the same concrete method identity.
+public nominalTraitMethodSymbol receiverTypeId: Int, traitName: Text, methodName: Text, ranges: ref [analysis.SourceAnalysisRange; ~], nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], declarations: ref [symbols.Symbol; ~], source: Text, identities: ref [modules.ModuleIdentity; ~], types: ref [SemanticType; ~] -> Int {
+    receiverTypeId < 0 or receiverTypeId >= (types -> len)
+        -> if { -1 -> return }
+    types[receiverTypeId] => receiver
+    receiver.kind != 1 or receiver.origin == 1 or receiver.module < 0
+        -> if { -1 -> return }
+    ranges[receiver.module] => range
+    declarations[range.symbolStart + receiver.symbol] => owner
+    tokens[range.tokenStart + owner.nameToken] => ownerToken
+    source -> slice(ownerToken.span.start, ownerToken.span.length) => ownerName
+    identities[receiver.module] => identity
+    source -> slice(identity.pathStart, identity.pathLength) => moduleName
+    0 => implementationIndex!
+    implementationIndex! < range.symbolCount -> while {
+        declarations[range.symbolStart + implementationIndex!] => implementation
+        implementation.kind == 6 -> if {
+            -1 => traitAst!
+            -1 => ownerAst!
+            0 => childAst!
+            childAst! < range.astCount -> while {
+                nodes[range.astStart + childAst!] => child
+                child.parent == implementation.astNode and child.kind == 16
+                    -> if {
+                        traitAst! < 0 or child.start < nodes[range.astStart + traitAst!].start
+                            -> if { childAst! => traitAst! }
+                        ownerAst! < 0 or child.start > nodes[range.astStart + ownerAst!].start
+                            -> if { childAst! => ownerAst! }
+                    }
+                childAst! + 1 => childAst!
+            }
+            traitAst! >= 0 and ownerAst! >= 0 and traitAst! != ownerAst!
+                -> if {
+                    nodes[range.astStart + traitAst!] => traitPathNode
+                    nodes[range.astStart + ownerAst!] => target
+                    source -> slice(traitPathNode.start, traitPathNode.length) => traitPath
+                    source -> slice(target.start, target.length) => ownerPath
+                    (traitPath == traitName or (identity.pathLength > 0 and traitPath == "$moduleName.$traitName"))
+                        and (ownerPath == ownerName or (identity.pathLength > 0 and ownerPath == "$moduleName.$ownerName"))
+                        -> if {
+                            0 => methodIndex!
+                            methodIndex! < range.symbolCount -> while {
+                                declarations[range.symbolStart + methodIndex!] => method
+                                method.kind == 31 and method.parent == implementationIndex!
+                                    -> if {
+                                        tokens[range.tokenStart + method.nameToken] => token
+                                        (source -> slice(token.span.start, token.span.length)) == methodName
+                                            -> if { methodIndex! -> return }
+                                    }
+                                methodIndex! + 1 => methodIndex!
+                            }
+                        }
+                }
+        }
+        implementationIndex! + 1 => implementationIndex!
+    }
+    -1
+}
+
+public builtinTypeId types: ref [SemanticType; ~], symbol: Int -> Int {
+    types -> builtinTypeSlot(symbol -> canonicalBuiltinSymbol)
+}
+
+# Seeding retains every legacy slot; normal lookup returns canonical identity.
+builtinTypeSlot types: ref [SemanticType; ~], symbol: Int -> Int {
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => candidate
+        candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == symbol
+            -> if { typeIndex! -> return }
+        typeIndex! + 1 => typeIndex!
+    }
+    -1
+}
+
+public struct TypeReference {
+    public sourceModule: Int
+    public typeAst: Int
+    public typeId: Int
+    public status: Int
+}
+
+public struct NominalField {
+    public ownerType: Int
+    public sourceModule: Int
+    public ownerSymbol: Int
+    public fieldSymbol: Int
+    # Structural product fields use fieldSymbol = -1. A labeled field keeps
+    # its exact source token here; an unlabeled tuple field uses -1.
+    public labelToken: Int
+    public ordinal: Int
+    public fieldType: Int
+    public status: Int
+}
+
+# An unlabeled product field has the exact name _<ordinal>. Compare decimal
+# digits without allocating a temporary name, accepting no leading zeros.
+public structuralFieldNameMatches source: Text, start: UIntSize, length: UIntSize, ordinal: Int -> Bool {
+    length < 2 or ordinal < 0 or (source -> byte(start)) != 95
+        -> if { false -> return }
+    start + length => cursor!
+    ordinal => remaining!
+    cursor! > start + 1 -> while {
+        cursor! - 1 => cursor!
+        Int(source -> byte(cursor!)) != 48 + remaining! % 10
+            -> if { false -> return }
+        remaining! / 10 => remaining!
+        remaining! == 0 -> if { cursor! == start + 1 -> return }
+    }
+    false
+}
+
+# Member IR may keep the separator token rather than the identifier. Both
+# semantic place comparison and diagnostic rendering use this exact boundary.
+public memberNameToken tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, initialToken: Int, tokenEnd: Int -> Int {
+    initialToken => index!
+    index! < 0 or index! >= tokenEnd -> if { -1 -> return }
+    tokens[tokenStart + index!].kind == grammar.tokenIdDot()
+        -> if { index! + 1 => index! }
+    index! < tokenEnd
+        and (tokens[tokenStart + index!].kind == grammar.triviaIdWhitespace()
+        or tokens[tokenStart + index!].kind == grammar.triviaIdComment()
+        or tokens[tokenStart + index!].kind == grammar.tokenIdNewLine())
+        -> while { index! + 1 => index! }
+    index! >= tokenEnd or tokens[tokenStart + index!].kind != grammar.tokenIdIdentifier()
+        -> if { -1 -> return }
+    index!
+}
+
+public struct SemanticTypeSet {
+    public types: [SemanticType; ~]
+    public references: [TypeReference; ~]
+    public fields: [NominalField; ~]
+}
+
+# Impl owners are direct nominal Path or structural TypeAnnotation children.
+# For trait impls the final child is the concrete target after `for`; inherent
+# impls have one. This is the single owner lookup used by semantic and Typed IR.
+public implOwnerTypeAst package: ref analysis.PackageAnalysis, sourceIndex: Int, implAst: Int -> Int {
+    package.ranges[sourceIndex] => sourceRange
+    implTypePaths(package.nodes, sourceRange.astStart, sourceRange.astCount, implAst).ownerAst
+}
+
+public struct ImplTypePaths {
+    public ownerAst: Int
+    public traitAst: Int
+}
+
+# Semantic analysis and declaration diagnostics share the same source children.
+public implTypePaths nodes: ref [ast.AstNode; ~], astStart: Int, astCount: Int, implAst: Int -> ImplTypePaths {
+    -1 => ownerTypeAst!
+    UIntSize(0) => ownerTypeStart!
+    -1 => firstTypeAst!
+    UIntSize(0) => firstTypeStart!
+    0 => candidateAst!
+    candidateAst! < astCount -> while {
+        nodes[astStart + candidateAst!] => candidate
+        (candidate.kind == 12 or candidate.kind == 16) and candidate.parent == implAst
+            and (firstTypeAst! < 0 or candidate.start < firstTypeStart!)
+            -> if {
+                candidateAst! => firstTypeAst!
+                candidate.start => firstTypeStart!
+            }
+        (candidate.kind == 12 or candidate.kind == 16) and candidate.parent == implAst
+            and (ownerTypeAst! < 0 or candidate.start > ownerTypeStart!)
+            -> if {
+                candidateAst! => ownerTypeAst!
+                candidate.start => ownerTypeStart!
+            }
+        candidateAst! + 1 => candidateAst!
+    }
+    -1 => traitAst!
+    firstTypeAst! != ownerTypeAst! -> if { firstTypeAst! => traitAst! }
+    ImplTypePaths { ownerAst: ownerTypeAst!, traitAst: traitAst! }
+}
+
+# Resolve an impl owner through the canonical TypeReference arena. Returning
+# -1 is fail-closed: callers must not invent nominal or structural identities.
+public implOwnerTypeId package: ref analysis.PackageAnalysis, references: ref [TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], sourceIndex: Int, implAst: Int -> Int {
+    package -> implOwnerTypeAst(sourceIndex, implAst) => ownerTypeAst
+    -1 => ownerTypeId!
+    ownerTypeAst >= 0 -> if {
+        package.ranges[sourceIndex] => sourceRange
+        sourceRange.astStart + ownerTypeAst => globalOwnerAst
+        globalOwnerAst >= 0 and globalOwnerAst < Int(referenceIndexByTypeAst -> len)
+            -> if {
+                referenceIndexByTypeAst[globalOwnerAst] => ownerReferenceIndex
+                ownerReferenceIndex >= 0 and ownerReferenceIndex < Int(references -> len)
+                    -> if {
+                        references[ownerReferenceIndex] => ownerReference
+                        ownerReference.status == 0 -> if { ownerReference.typeId => ownerTypeId! }
+                    }
+            }
+    }
+    ownerTypeId!
+}
+
+# C# ParseFunctionDeclaration normalizes a direct method return `Self` to
+# its impl owner. Preserve the original result AST and borrow the canonical
+# owner's resolved type rather than resolving Self as a nominal declaration.
+implMethodResultOwnerAst package: ref analysis.PackageAnalysis, sourceIndex: Int, typeAst: Int, nameToken: Int -> Int {
+    nameToken < 0 -> if { -1 -> return }
+    package.ranges[sourceIndex] => range
+    package.tokens[range.tokenStart + nameToken] => token
+    token.span.length != 4 -> if { -1 -> return }
+    package.sources[sourceIndex] -> len => sourceLength
+    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    (source -> byte(token.span.start)) != 83
+        or (source -> byte(token.span.start + 1)) != 101
+        or (source -> byte(token.span.start + 2)) != 108
+        or (source -> byte(token.span.start + 3)) != 102
+        -> if { -1 -> return }
+    0 => symbolIndex!
+    symbolIndex! < range.symbolCount -> while {
+        package.symbols[range.symbolStart + symbolIndex!] => method
+        method.kind == 31 and method.parent >= 0 -> if {
+            method.typeNode => resultAst!
+            method.secondaryTypeNode >= 0 -> if { method.secondaryTypeNode => resultAst! }
+            resultAst! == typeAst -> if {
+                package.symbols[range.symbolStart + method.parent] => implementation
+                implementation.kind == 6 -> if {
+                    package -> implOwnerTypeAst(sourceIndex, implementation.astNode) -> return
+                }
+            }
+        }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    -1
+}
+
+# Written primary types remain authoritative. Only synthetic self has no type AST.
+public functionParameterTypeId package: ref analysis.PackageAnalysis, references: ref [TypeReference; ~], referenceIndexByTypeAst: ref [Int; ~], sourceIndex: Int, parameterSymbol: Int -> Int {
+    package.ranges[sourceIndex] => range
+    parameterSymbol < 0 or parameterSymbol >= range.symbolCount
+        -> if { -1 -> return }
+    package.symbols[range.symbolStart + parameterSymbol] => parameter
+    parameter.typeNode >= 0 -> if {
+        parameter.typeNode >= range.astCount -> if { -1 -> return }
+        referenceIndexByTypeAst[range.astStart + parameter.typeNode] => referenceIndex
+        referenceIndex < 0 -> if { -1 -> return }
+        references[referenceIndex] => reference
+        reference.status != 0 -> if { -1 -> return }
+        reference.typeId -> return
+    }
+    parameter.kind != 35 or parameter.parent < 0 or parameter.parent >= range.symbolCount
+        -> if { -1 -> return }
+    package.symbols[range.symbolStart + parameter.parent] => method
+    method.kind != 31 or method.parent < 0 or method.parent >= range.symbolCount
+        or parameter.astNode != method.astNode
+        -> if { -1 -> return }
+    package.nodes[range.astStart + method.astNode] => methodAst
+    methodAst.secondaryToken < 0 -> if { -1 -> return }
+    package.symbols[range.symbolStart + method.parent] => owner
+    owner.kind != 6 -> if { -1 -> return }
+    package -> implOwnerTypeId(references, referenceIndexByTypeAst, sourceIndex, owner.astNode)
+}
+
+struct SpanNameRequest {
+    source: Text
+    start: UIntSize
+    length: UIntSize
+    expected: Text
+}
+
+public struct SpecializationRequest {
+    public types: [SemanticType; ~]
+    public inputTemplate: Int
+    public actualInput: Int
+    public resultTemplate: Int
+}
+
+public struct SpecializationResult {
+    public types: [SemanticType; ~]
+    public root: Int
+    public status: Int
+}
+
+public struct SpecializationRoot {
+    public root: Int
+    public status: Int
+    # Structural failures retain -1; repeated generic bindings preserve the
+    # exact parameter and leaf types responsible for the first conflict.
+    public conflictParameterModule: Int
+    public conflictParameterSymbol: Int
+    public conflictFirstActualTypeId: Int
+    public conflictActualTypeId: Int
+    # Structural failure records the precise nested template/actual pair.
+    public mismatchExpectedTypeId: Int
+    public mismatchActualTypeId: Int
+}
+
+spanNameIs request: SpanNameRequest -> Bool {
+    request.length == (request.expected -> len) => equal!
+    UIntSize(0) => byteIndex!
+    equal! and byteIndex! < request.length -> while {
+        (request.source -> byte(request.start + byteIndex!)) != (request.expected -> byte(byteIndex!))
+            -> if { false => equal! }
+        byteIndex! + 1 => byteIndex!
+    }
+    equal!
+}
+
+# Some intrinsic modules are supplied by the compiler runtime rather than by
+# the checked source closure. Resolve their qualified value types from the
+# exact import path and alias so `file.SourceText` keeps the same builtin type
+# identity as an unqualified `SourceText`; a coincidental suffix is not enough.
+intrinsicQualifiedTypeSymbol package: ref analysis.PackageAnalysis, imports: ref [modules.ImportEdge; ~], sourceIndex: Int, typeAst: Int -> Int {
+    -1 => intrinsicSymbol!
+    sourceIndex >= 0 and sourceIndex < (package.ranges -> len)
+        -> if {
+            package.ranges[sourceIndex] => sourceRange
+            typeAst >= 0 and typeAst < sourceRange.astCount
+                -> if {
+                    package.sources[sourceIndex] -> len => sourceLength
+                    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+                    package.nodes[sourceRange.astStart + typeAst] => typeNode
+                    -1 => firstIdentifier!
+                    -1 => lastIdentifier!
+                    0 => identifierCount!
+                    typeNode.firstToken => tokenIndex!
+                    tokenIndex! < typeNode.firstToken + typeNode.tokenCount
+                        -> while {
+                            package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    firstIdentifier! < 0 -> if { tokenIndex! => firstIdentifier! }
+                                    tokenIndex! => lastIdentifier!
+                                    identifierCount! + 1 => identifierCount!
+                                }
+                            tokenIndex! + 1 => tokenIndex!
+                        }
+                    identifierCount! == 2 -> if {
+                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => typeName
+                        SpanNameRequest { source: source, start: typeName.span.start, length: typeName.span.length, expected: "SourceText" } -> spanNameIs
+                            -> if {
+                                package.tokens[sourceRange.tokenStart + firstIdentifier!] => typeAlias
+                                0 => importIndex!
+                                importIndex! < (imports -> len) and intrinsicSymbol! < 0
+                                    -> while {
+                                        imports[importIndex!] => edge
+                                        edge.sourceModule == sourceIndex and edge.aliasToken >= 0
+                                            -> if {
+                                                package.tokens[sourceRange.tokenStart + edge.aliasToken] => importAlias
+                                                importAlias.span.length == typeAlias.span.length => sameAlias!
+                                                UIntSize(0) => aliasByte!
+                                                sameAlias! and aliasByte! < typeAlias.span.length
+                                                    -> while {
+                                                        (source -> byte(importAlias.span.start + aliasByte!)) != (source -> byte(typeAlias.span.start + aliasByte!))
+                                                            -> if { false => sameAlias! }
+                                                        aliasByte! + 1 => aliasByte!
+                                                    }
+                                                SpanNameRequest { source: source, start: edge.pathStart, length: edge.pathLength, expected: "sys.file" } -> spanNameIs => sysFileImport
+                                                sameAlias! and sysFileImport
+                                                    -> if { 24 => intrinsicSymbol! }
+                                            }
+                                        importIndex! + 1 => importIndex!
+                                    }
+                            }
+                    }
+                }
+        }
+    intrinsicSymbol!
+}
+
+public struct OpenNominalTypeResolution {
+    public targetModule: Int
+    public targetSymbol: Int
+    public matchCount: Int
+}
+
+public struct OpenNominalTypeCandidate {
+    public targetModule: Int
+    public targetSymbol: Int
+    public aliasToken: Int
+}
+
+# Open imports use declaration identity, not a special source spelling.
+# The recursive arena and nominal projection consume this same lookup.
+public openNominalTypeCandidates package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], sourceIndex: Int, nameToken: Int -> [OpenNominalTypeCandidate; ~] {
+    package.ranges[sourceIndex] => range
+    package.tokens[range.tokenStart + nameToken] => name
+    package.sources[sourceIndex] -> len => sourceLength
+    package.sources[sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    [OpenNominalTypeCandidate; ~] => candidates!
+    # Explicit aliases hide short names opened by every module import.
+    imports -> each edge {
+        edge.sourceModule == sourceIndex and edge.aliasToken >= 0
+            -> if {
+                package.tokens[range.tokenStart + edge.aliasToken] => alias
+                package.sources[sourceIndex] -> slice(alias.span.start, alias.span.length) => aliasName
+                SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: aliasName } -> spanNameIs
+                    -> if { candidates! -> return }
+            }
+    }
+    0 => edgeIndex!
+    edgeIndex! < (imports -> len) -> while {
+        imports[edgeIndex!] => edge
+        resolvedImports[edgeIndex!] => resolved
+        edge.sourceModule == sourceIndex and resolved.status == 0
+            -> if {
+                identities[resolved.targetModule].sourceIndex => facadeSource
+                0 => moduleIndex!
+                moduleIndex! < (identities -> len) -> while {
+                    identities[moduleIndex!].sourceIndex => candidateSource
+                    package.sources -> modules.sameLogicalAnalyzedSource(identities, facadeSource, candidateSource, package.tokens, package.ranges)
+                        -> if {
+                            package.ranges[candidateSource] => candidateRange
+                            package.sources[candidateSource] -> len => candidateLength
+                            package.sources[candidateSource] -> slice(UIntSize(0), candidateLength) => candidateText
+                            0 => symbolIndex!
+                            symbolIndex! < candidateRange.symbolCount -> while {
+                                package.symbols[candidateRange.symbolStart + symbolIndex!] => candidate
+                                candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)
+                                    and candidate.flags / 4 % 2 == 1 -> if {
+                                        package.tokens[candidateRange.tokenStart + candidate.nameToken] => candidateName
+                                        candidateText -> slice(candidateName.span.start, candidateName.span.length) => candidateSpelling
+                                        SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: candidateSpelling } -> spanNameIs
+                                            -> if {
+                                                false => recorded!
+                                                0 => matchIndex!
+                                                matchIndex! < (candidates! -> len) -> while {
+                                                    candidates![matchIndex!].targetModule == moduleIndex! and candidates![matchIndex!].targetSymbol == symbolIndex!
+                                                        -> if { true => recorded! }
+                                                    matchIndex! + 1 => matchIndex!
+                                                }
+                                                not recorded! -> if {
+                                                    candidates! -> push(OpenNominalTypeCandidate { targetModule: moduleIndex!, targetSymbol: symbolIndex!, aliasToken: edge.aliasToken })
+                                                }
+                                            }
+                                    }
+                                symbolIndex! + 1 => symbolIndex!
+                            }
+                        }
+                    moduleIndex! + 1 => moduleIndex!
+                }
+            }
+        edgeIndex! + 1 => edgeIndex!
+    }
+    candidates!
+}
+
+public resolveOpenNominalType package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], imports: ref [modules.ImportEdge; ~], resolvedImports: ref [moduleResolve.ResolvedImport; ~], sourceIndex: Int, nameToken: Int -> OpenNominalTypeResolution {
+    package -> openNominalTypeCandidates(identities, imports, resolvedImports, sourceIndex, nameToken) => candidates
+    candidates -> len => count
+    count == 1 -> if {
+        OpenNominalTypeResolution { targetModule: candidates[0].targetModule, targetSymbol: candidates[0].targetSymbol, matchCount: count } -> return
+    }
+    OpenNominalTypeResolution { targetModule: -1, targetSymbol: -1, matchCount: count }
+}
+
+# Stable builtin symbols 0..24 name reserved source types. Range (25) is a
+# runtime alias, so a declared module-local nominal identity takes precedence.
+# Keep this distinction shared with the legacy nominal projection.
+public builtinNameIsReserved symbol: Int -> Bool {
+    symbol >= 0 and symbol < 25
+}
+
+# Source spellings for the same scalar share one semantic identity. Keep the
+# legacy name slots stable for lookup, then canonicalize before comparison.
+public canonicalBuiltinSymbol symbol: Int -> Int {
+    symbol == 5 -> if { 2 -> return }
+    symbol == 7 -> if { 6 -> return }
+    symbol == 19 -> if { 20 -> return }
+    symbol == 22 -> if { 21 -> return }
+    symbol
+}
+
+public builtinSymbolByName name: Text -> Int {
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => names
+    0 => index!
+    index! < (names -> len) -> while {
+        name == names[index!] -> if { index! -> canonicalBuiltinSymbol -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+public isSignedNumericBuiltinSymbol symbol: Int -> Bool {
+    symbol -> canonicalBuiltinSymbol => canonical
+    canonical == 2 or canonical == 3 or canonical == 4 or canonical == 6
+        or canonical == 12 or canonical == 20 or canonical == 21
+}
+
+public isBoxableBuiltinSymbol symbol: Int -> Bool {
+    symbol -> canonicalBuiltinSymbol => canonical
+    canonical == 1 or canonical == 2 or canonical == 23
+}
+
+public builtinTypeName symbol: Int -> Text {
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Long", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float", "Double", "Double", "Bool", "SourceText", "Range"] => names
+    symbol -> canonicalBuiltinSymbol => canonical
+    names[canonical]
+}
+
+public intrinsicGenericName symbol: Int -> Text {
+    ["Option", "Result", "Task", "Stream", "EventStream", "Set", "Deque", "BinaryHeap"] => names
+    names[symbol]
+}
+
+public intrinsicNominalSymbol package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], targetModule: Int, targetSymbol: Int -> Int {
+    "sys.file" => fileNamespace
+    "SourceText" => sourceTextName
+    identities[targetModule] => identity
+    package.sources[identity.sourceIndex] -> len => sourceLength
+    package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    package.ranges[identity.sourceIndex] => sourceRange
+    package.symbols[sourceRange.symbolStart + targetSymbol] => symbol
+    package.tokens[sourceRange.tokenStart + symbol.nameToken] => name
+    SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: fileNamespace } -> spanNameIs
+        -> if {
+            SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: sourceTextName } -> spanNameIs
+                -> if { 24 } else { -1 }
+        } else { -1 }
+}
+
+# Enum payload edges are storage dependencies, never struct layout fields.
+public struct PayloadEdge {
+    public ownerType: Int
+    public payloadType: Int
+}
+
+# Shared semantic value-layout authority. A backend flag can mark a containing
+# type; recursiveType instead identifies an actual ordered DFS backedge.
+public struct ValueLayoutCycles {
+    public cyclic: [Bool; ~]
+    public recursiveType: Int
+}
+
+# Definition parsing registers structural children before their containing
+# definition. Named types are already declared and do not expand here. Keep
+# this registration walk separate from by-value edges: even a zero-length
+# array or heap container resolves its annotation's synthetic definitions.
+appendValueLayoutDefinitionRoots typeId: Int, types: ref [SemanticType; ~], fields: ref [NominalField; ~], firstField: ref [Int; ~], nextField: ref [Int; ~], registered: mut [Bool; ~], structRoots: mut [Int; ~], enumRoots: mut [Int; ~] -> Unit {
+    typeId < 0 or typeId >= (types -> len) -> if { return }
+    registered[typeId] -> if { return }
+    true => registered[typeId]
+    types[typeId] => current
+    current.kind == 1 -> if { return }
+    current.kind == 10 -> if {
+        firstField[typeId] => fieldIndex!
+        fieldIndex! >= 0 -> while {
+            fields[fieldIndex!].fieldType -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+            nextField[fieldIndex!] => fieldIndex!
+        }
+        structRoots -> push(typeId)
+    } else {
+        current.first -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+        current.second -> appendValueLayoutDefinitionRoots(types, fields, firstField, nextField, registered, structRoots, enumRoots)
+        current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)
+            -> if { enumRoots -> push(typeId) }
+    }
+}
+
+firstValueLayoutBackedge cyclic: ref [Bool; ~], starts: ref [Int; ~], dependencies: ref [Int; ~], canonical: ref [Int; ~], roots: ref [Int; ~] -> Int {
+    [Int; ~] => states!
+    cyclic -> each value { states! -> push(0) }
+    [Int; ~] => stackTypes!
+    [Int; ~] => stackEdges!
+    roots -> each root {
+        cyclic[root] and states![root] == 0 -> if {
+            0 => depth!
+            (stackTypes! -> len) == 0 -> if {
+                stackTypes! -> push(root)
+                stackEdges! -> push(starts[root])
+            } else {
+                root => stackTypes![0]
+                starts[root] => stackEdges![0]
+            }
+            1 => states![root]
+            depth! >= 0 -> while {
+                stackTypes![depth!] => owner
+                stackEdges![depth!] => edge
+                edge >= starts[owner + 1] -> if {
+                    2 => states![owner]
+                    depth! - 1 => depth!
+                } else {
+                    edge + 1 => stackEdges![depth!]
+                    canonical[dependencies[edge]] => dependency
+                    cyclic[dependency] -> if {
+                        states![dependency] == 1 -> if { dependency -> return }
+                        states![dependency] == 0 -> if {
+                            1 => states![dependency]
+                            depth! + 1 => depth!
+                            depth! >= (stackTypes! -> len) -> if {
+                                stackTypes! -> push(dependency)
+                                stackEdges! -> push(starts[dependency])
+                            } else {
+                                dependency => stackTypes![depth!]
+                                starts[dependency] => stackEdges![depth!]
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    -1
+}
+
+# Build the by-value dependency graph once. Pointer-backed containers terminate
+# layout dependencies even when their element recursively names the owner.
+public valueLayoutCycles types: ref [SemanticType; ~], fields: ref [NominalField; ~], references: ref [TypeReference; ~], ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~], referenceByAst: ref [Int; ~] -> ValueLayoutCycles {
+    [Int; ~] => heads!
+    [Int; ~] => pending!
+    [Int; ~] => owners!
+    [Int; ~] => next!
+    [Bool; ~] => cyclic!
+    types -> each current {
+        heads! -> push(-1)
+        pending! -> push(0)
+        cyclic! -> push(false)
+    }
+    # Source ranges already assign disjoint symbol offsets. Reuse that identity
+    # instead of packing module/symbol pairs or comparing every nominal field.
+    [Int; ~] => canonicalBySymbol!
+    [Int; ~] => firstVariant!
+    [Int; ~] => nextVariant!
+    declarations -> each declaration {
+        canonicalBySymbol! -> push(-1)
+        firstVariant! -> push(-1)
+        nextVariant! -> push(-1)
+    }
+    [Int; ~] => canonicalByType!
+    [Int; ~] => firstField!
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => current
+        typeIndex! => canonical!
+        current.kind == 1 and (current.origin == 0 or current.origin == 2)
+            and current.module >= 0 and current.module < (ranges -> len)
+            -> if {
+                ranges[current.module] => sourceRange
+                current.symbol >= 0 and current.symbol < sourceRange.symbolCount
+                    -> if {
+                        sourceRange.symbolStart + current.symbol => symbolIndex
+                        canonicalBySymbol![symbolIndex] < 0
+                            -> if { typeIndex! => canonicalBySymbol![symbolIndex] }
+                        canonicalBySymbol![symbolIndex] => canonical!
+                    }
+            }
+        canonicalByType! -> push(canonical!)
+        firstField! -> push(-1)
+        typeIndex! + 1 => typeIndex!
+    }
+    [Int; ~] => nextField!
+    fields -> each field { nextField! -> push(-1) }
+    (fields -> len) - 1 => fieldIndex!
+    fieldIndex! >= 0 -> while {
+        fields[fieldIndex!] => field
+        field.status == 0 and field.ownerType >= 0 and field.ownerType < (types -> len)
+            and field.fieldType >= 0
+            -> if {
+                canonicalByType![field.ownerType] => owner
+                firstField![owner] => nextField![fieldIndex!]
+                fieldIndex! => firstField![owner]
+            }
+        fieldIndex! - 1 => fieldIndex!
+    }
+    ranges -> each sourceRange {
+        sourceRange.symbolCount - 1 => symbolIndex!
+        symbolIndex! >= 0 -> while {
+            sourceRange.symbolStart + symbolIndex! => globalSymbol
+            declarations[globalSymbol] => declaration
+            declaration.kind == 27 and declaration.parent >= 0
+                and declaration.parent < sourceRange.symbolCount
+                -> if {
+                    sourceRange.symbolStart + declaration.parent => parentSymbol
+                    firstVariant![parentSymbol] => nextVariant![globalSymbol]
+                    globalSymbol => firstVariant![parentSymbol]
+                }
+            symbolIndex! - 1 => symbolIndex!
+        }
+    }
+    [Int; ~] => dependencyStarts!
+    [Int; ~] => dependenciesByOwner!
+    0 => owner!
+    owner! < (types -> len) -> while {
+        dependencyStarts! -> push(dependenciesByOwner! -> len)
+        types[owner!] => current
+        [Int; ~] => dependencies!
+        canonicalByType![owner!] != owner! -> if {
+            # Alias nodes share the declaration's complete by-value dependency set.
+            dependencies! -> push(canonicalByType![owner!])
+        } else {
+            ((current.kind == 4 and current.length > 0) or current.kind == 12) and current.first >= 0
+                -> if {
+                    dependencies! -> push(current.first)
+                }
+            current.kind == 13 or (current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1))
+                -> if {
+                    current.first >= 0 -> if { dependencies! -> push(current.first) }
+                    current.second >= 0 -> if { dependencies! -> push(current.second) }
+                }
+            current.kind == 1 or current.kind == 10 -> if {
+                firstField![owner!] => fieldCursor!
+                fieldCursor! >= 0 -> while {
+                    dependencies! -> push(fields[fieldCursor!].fieldType)
+                    nextField![fieldCursor!] => fieldCursor!
+                }
+            }
+            current.kind == 1 and (current.origin == 0 or current.origin == 2)
+                and current.module >= 0 and current.module < (ranges -> len)
+                -> if {
+                    ranges[current.module] => sourceRange
+                    current.symbol >= 0 and current.symbol < sourceRange.symbolCount
+                        -> if {
+                            firstVariant![sourceRange.symbolStart + current.symbol] => variantIndex!
+                            variantIndex! >= 0 -> while {
+                                declarations[variantIndex!] => variant
+                                variant.typeNode >= 0 -> if {
+                                    referenceByAst[sourceRange.astStart + variant.typeNode] => referenceIndex
+                                    referenceIndex >= 0 -> if {
+                                        references[referenceIndex] => reference
+                                        reference.status == 0 and reference.typeId >= 0
+                                            -> if { dependencies! -> push(reference.typeId) }
+                                    }
+                                }
+                                nextVariant![variantIndex!] => variantIndex!
+                            }
+                        }
+                }
+        }
+        dependencies! -> each dependency {
+            dependency >= 0 and dependency < (types -> len)
+                -> if {
+                    dependenciesByOwner! -> push(dependency)
+                    owners! -> push(owner!)
+                    next! -> push(heads![dependency])
+                    (owners! -> len) - 1 => heads![dependency]
+                    pending![owner!] + 1 => pending![owner!]
+                }
+        }
+        owner! + 1 => owner!
+    }
+    dependencyStarts! -> push(dependenciesByOwner! -> len)
+    [Int; ~] => ready!
+    0 => seed!
+    seed! < (types -> len) -> while {
+        pending![seed!] == 0 -> if { ready! -> push(seed!) }
+        seed! + 1 => seed!
+    }
+    0 => cursor!
+    cursor! < (ready! -> len) -> while {
+        heads![ready![cursor!]] => edge!
+        edge! >= 0 -> while {
+            owners![edge!] => dependent
+            pending![dependent] - 1 => pending![dependent]
+            pending![dependent] == 0 -> if { ready! -> push(dependent) }
+            next![edge!] => edge!
+        }
+        cursor! + 1 => cursor!
+    }
+    0 => resultIndex!
+    resultIndex! < (types -> len) -> while {
+        pending![resultIndex!] > 0 => cyclic![resultIndex!]
+        resultIndex! + 1 => resultIndex!
+    }
+    # Kahn flags include owners that merely contain a cycle. Ordered DFS names
+    # the actual backedge type, matching semantic declaration admission.
+    [Int; ~] => structRoots!
+    [Int; ~] => enumRoots!
+    [Bool; ~] => registered!
+    types -> each current { registered! -> push(false) }
+    3 => declarationKind!
+    declarationKind! <= 4 -> while {
+        ranges -> each sourceRange {
+            0 => declarationIndex!
+            declarationIndex! < sourceRange.symbolCount -> while {
+                sourceRange.symbolStart + declarationIndex! => globalSymbol
+                declarations[globalSymbol].kind == declarationKind!
+                    and canonicalBySymbol![globalSymbol] >= 0
+                    -> if {
+                        canonicalBySymbol![globalSymbol] => definitionType
+                        declarationKind! == 3 -> if {
+                            firstField![definitionType] => fieldCursor!
+                            fieldCursor! >= 0 -> while {
+                                fields[fieldCursor!].fieldType -> appendValueLayoutDefinitionRoots(types, fields, firstField!, nextField!, registered!, structRoots!, enumRoots!)
+                                nextField![fieldCursor!] => fieldCursor!
+                            }
+                            structRoots! -> push(definitionType)
+                        } else {
+                            firstVariant![globalSymbol] => variantIndex!
+                            variantIndex! >= 0 -> while {
+                                declarations[variantIndex!] => variant
+                                variant.typeNode >= 0 -> if {
+                                    referenceByAst[sourceRange.astStart + variant.typeNode] => referenceIndex
+                                    referenceIndex >= 0 -> if {
+                                        references[referenceIndex] => reference
+                                        reference.status == 0 -> if {
+                                            reference.typeId -> appendValueLayoutDefinitionRoots(types, fields, firstField!, nextField!, registered!, structRoots!, enumRoots!)
+                                        }
+                                    }
+                                }
+                                nextVariant![variantIndex!] => variantIndex!
+                            }
+                            enumRoots! -> push(definitionType)
+                        }
+                    }
+                declarationIndex! + 1 => declarationIndex!
+            }
+        }
+        declarationKind! + 1 => declarationKind!
+    }
+    enumRoots! -> each root { structRoots! -> push(root) }
+    cyclic! -> firstValueLayoutBackedge(dependencyStarts!, dependenciesByOwner!, canonicalByType!, structRoots!) => recursiveType
+    ValueLayoutCycles { cyclic: cyclic!, recursiveType: recursiveType }
+}
+
+# resolveAnalyzed stores source indices for local and imported nominal modules.
+# Only the complete variant annotation contributes its canonical stored type.
+public enumPayloadEdges sourceTypes: ref [SemanticType; ~], references: ref [TypeReference; ~], ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~], referenceByAst: ref [Int; ~] -> [PayloadEdge; ~] {
+    [Int; ~] => firstVariant!
+    [Int; ~] => nextVariant!
+    declarations -> each declaration {
+        firstVariant! -> push(-1)
+        nextVariant! -> push(-1)
+    }
+    ranges -> each sourceRange {
+        0 => declarationIndex!
+        declarationIndex! < sourceRange.symbolCount -> while {
+            sourceRange.symbolStart + declarationIndex! => globalIndex
+            declarations[globalIndex] => declaration
+            declaration.kind == 27 and declaration.parent >= 0
+                and declaration.parent < sourceRange.symbolCount
+                -> if {
+                    sourceRange.symbolStart + declaration.parent => ownerIndex
+                    firstVariant![ownerIndex] => nextVariant![globalIndex]
+                    globalIndex => firstVariant![ownerIndex]
+                }
+            declarationIndex! + 1 => declarationIndex!
+        }
+    }
+    [PayloadEdge; ~] => edges!
+    0 => ownerTypeIndex!
+    ownerTypeIndex! < (sourceTypes -> len) -> while {
+        sourceTypes[ownerTypeIndex!] => owner
+        owner.kind == 1 and (owner.origin == 0 or owner.origin == 2)
+            and owner.module >= 0 and owner.module < (ranges -> len)
+            -> if {
+                ranges[owner.module] => sourceRange
+                owner.symbol >= 0 and owner.symbol < sourceRange.symbolCount
+                    -> if {
+                        firstVariant![sourceRange.symbolStart + owner.symbol] => variantIndex!
+                        variantIndex! >= 0 -> while {
+                            declarations[variantIndex!] => variant
+                            variant.typeNode >= 0 and variant.typeNode < sourceRange.astCount
+                                -> if {
+                                    sourceRange.astStart + variant.typeNode => annotationIndex
+                                    annotationIndex < (referenceByAst -> len) -> if {
+                                        referenceByAst[annotationIndex] => referenceIndex
+                                        referenceIndex >= 0 and referenceIndex < (references -> len)
+                                            -> if {
+                                                references[referenceIndex] => reference
+                                                reference.status == 0 and reference.sourceModule == owner.module
+                                                    and reference.typeAst == variant.typeNode
+                                                    and reference.typeId >= 0 and reference.typeId < (sourceTypes -> len)
+                                                    -> if {
+                                                        edges! -> push(PayloadEdge {
+                                                            ownerType: ownerTypeIndex!
+                                                            payloadType: reference.typeId
+                                                        })
+                                                    }
+                                            }
+                                    }
+                                }
+                            nextVariant![variantIndex!] => variantIndex!
+                        }
+                    }
+            }
+        ownerTypeIndex! + 1 => ownerTypeIndex!
+    }
+    edges!
+}
+
+# Canonical ownership traits derived from the recursive type arena.
+# Bit 0 means the value owns destruction responsibility. Bit 1 means that
+# responsibility reaches heap-backed storage. Child IDs always precede their
+# parents, so fixed arrays and nominal applications are classified bottom-up.
+# Arena-only clients have no declaration graph. Complete compiler contexts
+# supply canonical enum dependencies through classifyWithPayloads instead.
+public classify sourceTypes: ref [SemanticType; ~], sourceFields: ref [NominalField; ~] -> [Int; ~] {
+    [PayloadEdge; ~] => payloadEdges
+    classifyWithPayloads(sourceTypes, sourceFields, payloadEdges)
+}
+
+# Storage responsibility is distinct from the affine nominal/drop trait.
+# Match C# ContainsOwnedStorage using committed field and payload identities:
+# scalar-only structs are copyable, fixed arrays own their descriptors, and
+# bounded inline collections inherit only their stored values' responsibility.
+public hasDirectOwnedStorage type: SemanticType -> Bool {
+    type.kind == 3 or type.kind == 4 or type.kind == 5
+        or type.kind == 6 or type.kind == 9
+        or (type.kind == 1 and type.origin == 16)
+        or (type.kind == 1 and type.origin == 1
+        and (type.symbol == 15 or type.symbol == 17
+        or type.symbol == 18 or type.symbol == 24))
+        or (type.kind == 7 and type.origin == 4
+        and type.symbol >= 2 and type.symbol <= 7)
+}
+
+public inheritsChildOwnedStorage type: SemanticType -> Bool {
+    type.kind == 10 or type.kind == 11 or type.kind == 12 or type.kind == 13
+        or (type.kind == 7 and type.origin == 4 and (type.symbol == 0 or type.symbol == 1))
+}
+
+# Ordinary fixed literals reject direct container elements before interning.
+public unsupportedFixedArrayLiteralElement types: ref [SemanticType; ~], initialElementTypeId: Int -> Bool {
+    types -> materializedReadTypeId(initialElementTypeId) => elementTypeId
+    elementTypeId < 0 or elementTypeId >= (types -> len)
+        -> if { false -> return }
+    types[elementTypeId] => element
+    element.kind == 4 -> if { true -> return }
+    element.kind == 1 and element.origin == 1 and element.symbol == 0
+        -> if { true -> return }
+    false => intFirst!
+    element.first >= 0 and element.first < (types -> len)
+        -> if {
+            types[element.first] => first
+            first.kind == 1 and first.origin == 1 and (first.symbol -> canonicalBuiltinSymbol) == 2
+                -> if { true => intFirst! }
+        }
+    (element.kind == 2 or element.kind == 3) and intFirst!
+        -> if { true -> return }
+    element.kind == 5 and intFirst! and element.second >= 0 and element.second < (types -> len)
+        -> if {
+            types[element.second] => second
+            (second.kind == 1 and second.origin == 1 and (second.symbol -> canonicalBuiltinSymbol) == 2) => intSecond
+            intSecond -> return
+        }
+    false
+}
+
+public ownedStorageByType sourceTypes: ref [SemanticType; ~], sourceFields: ref [NominalField; ~], payloadEdges: ref [PayloadEdge; ~], resourceSeeds: ref [Bool; ~] -> [Bool; ~] {
+    [Bool; ~] => owned!
+    0 => typeIndex!
+    typeIndex! < (sourceTypes -> len) -> while {
+        sourceTypes[typeIndex!] => type
+        type -> hasDirectOwnedStorage => owns!
+        typeIndex! < (resourceSeeds -> len) -> if {
+            resourceSeeds[typeIndex!] -> if { true => owns! }
+        }
+        owned! -> push(owns!)
+        typeIndex! + 1 => typeIndex!
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => compositeIndex!
+        compositeIndex! < (sourceTypes -> len) -> while {
+            sourceTypes[compositeIndex!] => type
+            not owned![compositeIndex!] and type -> inheritsChildOwnedStorage
+                -> if {
+                    false => childOwns!
+                    type.first >= 0 and type.first < (owned! -> len)
+                        -> if {
+                            owned![type.first] -> if { true => childOwns! }
+                        }
+                    type.second >= 0 and type.second < (owned! -> len)
+                        -> if {
+                            owned![type.second] -> if { true => childOwns! }
+                        }
+                    childOwns! -> if {
+                        true => owned![compositeIndex!]
+                        true => changed!
+                    }
+                }
+            compositeIndex! + 1 => compositeIndex!
+        }
+        sourceFields -> each field {
+            field.status == 0 and field.ownerType >= 0 and field.ownerType < (owned! -> len)
+                and field.fieldType >= 0 and field.fieldType < (owned! -> len)
+                and not owned![field.ownerType] and owned![field.fieldType]
+                -> if {
+                    true => owned![field.ownerType]
+                    true => changed!
+                }
+        }
+        payloadEdges -> each edge {
+            edge.ownerType >= 0 and edge.ownerType < (owned! -> len)
+                and edge.payloadType >= 0 and edge.payloadType < (owned! -> len)
+                and not owned![edge.ownerType] and owned![edge.payloadType]
+                -> if {
+                    true => owned![edge.ownerType]
+                    true => changed!
+                }
+        }
+    }
+    owned!
+}
+
+public classifyWithPayloads sourceTypes: ref [SemanticType; ~], sourceFields: ref [NominalField; ~], payloadEdges: ref [PayloadEdge; ~] -> [Int; ~] {
+    [Bool; ~] => resourceSeeds
+    classifyWithResources(sourceTypes, sourceFields, payloadEdges, resourceSeeds)
+}
+
+# Bit 2 reaches a unique native resource, independently of heap storage.
+# Complete contexts seed nominal resources through semantic.context authority.
+public classifyWithResources sourceTypes: ref [SemanticType; ~], sourceFields: ref [NominalField; ~], payloadEdges: ref [PayloadEdge; ~], resourceSeeds: ref [Bool; ~] -> [Int; ~] {
+    [Int; ~] => firstFieldByOwner!
+    0 => ownerSeedIndex!
+    ownerSeedIndex! < (sourceTypes -> len) -> while {
+        firstFieldByOwner! -> push(-1)
+        ownerSeedIndex! + 1 => ownerSeedIndex!
+    }
+    [Int; ~] => nextFieldByIndex!
+    0 => fieldSeedIndex!
+    fieldSeedIndex! < (sourceFields -> len) -> while {
+        nextFieldByIndex! -> push(-1)
+        sourceFields[fieldSeedIndex!] => field
+        field.ownerType >= 0 and field.ownerType < (sourceTypes -> len)
+            -> if {
+                firstFieldByOwner![field.ownerType] => nextFieldByIndex![fieldSeedIndex!]
+                fieldSeedIndex! => firstFieldByOwner![field.ownerType]
+            }
+        fieldSeedIndex! + 1 => fieldSeedIndex!
+    }
+    [Int; ~] => firstPayloadByOwner!
+    sourceTypes -> each sourceType { firstPayloadByOwner! -> push(-1) }
+    [Int; ~] => nextPayloadByIndex!
+    0 => payloadSeedIndex!
+    payloadSeedIndex! < (payloadEdges -> len) -> while {
+        payloadEdges[payloadSeedIndex!] => edge
+        firstPayloadByOwner![edge.ownerType] => nextPayload
+        nextPayloadByIndex! -> push(nextPayload)
+        payloadSeedIndex! => firstPayloadByOwner![edge.ownerType]
+        payloadSeedIndex! + 1 => payloadSeedIndex!
+    }
+    [Int; ~] => traits!
+    0 => seedTypeIndex!
+    seedTypeIndex! < (sourceTypes -> len) -> while {
+        sourceTypes[seedTypeIndex!] => current
+        false => owns!
+        false => reachesHeap!
+        current.kind == 9 => reachesResource!
+        seedTypeIndex! < (resourceSeeds -> len) -> if {
+            resourceSeeds[seedTypeIndex!] -> if { true => reachesResource! }
+        }
+        reachesResource! -> if { true => owns! }
+        current.kind == 3 or current.kind == 5 or current.kind == 6
+            or (current.kind == 1 and current.origin == 16)
+            -> if {
+                true => owns!
+                true => reachesHeap!
+            }
+        current.kind == 12 or current.kind == 13 -> if { true => owns! }
+        current.kind == 1 and current.origin == 1 and (current.symbol == 17 or current.symbol == 18)
+            -> if {
+                true => owns!
+                true => reachesResource!
+            }
+        current.kind == 1 and current.origin == 1 and current.symbol == 24
+            -> if {
+                true => owns!
+                true => reachesHeap!
+            }
+        current.kind == 1 and (current.origin == 0 or current.origin == 2)
+            -> if {
+                true => owns!
+            }
+        # Task, Stream and EventStream own their runtime state independently
+        # of T. Task<Unit> still owns its control and context allocation.
+        current.kind == 7 and current.origin == 4
+            and current.symbol >= 2 and current.symbol <= 4
+            -> if {
+                true => owns!
+                true => reachesHeap!
+            }
+        current.kind == 7 and current.origin == 4 and (current.symbol == 5 or current.symbol == 6 or current.symbol == 7)
+            -> if {
+                true => owns!
+                true => reachesHeap!
+            }
+        # Enum payloads store fixed arrays as owned pointer/length descriptors.
+        # This backing ownership is independent of the inline element trait.
+        current.kind == 7 and current.origin == 4
+            and (current.symbol == 0 or current.symbol == 1)
+            -> if {
+                (current.first >= 0 and sourceTypes[current.first].kind == 4)
+                    or (current.second >= 0 and sourceTypes[current.second].kind == 4)
+                    -> if {
+                        true => owns!
+                        true => reachesHeap!
+                    }
+            }
+        # Exactly zero fixed elements contribute no destruction responsibility.
+        # Unknown lengths retain the conservative element trait.
+        (current.kind == 4 and current.length != 0) or current.kind == 7 or current.kind == 12 or current.kind == 13
+            -> if {
+                current.first >= 0 -> if {
+                    traits![current.first] % 2 == 1 -> if { true => owns! }
+                    (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                    (traits![current.first] / 4) % 2 == 1 -> if { true => reachesResource! }
+                }
+                current.second >= 0 -> if {
+                    traits![current.second] % 2 == 1 -> if { true => owns! }
+                    (traits![current.second] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                    (traits![current.second] / 4) % 2 == 1 -> if { true => reachesResource! }
+                }
+            }
+        0 => value!
+        owns! -> if { value! + 1 => value! }
+        reachesHeap! -> if { value! + 2 => value! }
+        reachesResource! -> if { value! + 4 => value! }
+        traits! -> push(value!)
+        seedTypeIndex! + 1 => seedTypeIndex!
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => typeIndex!
+        typeIndex! < (sourceTypes -> len) -> while {
+            sourceTypes[typeIndex!] => current
+            traits![typeIndex!] => value
+            value % 2 == 1 => owns!
+            (value / 2) % 2 == 1 => reachesHeap!
+            (value / 4) % 2 == 1 => reachesResource!
+            (current.kind == 4 and current.length != 0) or current.kind == 7 or current.kind == 12 or current.kind == 13
+                -> if {
+                    current.first >= 0 -> if {
+                        traits![current.first] % 2 == 1 -> if { true => owns! }
+                        (traits![current.first] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                        (traits![current.first] / 4) % 2 == 1 -> if { true => reachesResource! }
+                    }
+                    current.second >= 0 -> if {
+                        traits![current.second] % 2 == 1 -> if { true => owns! }
+                        (traits![current.second] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                        (traits![current.second] / 4) % 2 == 1 -> if { true => reachesResource! }
+                    }
+                }
+            firstFieldByOwner![typeIndex!] => fieldIndex!
+            fieldIndex! >= 0 -> while {
+                sourceFields[fieldIndex!] => field
+                field.status == 0 and field.ownerType == typeIndex! and field.fieldType >= 0
+                    -> if {
+                        traits![field.fieldType] % 2 == 1 -> if { true => owns! }
+                        (traits![field.fieldType] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                        (traits![field.fieldType] / 4) % 2 == 1 -> if { true => reachesResource! }
+                    }
+                nextFieldByIndex![fieldIndex!] => fieldIndex!
+            }
+            firstPayloadByOwner![typeIndex!] => payloadIndex!
+            payloadIndex! >= 0 -> while {
+                payloadEdges[payloadIndex!].payloadType => payloadType
+                traits![payloadType] % 2 == 1 -> if { true => owns! }
+                (traits![payloadType] / 2) % 2 == 1 -> if { true => reachesHeap! }
+                (traits![payloadType] / 4) % 2 == 1 -> if { true => reachesResource! }
+                nextPayloadByIndex![payloadIndex!] => payloadIndex!
+            }
+            0 => nextValue!
+            owns! -> if { nextValue! + 1 => nextValue! }
+            reachesHeap! -> if { nextValue! + 2 => nextValue! }
+            reachesResource! -> if { nextValue! + 4 => nextValue! }
+            nextValue! != value -> if {
+                nextValue! => traits![typeIndex!]
+                true => changed!
+            }
+            typeIndex! + 1 => typeIndex!
+        }
+    }
+    traits!
+}
+
+# Resolves and globally interns recursive annotation types across source files.
+# Nominal equality uses declaration identity, not source spelling.
+public resolve sources: [Text; ~] -> SemanticTypeSet {
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
+    SemanticTypeSet { types: [SemanticType; ~], references: [TypeReference; ~], fields: [NominalField; ~] } => empty
+    package -> resolveAnalyzedSeeded(empty)
+}
+
+# Reuse canonical interning while keeping supplied IDs and references authoritative.
+public resolveAnalyzedSeeded package: analysis.PackageAnalysis, seed: ref SemanticTypeSet -> SemanticTypeSet {
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"] => builtinNames
+    package -> modules.identitiesAnalyzed => identities
+    package -> modules.importsAnalyzed => imports
+    package -> moduleResolve.resolveAnalyzed => resolvedImports
+    package -> qualified.resolveAnalyzed => qualifiedResults
+    [SemanticType; ~] => semanticTypes!
+    [TypeReference; ~] => references!
+    [NominalField; ~] => fields!
+    seed.types -> each type { semanticTypes! -> push(type) }
+    seed.references -> each reference { references! -> push(reference) }
+    seed.fields -> each field { fields! -> push(field) }
+
+    # Seed builtins in their stable nominal-symbol order. Expression inference
+    # can therefore use the same id without an adapter or encounter-order map.
+    0 => builtinSeed!
+    builtinSeed! < (builtinNames -> len) -> while {
+        (semanticTypes! -> builtinTypeSlot(builtinSeed!)) < 0
+            -> if {
+                semanticTypes! -> push(SemanticType {
+                    kind: 1
+                    origin: 1
+                    module: -1
+                    symbol: builtinSeed!
+                    first: -1
+                    second: -1
+                    length: -1
+                    lengthHash: 0
+                    containsParameter: false
+                    status: 0
+                })
+            }
+        builtinSeed! + 1 => builtinSeed!
+    }
+
+    # Seed every generated affine external type even when user source never
+    # spells it. COM activation/clone/receivers and native opaque handles then
+    # share the same pointer-sized canonical identity without wrapper storage.
+    semanticTypes! -> builtinTypeId(5) => nativeStatusTypeId
+    0 => comTypeSourceIndex!
+    (seed.types -> len) == 0 and comTypeSourceIndex! < (package.sources -> len)
+        -> while {
+            package.ranges[comTypeSourceIndex!] => comTypeRange
+            0 => comTypeSymbolIndex!
+            comTypeSymbolIndex! < comTypeRange.symbolCount
+                -> while {
+                    package.symbols[comTypeRange.symbolStart + comTypeSymbolIndex!] => comTypeSymbol
+                    comTypeSymbol.kind == 3 and (comTypeSymbol.flags / 512 % 2 == 1 or comTypeSymbol.flags / 65536 % 2 == 1)
+                        -> if {
+                            semanticTypes! -> len => comInterfaceTypeId
+                            semanticTypes! -> push(SemanticType {
+                                kind: 9
+                                origin: 0
+                                module: comTypeSourceIndex!
+                                symbol: comTypeSymbolIndex!
+                                first: -1
+                                second: -1
+                                length: -1
+                                lengthHash: 0
+                                containsParameter: false
+                                status: 0
+                            })
+                            comTypeSymbol.flags / 512 % 2 == 1 -> if {
+                                semanticTypes! -> push(SemanticType {
+                                    kind: 7
+                                    origin: 4
+                                    module: -1
+                                    symbol: 1
+                                    first: comInterfaceTypeId
+                                    second: nativeStatusTypeId
+                                    length: -1
+                                    lengthHash: 0
+                                    containsParameter: false
+                                    status: 0
+                                })
+                            }
+                        }
+                    comTypeSymbolIndex! + 1 => comTypeSymbolIndex!
+                }
+            comTypeSourceIndex! + 1 => comTypeSourceIndex!
+        }
+
+    # A trait object has its own canonical identity and two-pointer storage.
+    # Seed declarations before parsing uses so conversions and signatures share it.
+    0 => dynSource!
+    (seed.types -> len) == 0 and dynSource! < (package.sources -> len)
+        -> while {
+            package.ranges[dynSource!] => dynRange
+            0 => dynSymbol!
+            dynSymbol! < dynRange.symbolCount -> while {
+                package.symbols[dynRange.symbolStart + dynSymbol!].kind == 5
+                    -> if {
+                        semanticTypes! -> push(SemanticType { kind: 1, origin: 16, module: dynSource!, symbol: dynSymbol!, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
+                    }
+                dynSymbol! + 1 => dynSymbol!
+            }
+            dynSource! + 1 => dynSource!
+        }
+
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        package.ranges[sourceIndex!] => sourceRange
+        [Int; ~] => mapped!
+        0 => mapSeed!
+        mapSeed! < sourceRange.termCount -> while {
+            mapped! -> push(-1)
+            mapSeed! + 1 => mapSeed!
+        }
+
+        0 => completed!
+        0 => suppliedTerm!
+        suppliedTerm! < sourceRange.termCount -> while {
+            package.terms[sourceRange.termStart + suppliedTerm!] => suppliedTypeTerm
+            false => supplied!
+            seed.references -> each reference {
+                reference.sourceModule == sourceIndex! and reference.typeAst == suppliedTypeTerm.astNode
+                    -> if {
+                        reference.typeId >= 0 and reference.status == 0
+                            -> if { reference.typeId } else { -2 } => mapped![suppliedTerm!]
+                        true => supplied!
+                    }
+            }
+            supplied! -> if { completed! + 1 => completed! }
+            suppliedTerm! + 1 => suppliedTerm!
+        }
+        true => changed!
+        completed! < sourceRange.termCount and changed!
+            -> while {
+                false => changed!
+                0 => termIndex!
+                termIndex! < sourceRange.termCount -> while {
+                    mapped![termIndex!] == -1 -> if {
+                        package.terms[sourceRange.termStart + termIndex!] => term
+                        -1 => methodOwnerAst!
+                        term.kind == 1 -> if {
+                            package -> implMethodResultOwnerAst(sourceIndex!, term.astNode, term.nameToken) => methodOwnerAst!
+                        }
+                        -1 => methodOwnerTerm!
+                        methodOwnerAst! >= 0 -> if {
+                            0 => ownerTermIndex!
+                            ownerTermIndex! < sourceRange.termCount and methodOwnerTerm! < 0
+                                -> while {
+                                    package.terms[sourceRange.termStart + ownerTermIndex!].astNode == methodOwnerAst!
+                                        -> if { ownerTermIndex! => methodOwnerTerm! }
+                                    ownerTermIndex! + 1 => ownerTermIndex!
+                                }
+                        }
+                        (term.firstArgument < 0 or mapped![term.firstArgument] >= 0)
+                            and (methodOwnerAst! < 0 or (methodOwnerTerm! >= 0 and mapped![methodOwnerTerm!] >= 0)) => firstReady
+                        (term.secondArgument < 0 or mapped![term.secondArgument] >= 0) => secondReady
+                        firstReady and secondReady -> if {
+                            term.kind == 0 or methodOwnerTerm! >= 0 -> if {
+                                term.kind == 0 -> if { mapped![term.firstArgument] } else { mapped![methodOwnerTerm!] } => transparentType
+                                transparentType => mapped![termIndex!]
+                                references! -> push(TypeReference {
+                                    sourceModule: sourceIndex!
+                                    typeAst: term.astNode
+                                    typeId: transparentType
+                                    status: semanticTypes![transparentType].status
+                                })
+                                completed! + 1 => completed!
+                                true => changed!
+                            } else {
+                                -1 => origin!
+                                -1 => targetModule!
+                                -1 => targetSymbol!
+                                0 => status!
+                                term.kind == 15 -> if {
+                                    package.nodes[sourceRange.astStart + term.astNode] => dynAnnotation
+                                    package -> resolveDynTrait(identities, sourceIndex!, term.nameToken, dynAnnotation.firstToken + dynAnnotation.tokenCount) => resolvedTrait
+                                    16 => origin!
+                                    resolvedTrait.targetSource => targetModule!
+                                    resolvedTrait.targetSymbol => targetSymbol!
+                                    resolvedTrait.status => status!
+                                }
+                                term.kind == 1 -> if {
+                                    -1 => qualifiedIndex!
+                                    0 => qualifiedSearch!
+                                    qualifiedSearch! < (qualifiedResults -> len)
+                                        -> while {
+                                            qualifiedResults[qualifiedSearch!] => candidate
+                                            candidate.sourceModule == sourceIndex! -> if {
+                                                package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
+                                                term.nameToken == candidatePath.firstToken
+                                                    -> if {
+                                                        qualifiedSearch! => qualifiedIndex!
+                                                    }
+                                            }
+                                            qualifiedSearch! + 1 => qualifiedSearch!
+                                        }
+                                    qualifiedIndex! >= 0 -> if {
+                                        qualifiedResults[qualifiedIndex!] => imported
+                                        2 => origin!
+                                        identities[imported.targetModule].sourceIndex => targetModule!
+                                        imported.targetSymbol => targetSymbol!
+                                        imported.status => status!
+                                        imported.status == 0 -> if {
+                                            package -> intrinsicNominalSymbol(identities, imported.targetModule, imported.targetSymbol) => intrinsicSymbol
+                                            intrinsicSymbol >= 0 -> if {
+                                                1 => origin!
+                                                -1 => targetModule!
+                                                intrinsicSymbol => targetSymbol!
+                                            }
+                                        }
+                                    } else {
+                                        package.tokens[sourceRange.tokenStart + term.nameToken] => name
+                                        -1 => builtinIndex!
+                                        0 => builtinSearch!
+                                        builtinSearch! < (builtinNames -> len) and builtinIndex! < 0
+                                            -> while {
+                                                builtinNames[builtinSearch!] => builtinName
+                                                name.span.length == (builtinName -> len) => equal!
+                                                UIntSize(0) => nameByte!
+                                                equal! and nameByte! < name.span.length -> while {
+                                                    source -> byte(name.span.start + nameByte!) => leftByte
+                                                    builtinName -> byte(nameByte!) => rightByte
+                                                    leftByte != rightByte -> if { false => equal! }
+                                                    nameByte! + 1 => nameByte!
+                                                }
+                                                equal! -> if { builtinSearch! => builtinIndex! }
+                                                builtinSearch! + 1 => builtinSearch!
+                                            }
+                                        builtinIndex! -> builtinNameIsReserved -> if {
+                                            1 => origin!
+                                            -1 => targetModule!
+                                            builtinIndex! -> canonicalBuiltinSymbol => targetSymbol!
+                                        } else {
+                                            -1 => ownerFunction!
+                                            package.nodes[sourceRange.astStart + term.astNode].parent => ownerAst!
+                                            ownerAst! >= 0 and ownerFunction! < 0 -> while {
+                                                0 => ownerSymbolIndex!
+                                                ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                                                    package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
+                                                    (ownerCandidate.kind == 7 or ownerCandidate.kind == 31) and ownerCandidate.astNode == ownerAst!
+                                                        -> if {
+                                                            ownerSymbolIndex! => ownerFunction!
+                                                        }
+                                                    ownerSymbolIndex! + 1 => ownerSymbolIndex!
+                                                }
+                                                ownerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
+                                            }
+                                            -1 => localSymbol!
+                                            0 => symbolIndex!
+                                            symbolIndex! < sourceRange.symbolCount and localSymbol! < 0
+                                                -> while {
+                                                    package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
+                                                    (candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == ownerFunction!)
+                                                        -> if {
+                                                            package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
+                                                            name.span.length == candidateName.span.length => equal!
+                                                            UIntSize(0) => localByte!
+                                                            equal! and localByte! < name.span.length -> while {
+                                                                source -> byte(name.span.start + localByte!) => leftByte
+                                                                source -> byte(candidateName.span.start + localByte!) => rightByte
+                                                                leftByte != rightByte -> if { false => equal! }
+                                                                localByte! + 1 => localByte!
+                                                            }
+                                                            equal! -> if { symbolIndex! => localSymbol! }
+                                                        }
+                                                    symbolIndex! + 1 => symbolIndex!
+                                                }
+                                            sourceIndex! => localTypeSource!
+                                            false => siblingTypeAmbiguous!
+                                            localSymbol! < 0 -> if {
+                                                identities[sourceIndex!] => currentIdentity
+                                                0 => siblingModuleIndex!
+                                                siblingModuleIndex! < (identities -> len) -> while {
+                                                    identities[siblingModuleIndex!] => siblingIdentity
+                                                    siblingIdentity.sourceIndex != sourceIndex! and modules.sameLogicalAnalyzedSource(package.sources, identities, siblingIdentity.sourceIndex, currentIdentity.sourceIndex, package.tokens, package.ranges)
+                                                        -> if {
+                                                            siblingIdentity.sourceIndex => siblingSourceIndex
+                                                            package.sources[siblingSourceIndex] -> len => siblingSourceLength
+                                                            package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
+                                                            package.ranges[siblingSourceIndex] => siblingRange
+                                                            0 => siblingSymbolIndex!
+                                                            siblingSymbolIndex! < siblingRange.symbolCount
+                                                                -> while {
+                                                                    package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
+                                                                    siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4)
+                                                                        -> if {
+                                                                            package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
+                                                                            name.span.length == siblingName.span.length => siblingEqual!
+                                                                            UIntSize(0) => siblingByte!
+                                                                            siblingEqual! and siblingByte! < name.span.length
+                                                                                -> while {
+                                                                                    (source -> byte(name.span.start + siblingByte!)) != (siblingSource -> byte(siblingName.span.start + siblingByte!))
+                                                                                        -> if {
+                                                                                            false => siblingEqual!
+                                                                                        }
+                                                                                    siblingByte! + 1 => siblingByte!
+                                                                                }
+                                                                            siblingEqual! -> if {
+                                                                                localSymbol! >= 0 -> if {
+                                                                                    true => siblingTypeAmbiguous!
+                                                                                } else {
+                                                                                    siblingSymbolIndex! => localSymbol!
+                                                                                    siblingSourceIndex => localTypeSource!
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                                                }
+                                                        }
+                                                    siblingModuleIndex! + 1 => siblingModuleIndex!
+                                                }
+                                            }
+                                            localSymbol! >= 0 and not siblingTypeAmbiguous!
+                                                -> if {
+                                                    package.ranges[localTypeSource!] => localTypeRange
+                                                    package.symbols[localTypeRange.symbolStart + localSymbol!].kind == 32
+                                                        -> if { 3 => origin! } else { 0 => origin! }
+                                                    localTypeSource! => targetModule!
+                                                    localSymbol! => targetSymbol!
+                                                } else {
+                                                    OpenNominalTypeResolution { targetModule: -1, targetSymbol: -1, matchCount: 0 } => importedType!
+                                                    not siblingTypeAmbiguous! -> if {
+                                                        package -> resolveOpenNominalType(identities, imports, resolvedImports, sourceIndex!, term.nameToken) => importedType!
+                                                    }
+                                                    importedType!.matchCount == 1 -> if {
+                                                        2 => origin!
+                                                        identities[importedType!.targetModule].sourceIndex => targetModule!
+                                                        importedType!.targetSymbol => targetSymbol!
+                                                    } else {
+                                                        2 => status!
+                                                    }
+                                                }
+                                            status! != 0 and builtinIndex! >= 0 and not siblingTypeAmbiguous!
+                                                -> if {
+                                                    1 => origin!
+                                                    -1 => targetModule!
+                                                    builtinIndex! => targetSymbol!
+                                                    0 => status!
+                                                }
+                                            status! != 0 -> if {
+                                                package -> intrinsicQualifiedTypeSymbol(imports, sourceIndex!, term.astNode) => intrinsicQualifiedSymbol
+                                                intrinsicQualifiedSymbol >= 0 -> if {
+                                                    1 => origin!
+                                                    -1 => targetModule!
+                                                    intrinsicQualifiedSymbol => targetSymbol!
+                                                    0 => status!
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                term.kind == 7 -> if {
+                                    4 => origin!
+                                    -1 => targetModule!
+                                    package.tokens[sourceRange.tokenStart + term.nameToken] => constructorName
+                                    constructorName.span.length == 6 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        source -> byte(constructorName.span.start + 3) => byte3
+                                        source -> byte(constructorName.span.start + 4) => byte4
+                                        source -> byte(constructorName.span.start + 5) => byte5
+                                        byte0 == 82 and byte1 == 101 and byte2 == 115 and byte3 == 117 and byte4 == 108 and byte5 == 116
+                                            -> if { 1 => targetSymbol! }
+                                        byte0 == 79 and byte1 == 112 and byte2 == 116 and byte3 == 105 and byte4 == 111 and byte5 == 110
+                                            -> if { 0 => targetSymbol! }
+                                        byte0 == 83 and byte1 == 116 and byte2 == 114 and byte3 == 101 and byte4 == 97 and byte5 == 109
+                                            -> if { 3 => targetSymbol! }
+                                    }
+                                    constructorName.span.length == 4 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        source -> byte(constructorName.span.start + 3) => byte3
+                                        byte0 == 84 and byte1 == 97 and byte2 == 115 and byte3 == 107
+                                            -> if { 2 => targetSymbol! }
+                                    }
+                                    constructorName.span.length == 3 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        byte0 == 83 and byte1 == 101 and byte2 == 116
+                                            -> if { 5 => targetSymbol! }
+                                    }
+                                    constructorName.span.length == 5 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        source -> byte(constructorName.span.start + 3) => byte3
+                                        source -> byte(constructorName.span.start + 4) => byte4
+                                        byte0 == 68 and byte1 == 101 and byte2 == 113 and byte3 == 117 and byte4 == 101
+                                            -> if { 6 => targetSymbol! }
+                                    }
+                                    constructorName.span.length == 10 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        source -> byte(constructorName.span.start + 3) => byte3
+                                        source -> byte(constructorName.span.start + 4) => byte4
+                                        source -> byte(constructorName.span.start + 5) => byte5
+                                        source -> byte(constructorName.span.start + 6) => byte6
+                                        source -> byte(constructorName.span.start + 7) => byte7
+                                        source -> byte(constructorName.span.start + 8) => byte8
+                                        source -> byte(constructorName.span.start + 9) => byte9
+                                        byte0 == 66 and byte1 == 105 and byte2 == 110 and byte3 == 97 and byte4 == 114 and byte5 == 121 and byte6 == 72 and byte7 == 101 and byte8 == 97 and byte9 == 112
+                                            -> if { 7 => targetSymbol! }
+                                    }
+                                    constructorName.span.length == 11 -> if {
+                                        source -> byte(constructorName.span.start) => byte0
+                                        source -> byte(constructorName.span.start + 1) => byte1
+                                        source -> byte(constructorName.span.start + 2) => byte2
+                                        source -> byte(constructorName.span.start + 3) => byte3
+                                        source -> byte(constructorName.span.start + 4) => byte4
+                                        source -> byte(constructorName.span.start + 5) => byte5
+                                        source -> byte(constructorName.span.start + 6) => byte6
+                                        source -> byte(constructorName.span.start + 7) => byte7
+                                        source -> byte(constructorName.span.start + 8) => byte8
+                                        source -> byte(constructorName.span.start + 9) => byte9
+                                        source -> byte(constructorName.span.start + 10) => byte10
+                                        byte0 == 69 and byte1 == 118 and byte2 == 101 and byte3 == 110 and byte4 == 116 and byte5 == 83 and byte6 == 116 and byte7 == 114 and byte8 == 101 and byte9 == 97 and byte10 == 109
+                                            -> if { 4 => targetSymbol! }
+                                    }
+                                    targetSymbol! < 0 -> if { 2 => status! }
+                                }
+                                term.kind == 14 -> if {
+                                    4 => origin!
+                                    -1 => targetModule!
+                                    8 => targetSymbol!
+                                }
+
+                                -1 => firstType!
+                                term.firstArgument >= 0 -> if { mapped![term.firstArgument] => firstType! }
+                                -1 => secondType!
+                                term.secondArgument >= 0 -> if { mapped![term.secondArgument] => secondType! }
+                                origin! == 3 => containsParameter!
+                                firstType! >= 0 -> if {
+                                    semanticTypes![firstType!].containsParameter
+                                        -> if { true => containsParameter! }
+                                }
+                                secondType! >= 0 -> if {
+                                    semanticTypes![secondType!].containsParameter
+                                        -> if { true => containsParameter! }
+                                }
+                                UInt64(0) => lengthHash!
+                                -1 => lengthValue!
+                                term.lengthToken >= 0 -> if {
+                                    1469598103934665603 => lengthHash!
+                                    package.tokens[sourceRange.tokenStart + term.lengthToken] => length
+                                    length.kind == grammar.tokenIdNumber()
+                                        -> if { 0 => lengthValue! }
+                                    UIntSize(0) => lengthByte!
+                                    lengthByte! < length.span.length -> while {
+                                        source -> byte(length.span.start + lengthByte!) => value
+                                        lengthHash! * 1099511628211 + UInt64(value) => lengthHash!
+                                        lengthValue! >= 0 and value != 95
+                                            -> if { lengthValue! * 10 + Int(value - 48) => lengthValue! }
+                                        lengthByte! + 1 => lengthByte!
+                                    }
+                                    # Concrete lengths use their numeric value as identity;
+                                    # symbolic lengths retain the token hash.
+                                    lengthValue! >= 0 -> if { 0 => lengthHash! }
+                                }
+                                term.kind == 4 and lengthValue! < 0 and lengthHash! != 0
+                                    -> if { true => containsParameter! }
+                                term.kind == 11 -> if {
+                                    -1 => lengthValue!
+                                    term.nameToken >= 0 -> if {
+                                        1469598103934665603 => lengthHash!
+                                        package.tokens[sourceRange.tokenStart + term.nameToken] => productFieldName
+                                        Int(productFieldName.span.length) => lengthValue!
+                                        UIntSize(0) => productFieldNameByte!
+                                        productFieldNameByte! < productFieldName.span.length
+                                            -> while {
+                                                source -> byte(productFieldName.span.start + productFieldNameByte!) => productFieldNameValue
+                                                lengthHash! * 1099511628211 + UInt64(productFieldNameValue) => lengthHash!
+                                                productFieldNameByte! + 1 => productFieldNameByte!
+                                            }
+                                    }
+                                }
+                                term.kind == 10 -> if {
+                                    0 => lengthValue!
+                                    term.firstArgument => productCountField!
+                                    productCountField! >= 0 -> while {
+                                        lengthValue! + 1 => lengthValue!
+                                        package.terms[sourceRange.termStart + productCountField!].secondArgument => productCountField!
+                                    }
+                                }
+                                term.kind => resolvedKind!
+                                term.kind == 15 -> if { 1 => resolvedKind! }
+                                term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0
+                                    -> if {
+                                        package.ranges[targetModule!] => resolvedNominalRange
+                                        package.symbols[resolvedNominalRange.symbolStart + targetSymbol!] => resolvedNominalSymbol
+                                        resolvedNominalSymbol.flags / 512 % 2 == 1 or resolvedNominalSymbol.flags / 65536 % 2 == 1
+                                            -> if {
+                                                9 => resolvedKind!
+                                            }
+                                    }
+                                -1 => existing!
+                                0 => semanticIndex!
+                                semanticIndex! < (semanticTypes! -> len) and existing! < 0
+                                    -> while {
+                                        semanticTypes![semanticIndex!] => known
+                                        known.origin == origin! => sameOrigin!
+                                        term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0))
+                                            -> if { true => sameOrigin! }
+                                        term.kind != 10 and known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.length == lengthValue! and known.lengthHash == lengthHash! and known.status == status!
+                                            -> if {
+                                                semanticIndex! => existing!
+                                            }
+                                        semanticIndex! + 1 => semanticIndex!
+                                    }
+                                term.kind == 10 -> if {
+                                    0 => productCandidateSearch!
+                                    productCandidateSearch! < (semanticTypes! -> len) and existing! < 0
+                                        -> while {
+                                            semanticTypes![productCandidateSearch!] => productCandidate
+                                            productCandidate.kind == 10 and productCandidate.length == lengthValue! and productCandidate.status == status!
+                                                -> if {
+                                                    true => productCandidateEqual!
+                                                    term.firstArgument => currentProductFieldTerm!
+                                                    0 => currentProductOrdinal!
+                                                    currentProductFieldTerm! >= 0 and productCandidateEqual!
+                                                        -> while {
+                                                            -1 => candidateProductFieldIndex!
+                                                            0 => candidateProductFieldSearch!
+                                                            candidateProductFieldSearch! < (fields! -> len)
+                                                                -> while {
+                                                                    fields![candidateProductFieldSearch!] => candidateProductField
+                                                                    candidateProductField.ownerType == productCandidateSearch! and candidateProductField.ordinal == currentProductOrdinal!
+                                                                        -> if {
+                                                                            candidateProductFieldSearch! => candidateProductFieldIndex!
+                                                                        }
+                                                                    candidateProductFieldSearch! + 1 => candidateProductFieldSearch!
+                                                                }
+                                                            package.terms[sourceRange.termStart + currentProductFieldTerm!] => currentProductField
+                                                            candidateProductFieldIndex! < 0 or semanticTypes![mapped![currentProductFieldTerm!]].first != fields![candidateProductFieldIndex!].fieldType
+                                                                -> if {
+                                                                    false => productCandidateEqual!
+                                                                } else {
+                                                                    fields![candidateProductFieldIndex!] => candidateProductField
+                                                                    ((currentProductField.nameToken < 0) and not (candidateProductField.labelToken < 0)) or ((candidateProductField.labelToken < 0) and not (currentProductField.nameToken < 0))
+                                                                        -> if {
+                                                                            false => productCandidateEqual!
+                                                                        }
+                                                                    productCandidateEqual! and currentProductField.nameToken >= 0
+                                                                        -> if {
+                                                                            package.tokens[sourceRange.tokenStart + currentProductField.nameToken] => currentProductLabel
+                                                                            package.ranges[candidateProductField.sourceModule] => candidateProductFieldRange
+                                                                            package.sources[candidateProductField.sourceModule] -> len => candidateProductSourceLength
+                                                                            package.sources[candidateProductField.sourceModule] -> slice(UIntSize(0), candidateProductSourceLength) => candidateProductSource
+                                                                            package.tokens[candidateProductFieldRange.tokenStart + candidateProductField.labelToken] => candidateProductLabel
+                                                                            currentProductLabel.span.length == candidateProductLabel.span.length => productLabelEqual!
+                                                                            UIntSize(0) => productLabelByte!
+                                                                            productLabelEqual! and productLabelByte! < currentProductLabel.span.length
+                                                                                -> while {
+                                                                                    (source -> byte(currentProductLabel.span.start + productLabelByte!)) != (candidateProductSource -> byte(candidateProductLabel.span.start + productLabelByte!))
+                                                                                        -> if {
+                                                                                            false => productLabelEqual!
+                                                                                        }
+                                                                                    productLabelByte! + 1 => productLabelByte!
+                                                                                }
+                                                                            not productLabelEqual! -> if { false => productCandidateEqual! }
+                                                                        }
+                                                                }
+                                                            currentProductField.secondArgument => currentProductFieldTerm!
+                                                            currentProductOrdinal! + 1 => currentProductOrdinal!
+                                                        }
+                                                    productCandidateEqual! -> if { productCandidateSearch! => existing! }
+                                                }
+                                            productCandidateSearch! + 1 => productCandidateSearch!
+                                        }
+                                }
+                                false => createdType!
+                                existing! < 0 -> if {
+                                    semanticTypes! -> len => existing!
+                                    true => createdType!
+                                    semanticTypes! -> push(SemanticType {
+                                        kind: resolvedKind!
+                                        origin: origin!
+                                        module: targetModule!
+                                        symbol: targetSymbol!
+                                        first: firstType!
+                                        second: secondType!
+                                        length: lengthValue!
+                                        lengthHash: lengthHash!
+                                        containsParameter: containsParameter!
+                                        status: status!
+                                    })
+                                }
+                                term.kind == 10 and createdType! -> if {
+                                    term.firstArgument => structuralFieldTerm!
+                                    0 => structuralFieldOrdinal!
+                                    structuralFieldTerm! >= 0 -> while {
+                                        package.terms[sourceRange.termStart + structuralFieldTerm!] => structuralField
+                                        fields! -> push(NominalField {
+                                            ownerType: existing!
+                                            sourceModule: sourceIndex!
+                                            ownerSymbol: -1
+                                            fieldSymbol: -1
+                                            labelToken: structuralField.nameToken
+                                            ordinal: structuralFieldOrdinal!
+                                            fieldType: semanticTypes![mapped![structuralFieldTerm!]].first
+                                            status: semanticTypes![mapped![structuralFieldTerm!]].status
+                                        })
+                                        structuralField.secondArgument => structuralFieldTerm!
+                                        structuralFieldOrdinal! + 1 => structuralFieldOrdinal!
+                                    }
+                                }
+                                existing! => mapped![termIndex!]
+                                references! -> push(TypeReference {
+                                    sourceModule: sourceIndex!
+                                    typeAst: term.astNode
+                                    typeId: existing!
+                                    status: status!
+                                })
+                                completed! + 1 => completed!
+                                true => changed!
+                            }
+                        }
+                    }
+                    termIndex! + 1 => termIndex!
+                }
+            }
+        0 => fieldSymbolIndex!
+        fieldSymbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + fieldSymbolIndex!] => fieldSymbol
+            fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0
+                -> if {
+                    -1 => ownerType!
+                    0 => ownerTypeSearch!
+                    ownerTypeSearch! < (semanticTypes! -> len) and ownerType! < 0
+                        -> while {
+                            semanticTypes![ownerTypeSearch!] => ownerCandidate
+                            ownerCandidate.kind == 1 and (ownerCandidate.origin == 0 or ownerCandidate.origin == 2) and ownerCandidate.module == sourceIndex! and ownerCandidate.symbol == fieldSymbol.parent
+                                -> if {
+                                    ownerTypeSearch! => ownerType!
+                                }
+                            ownerTypeSearch! + 1 => ownerTypeSearch!
+                        }
+                    ownerType! < 0 -> if {
+                        semanticTypes! -> len => ownerType!
+                        semanticTypes! -> push(SemanticType {
+                            kind: 1
+                            origin: 0
+                            module: sourceIndex!
+                            symbol: fieldSymbol.parent
+                            first: -1
+                            second: -1
+                            length: -1
+                            lengthHash: 0
+                            containsParameter: false
+                            status: 0
+                        })
+                    }
+                    -1 => fieldType!
+                    0 => fieldTermSearch!
+                    fieldTermSearch! < sourceRange.termCount -> while {
+                        package.terms[sourceRange.termStart + fieldTermSearch!].astNode == fieldSymbol.typeNode and mapped![fieldTermSearch!] >= 0
+                            -> if {
+                                mapped![fieldTermSearch!] => fieldType!
+                            }
+                        fieldTermSearch! + 1 => fieldTermSearch!
+                    }
+                    0 => fieldOrdinal!
+                    0 => priorFieldIndex!
+                    priorFieldIndex! < fieldSymbolIndex! -> while {
+                        package.symbols[sourceRange.symbolStart + priorFieldIndex!] => priorField
+                        priorField.kind == 26 and priorField.parent == fieldSymbol.parent
+                            -> if { fieldOrdinal! + 1 => fieldOrdinal! }
+                        priorFieldIndex! + 1 => priorFieldIndex!
+                    }
+                    false => suppliedField!
+                    seed.fields -> each field {
+                        field.sourceModule == sourceIndex! and field.fieldSymbol == fieldSymbolIndex! and field.ownerSymbol == fieldSymbol.parent
+                            -> if { true => suppliedField! }
+                    }
+                    ownerType! >= 0 and fieldType! >= 0 and not suppliedField!
+                        -> if {
+                            fields! -> push(NominalField {
+                                ownerType: ownerType!
+                                sourceModule: sourceIndex!
+                                ownerSymbol: fieldSymbol.parent
+                                fieldSymbol: fieldSymbolIndex!
+                                labelToken: -1
+                                ordinal: fieldOrdinal!
+                                fieldType: fieldType!
+                                status: semanticTypes![fieldType!].status
+                            })
+                        }
+                }
+            fieldSymbolIndex! + 1 => fieldSymbolIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+
+    # `try native ... -> T` exposes Result<T, Int32> to Sollang while keeping
+    # the C shim's physical ABI as i32 status plus an out T pointer. Intern
+    # that synthetic Result application once so call inference, typed IR, and
+    # LLVM lowering share one canonical type without source rewriting.
+    0 => nativeTrySource!
+    nativeTrySource! < (package.sources -> len) -> while {
+        package.ranges[nativeTrySource!] => nativeTryRange
+        0 => nativeTrySymbolIndex!
+        nativeTrySymbolIndex! < nativeTryRange.symbolCount
+            -> while {
+                package.symbols[nativeTryRange.symbolStart + nativeTrySymbolIndex!] => nativeTrySymbol
+                nativeTrySymbol.kind == 7 and nativeTrySymbol.flags / 32768 % 2 == 1
+                    -> if {
+                        nativeTrySymbol.typeNode => nativeTrySuccessAst!
+                        nativeTrySymbol.secondaryTypeNode >= 0 -> if {
+                            nativeTrySymbol.secondaryTypeNode => nativeTrySuccessAst!
+                        }
+                        -1 => nativeTrySuccessType!
+                        0 => nativeTryReferenceIndex!
+                        nativeTryReferenceIndex! < (references! -> len)
+                            -> while {
+                                references![nativeTryReferenceIndex!] => nativeTryReference
+                                nativeTryReference.status == 0
+                                    and nativeTryReference.sourceModule == nativeTrySource!
+                                    and nativeTryReference.typeAst == nativeTrySuccessAst!
+                                    -> if {
+                                        nativeTryReference.typeId => nativeTrySuccessType!
+                                    }
+                                nativeTryReferenceIndex! + 1 => nativeTryReferenceIndex!
+                            }
+                        nativeTrySuccessType! >= 0 and nativeTrySuccessType! < (semanticTypes! -> len)
+                            -> if {
+                                -1 => nativeTryResultType!
+                                0 => nativeTryResultSearch!
+                                nativeTryResultSearch! < (semanticTypes! -> len)
+                                    -> while {
+                                        semanticTypes![nativeTryResultSearch!] => nativeTryResultCandidate
+                                        nativeTryResultCandidate.kind == 7
+                                            and nativeTryResultCandidate.origin == 4
+                                            and nativeTryResultCandidate.symbol == 1
+                                            and nativeTryResultCandidate.first == nativeTrySuccessType!
+                                            and nativeTryResultCandidate.second == nativeStatusTypeId
+                                            and nativeTryResultCandidate.status == 0 -> if {
+                                                nativeTryResultSearch! => nativeTryResultType!
+                                            }
+                                        nativeTryResultSearch! + 1 => nativeTryResultSearch!
+                                    }
+                                nativeTryResultType! < 0 -> if {
+                                    semanticTypes! -> push(SemanticType {
+                                        kind: 7
+                                        origin: 4
+                                        module: -1
+                                        symbol: 1
+                                        first: nativeTrySuccessType!
+                                        second: nativeStatusTypeId
+                                        length: -1
+                                        lengthHash: 0
+                                        containsParameter: false
+                                        status: 0
+                                    })
+                                }
+                            }
+                    }
+                nativeTrySymbolIndex! + 1 => nativeTrySymbolIndex!
+            }
+        nativeTrySource! + 1 => nativeTrySource!
+    }
+    SemanticTypeSet { types: semanticTypes!, references: references!, fields: fields! } => result
+    result
+}
+
+# Structurally unifies a generic input template with one concrete argument,
+# then rebuilds and interns only the changed result nodes in the caller's type
+# arena. This is the canonical compiler path: specialization must not copy the
+# complete, steadily growing arena for every call.
+public specializeInto types: mut [SemanticType; ~], inputTemplate: Int, actualInput: Int, resultTemplate: Int -> SpecializationRoot {
+    [inputTemplate,; ~] => inputTemplates
+    [actualInput,; ~] => actualInputs
+    types -> specializeManyInto(inputTemplates, actualInputs, resultTemplate)
+}
+
+# All arguments contribute to one binding environment. Repeated occurrences of
+# a parameter must agree across argument boundaries, not just within one input.
+public specializeManyInto types: mut [SemanticType; ~], inputTemplates: ref [Int; ~], actualInputs: ref [Int; ~], resultTemplate: Int -> SpecializationRoot {
+    [Int; ~] => templateStack!
+    [Int; ~] => actualStack!
+    [Int; ~] => parameterModules!
+    [Int; ~] => parameterSymbols!
+    [Int; ~] => replacements!
+    [UInt64; ~] => lengthParameterHashes!
+    [Int; ~] => lengthReplacements!
+    [UInt64; ~] => lengthReplacementHashes!
+    0 => status!
+    -1 => conflictParameterModule!
+    -1 => conflictParameterSymbol!
+    -1 => conflictFirstActualTypeId!
+    -1 => conflictActualTypeId!
+    -1 => mismatchExpectedTypeId!
+    -1 => mismatchActualTypeId!
+    (inputTemplates -> len) != (actualInputs -> len)
+        or resultTemplate < 0 or resultTemplate >= (types -> len)
+        -> if {
+            2 => status!
+        }
+    # Reverse the initial stack so inference visits source arguments in order.
+    (inputTemplates -> len) - 1 => inputIndex!
+    status! == 0 and inputIndex! >= 0
+        -> while {
+            inputTemplates[inputIndex!] => inputTemplate
+            actualInputs[inputIndex!] => actualInput
+            inputTemplate < 0 or inputTemplate >= (types -> len)
+                or actualInput < 0 or actualInput >= (types -> len)
+                -> if { 2 => status! } else {
+                    templateStack! -> push(inputTemplate)
+                    actualStack! -> push(actualInput)
+                }
+            inputIndex! - 1 => inputIndex!
+        }
+
+    status! == 0 and (templateStack! -> len) > 0
+        -> while {
+            (templateStack! -> len) - 1 => workIndex
+            templateStack! -> take(workIndex) => templateId
+            actualStack! -> take(workIndex) => actualId
+            types[templateId] => template!
+            types[actualId] => actual
+            templateId => matchedTemplateId!
+            # The semantic call boundary has already validated this readonly
+            # borrow. Infer a ref T parameter from the addressable value's T.
+            template!.kind == 8 and actual.kind != 8 and template!.containsParameter
+                and template!.first >= 0 -> if {
+                    template!.first => matchedTemplateId!
+                    types[matchedTemplateId!] => template!
+                }
+            template!.kind == 1 and template!.origin == 3
+                -> if {
+                    -1 => parameterIndex!
+                    0 => parameterSearch!
+                    parameterSearch! < (parameterSymbols! -> len) and parameterIndex! < 0
+                        -> while {
+                            parameterModules![parameterSearch!] == template!.module and parameterSymbols![parameterSearch!] == template!.symbol
+                                -> if {
+                                    parameterSearch! => parameterIndex!
+                                }
+                            parameterSearch! + 1 => parameterSearch!
+                        }
+                    parameterIndex! >= 0 -> if {
+                        replacements![parameterIndex!] != actualId -> if {
+                            template!.module => conflictParameterModule!
+                            template!.symbol => conflictParameterSymbol!
+                            replacements![parameterIndex!] => conflictFirstActualTypeId!
+                            actualId => conflictActualTypeId!
+                            2 => status!
+                        }
+                    } else {
+                        parameterModules! -> push(template!.module)
+                        parameterSymbols! -> push(template!.symbol)
+                        replacements! -> push(actualId)
+                    }
+                } else {
+                    # A call may pass array storage to a borrowed slice. The
+                    # call checker validates that conversion; specialization
+                    # must infer the slice element from the storage element.
+                    template!.kind != actual.kind
+                        and not (template!.kind == 2 and (actual.kind == 3 or actual.kind == 4 or actual.kind == 12))
+                        -> if { 2 => status! }
+                    status! == 0 and template!.kind == 1 and matchedTemplateId! != actualId
+                        -> if { 2 => status! }
+                    status! == 0 and template!.kind == 7 and (template!.origin != actual.origin or template!.module != actual.module or template!.symbol != actual.symbol)
+                        -> if { 2 => status! }
+                    # An identifier length in a generic fixed-array template is a
+                    # compile-time value parameter. Its concrete length is checked at
+                    # the call surface; structural unification must still infer the
+                    # element type from [T; N] against [Concrete; literal].
+                    status! == 0 and template!.kind == 4 and template!.length >= 0 and template!.length != actual.length
+                        -> if { 2 => status! }
+                    status! == 0 and template!.kind == 4 and template!.length < 0 and template!.lengthHash != 0
+                        -> if {
+                            actual.length < 0 -> if { 2 => status! } else {
+                                -1 => lengthParameterIndex!
+                                0 => lengthParameterSearch!
+                                lengthParameterSearch! < (lengthParameterHashes! -> len) and lengthParameterIndex! < 0
+                                    -> while {
+                                        lengthParameterHashes![lengthParameterSearch!] == template!.lengthHash
+                                            -> if { lengthParameterSearch! => lengthParameterIndex! }
+                                        lengthParameterSearch! + 1 => lengthParameterSearch!
+                                    }
+                                lengthParameterIndex! >= 0 -> if {
+                                    lengthReplacements![lengthParameterIndex!] != actual.length
+                                        -> if { 2 => status! }
+                                } else {
+                                    lengthParameterHashes! -> push(template!.lengthHash)
+                                    lengthReplacements! -> push(actual.length)
+                                    lengthReplacementHashes! -> push(actual.lengthHash)
+                                }
+                            }
+                        }
+                    status! == 0 -> if {
+                        template!.first < 0 and actual.first >= 0 -> if { 2 => status! }
+                        template!.first >= 0 and actual.first < 0 -> if { 2 => status! }
+                        template!.second < 0 and actual.second >= 0 -> if { 2 => status! }
+                        template!.second >= 0 and actual.second < 0 -> if { 2 => status! }
+                    }
+                    # Recursively infer the first child before the second,
+                    # matching C# Result success/error diagnostic priority.
+                    status! == 0 and template!.second >= 0 -> if {
+                        templateStack! -> push(template!.second)
+                        actualStack! -> push(actual.second)
+                    }
+                    status! == 0 and template!.first >= 0 -> if {
+                        templateStack! -> push(template!.first)
+                        actualStack! -> push(actual.first)
+                    }
+                }
+            status! == 2 and conflictParameterSymbol! < 0 and mismatchExpectedTypeId! < 0
+                -> if {
+                    matchedTemplateId! => mismatchExpectedTypeId!
+                    actualId => mismatchActualTypeId!
+                }
+        }
+
+    -1 => specializedRoot!
+    status! == 0 -> if {
+        # Rebuild only the result graph reachable from resultTemplate. Walking
+        # the complete type arena here makes generic calls quadratic in every
+        # unrelated type accumulated by the compilation.
+        [Int; ~] => nodeStack!
+        [Int; ~] => stateStack!
+        [Int; ~] => resolvedNodes!
+        [Int; ~] => resolvedTypes!
+        nodeStack! -> push(resultTemplate)
+        stateStack! -> push(0)
+        (nodeStack! -> len) > 0 -> while {
+            (nodeStack! -> len) - 1 => topIndex
+            nodeStack![topIndex] => nodeId
+            stateStack![topIndex] => nodeState
+
+            -1 => alreadyResolved!
+            0 => resolvedSearch!
+            resolvedSearch! < (resolvedNodes! -> len) and alreadyResolved! < 0
+                -> while {
+                    resolvedNodes![resolvedSearch!] == nodeId -> if {
+                        resolvedTypes![resolvedSearch!] => alreadyResolved!
+                    }
+                    resolvedSearch! + 1 => resolvedSearch!
+                }
+
+            alreadyResolved! >= 0 -> if {
+                nodeStack! -> take(topIndex) => discardedNode
+                stateStack! -> take(topIndex) => discardedState
+            } else {
+                types[nodeId] => current
+                -1 => parameterReplacement!
+                current.kind == 1 and current.origin == 3 -> if {
+                    0 => parameterReplacementSearch!
+                    parameterReplacementSearch! < (parameterSymbols! -> len) and parameterReplacement! < 0
+                        -> while {
+                            parameterModules![parameterReplacementSearch!] == current.module and parameterSymbols![parameterReplacementSearch!] == current.symbol
+                                -> if {
+                                    replacements![parameterReplacementSearch!] => parameterReplacement!
+                                }
+                            parameterReplacementSearch! + 1 => parameterReplacementSearch!
+                        }
+                }
+
+                parameterReplacement! >= 0 -> if {
+                    resolvedNodes! -> push(nodeId)
+                    resolvedTypes! -> push(parameterReplacement!)
+                    nodeStack! -> take(topIndex) => discardedNode
+                    stateStack! -> take(topIndex) => discardedState
+                } else {
+                    nodeState == 0 -> if {
+                        1 => stateStack![topIndex]
+                        current.first >= 0 -> if {
+                            nodeStack! -> push(current.first)
+                            stateStack! -> push(0)
+                        }
+                    } else {
+                        nodeState == 1 -> if {
+                            2 => stateStack![topIndex]
+                            current.second >= 0 -> if {
+                                nodeStack! -> push(current.second)
+                                stateStack! -> push(0)
+                            }
+                        } else {
+                            current.first => first!
+                            current.first >= 0 -> if {
+                                -1 => first!
+                                0 => firstSearch!
+                                firstSearch! < (resolvedNodes! -> len) and first! < 0
+                                    -> while {
+                                        resolvedNodes![firstSearch!] == current.first
+                                            -> if { resolvedTypes![firstSearch!] => first! }
+                                        firstSearch! + 1 => firstSearch!
+                                    }
+                            }
+                            current.second => second!
+                            current.second >= 0 -> if {
+                                -1 => second!
+                                0 => secondSearch!
+                                secondSearch! < (resolvedNodes! -> len) and second! < 0
+                                    -> while {
+                                        resolvedNodes![secondSearch!] == current.second
+                                            -> if { resolvedTypes![secondSearch!] => second! }
+                                        secondSearch! + 1 => secondSearch!
+                                    }
+                            }
+
+                            current.length => specializedLength!
+                            current.lengthHash => specializedLengthHash!
+                            current.kind == 4 and current.length < 0 and current.lengthHash != 0
+                                -> if {
+                                    0 => specializedLengthSearch!
+                                    specializedLengthSearch! < (lengthParameterHashes! -> len)
+                                        and specializedLength! < 0 -> while {
+                                            lengthParameterHashes![specializedLengthSearch!] == current.lengthHash
+                                                -> if {
+                                                    lengthReplacements![specializedLengthSearch!] => specializedLength!
+                                                    lengthReplacementHashes![specializedLengthSearch!] => specializedLengthHash!
+                                                }
+                                            specializedLengthSearch! + 1 => specializedLengthSearch!
+                                        }
+                                }
+                            nodeId => replacementType!
+                            first! != current.first or second! != current.second
+                                or specializedLength! != current.length
+                                or specializedLengthHash! != current.lengthHash
+                                -> if {
+                                    current.origin == 3 => containsParameter!
+                                    current.kind == 4 and specializedLength! < 0 and specializedLengthHash! != 0
+                                        -> if { true => containsParameter! }
+                                    first! >= 0 -> if { types[first!].containsParameter
+                                            -> if { true => containsParameter! } }
+                                    second! >= 0 -> if { types[second!].containsParameter
+                                            -> if { true => containsParameter! } }
+                                    -1 => existing!
+                                    0 => existingSearch!
+                                    existingSearch! < (types -> len) and existing! < 0
+                                        -> while {
+                                            types[existingSearch!] => known
+                                            known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.length == specializedLength! and known.lengthHash == specializedLengthHash! and known.status == current.status
+                                                -> if {
+                                                    existingSearch! => existing!
+                                                }
+                                            existingSearch! + 1 => existingSearch!
+                                        }
+                                    existing! < 0 -> if {
+                                        types -> len => existing!
+                                        types -> push(SemanticType {
+                                            kind: current.kind
+                                            origin: current.origin
+                                            module: current.module
+                                            symbol: current.symbol
+                                            first: first!
+                                            second: second!
+                                            length: specializedLength!
+                                            lengthHash: specializedLengthHash!
+                                            containsParameter: containsParameter!
+                                            status: current.status
+                                        })
+                                    }
+                                    existing! => replacementType!
+                                }
+                            resolvedNodes! -> push(nodeId)
+                            resolvedTypes! -> push(replacementType!)
+                            nodeStack! -> take(topIndex) => discardedNode
+                            stateStack! -> take(topIndex) => discardedState
+                        }
+                    }
+                }
+            }
+        }
+        0 => resultSearch!
+        resultSearch! < (resolvedNodes! -> len) and specializedRoot! < 0
+            -> while {
+                resolvedNodes![resultSearch!] == resultTemplate
+                    -> if { resolvedTypes![resultSearch!] => specializedRoot! }
+                resultSearch! + 1 => resultSearch!
+            }
+    }
+
+    SpecializationRoot {
+        root: specializedRoot!
+        status: status!
+        conflictParameterModule: conflictParameterModule!
+        conflictParameterSymbol: conflictParameterSymbol!
+        conflictFirstActualTypeId: conflictFirstActualTypeId!
+        conflictActualTypeId: conflictActualTypeId!
+        mismatchExpectedTypeId: mismatchExpectedTypeId!
+        mismatchActualTypeId: mismatchActualTypeId!
+    } => result
+    result
+}
+
+# Compatibility value API for callers that intentionally want an independent
+# arena. Ownership moves into the wrapper; no redundant copy is performed.
+public specialize request: SpecializationRequest -> SpecializationResult {
+    request.inputTemplate => inputTemplate
+    request.actualInput => actualInput
+    request.resultTemplate => resultTemplate
+    [SemanticType; ~] => types!
+    0 => compatibilityTypeIndex!
+    compatibilityTypeIndex! < (request.types -> len)
+        -> while {
+            types! -> push(request.types[compatibilityTypeIndex!])
+            compatibilityTypeIndex! + 1 => compatibilityTypeIndex!
+        }
+    types! -> specializeInto(inputTemplate, actualInput, resultTemplate) => specialized
+    SpecializationResult { types: types!, root: specialized.root, status: specialized.status } => result
+    result
+}

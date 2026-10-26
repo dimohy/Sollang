@@ -1,0 +1,329 @@
+namespace sollang.compiler.semantic.fixed_length_arrays
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+import sollang.compiler.ir.interpolation as interpolation
+
+public struct FixedLengthArrayWarning {
+    public sourceModule: Int
+    public bindingSymbol: Int
+    public length: Int
+}
+
+# These decisions mirror the managed candidate state. Semantic consumers supply
+# exact symbol identities and expected types; no lowered IR is consulted.
+public struct Candidate {
+    public length: Int
+    public unknown: Bool
+    public requiresGrowable: Bool
+}
+
+public afterOperation candidate: Candidate, operation: Int, nestedControl: Bool -> Candidate {
+    # 1 push, 2 reserve, 3 capacity, 4 other mutation, 5 owning transform.
+    operation == 1 -> if {
+        nestedControl -> if {
+            Candidate { length: candidate.length, unknown: true, requiresGrowable: candidate.requiresGrowable }
+        } else {
+            Candidate { length: candidate.length + 1, unknown: candidate.unknown, requiresGrowable: candidate.requiresGrowable }
+        }
+    } else {
+        operation == 2 or operation == 3 or operation == 5
+            -> if {
+                Candidate { length: candidate.length, unknown: candidate.unknown, requiresGrowable: true }
+            } else {
+                Candidate { length: candidate.length, unknown: true, requiresGrowable: candidate.requiresGrowable }
+            }
+    }
+}
+
+public withGrowableRequirement candidate: Candidate -> Candidate {
+    Candidate { length: candidate.length, unknown: candidate.unknown, requiresGrowable: true }
+}
+
+public shouldWarn candidate: Candidate -> Bool {
+    candidate.length > 0 and not candidate.unknown and not candidate.requiresGrowable
+}
+
+public isGrowableType types: ref [typeIds.SemanticType; ~], typeId: Int -> Bool {
+    typeId => actual!
+    actual! >= 0 and types[actual!].kind == 8 -> if { types[actual!].first => actual! }
+    actual! >= 0 and (types[actual!].kind == 3 or types[actual!].kind == 12)
+}
+
+nameIs package: ref analysis.PackageAnalysis, sourceModule: Int, tokenIndex: Int, expected: Text -> Bool {
+    tokenIndex < 0 -> if { false -> return }
+    package.ranges[sourceModule] => range
+    package.tokens[range.tokenStart + tokenIndex] => token
+    token.span.length != (expected -> len) -> if { false -> return }
+    UIntSize(0) => index!
+    index! < token.span.length -> while {
+        (package.sources[sourceModule] -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+operationCode package: ref analysis.PackageAnalysis, sourceModule: Int, tokenIndex: Int -> Int {
+    package -> nameIs(sourceModule, tokenIndex, "push")
+        -> if { 1 -> return }
+    package -> nameIs(sourceModule, tokenIndex, "reserve")
+        -> if { 2 -> return }
+    package -> nameIs(sourceModule, tokenIndex, "capacity")
+        -> if { 3 -> return }
+    package -> nameIs(sourceModule, tokenIndex, "append")
+        or (package -> nameIs(sourceModule, tokenIndex, "updated"))
+        -> if { 5 -> return }
+    ["pushAll", "pop", "take", "exchange", "remove", "clear", "set", "insert"] -> each name {
+        package -> nameIs(sourceModule, tokenIndex, name)
+            -> if { 4 -> return }
+    }
+    0
+}
+
+# Commit warnings from the semantic package and its resolved type/name facts.
+public collect prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypes.ExpressionTypeIdSet, interpolations: ref [interpolation.InterpolationNode; ~], interpolationRanges: ref [interpolation.InterpolationSourceRange; ~] -> [FixedLengthArrayWarning; ~] {
+    [Candidate; ~] => candidates!
+    prepared.package.symbols -> each symbol { candidates! -> push(Candidate { length: -1, unknown: false, requiresGrowable: false }) }
+    [Int; ~] => firstChild!
+    [Int; ~] => lastChild!
+    [Int; ~] => nextChild!
+    [Int; ~] => symbolByAst!
+    [Int; ~] => typeByAst!
+    [Int; ~] => declarationByAst!
+    prepared.package.nodes -> each node {
+        firstChild! -> push(-1)
+        lastChild! -> push(-1)
+        nextChild! -> push(-1)
+        symbolByAst! -> push(-1)
+        typeByAst! -> push(-1)
+        declarationByAst! -> push(-1)
+    }
+    resolved.expressions -> each expression {
+        expression.status == 0 and expression.sourceModule >= 0 and expression.astNode >= 0
+            -> if {
+                prepared.package.ranges[expression.sourceModule] => range
+                expression.typeId => typeByAst![range.astStart + expression.astNode]
+            }
+    }
+    prepared.package -> semanticDiagnostics.nominalFieldExpectedTypeIds(resolved, typeByAst!) => fieldExpectedTypes
+    prepared.package.ranges -> each range {
+        0 => localAst!
+        localAst! < range.astCount -> while {
+            range.astStart + localAst! => globalAst
+            prepared.package.nodes[globalAst].parent => parent
+            parent >= 0 -> if {
+                range.astStart + parent => globalParent
+                firstChild![globalParent] < 0 -> if { globalAst => firstChild![globalParent] } else {
+                    globalAst => nextChild![lastChild![globalParent]]
+                }
+                globalAst => lastChild![globalParent]
+            }
+            localAst! + 1 => localAst!
+        }
+        0 => localName!
+        localName! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + localName!] => name
+            name.symbol >= 0 -> if { range.symbolStart + name.symbol => symbolByAst![range.astStart + name.astNode] }
+            localName! + 1 => localName!
+        }
+        0 => localSymbol!
+        localSymbol! < range.symbolCount -> while {
+            range.symbolStart + localSymbol! => globalSymbol
+            prepared.package.symbols[globalSymbol] => symbol
+            # Synthetic input/self symbols share the enclosing declaration AST.
+            # Only its function symbol owns the declared return type.
+            symbol.astNode >= 0 and (symbol.kind == 7 or symbol.kind == 31)
+                -> if { globalSymbol => declarationByAst![range.astStart + symbol.astNode] }
+            symbol.kind == 9 and symbol.astNode >= 0
+                and prepared.package.nodes[range.astStart + symbol.astNode].kind == 9
+                -> if {
+                    firstChild![range.astStart + symbol.astNode] => valueAst
+                    valueAst >= 0 and prepared.package.nodes[valueAst].kind == 37
+                        -> if {
+                            typeByAst![valueAst] => valueType!
+                            valueType! < 0 and globalSymbol < (resolved.lexicalBindingTypeBySymbol -> len)
+                                -> if { resolved.lexicalBindingTypeBySymbol[globalSymbol] => valueType! }
+                            valueType! >= 0 and resolved.types[valueType!].kind == 3
+                                -> if {
+                                    0 => length!
+                                    firstChild![valueAst] => item!
+                                    item! >= 0 -> while {
+                                        prepared.package.nodes[item!].kind != 16 -> if { length! + 1 => length! }
+                                        nextChild![item!] => item!
+                                    }
+                                    Candidate { length: length!, unknown: false, requiresGrowable: false } => candidates![globalSymbol]
+                                }
+                        }
+                }
+            localSymbol! + 1 => localSymbol!
+        }
+    }
+    prepared.package.ranges -> each range {
+        0 => localAst!
+        localAst! < range.astCount -> while {
+            range.astStart + localAst! => globalAst
+            prepared.package.nodes[globalAst] => node
+            node.kind == 10 and not (prepared -> semanticContext.hasDeclaredCallTarget(globalAst))
+                -> if {
+                    firstChild![globalAst] => receiver
+                    receiver >= 0 and symbolByAst![receiver] >= 0
+                        -> if {
+                            symbolByAst![receiver] => owner
+                            candidates![owner].length >= 0 -> if {
+                                false => nested!
+                                node.parent => ancestor!
+                                ancestor! >= 0 -> while {
+                                    prepared.package.nodes[range.astStart + ancestor!] => parent
+                                    parent.kind == 42 or parent.kind == 44 or parent.kind == 48 or parent.kind == 56 or parent.kind == 57
+                                        -> if { true => nested! }
+                                    parent.parent => ancestor!
+                                }
+                                nextChild![receiver] => target!
+                                target! >= 0 -> while {
+                                    prepared.package.nodes[target!] => targetNode
+                                    targetNode.kind == 16 -> if {
+                                        prepared.package -> operationCode(range.sourceModule, targetNode.payloadToken) => operation
+                                        operation > 0 -> if { candidates![owner] -> afterOperation(operation, nested!) => candidates![owner] }
+                                    }
+                                    nextChild![target!] => target!
+                                }
+                            }
+                        }
+                }
+            localAst! + 1 => localAst!
+        }
+    }
+    resolved.callArguments -> each argument {
+        argument.status == 0 and argument.argumentAst >= 0 and (resolved.types -> isGrowableType(argument.expectedTypeId))
+            -> if {
+                prepared.package.ranges[argument.sourceModule] => range
+                symbolByAst![range.astStart + argument.argumentAst] => owner
+                owner >= 0 -> if { candidates![owner] -> withGrowableRequirement => candidates![owner] }
+            }
+    }
+    resolved.enumConstructorArguments -> each argument {
+        argument.argumentNode >= 0 and argument.argumentNode < (interpolations -> len)
+            and (resolved.types -> isGrowableType(argument.expectedTypeId))
+            -> if {
+                interpolations[argument.argumentNode] => value
+                value.kind == 1 and value.symbol >= 0 -> if {
+                    prepared.package.ranges[argument.sourceModule] => range
+                    range.symbolStart + value.symbol => owner
+                    candidates![owner].length >= 0 -> if {
+                        candidates![owner] -> withGrowableRequirement => candidates![owner]
+                    }
+                }
+            }
+        argument.argumentAst >= 0 and (resolved.types -> isGrowableType(argument.expectedTypeId))
+            -> if {
+                prepared.package.ranges[argument.sourceModule] => range
+                range.astStart + argument.argumentAst => globalArgument
+                prepared.package.nodes[globalArgument].kind == 15
+                    -> if {
+                        symbolByAst![globalArgument] => owner
+                        owner >= 0 and candidates![owner].length >= 0
+                            -> if { candidates![owner] -> withGrowableRequirement => candidates![owner] }
+                    }
+            }
+    }
+    prepared.package.ranges -> each range {
+        0 => localName!
+        localName! < range.nameCount -> while {
+            prepared.package.names[range.nameStart + localName!] => name
+            name.symbol >= 0 -> if {
+                range.symbolStart + name.symbol => owner
+                candidates![owner].length >= 0 -> if {
+                    range.astStart + name.astNode => globalName
+                    prepared.package.nodes[globalName].parent => parentAst
+                    parentAst >= 0 -> if {
+                        range.astStart + parentAst => globalParent
+                        prepared.package.nodes[globalParent] => parent
+                        -1 => expectedType!
+                        parent.kind == 53 and firstChild![globalParent] == globalName
+                            -> if {
+                                prepared -> semanticDiagnostics.indexedAssignmentValueType(resolved, range.sourceModule, parentAst) => expectedType!
+                            }
+                        parent.kind == 40 and parent.parent >= 0 -> if {
+                            fieldExpectedTypes[globalParent] => expectedType!
+                        }
+                        parent.kind == 47 or ((parent.kind == 7 or parent.kind == 31) and lastChild![globalParent] == globalName)
+                            -> if {
+                                parentAst => functionAst!
+                                functionAst! >= 0 and prepared.package.nodes[range.astStart + functionAst!].kind != 7 and prepared.package.nodes[range.astStart + functionAst!].kind != 31
+                                    -> while {
+                                        prepared.package.nodes[range.astStart + functionAst!].parent => functionAst!
+                                    }
+                                functionAst! >= 0 -> if {
+                                    declarationByAst![range.astStart + functionAst!] => functionSymbol
+                                    functionSymbol >= 0 -> if {
+                                        prepared.package.symbols[functionSymbol] => function
+                                        function.secondaryTypeNode => returnAst!
+                                        returnAst! < 0 -> if { function.typeNode => returnAst! }
+                                        returnAst! >= 0 -> if {
+                                            resolved.referenceIndexByTypeAst[range.astStart + returnAst!] => reference
+                                            reference >= 0 -> if { resolved.references[reference].typeId => expectedType! }
+                                        }
+                                    }
+                                }
+                            }
+                        resolved.types -> isGrowableType(expectedType!)
+                            -> if {
+                                candidates![owner] -> withGrowableRequirement => candidates![owner]
+                            }
+                    }
+                }
+            }
+            localName! + 1 => localName!
+        }
+    }
+    # Capacity observes growable storage even when its receiver is inside a string.
+    interpolationRanges -> each interpolationRange {
+        prepared.package.ranges[interpolationRange.sourceModule] => range
+        interpolationRange.nodeStart => nodeIndex!
+        nodeIndex! < interpolationRange.nodeStart + interpolationRange.nodeCount
+            -> while {
+                interpolations[nodeIndex!] => flow
+                flow.kind == 6 and flow.opcode == -236 and flow.argumentCount == 0 and flow.operand0 >= 0
+                    and resolved.interpolationCallSymbolByNode[nodeIndex!] < 0
+                    and resolved.interpolationMethodByNode[nodeIndex!].status < 0
+                    -> if {
+                        interpolations[flow.operand0] => receiver
+                        receiver.kind == 1 and receiver.symbol >= 0 and receiver.symbol < range.symbolCount
+                            -> if {
+                                range.symbolStart + receiver.symbol => owner
+                                candidates![owner].length >= 0
+                                    -> if { candidates![owner] -> withGrowableRequirement => candidates![owner] }
+                            }
+                    }
+                nodeIndex! + 1 => nodeIndex!
+            }
+    }
+    # The call binder owns target identity and concrete expected parameter types.
+    resolved.interpolationCallArguments -> each argument {
+        resolved.types -> isGrowableType(argument.expectedTypeId)
+            -> if {
+                interpolations[argument.argumentNode] => value
+                value.kind == 1 and value.symbol >= 0 -> if {
+                    prepared.package.ranges[argument.sourceModule] => range
+                    range.symbolStart + value.symbol => owner
+                    candidates![owner] -> withGrowableRequirement => candidates![owner]
+                }
+            }
+    }
+    [FixedLengthArrayWarning; ~] => warnings!
+    prepared.package.ranges -> each range {
+        0 => localSymbol!
+        localSymbol! < range.symbolCount -> while {
+            candidates![range.symbolStart + localSymbol!] => candidate
+            candidate -> shouldWarn -> if {
+                warnings! -> push(FixedLengthArrayWarning { sourceModule: range.sourceModule, bindingSymbol: localSymbol!, length: candidate.length })
+            }
+            localSymbol! + 1 => localSymbol!
+        }
+    }
+    warnings!
+}

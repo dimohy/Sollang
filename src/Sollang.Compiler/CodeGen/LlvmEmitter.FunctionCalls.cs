@@ -547,6 +547,13 @@ internal sealed partial class LlvmEmitter
         if (additionalArgumentOffset > 0 && argument is not null
             && function.InputOwnership == BoundFunctionInputOwnership.Default)
             TrackReadonlyCallTemporary(expression.Arguments[0], argument, borrowedTemporaries);
+        var savedOwners = new List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)>();
+        PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
+        var savedArgument = argument is null ? null : PreserveAsyncExpressionValue(argument,
+            function.InputOwnership == BoundFunctionInputOwnership.Move
+                && additionalArgumentOffset > 0
+                && expression.Arguments[0] is not (NameExpression or FieldAccessExpression));
+        var savedAdditional = new List<AsyncExpressionCarrier?>();
         var additionalArguments = (function.AdditionalParameters ?? [])
             .Select((parameter, index) =>
             {
@@ -559,9 +566,18 @@ internal sealed partial class LlvmEmitter
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, path);
                 if (parameter.Ownership == BoundFunctionInputOwnership.Default)
                     TrackReadonlyCallTemporary(argumentExpression, value, borrowedTemporaries);
+                PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
+                savedAdditional.Add(PreserveAsyncExpressionValue(value,
+                    parameter.Ownership == BoundFunctionInputOwnership.Move
+                        && argumentExpression is not (NameExpression or FieldAccessExpression)));
                 return value;
             })
             .ToArray();
+        if (argument is not null)
+            argument = RestoreAsyncExpressionValue(savedArgument, argument);
+        for (var index = 0; index < additionalArguments.Length; index++)
+            additionalArguments[index] = RestoreAsyncExpressionValue(savedAdditional[index], additionalArguments[index]);
+        RestoreAsyncCallOwners(borrowedTemporaries, savedOwners);
         var value = EmitFunctionCall(function, argument, additionalArguments);
         RemoveOwnedParameterArgumentsIfNeeded(function, expression.Arguments, additionalArgumentOffset);
         if (methodReceiverName is not null && FunctionConsumesOwnedHeapInput(function))
@@ -630,6 +646,25 @@ internal sealed partial class LlvmEmitter
         return RuntimeUnit.Instance;
     }
 
+    private void PreserveAsyncCallOwners(
+        List<RuntimeValue> temporaries,
+        List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)> saved)
+    {
+        while (saved.Count < temporaries.Count)
+        {
+            var value = temporaries[saved.Count];
+            saved.Add((value, PreserveAsyncExpressionValue(value, ownsValue: true)));
+        }
+    }
+
+    private void RestoreAsyncCallOwners(
+        List<RuntimeValue> temporaries,
+        List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)> saved)
+    {
+        for (var index = 0; index < saved.Count; index++)
+            temporaries[index] = RestoreAsyncExpressionValue(saved[index].Carrier, saved[index].Value);
+    }
+
     private RuntimeValue EmitFlowFunctionCall(
         BoundFunction function,
         RuntimeValue argument,
@@ -664,6 +699,11 @@ internal sealed partial class LlvmEmitter
                         : CreateReadonlyFlowResultReference(argument, function.InputType.Value, function.Name)
                 : argument;
         EnsureFunctionArgumentRuntimeType(functionArgument, function.InputType.Value, function.Name);
+        var savedOwners = new List<(RuntimeValue Value, AsyncExpressionCarrier? Carrier)>();
+        PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
+        var savedArgument = PreserveAsyncExpressionValue(functionArgument,
+            function.InputOwnership == BoundFunctionInputOwnership.Move && ownsFlowTemporary);
+        var savedAdditional = new List<AsyncExpressionCarrier?>();
         var additionalArguments = (function.AdditionalParameters ?? [])
             .Select((parameter, index) =>
             {
@@ -675,9 +715,17 @@ internal sealed partial class LlvmEmitter
                         : EmitFlowAdditionalValue(parameter.Type, additionalExpressions[index],
                             parameter.Ownership == BoundFunctionInputOwnership.Default ? borrowedTemporaries : null);
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
+                PreserveAsyncCallOwners(borrowedTemporaries, savedOwners);
+                savedAdditional.Add(PreserveAsyncExpressionValue(value,
+                    parameter.Ownership == BoundFunctionInputOwnership.Move
+                        && additionalExpressions[index] is not (NameExpression or FieldAccessExpression)));
                 return value;
             })
             .ToArray();
+        functionArgument = RestoreAsyncExpressionValue(savedArgument, functionArgument);
+        for (var index = 0; index < additionalArguments.Length; index++)
+            additionalArguments[index] = RestoreAsyncExpressionValue(savedAdditional[index], additionalArguments[index]);
+        RestoreAsyncCallOwners(borrowedTemporaries, savedOwners);
         var value = EmitFunctionCall(function, functionArgument, additionalArguments);
         RemoveOwnedParameterFlowArgumentsIfNeeded(function, source, additionalExpressions, receivesSourcePlace);
         foreach (var temporary in borrowedTemporaries.AsEnumerable().Reverse())

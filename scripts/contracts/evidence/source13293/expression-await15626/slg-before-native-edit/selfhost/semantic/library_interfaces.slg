@@ -1,0 +1,1128 @@
+namespace sollang.compiler.semantic.library_interfaces
+
+import sys.file as file
+import std.crypto.sha256 as sha256
+import std.text.json as json
+
+# The shared JSON reader owns decoded UTF-8 strings. Interface fields use spans
+# in one owned string buffer; the catalog retains the original mapped input
+# separately for provenance. Consumers never reinterpret escaped JSON bytes.
+public struct MetadataSpan {
+    public start: UIntSize
+    public length: UIntSize
+}
+
+public struct LibraryParameter {
+    public name: MetadataSpan
+    public typeName: MetadataSpan
+}
+
+public struct LibraryExport {
+    public name: MetadataSpan
+    public qualifiedName: MetadataSpan
+    public symbol: MetadataSpan
+    public parameterStart: Int
+    public parameterCount: Int
+    public resultType: MetadataSpan
+    public signatureHash: MetadataSpan
+}
+
+public struct ShapeIssue {
+    public kind: Int
+    public member: Int
+    public exportIndex: Int
+    public parameterIndex: Int
+}
+
+public struct ValidationIssue {
+    public status: Int
+    public exportIndex: Int
+    public parameterIndex: Int
+}
+
+public struct JsonIssue {
+    public kind: Int
+    public expected: Int
+    public owner: Int
+    public position: ShapeIssue
+    public property: [UInt8; ~]
+    public offset: UIntSize
+    public line: Int
+    public column: Int
+}
+
+public struct LibraryInterface {
+    public status: Int
+    public errorOffset: UIntSize
+    public schema: Int
+    public abi: MetadataSpan
+    public target: MetadataSpan
+    public libraryFile: MetadataSpan
+    public abiHash: MetadataSpan
+    public exports: [LibraryExport; ~]
+    public parameters: [LibraryParameter; ~]
+    public strings: [UInt8; ~]
+    public shape: ShapeIssue
+    public validation: ValidationIssue
+    public jsonIssue: JsonIssue
+}
+
+spanIs source: Text, span: MetadataSpan, expected: Text -> Bool {
+    span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    matches! and index! < span.length -> while {
+        (source -> byte(span.start + index!)) != (expected -> byte(index!))
+            -> if {
+                false => matches!
+            }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+public spanEquals source: Text, span: MetadataSpan, expected: Text -> Bool {
+    source -> spanIs(span, expected)
+}
+
+public exportCount document: ref LibraryInterface -> Int {
+    Int(document.exports -> len)
+}
+
+public exportName document: ref LibraryInterface, exportIndex: Int -> MetadataSpan {
+    document.exports[exportIndex].name
+}
+
+public exportResultType document: ref LibraryInterface, exportIndex: Int -> MetadataSpan {
+    document.exports[exportIndex].resultType
+}
+
+public exportParameterCount document: ref LibraryInterface, exportIndex: Int -> Int {
+    document.exports[exportIndex].parameterCount
+}
+
+public exportParameterType document: ref LibraryInterface, exportIndex: Int, parameterOrdinal: Int -> MetadataSpan {
+    document.exports[exportIndex].parameterStart + parameterOrdinal => parameterIndex
+    document.parameters[parameterIndex].typeName
+}
+
+sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
+    left.length == right.length => matches!
+    UIntSize(0) => index!
+    matches! and index! < left.length -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!))
+            -> if {
+                false => matches!
+            }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+appendSpan source: Text, span: MetadataSpan, bytes: mut [UInt8; ~] -> Unit {
+    UIntSize(0) => index!
+    index! < span.length -> while {
+        bytes -> push(source -> byte(span.start + index!))
+        index! + 1 => index!
+    }
+}
+
+spanPrecedes source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
+    UIntSize(0) => index!
+    index! < left.length and index! < right.length
+        -> while {
+            source -> byte(left.start + index!) => a
+            source -> byte(right.start + index!) => b
+            a != b -> if { a < b -> return }
+            index! + 1 => index!
+        }
+    left.length < right.length
+}
+
+hashEquals source: Text, declared: MetadataSpan, bytes: [UInt8] -> Bool {
+    declared.length != 64 -> if { false -> return }
+    sha256.create() => hasher!
+    hasher! -> update(bytes)
+    hasher! -> finish => digest
+    UIntSize(0) => index!
+    true => matches!
+    index! < 32 -> while {
+        digest[Int(index!)] => value
+        value / 16 => high
+        value % 16 => low
+        high < 10 -> if { high + 48 } else { high + 87 } => highHex
+        low < 10 -> if { low + 48 } else { low + 87 } => lowHex
+        (source -> byte(declared.start + index! * 2)) != highHex
+            or (source -> byte(declared.start + index! * 2 + 1)) != lowHex
+            -> if { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+identifierByte value: UInt8 -> Bool {
+    (value >= 'a' and value <= 'z')
+        or (value >= 'A' and value <= 'Z') or value == '_'
+}
+
+identifierSpan source: Text, span: MetadataSpan -> Bool {
+    span.length == 0 -> if { false -> return }
+    source -> byte(span.start) -> identifierByte -> unless { false -> return }
+    UIntSize(1) => index!
+    index! < span.length -> while {
+        source -> byte(span.start + index!) => current
+        not (current -> identifierByte) and not (current >= '0' and current <= '9')
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+qualifiedMatches source: Text, qualified: MetadataSpan, name: MetadataSpan -> Bool {
+    qualified.start => start!
+    qualified.start => index!
+    qualified.start + qualified.length => end
+    index! <= end -> while {
+        index! == end or (source -> byte(index!)) == '.'
+            -> if {
+                MetadataSpan { start: start!, length: index! - start! } => part
+                source -> identifierSpan(part) -> unless { false -> return }
+                index! == end -> if { source -> sameSpan(part, name) -> return }
+                index! + 1 => start!
+            }
+        index! + 1 => index!
+    }
+    false
+}
+
+abiSafe source: Text, span: MetadataSpan -> Bool {
+    (source -> spanIs(span, "Unit"))
+        or (source -> spanIs(span, "Int8")) or (source -> spanIs(span, "Int16"))
+        or (source -> spanIs(span, "Int32")) or (source -> spanIs(span, "Int64"))
+        or (source -> spanIs(span, "UInt8")) or (source -> spanIs(span, "UInt16"))
+        or (source -> spanIs(span, "UInt32")) or (source -> spanIs(span, "UInt64"))
+        or (source -> spanIs(span, "Float32")) or (source -> spanIs(span, "Float64"))
+}
+
+validationIssue status: Int, exportIndex: Int, parameterIndex: Int -> ValidationIssue => ValidationIssue { status: status, exportIndex: exportIndex, parameterIndex: parameterIndex }
+
+validateIntegrity source: Text, document: ref LibraryInterface, expectedTarget: Text -> ValidationIssue {
+    document.schema != 1 -> if { 21 -> validationIssue(-1, -1) -> return }
+    source -> spanIs(document.abi, "sollang-c-v1")
+        -> unless { 22 -> validationIssue(-1, -1) -> return }
+    (expectedTarget -> len) > 0 -> if {
+        source -> spanIs(document.target, expectedTarget)
+            -> unless { 23 -> validationIssue(-1, -1) -> return }
+    } else {
+        not (source -> spanIs(document.target, "windows-x64"))
+            and not (source -> spanIs(document.target, "linux-x64"))
+            -> if { 23 -> validationIssue(-1, -1) -> return }
+    }
+    (document.exports -> len) == 0 -> if { 71 -> validationIssue(-1, -1) -> return }
+    document.libraryFile.length == 0 -> if { 72 -> validationIssue(-1, -1) -> return }
+    UIntSize(0) => fileIndex!
+    fileIndex! < document.libraryFile.length -> while {
+        source -> byte(document.libraryFile.start + fileIndex!) => current
+        current == 47 or current == 92 -> if { 72 -> validationIssue(-1, -1) -> return }
+        fileIndex! + 1 => fileIndex!
+    }
+    [Int; ~] => order!
+    0 => exportIndex!
+    exportIndex! < (document.exports -> len) -> while {
+        order! -> push(exportIndex!)
+        exportIndex! + 1 => exportIndex!
+    }
+    1 => sortIndex!
+    sortIndex! < (order! -> len) -> while {
+        sortIndex! => cursor!
+        cursor! > 0 -> while {
+            order![cursor!] => right
+            order![cursor! - 1] => left
+            source -> spanPrecedes(document.exports[right].qualifiedName, document.exports[left].qualifiedName)
+                -> unless { break }
+            left => order![cursor!]
+            right => order![cursor! - 1]
+            cursor! - 1 => cursor!
+        }
+        sortIndex! + 1 => sortIndex!
+    }
+    [UInt8; ~] => abiBytes!
+    0 => ordinal!
+    ordinal! < (order! -> len) -> while {
+        ordinal! > 0 -> if { abiBytes! -> push(10) }
+        document.exports[order![ordinal!]] => exported
+        source -> appendSpan(exported.qualifiedName, abiBytes!)
+        abiBytes! -> push(0)
+        0 => parameterOrdinal!
+        parameterOrdinal! < exported.parameterCount -> while {
+            parameterOrdinal! > 0 -> if { abiBytes! -> push(0) }
+            source -> appendSpan(document.parameters[exported.parameterStart + parameterOrdinal!].typeName, abiBytes!)
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+        abiBytes! -> push(0)
+        abiBytes! -> push(45)
+        abiBytes! -> push(62)
+        source -> appendSpan(exported.resultType, abiBytes!)
+        ordinal! + 1 => ordinal!
+    }
+    source -> hashEquals(document.abiHash, abiBytes!)
+        -> unless { 73 -> validationIssue(-1, -1) -> return }
+    0 => signatureIndex!
+    signatureIndex! < (document.exports -> len) -> while {
+        document.exports[signatureIndex!] => exported
+        not (source -> identifierSpan(exported.name))
+            or not (source -> qualifiedMatches(exported.qualifiedName, exported.name))
+            or not (source -> identifierSpan(exported.symbol))
+            -> if { 64 -> validationIssue(signatureIndex!, -1) -> return }
+        0 => validationOrdinal!
+        validationOrdinal! < exported.parameterCount -> while {
+            document.parameters[exported.parameterStart + validationOrdinal!] => parameter
+            source -> identifierSpan(parameter.name) -> unless { 63 -> validationIssue(signatureIndex!, validationOrdinal!) -> return }
+            0 => previousParameter!
+            previousParameter! < validationOrdinal! -> while {
+                source -> sameSpan(document.parameters[exported.parameterStart + previousParameter!].name, parameter.name)
+                    -> if { 63 -> validationIssue(signatureIndex!, validationOrdinal!) -> return }
+                previousParameter! + 1 => previousParameter!
+            }
+            source -> abiSafe(parameter.typeName) -> unless { 74 -> validationIssue(signatureIndex!, validationOrdinal!) -> return }
+            validationOrdinal! + 1 => validationOrdinal!
+        }
+        source -> abiSafe(exported.resultType) -> unless { 74 -> validationIssue(signatureIndex!, -1) -> return }
+        [UInt8; ~] => signature!
+        source -> appendSpan(exported.name, signature!)
+        signature! -> push(0)
+        source -> appendSpan(exported.symbol, signature!)
+        signature! -> push(0)
+        0 => parameterOrdinal!
+        parameterOrdinal! < exported.parameterCount -> while {
+            parameterOrdinal! > 0 -> if { signature! -> push(0) }
+            document.parameters[exported.parameterStart + parameterOrdinal!] => parameter
+            source -> appendSpan(parameter.name, signature!)
+            signature! -> push(58)
+            source -> appendSpan(parameter.typeName, signature!)
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+        signature! -> push(0)
+        signature! -> push(45)
+        signature! -> push(62)
+        source -> appendSpan(exported.resultType, signature!)
+        source -> hashEquals(exported.signatureHash, signature!)
+            -> unless { 65 -> validationIssue(signatureIndex!, -1) -> return }
+        0 => previous!
+        previous! < signatureIndex! -> while {
+            source -> sameSpan(document.exports[previous!].name, exported.name)
+                -> if { 59 -> validationIssue(signatureIndex!, -1) -> return }
+            previous! + 1 => previous!
+        }
+        signatureIndex! + 1 => signatureIndex!
+    }
+    0 -> validationIssue(-1, -1)
+}
+
+emptyDocument: -> LibraryInterface => LibraryInterface {
+    status: 0
+    errorOffset: 0
+    schema: 0
+    abi: MetadataSpan { start: 0, length: 0 }
+    target: MetadataSpan { start: 0, length: 0 }
+    libraryFile: MetadataSpan { start: 0, length: 0 }
+    abiHash: MetadataSpan { start: 0, length: 0 }
+    exports: [LibraryExport; ~]
+    parameters: [LibraryParameter; ~]
+    strings: [UInt8; ~]
+    shape: ShapeIssue { kind: 0, member: 0, exportIndex: -1, parameterIndex: -1 }
+    validation: 0 -> validationIssue(-1, -1)
+    jsonIssue: JsonIssue { kind: 0, expected: 0, owner: 0, position: ShapeIssue { kind: 0, member: 0, exportIndex: -1, parameterIndex: -1 }, property: [UInt8; ~], offset: 0, line: 0, column: 0 }
+}
+
+bytesEqual bytes: [UInt8], expected: Text -> Bool {
+    (bytes -> len) != Int(expected -> len) -> if { false -> return }
+    0 => index!
+    index! < (bytes -> len) -> while {
+        bytes[index!] != (expected -> byte(UIntSize(index!)))
+            -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+memberMatches member: ref json.Member, expected: Text -> Bool {
+    member.name -> bytesEqual(expected)
+}
+
+fieldIndex object: ref json.Value, expected: Text -> Int {
+    -1 => result!
+    0 => index!
+    index! < (object.members -> len) -> while {
+        object.members[index!] -> memberMatches(expected)
+            -> if { object.members[index!].value => result! }
+        index! + 1 => index!
+    }
+    result!
+}
+
+isObject value: ref json.Value -> Bool {
+    value.kind -> when {
+        Object { true }
+        else { false }
+    }
+}
+
+isString value: ref json.Value -> Bool {
+    value.kind -> when {
+        String { true }
+        else { false }
+    }
+}
+
+isNumber value: ref json.Value -> Bool {
+    value.kind -> when {
+        Number { true }
+        else { false }
+    }
+}
+
+isArray value: ref json.Value -> Bool {
+    value.kind -> when {
+        Array { true }
+        else { false }
+    }
+}
+
+appendDecoded value: ref json.Value, storage: mut [UInt8; ~] -> Result<MetadataSpan, Int> {
+    value -> isString -> unless { Result<MetadataSpan, Int>.Err(12) -> return }
+    storage -> push(34)
+    UIntSize(storage -> len) => start
+    0 => index!
+    index! < (value.bytes -> len) -> while {
+        storage -> push(value.bytes[index!])
+        index! + 1 => index!
+    }
+    storage -> push(34)
+    Result<MetadataSpan, Int>.Ok(MetadataSpan { start: start, length: UIntSize(value.bytes -> len) })
+}
+
+isNull value: ref json.Value -> Bool {
+    value.kind -> when {
+        Null { true }
+        else { false }
+    }
+}
+
+markShape issue: mut ShapeIssue, kind: Int, member: Int -> Unit {
+    kind => issue.kind
+    member => issue.member
+}
+
+shapeExport issue: mut ShapeIssue, index: Int -> Unit {
+    index => issue.exportIndex
+    -1 => issue.parameterIndex
+}
+
+shapeParameter issue: mut ShapeIssue, index: Int -> Unit {
+    index => issue.parameterIndex
+}
+
+stringField object: ref json.Value, model: ref json.Document, name: Text, result: mut LibraryInterface, member: Int -> Result<MetadataSpan, Int> {
+    object -> fieldIndex(name) => index
+    index < 0 -> if {
+        result.shape -> markShape(1, member)
+        Result<MetadataSpan, Int>.Err(12) -> return
+    }
+    model.values[index] -> isNull -> if {
+        result.shape -> markShape(1, member)
+        Result<MetadataSpan, Int>.Err(12) -> return
+    }
+    model.values[index] -> appendDecoded(result.strings)
+}
+
+arrayField object: ref json.Value, model: ref json.Document, name: Text, result: mut LibraryInterface, member: Int -> Result<Int, Int> {
+    object -> fieldIndex(name) => index
+    index < 0 -> if {
+        result.shape -> markShape(2, member)
+        Result<Int, Int>.Err(12) -> return
+    }
+    model.values[index] -> isNull -> if {
+        result.shape -> markShape(2, member)
+        Result<Int, Int>.Err(12) -> return
+    }
+    model.values[index] -> isArray -> unless { Result<Int, Int>.Err(12) -> return }
+    Result<Int, Int>.Ok(index)
+}
+
+readModelParameter object: ref json.Value, model: ref json.Document, result: mut LibraryInterface -> Result<Unit, Int> {
+    object -> isNull -> if {
+        result.shape -> markShape(3, 0)
+        Result<Unit, Int>.Err(12) -> return
+    }
+    object -> stringField(model, "name", result, 12)? => name
+    object -> stringField(model, "type", result, 13)? => typeName
+    result.parameters -> push(LibraryParameter { name: name, typeName: typeName })
+    Result<Unit, Int>.Ok
+}
+
+readModelExport object: ref json.Value, model: ref json.Document, result: mut LibraryInterface -> Result<Unit, Int> {
+    result.exports -> len => exportIndex
+    result.shape -> shapeExport(exportIndex)
+    object -> isNull -> if {
+        result.shape -> markShape(3, 0)
+        Result<Unit, Int>.Err(12) -> return
+    }
+    object -> stringField(model, "name", result, 6)? => name
+    object -> stringField(model, "qualifiedName", result, 7)? => qualifiedName
+    object -> stringField(model, "symbol", result, 8)? => symbol
+    object -> arrayField(model, "parameters", result, 9)? => parametersIndex
+    result.parameters -> len => parameterStart
+    0 => index!
+    index! < (model.values[parametersIndex].items -> len)
+        -> while {
+            model.values[parametersIndex].items[index!] => parameterIndex
+            result.shape -> shapeParameter(index!)
+            model.values[parameterIndex] -> readModelParameter(model, result)?
+            index! + 1 => index!
+        }
+    result.shape -> shapeParameter(-1)
+    object -> stringField(model, "result", result, 10)? => resultType
+    object -> stringField(model, "signatureHash", result, 11)? => signatureHash
+    result.exports -> push(LibraryExport {
+        name: name
+        qualifiedName: qualifiedName
+        symbol: symbol
+        parameterStart: parameterStart
+        parameterCount: (result.parameters -> len) - parameterStart
+        resultType: resultType
+        signatureHash: signatureHash
+    })
+    Result<Unit, Int>.Ok
+}
+
+schemaInteger value: ref json.Value -> Result<Int, Int> {
+    (value.bytes -> len) == 0 -> if { Result<Int, Int>.Err(12) -> return }
+    value.bytes[0] == '-' => negative
+    negative -> if { 1 } else { 0 } => index!
+    0 => magnitude!
+    negative -> if { 2147483648 } else { 2147483647 } => maximum
+    index! < (value.bytes -> len) -> while {
+        value.bytes[index!] => current
+        current < '0' or current > '9' -> if { Result<Int, Int>.Err(12) -> return }
+        Int(current - '0') => digit
+        magnitude! > (maximum - digit) / 10 -> if { Result<Int, Int>.Err(12) -> return }
+        magnitude! * 10 + digit => magnitude!
+        index! + 1 => index!
+    }
+    Result<Int, Int>.Ok(negative -> if { -magnitude! } else { magnitude! })
+}
+
+jsonFailure issue: mut JsonIssue, kind: Int, expected: Int, owner: Int, member: Int, exportIndex: Int, parameterIndex: Int, offset: UIntSize -> Unit {
+    kind => issue.kind
+    expected => issue.expected
+    owner => issue.owner
+    ShapeIssue { kind: 0, member: member, exportIndex: exportIndex, parameterIndex: parameterIndex } => issue.position
+    offset => issue.offset
+}
+
+jsonMember name: [UInt8], owner: Int -> Int {
+    owner == 1 -> if {
+        name -> bytesEqual("schema") -> if { 14 -> return }
+        name -> bytesEqual("abi") -> if { 1 -> return }
+        name -> bytesEqual("target") -> if { 2 -> return }
+        name -> bytesEqual("libraryFile") -> if { 3 -> return }
+        name -> bytesEqual("abiHash") -> if { 4 -> return }
+        name -> bytesEqual("exports") -> if { 5 -> return }
+    }
+    owner == 2 -> if {
+        name -> bytesEqual("name") -> if { 6 -> return }
+        name -> bytesEqual("qualifiedName") -> if { 7 -> return }
+        name -> bytesEqual("symbol") -> if { 8 -> return }
+        name -> bytesEqual("parameters") -> if { 9 -> return }
+        name -> bytesEqual("result") -> if { 10 -> return }
+        name -> bytesEqual("signatureHash") -> if { 11 -> return }
+    }
+    owner == 3 -> if {
+        name -> bytesEqual("name") -> if { 12 -> return }
+        name -> bytesEqual("type") -> if { 13 -> return }
+    }
+    0
+}
+
+jsonExpected member: Int -> Int {
+    member == 14 -> if { 6 -> return }
+    member == 5 -> if { 2 -> return }
+    member == 9 -> if { 4 -> return }
+    1
+}
+
+jsonProperty issue: mut JsonIssue, name: [UInt8] -> Unit {
+    0 => index!
+    index! < (name -> len) -> while {
+        issue.property -> push(name[index!])
+        index! + 1 => index!
+    }
+}
+
+tokenNull token: json.Token -> Bool => token.kind -> when { Null { true } else { false } }
+
+tokenEndObject token: json.Token -> Bool => token.kind -> when { EndObject { true } else { false } }
+
+tokenEndArray token: json.Token -> Bool => token.kind -> when { EndArray { true } else { false } }
+
+tokenDocumentEnd token: json.Token -> Bool => token.kind -> when { DocumentEnd { true } else { false } }
+
+tokenCompatible reader: ref json.Reader, token: json.Token, expected: Int -> Bool {
+    expected != 6 and (token -> tokenNull) -> if { true -> return }
+    token.kind -> when {
+        String { expected == 1 -> return }
+        BeginArray { expected == 2 or expected == 4 -> return }
+        BeginObject { expected == 3 or expected == 5 or expected == 7 -> return }
+        Number {
+            expected != 6 -> if { false -> return }
+            reader -> int64(token) -> when {
+                Ok(value) { value >= -2147483648 and value <= 2147483647 -> return }
+                Err(_) { false -> return }
+            }
+        }
+        else { false -> return }
+    }
+}
+
+previousComma source: file.SourceText, offset: UIntSize -> Bool {
+    offset => index!
+    index! > 0 -> while {
+        index! - 1 => index!
+        source -> byte(index!) => byte
+        byte != 32 and byte != 9 and byte != 10 and byte != 13
+            -> if {
+                byte == 44 -> return
+            }
+    }
+    false
+}
+
+jsonSyntax issue: mut JsonIssue, reader: ref json.Reader, error: json.Error -> Unit {
+    error.kind -> when {
+        UnexpectedEnd {
+            reader.index < reader.end and (reader.source -> byte(reader.index)) == '"'
+                -> if { 11 } else {
+                    (reader.stack -> len) == 0 -> if { 14 } else { 4 }
+                } => issue.kind
+        }
+        UnexpectedByte {
+            5 => issue.kind
+            issue -> jsonByte(reader.source -> byte(error.offset))
+        }
+        TrailingData {
+            6 => issue.kind
+            issue -> jsonByte(reader.source -> byte(error.offset))
+        }
+        ExpectedColon {
+            7 => issue.kind
+            ShapeIssue { kind: 0, member: 0, exportIndex: issue.position.exportIndex, parameterIndex: issue.position.parameterIndex } => issue.position
+            error.offset < reader.end -> if { issue -> jsonByte(reader.source -> byte(error.offset)) }
+        }
+        ExpectedName {
+            error.offset < reader.end -> if {
+                reader.source -> byte(error.offset) => byte
+                byte == 125 and (reader.source -> previousComma(error.offset))
+                    -> if { 8 } else {
+                        byte == 47 -> if { 15 } else { 17 }
+                    } => issue.kind
+                issue -> jsonByte(byte)
+            }
+        }
+        ExpectedValue {
+            error.offset < reader.end and (reader.source -> byte(error.offset)) == 93
+                and (reader.source -> previousComma(error.offset))
+                -> if { 9 => issue.kind }
+        }
+        ExpectedCommaOrEnd {
+            15 => issue.kind
+            issue -> jsonByte(reader.source -> byte(error.offset))
+        }
+        InvalidStringEscape {
+            10 => issue.kind
+            error.offset + 1 => issue.offset
+            issue -> jsonByte(reader.source -> byte(issue.offset))
+        }
+        InvalidLiteral {
+            reader.source -> byte(reader.index) => first
+            first == 116 -> if { "true" } else { first == 102
+                    -> if { "false" } else { "null" } } => expected
+            first == 116 -> if { 1 } else { first == 102 -> if { 2 } else { 3 } } => issue.expected
+            UIntSize(0) => index!
+            index! < (expected -> len) and reader.index + index! < reader.end
+                and (reader.source -> byte(reader.index + index!)) == (expected -> byte(index!))
+                -> while { index! + 1 => index! }
+            reader.index + index! => issue.offset
+            12 => issue.kind
+            UIntSize(0) => copy!
+            copy! <= index! and reader.index + copy! < reader.end
+                -> while {
+                    issue -> jsonByte(reader.source -> byte(reader.index + copy!))
+                    copy! + 1 => copy!
+                }
+        }
+        InvalidNumber {
+            error.offset == reader.end -> if { 16 => issue.kind } else {
+                error.offset > 0 and (reader.source -> byte(error.offset - 1)) == 48
+                    -> if {
+                        13 => issue.kind
+                        issue -> jsonByte(reader.source -> byte(error.offset))
+                    }
+            }
+        }
+        else { }
+    }
+}
+
+streamFailure reader: ref json.Reader, error: json.Error, result: mut LibraryInterface, owner: Int, member: Int, exportIndex: Int, parameterIndex: Int -> Unit {
+    11 => result.status
+    error.offset => result.errorOffset
+    result.jsonIssue -> jsonFailure(0, 0, owner, member, exportIndex, parameterIndex, error.offset)
+    result.jsonIssue -> jsonSyntax(reader, error)
+}
+
+jsonByte issue: mut JsonIssue, byte: UInt8 -> Unit {
+    issue.property -> push(byte)
+}
+
+streamNext reader: mut json.Reader, result: mut LibraryInterface, owner: Int, member: Int, exportIndex: Int, parameterIndex: Int -> Result<json.Token, Int> {
+    reader -> next -> when {
+        Ok(token) { Result<json.Token, Int>.Ok(token) }
+        Err(error) {
+            reader -> streamFailure(error, result, owner, member, exportIndex, parameterIndex)
+            Result<json.Token, Int>.Err(11)
+        }
+    }
+}
+
+streamArray reader: mut json.Reader, token: json.Token, member: Int, exportIndex: Int, result: mut LibraryInterface -> Result<Unit, Int> {
+    token -> tokenNull -> if { Result<Unit, Int>.Ok -> return }
+    0 => index!
+    true -> while {
+        member == 5 -> if { 2 } else { 3 } => owner
+        member == 5 -> if { index! } else { exportIndex } => childExport
+        member == 5 -> if { -1 } else { index! } => childParameter
+        reader -> streamNext(result, owner, 0, childExport, childParameter)? => child
+        child -> tokenEndArray -> if { Result<Unit, Int>.Ok -> return }
+        reader -> streamObject(child, owner, childExport, childParameter, result)?
+        index! + 1 => index!
+    }
+    Result<Unit, Int>.Ok
+}
+
+streamObject reader: mut json.Reader, token: json.Token, owner: Int, exportIndex: Int, parameterIndex: Int, result: mut LibraryInterface -> Result<Unit, Int> {
+    token -> tokenNull -> if { Result<Unit, Int>.Ok -> return }
+    owner == 1 -> if { 7 } else { owner == 2 -> if { 3 } else { 5 } } => expectedObject
+    reader -> tokenCompatible(token, expectedObject)
+        -> unless {
+            result.jsonIssue -> jsonFailure(3, expectedObject, owner, 0, exportIndex, parameterIndex, token.start + token.length)
+            Result<Unit, Int>.Err(12) -> return
+        }
+    true -> while {
+        reader -> streamNext(result, owner, 0, exportIndex, parameterIndex)? => nameToken
+        nameToken -> tokenEndObject -> if { Result<Unit, Int>.Ok -> return }
+        reader -> nameSeparator(nameToken) -> when {
+            Ok(_) { }
+            Err(error) {
+                reader -> streamFailure(error, result, owner, 0, exportIndex, parameterIndex)
+                Result<Unit, Int>.Err(11) -> return
+            }
+        }
+        reader -> decodeString(nameToken, reader.limits.maxStringBytes) -> when {
+            Ok(name) {
+                name -> jsonMember(owner) => member
+                member == 0 -> if {
+                    result.jsonIssue -> jsonFailure(2, 0, owner, 0, exportIndex, parameterIndex, nameToken.start)
+                    result.jsonIssue -> jsonProperty(name)
+                    Result<Unit, Int>.Err(12) -> return
+                }
+                reader -> streamNext(result, owner, member, exportIndex, parameterIndex)? => value
+                member -> jsonExpected => expected
+                reader -> tokenCompatible(value, expected) -> unless {
+                    result.jsonIssue -> jsonFailure(3, expected, owner, member, exportIndex, parameterIndex, value.start + value.length)
+                    Result<Unit, Int>.Err(12) -> return
+                }
+                member == 5 or member == 9 -> if {
+                    reader -> streamArray(value, member, exportIndex, result)?
+                }
+            }
+            Err(error) {
+                reader -> streamFailure(error, result, owner, 0, exportIndex, parameterIndex)
+                Result<Unit, Int>.Err(11) -> return
+            }
+        }
+    }
+    Result<Unit, Int>.Ok
+}
+
+validateJsonStream source: Text, limits: json.Limits, result: mut LibraryInterface -> Result<Unit, Int> {
+    source -> json.reader(limits) -> when {
+        Ok(value) {
+            value => reader!
+            reader! -> streamNext(result, 1, 0, -1, -1)? => root
+            reader! -> streamObject(root, 1, -1, -1, result)?
+            reader! -> streamNext(result, 1, 0, -1, -1)? => end
+            end -> tokenDocumentEnd -> unless { Result<Unit, Int>.Err(11) -> return }
+            root -> tokenNull -> if {
+                result.jsonIssue -> jsonFailure(1, 0, 1, 0, -1, -1, root.start + root.length)
+                Result<Unit, Int>.Err(12) -> return
+            }
+            Result<Unit, Int>.Ok
+        }
+        Err(error) {
+            error.offset => result.errorOffset
+            Result<Unit, Int>.Err(11)
+        }
+    }
+}
+
+jsonLocation issue: mut JsonIssue, source: Text -> Unit {
+    0 => line!
+    UIntSize(0) => lineStart!
+    UIntSize(0) => index!
+    index! < issue.offset and index! < (source -> len)
+        -> while {
+            (source -> byte(index!)) == 10 -> if {
+                line! + 1 => line!
+                index! + 1 => lineStart!
+            }
+            index! + 1 => index!
+        }
+    line! => issue.line
+    Int(issue.offset - lineStart!) => issue.column
+}
+
+readModelDocument object: ref json.Value, model: ref json.Document, result: mut LibraryInterface -> Result<Unit, Int> {
+    object -> fieldIndex("schema") => schemaIndex
+    schemaIndex >= 0 -> if {
+        model.values[schemaIndex] -> schemaInteger? => schema
+        schema => result.schema
+    }
+    object -> stringField(model, "abi", result, 1)? => abi
+    abi => result.abi
+    object -> stringField(model, "target", result, 2)? => target
+    target => result.target
+    object -> stringField(model, "libraryFile", result, 3)? => libraryFile
+    libraryFile => result.libraryFile
+    object -> stringField(model, "abiHash", result, 4)? => abiHash
+    abiHash => result.abiHash
+    object -> arrayField(model, "exports", result, 5)? => exportsIndex
+    0 => index!
+    index! < (model.values[exportsIndex].items -> len)
+        -> while {
+            model.values[exportsIndex].items[index!] => exportIndex
+            model.values[exportIndex] -> readModelExport(model, result)?
+            index! + 1 => index!
+        }
+    Result<Unit, Int>.Ok
+}
+
+validateDocument document: ref LibraryInterface, expectedTarget: Text -> ValidationIssue {
+    document.strings -> file.borrowBytes => decoded
+    decoded -> slice(UIntSize(0), decoded -> len) -> validateIntegrity(document, expectedTarget)
+}
+
+public parseForTarget source: Text, expectedTarget: Text -> LibraryInterface {
+    emptyDocument() => result!
+    json.Limits {
+        maxInputBytes: Int(source -> len)
+        maxDepth: 64
+        maxTokens: Int(source -> len) + 1
+        maxStringBytes: Int(source -> len)
+    } => limits
+    source -> validateJsonStream(limits, result!) -> when {
+        Ok(_) { }
+        Err(status) { status => result!.status }
+    }
+    result!.status == 0 -> if {
+        source -> json.reader(limits) -> when {
+            Ok(value) {
+                value => reader!
+                reader! -> document -> when {
+                    Ok(model) {
+                        model.values[model.root] -> readModelDocument(model, result!) -> when {
+                            Ok(_) { }
+                            Err(status) { status => result!.status }
+                        }
+                    }
+                    Err(error) {
+                        reader! -> streamFailure(error, result!, 1, 0, -1, -1)
+                    }
+                }
+            }
+            Err(error) {
+                11 => result!.status
+                error.offset => result!.errorOffset
+            }
+        }
+    }
+    result!.jsonIssue -> jsonLocation(source)
+    result!.status == 0 -> if {
+        result! -> validateDocument(expectedTarget) => issue
+        issue.status => result!.status
+        issue => result!.validation
+    }
+    result!
+}
+
+public parse source: Text -> LibraryInterface {
+    source -> parseForTarget("")
+}
+
+public parseSourceForTarget source: file.SourceText, expectedTarget: Text -> LibraryInterface {
+    source -> slice(UIntSize(0), source -> len) -> parseForTarget(expectedTarget)
+}
+
+public readSourcePath interfacePath: Text -> Result<file.SourceText, Int> uses File {
+    interfacePath -> file.openRead -> when {
+        Ok(input) {
+            [UInt8(0); ~] => prefix!
+            input -> readIntoAt(prefix!, 0) -> when {
+                Ok(count) {
+                    count == 0 -> if { Result<file.SourceText, Int>.Ok("" -> file.borrowText) -> return }
+                    Result<file.SourceText, Int>.Ok(interfacePath -> file.mapText) -> return
+                }
+                Err(_) { Result<file.SourceText, Int>.Err(75) -> return }
+            }
+        }
+        Err(_) { Result<file.SourceText, Int>.Err(50) -> return }
+    }
+}
+
+
+public readPath interfacePath: Text, expectedTarget: Text -> LibraryInterface uses File {
+    interfacePath -> readSourcePath -> when {
+        Ok(source) { source -> parseSourceForTarget(expectedTarget) -> return }
+        Err(status) {
+            emptyDocument() => result!
+            status => result!.status
+            result! -> return
+        }
+    }
+}
+
+public parseSource source: file.SourceText -> LibraryInterface {
+    source -> slice(UIntSize(0), source -> len) -> parse
+}
+
+shapeMember member: Int -> Text {
+    member == 1 -> if { "abi" -> return }
+    member == 2 -> if { "target" -> return }
+    member == 3 -> if { "libraryFile" -> return }
+    member == 4 -> if { "abiHash" -> return }
+    member == 5 -> if { "exports" -> return }
+    member == 6 or member == 12 -> if { "name" -> return }
+    member == 7 -> if { "qualifiedName" -> return }
+    member == 8 -> if { "symbol" -> return }
+    member == 9 -> if { "parameters" -> return }
+    member == 10 -> if { "result" -> return }
+    member == 11 -> if { "signatureHash" -> return }
+    member == 13 -> if { "type" -> return }
+    member == 14 -> if { "schema" -> return }
+    ""
+}
+
+public shapeDiagnostic document: ref LibraryInterface, interfacePath: Text, line: Int, column: Int, storage: mut Arena -> Text {
+    document.shape.member -> shapeMember => property
+    document.shape.kind == 1 -> if { "a non-null string" } else {
+        document.shape.kind == 2 -> if { "a non-null array" } else { "a non-null object" }
+    } => expected
+    document.shape.exportIndex >= 0 -> if {
+        document.shape.parameterIndex >= 0 -> if {
+            document.shape.member != 0 -> if {
+                "$line:$column: invalid Sollang library interface '$interfacePath': 'exports[$(document.shape.exportIndex)].parameters[$(document.shape.parameterIndex)].$property' must be $expected" -> materialize(storage) -> return
+            }
+            "$line:$column: invalid Sollang library interface '$interfacePath': 'exports[$(document.shape.exportIndex)].parameters[$(document.shape.parameterIndex)]' must be $expected" -> materialize(storage) -> return
+        }
+        document.shape.member != 0 -> if {
+            "$line:$column: invalid Sollang library interface '$interfacePath': 'exports[$(document.shape.exportIndex)].$property' must be $expected" -> materialize(storage) -> return
+        }
+        "$line:$column: invalid Sollang library interface '$interfacePath': 'exports[$(document.shape.exportIndex)]' must be $expected" -> materialize(storage) -> return
+    }
+    "$line:$column: invalid Sollang library interface '$interfacePath': '$property' must be $expected" -> materialize(storage)
+}
+
+public semanticDiagnostic document: ref LibraryInterface, interfacePath: Text, expectedTarget: Text, storage: mut Arena -> Text {
+    document.strings -> file.borrowBytes => decoded
+    decoded -> slice(UIntSize(0), decoded -> len) => source
+    document.status == 21 or document.status == 22
+        -> if {
+            source -> slice(document.abi.start, document.abi.length) => abi
+            "unsupported Sollang library ABI in '$interfacePath': schema $(document.schema), ABI '$abi'" -> materialize(storage) -> return
+        }
+    document.status == 23 -> if {
+        source -> slice(document.target.start, document.target.length) => target
+        "Sollang library target mismatch in '$interfacePath': expected '$expectedTarget', found '$target'" -> materialize(storage) -> return
+    }
+    document.status == 71 -> if {
+        "Sollang library interface '$interfacePath' has no exports" -> materialize(storage) -> return
+    }
+    document.status == 72 -> if {
+        "invalid library file name in '$interfacePath'" -> materialize(storage) -> return
+    }
+    document.status == 73 -> if {
+        "Sollang library ABI hash mismatch in '$interfacePath'" -> materialize(storage) -> return
+    }
+    document.validation.exportIndex >= 0 -> if {
+        document.exports[document.validation.exportIndex] => exported
+        source -> slice(exported.name.start, exported.name.length) => name
+        document.status == 64 -> if {
+            "invalid export name, qualified name, or symbol for '$name' in '$interfacePath'" -> materialize(storage) -> return
+        }
+        document.status == 65 -> if {
+            "Sollang library signature hash mismatch for '$name' in '$interfacePath'" -> materialize(storage) -> return
+        }
+        document.status == 59 -> if {
+            "duplicate Sollang library member '$name' in '$interfacePath'" -> materialize(storage) -> return
+        }
+        document.validation.parameterIndex >= 0 -> if {
+            document.parameters[exported.parameterStart + document.validation.parameterIndex] => parameter
+            source -> slice(parameter.name.start, parameter.name.length) => parameterName
+            document.status == 63 -> if {
+                "invalid or duplicate parameter name '$parameterName' for '$name' in '$interfacePath'" -> materialize(storage) -> return
+            }
+            document.status == 74 -> if {
+                source -> slice(exported.qualifiedName.start, exported.qualifiedName.length) => functionName
+                source -> slice(parameter.typeName.start, parameter.typeName.length) => typeName
+                "public library function '$functionName' parameter '$parameterName' type '$typeName' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> materialize(storage) -> return
+            }
+        }
+        document.status == 74 -> if {
+            source -> slice(exported.qualifiedName.start, exported.qualifiedName.length) => functionName
+            source -> slice(exported.resultType.start, exported.resultType.length) => typeName
+            "public library function '$functionName' result type '$typeName' is not ABI-safe; use Unit or a fixed-width numeric scalar" -> materialize(storage) -> return
+        }
+    }
+    "invalid Sollang library interface '$interfacePath' (status $(document.status))" -> materialize(storage)
+}
+
+jsonOwner owner: Int -> Text {
+    owner == 2 -> if { "Sollang.Compiler.Cli.SollangLibraryExport" -> return }
+    owner == 3 -> if { "Sollang.Compiler.Cli.SollangLibraryParameter" -> return }
+    "Sollang.Compiler.Cli.SollangLibraryManifestDocument"
+}
+
+jsonConversionType expected: Int -> Text {
+    expected == 1 -> if { "System.String" -> return }
+    expected == 2 -> if { "System.Collections.Generic.IReadOnlyList`1[Sollang.Compiler.Cli.SollangLibraryExport]" -> return }
+    expected == 3 -> if { "Sollang.Compiler.Cli.SollangLibraryExport" -> return }
+    expected == 4 -> if { "System.Collections.Generic.IReadOnlyList`1[Sollang.Compiler.Cli.SollangLibraryParameter]" -> return }
+    expected == 5 -> if { "Sollang.Compiler.Cli.SollangLibraryParameter" -> return }
+    expected == 6 -> if { "System.Int32" -> return }
+    "Sollang.Compiler.Cli.SollangLibraryManifestDocument"
+}
+
+public jsonDiagnostic document: ref LibraryInterface, interfacePath: Text, line: Int, column: Int, storage: mut Arena -> Text {
+    document.jsonIssue -> jsonIssueDiagnostic(interfacePath, line, column, storage)
+}
+
+appendJsonPath bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+appendJsonOrdinal bytes: mut [UInt8; ~], value: Int -> Unit {
+    value >= 10 -> if { bytes -> appendJsonOrdinal(value / 10) }
+    bytes -> push(UInt8(48 + value % 10))
+}
+
+jsonPath position: ShapeIssue -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    bytes! -> push(36)
+    position.exportIndex >= 0 -> if {
+        bytes! -> appendJsonPath(".exports[")
+        bytes! -> appendJsonOrdinal(position.exportIndex)
+        bytes! -> push(93)
+        position.parameterIndex >= 0 -> if {
+            bytes! -> appendJsonPath(".parameters[")
+            bytes! -> appendJsonOrdinal(position.parameterIndex)
+            bytes! -> push(93)
+        }
+    }
+    position.member != 0 -> if {
+        bytes! -> push(46)
+        bytes! -> appendJsonPath(position.member -> shapeMember)
+    }
+    bytes!
+}
+
+jsonControlHex byte: UInt8 -> Text {
+    "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F" -> slice(UIntSize(byte) * 2, 2)
+}
+
+jsonIssueDiagnostic issue: ref JsonIssue, interfacePath: Text, line: Int, column: Int, storage: mut Arena -> Text {
+    issue.kind == 1 -> if {
+        "$line:$column: invalid Sollang library interface '$interfacePath': document is empty" -> materialize(storage) -> return
+    }
+    issue.kind == 2 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => property
+        issue.owner -> jsonOwner => owner
+        "$line:$column: invalid Sollang library interface '$interfacePath': The JSON property '$property' could not be mapped to any .NET member contained in type '$owner'." -> materialize(storage) -> return
+    }
+    issue.position -> jsonPath => pathBytes
+    pathBytes -> file.borrowBytes => pathView
+    pathView -> slice(UIntSize(0), pathView -> len) => path
+    issue.kind == 4 -> if {
+        "$line:$column: invalid Sollang library interface '$interfacePath': Expected depth to be zero at the end of the JSON payload. There is an open JSON object or array that should be closed. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 5 -> if {
+        issue.property[0] -> jsonControlHex => hex
+        "$line:$column: invalid Sollang library interface '$interfacePath': '0x$hex' is invalid within a JSON string. The string should be correctly escaped. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 6 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$byte' is invalid after a single JSON value. Expected end of data. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 7 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$byte' is invalid after a property name. Expected a ':'. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 8 or issue.kind == 9 -> if {
+        issue.kind == 8 -> if { "object" } else { "array" } => container
+        "$line:$column: invalid Sollang library interface '$interfacePath': The JSON $container contains a trailing comma at the end which is not supported in this mode. Change the reader options. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 10 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$byte' is an invalid escapable character within a JSON string. The string should be correctly escaped. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 11 -> if {
+        "$line:$column: invalid Sollang library interface '$interfacePath': Expected end of string, but instead reached end of data. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 12 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => literal
+        issue.expected == 1 -> if { "true" } else { issue.expected == 2
+                -> if { "false" } else { "null" } } => expected
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$literal' is an invalid JSON literal. Expected the literal '$expected'. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 13 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        "$line:$column: invalid Sollang library interface '$interfacePath': Invalid leading zero before '$byte'. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 14 -> if {
+        "$line:$column: invalid Sollang library interface '$interfacePath': The input does not contain any JSON tokens. Expected the input to start with a valid JSON token, when isFinalBlock is true. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 15 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$byte' is invalid after a value. Expected either ',', '}', or ']'. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 16 -> if {
+        "$line:$column: invalid Sollang library interface '$interfacePath': Expected a digit ('0'-'9'), but instead reached end of data. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.kind == 17 -> if {
+        issue.property -> file.borrowBytes => bytes
+        bytes -> slice(UIntSize(0), bytes -> len) => byte
+        """is an invalid start of a property name. Expected a '"'.""" => description
+        "$line:$column: invalid Sollang library interface '$interfacePath': '$byte' $description Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage) -> return
+    }
+    issue.expected -> jsonConversionType => expected
+    "$line:$column: invalid Sollang library interface '$interfacePath': The JSON value could not be converted to $expected. Path: $path | LineNumber: $(issue.line) | BytePositionInLine: $(issue.column)." -> materialize(storage)
+}

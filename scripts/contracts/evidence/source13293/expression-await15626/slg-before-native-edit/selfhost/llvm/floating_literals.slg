@@ -1,0 +1,286 @@
+namespace sollang.compiler.llvm.floating_literals
+
+public struct Encoding {
+    public valid: Bool
+    negative: Bool
+    bits: Long
+}
+
+# Exact nonnegative integers, little-endian base 100000000. Multiplication by
+# ten and a decimal carry fit Int; no host floating arithmetic is involved.
+multiply digits: mut [Int; ~], factor: Int, carry: Int -> Unit {
+    carry => pending!
+    0 => index!
+    index! < (digits -> len) -> while {
+        digits[index!] * factor + pending! => product
+        product % 100000000 => digits[index!]
+        product / 100000000 => pending!
+        index! + 1 => index!
+    }
+    pending! > 0 -> if { digits -> push(pending!) }
+}
+
+significantLength digits: ref [Int; ~] -> Int {
+    Int(digits -> len) => length!
+    length! > 1 and digits[length! - 1] == 0
+        -> while { length! - 1 => length! }
+    length!
+}
+
+compare left: ref [Int; ~], right: ref [Int; ~] -> Int {
+    left -> significantLength => leftLength
+    right -> significantLength => rightLength
+    leftLength < rightLength -> if { -1 -> return }
+    leftLength > rightLength -> if { 1 -> return }
+    leftLength => index!
+    index! > 0 -> while {
+        index! - 1 => index!
+        left[index!] < right[index!] -> if { -1 -> return }
+        left[index!] > right[index!] -> if { 1 -> return }
+    }
+    0
+}
+
+# The caller proves left >= right before subtracting.
+subtract left: mut [Int; ~], right: ref [Int; ~] -> Unit {
+    0 => borrow!
+    0 => index!
+    index! < (left -> len) -> while {
+        0 => rightDigit!
+        index! < (right -> len) -> if { right[index!] => rightDigit! }
+        left[index!] - rightDigit! - borrow! => difference!
+        0 => borrow!
+        difference! < 0 -> if {
+            difference! + 100000000 => difference!
+            1 => borrow!
+        }
+        difference! => left[index!]
+        index! + 1 => index!
+    }
+}
+
+powerOfTwo exponent: Int -> Long {
+    Long(1) => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+public encode source: ref Text, width: Int -> Encoding {
+    width != 32 and width != 64 -> if {
+        Encoding { valid: false, negative: false, bits: 0 } -> return
+    }
+    UIntSize(0) => cursor!
+    false => negative!
+    cursor! < (source -> len) -> if {
+        source -> byte(cursor!) => sign
+        sign == 43 or sign == 45 -> if {
+            sign == 45 => negative!
+            cursor! + 1 => cursor!
+        }
+    }
+    [Int; ~] => decimalDigits!
+    false => point!
+    0 => fractionDigits!
+    cursor! < (source -> len) and (source -> byte(cursor!)) != 101 and (source -> byte(cursor!)) != 69
+        -> while {
+            source -> byte(cursor!) => character
+            character >= 48 and character <= 57 -> if {
+                decimalDigits! -> push(Int(character) - 48)
+                point! -> if { fractionDigits! + 1 => fractionDigits! }
+            } else {
+                character == 46 and not point! -> if { true => point! } else {
+                    character != 95 -> if {
+                        Encoding { valid: false, negative: negative!, bits: 0 } -> return
+                    }
+                }
+            }
+            cursor! + 1 => cursor!
+        }
+    (decimalDigits! -> len) == 0 -> if {
+        Encoding { valid: false, negative: negative!, bits: 0 } -> return
+    }
+    0 => decimalExponent!
+    false => negativeExponent!
+    cursor! < (source -> len) -> if {
+        cursor! + 1 => cursor!
+        cursor! < (source -> len) -> if {
+            source -> byte(cursor!) => sign
+            sign == 43 or sign == 45 -> if {
+                sign == 45 => negativeExponent!
+                cursor! + 1 => cursor!
+            }
+        }
+        false => exponentDigit!
+        Int(source -> len) + 1000 => exponentLimit
+        cursor! < (source -> len) -> while {
+            source -> byte(cursor!) => character
+            character >= 48 and character <= 57 -> if {
+                true => exponentDigit!
+                decimalExponent! < exponentLimit -> if {
+                    decimalExponent! > (exponentLimit - Int(character) + 48) / 10
+                        -> if { exponentLimit => decimalExponent! } else {
+                            decimalExponent! * 10 + Int(character) - 48 => decimalExponent!
+                        }
+                }
+            } else {
+                character != 95 -> if {
+                    Encoding { valid: false, negative: negative!, bits: 0 } -> return
+                }
+            }
+            cursor! + 1 => cursor!
+        }
+        not exponentDigit! -> if {
+            Encoding { valid: false, negative: negative!, bits: 0 } -> return
+        }
+    }
+    negativeExponent! -> if { -decimalExponent! => decimalExponent! }
+    0 => first!
+    first! < (decimalDigits! -> len) and decimalDigits![first!] == 0
+        -> while { first! + 1 => first! }
+    first! == (decimalDigits! -> len) -> if {
+        Encoding { valid: true, negative: negative!, bits: 0 } -> return
+    }
+    Int(decimalDigits! -> len) - first! + decimalExponent! - fractionDigits! => decimalOrder
+    decimalOrder < -400 or (width == 32 and decimalOrder < -60)
+        -> if {
+            Encoding { valid: true, negative: negative!, bits: 0 } -> return
+        }
+    decimalOrder > 310 or (width == 32 and decimalOrder > 40)
+        -> if {
+            Encoding { valid: false, negative: negative!, bits: 0 } -> return
+        }
+    Int(decimalDigits! -> len) => end!
+    decimalDigits![end! - 1] == 0 -> while { end! - 1 => end! }
+    decimalExponent! - fractionDigits! + Int(decimalDigits! -> len) - end! => scale!
+    [Int; ~] => numerator!
+    numerator! -> push(0)
+    first! => digit!
+    digit! < end! -> while {
+        numerator! -> multiply(10, decimalDigits![digit!])
+        digit! + 1 => digit!
+    }
+    [Int; ~] => denominator!
+    denominator! -> push(1)
+    scale! > 0 -> while {
+        numerator! -> multiply(10, 0)
+        scale! - 1 => scale!
+    }
+    scale! < 0 -> while {
+        denominator! -> multiply(10, 0)
+        scale! + 1 => scale!
+    }
+    0 => exponent!
+    numerator! -> compare(denominator!) >= 0 -> if {
+        denominator! -> multiply(2, 0)
+        numerator! -> compare(denominator!) >= 0 -> while {
+            denominator! -> multiply(2, 0)
+            exponent! + 1 => exponent!
+        }
+        numerator! -> multiply(2, 0)
+    } else {
+        numerator! -> compare(denominator!) < 0 -> while {
+            numerator! -> multiply(2, 0)
+            exponent! - 1 => exponent!
+        }
+    }
+    width == 32 -> if { 24 } else { 53 } => precision
+    width == 32 -> if { -126 } else { -1022 } => minimumExponent
+    width == 32 -> if { 127 } else { 1023 } => maximumExponent
+    precision => significantBits!
+    exponent! < minimumExponent -> if {
+        precision + exponent! - minimumExponent => significantBits!
+    }
+    significantBits! < 0 -> if {
+        Encoding { valid: true, negative: negative!, bits: 0 } -> return
+    }
+    Long(1) => significand!
+    numerator! -> subtract(denominator!)
+    significantBits! == 0 -> if {
+        numerator! -> significantLength => length
+        length == 1 and numerator![0] == 0 -> if { 0 => significand! }
+    } else {
+        1 => bit!
+        bit! < significantBits! -> while {
+            numerator! -> multiply(2, 0)
+            significand! * 2 => significand!
+            numerator! -> compare(denominator!) >= 0 -> if {
+                numerator! -> subtract(denominator!)
+                significand! + 1 => significand!
+            }
+            bit! + 1 => bit!
+        }
+        numerator! -> multiply(2, 0)
+        numerator! -> compare(denominator!) => rounding
+        rounding > 0 or (rounding == 0 and significand! % 2 == 1)
+            -> if { significand! + 1 => significand! }
+    }
+    significand! == 0 -> if {
+        Encoding { valid: true, negative: negative!, bits: 0 } -> return
+    }
+    exponent! < minimumExponent -> if {
+        width == 64 -> if {
+            Encoding { valid: true, negative: negative!, bits: significand! } -> return
+        }
+        0 => topBit!
+        Long(1) => leading!
+        leading! * 2 <= significand! -> while {
+            leading! * 2 => leading!
+            topBit! + 1 => topBit!
+        }
+        Long(topBit! - 149 + 1023) * powerOfTwo(52) + (significand! - leading!) * powerOfTwo(52 - topBit!) => bits
+        Encoding { valid: true, negative: negative!, bits: bits } -> return
+    }
+    significand! == powerOfTwo(precision) -> if {
+        significand! / 2 => significand!
+        exponent! + 1 => exponent!
+    }
+    exponent! > maximumExponent -> if {
+        Encoding { valid: false, negative: negative!, bits: 0 } -> return
+    }
+    Long(exponent! + 1023) * powerOfTwo(52) + (significand! - powerOfTwo(precision - 1)) * powerOfTwo(53 - precision) => bits
+    Encoding { valid: true, negative: negative!, bits: bits }
+}
+
+public write encoding: Encoding -> Unit uses Console {
+    "0x" -> print
+    powerOfTwo(60) => place!
+    0 => index!
+    "0123456789ABCDEF" => alphabet
+    index! < 16 -> while {
+        Int(encoding.bits / place! % 16) => digit!
+        index! == 0 and encoding.negative -> if { digit! + 8 => digit! }
+        alphabet -> slice(UIntSize(digit!), 1) -> print
+        place! / 16 => place!
+        index! + 1 => index!
+    }
+}
+
+public negate encoding: Encoding -> Encoding {
+    Encoding { valid: encoding.valid, negative: not encoding.negative, bits: encoding.bits }
+}
+
+# Every Unicode scalar is an exact single and double integer value.
+public encodeCodePoint scalar: Int -> Encoding {
+    scalar < 0 or scalar > 1114111 -> if {
+        Encoding { valid: false, negative: false, bits: 0 } -> return
+    }
+    scalar == 0 -> if {
+        Encoding { valid: true, negative: false, bits: 0 } -> return
+    }
+    0 => exponent!
+    Long(1) => leading!
+    leading! * 2 <= Long(scalar) -> while {
+        leading! * 2 => leading!
+        exponent! + 1 => exponent!
+    }
+    Long(exponent! + 1023) * powerOfTwo(52) + (Long(scalar) - leading!) * powerOfTwo(52 - exponent!) => bits
+    Encoding { valid: true, negative: false, bits: bits }
+}
+
+public invalidEncoding: -> Encoding {
+    Encoding { valid: false, negative: false, bits: 0 }
+}

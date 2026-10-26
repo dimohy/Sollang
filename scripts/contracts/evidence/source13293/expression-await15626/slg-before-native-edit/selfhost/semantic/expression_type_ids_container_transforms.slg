@@ -1,0 +1,89 @@
+namespace sollang.compiler.semantic.expression_type_ids
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
+
+# Source-owned intrinsic identity: 0 none, 1 append, 2 updated. A declared
+# function or qualified target retains its own call and ownership contract.
+public containerTransformKind prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, flowAst: Int -> Int {
+    prepared.package.ranges[sourceModule] => range
+    range.astStart + flowAst => globalFlow
+    prepared.package.nodes[globalFlow].kind != 10
+        -> if { 0 -> return }
+    prepared -> semanticContext.hasDeclaredCallTarget(globalFlow)
+        -> if { 0 -> return }
+    prepared.directFlowTargetPathByAst[globalFlow] => targetAst
+    targetAst < 0 -> if { 0 -> return }
+    prepared.package.nodes[range.astStart + targetAst] => target
+    target.firstToken => tokenIndex!
+    tokenIndex! < target.firstToken + target.tokenCount
+        -> while {
+            prepared.package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdDot()
+                -> if { 0 -> return }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    prepared.package.tokens[range.tokenStart + target.payloadToken] => name
+    prepared.package.sources[sourceModule] -> slice(name.span.start, name.span.length) => spelling
+    spelling == "append" -> if { 1 -> return }
+    spelling == "updated" -> if { 2 -> return }
+    0
+}
+
+# Match the C# concrete Int container boundary, preserving the receiver's
+# canonical type identity instead of synthesizing a declaration-only owner.
+public containerTransformResultType types: ref [typeIds.SemanticType; ~], receiverType: Int, kind: Int -> Int {
+    receiverType < 0 or receiverType >= (types -> len) or kind == 0
+        -> if { -1 -> return }
+    types -> typeIds.materializedReadTypeId(receiverType) => actualType
+    types[actualType] => receiver
+    types -> typeIds.builtinTypeId(2) => intType
+    receiver.kind == 3 and receiver.first == intType
+        -> if { actualType -> return }
+    kind == 2 and receiver.kind == 5 and receiver.first == intType and receiver.second == intType
+        -> if { actualType -> return }
+    -1
+}
+
+# This participates in the existing path/type fixed point. Exact immediate
+# receivers include an owned function result in a chained flow. Arguments are
+# never candidates for the receiver, and inferred bindings consume this type
+# before Typed IR lowering begins.
+resolveContainerTransformTypes prepared: ref semanticContext.SemanticSnapshot, types: ref [typeIds.SemanticType; ~], expressions: mut [ExpressionTypeId; ~], expressionIndexByAst: mut [Int; ~], flowSourceByAst: ref [Int; ~] -> Bool {
+    false => changed!
+    prepared.package.ranges -> each range {
+        0 => flowAst!
+        flowAst! < range.astCount -> while {
+            range.astStart + flowAst! => globalFlow
+            prepared -> containerTransformKind(range.sourceModule, flowAst!) => kind
+            flowSourceByAst[globalFlow] => receiverGlobal
+            kind > 0 and receiverGlobal >= 0 -> if {
+                expressionIndexByAst[receiverGlobal] => receiverExpression
+                receiverExpression >= 0 -> if {
+                    expressions[receiverExpression] => receiver
+                    receiver.status == 0 -> if {
+                        types -> containerTransformResultType(receiver.typeId, kind) => resultType
+                        resultType >= 0 -> if {
+                            expressionIndexByAst[globalFlow] => resultIndex!
+                            resultIndex! < 0 -> if {
+                                expressions -> len => resultIndex!
+                                expressions -> push(ExpressionTypeId { sourceModule: range.sourceModule, astNode: flowAst!, typeId: resultType, status: 0 })
+                                resultIndex! => expressionIndexByAst[globalFlow]
+                                true => changed!
+                            } else {
+                                expressions[resultIndex!] => existing
+                                existing.typeId != resultType or existing.status != 0
+                                    -> if {
+                                        ExpressionTypeId { sourceModule: range.sourceModule, astNode: flowAst!, typeId: resultType, status: 0 } => expressions[resultIndex!]
+                                        true => changed!
+                                    }
+                            }
+                        }
+                    }
+                }
+            }
+            flowAst! + 1 => flowAst!
+        }
+    }
+    changed!
+}

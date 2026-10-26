@@ -1,0 +1,401 @@
+namespace sollang.compiler.package_versions
+
+import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+
+public struct SemanticVersion {
+    public status: Int
+    public major: Int
+    public minor: Int
+    public patch: Int
+    public preStart: UIntSize
+    public preLength: UIntSize
+}
+
+public struct RequirementResult {
+    public status: Int
+    public accepted: Bool
+}
+
+struct NumberPart {
+    status: Int
+    value: Int
+    next: UIntSize
+}
+
+digit value: UInt8 -> Bool {
+    value >= 48 and value <= 57
+}
+
+digitValue value: UInt8 -> Int {
+    0 => result!
+    value == 49 -> if { 1 => result! }
+    value == 50 -> if { 2 => result! }
+    value == 51 -> if { 3 => result! }
+    value == 52 -> if { 4 => result! }
+    value == 53 -> if { 5 => result! }
+    value == 54 -> if { 6 => result! }
+    value == 55 -> if { 7 => result! }
+    value == 56 -> if { 8 => result! }
+    value == 57 -> if { 9 => result! }
+    result!
+}
+
+identifierByte value: UInt8 -> Bool {
+    (value -> digit) or (value >= 65 and value <= 90) or (value >= 97 and value <= 122) or value == 45
+}
+
+parseNumber source: Text, start: UIntSize -> NumberPart {
+    source -> len => length
+    start => index!
+    0 => status!
+    0 => value!
+    index! >= length or not ((source -> byte(index!)) -> digit)
+        -> if { 1 => status! }
+    status! == 0 and (source -> byte(index!)) == 48 and index! + 1 < length and ((source -> byte(index! + 1)) -> digit)
+        -> if { 2 => status! }
+    status! == 0 and index! < length and ((source -> byte(index!)) -> digit)
+        -> while {
+            source -> byte(index!) -> digitValue => current
+            value! > 214748364 or (value! == 214748364 and current > 7)
+                -> if {
+                    3 => status!
+                } else {
+                    value! * 10 + current => value!
+                    index! + 1 => index!
+                }
+        }
+    NumberPart { status: status!, value: value!, next: index! }
+}
+
+validIdentifiers source: Text, start: UIntSize, end: UIntSize, prerelease: Bool -> Bool {
+    start < end => valid!
+    start => index!
+    start => identifierStart!
+    true => numeric!
+    valid! and index! < end -> while {
+        source -> byte(index!) => current
+        current == 46 -> if {
+            index! == identifierStart! -> if { false => valid! }
+            valid! and prerelease and numeric! and index! - identifierStart! > 1 and (source -> byte(identifierStart!)) == 48
+                -> if { false => valid! }
+            index! + 1 => identifierStart!
+            true => numeric!
+        } else {
+            not (current -> identifierByte) -> if { false => valid! }
+            not (current -> digit) -> if { false => numeric! }
+        }
+        index! + 1 => index!
+    }
+    valid! and identifierStart! == end -> if { false => valid! }
+    valid! and prerelease and numeric! and end - identifierStart! > 1 and (source -> byte(identifierStart!)) == 48
+        -> if { false => valid! }
+    valid!
+}
+
+# Status: 0 valid, 1 major, 2 first dot, 3 minor, 4 second dot,
+# 5 patch, 6 prerelease, 7 build metadata, 8 trailing input.
+public parse source: Text -> SemanticVersion {
+    source -> len => length
+    source -> parseNumber(0) => majorPart
+    majorPart.status => status!
+    majorPart.next => index!
+    0 => major!
+    0 => minor!
+    0 => patch!
+    UIntSize(0) => preStart!
+    UIntSize(0) => preLength!
+    status! == 0 -> if { majorPart.value => major! } else { 1 => status! }
+    status! == 0 -> if {
+        index! < length and (source -> byte(index!)) == 46
+            -> if { index! + 1 => index! } else { 2 => status! }
+    }
+    status! == 0 -> if {
+        source -> parseNumber(index!) => minorPart
+        minorPart.status == 0 -> if {
+            minorPart.value => minor!
+            minorPart.next => index!
+        } else { 3 => status! }
+    }
+    status! == 0 -> if {
+        index! < length and (source -> byte(index!)) == 46
+            -> if { index! + 1 => index! } else { 4 => status! }
+    }
+    status! == 0 -> if {
+        source -> parseNumber(index!) => patchPart
+        patchPart.status == 0 -> if {
+            patchPart.value => patch!
+            patchPart.next => index!
+        } else { 5 => status! }
+    }
+    status! == 0 and index! < length and (source -> byte(index!)) == 45
+        -> if {
+            index! + 1 => preStart!
+            preStart! => index!
+            index! < length and (source -> byte(index!)) != 43
+                -> while { index! + 1 => index! }
+            index! - preStart! => preLength!
+            not (source -> validIdentifiers(preStart!, index!, true))
+                -> if { 6 => status! }
+        }
+    status! == 0 and index! < length and (source -> byte(index!)) == 43
+        -> if {
+            index! + 1 => buildStart
+            length => index!
+            not (source -> validIdentifiers(buildStart, length, false))
+                -> if { 7 => status! }
+        }
+    status! == 0 and index! != length -> if { 8 => status! }
+    SemanticVersion { status: status!, major: major!, minor: minor!, patch: patch!, preStart: preStart!, preLength: preLength! }
+}
+
+compareIdentifier left: Text, leftStart: UIntSize, leftLength: UIntSize, right: Text, rightStart: UIntSize, rightLength: UIntSize -> Int {
+    true => leftNumeric!
+    true => rightNumeric!
+    UIntSize(0) => index!
+    leftNumeric! and index! < leftLength -> while {
+        not ((left -> byte(leftStart + index!)) -> digit)
+            -> if { false => leftNumeric! }
+        index! + 1 => index!
+    }
+    0 => index!
+    rightNumeric! and index! < rightLength -> while {
+        not ((right -> byte(rightStart + index!)) -> digit)
+            -> if { false => rightNumeric! }
+        index! + 1 => index!
+    }
+    0 => result!
+    leftNumeric! and not rightNumeric! -> if { -1 => result! }
+    not leftNumeric! and rightNumeric! -> if { 1 => result! }
+    result! == 0 and leftNumeric! and rightNumeric!
+        -> if {
+            leftLength < rightLength -> if { -1 => result! }
+            leftLength > rightLength -> if { 1 => result! }
+        }
+    leftLength < rightLength -> if { leftLength } else { rightLength } => sharedLength
+    UIntSize(0) => byteIndex!
+    result! == 0 and byteIndex! < sharedLength -> while {
+        left -> byte(leftStart + byteIndex!) => leftByte
+        right -> byte(rightStart + byteIndex!) => rightByte
+        leftByte < rightByte -> if { -1 => result! }
+        leftByte > rightByte -> if { 1 => result! }
+        byteIndex! + 1 => byteIndex!
+    }
+    result! == 0 and leftLength < rightLength -> if { -1 => result! }
+    result! == 0 and leftLength > rightLength -> if { 1 => result! }
+    result!
+}
+
+public compare leftSource: Text, left: SemanticVersion, rightSource: Text, right: SemanticVersion -> Int {
+    0 => result!
+    left.major < right.major -> if { -1 => result! }
+    left.major > right.major -> if { 1 => result! }
+    result! == 0 and left.minor < right.minor -> if { -1 => result! }
+    result! == 0 and left.minor > right.minor -> if { 1 => result! }
+    result! == 0 and left.patch < right.patch -> if { -1 => result! }
+    result! == 0 and left.patch > right.patch -> if { 1 => result! }
+    result! == 0 and left.preLength == 0 and right.preLength > 0
+        -> if { 1 => result! }
+    result! == 0 and left.preLength > 0 and right.preLength == 0
+        -> if { -1 => result! }
+    result! == 0 and left.preLength > 0 and right.preLength > 0
+        -> if {
+            left.preStart => leftIndex!
+            right.preStart => rightIndex!
+            left.preStart + left.preLength => leftEnd
+            right.preStart + right.preLength => rightEnd
+            result! == 0 and leftIndex! < leftEnd and rightIndex! < rightEnd
+                -> while {
+                    leftIndex! => leftIdentifierStart
+                    rightIndex! => rightIdentifierStart
+                    leftIndex! < leftEnd and (leftSource -> byte(leftIndex!)) != 46
+                        -> while { leftIndex! + 1 => leftIndex! }
+                    rightIndex! < rightEnd and (rightSource -> byte(rightIndex!)) != 46
+                        -> while { rightIndex! + 1 => rightIndex! }
+                    leftIndex! - leftIdentifierStart => leftIdentifierLength
+                    rightIndex! - rightIdentifierStart => rightIdentifierLength
+                    leftSource -> compareIdentifier(leftIdentifierStart, leftIdentifierLength, rightSource, rightIdentifierStart, rightIdentifierLength) => result!
+                    leftIndex! < leftEnd -> if { leftIndex! + 1 => leftIndex! }
+                    rightIndex! < rightEnd -> if { rightIndex! + 1 => rightIndex! }
+                }
+            result! == 0 and leftIndex! < leftEnd -> if { 1 => result! }
+            result! == 0 and rightIndex! < rightEnd -> if { -1 => result! }
+        }
+    result!
+}
+
+struct RequirementTerm {
+    operation: Int
+    versionStart: UIntSize
+    version: SemanticVersion
+}
+
+parseRequirementTerm term: Text -> RequirementTerm {
+    term -> len => length
+    UIntSize(0) => versionStart!
+    0 => operation!
+    operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 94
+        -> if {
+            2 => operation!
+            1 => versionStart!
+        }
+    operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 126
+        -> if {
+            3 => operation!
+            1 => versionStart!
+        }
+    operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 61
+        -> if {
+            4 => operation!
+            1 => versionStart!
+        }
+    operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 62
+        -> if {
+            5 => operation!
+            1 => versionStart!
+            length > 1 and (term -> byte(UIntSize(1))) == 61
+                -> if {
+                    6 => operation!
+                    2 => versionStart!
+                }
+        }
+    operation! == 0 and length > 0 and (term -> byte(UIntSize(0))) == 60
+        -> if {
+            7 => operation!
+            1 => versionStart!
+            length > 1 and (term -> byte(UIntSize(1))) == 61
+                -> if {
+                    8 => operation!
+                    2 => versionStart!
+                }
+        }
+    operation! == 0 -> if { 4 => operation! }
+    term -> slice(versionStart!, length - versionStart!) -> parse => version
+    RequirementTerm { operation: operation!, versionStart: versionStart!, version: version }
+}
+
+acceptTerm term: Text, candidateSource: Text, candidate: SemanticVersion -> RequirementResult {
+    term -> parseRequirementTerm => parsed
+    parsed.version => expected
+    expected.status != 0 -> if {
+        RequirementResult { status: 1, accepted: false } -> return
+    }
+    term -> slice(parsed.versionStart, (term -> len) - parsed.versionStart) => versionText
+    true => accepted!
+    candidateSource -> compare(candidate, versionText, expected) => ordering
+    parsed.operation == 2 -> if {
+        ordering >= 0 and ((expected.major > 0 and candidate.major == expected.major) or (expected.major == 0 and expected.minor > 0 and candidate.major == 0 and candidate.minor == expected.minor) or (expected.major == 0 and expected.minor == 0 and candidate.major == 0 and candidate.minor == 0 and candidate.patch == expected.patch)) => accepted!
+    }
+    parsed.operation == 3 -> if { candidate.major == expected.major and candidate.minor == expected.minor and ordering >= 0 => accepted! }
+    parsed.operation == 4 -> if { ordering == 0 => accepted! }
+    parsed.operation == 5 -> if { ordering > 0 => accepted! }
+    parsed.operation == 6 -> if { ordering >= 0 => accepted! }
+    parsed.operation == 7 -> if { ordering < 0 => accepted! }
+    parsed.operation == 8 -> if { ordering <= 0 => accepted! }
+    RequirementResult { status: 0, accepted: accepted! }
+}
+
+public struct RequirementSyntax {
+    public status: Int
+    public invalidStart: UIntSize
+    public invalidLength: UIntSize
+}
+
+requirementBlankWidth source: Text, index: UIntSize -> UIntSize {
+    source -> unicodeIdentifier.scalarWidth(index) => width
+    source -> slice(index, width) => scalar
+    syntax.RawStringLayout { raw: false, multiline: false, contentStart: 0, contentEnd: width, indentationStart: 0, indentationLength: 0, issue: 0 } => layout
+    scalar -> syntax.rawStringLine(layout, 0) => line
+    line.start == line.end and line.next == width
+        -> if { width -> return }
+    0
+}
+
+public trimRequirement source: Text -> Text {
+    source -> len => length
+    UIntSize(0) => cursor!
+    UIntSize(0) => start!
+    UIntSize(0) => end!
+    false => contentSeen!
+    cursor! < length -> while {
+        source -> requirementBlankWidth(cursor!) => blankWidth
+        blankWidth == 0 -> if {
+            not contentSeen! -> if { cursor! => start! }
+            true => contentSeen!
+            source -> unicodeIdentifier.scalarWidth(cursor!) => width
+            cursor! + width => cursor!
+            cursor! => end!
+        } else { cursor! + blankWidth => cursor! }
+    }
+    source -> slice(start!, end! - start!)
+}
+
+# Parse every term before candidate testing, like VersionRequirement.Parse.
+public validateRequirement source: Text -> RequirementSyntax {
+    source -> trimRequirement => requirement
+    requirement -> len => length
+    length == 0 -> if {
+        RequirementSyntax { status: 1, invalidStart: 0, invalidLength: 0 } -> return
+    }
+    length == 1 and (requirement -> byte(0)) == 42
+        -> if {
+            RequirementSyntax { status: 0, invalidStart: 0, invalidLength: 0 } -> return
+        }
+    UIntSize(0) => index!
+    index! < length -> while {
+        index! < length and (requirement -> byte(index!)) == 32
+            -> while { index! + 1 => index! }
+        index! < length -> if {
+            index! => start
+            index! < length and (requirement -> byte(index!)) != 32
+                -> while { index! + 1 => index! }
+            requirement -> slice(start, index! - start) => term
+            term -> parseRequirementTerm => parsed
+            parsed.version.status != 0 -> if {
+                RequirementSyntax { status: 2, invalidStart: start + parsed.versionStart, invalidLength: index! - start - parsed.versionStart } -> return
+            }
+        }
+    }
+    RequirementSyntax { status: 0, invalidStart: 0, invalidLength: 0 }
+}
+
+public accepts rawRequirement: Text, candidateSource: Text -> RequirementResult {
+    rawRequirement -> validateRequirement => syntaxResult
+    syntaxResult.status != 0 -> if {
+        RequirementResult { status: 2, accepted: false } -> return
+    }
+    rawRequirement -> trimRequirement => requirement
+    (requirement -> len) == 1 and (requirement -> byte(0)) == 42
+        -> if {
+            candidateSource -> parse => candidate
+            RequirementResult { status: candidate.status, accepted: candidate.status == 0 } -> return
+        }
+    candidateSource -> parse => candidate
+    candidate.status => status!
+    status! == 0 => accepted!
+    requirement -> len => length
+    UIntSize(0) => index!
+    false => termSeen!
+    status! == 0 and accepted! and index! < length
+        -> while {
+            index! < length and (requirement -> byte(index!)) == 32
+                -> while { index! + 1 => index! }
+            index! < length -> if {
+                index! => start
+                index! < length and (requirement -> byte(index!)) != 32
+                    -> while { index! + 1 => index! }
+                requirement -> slice(start, index! - start) => term
+                term -> acceptTerm(candidateSource, candidate) => termResult
+                termResult.status != 0 -> if {
+                    2 => status!
+                    false => accepted!
+                } else { termResult.accepted => accepted! }
+                true => termSeen!
+            }
+        }
+    status! == 0 and not termSeen! -> if {
+        3 => status!
+        false => accepted!
+    }
+    RequirementResult { status: status!, accepted: accepted! }
+}

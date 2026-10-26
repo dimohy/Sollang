@@ -1,0 +1,194 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.syntax as syntax
+
+# Text literal decoding is a source-only lowering concern. Keeping it in the
+# logical LLVM text module avoids an aggregate adapter while giving it an
+# independently navigable file and no runtime allocation.
+literalIsRaw context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> Bool {
+    context.sources[sourceModule] -> syntax.rawStringTokenLayout(token) => layout
+    layout.raw
+}
+
+# Metadata String tokens retain their lexer content. Only an actual source-local
+# StringExpression admits multiline raw normalization.
+literalLayout context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> syntax.RawStringLayout {
+    context.sources[sourceModule] -> syntax.rawStringTokenLayout(token) => bounds
+    not bounds.raw -> if { bounds -> return }
+    context.ranges[sourceModule] => range
+    0 => nodeIndex!
+    nodeIndex! < range.astCount -> while {
+        context.nodes[range.astStart + nodeIndex!] => node
+        node.kind == 13 and node.payloadToken >= 0 and node.payloadToken < range.tokenCount
+            -> if {
+                context.tokens[range.tokenStart + node.payloadToken] => candidate
+                candidate.span.start == token.span.start and candidate.span.length == token.span.length
+                    -> if { context.sources[sourceModule] -> syntax.rawStringLayout(token) -> return }
+            }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    bounds
+}
+
+literalStart context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
+    context -> literalLayout(sourceModule, token) => layout
+    layout.contentStart
+}
+
+literalEnd context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
+    context -> literalLayout(sourceModule, token) => layout
+    layout.contentEnd
+}
+
+# Returns the decoded byte for a supported quoted-string escape, or -1 when
+# the current source byte must be emitted literally. Raw strings never decode
+# escapes. This mirrors the reference parser's exact escape set.
+literalDecodedEscape context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken, byteIndex: UIntSize, byteEnd: UIntSize -> Int {
+    -1 => decoded!
+    not (context -> literalIsRaw(sourceModule, token))
+        and byteIndex + 1 < byteEnd
+        and (context.sources[sourceModule] -> byte(byteIndex)) == 92
+        -> if {
+            context.sources[sourceModule] -> byte(byteIndex + 1) => escaped
+            escaped == 110 -> if { 10 => decoded! }
+            escaped == 114 -> if { 13 => decoded! }
+            escaped == 116 -> if { 9 => decoded! }
+            escaped == 92 -> if { 92 => decoded! }
+        }
+    decoded!
+}
+
+literalLength context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> UIntSize {
+    context -> literalLayout(sourceModule, token) => layout
+    layout.raw -> if {
+        not layout.multiline -> if { layout.contentEnd - layout.contentStart -> return }
+        UIntSize(0) => rawLength!
+        layout.contentStart => cursor!
+        cursor! < layout.contentEnd -> while {
+            context.sources[sourceModule] -> syntax.rawStringLine(layout, cursor!) => line
+            rawLength! + line.end - line.start => rawLength!
+            line.newline -> if { rawLength! + 1 => rawLength! }
+            line.next => cursor!
+        }
+        rawLength! -> return
+    }
+    context -> literalStart(sourceModule, token) => byteIndex!
+    context -> literalEnd(sourceModule, token) => byteEnd
+    UIntSize(0) => length!
+    byteIndex! < byteEnd -> while {
+        byteIndex! < byteEnd -> if {
+            context.sources[sourceModule] -> byte(byteIndex!) => currentByte
+            context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
+            decodedEscape >= 0 -> if {
+                length! + 1 => length!
+                byteIndex! + 1 => byteIndex!
+            } else {
+                currentByte == 13
+                    and byteIndex! + 1 < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + 1)) == 10
+                    -> if {
+                        length! + 1 => length!
+                        byteIndex! + 1 => byteIndex!
+                    } else {
+                        length! + 1 => length!
+                    }
+            }
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    length!
+}
+
+literalHexDigit value: UInt16 -> Text {
+    "F" => result!
+    value == 0 -> if { "0" => result! }
+    value == 1 -> if { "1" => result! }
+    value == 2 -> if { "2" => result! }
+    value == 3 -> if { "3" => result! }
+    value == 4 -> if { "4" => result! }
+    value == 5 -> if { "5" => result! }
+    value == 6 -> if { "6" => result! }
+    value == 7 -> if { "7" => result! }
+    value == 8 -> if { "8" => result! }
+    value == 9 -> if { "9" => result! }
+    value == 10 -> if { "A" => result! }
+    value == 11 -> if { "B" => result! }
+    value == 12 -> if { "C" => result! }
+    value == 13 -> if { "D" => result! }
+    value == 14 -> if { "E" => result! }
+    result!
+}
+
+literalEmitEscapedByte value: UInt8 -> Unit uses Console {
+    "\" -> print
+    UInt16(value) / 16 -> literalHexDigit -> print
+    UInt16(value) % 16 -> literalHexDigit -> print
+}
+
+literalEmitConstant context: ref emitterContext.EmitContext, sourceModule: Int, token: syntax.SyntaxToken -> Unit uses Console {
+    "c" -> print
+    context.sources[sourceModule] -> slice(token.span.start, UIntSize(1)) -> print
+    context -> literalLayout(sourceModule, token) => layout
+    layout.raw -> if {
+        layout.contentStart => cursor!
+        cursor! < layout.contentEnd -> while {
+            layout.multiline -> if {
+                context.sources[sourceModule] -> syntax.rawStringLine(layout, cursor!)
+            } else {
+                syntax.RawStringLine { start: cursor!, end: layout.contentEnd, next: layout.contentEnd, newline: false, issue: false }
+            } => line
+            line.start => byteIndex!
+            byteIndex! < line.end -> while {
+                context -> literalEmitSourceByte(sourceModule, byteIndex!)
+                byteIndex! + 1 => byteIndex!
+            }
+            line.newline -> if { UInt8(10) -> literalEmitEscapedByte }
+            line.next => cursor!
+        }
+        context.sources[sourceModule] -> slice(token.span.start, UIntSize(1)) -> println
+        return
+    }
+    context -> literalStart(sourceModule, token) => byteIndex!
+    context -> literalEnd(sourceModule, token) => byteEnd
+    byteIndex! < byteEnd -> while {
+        byteIndex! < byteEnd -> if {
+            context.sources[sourceModule] -> byte(byteIndex!) => textByte!
+            context -> literalDecodedEscape(sourceModule, token, byteIndex!, byteEnd) => decodedEscape
+            decodedEscape >= 0 -> if {
+                UInt8(decodedEscape) => textByte!
+                byteIndex! + 1 => byteIndex!
+            } else {
+                textByte! == 13
+                    and byteIndex! + 1 < byteEnd
+                    and (context.sources[sourceModule] -> byte(byteIndex! + 1)) == 10
+                    -> if {
+                        10 => textByte!
+                        byteIndex! + 1 => byteIndex!
+                    }
+            }
+            textByte! >= 32
+                and textByte! <= 126
+                and textByte! != 34
+                and textByte! != 92 -> if {
+                    context.sources[sourceModule] -> slice(byteIndex!, UIntSize(1)) -> print
+                } else {
+                    textByte! -> literalEmitEscapedByte
+                }
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    context.sources[sourceModule] -> slice(token.span.start, UIntSize(1)) -> println
+}
+
+literalEmitSourceByte context: ref emitterContext.EmitContext, sourceModule: Int, byteIndex: UIntSize -> Unit uses Console {
+    context.sources[sourceModule] -> byte(byteIndex) => nativeByte
+    nativeByte >= 32
+        and nativeByte <= 126
+        and nativeByte != 34
+        and nativeByte != 92 -> if {
+            context.sources[sourceModule] -> slice(byteIndex, UIntSize(1)) -> print
+        } else {
+            nativeByte -> literalEmitEscapedByte
+        }
+}

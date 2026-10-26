@@ -180,7 +180,9 @@ internal sealed partial class LlvmEmitter
             _ => throw new SollangException("contextual numeric emission expects a binary numeric expression")
         };
         var left = EmitFunctionArgumentExpression(leftExpression, expectedType);
+        var savedLeft = PreserveAsyncExpressionValue(left, ownsValue: false);
         var right = EmitFunctionArgumentExpression(rightExpression, expectedType);
+        left = RestoreAsyncExpressionValue(savedLeft, left);
         return EmitNumericBinary(left, right, integerOperation, floatOperation, prefix);
     }
 
@@ -240,7 +242,9 @@ internal sealed partial class LlvmEmitter
         {
             left = EmitTransientText(left);
         }
+        var savedLeft = PreserveAsyncExpressionValue(left, ownsValue: false);
         var right = EmitFunctionArgumentExpression(rightExpression, left.Type);
+        left = RestoreAsyncExpressionValue(savedLeft, left);
         if (right is RuntimeFormattedText or RuntimeTextChoice)
         {
             right = EmitTransientText(right);

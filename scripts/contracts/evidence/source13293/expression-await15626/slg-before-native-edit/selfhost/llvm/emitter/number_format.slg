@@ -1,0 +1,227 @@
+namespace sollang.compiler.llvm.emitter.number_format
+
+public emitIntFormatRuntime: -> Unit uses Console {
+    """
+    define internal i64 @sollang_format_u64(ptr %dest, i64 %value) {
+    entry:
+      br label %count
+    count:
+      %count_n = phi i64 [ %value, %entry ], [ %count_q, %count_more ]
+      %length = phi i64 [ 1, %entry ], [ %next_length, %count_more ]
+      %count_q = udiv i64 %count_n, 10
+      %count_done = icmp eq i64 %count_q, 0
+      br i1 %count_done, label %write_entry, label %count_more
+    count_more:
+      %next_length = add i64 %length, 1
+      br label %count
+    write_entry:
+      %last_index = sub i64 %length, 1
+      br label %write
+    write:
+      %write_n = phi i64 [ %value, %write_entry ], [ %write_q, %write ]
+      %index = phi i64 [ %last_index, %write_entry ], [ %previous_index, %write ]
+      %digit = urem i64 %write_n, 10
+      %write_q = udiv i64 %write_n, 10
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      %slot = getelementptr i8, ptr %dest, i64 %index
+      store i8 %ascii, ptr %slot, align 1
+      %previous_index = sub i64 %index, 1
+      %write_done = icmp eq i64 %write_q, 0
+      br i1 %write_done, label %return, label %write
+    return:
+      ret i64 %length
+    }
+    define internal i64 @sollang_format_i64(ptr %dest, i64 %value) {
+    entry:
+      %negative = icmp slt i64 %value, 0
+      br i1 %negative, label %negative_value, label %positive_value
+    negative_value:
+      store i8 45, ptr %dest, align 1
+      %digits_dest = getelementptr i8, ptr %dest, i64 1
+      %magnitude = sub i64 0, %value
+      %negative_digits = call i64 @sollang_format_u64(ptr %digits_dest, i64 %magnitude)
+      %negative_length = add i64 %negative_digits, 1
+      ret i64 %negative_length
+    positive_value:
+      %positive_length = call i64 @sollang_format_u64(ptr %dest, i64 %value)
+      ret i64 %positive_length
+    }
+    """ -> println
+}
+
+public emitIntTextRuntime: -> Unit uses Console {
+    """
+    define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+    entry:
+      %buffer = alloca [12 x i8], align 1
+      %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+      %wide = sext i32 %value to i64
+      %negative = icmp slt i64 %wide, 0
+      %negated = sub i64 0, %wide
+      %magnitude = select i1 %negative, i64 %negated, i64 %wide
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+    """
+    define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+    entry:
+      %buffer = alloca [21 x i8], align 1
+      %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+      %negative_value = icmp slt i64 %value, 0
+      %negative = and i1 %signed, %negative_value
+      %negated = sub i64 0, %value
+      %magnitude = select i1 %negative, i64 %negated, i64 %value
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+}
+
+public emitBoolTextRuntime: -> Unit uses Console {
+    """
+    @sollang_runtime_bool_true = private constant [4 x i8] c"true"
+    @sollang_runtime_bool_false = private constant [5 x i8] c"false"
+    define internal void @sollang_runtime_print_i1(i1 %value, i1 %newline) {
+    entry:
+      %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
+      %length = select i1 %value, i64 4, i64 5
+      call void @sollang_runtime_print(ptr %data, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+}
+
+public emitIntStandardErrorRuntime: -> Unit uses Console {
+    """
+    define internal void @sollang_runtime_eprint_i32(i32 %value, i1 %newline) {
+    entry:
+      %buffer = alloca [12 x i8], align 1
+      %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+      %wide = sext i32 %value to i64
+      %negative = icmp slt i64 %wide, 0
+      %negated = sub i64 0, %wide
+      %magnitude = select i1 %negative, i64 %negated, i64 %wide
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sollang_runtime_eprint(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+    """
+    define internal void @sollang_runtime_eprint_i64(i64 %value, i1 %signed, i1 %newline) {
+    entry:
+      %buffer = alloca [21 x i8], align 1
+      %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+      %negative_value = icmp slt i64 %value, 0
+      %negative = and i1 %signed, %negative_value
+      %negated = sub i64 0, %value
+      %magnitude = select i1 %negative, i64 %negated, i64 %value
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sollang_runtime_eprint(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+}
+
+public emitBoolStandardErrorRuntime: -> Unit uses Console {
+    """
+    define internal void @sollang_runtime_eprint_i1(i1 %value, i1 %newline) {
+    entry:
+      %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
+      %length = select i1 %value, i64 4, i64 5
+      call void @sollang_runtime_eprint(ptr %data, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+}

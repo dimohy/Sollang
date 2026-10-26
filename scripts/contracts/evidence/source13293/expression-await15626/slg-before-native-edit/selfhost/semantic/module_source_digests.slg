@@ -1,0 +1,118 @@
+namespace sollang.compiler.semantic.module_source_digests
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import std.crypto.sha256 as sha256
+import sys.text as text
+import syntax.generated.slg as grammar
+
+public struct ModuleDigest {
+    public name: [UInt64; ~]
+    public bytes: [UInt8; 32]
+    public status: Int
+}
+
+public logicalName package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], sourceModule: Int -> [UInt64; ~] {
+    [UInt64; ~] => words!
+    sourceModule < 0 or sourceModule >= (package.ranges -> len) or sourceModule >= (identities -> len)
+        -> if { words! -> return }
+    identities[sourceModule] => identity
+    package.ranges[sourceModule] => range
+    range.tokenStart => tokenIndex!
+    tokenIndex! < range.tokenStart + range.tokenCount
+        -> while {
+            package.tokens[tokenIndex!] => token
+            token.span.start >= identity.pathStart and token.span.start < identity.pathStart + identity.pathLength
+                and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
+                -> if {
+                    UIntSize(0) => byteIndex!
+                    byteIndex! < token.span.length -> while {
+                        words! -> push(UInt64(package.sources[sourceModule] -> byte(token.span.start + byteIndex!)))
+                        byteIndex! + 1 => byteIndex!
+                    }
+                }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    words!
+}
+
+public sameName left: ref [UInt64; ~], right: ref [UInt64; ~] -> Bool {
+    (left -> len) != (right -> len) -> if { false -> return }
+    0 => index!
+    index! < (left -> len) -> while {
+        left[index!] != right[index!] -> if { false -> return }
+        index! + 1 => index!
+    }
+    true
+}
+
+appendWord value: UInt64, bytes: mut [UInt8; ~] -> Unit {
+    value => remaining!
+    0..<8 -> each {
+        bytes -> push(UInt8(remaining! % 256))
+        remaining! / 256 => remaining!
+    }
+}
+
+# The caller supplies the same resolved source paths used by compilation.
+# Match C# HashModule: ordinal path order, LE64 byte lengths, path and source
+# bytes for every file in the exact parsed namespace, including private bodies.
+public capture package: ref analysis.PackageAnalysis, identities: ref [modules.ModuleIdentity; ~], paths: ref [Text; ~], sourceModule: Int -> ModuleDigest {
+    ModuleDigest { name: [UInt64; ~], bytes: [0; 32], status: 1 } => invalid
+    (paths -> len) != (package.sources -> len) or (identities -> len) != (package.sources -> len)
+        or sourceModule < 0 or sourceModule >= (package.sources -> len)
+        -> if { invalid -> return }
+    package -> logicalName(identities, sourceModule) => name
+    [Int; ~] => members!
+    0 => candidate!
+    candidate! < (package.sources -> len) -> while {
+        modules.sameLogicalAnalyzedSource(package.sources, identities, sourceModule, candidate!, package.tokens, package.ranges)
+            -> if {
+                (paths[candidate!] -> len) == 0 -> if { invalid -> return }
+                members! -> each prior {
+                    (paths[prior] -> text.compareOrdinal(paths[candidate!])) == 0
+                        -> if { invalid -> return }
+                }
+                members! -> push(candidate!)
+            }
+        candidate! + 1 => candidate!
+    }
+    [Bool; ~] => emitted!
+    members! -> each { emitted! -> push(false) }
+    sha256.create() => hasher!
+    0 => ordinal!
+    ordinal! < (members! -> len) -> while {
+        -1 => selected!
+        0 => index!
+        index! < (members! -> len) -> while {
+            not emitted![index!] -> if {
+                selected! < 0 -> if { index! => selected! } else {
+                    (paths[members![index!]] -> text.compareOrdinal(paths[members![selected!]])) < 0
+                        -> if { index! => selected! }
+                }
+            }
+            index! + 1 => index!
+        }
+        selected! < 0 -> if { invalid -> return }
+        members![selected!] => member
+        [UInt8; ~] => bytes!
+        UInt64(paths[member] -> len) -> appendWord(bytes!)
+        UIntSize(0) => pathByte!
+        pathByte! < (paths[member] -> len) -> while {
+            bytes! -> push(paths[member] -> byte(pathByte!))
+            pathByte! + 1 => pathByte!
+        }
+        UInt64(package.sources[member] -> len) -> appendWord(bytes!)
+        UIntSize(0) => sourceByte!
+        sourceByte! < (package.sources[member] -> len)
+            -> while {
+                bytes! -> push(package.sources[member] -> byte(sourceByte!))
+                sourceByte! + 1 => sourceByte!
+            }
+        hasher! -> update(bytes!)
+        true => emitted![selected!]
+        ordinal! + 1 => ordinal!
+    }
+    hasher! -> finish => digest
+    ModuleDigest { name: name, bytes: digest, status: 0 }
+}

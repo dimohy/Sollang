@@ -1,0 +1,345 @@
+namespace sollang.compiler.source_style
+
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import syntax.generated.slg as grammar
+import sys.file as file
+
+public struct StyleNote {
+    public code: Int
+    public line: Int
+    public column: Int
+    public conditionLength: Int
+    public role: Int
+    public controlArrowStart: UIntSize
+}
+
+struct SourceLocation {
+    line: Int
+    column: Int
+}
+
+public inlineControlLimit: -> UIntSize => 45
+
+trivia kind: Int -> Bool {
+    kind == grammar.triviaIdWhitespace() or kind == grammar.triviaIdComment()
+}
+
+identifierEquals source: file.SourceText, token: syntax.SyntaxToken, expected: Text -> Bool {
+    token.kind == grammar.tokenIdIdentifier() and token.span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    matches! and index! < token.span.length -> while {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!))
+            -> if { false => matches! }
+        index! + 1 => index!
+    }
+    matches!
+}
+
+roleAt source: file.SourceText, token: syntax.SyntaxToken -> Int {
+    source -> identifierEquals(token, "if") -> if { 0 -> return }
+    source -> identifierEquals(token, "unless") -> if { 1 -> return }
+    source -> identifierEquals(token, "while") -> if { 2 -> return }
+    -1
+}
+
+nextOnLine tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! < (tokens -> len) -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdNewLine() -> if { -1 -> return }
+        not (token.kind -> trivia) -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+previousOnLine tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdNewLine() -> if { -1 -> return }
+        not (token.kind -> trivia) -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+previousSignificant tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        not (tokens[index!].kind -> trivia) -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+previousControlConditionToken tokens: ref [syntax.SyntaxToken; ~], start: Int -> Int {
+    start => index!
+    index! >= 0 -> while {
+        tokens[index!].kind => kind
+        not (kind -> trivia) and kind != grammar.tokenIdNewLine()
+            -> if { index! -> return }
+        index! - 1 => index!
+    }
+    -1
+}
+
+matchingOpening tokens: ref [syntax.SyntaxToken; ~], closing: Int -> Int {
+    0 => depth!
+    closing => index!
+    index! >= 0 -> while {
+        tokens[index!].kind == grammar.tokenIdRightParen()
+            -> if { depth! + 1 => depth! }
+        tokens[index!].kind == grammar.tokenIdLeftParen()
+            -> if {
+                depth! - 1 => depth!
+                depth! == 0 -> if { index! -> return }
+            }
+        index! - 1 => index!
+    }
+    -1
+}
+
+beginsExpression tokens: ref [syntax.SyntaxToken; ~], opening: Int -> Bool {
+    tokens -> previousSignificant(opening - 1) => previous
+    previous < 0 -> if { true -> return }
+    tokens[previous].kind => kind
+    kind == grammar.tokenIdNewLine()
+        or kind == grammar.tokenIdLeftBrace()
+        or kind == grammar.tokenIdLeftBracket()
+        or kind == grammar.tokenIdLeftParen()
+        or kind == grammar.tokenIdComma()
+        or kind == grammar.tokenIdColon()
+        or kind == grammar.tokenIdFatArrow()
+}
+
+collectLineStarts source: file.SourceText -> [UIntSize; ~] {
+    [UIntSize; ~] => starts!
+    starts! -> push(0)
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        source -> byte(index!) => current
+        current == 13 -> if {
+            index! + 1 < (source -> len) and (source -> byte(index! + 1)) == 10
+                -> if { index! + 1 => index! }
+            starts! -> push(index! + 1)
+        } else {
+            current == 10 -> if { starts! -> push(index! + 1) }
+        }
+        index! + 1 => index!
+    }
+    starts!
+}
+
+tokenTextLength source: Text, token: syntax.SyntaxToken -> Int {
+    token.kind == grammar.tokenIdNumber() -> if {
+        source -> unicodeIdentifier.utf16Length(token.span.start, token.span -> end) => numberLength!
+        numberLength! < 0 -> if { -1 -> return }
+        token.span.start => index!
+        index! < (token.span -> end) -> while {
+            (source -> byte(index!)) == '_' -> if { numberLength! - 1 => numberLength! }
+            index! + 1 => index!
+        }
+        numberLength! -> return
+    }
+    token.kind == grammar.tokenIdCharacter() -> if {
+        source -> syntax.decodeCharacterLiteral(token.span) -> when {
+            Some(value) {
+                value => scalar!
+                1 => digits!
+                scalar! >= 10 -> while {
+                    scalar! / 10 => scalar!
+                    digits! + 1 => digits!
+                }
+                digits! -> return
+            }
+            None { -1 -> return }
+        }
+    }
+    token.span.start => start!
+    token.span -> end => end!
+    token.kind == grammar.tokenIdString() -> if {
+        UIntSize(1) => delimiterWidth!
+        token.span.length >= 6
+            and (source -> byte(start! + 1)) == 34
+            and (source -> byte(start! + 2)) == 34
+            -> if {
+                0 => delimiterWidth!
+                start! + delimiterWidth! < end! and (source -> byte(start! + delimiterWidth!)) == 34
+                    -> while { delimiterWidth! + 1 => delimiterWidth! }
+            }
+        start! + delimiterWidth! => start!
+        end! - delimiterWidth! => end!
+    }
+    source -> unicodeIdentifier.utf16Length(start!, end!)
+}
+
+lineIndex lineStarts: ref [UIntSize; ~], offset: UIntSize -> Int {
+    0 => low!
+    lineStarts -> len => high!
+    low! + 1 < high! -> while {
+        (low! + high!) / 2 => middle
+        lineStarts[middle] <= offset -> if {
+            middle => low!
+        } else {
+            middle => high!
+        }
+    }
+    low!
+}
+
+location source: Text, lineStarts: ref [UIntSize; ~], offset: UIntSize -> SourceLocation {
+    lineStarts -> lineIndex(offset) => row
+    source -> unicodeIdentifier.utf16Length(lineStarts[row], offset) => width
+    SourceLocation {
+        line: row + 1
+        column: width >= 0 -> if { width + 1 } else { -1 }
+    }
+}
+
+public analyze sourceText: Text -> [StyleNote; ~] {
+    sourceText -> file.borrowText => source
+    source -> lexer.lexSource => tokens
+    [StyleNote; ~] => notes!
+    0 => tokenIndex!
+    tokenIndex! < (tokens -> len) -> while {
+        # The managed lexer aborts before style analysis on an invalid token.
+        tokens[tokenIndex!].kind == grammar.tokenIdInvalid()
+            -> if { notes! -> return }
+        tokenIndex! + 1 => tokenIndex!
+    }
+    source -> collectLineStarts => lineStarts
+    0 => arrowIndex!
+    arrowIndex! < (tokens -> len) -> while {
+        tokens[arrowIndex!].kind == grammar.tokenIdArrow()
+            -> if {
+                lineStarts -> lineIndex(tokens[arrowIndex!].span.start) => arrowLine
+                tokens -> nextOnLine(arrowIndex! + 1) => targetIndex
+                targetIndex >= 0
+                    and (lineStarts -> lineIndex(tokens[targetIndex].span.start)) == arrowLine
+                    -> if {
+                        source -> roleAt(tokens[targetIndex]) => role
+                        role >= 0 -> if {
+                            tokens -> previousOnLine(arrowIndex! - 1) => endIndex
+                            endIndex >= 0 -> if {
+                                endIndex => startIndex!
+                                tokens -> previousOnLine(startIndex! - 1) => previous!
+                                previous! >= 0
+                                    and (lineStarts -> lineIndex(tokens[previous!].span.start)) == arrowLine
+                                    and tokens[previous!].kind != grammar.tokenIdLeftBrace()
+                                    and tokens[previous!].kind != grammar.tokenIdFatArrow()
+                                    -> while {
+                                        previous! => startIndex!
+                                        tokens -> previousOnLine(startIndex! - 1) => previous!
+                                    }
+                                sourceText -> location(lineStarts, tokens[startIndex!].span.start) => conditionLocation
+                                sourceText -> location(lineStarts, tokens[endIndex].span.start) => endLocation
+                                sourceText -> location(lineStarts, tokens[arrowIndex!].span.start) => arrowLocation
+                                sourceText -> tokenTextLength(tokens[endIndex]) => endTextLength
+                                endLocation.column + endTextLength - conditionLocation.column => conditionLength
+                                endLocation.line == arrowLocation.line
+                                    and conditionLocation.column > 0 and endLocation.column > 0
+                                    and endTextLength >= 0 and conditionLength >= Int(inlineControlLimit())
+                                    -> if {
+                                        notes! -> push(StyleNote {
+                                            code: 1
+                                            line: conditionLocation.line
+                                            column: conditionLocation.column
+                                            conditionLength: conditionLength
+                                            role: role
+                                            controlArrowStart: tokens[arrowIndex!].span.start
+                                        })
+                                    }
+
+                            }
+                            tokens -> previousControlConditionToken(arrowIndex! - 1) => closingIndex
+                            closingIndex >= 0 and tokens[closingIndex].kind == grammar.tokenIdRightParen()
+                                -> if {
+                                    tokens -> matchingOpening(closingIndex) => openingIndex
+                                    openingIndex >= 0 and (tokens -> beginsExpression(openingIndex))
+                                        -> if {
+                                            sourceText -> location(lineStarts, tokens[openingIndex].span.start) => openingLocation
+                                            openingLocation.column > 0 -> if {
+                                                notes! -> push(StyleNote {
+                                                    code: 2
+                                                    line: openingLocation.line
+                                                    column: openingLocation.column
+                                                    conditionLength: 0
+                                                    role: role
+                                                    controlArrowStart: 0
+                                                })
+                                            }
+                                        }
+                                }
+                        }
+                    }
+            }
+        arrowIndex! + 1 => arrowIndex!
+    }
+    notes!
+}
+
+public longInlineControlArrows sourceText: Text -> [UIntSize; ~] {
+    sourceText -> analyze => notes
+    [UIntSize; ~] => arrows!
+    notes -> each note {
+        note.code == 1 -> if { arrows! -> push(note.controlArrowStart) }
+    }
+    arrows!
+}
+
+appendNamespaceToken source: Text, token: syntax.SyntaxToken, bytes: mut [UInt8; ~] -> Unit {
+    UIntSize(0) => index!
+    index! < token.span.length -> while {
+        bytes -> push(source -> byte(token.span.start + index!))
+        index! + 1 => index!
+    }
+}
+
+namespacePath source: Text, tokens: ref [syntax.SyntaxToken; ~], keyword: Int, storage: mut Arena -> Text {
+    tokens -> nextOnLine(keyword + 1) => first
+    first < 0 -> if { "" -> return }
+    tokens[first].kind != grammar.tokenIdIdentifier()
+        -> if { "" -> return }
+    [UInt8; ~] => bytes!
+    source -> appendNamespaceToken(tokens[first], bytes!)
+    tokens -> nextOnLine(first + 1) => next!
+    next! >= 0 and tokens[next!].kind == grammar.tokenIdDot()
+        -> while {
+            tokens -> nextOnLine(next! + 1) => segment
+            segment < 0 -> if { "" -> return }
+            tokens[segment].kind != grammar.tokenIdIdentifier()
+                -> if { "" -> return }
+            bytes! -> push(46)
+            source -> appendNamespaceToken(tokens[segment], bytes!)
+            tokens -> nextOnLine(segment + 1) => next!
+        }
+    bytes! -> file.borrowBytes => name
+    name -> slice(0, name -> len) -> materialize(storage)
+}
+
+public moduleName sourceText: Text, storage: mut Arena -> Text {
+    sourceText -> file.borrowText => source
+    source -> lexer.lexSource => tokens
+    0 => depth!
+    0 => index!
+    index! < (tokens -> len) -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdInvalid()
+            -> if { "" -> return }
+        token.kind == grammar.tokenIdLeftBrace() -> if {
+            depth! + 1 => depth!
+        } else {
+            token.kind == grammar.tokenIdRightBrace() -> if {
+                depth! - 1 => depth!
+            } else {
+                depth! == 0 and (source -> identifierEquals(token, "namespace"))
+                    -> if { sourceText -> namespacePath(tokens, index!, storage) -> return }
+            }
+        }
+        index! + 1 => index!
+    }
+    ""
+}

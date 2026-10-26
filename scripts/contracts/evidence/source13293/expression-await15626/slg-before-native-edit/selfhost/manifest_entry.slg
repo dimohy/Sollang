@@ -1,0 +1,28 @@
+namespace sollang.compiler.manifest_entry
+
+import sys.path as path
+import sys.directory.kind as kinds
+
+# Directory.Exists and File.Exists return false for unavailable metadata.
+# Query follows links; its canonical path does not replace lexical identity.
+hasKind value: ref path.Path, expected: kinds.Kind -> Bool uses File {
+    value -> query -> when {
+        Ok(info) { (info.kind -> kinds.code) == (expected -> kinds.code) }
+        Err(_) { false }
+    }
+}
+
+public fileExists value: ref path.Path -> Bool uses File => value -> hasKind(kinds.Kind.File)
+
+# Only a real directory selects the default manifest filename. Native lexical
+# absolute resolution also works for nonexistent paths and keeps their names.
+public resolve option: Text, fileName: Text, style: path.Style -> Result<path.Path, Text> uses File {
+    option -> path.fromText(style) => request
+    request -> hasKind(kinds.Kind.Directory) -> if {
+        request -> join(fileName) -> when {
+            Ok(value) { value -> absolute -> return }
+            Err(error) { Result<path.Path, Text>.Err(error) -> return }
+        }
+    }
+    request -> absolute
+}

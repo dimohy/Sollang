@@ -1,0 +1,674 @@
+namespace sollang.compiler.diagnostics
+
+import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
+import sollang.compiler.ast as ast
+import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import syntax.generated.slg as grammar
+import sys.runtime as runtime
+
+public struct SyntaxDiagnostic {
+    public code: Int
+    public span: syntax.SourceSpan
+    public foundKind: Int
+    public tokenIndex: Int
+}
+
+# Code 1 is an invalid source byte. Code 2 is an unexpected token at the
+# furthest point reached by any parser alternative. Code 3 is an unterminated
+# string literal, code 4 is an invalid character literal, code 5 is an
+# unterminated character literal, code 6 is a duplicate structural-product
+# field label within one product root, code 7 is an unterminated raw string,
+# code 8 is a missing statement boundary, code 9 is a missing expression, and
+# code 10 is an invalid map access mode after the committed map keyword;
+# codes 11 and 12 require the opening brace or map mode after a bare keyword;
+# code 13 rejects a file-size clause on a read map at its size keyword;
+# code 14 rejects a noninteger or out-of-range concrete fixed-array type length.
+# Codes 15-18 are ordered raw expression layout failures at its opening token.
+# Codes 19-21 are committed interpolation boundary failures at the string token.
+# Code 22 wraps an ordinary expression-fragment diagnostic at the same token.
+# Code 30 rejects public local functions at their public token.
+# Code 23 rejects a nonpositive or out-of-range concrete bounded-array capacity.
+# Code 24 rejects an invalid empty-array capacity hint; code 25 rejects a repeat
+# count after the array's closing bracket has been consumed.
+public numericExtentSyntaxMessage code: Int -> Text {
+    code == 29 -> if { "bounded dictionary capacity must be positive and at least the initializer count" -> return }
+    code == 28 -> if { "dictionary capacity hint must be a non-negative integer literal" -> return }
+    code == 26 -> if { "bounded dictionary capacity must be a positive integer literal" -> return }
+    code == 27 -> if { "BitSet size must be a positive integer literal" -> return }
+    code == 24 -> if { "array capacity hint must be a non-negative integer literal" -> return }
+    code == 25 -> if { "array repeat count must be a non-negative integer literal" -> return }
+    code == 23 -> if { "bounded array capacity must be a positive integer literal" } else {
+        "fixed array length must be a nonnegative integer literal"
+    }
+}
+
+public analyze source: Text -> [SyntaxDiagnostic; ~] {
+    source -> analyzeRule(grammar.startRule())
+}
+
+analyzeRule source: Text, startRule: Int -> [SyntaxDiagnostic; ~] {
+    source -> prepareRule(startRule) => prepared
+    prepared.diagnostics => diagnostics
+    diagnostics
+}
+
+public struct PreparedSyntax {
+    public tokens: [syntax.SyntaxToken; ~]
+    public nodes: [ast.AstNode; ~]
+    public diagnostics: [SyntaxDiagnostic; ~]
+}
+
+public prepare source: Text -> PreparedSyntax {
+    source -> prepareRule(grammar.startRule())
+}
+
+prepareRule source: Text, startRule: Int -> PreparedSyntax {
+    source -> lexer.lex => tokens
+    parser.ParseRequest { source: source, startRule: startRule } -> parser.parsePreparedRuleEvents(tokens) => events
+    false => earlyIssue!
+    0 => eventIndex!
+    eventIndex! < (events -> len) and not earlyIssue!
+        -> while {
+            events[eventIndex!] => event
+            event.kind == 7 or event.kind == 8 -> if { true => earlyIssue! }
+            eventIndex! + 1 => eventIndex!
+        }
+    events[Int(events -> len) - 1].value == 1 and not earlyIssue!
+        -> if {
+            source -> ast.lowerPreparedRule(startRule, tokens, events)
+        } else { [ast.AstNode; ~] } => nodes
+    source -> analyzePreparedRule(startRule, tokens, events, nodes) => diagnostics
+    PreparedSyntax { tokens: tokens, nodes: nodes, diagnostics: diagnostics }
+}
+
+analyzePreparedRule source: Text, startRule: Int, tokens: ref [syntax.SyntaxToken; ~], events: ref [parser.ParseEvent; ~], nodes: ref [ast.AstNode; ~] -> [SyntaxDiagnostic; ~] {
+    [SyntaxDiagnostic; ~] => diagnostics!
+    events -> len => eventCount
+    events[eventCount - 1] => outcome
+
+    0 => stringIssueEventIndex!
+    stringIssueEventIndex! < eventCount -> while {
+        events[stringIssueEventIndex!] => event
+        event.kind == 7 or event.kind == 8 -> if {
+            tokens[event.tokenIndex] => token
+            event.kind == 7 -> if { 14 + event.value } else { event.value } => code
+            diagnostics! -> push(SyntaxDiagnostic {
+                code: code
+                span: token.span
+                foundKind: token.kind
+                tokenIndex: event.tokenIndex
+            })
+            diagnostics! -> return
+        }
+        stringIssueEventIndex! + 1 => stringIssueEventIndex!
+    }
+
+    outcome.value == 0 -> if {
+        source -> len => sourceLength
+        syntax.SourceSpan { fileId: 0, start: sourceLength, length: 0 } => failureSpan!
+        grammar.tokenIdEnd() => foundKind!
+        outcome.tokenIndex < (tokens -> len) -> if {
+            tokens[outcome.tokenIndex] => found
+            found.span.fileId => failureSpan!.fileId
+            found.span.start => failureSpan!.start
+            found.span.length => failureSpan!.length
+            found.kind => foundKind!
+        }
+        foundKind! == grammar.tokenIdInvalid() -> if {
+            failureSpan!.length > 0
+                and (source -> byte(failureSpan!.start)) == 34
+                -> if {
+                    failureSpan!.length >= 3
+                        and (source -> byte(failureSpan!.start + 1)) == 34
+                        and (source -> byte(failureSpan!.start + 2)) == 34
+                        -> if { 7 } else { 3 }
+                } else {
+                    failureSpan!.length > 0
+                        and (source -> byte(failureSpan!.start)) == 39
+                        -> if {
+                            failureSpan!.length > 1
+                                and (source -> byte(failureSpan!.start + failureSpan!.length - 1)) == 39
+                                -> if { 4 } else { 5 }
+                        } else { 1 }
+                }
+        } else { 2 } => code!
+        code! == 2 -> if {
+            false => expressionRequired!
+            outcome.tokenIndex > 0 -> if {
+                outcome.tokenIndex - 1 => previousTokenIndex!
+                previousTokenIndex! >= 0
+                    and tokens[previousTokenIndex!].kind >= grammar.triviaIdWhitespace()
+                    -> while { previousTokenIndex! - 1 => previousTokenIndex! }
+                previousTokenIndex! >= 0 -> if {
+                    tokens[previousTokenIndex!].kind => previousKind
+                    previousKind == grammar.tokenIdPlus()
+                        or previousKind == grammar.tokenIdMinus()
+                        or previousKind == grammar.tokenIdStar()
+                        or previousKind == grammar.tokenIdSlash()
+                        or previousKind == grammar.tokenIdPercent()
+                        or previousKind == grammar.tokenIdComma()
+                        or previousKind == grammar.tokenIdLeftParen()
+                        or previousKind == grammar.tokenIdLess()
+                        or previousKind == grammar.tokenIdLessEqual()
+                        or previousKind == grammar.tokenIdGreater()
+                        or previousKind == grammar.tokenIdGreaterEqual()
+                        or previousKind == grammar.tokenIdEqualEqual()
+                        or previousKind == grammar.tokenIdBangEqual()
+                        -> if { true => expressionRequired! }
+                    previousKind == grammar.tokenIdIdentifier() -> if {
+                        tokens[previousTokenIndex!] => previousToken
+                        source -> slice(previousToken.span.start, previousToken.span.length) => previousText
+                        previousText == "and" or previousText == "or"
+                            or previousText == "not" or previousText == "box"
+                            -> if { true => expressionRequired! }
+                    }
+                }
+            }
+            0 => eventIndex!
+            eventIndex! < eventCount -> while {
+                events[eventIndex!] => event
+                event.kind == 6
+                    and event.value == grammar.ruleIdStatementEnd()
+                    and event.tokenIndex == outcome.tokenIndex -> if {
+                        8 => code!
+                    }
+                event.kind == 6
+                    and event.value == grammar.ruleIdPrimaryExpression()
+                    and event.tokenIndex == outcome.tokenIndex
+                    and code! == 2
+                    and expressionRequired! -> if {
+                        9 => code!
+                    }
+                eventIndex! + 1 => eventIndex!
+            }
+        }
+        (code! == 2 or code! == 8) and outcome.tokenIndex > 0
+            -> if {
+                outcome.tokenIndex - 1 => keywordIndex!
+                keywordIndex! >= 0 and tokens[keywordIndex!].kind >= grammar.triviaIdWhitespace()
+                    -> while { keywordIndex! - 1 => keywordIndex! }
+                keywordIndex! >= 0 and tokens[keywordIndex!].kind == grammar.tokenIdIdentifier()
+                    -> if {
+                        tokens[keywordIndex!] => keyword
+                        source -> slice(keyword.span.start, keyword.span.length) => keywordText
+                        keywordText == "when" or keywordText == "map"
+                            -> if {
+                                keywordIndex! - 1 => beforeKeywordIndex!
+                                beforeKeywordIndex! >= 0
+                                    and tokens[beforeKeywordIndex!].kind >= grammar.triviaIdWhitespace()
+                                    -> while { beforeKeywordIndex! - 1 => beforeKeywordIndex! }
+                                beforeKeywordIndex! < 0
+                                    or tokens[beforeKeywordIndex!].kind != grammar.tokenIdFatArrow()
+                                    -> if {
+                                        keywordText == "map" and foundKind! == grammar.tokenIdIdentifier()
+                                            -> if { 10 => code! }
+                                        keywordText == "when"
+                                            and (foundKind! == grammar.tokenIdRightBrace()
+                                            or foundKind! == grammar.tokenIdEnd())
+                                            -> if { 11 => code! }
+                                        keywordText == "map"
+                                            and (foundKind! == grammar.tokenIdRightBrace()
+                                            or foundKind! == grammar.tokenIdEnd())
+                                            -> if { 12 => code! }
+                                    }
+                            }
+                    }
+            }
+        SyntaxDiagnostic {
+            code: code!
+            span: failureSpan!
+            foundKind: foundKind!
+            tokenIndex: outcome.tokenIndex
+        } => diagnostic
+        diagnostics! -> push(diagnostic)
+    }
+
+    # Product labels are semantic names inside one structural type rather than
+    # grammar alternatives.  Preserve the lossless accepted CST, then reject a
+    # duplicate at the second label token before semantic or LLVM lowering.
+    outcome.value == 1 -> if {
+        false => invalidReadSizeFound!
+        0 => mapIndex!
+        mapIndex! < (nodes -> len) and not invalidReadSizeFound!
+            -> while {
+                nodes[mapIndex!] => mapNode
+                mapNode.kind == 49 -> if {
+                    0 => mapIdentifierOrdinal!
+                    false => readMode!
+                    mapNode.firstToken => modeTokenIndex!
+                    modeTokenIndex! < mapNode.firstToken + mapNode.tokenCount
+                        and mapIdentifierOrdinal! < 2 -> while {
+                            tokens[modeTokenIndex!] => modeToken
+                            modeToken.kind == grammar.tokenIdIdentifier()
+                                -> if {
+                                    mapIdentifierOrdinal! == 1 -> if {
+                                        (source -> slice(modeToken.span.start, modeToken.span.length)) == "read"
+                                            -> if { true => readMode! }
+                                    }
+                                    mapIdentifierOrdinal! + 1 => mapIdentifierOrdinal!
+                                }
+                            modeTokenIndex! + 1 => modeTokenIndex!
+                        }
+                    readMode! -> if {
+                        0 => mapChildCount!
+                        -1 => mapLastChild!
+                        0 => mapChildIndex!
+                        mapChildIndex! < (nodes -> len) -> while {
+                            nodes[mapChildIndex!].parent == mapIndex! -> if {
+                                mapChildCount! + 1 => mapChildCount!
+                                mapChildIndex! => mapLastChild!
+                            }
+                            mapChildIndex! + 1 => mapChildIndex!
+                        }
+                        (mapChildCount! == 2 or mapChildCount! == 4) and mapLastChild! >= 0
+                            -> if {
+                                nodes[mapLastChild!].firstToken - 1 => sizeTokenIndex!
+                                sizeTokenIndex! >= mapNode.firstToken
+                                    and tokens[sizeTokenIndex!].kind >= grammar.triviaIdWhitespace()
+                                    -> while { sizeTokenIndex! - 1 => sizeTokenIndex! }
+                                sizeTokenIndex! >= mapNode.firstToken -> if {
+                                    tokens[sizeTokenIndex!] => sizeToken
+                                    sizeToken.kind == grammar.tokenIdIdentifier()
+                                        and (source -> slice(sizeToken.span.start, sizeToken.span.length)) == "size"
+                                        -> if {
+                                            diagnostics! -> push(SyntaxDiagnostic {
+                                                code: 13
+                                                span: sizeToken.span
+                                                foundKind: sizeToken.kind
+                                                tokenIndex: sizeTokenIndex!
+                                            })
+                                            true => invalidReadSizeFound!
+                                        }
+                                }
+                            }
+                    }
+                }
+                mapIndex! + 1 => mapIndex!
+            }
+        false => duplicateFound!
+        0 => fieldIndex!
+        fieldIndex! < (nodes -> len) and not duplicateFound!
+            -> while {
+                nodes[fieldIndex!] => field
+                field.cstRuleId == grammar.ruleIdProductTypeField()
+                    -> if {
+                        -1 => labelToken!
+                        false => colonSeen!
+                        field.firstToken => tokenIndex!
+                        tokenIndex! < field.firstToken + field.tokenCount
+                            -> while {
+                                tokens[tokenIndex!].kind == grammar.tokenIdColon()
+                                    -> if { true => colonSeen! }
+                                not colonSeen!
+                                    and labelToken! < 0
+                                    and tokens[tokenIndex!].kind == grammar.tokenIdIdentifier()
+                                    -> if { tokenIndex! => labelToken! }
+                                tokenIndex! + 1 => tokenIndex!
+                            }
+                        colonSeen! and labelToken! >= 0 -> if {
+                            0 => priorIndex!
+                            priorIndex! < fieldIndex! and not duplicateFound!
+                                -> while {
+                                    nodes[priorIndex!] => prior
+                                    prior.parent == field.parent
+                                        and prior.cstRuleId == grammar.ruleIdProductTypeField()
+                                        -> if {
+                                            -1 => priorLabelToken!
+                                            false => priorColonSeen!
+                                            prior.firstToken => priorTokenIndex!
+                                            priorTokenIndex! < prior.firstToken + prior.tokenCount
+                                                -> while {
+                                                    tokens[priorTokenIndex!].kind == grammar.tokenIdColon()
+                                                        -> if { true => priorColonSeen! }
+                                                    not priorColonSeen!
+                                                        and priorLabelToken! < 0
+                                                        and tokens[priorTokenIndex!].kind == grammar.tokenIdIdentifier()
+                                                        -> if { priorTokenIndex! => priorLabelToken! }
+                                                    priorTokenIndex! + 1 => priorTokenIndex!
+                                                }
+                                            priorColonSeen! and priorLabelToken! >= 0 -> if {
+                                                tokens[labelToken!] => label
+                                                tokens[priorLabelToken!] => priorLabel
+                                                label.span.length == priorLabel.span.length => equal!
+                                                UIntSize(0) => byteIndex!
+                                                equal! and byteIndex! < label.span.length -> while {
+                                                    source -> byte(label.span.start + byteIndex!) => labelByte
+                                                    source -> byte(priorLabel.span.start + byteIndex!) => priorLabelByte
+                                                    labelByte != priorLabelByte -> if { false => equal! }
+                                                    byteIndex! + 1 => byteIndex!
+                                                }
+                                                equal! -> if {
+                                                    SyntaxDiagnostic {
+                                                        code: 6
+                                                        span: label.span
+                                                        foundKind: label.kind
+                                                        tokenIndex: labelToken!
+                                                    } => duplicateDiagnostic
+                                                    diagnostics! -> push(duplicateDiagnostic)
+                                                    true => duplicateFound!
+                                                }
+                                            }
+                                        }
+                                    priorIndex! + 1 => priorIndex!
+                                }
+                        }
+                    }
+                fieldIndex! + 1 => fieldIndex!
+            }
+    }
+
+    diagnostics!
+}
+
+# Non-negative values are token kinds. Negative values encode grammar keywords
+# as -(keywordIndex + 1), keeping the representation compact and deterministic.
+public expectedCodes source: Text -> [Int; ~] {
+    source -> parser.parseEvents -> eventExpectedCodes
+}
+
+eventExpectedCodes events: [parser.ParseEvent; ~] -> [Int; ~] {
+    [Int; ~] => expected!
+    0 => eventIndex!
+    eventIndex! < (events -> len) -> while {
+        events[eventIndex!] => event
+        event.kind == 4 -> if {
+            expected! -> push(event.value)
+        }
+        eventIndex! + 1 => eventIndex!
+    }
+    expected!
+}
+
+# The parser can retain several alternatives at the same furthest token.  The
+# default remains its deterministic final alternative.  Only the exact empty
+# product-label shape `(: Type` or `, : Type` selects Identifier, matching the
+# canonical product-field contract without changing unrelated dictionary or
+# missing-field-type diagnostics.
+public preferredExpectedCode source: Text, diagnostic: SyntaxDiagnostic -> Int {
+    source -> preferredExpectedCodeForRule(diagnostic, grammar.startRule())
+}
+
+preferredExpectedCodeForRule source: Text, diagnostic: SyntaxDiagnostic, startRule: Int -> Int {
+    parser.ParseRequest { source: source, startRule: startRule } -> parser.parseRuleEvents => events
+    events -> eventExpectedCodes => expected
+    expected[(expected -> len) - 1] => selected!
+    source -> lexer.lex => tokens
+    # The managed parser consumes an Identifier before flow keyword dispatch.
+    # The failure event stream need not contain a Path rule event; the original
+    # Arrow and retained Identifier candidate supply this token decision.
+    diagnostic.tokenIndex > 0 -> if {
+        diagnostic.tokenIndex - 1 => previous!
+        previous! >= 0 and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+            -> while { previous! - 1 => previous! }
+        previous! >= 0 and tokens[previous!].kind == grammar.tokenIdArrow()
+            -> if {
+                expected -> each candidate {
+                    candidate == grammar.tokenIdIdentifier()
+                        -> if { grammar.tokenIdIdentifier() -> return }
+                }
+            }
+    }
+    # A colon commits the next token to a type. A failed TypeName then owns
+    # Identifier rather than the speculative ProductType opening delimiter.
+    # Uncommitted type attempts after a completed block do not own its closer.
+    events -> each event {
+        event.kind == 6 and event.value == grammar.ruleIdTypeName()
+            and event.tokenIndex == diagnostic.tokenIndex
+            -> if {
+                diagnostic.tokenIndex - 1 => previous!
+                previous! >= 0 and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+                    -> while { previous! - 1 => previous! }
+                previous! >= 0 and tokens[previous!].kind == grammar.tokenIdColon()
+                    -> if {
+                        expected -> each candidate {
+                            candidate == grammar.tokenIdIdentifier()
+                                -> if { grammar.tokenIdIdentifier() -> return }
+                        }
+                    }
+            }
+    }
+    # The managed fixed-length type parser ends at its required Tilde branch
+    # when a minus follows the semicolon; the bounded branch is only a match.
+    diagnostic.foundKind == grammar.tokenIdMinus() and diagnostic.tokenIndex > 0
+        -> if {
+            diagnostic.tokenIndex - 1 => previous!
+            previous! >= 0 and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+                -> while { previous! - 1 => previous! }
+            previous! >= 0 and tokens[previous!].kind == grammar.tokenIdSemicolon()
+                -> if {
+                    expected -> each candidate {
+                        candidate == grammar.tokenIdTilde() -> if { grammar.tokenIdTilde() -> return }
+                    }
+                }
+        }
+    diagnostic.foundKind == grammar.tokenIdColon()
+        and diagnostic.tokenIndex > 0
+        and diagnostic.tokenIndex + 1 < (tokens -> len)
+        -> if {
+            diagnostic.tokenIndex - 1 => previous!
+            previous! >= 0 and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+                -> while { previous! - 1 => previous! }
+            diagnostic.tokenIndex + 1 => following!
+            following! < (tokens -> len)
+                and tokens[following!].kind >= grammar.triviaIdWhitespace()
+                -> while { following! + 1 => following! }
+            previous! >= 0
+                and following! < (tokens -> len)
+                and (tokens[previous!].kind == grammar.tokenIdLeftParen()
+                or tokens[previous!].kind == grammar.tokenIdComma())
+                and tokens[following!].kind == grammar.tokenIdIdentifier()
+                -> if {
+                    0 => expectedIndex!
+                    expectedIndex! < (expected -> len) -> while {
+                        expected[expectedIndex!] == grammar.tokenIdIdentifier()
+                            -> if { grammar.tokenIdIdentifier() => selected! }
+                        expectedIndex! + 1 => expectedIndex!
+                    }
+                }
+        }
+    selected!
+}
+
+public struct SourceLocation {
+    public line: Int
+    public column: Int
+}
+
+public sourceLocation source: Text, offset: UIntSize -> SourceLocation {
+    1 => line!
+    1 => column!
+    UIntSize(0) => index!
+    index! < offset -> while {
+        source -> byte(index!) => current
+        current == 13 -> if {
+            index! + 1 < offset and (source -> byte(index! + 1)) == 10
+                -> if { index! + 1 => index! }
+            line! + 1 => line!
+            1 => column!
+            index! + 1 => index!
+        } else {
+            current == 10 -> if {
+                line! + 1 => line!
+                1 => column!
+                index! + 1 => index!
+            } else {
+                source -> unicodeIdentifier.scalarWidth(index!) => width!
+                width! == 0 -> if { 1 => width! }
+                width! == 4 -> if { column! + 2 => column! } else { column! + 1 => column! }
+                index! + width! => index!
+            }
+        }
+    }
+    SourceLocation { line: line!, column: column! }
+}
+
+# CLI and language-server diagnostics preserve the checked lexer's reason.
+public characterLiteralMessage source: Text, span: syntax.SourceSpan, storage: mut Arena -> Text {
+    source -> syntax.decodeCharacterLiteralChecked(span) -> when {
+        Ok(value) { "internal compiler error: valid character token classified as lexical error" -> materialize(storage) }
+        Err(issue) {
+            issue -> when {
+                Unterminated { "unterminated character literal" -> materialize(storage) }
+                ScalarCount { "character literal must contain one Unicode scalar" -> materialize(storage) }
+                UnsupportedEscape(offset) {
+                    source -> unicodeIdentifier.scalarWidth(offset) => width
+                    width == 4 -> if { "�" } else { source -> slice(offset, width) } => escape
+                    "unsupported character escape '\\$escape'" -> materialize(storage)
+                }
+            }
+        }
+    }
+}
+
+public stringInterpolationMessage code: Int -> Text {
+    code == 19 -> if { "empty interpolation expression is not allowed" -> return }
+    code == 20 -> if { "unterminated interpolation expression in string literal" -> return }
+    code == 21 -> if { "unterminated string literal inside interpolation expression" -> return }
+    "internal compiler error: invalid interpolation diagnostic code"
+}
+
+public stringInterpolationSyntaxMessage source: Text, diagnostic: SyntaxDiagnostic, storage: mut Arena -> Text {
+    syntax.SyntaxToken { kind: grammar.tokenIdString(), span: diagnostic.span } => token
+    source -> parser.stringInterpolationSyntaxIssue(token) => issue
+    issue.code != 4 -> if {
+        "internal compiler error: invalid interpolation fragment diagnostic" -> materialize(storage) -> return
+    }
+    source -> slice(issue.expressionSpan.start, issue.expressionSpan.length) => expression
+    expression -> analyzeRule(grammar.ruleIdExpression()) => errors
+    errors -> len == 0 -> if {
+        "internal compiler error: missing interpolation fragment diagnostic" -> materialize(storage) -> return
+    }
+    Arena(0) => innerStorage!
+    expression -> formatForRule(errors[0], "", grammar.ruleIdExpression(), innerStorage!) => inner
+    "$" => interpolationMarker
+    "invalid interpolation expression '$(interpolationMarker)($expression)': $inner" -> materialize(storage)
+}
+
+public formatForFile source: Text, diagnostic: SyntaxDiagnostic, path: Text, storage: mut Arena -> Text {
+    source -> formatForRule(diagnostic, path, grammar.startRule(), storage)
+}
+
+formatForRule source: Text, diagnostic: SyntaxDiagnostic, path: Text, startRule: Int, storage: mut Arena -> Text {
+    source -> sourceLocation(diagnostic.span.start) => position
+    diagnostic.code >= 19 and diagnostic.code <= 22
+        -> if {
+            Arena(0) => messageStorage!
+            diagnostic.code == 22 -> if {
+                source -> stringInterpolationSyntaxMessage(diagnostic, messageStorage!)
+            } else { diagnostic.code -> stringInterpolationMessage } => message
+            Arena(0) => prefixStorage!
+            (path -> len) > 0 -> if {
+                "$(path): " -> materialize(prefixStorage!)
+            } else { "" -> materialize(prefixStorage!) } => pathPrefix
+            "$(pathPrefix)parse error at $(position.line):$(position.column): $message" -> materialize(storage) -> return
+        }
+    diagnostic.code >= 15 and diagnostic.code <= 18
+        -> if {
+            diagnostic.code == 15 -> if {
+                "a multiline raw string closing delimiter must begin on a new line"
+            } else { diagnostic.code == 16 -> if {
+                    "only indentation may precede a multiline raw string closing delimiter"
+                } else { diagnostic.code == 17 -> if {
+                        "multiline raw string opening and closing delimiters must have matching indentation"
+                    } else { "raw string content must match the closing delimiter indentation" }
+                }
+            } => message
+            Arena(0) => prefixStorage!
+            (path -> len) > 0 -> if {
+                "$(path): " -> materialize(prefixStorage!)
+            } else { "" -> materialize(prefixStorage!) } => pathPrefix
+            "$(pathPrefix)parse error at $(position.line):$(position.column): $message"
+                -> materialize(storage)
+        } else {
+            diagnostic.code == 1 -> if {
+                diagnostic.span.length == 4
+                    or (diagnostic.span.length == 1 and (source -> byte(diagnostic.span.start)) >= 128)
+                    -> if { "�" } else { source -> slice(diagnostic.span.start, diagnostic.span.length) } => unexpected
+                "lex error at $(position.line):$(position.column): unexpected character '$unexpected'"
+                    -> materialize(storage)
+            } else {
+                diagnostic.code == 3 or diagnostic.code == 7 -> if {
+                    diagnostic.code == 7 -> if { "raw " } else { "" } => stringKind
+                    "lex error at $(position.line):$(position.column): unterminated $(stringKind)string literal"
+                        -> materialize(storage)
+                } else {
+                    diagnostic.code == 4 or diagnostic.code == 5 -> if {
+                        Arena(0) => characterStorage!
+                        source -> characterLiteralMessage(diagnostic.span, characterStorage!) => characterProblem
+                        "lex error at $(position.line):$(position.column): $characterProblem"
+                            -> materialize(storage)
+                    } else {
+                        Arena(0) => prefixStorage!
+                        (path -> len) > 0 -> if {
+                            "$(path): " -> materialize(prefixStorage!)
+                        } else {
+                            "" -> materialize(prefixStorage!)
+                        } => pathPrefix
+                        diagnostic.code == 6 or diagnostic.code == 13 or diagnostic.code == 14 or (diagnostic.code >= 23 and diagnostic.code <= 30)
+                            -> if {
+                                diagnostic.code == 14 or (diagnostic.code >= 23 and diagnostic.code <= 30)
+                                    -> if {
+                                        diagnostic.code == 30 -> if {
+                                            "local functions cannot be public"
+                                        } else { diagnostic.code -> numericExtentSyntaxMessage } => message
+                                        "$(pathPrefix)parse error at $(position.line):$(position.column): $message"
+                                            -> materialize(storage)
+                                    } else { diagnostic.code == 13 -> if {
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): only map write accepts 'size'"
+                                                -> materialize(storage)
+                                        } else {
+                                            source -> slice(diagnostic.span.start, diagnostic.span.length) => duplicateLabel
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): duplicate product field label '$duplicateLabel'"
+                                                -> materialize(storage)
+                                    } }
+                            } else {
+                                diagnostic.code == 8 or diagnostic.code == 9 or diagnostic.code == 10
+                                    or diagnostic.code == 11 or diagnostic.code == 12
+                                    -> if {
+                                        diagnostic.code == 10 -> if {
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): map expects 'read' or 'write'"
+                                                -> materialize(storage)
+                                        } else {
+                                            diagnostic.code == 8 -> if { "end of statement" } else {
+                                                diagnostic.code == 9 -> if { "expression" } else {
+                                                    diagnostic.code == 11 -> if { "LeftBrace" } else { "Identifier" }
+                                                }
+                                            } => expectation
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): expected $expectation"
+                                                -> materialize(storage)
+                                        }
+                                    } else {
+                                        source -> preferredExpectedCodeForRule(diagnostic, startRule) => expectedCode
+                                        expectedCode >= 0 -> if {
+                                            grammar.tokenNames() => tokenNames
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): expected $(tokenNames[expectedCode])"
+                                                -> materialize(storage)
+                                        } else {
+                                            grammar.keywordTexts() => keywordTexts
+                                            0 - expectedCode - 1 => keywordIndex
+                                            "$(pathPrefix)parse error at $(position.line):$(position.column): expected '$(keywordTexts[keywordIndex])'"
+                                                -> materialize(storage)
+                                        }
+                                    }
+                            }
+                    }
+                }
+            }
+        }
+}
+
+emitWithPath source: Text, diagnostic: SyntaxDiagnostic, path: Text -> Unit uses Console {
+    Arena(0) => storage!
+    source -> formatForFile(diagnostic, path, storage!) => message
+    "sollang: $message" -> runtime.eprintln
+}
+
+public emit source: Text, diagnostic: SyntaxDiagnostic -> Unit uses Console {
+    source -> emitWithPath(diagnostic, "")
+}
+
+public emitForFile source: Text, diagnostic: SyntaxDiagnostic, path: Text -> Unit uses Console {
+    source -> emitWithPath(diagnostic, path)
+}

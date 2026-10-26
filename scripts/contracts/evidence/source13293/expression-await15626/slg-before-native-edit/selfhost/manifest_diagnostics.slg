@@ -1,0 +1,108 @@
+namespace sollang.compiler.manifest_diagnostics
+
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+
+# Kinds: 0 none, 1 expected token, 2 wrong header, 3 unknown field,
+# 4 duplicate field, 5 separator, 6 missing field, 7 empty members,
+# 8 existing nested parser failure without a canonical diagnostic fact,
+# 9 source count, 10 missing git rev, 11 non-git rev, 12 duplicate dependency.
+# Scope: 1 project fields, 2 workspace fields, 3 workspace member entries,
+# 4 dependency fields, 5 dependencies entries.
+public struct ManifestDiagnostic {
+    public kind: Int
+    public scope: Int
+    public hasToken: Bool
+    public tokenKind: Int
+    public start: UIntSize
+    public length: UIntSize
+    public expected: Int
+    public fieldStart: UIntSize
+    public fieldLength: UIntSize
+    public requiredField: Int
+}
+
+public none: -> ManifestDiagnostic {
+    ManifestDiagnostic { kind: 0, scope: 0, hasToken: false, tokenKind: -1, start: 0, length: 0, expected: 0, fieldStart: 0, fieldLength: 0, requiredField: 0 }
+}
+
+public atToken kind: Int, scope: Int, token: syntax.SyntaxToken, expected: Int -> ManifestDiagnostic {
+    ManifestDiagnostic { kind: kind, scope: scope, hasToken: true, tokenKind: token.kind, start: token.span.start, length: token.span.length, expected: expected, fieldStart: token.span.start, fieldLength: token.span.length, requiredField: 0 }
+}
+
+public withoutToken kind: Int, scope: Int, requiredField: Int -> ManifestDiagnostic {
+    ManifestDiagnostic { kind: kind, scope: scope, hasToken: false, tokenKind: -1, start: 0, length: 0, expected: 0, fieldStart: 0, fieldLength: 0, requiredField: requiredField }
+}
+
+expectedText expected: Int -> Text {
+    expected == 1 -> if { "'project'" -> return }
+    expected == 2 -> if { "'workspace'" -> return }
+    expected == 3 -> if { "'{'" -> return }
+    expected == 4 -> if { "'}'" -> return }
+    expected == 5 -> if { "':'" -> return }
+    expected == 6 -> if { "string literal" -> return }
+    expected == 7 -> if { "'['" -> return }
+    expected == 8 -> if { "']'" -> return }
+    expected == 9 -> if { "end of file" -> return }
+    expected == 10 -> if { "field name" -> return }
+    expected == 11 -> if { "dependencies entry name" -> return }
+    expected == 12 -> if { "dependency field name" -> return }
+    expected == 13 -> if { "'{' or path string" -> return }
+    "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED"
+}
+
+public format source: Text, manifestPath: Text, error: ManifestDiagnostic, storage: mut Arena -> Text {
+    error.kind == 0 -> if { "" -> return }
+    error.kind == 8 -> if { "MANIFEST_NESTED_DIAGNOSTIC_PENDING: $manifestPath" -> materialize(storage) -> return }
+    (error.scope < 1 or error.scope > 5) or (error.scope == 3 and error.kind != 5)
+        -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+    error.scope == 1 -> if { "project" } else {
+        error.scope == 4 -> if { "dependency" } else { "workspace" }
+    } => owner
+    error.kind == 6 -> if {
+        ((error.scope == 1 and (error.requiredField == 1 or error.requiredField == 2)) or (error.scope == 2 and error.requiredField == 3)) => supportedRequiredField
+        not supportedRequiredField -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+        error.requiredField == 1 -> if { "name" } else {
+            error.requiredField == 2 -> if { "version" } else { "members" }
+        } => field
+        "$owner manifest is missing required field '$field': $manifestPath" -> materialize(storage) -> return
+    }
+    error.kind == 7 -> if {
+        error.scope != 2 -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+        "workspace 'members' must not be empty: $manifestPath" -> materialize(storage) -> return
+    }
+    not error.hasToken or ((error.kind < 1 or error.kind > 5) and (error.kind < 9 or error.kind > 12))
+        -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+    error.kind == 1 and (error.expected < 1 or error.expected > 13)
+        -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+    (error.kind >= 9 and error.kind <= 12) and error.scope != 5
+        -> if { "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage) -> return }
+    source -> syntaxDiagnostics.sourceLocation(error.start) => location
+    error.kind >= 9 and error.kind <= 12 -> if {
+        source -> slice(error.fieldStart, error.fieldLength) => key
+        error.kind == 9 -> if { "$manifestPath($(location.line),$(location.column)): dependency '$key' must declare exactly one of 'path', 'git', or 'registry'" -> materialize(storage) -> return }
+        error.kind == 10 -> if { "$manifestPath($(location.line),$(location.column)): git dependency '$key' is missing required field 'rev'" -> materialize(storage) -> return }
+        error.kind == 11 -> if { "$manifestPath($(location.line),$(location.column)): non-git dependency '$key' cannot declare 'rev'" -> materialize(storage) -> return }
+        "$manifestPath($(location.line),$(location.column)): duplicate dependencies entry '$key'" -> materialize(storage) -> return
+    }
+    error.kind == 1 -> if {
+        error.expected -> expectedText => expected
+        "$manifestPath($(location.line),$(location.column)): expected $expected" -> materialize(storage) -> return
+    }
+    error.kind == 2 -> if { "$manifestPath($(location.line),$(location.column)): $owner manifest must start with '$owner'" -> materialize(storage) -> return }
+    error.kind == 3 or error.kind == 4 -> if {
+        source -> slice(error.fieldStart, error.fieldLength) => field
+        error.kind == 3 -> if { "$manifestPath($(location.line),$(location.column)): unknown $owner field '$field'" -> materialize(storage) -> return }
+        "$manifestPath($(location.line),$(location.column)): duplicate $owner field '$field'" -> materialize(storage) -> return
+    }
+    error.kind == 5 -> if {
+        error.scope == 3 -> if {
+            "$manifestPath($(location.line),$(location.column)): members entries must be separated by a newline or comma" -> materialize(storage) -> return
+        }
+        error.scope == 5 -> if {
+            "$manifestPath($(location.line),$(location.column)): dependencies entries must be separated by a newline or comma" -> materialize(storage) -> return
+        }
+        "$manifestPath($(location.line),$(location.column)): $owner fields must be separated by a newline or comma" -> materialize(storage) -> return
+    }
+    "MANIFEST_DIAGNOSTIC_UNIMPLEMENTED: $manifestPath" -> materialize(storage)
+}

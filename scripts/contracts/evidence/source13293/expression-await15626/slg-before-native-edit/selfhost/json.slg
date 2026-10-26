@@ -1,0 +1,495 @@
+namespace sollang.compiler.json
+
+import sys.file as file
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+
+# JSON is represented by spans into one affine SourceText owner. Values are
+# cheap scalar views and therefore never copy a Clang AST or an LSP payload.
+public struct Value {
+    public kind: Int
+    public start: UIntSize
+    public end: UIntSize
+    public contentStart: UIntSize
+    public contentEnd: UIntSize
+}
+
+public struct Member {
+    public found: Bool
+    public value: Value
+}
+
+public struct ArrayCursor {
+    public found: Bool
+    public value: Value
+    public next: UIntSize
+}
+
+isWhitespace value: UInt8 -> Bool {
+    value == 32 or value == 9 or value == 10 or value == 13
+}
+
+public skipWhitespace source: ref file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
+    start => index!
+    index! < end and ((source -> byte(index!)) -> isWhitespace)
+        -> while {
+            index! + 1 => index!
+        }
+    index!
+}
+
+hexValue value: UInt8 -> Int {
+    -1 => result!
+    value >= 48 and value <= 57 -> if { Int(value - 48) => result! }
+    value >= 65 and value <= 70 -> if { Int(value - 65) + 10 => result! }
+    value >= 97 and value <= 102 -> if { Int(value - 97) + 10 => result! }
+    result!
+}
+
+parseHex4 source: ref file.SourceText, start: UIntSize, end: UIntSize -> Int {
+    -1 => result!
+    start + 4 <= end -> if {
+        0 => value!
+        true => valid!
+        UIntSize(0) => index!
+        valid! and index! < 4 -> while {
+            source -> byte(start + index!) -> hexValue => digit
+            digit < 0 -> if { false => valid! } else { value! * 16 + digit => value! }
+            index! + 1 => index!
+        }
+        valid! -> if { value! => result! }
+    }
+    result!
+}
+
+appendCodePoint bytes: mut [UInt8; ~], codePoint: Int -> Unit {
+    codePoint <= 127 -> if {
+        bytes -> push(UInt8(codePoint))
+    } else {
+        codePoint <= 2047 -> if {
+            bytes -> push(UInt8(192 + codePoint / 64))
+            bytes -> push(UInt8(128 + codePoint % 64))
+        } else {
+            codePoint <= 65535 -> if {
+                bytes -> push(UInt8(224 + codePoint / 4096))
+                bytes -> push(UInt8(128 + (codePoint / 64) % 64))
+                bytes -> push(UInt8(128 + codePoint % 64))
+            } else {
+                bytes -> push(UInt8(240 + codePoint / 262144))
+                bytes -> push(UInt8(128 + (codePoint / 4096) % 64))
+                bytes -> push(UInt8(128 + (codePoint / 64) % 64))
+                bytes -> push(UInt8(128 + codePoint % 64))
+            }
+        }
+    }
+}
+
+scanStringEnd source: ref file.SourceText, quote: UIntSize, end: UIntSize -> UIntSize {
+    quote + 1 => index!
+    false => escaped!
+    true => scanning!
+    scanning! -> while {
+        index! >= end -> if {
+            end + 1 => index!
+            false => scanning!
+        } else {
+            source -> byte(index!) => value
+            escaped! -> if {
+                false => escaped!
+                index! + 1 => index!
+            } else {
+                value == 92 -> if {
+                    true => escaped!
+                    index! + 1 => index!
+                } else {
+                    value == 34 -> if {
+                        index! + 1 => index!
+                        false => scanning!
+                    } else {
+                        value < 32 -> if {
+                            end + 1 => index!
+                            false => scanning!
+                        } else { index! + 1 => index! }
+                    }
+                }
+            }
+        }
+    }
+    index!
+}
+
+public parse source: ref file.SourceText, start: UIntSize, end: UIntSize -> Value {
+    source -> skipWhitespace(start, end) => valueStart
+    Value { kind: -1, start: valueStart, end: valueStart, contentStart: valueStart, contentEnd: valueStart } => result!
+    valueStart < end -> if {
+        source -> byte(valueStart) => first
+        first == 34 -> if {
+            source -> scanStringEnd(valueStart, end) => after
+            after <= end -> if {
+                3 => result!.kind
+                after => result!.end
+                valueStart + 1 => result!.contentStart
+                after - 1 => result!.contentEnd
+            }
+        } else {
+            first == 123 or first == 91 -> if {
+                first == 123 -> if { UInt8(125) } else { UInt8(93) } => closing
+                valueStart + 1 => index!
+                1 => depth!
+                false => inString!
+                false => escaped!
+                index! < end and depth! > 0 -> while {
+                    source -> byte(index!) => value
+                    inString! -> if {
+                        escaped! -> if { false => escaped! } else {
+                            value == 92 -> if { true => escaped! }
+                            value == 34 -> if { false => inString! }
+                        }
+                    } else {
+                        value == 34 -> if { true => inString! } else {
+                            value == 123 or value == 91 -> if { depth! + 1 => depth! }
+                            value == 125 or value == 93 -> if {
+                                depth! - 1 => depth!
+                                depth! == 0 and value != closing -> if { -1 => depth! }
+                            }
+                        }
+                    }
+                    index! + 1 => index!
+                }
+                depth! == 0 -> if {
+                    first == 123 -> if { 5 } else { 4 } => result!.kind
+                    index! => result!.end
+                    valueStart + 1 => result!.contentStart
+                    index! - 1 => result!.contentEnd
+                }
+            } else {
+                valueStart => index!
+                index! < end
+                    and not ((source -> byte(index!)) -> isWhitespace)
+                    and (source -> byte(index!)) != 44
+                    and (source -> byte(index!)) != 93
+                    and (source -> byte(index!)) != 125 -> while {
+                        index! + 1 => index!
+                    }
+                index! > valueStart -> if {
+                    2 => result!.kind
+                    index! => result!.end
+                    valueStart => result!.contentStart
+                    index! => result!.contentEnd
+                    first == 116 or first == 102 -> if { 1 => result!.kind }
+                    first == 110 -> if { 0 => result!.kind }
+                }
+            }
+        }
+    }
+    result!
+}
+
+public decodeString source: ref file.SourceText, value: Value -> [UInt8; ~] {
+    [UInt8; ~] => bytes!
+    value.contentStart => index!
+    true => valid!
+    valid! and index! < value.contentEnd -> while {
+        source -> byte(index!) => current
+        current != 92 -> if {
+            bytes! -> push(current)
+            index! + 1 => index!
+        } else {
+            index! + 1 >= value.contentEnd -> if {
+                false => valid!
+            } else {
+                source -> byte(index! + 1) => escaped
+                escaped == 34 -> if { bytes! -> push(34) }
+                escaped == 92 -> if { bytes! -> push(92) }
+                escaped == 47 -> if { bytes! -> push(47) }
+                escaped == 98 -> if { bytes! -> push(8) }
+                escaped == 102 -> if { bytes! -> push(12) }
+                escaped == 110 -> if { bytes! -> push(10) }
+                escaped == 114 -> if { bytes! -> push(13) }
+                escaped == 116 -> if { bytes! -> push(9) }
+                escaped == 117 -> if {
+                    source -> parseHex4(index! + 2, value.contentEnd) => firstCode
+                    firstCode < 0 -> if { false => valid! } else {
+                        firstCode => codePoint!
+                        index! + 6 => next!
+                        firstCode >= 55296 and firstCode <= 56319 -> if {
+                            next! + 6 <= value.contentEnd
+                                and (source -> byte(next!)) == 92
+                                and (source -> byte(next! + 1)) == 117 -> if {
+                                    source -> parseHex4(next! + 2, value.contentEnd) => secondCode
+                                    secondCode >= 56320 and secondCode <= 57343
+                                        -> if {
+                                            65536 + (firstCode - 55296) * 1024 + secondCode - 56320 => codePoint!
+                                            next! + 6 => next!
+                                        } else { false => valid! }
+                                } else { false => valid! }
+                        }
+                        valid! -> if { bytes! -> appendCodePoint(codePoint!) }
+                        next! => index!
+                    }
+                } else {
+                    escaped != 34
+                        and escaped != 92
+                        and escaped != 47
+                        and escaped != 98
+                        and escaped != 102
+                        and escaped != 110
+                        and escaped != 114
+                        and escaped != 116 -> if { false => valid! }
+                    escaped != 117 -> if { index! + 2 => index! }
+                }
+            }
+        }
+    }
+    valid! -> unless {
+        (bytes! -> len) > 0 -> while { bytes! -> take((bytes! -> len) - 1) => discarded }
+    }
+    bytes!
+}
+
+bytesEqualText bytes: ref [UInt8; ~], value: Text -> Bool {
+    UIntSize(bytes -> len) == (value -> len) => equal!
+    UIntSize(0) => index!
+    equal! and index! < (value -> len) -> while {
+        bytes[Int(index!)] != (value -> byte(index!))
+            -> if { false => equal! }
+        index! + 1 => index!
+    }
+    equal!
+}
+
+public findMember source: ref file.SourceText, object: Value, name: Text -> Member {
+    Value { kind: -1, start: object.start, end: object.start, contentStart: object.start, contentEnd: object.start } => missing
+    Member { found: false, value: missing } => result!
+    object.kind == 5 -> if {
+        object.contentStart => index!
+        true => scanning!
+        scanning! -> while {
+            source -> skipWhitespace(index!, object.contentEnd) => index!
+            index! >= object.contentEnd -> if { false => scanning! } else {
+                source -> parse(index!, object.contentEnd) => key
+                key.kind != 3 -> if { false => scanning! } else {
+                    source -> skipWhitespace(key.end, object.contentEnd) => colon
+                    colon >= object.contentEnd or (source -> byte(colon)) != 58
+                        -> if {
+                            false => scanning!
+                        } else {
+                            source -> parse(colon + 1, object.contentEnd) => memberValue
+                            memberValue.kind < 0 -> if { false => scanning! } else {
+                                source -> decodeString(key) => keyBytes
+                                keyBytes -> bytesEqualText(name) -> if {
+                                    Member { found: true, value: memberValue } => result!
+                                    false => scanning!
+                                } else {
+                                    source -> skipWhitespace(memberValue.end, object.contentEnd) => next
+                                    next < object.contentEnd and (source -> byte(next)) == 44
+                                        -> if {
+                                            next + 1 => index!
+                                        } else { object.contentEnd => index! }
+                                }
+                            }
+                        }
+                }
+            }
+        }
+    }
+    result!
+}
+
+public firstArrayValue source: ref file.SourceText, array: Value -> ArrayCursor {
+    Value { kind: -1, start: array.start, end: array.start, contentStart: array.start, contentEnd: array.start } => missing
+    ArrayCursor { found: false, value: missing, next: array.contentEnd } => result!
+    array.kind == 4 -> if {
+        source -> skipWhitespace(array.contentStart, array.contentEnd) => start
+        start < array.contentEnd -> if {
+            source -> parse(start, array.contentEnd) => value
+            value.kind >= 0 -> if {
+                source -> skipWhitespace(value.end, array.contentEnd) => after!
+                after! < array.contentEnd and (source -> byte(after!)) == 44
+                    -> if { after! + 1 => after! }
+                ArrayCursor { found: true, value: value, next: after! } => result!
+            }
+        }
+    }
+    result!
+}
+
+public nextArrayValue source: ref file.SourceText, array: Value, cursor: UIntSize -> ArrayCursor {
+    Value { kind: -1, start: cursor, end: cursor, contentStart: cursor, contentEnd: cursor } => missing
+    ArrayCursor { found: false, value: missing, next: array.contentEnd } => result!
+    array.kind == 4 -> if {
+        source -> skipWhitespace(cursor, array.contentEnd) => start
+        start < array.contentEnd -> if {
+            source -> parse(start, array.contentEnd) => value
+            value.kind >= 0 -> if {
+                source -> skipWhitespace(value.end, array.contentEnd) => after!
+                after! < array.contentEnd and (source -> byte(after!)) == 44
+                    -> if { after! + 1 => after! }
+                ArrayCursor { found: true, value: value, next: after! } => result!
+            }
+        }
+    }
+    result!
+}
+
+# This admission pass checks the whole raw document once, before a caller
+# starts cheap span lookup. Escape spelling is validated without decoding:
+# JsonDocument accepts isolated UTF-16 surrogate escapes in unused strings.
+documentStringEnd source: ref file.SourceText, view: Text, start: UIntSize, end: UIntSize -> UIntSize {
+    start + 1 => index!
+    index! < end -> while {
+        source -> byte(index!) => value
+        value == 34 -> if { index! + 1 -> return }
+        value < 32 -> if { end + 1 -> return }
+        value == 92 -> if {
+            index! + 1 < end -> unless { end + 1 -> return }
+            source -> byte(index! + 1) => escaped
+            escaped == 117 -> if {
+                source -> parseHex4(index! + 2, end) >= 0
+                    -> unless { end + 1 -> return }
+                index! + 6 => index!
+            } else {
+                escaped == 34 or escaped == 92 or escaped == 47
+                    or escaped == 98 or escaped == 102 or escaped == 110
+                    or escaped == 114 or escaped == 116
+                    -> unless { end + 1 -> return }
+                index! + 2 => index!
+            }
+        } else {
+            view -> unicodeIdentifier.scalarWidth(index!) => width
+            width > 0 and width <= end - index!
+                -> unless { end + 1 -> return }
+            index! + width => index!
+        }
+    }
+    end + 1
+}
+
+documentDigit value: UInt8 -> Bool => value >= 48 and value <= 57
+
+documentNumberEnd source: ref file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
+    start => index!
+    index! < end and (source -> byte(index!)) == 45
+        -> if { index! + 1 => index! }
+    index! < end -> unless { end + 1 -> return }
+    source -> byte(index!) => first
+    first == 48 -> if {
+        index! + 1 => index!
+    } else {
+        first >= 49 and first <= 57 -> unless { end + 1 -> return }
+        index! < end and ((source -> byte(index!)) -> documentDigit)
+            -> while { index! + 1 => index! }
+    }
+    index! < end and (source -> byte(index!)) == 46
+        -> if {
+            index! + 1 => index!
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> unless { end + 1 -> return }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> while { index! + 1 => index! }
+        }
+    index! < end and ((source -> byte(index!)) == 101 or (source -> byte(index!)) == 69)
+        -> if {
+            index! + 1 => index!
+            index! < end and ((source -> byte(index!)) == 43 or (source -> byte(index!)) == 45)
+                -> if { index! + 1 => index! }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> unless { end + 1 -> return }
+            index! < end and ((source -> byte(index!)) -> documentDigit)
+                -> while { index! + 1 => index! }
+        }
+    index!
+}
+
+documentScalarEnd source: ref file.SourceText, view: Text, start: UIntSize, end: UIntSize -> UIntSize {
+    source -> byte(start) => first
+    first == 34 -> if { source -> documentStringEnd(view, start, end) -> return }
+    first == 45 or (first -> documentDigit)
+        -> if { source -> documentNumberEnd(start, end) -> return }
+    ["null", "false", "true"] -> each literal {
+        start + (literal -> len) <= end -> if {
+            true => matches!
+            UIntSize(0) => offset!
+            matches! and offset! < (literal -> len) -> while {
+                (source -> byte(start + offset!)) != (literal -> byte(offset!))
+                    -> if { false => matches! }
+                offset! + 1 => offset!
+            }
+            matches! -> if { start + (literal -> len) -> return }
+        }
+    }
+    end + 1
+}
+
+# Stack states: root0/1; array10 first value,11 required value,12 comma/end;
+# object20 first name,21 required name,22 colon,23 value,24 comma/end.
+# Parents are advanced before a child container is pushed, so validation is
+# linear and bounded by maxDepth without recursively rescanning member values.
+public validateDocument source: ref file.SourceText, maxDepth: Int -> Bool {
+    maxDepth > 0 -> unless { false -> return }
+    source -> len => end
+    source -> slice(0, end) => view
+    [Int; ~] => states!
+    states! -> push(0)
+    UIntSize(0) => index!
+    true -> while {
+        source -> skipWhitespace(index!, end) => index!
+        (states! -> len) - 1 => top
+        states![top] => state
+        state == 1 -> if { index! == end -> return }
+        index! < end -> unless { false -> return }
+        source -> byte(index!) => value
+        state == 20 or state == 21 -> if {
+            state == 20 and value == 125 -> if {
+                states! -> take(top) => discarded
+                index! + 1 => index!
+                continue
+            }
+            value == 34 -> unless { false -> return }
+            source -> documentStringEnd(view, index!, end) => after
+            after <= end -> unless { false -> return }
+            after => index!
+            22 => states![top]
+            continue
+        }
+        state == 22 -> if {
+            value == 58 -> unless { false -> return }
+            23 => states![top]
+            index! + 1 => index!
+            continue
+        }
+        state == 24 or state == 12 -> if {
+            value == 44 -> if {
+                state == 24 -> if { 21 } else { 11 } => states![top]
+            } else {
+                state == 24 -> if { UInt8(125) } else { UInt8(93) } => closing
+                value == closing -> unless { false -> return }
+                states! -> take(top) => discarded
+            }
+            index! + 1 => index!
+            continue
+        }
+        state == 10 and value == 93 -> if {
+            states! -> take(top) => discarded
+            index! + 1 => index!
+            continue
+        }
+        state == 0 or state == 10 or state == 11 or state == 23
+            -> unless { false -> return }
+        state -> when {
+            == 0 { 1 => states![top] }
+            == 23 { 24 => states![top] }
+            else { 12 => states![top] }
+        }
+        value == 123 or value == 91 -> if {
+            (states! -> len) <= maxDepth -> unless { false -> return }
+            value == 123 -> if { 20 } else { 10 } => childState
+            states! -> push(childState)
+            index! + 1 => index!
+        } else {
+            source -> documentScalarEnd(view, index!, end) => after
+            after <= end -> unless { false -> return }
+            after => index!
+        }
+    }
+    false
+}
