@@ -69,7 +69,18 @@ function Test-StaticExecutionOrder([Management.Automation.Language.ScriptBlockAs
     $earlyChildren = @($commands | Where-Object {
         $_.GetCommandName() -eq 'Invoke-CheckedContract' -and $_.Extent.StartOffset -lt $boundary
     })
-    return $lateAssertions.Count -eq 0 -and $earlyChildren.Count -eq 0
+    $sourceNames = @('verify-socket-vectored-contract.ps1', 'verify-socket-try-clone-contract.ps1',
+        'verify-socket-reactor-contract.ps1', 'verify-struct-field-migration.ps1')
+    $probeNames = @('verify-focused-slg-format.ps1', 'verify-llvm-no-allocation-audit.ps1',
+        'verify-portable-memory-io-contract.ps1')
+    $literals = @($Ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.StringConstantExpressionAst]
+    }, $true))
+    $sourceSlots = @($literals | Where-Object Value -cin $sourceNames | ForEach-Object { $_.Extent.StartOffset })
+    $probeSlots = @($literals | Where-Object Value -cin $probeNames | ForEach-Object { $_.Extent.StartOffset })
+    $costOrderValid = $sourceSlots.Count -eq $sourceNames.Count -and $probeSlots.Count -eq $probeNames.Count -and
+        ($sourceSlots | Measure-Object -Maximum).Maximum -lt ($probeSlots | Measure-Object -Minimum).Minimum
+    return $lateAssertions.Count -eq 0 -and $earlyChildren.Count -eq 0 -and $costOrderValid
 }
 if (-not (Test-StaticExecutionOrder $tree)) { throw 'Source assertions must finish before child contracts and success output' }
 $completed++
@@ -82,4 +93,10 @@ $lateAssertionTree = [Management.Automation.Language.Parser]::ParseInput(
     $source + "`nAssert-Contains 'input' 'missing' 'late assertion'`n", [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count -ne 0 -or (Test-StaticExecutionOrder $lateAssertionTree)) { throw 'Assertion after the final failure gate was not rejected' }
 $completed++
-@{ status = 'passed'; completed = $completed; total = 19; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 3 } | ConvertTo-Json
+$lateSource = $source.Replace('"verify-socket-reactor-contract.ps1"', '"__source_order_swap__"').
+    Replace('"verify-portable-memory-io-contract.ps1"', '"verify-socket-reactor-contract.ps1"').
+    Replace('"__source_order_swap__"', '"verify-portable-memory-io-contract.ps1"')
+$lateSourceTree = [Management.Automation.Language.Parser]::ParseInput($lateSource, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0 -or (Test-StaticExecutionOrder $lateSourceTree)) { throw 'Source contracts after expensive probes were not rejected' }
+$completed++
+@{ status = 'passed'; completed = $completed; total = 20; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 4 } | ConvertTo-Json

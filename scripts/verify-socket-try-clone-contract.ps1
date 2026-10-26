@@ -40,7 +40,10 @@ Require $managedEmitter "sollang_platform_socket_try_clone" "managed direct clon
 Require $windowsRuntime "@WSADuplicateSocketW" "Windows socket duplication primitive"
 Require $windowsRuntime "@GetCurrentProcessId" "Windows same-process duplication target"
 Require $linuxRuntime "call i32 @dup(i32 %descriptor)" "Linux descriptor duplication primitive"
-Require $selfhostNormalize 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "tryClone")' "self-host early clone classification"
+Require $selfhostNormalize 'socketSources![call!.targetModule]' 'selected socket module boundary'
+Require $selfhostNormalize 'declaration.flags / 128' 'selected intrinsic declaration boundary'
+Require $selfhostNormalize 'declaration.nameToken] => name' 'selected socket declaration name'
+if (-not [regex]::IsMatch($selfhostNormalize, 'sourceMatches\(name\.span\.start, name\.span\.length, "tryClone"\)\s+-> if \{ -300 => call!\.opcode \}')) { throw 'Canonical selected socket declaration must map tryClone to exact opcode -300' }
 Require $selfhostFinalize 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "tryClone")' "self-host final clone classification"
 Require $selfhostEmitter "call.opcode == -300" "self-host clone emission"
 Require $selfhostEmitter "@sollang_platform_socket_try_clone" "self-host direct clone call"

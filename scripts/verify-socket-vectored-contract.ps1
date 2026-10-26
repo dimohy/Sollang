@@ -52,9 +52,12 @@ Require $linuxRuntime "declare i64 @sendmsg" "Linux gather primitive"
 Require $linuxRuntime "call i64 @sendmsg" "Linux one-call gather lowering"
 Require $linuxRuntime "declare i64 @recvmsg" "Linux scatter primitive"
 Require $linuxRuntime "call i64 @recvmsg" "Linux one-call scatter lowering"
-Require $selfhostNormalize 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "sendVectored")' "self-host early opcode classification"
+Require $selfhostNormalize 'socketSources![call!.targetModule]' 'selected socket module boundary'
+Require $selfhostNormalize 'declaration.flags / 128' 'selected intrinsic declaration boundary'
+Require $selfhostNormalize 'declaration.nameToken] => name' 'selected socket declaration name'
+if (-not [regex]::IsMatch($selfhostNormalize, 'sourceMatches\(name\.span\.start, name\.span\.length, "sendVectored"\)\s+-> if \{ -299 => call!\.opcode \}')) { throw 'Canonical selected socket declaration must map sendVectored to exact opcode -299' }
 Require $selfhostFinalize 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "sendVectored")' "self-host final opcode classification"
-Require $selfhostNormalize 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "receiveVectored")' "self-host early receive opcode classification"
+if (-not [regex]::IsMatch($selfhostNormalize, 'sourceMatches\(name\.span\.start, name\.span\.length, "receiveVectored"\)\s+-> if \{ -301 => call!\.opcode \}')) { throw 'Canonical selected socket declaration must map receiveVectored to exact opcode -301' }
 Require $selfhostFinalize 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "receiveVectored")' "self-host final receive opcode classification"
 Require $selfhostEmitter "call.opcode == -299" "self-host vectored emission"
 Require $selfhostEmitter "call.opcode == -301" "self-host scatter emission"

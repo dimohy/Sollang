@@ -3478,13 +3478,10 @@ foreach ($name in @(
     "test-project-focused-gate-projection.ps1"
     "verify-project-progress.ps1"
     "verify-ai-slg-best-practices.ps1"
-    "verify-focused-slg-format.ps1"
-    "verify-llvm-no-allocation-audit.ps1"
     "verify-process-child-try-wait-contract.ps1"
     "verify-process-child-kill-contract.ps1"
     "verify-async-result-propagation-contract.ps1"
     "verify-async-owned-array-cancellation-contract.ps1"
-    "verify-portable-memory-io-contract.ps1"
     "verify-http-server-contract.ps1"
     "verify-socket-datagram-contract.ps1"
     "verify-socket-vectored-contract.ps1"
@@ -3497,6 +3494,15 @@ foreach ($name in @(
     Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
 }
 Invoke-CheckedContract -Name "verify-native-exact-source-closure-contract.ps1"
+Invoke-CheckedContract -Name "test-verification-socket-completion-ir.ps1"
+# Keep source-only contracts ahead of formatter/compiler/runtime probes.
+foreach ($name in @(
+    "verify-focused-slg-format.ps1"
+    "verify-llvm-no-allocation-audit.ps1"
+    "verify-portable-memory-io-contract.ps1"
+)) {
+    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
+}
 
 # Execute small production-method and focused-source probes before the
 # expensive compiler build. These never rebuild the compiler itself.

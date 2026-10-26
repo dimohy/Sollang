@@ -89,6 +89,30 @@ function Get-PublicFieldInsertions {
 }
 
 $expectedPrivateFields = [ordered]@{
+    # Session input/document/shutdown state changes through newSession/accept;
+    # callers observe only the exported finished and exitCode fields.
+    'selfhost/cli_language_server.slg' = 4
+    # Exact floating encodings are constructed, written and negated by this module.
+    'selfhost/llvm/floating_literals.slg' = 2
+    # Token fixtures expose representation through make/value instance methods;
+    # making raw public would change the intended method-dispatch boundary.
+    'examples/regression/2000-selfhost-pre-ir-interpolation-call-receiver.slg' = 1
+    'examples/regression/2001-selfhost-pre-ir-interpolation-call-target.slg' = 1
+    'examples/regression/2008-selfhost-pre-ir-interpolation-indexed-call-target.slg' = 1
+    'examples/regression/2012-selfhost-pre-ir-interpolation-index-binding-call-target.slg' = 1
+    'examples/regression/2013-interpolated-call-result-instance-method.slg' = 1
+    'examples/regression/2015-interpolated-compound-index-instance-method.slg' = 1
+    'examples/regression/2018-interpolated-function-parameter-instance-method.slg' = 1
+    'examples/regression/diagnostics/2014-interpolated-call-result-method-extra-argument.slg' = 1
+    'examples/regression/diagnostics/2016-interpolated-compound-index-method-extra-argument.slg' = 1
+    'examples/regression/diagnostics/2017-interpolated-compound-invalid-index-before-method.slg' = 1
+    'examples/regression/diagnostics/2019-interpolated-function-parameter-method-extra-argument.slg' = 1
+    # Embedded admission mocks never expose their SourceText representation;
+    # dictionary-header identity intentionally includes private field types.
+    'examples/regression/2514-main-only-call-admission.slg' = 3
+    'examples/regression/2766-dictionary-declaration-header-identity.slg' = 2
+    # Associated-member diagnostics exercise a method rather than field access.
+    'examples/regression/diagnostics/sample/2063-associated_member.slg' = 1
     # Only the checked plan compiler/evaluator may mutate instruction topology or slots.
     'selfhost/semantic/constant_expressions.slg' = 2
     'stdlib/std/net/quic/transport_parameters.slg' = 1

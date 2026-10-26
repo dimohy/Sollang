@@ -37,3 +37,31 @@ foreach ($platform in @('windows', 'linux')) {
     }
 }
 Write-Output 'Socket IR: cancellation controls and Windows/Linux fixed scratch, repeated allocation, missing and duplicate storage controls passed.'
+$runtimeRoot = Join-Path (Split-Path -Parent $PSScriptRoot) 'src/Sollang.Compiler/CodeGen'
+$windows = [IO.File]::ReadAllText((Join-Path $runtimeRoot 'WindowsLlvmRuntimePlatform.Socket.cs'))
+$linux = [IO.File]::ReadAllText((Join-Path $runtimeRoot 'LinuxLlvmRuntimePlatform.Socket.cs'))
+$registrationControls = 0
+foreach ($source in @($windows, $linux)) {
+    if (-not (Test-VerificationSocketRegisterPreEffect -Source $source)) { throw 'VALID_DIRECT_OR_LOCKED_REGISTRATION_REJECTED' }
+    $registrationControls++
+}
+$active = 'store i64 1, ptr %free_entry, align 8'
+$count = 'store i64 %next_count, ptr %count_slot, align 8'
+$forward = '%result = call %sollang.socket_result @sollang_platform_socket_completion_register_stream_locked(i64 %identity, i64 %socket, i64 %key)'
+$lockedDefinition = 'define internal %sollang\.socket_result @sollang_platform_socket_completion_register_stream_locked\([^\r\n]+\) #0 \{.*?\r?\n        \}'
+$invalidRegistrations = @(
+    $windows.Replace('@sollang_platform_socket_completion_register_stream(', '@missing_register_stream('),
+    $windows.Replace('duplicate_loop:', 'missing_duplicate_loop:'),
+    $windows.Replace('duplicate_loop:', '__swap_label__:').Replace('free_loop:', 'duplicate_loop:').Replace('__swap_label__:', 'free_loop:'),
+    $windows.Replace($count, ''),
+    $windows.Replace($active, '').Replace($count, "$active`n          $count"),
+    $linux.Replace($forward, $forward.Replace('i64 %key)', 'i64 %socket)')),
+    [regex]::Replace($linux, $lockedDefinition, '', [Text.RegularExpressions.RegexOptions]::Singleline),
+    $linux.Replace('duplicate_loop:', "call void @epoll_ctl()`nduplicate_loop:"),
+    $linux.Replace('call void @sollang_socket_completion_unlock(ptr %state)', '')
+)
+foreach ($source in $invalidRegistrations) {
+    if (Test-VerificationSocketRegisterPreEffect -Source $source) { throw "INVALID_REGISTRATION_ACCEPTED:$registrationControls" }
+    $registrationControls++
+}
+@{ status = 'passed'; registrationControlsCompleted = $registrationControls; registrationControlsTotal = 11 } | ConvertTo-Json

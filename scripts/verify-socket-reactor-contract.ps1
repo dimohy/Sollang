@@ -16,26 +16,10 @@ function Require([string]$Text, [string]$Needle, [string]$Description) {
     }
 }
 
+. (Join-Path $PSScriptRoot 'verification-socket-completion-ir.ps1')
 function Require-CompletionRegisterPreEffect([string]$Text, [string]$Platform) {
-    $match = [regex]::Match(
-        $Text,
-        'define internal %sollang\.socket_result @sollang_platform_socket_completion_register_stream\([^\r\n]+\) #0 \{(?<body>.*?)\r?\n        \}',
-        [Text.RegularExpressions.RegexOptions]::Singleline)
-    if (-not $match.Success) { throw "$Platform completion register definition is missing" }
-    $body = $match.Groups['body'].Value
-    foreach ($forbiddenEffect in @('CreateIoCompletionPort', '@epoll_ctl', '@fcntl')) {
-        if ($body.Contains($forbiddenEffect, [StringComparison]::Ordinal)) {
-            throw "$Platform completion register must remain pre-effect but contains $forbiddenEffect"
-        }
-    }
-    if ($body.IndexOf('duplicate_loop:', [StringComparison]::Ordinal) -ge
-        $body.IndexOf('free_loop:', [StringComparison]::Ordinal)) {
-        throw "$Platform completion register must classify duplicate keys before capacity"
-    }
-    $activePublish = 'store i64 1, ptr %free_entry, align 8'
-    if ($body.IndexOf($activePublish, [StringComparison]::Ordinal) -lt
-        $body.IndexOf('store i64 %next_count, ptr %count_slot, align 8', [StringComparison]::Ordinal)) {
-        throw "$Platform completion register must publish active only after every entry field and count"
+    if (-not (Test-VerificationSocketRegisterPreEffect -Source $Text)) {
+        throw "$Platform completion registration must preserve exact locked forwarding, pre-effect duplicate/capacity classification and publish-last ordering"
     }
 }
 
@@ -106,7 +90,10 @@ if ($emitter.Contains('"@sollang_platform_socket_completion_', [StringComparison
 Require $windowsRuntime "call i32 @WSAPoll(ptr %descriptors" "single Windows readiness primitive"
 Require $linuxRuntime "call i32 @poll(ptr %descriptors" "single Linux readiness primitive"
 Require $selfhostTyped "opcode <= -297 and opcode >= -302" "self-host socket opcode range"
-Require $selfhostNormalize 'sourceMatches(socketCallNameToken.span.start, socketCallNameToken.span.length, "waitInto")' "self-host early classification"
+Require $selfhostNormalize 'socketSources![call!.targetModule]' 'selected socket module boundary'
+Require $selfhostNormalize 'declaration.flags / 128' 'selected intrinsic declaration boundary'
+Require $selfhostNormalize 'declaration.nameToken] => name' 'selected socket declaration name'
+if (-not [regex]::IsMatch($selfhostNormalize, 'sourceMatches\(name\.span\.start, name\.span\.length, "waitInto"\)\s+-> if \{ -302 => call!\.opcode \}')) { throw 'Canonical selected socket declaration must map waitInto to exact opcode -302' }
 Require $selfhostFinalize 'sourceMatches(finalSocketIntrinsicNameToken.span.start, finalSocketIntrinsicNameToken.span.length, "waitInto")' "self-host final classification"
 Require $selfhostEmitter "call.opcode == -302" "self-host reactor emission"
 Require $fixture "reactor! -> registerStream(firstServer, 101, socket.InterestMode.Read)?" "first keyed registration"

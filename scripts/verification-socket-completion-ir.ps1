@@ -1,4 +1,40 @@
-# Public runtime checks compare instructions, independent of basic-block order.
+# Public runtime checks inspect only the selected runtime function bodies.
+function Test-VerificationSocketRegisterPreEffect {
+    param([Parameter(Mandatory)][string]$Source)
+    $extract = {
+        param([string]$Name)
+        $pattern = 'define internal %sollang\.socket_result @' + [regex]::Escape($Name) + '\([^\r\n]+\) #0 \{(?<body>.*?)\r?\n        \}'
+        $definitions = [regex]::Matches($Source, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline)
+        if ($definitions.Count -ne 1) { return '' }
+        return $definitions[0].Groups['body'].Value
+    }
+    $name = 'sollang_platform_socket_completion_register_stream'
+    $entry = & $extract $name
+    if ([string]::IsNullOrEmpty($entry)) { return $false }
+    $body = $entry
+    if ($entry.Contains("@$($name)_locked", [StringComparison]::Ordinal)) {
+        $call = '%result = call %sollang.socket_result @' + $name + '_locked(i64 %identity, i64 %socket, i64 %key)'
+        $lock = $entry.IndexOf('call void @sollang_socket_completion_lock(ptr %state)', [StringComparison]::Ordinal)
+        $invoke = $entry.IndexOf($call, [StringComparison]::Ordinal)
+        $unlock = $entry.IndexOf('call void @sollang_socket_completion_unlock(ptr %state)', [StringComparison]::Ordinal)
+        $returned = $entry.IndexOf('ret %sollang.socket_result %result', [StringComparison]::Ordinal)
+        if ($lock -lt 0 -or $invoke -le $lock -or $unlock -le $invoke -or $returned -le $unlock) { return $false }
+        $body = & $extract ($name + '_locked')
+        if ([string]::IsNullOrEmpty($body)) { return $false }
+    }
+    foreach ($candidate in @($entry, $body)) {
+        foreach ($effect in @('CreateIoCompletionPort', '@epoll_ctl', '@fcntl')) {
+            if ($candidate.Contains($effect, [StringComparison]::Ordinal)) { return $false }
+        }
+    }
+    $duplicate = [regex]::Match($body, '(?m)^[ \t]*duplicate_loop:\r?$')
+    $capacity = [regex]::Match($body, '(?m)^[ \t]*free_loop:\r?$')
+    $count = [regex]::Match($body, '(?m)^[ \t]*store i64 %next_count, ptr %count_slot, align 8[ \t]*\r?$')
+    $active = [regex]::Match($body, '(?m)^[ \t]*store i64 1, ptr %free_entry, align 8[ \t]*\r?$')
+    return $duplicate.Success -and $capacity.Success -and $capacity.Index -gt $duplicate.Index -and
+        $count.Success -and $active.Success -and $active.Index -gt $count.Index
+}
+
 function Test-VerificationSocketWaiterScratch {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Body,
           [Parameter(Mandatory)][ValidateSet('windows', 'linux')][string]$Platform)
