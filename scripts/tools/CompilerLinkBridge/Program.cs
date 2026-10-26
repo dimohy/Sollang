@@ -51,6 +51,31 @@ if (slgMain)
         requiredAllocators.Add(symbol);
     }
 
+// The SLG runtime also calls CRT console/descriptor functions. Validate their
+// declared ABI before importing them; LLVM can lower its memset intrinsic to
+// the CRT symbol even without an explicit @memset declaration.
+var crtDeclarations = new Dictionary<string, string> {
+    ["_get_osfhandle"] = "declare i64 @_get_osfhandle(i32)",
+    ["getchar"] = "declare i32 @getchar()",
+    ["memset"] = "declare ptr @memset(ptr, i32, i64)" };
+if (slgMain)
+{
+    var lines = File.ReadAllLines(input);
+    foreach (var (symbol, declaration) in crtDeclarations)
+    {
+        var declarations = lines.Where(line => line.StartsWith("declare ", StringComparison.Ordinal)
+            && line.Contains("@" + symbol + "(", StringComparison.Ordinal)).ToArray();
+        if (declarations.Length == 0) continue;
+        if (declarations.Length != 1 || declarations[0] != declaration)
+            throw new InvalidOperationException("COMPILER_LINK_BRIDGE_CRT_ABI_MISMATCH:" + symbol);
+        requiredAllocators.Add(symbol);
+    }
+    // Aggregate zero initialization can also introduce memset during object
+    // compilation, without a corresponding source IR declaration.
+    if (!requiredAllocators.Contains("memset"))
+        requiredAllocators.Add("memset");
+}
+
 var assembly = Assembly.LoadFrom(assemblyPath);
 var toolchainType = assembly.GetType("Sollang.Compiler.Tooling.LlvmToolchain", throwOnError: true)!;
 var from = toolchainType.GetMethod("From", BindingFlags.Public | BindingFlags.Static,
@@ -127,4 +152,5 @@ else if (args[0] == "link")
     link.Invoke(linker, [input, output, work, optimization, false]);
 Console.WriteLine(JsonSerializer.Serialize(new { status = "passed", mode = args[0],
     scope = "diagnostic-link-only-not-compiler-acceptance", compilerAssemblySha256 = digest, optimization,
-    entryPoint = slgMain ? "main" : "sollang_start", maximumWorkers, resolvedWorkerLimit }));
+    entryPoint = slgMain ? "main" : "sollang_start", maximumWorkers, resolvedWorkerLimit,
+    crtExports = requiredAllocators }));

@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from completed_artifact_plan import initialize_output
+from completed_artifact_plan import initialize_output, cleanup_output
 from verification_execution import VerificationExecution
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,12 +15,13 @@ def main():
     for name in ('bridge', 'compiler', 'llvm', 'sample', 'output'):
         parser.add_argument('--' + name, type=Path, required=True)
     parser.add_argument('--slg-sample', type=Path)
+    parser.add_argument('--reusable-directory', type=Path, action='append')
     args = parser.parse_args()
     bridge, compiler, llvm, sample, output = [p.resolve() for p in
         (args.bridge, args.compiler, args.llvm, args.sample, args.output)]
     if output.exists() or not output.is_relative_to(ROOT / 'artifacts'):
         raise ValueError('LINK_BRIDGE_TEST_FRESH_OUTPUT_REQUIRED')
-    initialize_output(ROOT, output)
+    initialize_output(ROOT, output, reusable_directories=args.reusable_directory)
     output.mkdir(parents=True)
     target = output / 'wrong-target.ll.fixture.txt'
     target.write_text('target triple = "x86_64-unknown-linux-gnu"\n')
@@ -37,6 +38,11 @@ def main():
                              'define i32 @main() {\n  ret i32 0\n}\n'
                              'declare ptr @malloc(i32)\n')
         paths.append(allocator)
+        crt = output / 'invalid-crt.ll.fixture.txt'
+        crt.write_text('target triple = "x86_64-pc-windows-msvc"\n'
+                       'define i32 @main() {\n  ret i32 0\n}\n'
+                       'declare i32 @_get_osfhandle(i32)\n')
+        paths.append(crt)
     pins = {str(p): sha(p) for p in paths}
     stable = lambda: all(Path(p).is_file() and sha(Path(p)) == digest for p, digest in pins.items())
     result = dict(schemaVersion=1, scope='compiler-link-bridge-input-contract', status='running',
@@ -57,7 +63,8 @@ def main():
                 ('native-reject-managed', sha(compiler), sample, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED'),
                 ('native-wrong-target', sha(compiler), target, '-O1', 'COMPILER_LINK_BRIDGE_TARGET_ABI_MISMATCH'),
                 ('native-missing-entry', sha(compiler), entry, '-O1', 'COMPILER_LINK_BRIDGE_ENTRY_REQUIRED'),
-                ('native-invalid-allocator', sha(compiler), allocator, '-O1', 'COMPILER_LINK_BRIDGE_ALLOCATOR_ABI_MISMATCH')])
+                ('native-invalid-allocator', sha(compiler), allocator, '-O1', 'COMPILER_LINK_BRIDGE_ALLOCATOR_ABI_MISMATCH'),
+                ('native-invalid-crt', sha(compiler), crt, '-O1', 'COMPILER_LINK_BRIDGE_CRT_ABI_MISMATCH')])
         result['total'] = len(rows)
         for name, digest, source, optimization, failure in rows:
             exe = output / (name + '.exe')
@@ -79,7 +86,9 @@ def main():
         error = exc
         raise
     finally:
-        runner.finalize(error)
+        runner.finalize(error, cleanup=False)
+    if result['status'] == 'passed' and result['inputsStable'] and result['processesStopped']:
+        cleanup_output(ROOT, output, execute=True, reusable_directories=args.reusable_directory)
 
 
 if __name__ == '__main__':
