@@ -1,0 +1,386 @@
+namespace std.compress.zstd.fse
+
+import std.compress.zstd.fse as model
+
+# RFC 8878 section 4.1 bounded FSE tables and forward/reverse bit readers.
+public enum Failure {
+    Invalid
+}
+
+public struct Table {
+    public symbols: [Int; ~]
+    public stateBits: [Int; ~]
+    public stateBases: [Int; ~]
+    public accuracyLog: Int
+}
+
+public struct Description {
+    public table: Table
+    public bytesRead: Int
+}
+
+struct ForwardBits {
+    bitPosition: Int
+}
+
+public struct ReverseBits {
+    public offset: Int
+    public size: Int
+    public bitOffset: Int
+}
+
+errorTable: -> Result<Table, Failure> {
+    Result<Table, Failure>.Err(model.Failure.Invalid)
+}
+
+errorDescription: -> Result<Description, Failure> {
+    Result<Description, Failure>.Err(model.Failure.Invalid)
+}
+
+errorReader: -> Result<ReverseBits, Failure> {
+    Result<ReverseBits, Failure>.Err(model.Failure.Invalid)
+}
+
+errorInt: -> Result<Int, Failure> {
+    Result<Int, Failure>.Err(model.Failure.Invalid)
+}
+
+powerOfTwo exponent: Int -> Int {
+    exponent >= 0 -> unless { 0 -> return }
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+highestSetBit value: Int -> Int {
+    value > 0 -> unless { -1 -> return }
+    value => remaining!
+    0 => bit!
+    remaining! > 1 -> while {
+        remaining! / 2 => remaining!
+        bit! + 1 => bit!
+    }
+    bit!
+}
+
+public empty: -> Table {
+    Table {
+        symbols: [Int; ~]
+        stateBits: [Int; ~]
+        stateBases: [Int; ~]
+        accuracyLog: -1
+    }
+}
+
+public rle symbol: Int -> Result<Table, Failure> {
+    symbol >= 0 and symbol <= 255 -> unless { errorTable() -> return }
+    [Int; ~] => symbols!
+    [Int; ~] => stateBits!
+    [Int; ~] => stateBases!
+    symbols! -> push(symbol)
+    stateBits! -> push(0)
+    stateBases! -> push(0)
+    Result<Table, Failure>.Ok(Table {
+        symbols: symbols!
+        stateBits: stateBits!
+        stateBases: stateBases!
+        accuracyLog: 0
+    })
+}
+
+public predefinedLiteralLengths: -> Result<Table, Failure> {
+    [4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1,
+    -1, -1, -1, -1] => normalized
+    normalized -> fromNormalized(6)
+}
+
+public predefinedOffsets: -> Result<Table, Failure> {
+    [1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, -1, -1, -1, -1, -1] => normalized
+    normalized -> fromNormalized(5)
+}
+
+public predefinedMatchLengths: -> Result<Table, Failure> {
+    [1, 4, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, -1, -1,
+    -1, -1, -1, -1, -1] => normalized
+    normalized -> fromNormalized(6)
+}
+
+public fromNormalized normalized: [Int], accuracyLog: Int -> Result<Table, Failure> {
+    accuracyLog >= 5 and accuracyLog <= 9
+        and (normalized -> len) > 1 and (normalized -> len) <= 256
+        -> unless { errorTable() -> return }
+    accuracyLog -> powerOfTwo => tableSize
+    0 => probabilityTotal!
+    0 => nonzeroSymbols!
+    0 => symbol!
+    symbol! < (normalized -> len) -> while {
+        normalized[symbol!] >= -1 -> unless { errorTable() -> return }
+        normalized[symbol!] != 0 -> if {
+            normalized[symbol!] < 0 -> if { 1 } else { normalized[symbol!] } => probability
+            probabilityTotal! + probability => probabilityTotal!
+            nonzeroSymbols! + 1 => nonzeroSymbols!
+        }
+        symbol! + 1 => symbol!
+    }
+    probabilityTotal! == tableSize and nonzeroSymbols! >= 2
+        -> unless { errorTable() -> return }
+
+    [Int; ~] => symbols!
+    [Int; ~] => stateBits!
+    [Int; ~] => stateBases!
+    symbols! -> reserve(tableSize)
+    stateBits! -> reserve(tableSize)
+    stateBases! -> reserve(tableSize)
+    0 => index!
+    index! < tableSize -> while {
+        symbols! -> push(-1)
+        stateBits! -> push(0)
+        stateBases! -> push(0)
+        index! + 1 => index!
+    }
+    [Int; ~] => nextState!
+    nextState! -> reserve(normalized -> len)
+    0 => nextIndex!
+    nextIndex! < (normalized -> len) -> while {
+        nextState! -> push(0)
+        nextIndex! + 1 => nextIndex!
+    }
+
+    tableSize => highThreshold!
+    0 => lowSymbol!
+    lowSymbol! < (normalized -> len) -> while {
+        normalized[lowSymbol!] == -1 -> if {
+            highThreshold! - 1 => highThreshold!
+            lowSymbol! => symbols![highThreshold!]
+            1 => nextState![lowSymbol!]
+        }
+        lowSymbol! + 1 => lowSymbol!
+    }
+
+    tableSize / 2 + tableSize / 8 + 3 => step
+    0 => position!
+    0 => spreadSymbol!
+    spreadSymbol! < (normalized -> len) -> while {
+        normalized[spreadSymbol!] > 0 -> if {
+            normalized[spreadSymbol!] => nextState![spreadSymbol!]
+            0 => cell!
+            cell! < normalized[spreadSymbol!] -> while {
+                symbols![position!] == -1 -> unless { errorTable() -> return }
+                spreadSymbol! => symbols![position!]
+                (position! + step) % tableSize => position!
+                position! >= highThreshold! -> while {
+                    (position! + step) % tableSize => position!
+                }
+                cell! + 1 => cell!
+            }
+        }
+        spreadSymbol! + 1 => spreadSymbol!
+    }
+    position! == 0 -> unless { errorTable() -> return }
+
+    0 => state!
+    state! < tableSize -> while {
+        symbols![state!] => stateSymbol
+        stateSymbol >= 0 and stateSymbol < (nextState! -> len)
+            -> unless { errorTable() -> return }
+        nextState![stateSymbol] => descriptor
+        descriptor > 0 -> unless { errorTable() -> return }
+        descriptor + 1 => nextState![stateSymbol]
+        accuracyLog - (descriptor -> highestSetBit) => bits
+        bits >= 0 -> unless { errorTable() -> return }
+        bits => stateBits![state!]
+        descriptor * (bits -> powerOfTwo) - tableSize => stateBases![state!]
+        state! + 1 => state!
+    }
+
+    Result<Table, Failure>.Ok(Table {
+        symbols: symbols!
+        stateBits: stateBits!
+        stateBases: stateBases!
+        accuracyLog: accuracyLog
+    })
+}
+
+public parseDescription input: [UInt8], offset: Int, available: Int, maxSymbols: Int, maxAccuracyLog: Int -> Result<Description, Failure> {
+    available > 0 and offset >= 0 and offset + available <= (input -> len)
+        and maxSymbols > 1 and maxSymbols <= 256
+        and maxAccuracyLog >= 5 and maxAccuracyLog <= 9
+        -> unless { errorDescription() -> return }
+    ForwardBits { bitPosition: 0 } => reader!
+    reader! -> read(input, offset, available, 4)? => encodedAccuracy
+    encodedAccuracy + 5 => accuracyLog
+    accuracyLog <= maxAccuracyLog -> unless { errorDescription() -> return }
+    accuracyLog -> powerOfTwo => tableSize
+    tableSize => remaining!
+    [Int; ~] => normalized!
+    normalized! -> reserve(maxSymbols)
+    0 => nonzeroSymbols!
+
+    remaining! > 0 and (normalized! -> len) < maxSymbols
+        -> while {
+            (remaining! + 1 -> highestSetBit) + 1 => bits
+            reader! -> read(input, offset, available, bits)? => raw
+            (bits - 1 -> powerOfTwo) - 1 => lowerMask
+            (bits -> powerOfTwo) - 1 - (remaining! + 1) => threshold
+            raw % (bits - 1 -> powerOfTwo) => lower
+            raw => decoded!
+            lower < threshold -> if {
+                reader!.bitPosition - 1 => reader!.bitPosition
+                lower => decoded!
+            } else {
+                raw > lowerMask -> if { raw - threshold => decoded! }
+            }
+            decoded! - 1 => probability
+            probability >= -1 -> unless { errorDescription() -> return }
+            probability < 0 -> if { 1 } else { probability } => allocated
+            allocated <= remaining! -> unless { errorDescription() -> return }
+            remaining! - allocated => remaining!
+            normalized! -> push(probability)
+            probability != 0 -> if { nonzeroSymbols! + 1 => nonzeroSymbols! }
+
+            probability == 0 -> if {
+                3 => repeat!
+                repeat! == 3 -> while {
+                    reader! -> read(input, offset, available, 2)? => repeat!
+                    (normalized! -> len) + repeat! <= maxSymbols
+                        -> unless { errorDescription() -> return }
+                    0 => repeated!
+                    repeated! < repeat! -> while {
+                        normalized! -> push(0)
+                        repeated! + 1 => repeated!
+                    }
+                }
+            }
+        }
+    remaining! == 0 and nonzeroSymbols! >= 2
+        -> unless { errorDescription() -> return }
+    (reader!.bitPosition + 7) / 8 => bytesRead
+    normalized! -> fromNormalized(accuracyLog)? => table
+    Result<Description, Failure>.Ok(Description {
+        table: table
+        bytesRead: bytesRead
+    })
+}
+
+impl ForwardBits {
+    public read: mut self, input: [UInt8], offset: Int, available: Int, bits: Int -> Result<Int, Failure> {
+        bits >= 0 and offset >= 0 and available >= 0
+            and self.bitPosition >= 0 and self.bitPosition + bits <= available * 8
+            and offset + available <= (input -> len)
+            -> unless { errorInt() -> return }
+        0 => value!
+        0 => index!
+        index! < bits -> while {
+            self.bitPosition + index! => absoluteBit
+            Int(input[offset + absoluteBit / 8]) => byte
+            absoluteBit % 8 -> powerOfTwo => divisor
+            (byte / divisor) % 2 => bit
+            value! + bit * (index! -> powerOfTwo) => value!
+            index! + 1 => index!
+        }
+        self.bitPosition + bits => self.bitPosition
+        Result<Int, Failure>.Ok(value!)
+    }
+}
+
+public decodeReverse input: [UInt8], offset: Int, size: Int -> Result<ReverseBits, Failure> {
+    size > 0 and offset >= 0 and offset + size <= (input -> len)
+        -> unless { errorReader() -> return }
+    Int(input[offset + size - 1]) -> highestSetBit => finalBit
+    finalBit >= 0 -> unless { errorReader() -> return }
+    Result<ReverseBits, Failure>.Ok(ReverseBits {
+        offset: offset
+        size: size
+        bitOffset: size * 8 - (8 - finalBit)
+    })
+}
+
+impl Table {
+    public hasData: self -> Bool => self.accuracyLog >= 0 and (self.symbols -> len) > 0
+
+    public accuracy: self -> Int => self.accuracyLog
+
+    public symbol: self, state: Int -> Result<Int, Failure> {
+        state >= 0 and state < (self.symbols -> len)
+            -> unless { errorInt() -> return }
+        Result<Int, Failure>.Ok(self.symbols[state])
+    }
+
+    public bits: self, state: Int -> Result<Int, Failure> {
+        state >= 0 and state < (self.stateBits -> len)
+            -> unless { errorInt() -> return }
+        Result<Int, Failure>.Ok(self.stateBits[state])
+    }
+
+    public base: self, state: Int -> Result<Int, Failure> {
+        state >= 0 and state < (self.stateBases -> len)
+            -> unless { errorInt() -> return }
+        Result<Int, Failure>.Ok(self.stateBases[state])
+    }
+
+    public update: self, state: Int, reader: mut ReverseBits, input: [UInt8] -> Result<Int, Failure> {
+        state >= 0 and state < (self.stateBits -> len)
+            and state < (self.stateBases -> len)
+            -> unless { errorInt() -> return }
+        reader -> read(input, self.stateBits[state])? => extra
+        self.stateBases[state] + extra => next
+        next >= 0 and next < (self.symbols -> len)
+            -> unless { errorInt() -> return }
+        Result<Int, Failure>.Ok(next)
+    }
+
+    public reset: mut self -> Unit {
+        (self.symbols -> len) > 0 -> while {
+            self.symbols -> take((self.symbols -> len) - 1) => discardedSymbol
+        }
+        (self.stateBits -> len) > 0 -> while {
+            self.stateBits -> take((self.stateBits -> len) - 1) => discardedBits
+        }
+        (self.stateBases -> len) > 0 -> while {
+            self.stateBases -> take((self.stateBases -> len) - 1) => discardedBase
+        }
+        -1 => self.accuracyLog
+    }
+
+    public replaceFrom: mut self, replacement: ref Table -> Unit {
+        self -> reset
+        0 => index!
+        index! < (replacement.symbols -> len) -> while {
+            self.symbols -> push(replacement.symbols[index!])
+            self.stateBits -> push(replacement.stateBits[index!])
+            self.stateBases -> push(replacement.stateBases[index!])
+            index! + 1 => index!
+        }
+        replacement.accuracyLog => self.accuracyLog
+    }
+}
+
+impl ReverseBits {
+    public read: mut self, input: [UInt8], bits: Int -> Result<Int, Failure> {
+        bits >= 0 and bits <= self.bitOffset
+            and self.offset >= 0 and self.offset + self.size <= (input -> len)
+            -> unless { errorInt() -> return }
+        self.bitOffset - bits => self.bitOffset
+        0 => value!
+        0 => index!
+        index! < bits -> while {
+            self.bitOffset + index! => bitPosition
+            Int(input[self.offset + bitPosition / 8]) => byte
+            bitPosition % 8 -> powerOfTwo => divisor
+            (byte / divisor) % 2 => bit
+            value! + bit * (index! -> powerOfTwo) => value!
+            index! + 1 => index!
+        }
+        Result<Int, Failure>.Ok(value!)
+    }
+
+    public complete: self -> Bool => self.bitOffset == 0
+}

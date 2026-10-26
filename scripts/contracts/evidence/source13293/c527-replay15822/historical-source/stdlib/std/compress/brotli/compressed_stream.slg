@@ -1,0 +1,507 @@
+namespace std.compress.brotli.compressed_stream
+
+import std.compress.brotli.compressed_stream as model
+import std.compress.brotli.error as errors
+import std.compress.brotli.command as commands
+import std.compress.brotli.command.error as command_errors
+import std.compress.brotli.compressed_header as headers
+import std.compress.brotli.compressed_header.error as header_errors
+import std.compress.brotli.prefix_code as codes
+import std.compress.brotli.prefix_code.error as code_errors
+import std.compress.brotli.prefix_table as prefix
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxOutputBytes: Int
+    public maxCommands: Int
+    public maxWindowBytes: Int
+}
+
+struct HeaderPrefix {
+    reader: headers.HeaderReader
+    description: codes.DescriptionReader
+}
+
+struct ContextPrefix {
+    reader: headers.ContextReader
+    description: codes.DescriptionReader
+}
+
+struct TreePrefix {
+    reader: headers.TreeReader
+    description: codes.DescriptionReader
+}
+
+enum State {
+    Header(headers.HeaderReader)
+    HeaderPrefix(HeaderPrefix)
+    Context(headers.ContextReader)
+    ContextPrefix(ContextPrefix)
+    Tree(headers.TreeReader)
+    TreePrefix(TreePrefix)
+    Command(commands.Reader)
+    Complete([UInt8; ~])
+    Empty
+}
+
+public struct Reader {
+    public parser: headers.Parser
+    public limits: Limits
+    public expectedOutputBytes: Int
+    public history: [UInt8; ~]
+    public state: State
+}
+
+public enum Read {
+    NeedMore(Int)
+    Ready
+}
+
+enum Advance {
+    Continue
+    NeedMore(Int)
+    Ready
+}
+
+impl HeaderPrefix {
+    intoReader: move self -> headers.HeaderReader {
+        self.reader => reader
+        reader
+    }
+}
+
+impl ContextPrefix {
+    intoReader: move self -> headers.ContextReader {
+        self.reader => reader
+        reader
+    }
+}
+
+impl TreePrefix {
+    intoReader: move self -> headers.TreeReader {
+        self.reader => reader
+        reader
+    }
+}
+
+mapHeaderError kind: header_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidHeader }
+}
+
+mapCommandError kind: command_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    OutputLimitExceeded { errors.Kind.OutputLimitExceeded }
+    UnsupportedDictionary { errors.Kind.UnsupportedDictionary }
+    else { errors.Kind.InvalidHeader }
+}
+
+mapCodeError kind: code_errors.Kind -> errors.Kind => kind -> when {
+    TruncatedInput { errors.Kind.TruncatedInput }
+    else { errors.Kind.InvalidHeader }
+}
+
+headerError kind: header_errors.Kind, offset: UIntSize -> Result<Read, Error> {
+    Result<Read, Error>.Err(Error {
+        kind: kind -> mapHeaderError
+        offset: offset
+    })
+}
+
+commandError kind: command_errors.Kind, offset: UIntSize -> Result<Read, Error> {
+    Result<Read, Error>.Err(Error {
+        kind: kind -> mapCommandError
+        offset: offset
+    })
+}
+
+readerError kind: errors.Kind, offset: UIntSize -> Result<Reader, Error> {
+    Result<Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+bytesError kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+headerAdvanceError kind: header_errors.Kind, offset: UIntSize -> Result<Advance, Error> {
+    Result<Advance, Error>.Err(Error {
+        kind: kind -> mapHeaderError
+        offset: offset
+    })
+}
+
+commandAdvanceError kind: command_errors.Kind, offset: UIntSize -> Result<Advance, Error> {
+    Result<Advance, Error>.Err(Error {
+        kind: kind -> mapCommandError
+        offset: offset
+    })
+}
+
+codeAdvanceError kind: code_errors.Kind, offset: UIntSize -> Result<Advance, Error> {
+    Result<Advance, Error>.Err(Error {
+        kind: kind -> mapCodeError
+        offset: offset
+    })
+}
+
+impl Limits {
+    public dormantReader: self, parser: headers.Parser -> Result<Reader, Error> {
+        self.maxOutputBytes >= 0 and self.maxCommands >= 0
+            and self.maxWindowBytes >= 1_008 and self.maxWindowBytes <= 16_777_200
+            -> unless { readerError(errors.Kind.InvalidLimit, 0) -> return }
+        Result<Reader, Error>.Ok(Reader {
+            parser: parser
+            limits: self
+            expectedOutputBytes: 0
+            history: [UInt8; ~]
+            state: model.State.Empty
+        })
+    }
+
+    public reader: self, parser: headers.Parser, expectedOutputBytes: Int, history: move [UInt8; ~] -> Result<Reader, Error> {
+        self.maxOutputBytes >= 0 and self.maxCommands > 0
+            and self.maxWindowBytes >= 1_008 and self.maxWindowBytes <= 16_777_200
+            and expectedOutputBytes > 0 and expectedOutputBytes <= self.maxOutputBytes
+            and (history -> len) <= self.maxOutputBytes - expectedOutputBytes
+            -> unless { readerError(errors.Kind.InvalidLimit, UIntSize(expectedOutputBytes)) -> return }
+        parser -> headerReader => header
+        Result<Reader, Error>.Ok(Reader {
+            parser: parser
+            limits: self
+            expectedOutputBytes: expectedOutputBytes
+            history: history
+            state: model.State.Header(header)
+        })
+    }
+}
+
+advanceHeader owner: mut Reader, reader: move headers.HeaderReader, window: mut prefix.Window -> Result<Advance, Error> {
+    reader => reader!
+    reader! -> read(window) -> when {
+        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.Header(reader!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                NeedBlockPrefix(_) {
+                    reader! -> prefixDescription -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(description) {
+                            model.State.HeaderPrefix(HeaderPrefix {
+                                reader: reader!
+                                description: description
+                            }) => owner.state
+                            Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                        }
+                    }
+                }
+                NeedBlockFinish(_) {
+                    reader! -> finishBlock -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(_) {
+                            model.State.Header(reader!) => owner.state
+                            Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                        }
+                    }
+                }
+                Ready {
+                    reader! -> finishPrelude -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(prelude) {
+                            prelude -> contextReader(owner.parser) -> when {
+                                Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                                Ok(context) {
+                                    model.State.Context(context) => owner.state
+                                    Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+advanceHeaderPrefix owner: mut Reader, prefixState: move HeaderPrefix, window: mut prefix.Window -> Result<Advance, Error> {
+    prefixState => prefixState!
+    prefixState!.description -> read(window) -> when {
+        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.HeaderPrefix(prefixState!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                Ready {
+                    prefixState!.description -> takeTable -> when {
+                        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+                        Ok(table) {
+                            prefixState!.reader -> installPrefix(table) -> when {
+                                Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                                Ok(_) {
+                                    prefixState! -> intoReader => reader
+                                    model.State.Header(reader) => owner.state
+                                    Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+advanceContext owner: mut Reader, reader: move headers.ContextReader, window: mut prefix.Window -> Result<Advance, Error> {
+    reader => reader!
+    reader! -> read(window) -> when {
+        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.Context(reader!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                NeedPrefix(_) {
+                    reader! -> prefixDescription -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(description) {
+                            model.State.ContextPrefix(ContextPrefix {
+                                reader: reader!
+                                description: description
+                            }) => owner.state
+                            Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                        }
+                    }
+                }
+                Ready {
+                    reader! -> finish -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(prelude) {
+                            prelude -> treeReader(owner.parser) -> when {
+                                Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                                Ok(tree) {
+                                    model.State.Tree(tree) => owner.state
+                                    Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+advanceContextPrefix owner: mut Reader, prefixState: move ContextPrefix, window: mut prefix.Window -> Result<Advance, Error> {
+    prefixState => prefixState!
+    prefixState!.description -> read(window) -> when {
+        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.ContextPrefix(prefixState!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                Ready {
+                    prefixState!.description -> takeTable -> when {
+                        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+                        Ok(table) {
+                            prefixState!.reader -> installPrefix(table) -> when {
+                                Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                                Ok(_) {
+                                    prefixState! -> intoReader => reader
+                                    model.State.Context(reader) => owner.state
+                                    Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+advanceTree owner: mut Reader, reader: move headers.TreeReader, window: mut prefix.Window, position: prefix.Position -> Result<Advance, Error> {
+    reader => reader!
+    reader! -> next -> when {
+        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedTree(_) {
+                    reader! -> prefixDescription -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(description) {
+                            model.State.TreePrefix(TreePrefix {
+                                reader: reader!
+                                description: description
+                            }) => owner.state
+                            Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                        }
+                    }
+                }
+                Ready {
+                    reader! -> finish(position) -> when {
+                        Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                        Ok(parsed) {
+                            commands.Limits {
+                                maxOutputBytes: owner.limits.maxOutputBytes
+                                maxCommands: owner.limits.maxCommands
+                                maxWindowBytes: owner.limits.maxWindowBytes
+                            } -> executor(parsed, owner.expectedOutputBytes) -> when {
+                                Err(error) { commandAdvanceError(error.kind, error.offset) -> return }
+                                Ok(executor) {
+                                    owner.history => history
+                                    [UInt8; ~] => owner.history
+                                    executor -> reader(history) -> when {
+                                        Err(error) { commandAdvanceError(error.kind, error.offset) -> return }
+                                        Ok(command) {
+                                            model.State.Command(command) => owner.state
+                                            Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error {
+        kind: errors.Kind.InvalidHeader
+        offset: UIntSize(position.byteIndex)
+    })
+}
+
+advanceTreePrefix owner: mut Reader, prefixState: move TreePrefix, window: mut prefix.Window -> Result<Advance, Error> {
+    prefixState => prefixState!
+    prefixState!.description -> read(window) -> when {
+        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.TreePrefix(prefixState!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                Ready {
+                    prefixState!.description -> takeTable -> when {
+                        Err(error) { codeAdvanceError(error.kind, error.offset) -> return }
+                        Ok(table) {
+                            prefixState!.reader -> installTree(table) -> when {
+                                Err(error) { headerAdvanceError(error.kind, error.offset) -> return }
+                                Ok(_) {
+                                    prefixState! -> intoReader => reader
+                                    model.State.Tree(reader) => owner.state
+                                    Result<Advance, Error>.Ok(model.Advance.Continue) -> return
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+advanceCommand owner: mut Reader, reader: move commands.Reader, window: mut prefix.Window -> Result<Advance, Error> {
+    reader => reader!
+    reader! -> read(window) -> when {
+        Err(error) { commandAdvanceError(error.kind, error.offset) -> return }
+        Ok(progress) {
+            progress -> when {
+                NeedMore(bits) {
+                    model.State.Command(reader!) => owner.state
+                    Result<Advance, Error>.Ok(model.Advance.NeedMore(bits)) -> return
+                }
+                Ready {
+                    reader! -> finish -> when {
+                        Err(error) { commandAdvanceError(error.kind, error.offset) -> return }
+                        Ok(streamed) {
+                            streamed -> intoOutput => output
+                            model.State.Complete(output) => owner.state
+                            Result<Advance, Error>.Ok(model.Advance.Ready) -> return
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Result<Advance, Error>.Err(Error { kind: errors.Kind.InvalidHeader, offset: 0 })
+}
+
+impl Reader {
+    public active: self -> Bool => self.state -> when {
+        Empty { false }
+        else { true }
+    }
+
+    public read: mut self, window: mut prefix.Window, position: prefix.Position -> Result<Read, Error> {
+        true -> while {
+            self.state => state
+            model.State.Empty => self.state
+            state -> when {
+                Header(reader) { self -> advanceHeader(reader, window) }
+                HeaderPrefix(prefixState) { self -> advanceHeaderPrefix(prefixState, window) }
+                Context(reader) { self -> advanceContext(reader, window) }
+                ContextPrefix(prefixState) { self -> advanceContextPrefix(prefixState, window) }
+                Tree(reader) { self -> advanceTree(reader, window, position) }
+                TreePrefix(prefixState) { self -> advanceTreePrefix(prefixState, window) }
+                Command(reader) { self -> advanceCommand(reader, window) }
+                Complete(output) {
+                    model.State.Complete(output) => self.state
+                    Result<Advance, Error>.Ok(model.Advance.Ready)
+                }
+                Empty {
+                    Result<Advance, Error>.Err(Error {
+                        kind: errors.Kind.InvalidHeader
+                        offset: UIntSize(position.byteIndex)
+                    })
+                }
+            } -> when {
+                Err(error) { Result<Read, Error>.Err(error) -> return }
+                Ok(advance) {
+                    advance -> when {
+                        Continue { }
+                        NeedMore(bits) { Result<Read, Error>.Ok(model.Read.NeedMore(bits)) -> return }
+                        Ready { Result<Read, Error>.Ok(model.Read.Ready) -> return }
+                    }
+                }
+            }
+        }
+        Result<Read, Error>.Err(Error {
+            kind: errors.Kind.InvalidHeader
+            offset: UIntSize(position.byteIndex)
+        })
+    }
+
+    public finish: move self -> Result<[UInt8; ~], Error> {
+        self.state => state
+        state -> when {
+            Complete(output) { Result<[UInt8; ~], Error>.Ok(output) }
+            else { bytesError(errors.Kind.TruncatedInput, 0) }
+        }
+    }
+
+    public takeOutput: mut self -> Result<[UInt8; ~], Error> {
+        self.state => state
+        model.State.Empty => self.state
+        state -> when {
+            Complete(output) { Result<[UInt8; ~], Error>.Ok(output) }
+            else { bytesError(errors.Kind.TruncatedInput, 0) }
+        }
+    }
+}

@@ -1,0 +1,1563 @@
+namespace std.text.json
+
+import std.text.json.error as errors
+import std.text.json as model
+import sys.file as file
+
+# Strict RFC 8259 token reader. It owns one SourceText view and preserves
+# strings and numbers as raw spans so callers choose decoding and numeric
+# precision deliberately. JSON parsing performs no file or network activity.
+public enum TokenKind {
+    DocumentEnd
+    Null
+    False
+    True
+    Number
+    String
+    Name
+    BeginArray
+    EndArray
+    BeginObject
+    EndObject
+}
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxInputBytes: Int
+    public maxDepth: Int
+    public maxTokens: Int
+    public maxStringBytes: Int
+}
+
+public struct Token {
+    public kind: TokenKind
+    public start: UIntSize
+    public length: UIntSize
+    public contentStart: UIntSize
+    public contentLength: UIntSize
+    public decodedLength: Int
+    public depth: Int
+}
+
+# The owned typed model is an index-addressed tree. Values never recursively
+# contain Value by layout, and every decoded string/name or number spelling is
+# owned by the document. Object member order and duplicate names are preserved.
+public enum ValueKind {
+    Null
+    Boolean
+    Number
+    String
+    Array
+    Object
+}
+
+public struct Member {
+    public name: [UInt8; ~]
+    public value: Int
+}
+
+public struct Value {
+    public kind: ValueKind
+    public boolean: Bool
+    public bytes: [UInt8; ~]
+    public items: [Int; ~]
+    public members: [Member; ~]
+}
+
+public struct Document {
+    public values: [Value; ~]
+    public root: Int
+}
+
+public struct Reader {
+    public source: file.SourceText
+    public index: UIntSize
+    public end: UIntSize
+    public rootState: UInt8
+    public tokensRead: Int
+    public limits: Limits
+    public stack: [UInt8; ~]
+}
+
+# Stateful generator. The instance owns both its structural state and output;
+# writing therefore needs no global mutable state and intoBytes transfers the
+# already-built buffer without copying it.
+public struct Writer {
+    public output: [UInt8; ~]
+    public produced: Int
+    public maxOutputBytes: Int
+    public maxDepth: Int
+    public rootState: UInt8
+    public stack: [UInt8; ~]
+}
+
+# Public token spans are validated against the receiving reader before access.
+checkedTokenEnd source: ref file.SourceText, token: Token, invalidKind: errors.Kind -> Result<UIntSize, Error> {
+    source -> len => sourceLength
+    token.start < sourceLength and token.length > 0
+        and token.length <= sourceLength - token.start
+        -> unless {
+            errorOffset(invalidKind, token.start) -> return
+        }
+    Result<UIntSize, Error>.Ok(token.start + token.length)
+}
+
+checkedLiteralToken source: ref file.SourceText, token: Token, expected: Text -> Result<Unit, Error> {
+    source -> checkedTokenEnd(token, errors.Kind.InvalidLiteral)? => end
+    token.length == (expected -> len)
+        and source -> literalMatches(token.start, end, expected)
+        -> unless {
+            errorUnit(errors.Kind.InvalidLiteral, token.start) -> return
+        }
+    Result<Unit, Error>.Ok
+}
+
+# Integer conversion accepts only the integer lexical form. Decimal points and
+# exponents require a separate numeric policy, even when their value is integral.
+integerMagnitude source: ref file.SourceText, token: Token, maximum: UInt64 -> Result<UInt64, Error> {
+    token.kind -> when {
+        Number { }
+        else {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.WrongTokenKind
+                offset: token.start
+            }) -> return
+        }
+    }
+    source -> checkedTokenEnd(token, errors.Kind.InvalidNumber)? => end
+    source -> scanNumber(token.start, end)? => scannedEnd
+    scannedEnd == end -> unless {
+        Result<UInt64, Error>.Err(Error {
+            kind: errors.Kind.InvalidNumber
+            offset: scannedEnd
+        }) -> return
+    }
+    token.start => index!
+    source -> byte(index!) == '-' -> if {
+        index! + 1 => index!
+    }
+    index! => firstDigit
+    index! < end -> while {
+        source -> byte(index!) => byte
+        byte -> isDigit -> unless {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NonIntegerNumber
+                offset: index!
+            }) -> return
+        }
+        index! + 1 => index!
+    }
+    firstDigit => index!
+    UInt64(0) => magnitude!
+    index! < end -> while {
+        UInt64((source -> byte(index!)) - '0') => digit
+        magnitude! <= (maximum - digit) / 10 -> unless {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: index!
+            }) -> return
+        }
+        magnitude! * 10 + digit => magnitude!
+        index! + 1 => index!
+    }
+    Result<UInt64, Error>.Ok(magnitude!)
+}
+
+# JSON decimal and exponent spellings are preserved exactly. The model does
+# not silently round them to Float32/Float64, and RFC 8259 already rejects
+# NaN/Infinity. Callers may opt into the exact int64/uint64 conversions above;
+# binary floating and fixed-decimal conversion require a separate explicit
+# rounding, overflow, and negative-zero policy.
+ownedNumberBytes source: ref file.SourceText, token: Token -> Result<[UInt8; ~], Error> {
+    token.kind -> when {
+        Number { }
+        else { errorBytes(errors.Kind.WrongTokenKind, token.start) -> return }
+    }
+    source -> checkedTokenEnd(token, errors.Kind.InvalidNumber)? => end
+    source -> scanNumber(token.start, end)? => scannedEnd
+    scannedEnd == end -> unless { errorBytes(errors.Kind.InvalidNumber, scannedEnd) -> return }
+    [UInt8; ~] => bytes!
+    bytes! -> reserve(Int(token.length))
+    token.start => index!
+    index! < end -> while {
+        bytes! -> push(source -> byte(index!))
+        index! + 1 => index!
+    }
+    Result<[UInt8; ~], Error>.Ok(bytes!)
+}
+
+impl Reader {
+    public boolean: self, token: Token -> Result<Bool, Error> {
+        token.kind -> when {
+            True {
+                self.source -> checkedLiteralToken(token, "true")?
+                Result<Bool, Error>.Ok(true)
+            }
+            False {
+                self.source -> checkedLiteralToken(token, "false")?
+                Result<Bool, Error>.Ok(false)
+            }
+            else {
+                Result<Bool, Error>.Err(Error {
+                    kind: errors.Kind.WrongTokenKind
+                    offset: token.start
+                })
+            }
+        }
+    }
+
+    public nullValue: self, token: Token -> Result<Unit, Error> {
+        token.kind -> when {
+            Null { self.source -> checkedLiteralToken(token, "null") }
+            else { errorUnit(errors.Kind.WrongTokenKind, token.start) }
+        }
+    }
+
+    public int64: self, token: Token -> Result<Int64, Error> {
+        # Validate the token before inspecting its sign or reading any bytes.
+        self.source -> integerMagnitude(token, 9_223_372_036_854_775_808)? => magnitude
+        self.source -> byte(token.start) == '-' -> if {
+            magnitude == 9_223_372_036_854_775_808 -> if {
+                Result<Int64, Error>.Ok(-9_223_372_036_854_775_808) -> return
+            }
+            Result<Int64, Error>.Ok(-Int64(magnitude)) -> return
+        }
+        magnitude <= 9_223_372_036_854_775_807 -> unless {
+            Result<Int64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: token.start
+            }) -> return
+        }
+        Result<Int64, Error>.Ok(Int64(magnitude))
+    }
+
+    public uint64: self, token: Token -> Result<UInt64, Error> {
+        self.source -> integerMagnitude(token, 18_446_744_073_709_551_615)? => magnitude
+        self.source -> byte(token.start) == '-' -> if {
+            Result<UInt64, Error>.Err(Error {
+                kind: errors.Kind.NumberOutOfRange
+                offset: token.start
+            }) -> return
+        }
+        Result<UInt64, Error>.Ok(magnitude)
+    }
+}
+
+struct StringScan {
+    end: UIntSize
+    contentEnd: UIntSize
+    decodedLength: Int
+}
+
+errorReader kind: errors.Kind, offset: UIntSize -> Result<Reader, Error> {
+    Result<Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorToken kind: errors.Kind, offset: UIntSize -> Result<Token, Error> {
+    Result<Token, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorStringScan kind: errors.Kind, offset: UIntSize -> Result<StringScan, Error> {
+    Result<StringScan, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorOffset kind: errors.Kind, offset: UIntSize -> Result<UIntSize, Error> {
+    Result<UIntSize, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorInt kind: errors.Kind, offset: UIntSize -> Result<Int, Error> {
+    Result<Int, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorWriter kind: errors.Kind, offset: UIntSize -> Result<Writer, Error> {
+    Result<Writer, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorUnit kind: errors.Kind, offset: UIntSize -> Result<Unit, Error> {
+    Result<Unit, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorOwnedBytes kind: errors.Kind, offset: UIntSize -> Result<[UInt8; ~], Error> {
+    Result<[UInt8; ~], Error>.Err(Error { kind: kind, offset: offset })
+}
+
+isWhitespace byte: UInt8 -> Bool {
+    byte == ' ' or byte == '\t' or byte == '\n' or byte == '\r'
+}
+
+isDigit byte: UInt8 -> Bool => byte >= '0' and byte <= '9'
+
+isValueDelimiter byte: UInt8 -> Bool {
+    (byte -> isWhitespace) or byte == ',' or byte == ']' or byte == '}'
+}
+
+hexValue byte: UInt8 -> Int {
+    byte >= '0' and byte <= '9' -> if { Int(byte - '0') -> return }
+    byte >= 'A' and byte <= 'F' -> if { Int(byte - 'A') + 10 -> return }
+    byte >= 'a' and byte <= 'f' -> if { Int(byte - 'a') + 10 -> return }
+    -1
+}
+
+skipWhitespace source: ref file.SourceText, start: UIntSize, end: UIntSize -> UIntSize {
+    start => index!
+    index! < end and ((source -> byte(index!)) -> isWhitespace)
+        -> while { index! + 1 => index! }
+    index!
+}
+
+parseHex4 source: ref file.SourceText, start: UIntSize, end: UIntSize -> Int {
+    start + 4 <= end -> unless { -1 -> return }
+    0 => value!
+    UIntSize(0) => index!
+    index! < 4 -> while {
+        source -> byte(start + index!) -> hexValue => digit
+        digit >= 0 -> unless { -1 -> return }
+        value! * 16 + digit => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+utf8SequenceLength source: ref file.SourceText, start: UIntSize, end: UIntSize -> Int {
+    start < end -> unless { 0 -> return }
+    source -> byte(start) => first
+    first < 128 -> if { 1 -> return }
+    first >= 194 and first <= 223 -> if {
+        start + 1 < end -> unless { 0 -> return }
+        source -> byte(start + 1) => second
+        second >= 128 and second <= 191 -> if { 2 -> return } else { 0 -> return }
+    }
+    first >= 224 and first <= 239 -> if {
+        start + 2 < end -> unless { 0 -> return }
+        source -> byte(start + 1) => second
+        source -> byte(start + 2) => third
+        third >= 128 and third <= 191 -> unless { 0 -> return }
+        first -> when {
+            == 224 { second >= 160 and second <= 191 -> if { 3 -> return } else { 0 -> return } }
+            == 237 { second >= 128 and second <= 159 -> if { 3 -> return } else { 0 -> return } }
+            else { second >= 128 and second <= 191 -> if { 3 -> return } else { 0 -> return } }
+        }
+    }
+    first >= 240 and first <= 244 -> if {
+        start + 3 < end -> unless { 0 -> return }
+        source -> byte(start + 1) => second
+        source -> byte(start + 2) => third
+        source -> byte(start + 3) => fourth
+        third >= 128 and third <= 191 -> unless { 0 -> return }
+        fourth >= 128 and fourth <= 191 -> unless { 0 -> return }
+        first -> when {
+            == 240 { second >= 144 and second <= 191 -> if { 4 -> return } else { 0 -> return } }
+            == 244 { second >= 128 and second <= 143 -> if { 4 -> return } else { 0 -> return } }
+            else { second >= 128 and second <= 191 -> if { 4 -> return } else { 0 -> return } }
+        }
+    }
+    0
+}
+
+codePointUtf8Length codePoint: Int -> Int {
+    codePoint <= 127 -> if { 1 -> return }
+    codePoint <= 2_047 -> if { 2 -> return }
+    codePoint <= 65_535 -> if { 3 -> return }
+    4
+}
+
+scanString source: ref file.SourceText, quote: UIntSize, end: UIntSize, maxStringBytes: Int -> Result<StringScan, Error> {
+    quote + 1 => index!
+    0 => decodedLength!
+    index! < end -> while {
+        source -> byte(index!) => byte
+        byte == '"' -> if {
+        Result<StringScan, Error>.Ok(StringScan {
+            end: index! + 1
+            contentEnd: index!
+            decodedLength: decodedLength!
+        }) -> return
+    }
+    byte < ' ' -> if {
+        errorStringScan(errors.Kind.UnexpectedByte, index!) -> return
+    }
+    byte == '\\' -> if {
+        index! + 1 < end -> unless {
+            errorStringScan(errors.Kind.UnexpectedEnd, index!) -> return
+        }
+        source -> byte(index! + 1) => escaped
+        escaped == '"' or escaped == '\\' or escaped == '/'
+            or escaped == 'b' or escaped == 'f' or escaped == 'n'
+            or escaped == 'r' or escaped == 't'
+            -> if {
+                decodedLength! + 1 => decodedLength!
+                index! + 2 => index!
+            } else {
+                escaped == 'u' -> unless {
+                    errorStringScan(errors.Kind.InvalidStringEscape, index!) -> return
+                }
+                source -> parseHex4(index! + 2, end) => firstCode
+                firstCode >= 0 -> unless {
+                    errorStringScan(errors.Kind.InvalidUnicodeEscape, index!) -> return
+                }
+                firstCode => codePoint!
+                index! + 6 => next!
+                firstCode >= 55_296 and firstCode <= 56_319 -> if {
+                    next! + 6 <= end
+                        and (source -> byte(next!)) == '\\'
+                        and (source -> byte(next! + 1)) == 'u'
+                        -> unless {
+                            errorStringScan(errors.Kind.InvalidUnicodeEscape, index!) -> return
+                        }
+                    source -> parseHex4(next! + 2, end) => secondCode
+                    secondCode >= 56_320 and secondCode <= 57_343
+                        -> unless {
+                            errorStringScan(errors.Kind.InvalidUnicodeEscape, next!) -> return
+                        }
+                    65_536 + (firstCode - 55_296) * 1_024 + secondCode - 56_320 => codePoint!
+                    next! + 6 => next!
+                } else {
+                    firstCode >= 56_320 and firstCode <= 57_343 -> if {
+                        errorStringScan(errors.Kind.InvalidUnicodeEscape, index!) -> return
+                    }
+                }
+                decodedLength! + (codePoint! -> codePointUtf8Length) => decodedLength!
+                next! => index!
+            }
+    } else {
+        byte < 128 -> if {
+            decodedLength! + 1 => decodedLength!
+            index! + 1 => index!
+        } else {
+            source -> utf8SequenceLength(index!, end) => sequenceLength
+            sequenceLength > 0 -> unless {
+                errorStringScan(errors.Kind.InvalidUtf8, index!) -> return
+            }
+            decodedLength! + sequenceLength => decodedLength!
+            index! + UIntSize(sequenceLength) => index!
+        }
+    }
+    decodedLength! <= maxStringBytes -> unless {
+        errorStringScan(errors.Kind.OutputLimitExceeded, index!) -> return
+    }
+}
+errorStringScan(errors.Kind.UnexpectedEnd, end)
+}
+
+literalMatches source: ref file.SourceText, start: UIntSize, end: UIntSize, value: Text -> Bool {
+    start + (value -> len) <= end -> unless { false -> return }
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        (source -> byte(start + index!)) == (value -> byte(index!))
+            -> unless {
+                false -> return
+            }
+        index! + 1 => index!
+    }
+    true
+}
+
+scanNumber source: ref file.SourceText, start: UIntSize, end: UIntSize -> Result<UIntSize, Error> {
+    start => index!
+    (source -> byte(index!)) == '-' -> if {
+        index! + 1 => index!
+        index! < end -> unless { errorOffset(errors.Kind.InvalidNumber, start) -> return }
+    }
+    source -> byte(index!) => first
+    first == '0' -> if {
+        index! + 1 => index!
+        index! < end and ((source -> byte(index!)) -> isDigit)
+            -> if {
+                errorOffset(errors.Kind.InvalidNumber, index!) -> return
+            }
+    } else {
+        first >= '1' and first <= '9' -> unless {
+            errorOffset(errors.Kind.InvalidNumber, index!) -> return
+        }
+        index! + 1 => index!
+        index! < end and ((source -> byte(index!)) -> isDigit)
+            -> while { index! + 1 => index! }
+    }
+    index! < end and (source -> byte(index!)) == '.'
+        -> if {
+            index! + 1 => index!
+            index! < end and ((source -> byte(index!)) -> isDigit)
+                -> unless {
+                    errorOffset(errors.Kind.InvalidNumber, index!) -> return
+                }
+            index! < end and ((source -> byte(index!)) -> isDigit)
+                -> while { index! + 1 => index! }
+        }
+    index! < end
+        and ((source -> byte(index!)) == 'E' or (source -> byte(index!)) == 'e')
+        -> if {
+            index! + 1 => index!
+            index! < end
+                and ((source -> byte(index!)) == '+' or (source -> byte(index!)) == '-')
+                -> if { index! + 1 => index! }
+            index! < end and ((source -> byte(index!)) -> isDigit)
+                -> unless {
+                    errorOffset(errors.Kind.InvalidNumber, index!) -> return
+                }
+            index! < end and ((source -> byte(index!)) -> isDigit)
+                -> while { index! + 1 => index! }
+        }
+    index! < end and not ((source -> byte(index!)) -> isValueDelimiter)
+        -> if {
+            errorOffset(errors.Kind.InvalidNumber, index!) -> return
+        }
+    Result<UIntSize, Error>.Ok(index!)
+}
+
+makeToken kind: TokenKind, start: UIntSize, end: UIntSize, contentStart: UIntSize, contentEnd: UIntSize, decodedLength: Int, depth: Int -> Token {
+    Token {
+        kind: kind
+        start: start
+        length: end - start
+        contentStart: contentStart
+        contentLength: contentEnd - contentStart
+        decodedLength: decodedLength
+        depth: depth
+    }
+}
+
+emitToken reader: mut Reader, token: Token -> Result<Token, Error> {
+    reader.tokensRead < reader.limits.maxTokens -> unless {
+        errorToken(errors.Kind.TokenLimitExceeded, token.start) -> return
+    }
+    reader.tokensRead + 1 => reader.tokensRead
+    Result<Token, Error>.Ok(token)
+}
+
+pushState stack: mut [UInt8; ~], state: UInt8 -> Unit {
+    stack -> push(state)
+}
+
+popState stack: mut [UInt8; ~] -> UInt8 {
+    stack -> take((stack -> len) - 1)
+}
+
+setTopState stack: mut [UInt8; ~], state: UInt8 -> Unit {
+    stack -> take((stack -> len) - 1) => discarded
+    stack -> push(state)
+}
+
+documentEnd offset: UIntSize -> Token => Token {
+    kind: model.TokenKind.DocumentEnd
+    start: offset
+    length: 0
+    contentStart: offset
+    contentLength: 0
+    decodedLength: 0
+    depth: 0
+}
+
+scanValue reader: mut Reader, depth: Int -> Result<Token, Error> {
+    reader.index < reader.end -> unless {
+        errorToken(errors.Kind.UnexpectedEnd, reader.index) -> return
+    }
+    reader.source -> byte(reader.index) => first
+    reader.index => start
+    first == '"' -> if {
+    reader.source -> scanString(start, reader.end, reader.limits.maxStringBytes)? => scan
+    scan.end => reader.index
+    makeToken(model.TokenKind.String, start, scan.end, start + 1, scan.contentEnd, scan.decodedLength, depth) => token
+    emitToken(reader, token) -> return
+}
+first == '{' or first == '[' -> if {
+        (reader.stack -> len) < reader.limits.maxDepth
+            -> unless {
+                errorToken(errors.Kind.DepthLimitExceeded, start) -> return
+            }
+        first == '{' -> if { UInt8(20) } else { UInt8(10) } => state
+            pushState(reader.stack, state)
+            start + 1 => reader.index
+            first == '{' -> if { model.TokenKind.BeginObject } else { model.TokenKind.BeginArray } => kind
+                makeToken(kind, start, start + 1, start, start + 1, 0, depth) => token
+                emitToken(reader, token) -> return
+            }
+            first -> when {
+                == 't' {
+                    reader.source -> literalMatches(start, reader.end, "true")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 4 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.True, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                == 'f' {
+                    reader.source -> literalMatches(start, reader.end, "false")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 5 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.False, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                == 'n' {
+                    reader.source -> literalMatches(start, reader.end, "null")
+                        -> unless { errorToken(errors.Kind.InvalidLiteral, start) -> return }
+                    start + 4 => after
+                    after < reader.end and not ((reader.source -> byte(after)) -> isValueDelimiter)
+                        -> if { errorToken(errors.Kind.InvalidLiteral, after) -> return }
+                    after => reader.index
+                    makeToken(model.TokenKind.Null, start, after, start, after, 0, depth) => token
+                    emitToken(reader, token) -> return
+                }
+                else {
+                    first == '-' or (first -> isDigit) -> if {
+                        reader.source -> scanNumber(start, reader.end)? => after
+                        after => reader.index
+                        makeToken(model.TokenKind.Number, start, after, start, after, 0, depth) => token
+                        emitToken(reader, token) -> return
+                    }
+                    errorToken(errors.Kind.ExpectedValue, start)
+                }
+            }
+        }
+
+        appendCodePoint output: mut [UInt8; ~], codePoint: Int -> Unit {
+            codePoint <= 127 -> if {
+                output -> push(UInt8(codePoint))
+            } else {
+                codePoint <= 2_047 -> if {
+                    output -> push(UInt8(192 + codePoint / 64))
+                    output -> push(UInt8(128 + codePoint % 64))
+                } else {
+                    codePoint <= 65_535 -> if {
+                        output -> push(UInt8(224 + codePoint / 4_096))
+                        output -> push(UInt8(128 + (codePoint / 64) % 64))
+                        output -> push(UInt8(128 + codePoint % 64))
+                    } else {
+                        output -> push(UInt8(240 + codePoint / 262_144))
+                        output -> push(UInt8(128 + (codePoint / 4_096) % 64))
+                        output -> push(UInt8(128 + (codePoint / 64) % 64))
+                        output -> push(UInt8(128 + codePoint % 64))
+                    }
+                }
+            }
+        }
+
+        writerOffset writer: ref Writer -> UIntSize => UIntSize(writer.produced)
+
+        appendByte output: mut [UInt8; ~], value: UInt8 -> Unit {
+            output -> push(value)
+        }
+
+        valuePrefix writer: ref Writer -> Result<Int, Error> {
+            writer.stack -> len => depth
+            depth == 0 -> if {
+                writer.rootState == 0 -> if { Result<Int, Error>.Ok(0) -> return }
+                errorInt(errors.Kind.InvalidWriterState, writer -> writerOffset) -> return
+            }
+            writer.stack[depth - 1] => state
+            state == 10 or state == 21 -> if { Result<Int, Error>.Ok(0) -> return }
+            state == 11 -> if { Result<Int, Error>.Ok(1) -> return }
+            errorInt(errors.Kind.InvalidWriterState, writer -> writerOffset)
+        }
+
+        commitValue writer: mut Writer, prefix: Int -> Unit {
+            prefix == 1 -> if { appendByte(writer.output, ',') }
+            writer.stack -> len => depth
+            depth == 0 -> if {
+                1 => writer.rootState
+            } else {
+                writer.stack[depth - 1] => state
+                state == 10 or state == 11 -> if {
+                    setTopState(writer.stack, 11)
+                } else {
+                    setTopState(writer.stack, 22)
+                }
+            }
+            writer.produced + prefix => writer.produced
+        }
+
+        requireOutput writer: ref Writer, additional: Int -> Result<Unit, Error> {
+            additional >= 0 and writer.produced <= writer.maxOutputBytes - additional
+                -> unless {
+                    errorUnit(errors.Kind.OutputLimitExceeded, writer -> writerOffset) -> return
+                }
+            Result<Unit, Error>.Ok
+        }
+
+        encodedStringLength value: Text -> Result<Int, Error> {
+            value -> file.borrowText => source
+            UIntSize(0) => index!
+            2 => length!
+            index! < (source -> len) -> while {
+                source -> byte(index!) => byte
+                byte == '"' or byte == '\\' -> if {
+                length! + 2 => length!
+                index! + 1 => index!
+            } else {
+                byte < ' ' -> if {
+                    byte == '\b' or byte == '\t' or byte == '\n' or byte == '\f' or byte == '\r'
+                        -> if { length! + 2 => length! } else { length! + 6 => length! }
+                    index! + 1 => index!
+                } else {
+                    byte < 128 -> if {
+                        length! + 1 => length!
+                        index! + 1 => index!
+                    } else {
+                        source -> utf8SequenceLength(index!, source -> len) => sequenceLength
+                        sequenceLength > 0 -> unless {
+                            errorInt(errors.Kind.InvalidUtf8, index!) -> return
+                        }
+                        length! + sequenceLength => length!
+                        index! + UIntSize(sequenceLength) => index!
+                    }
+                }
+            }
+        }
+        Result<Int, Error>.Ok(length!)
+    }
+
+    hexDigit value: UInt8 -> UInt8 {
+        value < 10 -> if { value + '0' } else { value - 10 + 'A' }
+    }
+
+    appendEscapedString output: mut [UInt8; ~], value: Text -> Unit {
+        output -> push('"')
+        UIntSize(0) => index!
+        index! < (value -> len) -> while {
+            value -> byte(index!) => byte
+            byte == '"' or byte == '\\' -> if {
+            output -> push('\\')
+            output -> push(byte)
+        } else {
+            byte -> when {
+                == '\b' {
+                    output -> push('\\')
+                    output -> push('b')
+                }
+                == '\t' {
+                    output -> push('\\')
+                    output -> push('t')
+                }
+                == '\n' {
+                    output -> push('\\')
+                    output -> push('n')
+                }
+                == '\f' {
+                    output -> push('\\')
+                    output -> push('f')
+                }
+                == '\r' {
+                    output -> push('\\')
+                    output -> push('r')
+                }
+                < ' ' {
+                    output -> push('\\')
+                    output -> push('u')
+                    output -> push('0')
+                    output -> push('0')
+                    output -> push(hexDigit(byte / 16))
+                    output -> push(hexDigit(byte % 16))
+                }
+                else { output -> push(byte) }
+            }
+        }
+        index! + 1 => index!
+    }
+    output -> push('"')
+}
+
+appendText output: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        output -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+}
+
+public limits maxInputBytes: Int, maxDepth: Int, maxTokens: Int, maxStringBytes: Int -> Result<Limits, Error> {
+    maxInputBytes >= 0 and maxDepth >= 0 and maxTokens > 0 and maxStringBytes >= 0
+        -> unless { Result<Limits, Error>.Err(Error { kind: errors.Kind.InvalidLimit, offset: 0 }) -> return }
+    Result<Limits, Error>.Ok(Limits {
+        maxInputBytes: maxInputBytes
+        maxDepth: maxDepth
+        maxTokens: maxTokens
+        maxStringBytes: maxStringBytes
+    })
+}
+
+public reader text: Text, limits: Limits -> Result<Reader, Error> {
+    limits.maxInputBytes >= 0
+        and limits.maxDepth >= 0
+        and limits.maxTokens > 0
+        and limits.maxStringBytes >= 0
+        -> unless { errorReader(errors.Kind.InvalidLimit, 0) -> return }
+    text -> len => length
+    Int(length) <= limits.maxInputBytes -> unless {
+        errorReader(errors.Kind.InputLimitExceeded, length) -> return
+    }
+    text -> file.borrowText => source
+    Result<Reader, Error>.Ok(Reader {
+        source: source
+        index: 0
+        end: length
+        rootState: 0
+        tokensRead: 0
+        limits: limits
+        stack: [UInt8; ~]
+    })
+}
+
+public writer maxOutputBytes: Int, maxDepth: Int -> Result<Writer, Error> {
+    maxOutputBytes >= 0 and maxDepth >= 0 -> unless {
+        errorWriter(errors.Kind.InvalidLimit, 0) -> return
+    }
+    Result<Writer, Error>.Ok(Writer {
+        output: [UInt8; ~]
+        produced: 0
+        maxOutputBytes: maxOutputBytes
+        maxDepth: maxDepth
+        rootState: 0
+        stack: [UInt8; ~]
+    })
+}
+
+modelValue kind: ValueKind -> Value => Value {
+    kind: kind
+    boolean: false
+    bytes: [UInt8; ~]
+    items: [Int; ~]
+    members: [Member; ~]
+}
+
+appendModelValue document: mut Document, value: move Value -> Int {
+    document.values -> len => index
+    document.values -> push(value)
+    index
+}
+
+readModelValue reader: mut Reader, token: Token, document: mut Document -> Result<Int, Error> {
+    token.kind -> when {
+        Null {
+            document -> appendModelValue(modelValue(model.ValueKind.Null)) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        False {
+            modelValue(model.ValueKind.Boolean) => value!
+            false => value!.boolean
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        True {
+            modelValue(model.ValueKind.Boolean) => value!
+            true => value!.boolean
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        Number {
+            modelValue(model.ValueKind.Number) => value!
+            reader.source -> ownedNumberBytes(token)? => value!.bytes
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        String {
+            modelValue(model.ValueKind.String) => value!
+            reader -> decodeString(token, reader.limits.maxStringBytes)? => value!.bytes
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        BeginArray {
+            modelValue(model.ValueKind.Array) => value!
+            true => reading!
+            reading! -> while {
+                reader -> next? => itemToken
+                itemToken.kind -> when {
+                    EndArray { false => reading! }
+                    DocumentEnd { errorInt(errors.Kind.UnexpectedEnd, itemToken.start) -> return }
+                    Name { errorInt(errors.Kind.ExpectedValue, itemToken.start) -> return }
+                    EndObject { errorInt(errors.Kind.ExpectedValue, itemToken.start) -> return }
+                    else {
+                        readModelValue(reader, itemToken, document)? => item
+                        value!.items -> push(item)
+                    }
+                }
+            }
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        BeginObject {
+            modelValue(model.ValueKind.Object) => value!
+            true => reading!
+            reading! -> while {
+                reader -> next? => nameToken
+                nameToken.kind -> when {
+                    EndObject { false => reading! }
+                    Name {
+                        reader -> decodeString(nameToken, reader.limits.maxStringBytes)? => name
+                        reader -> next? => memberToken
+                        readModelValue(reader, memberToken, document)? => memberValue
+                        value!.members -> push(Member { name: name, value: memberValue })
+                    }
+                    else { errorInt(errors.Kind.ExpectedName, nameToken.start) -> return }
+                }
+            }
+            document -> appendModelValue(value!) => index
+            Result<Int, Error>.Ok(index) -> return
+        }
+        else { errorInt(errors.Kind.WrongTokenKind, token.start) }
+    }
+}
+
+impl Reader {
+    public offset: self -> UIntSize => self.index
+    public depth: self -> Int => self.stack -> len
+    public tokenCount: self -> Int => self.tokensRead
+
+    # Materialize exactly one complete JSON value into an owned typed model.
+    # Existing reader limits bound input, depth, tokens, and decoded strings
+    # before model storage grows.
+    public document: mut self -> Result<Document, Error> {
+        Document { values: [Value; ~], root: -1 } => document!
+        self -> next? => first
+        readModelValue(self, first, document!)? => root
+        root => document!.root
+        self -> next? => end
+        end.kind -> when {
+            DocumentEnd { Result<Document, Error>.Ok(document!) -> return }
+            else { Result<Document, Error>.Err(Error { kind: errors.Kind.TrailingData, offset: end.start }) -> return }
+        }
+        Result<Document, Error>.Err(Error { kind: errors.Kind.UnexpectedEnd, offset: end.start })
+    }
+
+    public rawText: self, token: Token -> Text {
+        self.source -> slice(token.start, token.length)
+    }
+
+    public decodeString: self, token: Token, maxOutputBytes: Int -> Result<[UInt8; ~], Error> {
+        maxOutputBytes >= 0 -> unless {
+            errorBytes(errors.Kind.InvalidLimit, token.start) -> return
+        }
+        token.kind -> when {
+            String { true }
+            Name { true }
+            else { false }
+        } => stringToken
+        stringToken -> unless {
+            errorBytes(errors.Kind.WrongTokenKind, token.start) -> return
+        }
+        # Token is a public value, so authenticate both its source span and all
+        # derived string metadata before reserving output or reading content.
+        self.source -> checkedTokenEnd(token, errors.Kind.InvalidStringEscape)? => tokenEnd
+        self.source -> byte(token.start) == '"' -> unless {
+        errorBytes(errors.Kind.InvalidStringEscape, token.start) -> return
+    }
+    self.source -> scanString(token.start, tokenEnd, self.limits.maxStringBytes)? => authenticated
+    authenticated.end == tokenEnd
+        and token.contentStart == token.start + 1
+        and token.contentLength == authenticated.contentEnd - token.contentStart
+        and token.decodedLength == authenticated.decodedLength
+        -> unless {
+            errorBytes(errors.Kind.InvalidStringEscape, token.start) -> return
+        }
+    token.decodedLength <= maxOutputBytes -> unless {
+        errorBytes(errors.Kind.OutputLimitExceeded, token.start) -> return
+    }
+    [UInt8; ~] => output!
+    output! -> reserve(token.decodedLength)
+    token.contentStart => index!
+    token.contentStart + token.contentLength => end
+    index! < end -> while {
+        self.source -> byte(index!) => byte
+        byte != '\\' -> if {
+            byte < 128 -> if {
+                output! -> push(byte)
+                index! + 1 => index!
+            } else {
+                self.source -> utf8SequenceLength(index!, end) => sequenceLength
+                0 => byteIndex!
+                byteIndex! < sequenceLength -> while {
+                    output! -> push(self.source -> byte(index! + UIntSize(byteIndex!)))
+                    byteIndex! + 1 => byteIndex!
+                }
+                index! + UIntSize(sequenceLength) => index!
+            }
+        } else {
+            self.source -> byte(index! + 1) => escaped
+            escaped -> when {
+                == '"' { output! -> push('"') }
+            == '\\' { output! -> push('\\') }
+            == '/' { output! -> push('/') }
+            == 'b' { output! -> push('\b') }
+            == 'f' { output! -> push('\f') }
+            == 'n' { output! -> push('\n') }
+            == 'r' { output! -> push('\r') }
+            == 't' { output! -> push('\t') }
+            == 'u' {
+                self.source -> parseHex4(index! + 2, end) => firstCode
+                firstCode => codePoint!
+                index! + 6 => next!
+                firstCode >= 55_296 and firstCode <= 56_319 -> if {
+                    self.source -> parseHex4(next! + 2, end) => secondCode
+                    65_536 + (firstCode - 55_296) * 1_024 + secondCode - 56_320 => codePoint!
+                    next! + 6 => next!
+                }
+                output! -> appendCodePoint(codePoint!)
+                next! => index!
+            }
+            else { errorBytes(errors.Kind.InvalidStringEscape, index!) -> return }
+        }
+        escaped != 'u' -> if { index! + 2 => index! }
+    }
+}
+Result<[UInt8; ~], Error>.Ok(output!)
+}
+
+public next: mut self -> Result<Token, Error> {
+    true -> while {
+        self.source -> skipWhitespace(self.index, self.end) => self.index
+        self.stack -> len => depth
+        depth == 0 -> if {
+            self.rootState == 1 -> if {
+                self.index == self.end -> if {
+                    Result<Token, Error>.Ok(documentEnd(self.index)) -> return
+                }
+                errorToken(errors.Kind.TrailingData, self.index) -> return
+            }
+            1 => self.rootState
+            scanValue(self, 0) -> return
+        }
+        depth - 1 => topIndex
+        self.stack[topIndex] => state
+        state == 10 or state == 11 -> if {
+            self.index < self.end and (self.source -> byte(self.index)) == ']'
+                -> if {
+                    state == 11 -> if {
+                        errorToken(errors.Kind.ExpectedValue, self.index) -> return
+                    }
+                    popState(self.stack) => discarded
+                    self.index => start
+                    self.index + 1 => self.index
+                    makeToken(model.TokenKind.EndArray, start, self.index, start, self.index, 0, topIndex) => token
+                    emitToken(self, token) -> return
+                }
+            setTopState(self.stack, 12)
+            scanValue(self, depth) -> return
+        }
+        state == 12 -> if {
+            self.index < self.end -> unless {
+                errorToken(errors.Kind.UnexpectedEnd, self.index) -> return
+            }
+            self.source -> byte(self.index) => byte
+            byte == ']' -> if {
+                popState(self.stack) => discarded
+                self.index => start
+                self.index + 1 => self.index
+                makeToken(model.TokenKind.EndArray, start, self.index, start, self.index, 0, topIndex) => token
+                emitToken(self, token) -> return
+            }
+            byte == ',' -> unless {
+                errorToken(errors.Kind.ExpectedCommaOrEnd, self.index) -> return
+            }
+            setTopState(self.stack, 11)
+            self.index + 1 => self.index
+        }
+        state == 20 or state == 21 -> if {
+            self.index < self.end -> unless {
+                errorToken(errors.Kind.UnexpectedEnd, self.index) -> return
+            }
+            self.source -> byte(self.index) => byte
+            byte == '}' -> if {
+            state == 21 -> if {
+                errorToken(errors.Kind.ExpectedName, self.index) -> return
+            }
+            popState(self.stack) => discarded
+            self.index => start
+            self.index + 1 => self.index
+            makeToken(model.TokenKind.EndObject, start, self.index, start, self.index, 0, topIndex) => token
+            emitToken(self, token) -> return
+        }
+        byte == '"' -> unless {
+        errorToken(errors.Kind.ExpectedName, self.index) -> return
+    }
+    self.index => start
+    self.source -> scanString(start, self.end, self.limits.maxStringBytes)? => scan
+    scan.end => self.index
+    setTopState(self.stack, 22)
+    makeToken(model.TokenKind.Name, start, scan.end, start + 1, scan.contentEnd, scan.decodedLength, depth) => token
+    emitToken(self, token) -> return
+}
+state -> when {
+    == 22 {
+        self.index < self.end and (self.source -> byte(self.index)) == ':'
+            -> unless {
+                errorToken(errors.Kind.ExpectedColon, self.index) -> return
+            }
+        self.index + 1 => self.index
+        setTopState(self.stack, 23)
+    }
+    == 23 {
+        setTopState(self.stack, 24)
+        scanValue(self, depth) -> return
+    }
+    == 24 {
+        self.index < self.end -> unless {
+            errorToken(errors.Kind.UnexpectedEnd, self.index) -> return
+        }
+        self.source -> byte(self.index) => byte
+        byte == '}' -> if {
+        popState(self.stack) => discarded
+        self.index => start
+        self.index + 1 => self.index
+        makeToken(model.TokenKind.EndObject, start, self.index, start, self.index, 0, topIndex) => token
+        emitToken(self, token) -> return
+    }
+    byte == ',' -> unless {
+        errorToken(errors.Kind.ExpectedCommaOrEnd, self.index) -> return
+    }
+    setTopState(self.stack, 21)
+    self.index + 1 => self.index
+}
+else { continue }
+}
+}
+errorToken(errors.Kind.UnexpectedEnd, self.index)
+}
+
+# Consume exactly one value using the same bounded token state machine.
+# Unknown object members can be skipped without decoding or materializing
+# their strings, arrays, or objects. Parse failures retain consumed progress.
+public skipValue: mut self -> Result<Unit, Error> {
+    self -> next? => first
+    first.kind -> when {
+        Null { Result<Unit, Error>.Ok -> return }
+        False { Result<Unit, Error>.Ok -> return }
+        True { Result<Unit, Error>.Ok -> return }
+        Number { Result<Unit, Error>.Ok -> return }
+        String { Result<Unit, Error>.Ok -> return }
+        BeginArray { }
+        BeginObject { }
+        else { errorUnit(errors.Kind.WrongTokenKind, first.start) -> return }
+    }
+    (self.stack -> len) > first.depth -> while {
+        self -> next? => token
+    }
+    Result<Unit, Error>.Ok
+}
+
+public finish: mut self -> Result<Unit, Error> {
+    true => reading!
+    reading! -> while {
+        self -> next? => token
+        token.kind -> when {
+            DocumentEnd { false => reading! }
+            else { continue }
+        }
+    }
+    Result<Unit, Error>.Ok
+}
+}
+
+modelErrorInt offset: UIntSize -> Result<Int, Error> {
+    errorInt(errors.Kind.InvalidModel, offset)
+}
+
+boundedModelLength current: Int, additional: Int, maximum: Int, offset: UIntSize -> Result<Int, Error> {
+    additional >= 0 and current >= 0 and additional <= maximum and current <= maximum - additional
+        -> unless {
+            errorInt(errors.Kind.OutputLimitExceeded, offset) -> return
+        }
+    Result<Int, Error>.Ok(current + additional)
+}
+
+encodedModelBytesLength value: ref [UInt8; ~], maximum: Int, offset: UIntSize -> Result<Int, Error> {
+    value -> file.borrowBytes => source
+    2 => length!
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        source -> byte(index!) => byte
+        byte == '"' or byte == '\\' -> if {
+        boundedModelLength(length!, 2, maximum, offset)? => length!
+        index! + 1 => index!
+    } else {
+        byte < ' ' -> if {
+            byte == '\b' or byte == '\t' or byte == '\n' or byte == '\f' or byte == '\r'
+                -> if {
+                    boundedModelLength(length!, 2, maximum, offset)? => length!
+                } else {
+                    boundedModelLength(length!, 6, maximum, offset)? => length!
+                }
+            index! + 1 => index!
+        } else {
+            byte < 128 -> if {
+                boundedModelLength(length!, 1, maximum, offset)? => length!
+                index! + 1 => index!
+            } else {
+                source -> utf8SequenceLength(index!, source -> len) => sequenceLength
+                sequenceLength > 0 -> unless { errorInt(errors.Kind.InvalidUtf8, offset) -> return }
+                boundedModelLength(length!, sequenceLength, maximum, offset)? => length!
+                index! + UIntSize(sequenceLength) => index!
+            }
+        }
+    }
+}
+Result<Int, Error>.Ok(length!)
+}
+
+validateModelValueContent value: ref Value, document: ref Document, index: Int, depth: Int, maxDepth: Int, maximum: Int, states: mut [UInt8; ~], offset: UIntSize -> Result<Int, Error> {
+    value.kind -> when {
+        Null {
+            not value.boolean and (value.bytes -> len) == 0 and (value.items -> len) == 0
+                and (value.members -> len) == 0 -> unless { modelErrorInt(offset) -> return }
+            boundedModelLength(0, 4, maximum, offset)? => length
+            2 => states[index]
+            Result<Int, Error>.Ok(length) -> return
+        }
+        Boolean {
+            (value.bytes -> len) == 0 and (value.items -> len) == 0 and (value.members -> len) == 0
+                -> unless { modelErrorInt(offset) -> return }
+            value.boolean -> if { 4 } else { 5 } => literalLength
+            boundedModelLength(0, literalLength, maximum, offset)? => length
+            2 => states[index]
+            Result<Int, Error>.Ok(length) -> return
+        }
+        Number {
+            not value.boolean and (value.bytes -> len) > 0 and (value.items -> len) == 0
+                and (value.members -> len) == 0 -> unless { modelErrorInt(offset) -> return }
+            value.bytes -> file.borrowBytes => source
+            source -> scanNumber(0, source -> len)? => end
+            end == (source -> len) -> unless { modelErrorInt(offset) -> return }
+            boundedModelLength(0, value.bytes -> len, maximum, offset)? => length
+            2 => states[index]
+            Result<Int, Error>.Ok(length) -> return
+        }
+        String {
+            not value.boolean and (value.items -> len) == 0 and (value.members -> len) == 0
+                -> unless { modelErrorInt(offset) -> return }
+            encodedModelBytesLength(value.bytes, maximum, offset)? => length
+            2 => states[index]
+            Result<Int, Error>.Ok(length) -> return
+        }
+        Array {
+            not value.boolean and (value.bytes -> len) == 0 and (value.members -> len) == 0
+                -> unless { modelErrorInt(offset) -> return }
+            depth < maxDepth -> unless { errorInt(errors.Kind.DepthLimitExceeded, offset) -> return }
+            2 => length!
+            0 => itemIndex!
+            itemIndex! < (value.items -> len) -> while {
+                itemIndex! > 0 -> if { boundedModelLength(length!, 1, maximum, offset)? => length! }
+                validateModelValue(document, value.items[itemIndex!], depth + 1, maxDepth,
+                maximum - length!, states, offset)? => childLength
+                boundedModelLength(length!, childLength, maximum, offset)? => length!
+                itemIndex! + 1 => itemIndex!
+            }
+            2 => states[index]
+            Result<Int, Error>.Ok(length!) -> return
+        }
+        Object {
+            not value.boolean and (value.bytes -> len) == 0 and (value.items -> len) == 0
+                -> unless { modelErrorInt(offset) -> return }
+            depth < maxDepth -> unless { errorInt(errors.Kind.DepthLimitExceeded, offset) -> return }
+            2 => length!
+            0 => memberIndex!
+            memberIndex! < (value.members -> len) -> while {
+                memberIndex! > 0 -> if { boundedModelLength(length!, 1, maximum, offset)? => length! }
+                encodedModelBytesLength(value.members[memberIndex!].name, maximum - length!, offset)? => nameLength
+                boundedModelLength(length!, nameLength, maximum, offset)? => length!
+                boundedModelLength(length!, 1, maximum, offset)? => length!
+                validateModelValue(document, value.members[memberIndex!].value, depth + 1, maxDepth,
+                maximum - length!, states, offset)? => childLength
+                boundedModelLength(length!, childLength, maximum, offset)? => length!
+                memberIndex! + 1 => memberIndex!
+            }
+            2 => states[index]
+            Result<Int, Error>.Ok(length!) -> return
+        }
+    }
+}
+
+validateModelValue document: ref Document, index: Int, depth: Int, maxDepth: Int, maximum: Int, states: mut [UInt8; ~], offset: UIntSize -> Result<Int, Error> {
+    index >= 0 and index < (document.values -> len)
+        -> unless { modelErrorInt(offset) -> return }
+    states[index] == 0 -> unless { modelErrorInt(offset) -> return }
+    1 => states[index]
+    document.values[index] -> validateModelValueContent(document, index, depth, maxDepth, maximum, states, offset)
+}
+
+appendEscapedModelBytes output: mut [UInt8; ~], value: ref [UInt8; ~] -> Unit {
+    output -> push('"')
+    0 => index!
+    index! < (value -> len) -> while {
+        value[index!] => byte
+        byte == '"' or byte == '\\' -> if {
+        output -> push('\\')
+        output -> push(byte)
+    } else {
+        byte -> when {
+            == '\b' {
+                output -> push('\\')
+                output -> push('b')
+            }
+            == '\t' {
+                output -> push('\\')
+                output -> push('t')
+            }
+            == '\n' {
+                output -> push('\\')
+                output -> push('n')
+            }
+            == '\f' {
+                output -> push('\\')
+                output -> push('f')
+            }
+            == '\r' {
+                output -> push('\\')
+                output -> push('r')
+            }
+            < ' ' {
+                output -> push('\\')
+                output -> push('u')
+                output -> push('0')
+                output -> push('0')
+                output -> push(hexDigit(byte / 16))
+                output -> push(hexDigit(byte % 16))
+            }
+            else { output -> push(byte) }
+        }
+    }
+    index! + 1 => index!
+}
+output -> push('"')
+}
+
+appendModelRawBytes output: mut [UInt8; ~], value: ref [UInt8; ~] -> Unit {
+    0 => index!
+    index! < (value -> len) -> while {
+        output -> push(value[index!])
+        index! + 1 => index!
+    }
+}
+
+appendEncodedModelValueContent value: ref Value, output: mut [UInt8; ~], document: ref Document -> Unit {
+    value.kind -> when {
+        Null { appendText(output, "null") }
+        Boolean { value.boolean -> if { appendText(output, "true") } else { appendText(output, "false") } }
+        Number { appendModelRawBytes(output, value.bytes) }
+        String { appendEscapedModelBytes(output, value.bytes) }
+        Array {
+            output -> push('[')
+            0 => itemIndex!
+            itemIndex! < (value.items -> len) -> while {
+                itemIndex! > 0 -> if { output -> push(',') }
+                appendEncodedModelValue(output, document, value.items[itemIndex!])
+                itemIndex! + 1 => itemIndex!
+            }
+            output -> push(']')
+        }
+        Object {
+            output -> push('{')
+                0 => memberIndex!
+                memberIndex! < (value.members -> len) -> while {
+                    memberIndex! > 0 -> if { output -> push(',') }
+                    appendEscapedModelBytes(output, value.members[memberIndex!].name)
+                    output -> push(':')
+                    appendEncodedModelValue(output, document, value.members[memberIndex!].value)
+                    memberIndex! + 1 => memberIndex!
+                }
+                output -> push('}')
+        }
+    }
+}
+
+appendEncodedModelValue output: mut [UInt8; ~], document: ref Document, index: Int -> Unit {
+    document.values[index] -> appendEncodedModelValueContent(output, document)
+}
+
+impl Writer {
+    # Validate the whole flat arena before committing its first byte. Each arena
+    # entry must be reachable exactly once, which rejects cycles, aliases, and
+    # disconnected forged values while preserving object order and duplicates.
+    public document: mut self, value: ref Document -> Result<Unit, Error> {
+        self -> valuePrefix? => prefix
+        prefix <= self.maxOutputBytes and self.produced <= self.maxOutputBytes - prefix
+            -> unless {
+                errorUnit(errors.Kind.OutputLimitExceeded, self -> writerOffset) -> return
+            }
+        self.maxOutputBytes - self.produced - prefix => available
+        (value.values -> len) > 0 -> unless {
+            errorUnit(errors.Kind.InvalidModel, self -> writerOffset) -> return
+        }
+        (value.values -> len) <= available -> unless {
+            errorUnit(errors.Kind.OutputLimitExceeded, self -> writerOffset) -> return
+        }
+        [UInt8; ~] => states!
+        states! -> reserve(value.values -> len)
+        0 => stateIndex!
+        stateIndex! < (value.values -> len) -> while {
+            states! -> push(0)
+            stateIndex! + 1 => stateIndex!
+        }
+        validateModelValue(value, value.root, self.stack -> len, self.maxDepth,
+        available, states!, self -> writerOffset)? => length
+        0 => visitedIndex!
+        visitedIndex! < (states! -> len) -> while {
+            states![visitedIndex!] == 2 -> unless {
+                errorUnit(errors.Kind.InvalidModel, self -> writerOffset) -> return
+            }
+            visitedIndex! + 1 => visitedIndex!
+        }
+        self -> requireOutput(prefix + length)?
+        [UInt8; ~] => encoded!
+        encoded! -> reserve(length)
+        appendEncodedModelValue(encoded!, value, value.root)
+        commitValue(self, prefix)
+        appendModelRawBytes(self.output, encoded!)
+        self.produced + length => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public int64: mut self, value: Int64 -> Result<Unit, Error> {
+        self -> number("$value")
+    }
+
+    public uint64: mut self, value: UInt64 -> Result<Unit, Error> {
+        self -> number("$value")
+    }
+
+    public byteCount: self -> Int => self.produced
+    public depth: self -> Int => self.stack -> len
+
+    public beginArray: mut self -> Result<Unit, Error> {
+        self -> valuePrefix? => prefix
+        (self.stack -> len) < self.maxDepth -> unless {
+            errorUnit(errors.Kind.DepthLimitExceeded, self -> writerOffset) -> return
+        }
+        self -> requireOutput(prefix + 1)?
+        commitValue(self, prefix)
+        appendByte(self.output, '[')
+        self.produced + 1 => self.produced
+        pushState(self.stack, 10)
+        Result<Unit, Error>.Ok
+    }
+
+    public endArray: mut self -> Result<Unit, Error> {
+        self.stack -> len => depth
+        depth > 0 -> unless {
+            errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+        }
+        self.stack[depth - 1] => state
+        state == 10 or state == 11 -> unless {
+            errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+        }
+        self -> requireOutput(1)?
+        popState(self.stack) => discarded
+        appendByte(self.output, ']')
+        self.produced + 1 => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public beginObject: mut self -> Result<Unit, Error> {
+        self -> valuePrefix? => prefix
+        (self.stack -> len) < self.maxDepth -> unless {
+            errorUnit(errors.Kind.DepthLimitExceeded, self -> writerOffset) -> return
+        }
+        self -> requireOutput(prefix + 1)?
+        commitValue(self, prefix)
+        appendByte(self.output, '{')
+            self.produced + 1 => self.produced
+            pushState(self.stack, 20)
+            Result<Unit, Error>.Ok
+        }
+
+        public endObject: mut self -> Result<Unit, Error> {
+            self.stack -> len => depth
+            depth > 0 -> unless {
+                errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+            }
+            self.stack[depth - 1] => state
+            state == 20 or state == 22 -> unless {
+                errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+            }
+            self -> requireOutput(1)?
+            popState(self.stack) => discarded
+            appendByte(self.output, '}')
+        self.produced + 1 => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public name: mut self, value: Text -> Result<Unit, Error> {
+        self.stack -> len => depth
+        depth > 0 -> unless {
+            errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+        }
+        self.stack[depth - 1] => state
+        state == 20 or state == 22 -> unless {
+            errorUnit(errors.Kind.InvalidWriterState, self -> writerOffset) -> return
+        }
+        value -> encodedStringLength? => encodedLength
+        state == 22 -> if { 1 } else { 0 } => prefix
+        self -> requireOutput(prefix + encodedLength + 1)?
+        prefix == 1 -> if { appendByte(self.output, ',') }
+        appendEscapedString(self.output, value)
+        appendByte(self.output, ':')
+        self.produced + prefix + encodedLength + 1 => self.produced
+        setTopState(self.stack, 21)
+        Result<Unit, Error>.Ok
+    }
+
+    public nullValue: mut self -> Result<Unit, Error> {
+        self -> valuePrefix? => prefix
+        self -> requireOutput(prefix + 4)?
+        commitValue(self, prefix)
+        appendText(self.output, "null")
+        self.produced + 4 => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public boolean: mut self, value: Bool -> Result<Unit, Error> {
+        self -> valuePrefix? => prefix
+        value -> if { 4 } else { 5 } => length
+        self -> requireOutput(prefix + length)?
+        commitValue(self, prefix)
+        value -> if { appendText(self.output, "true") } else { appendText(self.output, "false") }
+        self.produced + length => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public number: mut self, value: Text -> Result<Unit, Error> {
+        (value -> len) > 0 -> unless {
+            errorUnit(errors.Kind.InvalidNumber, self -> writerOffset) -> return
+        }
+        value -> file.borrowText => source
+        source -> scanNumber(0, source -> len)? => end
+        end == (source -> len) -> unless {
+            errorUnit(errors.Kind.InvalidNumber, self -> writerOffset) -> return
+        }
+        self -> valuePrefix? => prefix
+        Int(value -> len) => length
+        self -> requireOutput(prefix + length)?
+        commitValue(self, prefix)
+        appendText(self.output, value)
+        self.produced + length => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public string: mut self, value: Text -> Result<Unit, Error> {
+        value -> encodedStringLength? => encodedLength
+        self -> valuePrefix? => prefix
+        self -> requireOutput(prefix + encodedLength)?
+        commitValue(self, prefix)
+        appendEscapedString(self.output, value)
+        self.produced + encodedLength => self.produced
+        Result<Unit, Error>.Ok
+    }
+
+    public intoBytes: move self -> Result<[UInt8; ~], Error> {
+        (self.stack -> len) == 0 and self.rootState == 1
+            -> unless {
+                errorOwnedBytes(errors.Kind.IncompleteDocument, self -> writerOffset) -> return
+            }
+        self.output => output
+        Result<[UInt8; ~], Error>.Ok(output)
+    }
+}

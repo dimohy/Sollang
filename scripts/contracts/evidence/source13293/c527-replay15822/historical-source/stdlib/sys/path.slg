@@ -1,0 +1,526 @@
+namespace sys.path
+
+import sys.directory.kind as kinds
+
+# Path owns its UTF-8 storage. It is not a Text alias and therefore cannot
+# outlive borrowed source storage accidentally.
+public struct Path {
+    bytes: [UInt8; ~]
+    style: Style
+}
+
+# A query follows symbolic links and returns one owned canonical path together
+# with the portable metadata shared by Windows and Linux.
+public struct RawInfo {
+    public bytes: [UInt8; ~]
+    public kindCode: UInt8
+    public byteLength: UInt64
+    public modifiedNanos: UInt64
+}
+
+public struct Info {
+    public canonical: Path
+    public kind: kinds.Kind
+    public byteLength: UInt64
+    public modifiedNanos: UInt64
+}
+
+# Path style is explicit so a cross-compiler can manipulate target paths
+# without silently applying the host machine's separator rules.
+public enum Style {
+    Posix
+    Windows
+}
+
+queryKind code: UInt8 -> kinds.Kind {
+    code -> when {
+        == 0 { kinds.Kind.File }
+        == 1 { kinds.Kind.Directory }
+        == 2 { kinds.Kind.Symlink }
+        else { kinds.Kind.Other }
+    }
+}
+
+copyBytes source: [UInt8; ~] -> [UInt8; ~] {
+    [UInt8; ~] => copied!
+    0 => index!
+    index! < (source -> len) -> while {
+        copied! -> push(source[index!])
+        index! + 1 => index!
+    }
+    copied!
+}
+
+impl Path {
+    public query: self -> Result<Info, Text> uses File {
+        self.style => style
+        self -> queryRaw -> when {
+            Ok(raw) {
+                raw.bytes -> copyBytes => canonicalBytes
+                fromBytes(canonicalBytes, style) -> when {
+                    Ok(canonical) {
+                        Info {
+                            canonical: canonical
+                            kind: raw.kindCode -> queryKind
+                            byteLength: raw.byteLength
+                            modifiedNanos: raw.modifiedNanos
+                        } => info
+                        Result<Info, Text>.Ok(info) -> return
+                    }
+                    Err(error) { Result<Info, Text>.Err(error) -> return }
+                }
+            }
+            Err(error) {
+                Result<Info, Text>.Err(error) -> return
+            }
+        }
+        Result<Info, Text>.Err("io")
+    }
+}
+
+sameStyle left: Style, right: Style -> Bool {
+    left -> when {
+        Posix {
+            right -> when {
+                Posix { true }
+                Windows { false }
+            }
+        }
+        Windows {
+            right -> when {
+                Posix { false }
+                Windows { true }
+            }
+        }
+    }
+}
+
+isSeparator value: UInt8, style: Style -> Bool {
+    style -> when {
+        Posix { value == '/' }
+        Windows { value == '/' or value == '\\' }
+    }
+}
+
+pathError message: Text -> Result<Path, Text> {
+    Result<Path, Text>.Err(message) => result
+    result
+}
+
+public fromText value: Text, style: Style -> Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes! -> push(value -> byte(index!))
+        index! + 1 => index!
+    }
+    Path { bytes: bytes!, style: style } => result
+    result
+}
+
+validUtf8 bytes: [UInt8; ~] -> Bool {
+    UIntSize(bytes -> len) => length
+    UIntSize(0) => index!
+    index! < length -> while {
+        bytes[Int(index!)] => first
+        first <= 127 -> if { index! + 1 => index! } else {
+            first >= 194 and first <= 223 -> if {
+                index! + 1 < length and bytes[Int(index! + 1)] >= 128 and bytes[Int(index! + 1)] <= 191
+                    -> unless { false -> return }
+                index! + 2 => index!
+            } else {
+                first >= 224 and first <= 239 -> if {
+                    index! + 2 < length -> unless { false -> return }
+                    bytes[Int(index! + 1)] => second
+                    second >= 128 and second <= 191 and bytes[Int(index! + 2)] >= 128 and bytes[Int(index! + 2)] <= 191
+                        -> unless { false -> return }
+                    first == 224 and second < 160 -> if { false -> return }
+                    first == 237 and second > 159 -> if { false -> return }
+                    index! + 3 => index!
+                } else {
+                    first >= 240 and first <= 244 -> unless { false -> return }
+                    index! + 3 < length -> unless { false -> return }
+                    bytes[Int(index! + 1)] => second
+                    second >= 128 and second <= 191
+                        and bytes[Int(index! + 2)] >= 128 and bytes[Int(index! + 2)] <= 191
+                        and bytes[Int(index! + 3)] >= 128 and bytes[Int(index! + 3)] <= 191
+                        -> unless { false -> return }
+                    first == 240 and second < 144 -> if { false -> return }
+                    first == 244 and second > 143 -> if { false -> return }
+                    index! + 4 => index!
+                }
+            }
+        }
+    }
+    true
+}
+
+# The owned-byte boundary is fallible so callers cannot forge a Path containing
+# malformed UTF-8. NUL is rejected by filesystem and confinement operations,
+# where its diagnostic has the relevant operation context.
+public fromBytes value: move [UInt8; ~], style: Style -> Result<Path, Text> {
+    validUtf8(value) -> unless { Result<Path, Text>.Err("path is not valid UTF-8") -> return }
+    Result<Path, Text>.Ok(Path { bytes: value, style: style })
+}
+
+impl Path {
+    public styleKind: self -> Style => self.style
+
+    public byteAt: self, index: UIntSize -> UInt8 => self.bytes[Int(index)]
+
+    public byteCount: self -> UIntSize {
+        UIntSize(self.bytes -> len)
+    }
+
+    public equalsText: self, value: Text -> Bool {
+        UIntSize(self.bytes -> len) => pathLength
+        value -> len => valueLength
+        pathLength == valueLength => matches!
+        UIntSize(0) => index!
+        matches! and index! < pathLength -> while {
+            self.bytes[Int(index!)] != (value -> byte(index!))
+                -> if { false => matches! }
+            index! + 1 => index!
+        }
+        matches!
+    }
+
+    public endsWithText: self, value: Text -> Bool {
+        UIntSize(self.bytes -> len) => pathLength
+        value -> len => valueLength
+        valueLength <= pathLength => matches!
+        pathLength - valueLength => start
+        UIntSize(0) => index!
+        matches! and index! < valueLength -> while {
+            self.bytes[Int(start + index!)] != (value -> byte(index!))
+                -> if { false => matches! }
+            index! + 1 => index!
+        }
+        matches!
+    }
+
+    public isAbsolute: self -> Bool {
+        self.style -> when {
+            Posix {
+                UIntSize(self.bytes -> len) > 0 and self.bytes[0] == '/'
+            }
+            Windows {
+                UIntSize(self.bytes -> len) => length
+                false => absolute!
+                length >= 2 and (self.bytes[0] == '/' or self.bytes[0] == '\\') and (self.bytes[1] == '/' or self.bytes[1] == '\\')
+                    -> if { true => absolute! }
+                length >= 3 and self.bytes[1] == ':' and (self.bytes[2] == '/' or self.bytes[2] == '\\')
+                    -> if { true => absolute! }
+                absolute!
+            }
+        }
+    }
+
+    # Join rejects an absolute child rather than silently discarding the base.
+    public join: move self, child: Text -> Result<Path, Text> {
+        self.style => style
+        style -> when {
+            Posix {
+                (child -> len) > 0 and (child -> byte(0)) == '/'
+            }
+            Windows {
+                child -> len => childLength
+                false => absolute!
+                childLength >= 2 and ((child -> byte(UIntSize(0))) == '/' or (child -> byte(UIntSize(0))) == '\\') and ((child -> byte(UIntSize(1))) == '/' or (child -> byte(UIntSize(1))) == '\\')
+                    -> if { true => absolute! }
+                childLength >= 3 and (child -> byte(UIntSize(1))) == ':' and ((child -> byte(UIntSize(2))) == '/' or (child -> byte(UIntSize(2))) == '\\')
+                    -> if { true => absolute! }
+                absolute!
+            }
+        } => childAbsolute
+        childAbsolute -> if {
+            pathError("absolute child path") -> return
+        }
+        self.bytes => bytes!
+        UIntSize(bytes! -> len) => baseLength
+        false => endsWithSeparator!
+        baseLength > 0 -> if {
+            bytes![Int(baseLength - 1)] => lastByte
+            style -> when {
+                Posix => lastByte == '/'
+                Windows => lastByte == '/' or lastByte == '\\'
+            } => endsWithSeparator!
+        }
+        baseLength > 0 and (child -> len) > 0 and not endsWithSeparator!
+            -> if {
+                style -> when {
+                    Posix => UInt8('/')
+                    Windows => UInt8('\\')
+                } => separator
+                bytes! -> push(separator)
+            }
+        UIntSize(0) => childIndex!
+        childIndex! < (child -> len) -> while {
+            bytes! -> push(child -> byte(childIndex!))
+            childIndex! + 1 => childIndex!
+        }
+        Path { bytes: bytes!, style: style } => joined
+        Result<Path, Text>.Ok(joined)
+    }
+
+    # Joins two borrowed path values into a fresh owned result.
+    public joinDiscovered: self, child: ref Path -> Path {
+        [UInt8; ~] => bytes!
+        UIntSize(0) => baseIndex!
+        baseIndex! < UIntSize(self.bytes -> len) -> while {
+            bytes! -> push(self.bytes[Int(baseIndex!)])
+            baseIndex! + 1 => baseIndex!
+        }
+        UIntSize(bytes! -> len) => baseLength
+        false => endsWithSeparator!
+        baseLength > 0 -> if {
+            bytes![Int(baseLength - 1)] => last
+            isSeparator(last, self.style) => endsWithSeparator!
+        }
+        baseLength > 0 and UIntSize(child.bytes -> len) > 0 and not endsWithSeparator!
+            -> if {
+                self.style -> when {
+                    Posix => UInt8('/')
+                    Windows => UInt8('\\')
+                } => separator
+                bytes! -> push(separator)
+            }
+        UIntSize(0) => childIndex!
+        childIndex! < UIntSize(child.bytes -> len) -> while {
+            bytes! -> push(child.bytes[Int(childIndex!)])
+            childIndex! + 1 => childIndex!
+        }
+        Path { bytes: bytes!, style: self.style } => joined
+        joined
+    }
+
+    public joinPath: self, child: ref Path -> Result<Path, Text> {
+        not sameStyle(self.style, child.style) -> if {
+            Result<Path, Text>.Err("path styles differ") -> return
+        }
+        child -> isAbsolute -> if {
+            Result<Path, Text>.Err("cannot join an absolute child") -> return
+        }
+
+        self -> joinDiscovered(child) => joined
+        Result<Path, Text>.Ok(joined)
+    }
+
+    copyOwned: self -> Path {
+        self.bytes -> copyBytes => bytes
+        Path { bytes: bytes, style: self.style }
+    }
+
+    # Pure lexical containment. Both operands are normalized under the same
+    # fail-closed rules, and a byte prefix counts only at a component boundary.
+    # Filesystem links are deliberately outside this operation.
+    public containsLexically: self, candidate: ref Path -> Result<Bool, Text> {
+        not sameStyle(self.style, candidate.style) -> if {
+            Result<Bool, Text>.Err("path styles differ") -> return
+        }
+        self -> copyOwned -> normalizeConfined? => root
+        candidate -> copyOwned -> normalizeConfined? => value
+        UIntSize(root.bytes -> len) => rootLength
+        UIntSize(value.bytes -> len) => valueLength
+        rootLength <= valueLength => contained!
+        UIntSize(0) => index!
+        contained! and index! < rootLength -> while {
+            root.bytes[Int(index!)] != value.bytes[Int(index!)]
+                -> if { false => contained! }
+            index! + 1 => index!
+        }
+        contained! and valueLength > rootLength -> if {
+            rootLength == 0 or not isSeparator(root.bytes[Int(rootLength - 1)], root.style)
+                -> if { isSeparator(value.bytes[Int(rootLength)], root.style)
+                        -> unless { false => contained! } }
+        }
+        Result<Bool, Text>.Ok(contained!)
+    }
+
+    # Windows canonical query results use the trusted extended-length spelling.
+    # Strip only that runtime-produced prefix before applying the public lexical
+    # validator; untrusted input still rejects every device/extended namespace.
+    normalizeResolvedCanonical: move self -> Result<Path, Text> {
+        self.style => style
+        self.bytes => source
+        UIntSize(source -> len) => length
+        style -> when {
+            Posix {
+                source -> copyBytes => comparable
+                Path { bytes: comparable, style: style } -> normalizeConfined
+            }
+            Windows {
+                [UInt8; ~] => comparable!
+                UIntSize(0) => index!
+                length >= 4 and isSeparator(source[0], style) and isSeparator(source[1], style)
+                    and source[2] == '?' and isSeparator(source[3], style)
+                    -> if {
+                        4 => index!
+                        length >= 8 and source[4] == 'U' and source[5] == 'N'
+                            and source[6] == 'C' and isSeparator(source[7], style)
+                            -> if {
+                                comparable! -> push('\\')
+                                comparable! -> push('\\')
+                                8 => index!
+                            }
+                    }
+                index! < length -> while {
+                    comparable! -> push(source[Int(index!)])
+                    index! + 1 => index!
+                }
+                Path { bytes: comparable!, style: style } -> normalizeConfined
+            }
+        }
+    }
+
+    # Resolves both operands through the target filesystem before applying the
+    # component-boundary lexical comparison. This detects a symlink or junction
+    # that resolves outside the root at query time. It is a snapshot check, not
+    # a substitute for handle-relative open when an attacker can race updates.
+    public containsResolved: self, candidate: ref Path -> Result<Bool, Text> uses File {
+        self -> query -> when {
+            Ok(rootInfo) {
+                candidate -> query -> when {
+                    Ok(candidateInfo) {
+                        rootInfo.canonical -> copyOwned => rootQueried
+                        candidateInfo.canonical -> copyOwned => candidateQueried
+                        rootQueried -> normalizeResolvedCanonical? => rootCanonical
+                        candidateQueried -> normalizeResolvedCanonical? => candidateCanonical
+                        rootCanonical -> containsLexically(candidateCanonical)
+                    }
+                    Err(error) { Result<Bool, Text>.Err(error) }
+                }
+            }
+            Err(error) { Result<Bool, Text>.Err(error) }
+        }
+    }
+
+    # Lexical normalization never touches the filesystem. Parent components that
+    # would cross the starting root are rejected, which is the safe default for
+    # package roots and module discovery.
+    public normalizeConfined: move self -> Result<Path, Text> {
+        self.style => style
+        self.bytes => source
+        [UInt8; ~] => output!
+        [UIntSize; ~] => componentStarts!
+        style -> when {
+            Posix => false
+            Windows => true
+        } => windows
+        UIntSize(source -> len) => sourceLength
+        UIntSize(0) => validationIndex!
+        validationIndex! < sourceLength -> while {
+            source[Int(validationIndex!)] == 0 -> if { pathError("path contains NUL") -> return }
+            validationIndex! + 1 => validationIndex!
+        }
+        UIntSize(0) => index!
+        false => absolute!
+        false => unc!
+        UIntSize(0) => protectedComponents!
+
+        windows -> if {
+            sourceLength >= 2 and source[1] == ':' -> if {
+                (source[0] >= 'A' and source[0] <= 'Z') or (source[0] >= 'a' and source[0] <= 'z')
+                    -> unless { pathError("invalid drive prefix") -> return }
+                output! -> push(source[0])
+                output! -> push(':')
+                2 => index!
+                index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
+                    -> if {
+                        output! -> push('\\')
+                        true => absolute!
+                        index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
+                            -> while { index! + 1 => index! }
+                    }
+            } else {
+                sourceLength >= 4 and isSeparator(source[0], style)
+                    and isSeparator(source[1], style)
+                    and (source[2] == '?' or source[2] == '.')
+                    and isSeparator(source[3], style)
+                    -> if { pathError("unsupported path namespace") -> return }
+                sourceLength >= 4 and isSeparator(source[0], style)
+                    and source[1] == '?' and source[2] == '?'
+                    and isSeparator(source[3], style)
+                    -> if { pathError("unsupported path namespace") -> return }
+                sourceLength >= 3 and isSeparator(source[0], style)
+                    and isSeparator(source[1], style) and isSeparator(source[2], style)
+                    -> if { pathError("invalid UNC path") -> return }
+                sourceLength >= 2 and (source[0] == '/' or source[0] == '\\') and (source[1] == '/' or source[1] == '\\')
+                    -> if {
+                        output! -> push('\\')
+                        output! -> push('\\')
+                        true => absolute!
+                        true => unc!
+                        2 => protectedComponents!
+                        2 => index!
+                        index! < sourceLength and (source[Int(index!)] == '/' or source[Int(index!)] == '\\')
+                            -> while { index! + 1 => index! }
+                    }
+            }
+        } else {
+            sourceLength > 0 and source[0] == '/' -> if {
+                output! -> push('/')
+                true => absolute!
+                1 => index!
+                index! < sourceLength and source[Int(index!)] == '/'
+                    -> while { index! + 1 => index! }
+            }
+        }
+
+        false => escaped!
+        false => wroteComponent!
+        index! < sourceLength and not escaped! -> while {
+            index! => componentStart
+            index! < sourceLength and (windows -> if { source[Int(index!)] != '/' and source[Int(index!)] != '\\' } else { source[Int(index!)] != '/' })
+                -> while {
+                    index! + 1 => index!
+                }
+            index! => componentEnd
+            componentEnd - componentStart => componentLength
+            index! < sourceLength and (windows -> if { source[Int(index!)] == '/' or source[Int(index!)] == '\\' } else { source[Int(index!)] == '/' })
+                -> while {
+                    index! + 1 => index!
+                }
+
+            componentLength == 1 and source[Int(componentStart)] == '.' => currentDirectory
+            componentLength == 2 and source[Int(componentStart)] == '.' and source[Int(componentStart + 1)] == '.' => parentDirectory
+            componentLength > 0 and not currentDirectory and not parentDirectory
+                -> if {
+                    UIntSize(output! -> len) => truncateStart
+                    wroteComponent! -> if {
+                        windows -> if { output! -> push('\\') } else { output! -> push('/') }
+                    }
+                    componentStarts! -> push(truncateStart)
+                    componentStart => componentByteIndex!
+                    componentByteIndex! < componentEnd -> while {
+                        output! -> push(source[Int(componentByteIndex!)])
+                        componentByteIndex! + 1 => componentByteIndex!
+                    }
+                    true => wroteComponent!
+                }
+            parentDirectory -> if {
+                UIntSize(componentStarts! -> len) > protectedComponents!
+                    -> if {
+                        componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - 1)) => truncateTo
+                        UIntSize(output! -> len) > truncateTo -> while {
+                            output! -> take(Int(UIntSize(output! -> len) - 1)) => removedByte
+                        }
+                        UIntSize(componentStarts! -> len) > 0 => wroteComponent!
+                    } else {
+                        true => escaped!
+                    }
+            }
+        }
+
+        escaped! -> if {
+            pathError("path escapes root") -> return
+        }
+        unc! and UIntSize(componentStarts! -> len) < 2
+            -> if {
+                pathError("incomplete UNC path") -> return
+            }
+        UIntSize(output! -> len) == 0 -> if { output! -> push('.') }
+        Path { bytes: output!, style: style } => normalized
+        Result<Path, Text>.Ok(normalized)
+    }
+}

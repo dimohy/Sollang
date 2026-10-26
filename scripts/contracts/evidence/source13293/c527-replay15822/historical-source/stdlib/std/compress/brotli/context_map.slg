@@ -1,0 +1,566 @@
+namespace std.compress.brotli.context_map
+
+import std.compress.brotli.context_map as model
+import std.compress.brotli.context_map.error as errors
+import std.compress.brotli.prefix_code as prefix_code
+import std.compress.brotli.prefix_code.error as prefix_errors
+import std.compress.brotli.prefix_table as prefix
+import std.compress.brotli.prefix_table.error as table_errors
+
+public struct Error {
+    public kind: errors.Kind
+    public offset: UIntSize
+}
+
+public struct Limits {
+    public maxEntries: Int
+    public maxTrees: Int
+    public maxTableEntries: Int
+}
+
+public struct Parser {
+    public prefixParser: prefix_code.Parser
+    public maxEntries: Int
+    public maxTrees: Int
+}
+
+public struct Parsed {
+    public values: [Int; ~]
+    public treeCount: Int
+    public position: prefix.Position
+}
+
+public enum ReaderPhase {
+    HasTreeCount
+    TreeCountWidth
+    TreeCountRemainder
+    RunLengthFlag
+    RunLengthPrefix
+    Prefix
+    Symbol
+    RunExtra
+    MoveToFront
+    Finished
+}
+
+public enum TableSlot {
+    Empty
+    Ready(prefix.Table)
+}
+
+# Reader retains only bounded semantic state. Caller bytes are copied once into
+# the shared scalar Window and are never retained by the context-map instance.
+public struct Reader {
+    public prefixParser: prefix_code.Parser
+    public maxEntries: Int
+    public maxTrees: Int
+    public entryCount: Int
+    public phase: ReaderPhase
+    public pendingWidth: Int
+    public treeCount: Int
+    public maxRunLengthPrefix: Int
+    public values: [Int; ~]
+    public table: TableSlot
+}
+
+public enum ReaderRead {
+    NeedMore(Int)
+    NeedPrefix(Int)
+    Ready
+}
+
+public struct Streamed {
+    public values: [Int; ~]
+    public treeCount: Int
+}
+
+enum WindowBits {
+    NeedMore(Int)
+    Ready(Int)
+}
+
+struct Bits {
+    value: Int
+    position: prefix.Position
+}
+
+errorParser kind: errors.Kind, offset: UIntSize -> Result<Parser, Error> {
+    Result<Parser, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorParsed kind: errors.Kind, offset: UIntSize -> Result<Parsed, Error> {
+    Result<Parsed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorBits kind: errors.Kind, offset: UIntSize -> Result<Bits, Error> {
+    Result<Bits, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReader kind: errors.Kind, offset: UIntSize -> Result<Reader, Error> {
+    Result<Reader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorReaderRead kind: errors.Kind, offset: UIntSize -> Result<ReaderRead, Error> {
+    Result<ReaderRead, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorDescriptionReader kind: errors.Kind, offset: UIntSize -> Result<prefix_code.DescriptionReader, Error> {
+    Result<prefix_code.DescriptionReader, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+errorStreamed kind: errors.Kind, offset: UIntSize -> Result<Streamed, Error> {
+    Result<Streamed, Error>.Err(Error { kind: kind, offset: offset })
+}
+
+powerOfTwo exponent: Int -> Int {
+    1 => value!
+    0 => index!
+    index! < exponent -> while {
+        value! * 2 => value!
+        index! + 1 => index!
+    }
+    value!
+}
+
+readBits input: [UInt8], position: prefix.Position, width: Int -> Result<Bits, Error> {
+    position.byteIndex => byteIndex!
+    position.bitIndex => bitIndex!
+    0 => value!
+    1 => place!
+    0 => read!
+    read! < width -> while {
+        byteIndex! < (input -> len)
+            -> unless { errorBits(errors.Kind.TruncatedInput, UIntSize(byteIndex!)) -> return }
+        (Int(input[byteIndex!]) / (bitIndex! -> powerOfTwo)) % 2 => bit
+        bit == 1 -> if { value! + place! => value! }
+        place! * 2 => place!
+        read! + 1 => read!
+        bitIndex! + 1 => bitIndex!
+        bitIndex! == 8 -> if {
+            0 => bitIndex!
+            byteIndex! + 1 => byteIndex!
+        }
+    }
+    Result<Bits, Error>.Ok(Bits {
+        value: value!
+        position: prefix.Position { byteIndex: byteIndex!, bitIndex: bitIndex! }
+    })
+}
+
+appendZeros values: mut [Int; ~], count: Int -> Unit {
+    0 => index!
+    index! < count -> while {
+        values -> push(0)
+        index! + 1 => index!
+    }
+}
+
+mapPrefixError kind: prefix_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    DuplicateSymbol { errors.Kind.InvalidPrefixCode }
+    InvalidCodeSpace { errors.Kind.InvalidPrefixCode }
+    TableLimitExceeded { errors.Kind.InvalidPrefixCode }
+    InvalidSymbol { errors.Kind.InvalidPrefixCode }
+}
+
+mapTableError kind: table_errors.Kind -> errors.Kind => kind -> when {
+    InvalidLimit { errors.Kind.InvalidLimit }
+    InvalidCodeLength { errors.Kind.InvalidPrefixCode }
+    TruncatedInput { errors.Kind.TruncatedInput }
+    InvalidCodeSpace { errors.Kind.InvalidPrefixCode }
+    TableLimitExceeded { errors.Kind.InvalidPrefixCode }
+}
+
+readWindowBits window: mut prefix.Window, width: Int -> Result<WindowBits, Error> {
+    window -> read(width) -> when {
+        Err(error) { Result<WindowBits, Error>.Err(Error { kind: error.kind -> mapTableError, offset: error.offset }) }
+        Ok(bits) {
+            bits -> when {
+                Incomplete(missing) { Result<WindowBits, Error>.Ok(model.WindowBits.NeedMore(missing)) }
+                Complete(value) { Result<WindowBits, Error>.Ok(model.WindowBits.Ready(Int(value))) }
+            }
+        }
+    }
+}
+
+parsePrefix parser: ref Parser, input: [UInt8], position: prefix.Position, alphabetSize: Int -> Result<prefix_code.Parsed, Error> {
+    parser.prefixParser -> parse(input, position, alphabetSize, 8) -> when {
+        Ok(parsed) { Result<prefix_code.Parsed, Error>.Ok(parsed) }
+        Err(error) {
+            Result<prefix_code.Parsed, Error>.Err(Error {
+                kind: error.kind -> mapPrefixError
+                offset: error.offset
+            })
+        }
+    }
+}
+
+inverseMoveToFront values: mut [Int; ~], treeCount: Int -> Result<Unit, Error> {
+    [Int; ~] => moveToFront!
+    0 => tree!
+    tree! < treeCount -> while {
+        moveToFront! -> push(tree!)
+        tree! + 1 => tree!
+    }
+    0 => valueIndex!
+    valueIndex! < (values -> len) -> while {
+        values[valueIndex!] => moveIndex
+        moveIndex >= 0 and moveIndex < treeCount
+            -> unless { Result<Unit, Error>.Err(Error {
+                    kind: errors.Kind.InvalidTreeIndex
+                    offset: UIntSize(valueIndex!)
+                }) -> return }
+        moveToFront![moveIndex] => value
+        moveIndex => shift!
+        shift! > 0 -> while {
+            moveToFront![shift! - 1] => moveToFront![shift!]
+            shift! - 1 => shift!
+        }
+        value => moveToFront![0]
+        value => values[valueIndex!]
+        valueIndex! + 1 => valueIndex!
+    }
+    Result<Unit, Error>.Ok
+}
+
+impl Limits {
+    public parser: self -> Result<Parser, Error> {
+        self.maxEntries > 0 and self.maxEntries <= 16_384
+            and self.maxTrees > 0 and self.maxTrees <= 256
+            and self.maxTableEntries > 0 and self.maxTableEntries <= 1_080
+            -> unless { errorParser(errors.Kind.InvalidLimit, 0) -> return }
+        prefix_code.Limits {
+            maxAlphabetSize: self.maxTrees + 16
+            maxTableEntries: self.maxTableEntries
+        } -> parser -> when {
+            Ok(prefixParser) {
+                Result<Parser, Error>.Ok(Parser {
+                    prefixParser: prefixParser
+                    maxEntries: self.maxEntries
+                    maxTrees: self.maxTrees
+                })
+            }
+            Err(error) { errorParser(error.kind -> mapPrefixError, error.offset) }
+        }
+    }
+}
+
+impl Parser {
+    public reader: self, entryCount: Int -> Result<Reader, Error> {
+        entryCount > 0 and entryCount <= self.maxEntries
+            -> unless { errorReader(errors.Kind.InvalidLimit, UIntSize(entryCount)) -> return }
+        Result<Reader, Error>.Ok(Reader {
+            prefixParser: self.prefixParser
+            maxEntries: self.maxEntries
+            maxTrees: self.maxTrees
+            entryCount: entryCount
+            phase: model.ReaderPhase.HasTreeCount
+            pendingWidth: 0
+            treeCount: 1
+            maxRunLengthPrefix: 0
+            values: [Int; ~]
+            table: model.TableSlot.Empty
+        })
+    }
+
+    public parse: self, input: [UInt8], position: prefix.Position, entryCount: Int -> Result<Parsed, Error> {
+        entryCount > 0 and entryCount <= self.maxEntries
+            -> unless { errorParsed(errors.Kind.InvalidLimit, UIntSize(entryCount)) -> return }
+        input -> readBits(position, 1)? => hasTreeCount
+        1 => treeCount!
+        hasTreeCount.position => current!
+        hasTreeCount.value == 1 -> if {
+            input -> readBits(current!, 3)? => width
+            width.position => current!
+            width.value == 0 -> if {
+                2 => treeCount!
+            } else {
+                input -> readBits(current!, width.value)? => remainder
+                remainder.position => current!
+                (width.value -> powerOfTwo) + remainder.value + 1 => treeCount!
+            }
+        }
+        treeCount! <= self.maxTrees
+            -> unless { errorParsed(errors.Kind.TreeLimitExceeded, UIntSize(treeCount!)) -> return }
+        [Int; ~] => values!
+        treeCount! == 1 -> if {
+            values! -> appendZeros(entryCount)
+            Result<Parsed, Error>.Ok(Parsed {
+                values: values!
+                treeCount: treeCount!
+                position: current!
+            }) -> return
+        }
+
+        input -> readBits(current!, 1)? => useRunLength
+        useRunLength.position => current!
+        0 => maxRunLengthPrefix!
+        useRunLength.value == 1 -> if {
+            input -> readBits(current!, 4)? => runLengthPrefix
+            runLengthPrefix.value + 1 => maxRunLengthPrefix!
+            runLengthPrefix.position => current!
+        }
+        self -> parsePrefix(
+        input,
+        current!,
+        treeCount! + maxRunLengthPrefix!)? => prefixDescription
+        prefixDescription.position => current!
+
+        (values! -> len) < entryCount -> while {
+            prefixDescription.table -> read(input, current!) -> when {
+                Ok(decoded) {
+                    decoded.position => current!
+                    decoded.symbol == 0 -> if {
+                        values! -> push(0)
+                    } else {
+                        decoded.symbol <= maxRunLengthPrefix! -> if {
+                            input -> readBits(current!, decoded.symbol)? => extra
+                            extra.position => current!
+                            (decoded.symbol -> powerOfTwo) + extra.value => runLength
+                            (values! -> len) + runLength <= entryCount
+                                -> unless {
+                                    errorParsed(errors.Kind.RunLengthExceeded, UIntSize(values! -> len)) -> return
+                                }
+                            values! -> appendZeros(runLength)
+                        } else {
+                            decoded.symbol - maxRunLengthPrefix! => treeIndex
+                            treeIndex < treeCount!
+                                -> unless {
+                                    errorParsed(errors.Kind.InvalidTreeIndex, UIntSize(treeIndex)) -> return
+                                }
+                            values! -> push(treeIndex)
+                        }
+                    }
+                }
+                Err(error) { errorParsed(error.kind -> when {
+                        TruncatedInput { errors.Kind.TruncatedInput }
+                        else { errors.Kind.InvalidPrefixCode }
+                    }, error.offset) -> return }
+            }
+        }
+        input -> readBits(current!, 1)? => useMoveToFront
+        useMoveToFront.position => current!
+        useMoveToFront.value == 1 -> if { values! -> inverseMoveToFront(treeCount!)? }
+        Result<Parsed, Error>.Ok(Parsed {
+            values: values!
+            treeCount: treeCount!
+            position: current!
+        })
+    }
+}
+
+impl Reader {
+    public prefixDescription: self -> Result<prefix_code.DescriptionReader, Error> {
+        self.phase -> when {
+            Prefix {
+                self.prefixParser -> descriptionReader(self.treeCount + self.maxRunLengthPrefix, 8) -> when {
+                    Err(error) { errorDescriptionReader(error.kind -> mapPrefixError, error.offset) }
+                    Ok(reader) { Result<prefix_code.DescriptionReader, Error>.Ok(reader) }
+                }
+            }
+            else { errorDescriptionReader(errors.Kind.InvalidPrefixCode, UIntSize(self.values -> len)) }
+        }
+    }
+
+    public installPrefix: mut self, table: move prefix.Table -> Result<Unit, Error> {
+        self.phase -> when {
+            Prefix { true }
+            else { false }
+        } => acceptsPrefix
+        acceptsPrefix -> unless {
+            Result<Unit, Error>.Err(Error {
+                kind: errors.Kind.InvalidPrefixCode
+                offset: UIntSize(self.values -> len)
+            }) -> return
+        }
+        model.TableSlot.Ready(table) => self.table
+        model.ReaderPhase.Symbol => self.phase
+        Result<Unit, Error>.Ok
+    }
+
+    public read: mut self, window: mut prefix.Window -> Result<ReaderRead, Error> {
+        true -> while {
+            self.phase -> when {
+                HasTreeCount {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(hasTreeCount) {
+                            hasTreeCount == 0 -> if {
+                                self.values -> appendZeros(self.entryCount)
+                                model.ReaderPhase.Finished => self.phase
+                            } else {
+                                model.ReaderPhase.TreeCountWidth => self.phase
+                            }
+                        }
+                    }
+                }
+                TreeCountWidth {
+                    window -> readWindowBits(3)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(width) {
+                            width == 0 -> if {
+                                2 => self.treeCount
+                                model.ReaderPhase.RunLengthFlag => self.phase
+                            } else {
+                                width => self.pendingWidth
+                                model.ReaderPhase.TreeCountRemainder => self.phase
+                            }
+                        }
+                    }
+                }
+                TreeCountRemainder {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(remainder) {
+                            (self.pendingWidth -> powerOfTwo) + remainder + 1 => self.treeCount
+                            self.treeCount <= self.maxTrees
+                                -> unless { errorReaderRead(errors.Kind.TreeLimitExceeded, UIntSize(self.treeCount)) -> return }
+                            model.ReaderPhase.RunLengthFlag => self.phase
+                        }
+                    }
+                }
+                RunLengthFlag {
+                    self.treeCount == 1 -> if {
+                        self.values -> appendZeros(self.entryCount)
+                        model.ReaderPhase.Finished => self.phase
+                    } else {
+                        window -> readWindowBits(1)? => read
+                        read -> when {
+                            NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                            Ready(useRunLength) {
+                                useRunLength == 0 -> if {
+                                    0 => self.maxRunLengthPrefix
+                                    model.ReaderPhase.Prefix => self.phase
+                                } else {
+                                    model.ReaderPhase.RunLengthPrefix => self.phase
+                                }
+                            }
+                        }
+                    }
+                }
+                RunLengthPrefix {
+                    window -> readWindowBits(4)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(prefixWidth) {
+                            prefixWidth + 1 => self.maxRunLengthPrefix
+                            model.ReaderPhase.Prefix => self.phase
+                        }
+                    }
+                }
+                Prefix {
+                    Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedPrefix(self.treeCount + self.maxRunLengthPrefix)) -> return
+                }
+                Symbol {
+                    (self.values -> len) < self.entryCount -> if {
+                        self.table -> when {
+                            Empty { errorReaderRead(errors.Kind.InvalidPrefixCode, UIntSize(self.values -> len)) -> return }
+                            Ready(table) {
+                                window -> symbol(table) -> when {
+                                    Err(error) { errorReaderRead(error.kind -> mapTableError, error.offset) -> return }
+                                    Ok(probed) {
+                                        probed -> when {
+                                            NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                                            Ready(decoded) {
+                                                decoded.symbol == 0 -> if {
+                                                    self.values -> push(0)
+                                                } else {
+                                                    decoded.symbol <= self.maxRunLengthPrefix -> if {
+                                                        decoded.symbol => self.pendingWidth
+                                                        model.ReaderPhase.RunExtra => self.phase
+                                                    } else {
+                                                        decoded.symbol - self.maxRunLengthPrefix => treeIndex
+                                                        treeIndex < self.treeCount
+                                                            -> unless { errorReaderRead(errors.Kind.InvalidTreeIndex, UIntSize(treeIndex)) -> return }
+                                                        self.values -> push(treeIndex)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (self.values -> len) == self.entryCount -> if { model.ReaderPhase.MoveToFront => self.phase }
+                }
+                RunExtra {
+                    window -> readWindowBits(self.pendingWidth)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(extra) {
+                            (self.pendingWidth -> powerOfTwo) + extra => runLength
+                            (self.values -> len) + runLength <= self.entryCount
+                                -> unless { errorReaderRead(errors.Kind.RunLengthExceeded, UIntSize(self.values -> len)) -> return }
+                            self.values -> appendZeros(runLength)
+                            model.ReaderPhase.Symbol => self.phase
+                        }
+                    }
+                }
+                MoveToFront {
+                    window -> readWindowBits(1)? => read
+                    read -> when {
+                        NeedMore(bits) { Result<ReaderRead, Error>.Ok(model.ReaderRead.NeedMore(bits)) -> return }
+                        Ready(useMoveToFront) {
+                            useMoveToFront == 1 -> if { self.values -> inverseMoveToFront(self.treeCount)? }
+                            model.ReaderPhase.Finished => self.phase
+                        }
+                    }
+                }
+                Finished { Result<ReaderRead, Error>.Ok(model.ReaderRead.Ready) -> return }
+            }
+        }
+        errorReaderRead(errors.Kind.InvalidPrefixCode, UIntSize(self.values -> len))
+    }
+
+    public finish: move self -> Result<Streamed, Error> {
+        self.phase -> when {
+            Finished { true }
+            else { false }
+        } => finished
+        finished -> unless { errorStreamed(errors.Kind.TruncatedInput, UIntSize(self.values -> len)) -> return }
+        self.treeCount => treeCount
+        self.values => values
+        Result<Streamed, Error>.Ok(Streamed { values: values, treeCount: treeCount })
+    }
+
+    # Transfer one completed map and reset this same reader for the next map.
+    # The empty replacement owns no allocation, so consecutive header maps
+    # reuse the parser instance without retaining caller input or copying data.
+    public takeAndReset: mut self, nextEntryCount: Int -> Result<Streamed, Error> {
+        self.phase -> when {
+            Finished { }
+            else { errorStreamed(errors.Kind.TruncatedInput, UIntSize(self.values -> len)) -> return }
+        }
+        nextEntryCount > 0 and nextEntryCount <= self.maxEntries
+            -> unless { errorStreamed(errors.Kind.InvalidLimit, UIntSize(nextEntryCount)) -> return }
+        self.treeCount => treeCount
+        self.values => values
+        [Int; ~] => self.values
+        nextEntryCount => self.entryCount
+        model.ReaderPhase.HasTreeCount => self.phase
+        0 => self.pendingWidth
+        1 => self.treeCount
+        0 => self.maxRunLengthPrefix
+        model.TableSlot.Empty => self.table
+        Result<Streamed, Error>.Ok(Streamed { values: values, treeCount: treeCount })
+    }
+}
+
+impl Streamed {
+    public intoValues: move self -> [Int; ~] {
+        self.values => values
+        values
+    }
+}
+
+impl Parsed {
+    public intoValues: move self -> [Int; ~] {
+        self.values => values
+        values
+    }
+}

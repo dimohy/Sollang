@@ -47,12 +47,12 @@ $emitterPreparation = Get-Content -LiteralPath (Join-Path $root 'selfhost/llvm/t
 $semanticInference = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/interpolation_inference.slg') -Raw
 $collectionTypeIds = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/type_ids.slg') -Raw
 $currentShared = $contract.currentSharedQueryEvidence
-$currentSharedContractPath = [IO.Path]::GetFullPath((Join-Path $root $currentShared.contract))
+$currentSharedContractPath = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentShared.contract))
 $currentSharedContract = Get-Content -LiteralPath $currentSharedContractPath -Raw | ConvertFrom-Json
-$currentSharedManagedPath = [IO.Path]::GetFullPath((Join-Path $root $currentShared.managed))
+$currentSharedManagedPath = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentShared.managed))
 $currentSharedManaged = Get-Content -LiteralPath $currentSharedManagedPath -Raw | ConvertFrom-Json
-$currentSharedPaired = Get-Content -LiteralPath (Join-Path $root $currentShared.paired) -Raw | ConvertFrom-Json
-$currentSharedCompiler = [IO.Path]::GetFullPath((Join-Path $root $currentShared.compiler))
+$currentSharedPaired = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentShared.paired) -Raw | ConvertFrom-Json
+$currentSharedCompiler = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentShared.compiler))
 if (@($currentSharedContract.cases).Count -ne 16 -or
     @($currentSharedContract.cases.id | Sort-Object -Unique).Count -ne 16 -or
     (Get-FileHash -LiteralPath $currentSharedCompiler -Algorithm SHA256).Hash -cne $currentShared.compilerSha256 -or
@@ -297,7 +297,7 @@ $unknownPackageCallResolution = Get-Content -LiteralPath (Join-Path $root 'selfh
 $currentUnknown = $contract.currentUnknownBindingEvidence
 $unknownScopeComparisonPath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.sourceComparison
 $unknownScopeComparison = Get-Content -LiteralPath $unknownScopeComparisonPath -Raw | ConvertFrom-Json
-$unknownScopePaired = Get-Content -LiteralPath (Join-Path $root $currentUnknown.paired) -Raw | ConvertFrom-Json
+$unknownScopePaired = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.paired) -Raw | ConvertFrom-Json
 if ($unknownScopeComparison.status -cne 'compared-before-slg-edit' -or
     $unknownScopeComparison.slgCompilerEdits -ne 0 -or
     (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $unknownScopeComparison.managedFirst) -cne
@@ -359,12 +359,12 @@ if ($unknownBinding.status -cne 'passed-slice-unit-open' -or
     $emitterDiagnostics.Contains('isBlockingUnknownInterpolation', [StringComparison]::Ordinal)) {
     throw 'unknown interpolation binding slice lacks source-first semantic decision or current paired evidence'
 }
-$currentUnknownContractPath = [IO.Path]::GetFullPath((Join-Path $root $currentUnknown.contract))
+$currentUnknownContractPath = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.contract))
 $currentUnknownContract = Get-Content -LiteralPath $currentUnknownContractPath -Raw | ConvertFrom-Json
-$currentUnknownManagedPath = [IO.Path]::GetFullPath((Join-Path $root $currentUnknown.managed))
+$currentUnknownManagedPath = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.managed))
 $currentUnknownManaged = Get-Content -LiteralPath $currentUnknownManagedPath -Raw | ConvertFrom-Json
-$currentUnknownPaired = Get-Content -LiteralPath (Join-Path $root $currentUnknown.paired) -Raw | ConvertFrom-Json
-$currentUnknownCompiler = [IO.Path]::GetFullPath((Join-Path $root $currentUnknown.compiler))
+$currentUnknownPaired = Get-Content -LiteralPath (Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.paired) -Raw | ConvertFrom-Json
+$currentUnknownCompiler = [IO.Path]::GetFullPath((Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $currentUnknown.compiler))
 if (@($currentUnknownContract.cases).Count -ne 13 -or
     @($currentUnknownContract.cases.id | Sort-Object -Unique).Count -ne 13 -or
     (Get-FileHash -LiteralPath $currentUnknownCompiler -Algorithm SHA256).Hash -cne $currentUnknown.compilerSha256 -or
@@ -1863,7 +1863,7 @@ if ($mismatchedSourcePaths.Count -gt 0) {
     # when a frozen current-source proof binds each changed compiler input to
     # the completed C# / selfhost suite pair; documentation remains pinned by
     # its own content hash. This does not claim whole-compiler parity.
-    $currentProofPath = Join-Path $root $contract.currentSourceProofEvidence
+    $currentProofPath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $contract.currentSourceProofEvidence
     $currentProof = Get-Content -LiteralPath $currentProofPath -Raw | ConvertFrom-Json
     if ($currentProof.schemaVersion -ne 2 -or $currentProof.status -cne 'passed' -or
         @($currentProof.sources).Count -ne $mismatchedSourcePaths.Count -or
@@ -2351,7 +2351,7 @@ foreach ($decisionEvidence in @($contract.displayabilityDecisionEvidence, $contr
         throw "interpolation semantic decision evidence is missing or failed: $decisionEvidence"
     }
 }
-$topologyPath = Join-Path $root $contract.indexedMemberTopologyEvidence
+$topologyPath = Resolve-CompilerEvidencePath -RepositoryRoot $root -LiteralPath $contract.indexedMemberTopologyEvidence
 if (-not (Test-Path -LiteralPath $topologyPath -PathType Leaf)) {
     throw 'indexed member interpolation topology evidence is missing'
 }
