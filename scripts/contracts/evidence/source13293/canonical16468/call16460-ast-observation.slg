@@ -1,0 +1,23 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.calls as calls
+import syntax.generated.slg as grammar
+
+main {
+    "main { true => projected\nprojected -> println }" => source
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> each node {
+        node.cstRuleId == grammar.ruleIdFlowTargetCall() -> if {
+            tokens[node.payloadToken] => token
+            source -> slice(token.span.start, token.span.length) => name
+            "flow-target=$name" -> println
+        }
+    }
+    source -> calls.resolve => resolved
+    resolved -> each call {
+        tokens[call.nameToken] => token
+        source -> slice(token.span.start, token.span.length) => name
+        "resolved-target=$name,status=$(call.status)" -> println
+    }
+}
