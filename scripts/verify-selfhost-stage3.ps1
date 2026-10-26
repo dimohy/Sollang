@@ -18,6 +18,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "stage3-seed-provenance.ps1")
 . (Join-Path $PSScriptRoot "input-fingerprint-stability.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+. (Join-Path $PSScriptRoot "selfhost-stage-inputs.ps1")
 $cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
 if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
     throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
@@ -46,6 +47,7 @@ $stage1Path = Join-Path $artifactsDir "selfhost-stage1-verification.exe"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
+$stageCompilationInputs = Get-SelfhostStageCompilationInputs -RepositoryRoot $repoRoot -Jobs $Jobs
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2BitcodePath = Join-Path $artifactsDir "selfhost-stage2.bc"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
@@ -597,11 +599,8 @@ if (-not (Test-Stage2ArtifactReceipt `
     throw "stage 2 artifacts are missing, empty, or differ from their completion receipt; rerun with -RebuildStage2"
 }
 
-$sourcePaths = Get-Content $manifestPath |
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-    ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
-$sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
-$fingerprintInputs = @($stage1Path, $manifestPath, $runtimeManifestPath) + $sourcePaths
+$sourcePaths = @($stageCompilationInputs.CompilerSources + $stageCompilationInputs.StandardLibrarySources)
+$fingerprintInputs = @($stage1Path) + $stageCompilationInputs.FingerprintPaths
 $currentStage2Fingerprint = Get-ContentFingerprint $fingerprintInputs
 if (-not (Test-Path -LiteralPath $stage2FingerprintPath) -or
     [System.IO.File]::ReadAllText($stage2FingerprintPath).Trim() -ne $currentStage2Fingerprint) {
@@ -631,7 +630,7 @@ if ($ResumeCandidate) {
     Assert-VerificationCancellationNotRequested
     $process = Start-Process `
         -FilePath $stage2Path `
-        -ArgumentList (@("windows", "--jobs", $Jobs.ToString([System.Globalization.CultureInfo]::InvariantCulture)) + $sourcePaths) `
+        -ArgumentList $stageCompilationInputs.EmissionArguments `
         -RedirectStandardOutput $stage3LlvmPath `
         -RedirectStandardError $stage3ErrorPath `
         -PassThru `

@@ -1987,6 +1987,76 @@ class CompilerConsumerClosureTests(unittest.TestCase):
         path.write_text(json.dumps(record))
         return old, replacement, path
 
+    def unqualified_diagnostic_observation_fixture(self):
+        old, replacement, consumer = self.products()
+        record = json.loads(consumer.read_text())
+        for key in ('completed', 'total', 'cases'):
+            record.pop(key)
+        record.update(status='observed-not-qualified', claimsGoalComplete=False,
+                      observedExit=1, diagnostic='sollang: semantic error: observed only',
+                      processes=[dict(pid=123, exit=1, command=[str(old / 'compiler.exe'), 'build'],
+                          shutdownConfirmed=True, shutdownScope='owned-windows-job',
+                          startedAtUtc='2026-10-26T11:39:22+00:00',
+                          finishedAtUtc='2026-10-26T11:39:36+00:00',
+                          naturalShutdownObservation=dict(rootPid=123, outcome='drained'))])
+        (consumer.parent / 'build.stderr').write_text(record['diagnostic'] + '\n')
+        (consumer.parent / 'build.stdout').write_bytes(b'')
+        consumer.write_text(json.dumps(record))
+        return old, replacement, consumer, record
+
+    def test_unqualified_diagnostic_observation_retires_only_product(self):
+        old, replacement, consumer, record = self.unqualified_diagnostic_observation_fixture()
+        original = consumer.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'NOT_TERMINAL'):
+            policy.consumer_closure_record(self.repo, old, [consumer], replacement)
+        closure = policy.close_compiler_consumers(self.repo, old, [consumer], replacement,
+                                                 legacy_terminal=True)
+        row = json.loads(closure.read_text())['consumers'][0]
+        self.assertEqual(0, row['completed'])
+        self.assertIsNone(row['total'])
+        self.assertEqual('terminal-unqualified-diagnostic-observation', row['disposition'])
+        self.assertEqual(['diagnostic-oracle-unverified'], row['unprovenReasons'])
+        self.assertEqual(0, self.execute(self.plan(retention_terminal=True)).returncode)
+        self.assertFalse((old / 'compiler.exe').exists())
+        self.assertTrue((replacement / 'compiler.exe').exists())
+        self.assertEqual(original, consumer.read_bytes())
+        self.assertTrue((consumer.parent / 'build.stderr').exists())
+        self.assertTrue((consumer.parent / 'consumer-retirement-protection.json').exists())
+
+    def test_unqualified_diagnostic_observation_rejects_unproven_capture(self):
+        old, replacement, consumer, original = self.unqualified_diagnostic_observation_fixture()
+        for mutation in ('active', 'shutdown', 'pin', 'exit', 'scope', 'drained', 'pid',
+                         'goal', 'test', 'count', 'diagnostic', 'stdout', 'logs', 'time'):
+            record = copy.deepcopy(original)
+            (consumer.parent / 'build.stdout').write_bytes(b'')
+            extra = consumer.parent / 'other.stderr'
+            if extra.exists(): extra.unlink()
+            if mutation == 'active': record['activeProcess'] = {'pid': 123}
+            elif mutation == 'shutdown': record['processesStopped'] = False
+            elif mutation == 'pin': record['inputHashes'] = {}
+            elif mutation == 'exit': record['processes'][0]['exit'] = 0
+            elif mutation == 'scope': record['processes'][0]['command'][1] = 'run'
+            elif mutation == 'drained': record['processes'][0]['naturalShutdownObservation']['outcome'] = 'active'
+            elif mutation == 'pid': record['processes'][0]['naturalShutdownObservation']['rootPid'] = 456
+            elif mutation == 'goal': record['claimsGoalComplete'] = True
+            elif mutation == 'test': record['claimsTestPassed'] = True
+            elif mutation == 'count': record['completed'] = 1
+            elif mutation == 'diagnostic': record['diagnostic'] = 'different'
+            elif mutation == 'stdout': (consumer.parent / 'build.stdout').write_text('unexpected')
+            elif mutation == 'logs': extra.write_text('ambiguous')
+            elif mutation == 'time': record['processes'][0]['finishedAtUtc'] = '2026-10-26T11:38:00+00:00'
+            consumer.write_text(json.dumps(record))
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                policy.consumer_closure_record(self.repo, old, [consumer], replacement,
+                                               legacy_terminal=True)
+
+    def test_unqualified_diagnostic_observation_rechecks_logs_on_replay(self):
+        old, replacement, consumer, record = self.unqualified_diagnostic_observation_fixture()
+        policy.close_compiler_consumers(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        (consumer.parent / 'build.stderr').write_text('changed diagnostic')
+        with self.assertRaises(ValueError):
+            policy.verified_consumer_closure(self.repo, old)
+
     def retirement_chain(self):
         old, middle, first = self.products()
         path = middle / 'result.json'

@@ -1,0 +1,38 @@
+namespace sollang.compiler.llvm.invariant_rules
+
+# A declared source method keeps its synthetic self symbol as the first
+# concrete Typed IR parameter. This pure rule is shared by LLVM verification
+# and its focused self-host fixture without constructing compiler-wide state.
+public methodReceiverInvariantCode functionKind: Int, selfToken: Int, functionSourceModule: Int, functionSymbol: Int, parameterKind: Int, parameterSourceModule: Int, receiverKind: Int, receiverParent: Int, receiverNameToken: Int -> Int {
+    0 => code!
+    functionKind == 31 and selfToken >= 0
+        and not (parameterKind == 10
+        and parameterSourceModule == functionSourceModule
+        and receiverKind == 35
+        and receiverParent == functionSymbol
+        and receiverNameToken == selfToken)
+        -> if { 51 => code! }
+    code!
+}
+
+# A parallel/stream role fills one runtime slot only when it remains implicit.
+# Explicit linked captures do not suppress it, while a role already linked as
+# the source child must never be counted twice.
+public implicitFlowArgumentCount flowOwner: Bool, childIsSource: Bool, linkedCount: Int, expectedCount: Int -> Int {
+    flowOwner and not childIsSource and linkedCount < expectedCount
+        -> if { 1 } else { 0 }
+}
+
+# A function-local index accepts only an in-bounds parent in the same contiguous
+# Typed IR function/entry range. Other parent links can carry valid structural
+# metadata, but they must not widen a function-local lookup.
+public irParentOwnerAccepted parentIndex: Int, irCount: Int, nodeOwner: Int, parentOwner: Int -> Bool {
+    parentIndex >= 0 and parentIndex < irCount and nodeOwner == parentOwner
+}
+
+# Preserve the established aggregate wrapper selection rule in one executable
+# predicate: an eligible exact match replaces any prior selection, while a
+# fallback can replace only until the first exact match has been observed.
+public aggregateChildReplacesSelection eligible: Bool, exact: Bool, exactAlreadySelected: Bool -> Bool {
+    eligible and (exact or not exactAlreadySelected)
+}

@@ -21,6 +21,7 @@ if ($Rebuild -and $ResumeCandidate) {
 . (Join-Path $PSScriptRoot "stage3-seed-provenance.ps1")
 . (Join-Path $PSScriptRoot "input-fingerprint-stability.ps1")
 . (Join-Path $PSScriptRoot "verification-process.ps1")
+. (Join-Path $PSScriptRoot "selfhost-stage-inputs.ps1")
 $cancellationValues = @($CancellationRequestPath, $CancellationRunId, $CancellationAcknowledgementPath)
 if (@($cancellationValues | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -notin @(0, 3)) {
     throw 'CancellationRequestPath, CancellationRunId, and CancellationAcknowledgementPath must be supplied together'
@@ -120,6 +121,7 @@ $compilerRuntimeSources = Get-Content $runtimeManifestPath |
 $compilerSources = Get-Content $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
+$stageCompilationInputs = Get-SelfhostStageCompilationInputs -RepositoryRoot $repoRoot -Jobs $Stage2BuildJobs
 $expectedStage2Bytes = if (Test-Stage2ArtifactReceipt `
         -LlvmPath $stage2LlvmPath `
         -BitcodePath $stage2BitcodePath `
@@ -136,7 +138,8 @@ $expectedStage2Definitions = if (Test-Path -LiteralPath $stage2LlvmPath) {
 }
 
 & (Join-Path $PSScriptRoot "verify-source-manifest-closure.ps1") `
-    -Manifest @($manifestPath, $runtimeManifestPath) `
+    -Manifest @($manifestPath) `
+    -SourcePath $stageCompilationInputs.StandardLibrarySources `
     -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-selfhost-compiler-contracts.ps1") -RepositoryRoot $repoRoot
 & (Join-Path $PSScriptRoot "verify-quic-frame-consumers.ps1") -RepositoryRoot $repoRoot -Jobs 3
@@ -222,9 +225,7 @@ function Get-ContentFingerprint {
 }
 
 function Get-Stage2InputFingerprint {
-    $paths = @($stage1Path, $manifestPath, $runtimeManifestPath)
-    $paths += $compilerSources
-    $paths += $compilerRuntimeSources
+    $paths = @($stage1Path) + $stageCompilationInputs.FingerprintPaths
     return Get-ContentFingerprint $paths
 }
 
@@ -621,7 +622,7 @@ if (Test-Stage2IsCurrent) {
         Write-Host "[stage2 2/7] RESUME receipt-bound Stage2 candidate."
     } else {
         Remove-Item -LiteralPath $stage2CandidateLlvmPath, $stage2CandidateBitcodePath, $stage2CandidatePath, $stage2CandidateFingerprintPath, $stage2CandidateArtifactReceiptPath -ErrorAction SilentlyContinue
-        $sourcePaths = @($compilerSources + ($compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }))
+        $sourcePaths = @($stageCompilationInputs.CompilerSources + $stageCompilationInputs.StandardLibrarySources)
         $sourceLineCount = ($sourcePaths | ForEach-Object { [System.IO.File]::ReadAllLines($_).LongLength } | Measure-Object -Sum).Sum
         $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2.err.log"
         $stage2TimeoutMilliseconds = 3600000
@@ -635,7 +636,7 @@ if (Test-Stage2IsCurrent) {
         Write-Host ("[stage2 2/7] phase 1/2 analyze {0:N0} source files / {1:N0} lines" -f $sourcePaths.Count, $sourceLineCount)
         $stage2Process = Invoke-ProcessToFile `
             -FilePath $stage1Path `
-            -ArgumentList (@("windows", "--jobs", $Stage2BuildJobs.ToString([System.Globalization.CultureInfo]::InvariantCulture)) + $sourcePaths) `
+            -ArgumentList $stageCompilationInputs.EmissionArguments `
             -OutputPath $stage2CandidateLlvmPath `
             -ErrorPath $stage2ErrorPath
 

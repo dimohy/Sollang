@@ -1240,6 +1240,42 @@ def controller_lost_consumer_shutdown(repo: Path, path: Path, record: dict, prod
     return {'path': str(audit_path), 'sha256': hashlib.sha256(audit_path.read_bytes()).hexdigest()}
 
 
+def stopped_diagnostic_observation(repo: Path, path: Path, record: dict, product: Path) -> bool:
+    """Authenticate one rejected build observation without certifying its diagnostic."""
+    processes = record.get('processes')
+    if (record.get('status') != 'observed-not-qualified'
+            or any(key in record for key in ('completed', 'total', 'cases'))
+            or record.get('claimsGoalComplete') is not False
+            or record.get('claimsTestPassed', False) is not False
+            or type(record.get('observedExit')) is not int or record['observedExit'] != 1
+            or not isinstance(record.get('diagnostic'), str) or not record['diagnostic'].strip()
+            or not isinstance(processes, list) or len(processes) != 1):
+        return False
+    process = processes[0]
+    if (not terminal_consumer_process(repo, path.parent, process)
+            or process.get('command', [])[:2] != [str(product), 'build']
+            or process.get('exit') != 1 or process.get('shutdownConfirmed') is not True
+            or process.get('shutdownScope') != 'owned-windows-job'
+            or type(process.get('pid')) is not int or process['pid'] <= 0
+            or process.get('naturalShutdownObservation', {}).get('rootPid') != process['pid']
+            or process.get('naturalShutdownObservation', {}).get('outcome') != 'drained'):
+        return False
+    try:
+        started = dt.datetime.fromisoformat(process['startedAtUtc'])
+        finished = dt.datetime.fromisoformat(process['finishedAtUtc'])
+        if started.tzinfo is None or finished.tzinfo is None or finished < started:
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    logs = list(path.parent.glob('*.stderr'))
+    if len(logs) != 1:
+        return False
+    stderr = assert_artifact_path(repo, logs[0])
+    stdout = assert_artifact_path(repo, stderr.with_suffix('.stdout'))
+    return (stdout.is_file() and stdout.stat().st_size == 0
+            and stderr.read_text(encoding='utf-8-sig').strip() == record['diagnostic'].strip())
+
+
 def terminal_diagnostic_capture(record: dict) -> bool:
     """Recognize terminal mismatch captures for retirement only, never acceptance."""
     cases = record.get('cases')
@@ -1430,7 +1466,10 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
                              if legacy_terminal else None)
         recovered_interruption = recovered_interruption_shutdown(repo, path, record) if legacy_terminal else None
         mismatch_capture = legacy_terminal and terminal_diagnostic_capture(record)
-        if ((record.get('status') not in ('passed', 'failed') and not canceled and not timed_out and not mismatch_capture)
+        diagnostic_observation = legacy_terminal and stopped_diagnostic_observation(
+            repo, path, record, Path(references[0]['compilerPath']))
+        if ((record.get('status') not in ('passed', 'failed') and not canceled and not timed_out
+                and not mismatch_capture and not diagnostic_observation)
                 or (active_record(record) and not timed_out and partial_rejection is None) or record.get('orphanProcessIds')):
             raise ValueError('ARTIFACT_CONSUMER_NOT_TERMINAL')
         stable_inputs = record.get('inputsStable', record.get('inputStable'))
@@ -1453,6 +1492,14 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         producer_pinned = isinstance(pins, dict) and str(pins.get(producer['path'], '')).casefold() == producer['sha256'].casefold()
         if not binary_pinned or not (producer_pinned or legacy_terminal and missing_producer_pin):
             raise ValueError('ARTIFACT_CONSUMER_BUILD_LINK_INVALID')
+        if diagnostic_observation:
+            assert_output_shutdown(repo, path.parent)
+            rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                         'status': record['status'], 'completed': 0, 'total': None,
+                         'executed': 1, 'failed': None, 'unexecuted': None,
+                         'disposition': 'terminal-unqualified-diagnostic-observation',
+                         'unprovenReasons': ['diagnostic-oracle-unverified']})
+            continue
         if recovered_interruption is not None:
             rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                          'status': 'canceled', 'completed': 0, 'total': record['total'],

@@ -1960,6 +1960,13 @@ accept cancellation only when the structured result reports `cancelled`, a
 non-zero exit code, the exact `CANCELLATION_REQUESTED` identifier, and zero
 orphan processes.
 
+Windows Stage2/Stage3 self-compilation uses the canonical compiler manifest
+with `windows-stdlib` and the repository's full standard-library root. Resolve
+both generations' emission arguments and fingerprint inputs through
+`scripts/selfhost-stage-inputs.ps1`; include every standard-library source in
+the fingerprint. Bootstrap runtime projections remain inputs of their focused
+ABI controls and are not appended to the full standard-library compilation.
+
 Use explicit `--jobs <positive Int>` when a compiler build needs bounded
 workers. The C# Windows linker retains small LLVM partitions while limiting
 concurrent optimization processes. Record the selected worker count with the
