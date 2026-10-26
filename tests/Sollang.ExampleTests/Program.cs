@@ -1434,7 +1434,8 @@ static IEnumerable<string> CollectResultInputs(string repoRoot, string expectedD
         if (Directory.Exists(path))
         {
             foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
-                .Where(file => Path.GetExtension(file) is ".slg" or ".project" or ".workspace" or ".lock" or ".h" or ".hpp"))
+                .Where(file => Path.GetExtension(file) is ".slg" or ".lexer" or ".grammar"
+                    or ".project" or ".workspace" or ".lock" or ".h" or ".hpp"))
                 inputs.Add(file);
         }
         else if (File.Exists(path)) inputs.Add(path);

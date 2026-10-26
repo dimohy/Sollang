@@ -1,0 +1,31 @@
+--- selfhost/syntax/source.slg (reviewed)
++++ selfhost/syntax/source.slg (current)
+@@ -12,8 +12,28 @@
+ 
+ public struct SyntaxToken {
+     public kind: Int
+     public span: SourceSpan
++}
++
++# Number tokens retain source spelling; extent consumers share normalized digits.
++public numericExtentTokenValue source: Text, token: SyntaxToken -> Int {
++    0 => extent!
++    UIntSize(0) => index!
++    index! < token.span.length -> while {
++        source -> byte(token.span.start + index!) => digit
++        digit == 95 -> if {
++            index! + 1 => index!
++            continue
++        }
++        digit < 48 or digit > 57 -> if { -1 -> return }
++        Int(digit - 48) => value
++        extent! > (2_147_483_647 - value) / 10 -> if { -1 -> return }
++        extent! * 10 + value => extent!
++        index! + 1 => index!
++    }
++    token.span.length == 0 -> if { -1 -> return }
++    extent!
+ }
+ 
+ # Raw expression layout is shared by parser admission and LLVM text decoding.
+ # Issue order matches StringLiteralParser.NormalizeRawString.

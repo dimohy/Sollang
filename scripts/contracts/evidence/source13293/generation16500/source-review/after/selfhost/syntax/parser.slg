@@ -1,0 +1,949 @@
+namespace sollang.compiler.parser
+
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Parser events are lossless building blocks for a green CST. Enter/exit events
+# carry rule ids, token events carry token indexes, and the final outcome event
+# carries 1 for acceptance or 0 for rejection. Backtracking rewinds the logical
+# event depth, so abandoned alternatives never escape the parser. A kind-6
+# event identifies a grammar rule that failed at the final diagnostic token.
+# Kind 8 commits a compiler-owned syntax failure at its diagnostic token.
+public struct ParseEvent {
+    public kind: Int
+    public value: Int
+    public tokenIndex: Int
+}
+
+public struct ParseRequest {
+    public source: Text
+    public startRule: Int
+}
+
+public struct StringInterpolationSyntaxIssue {
+    public code: Int
+    public expressionSpan: syntax.SourceSpan
+}
+
+public stringInterpolationSyntaxIssue source: Text, token: syntax.SyntaxToken -> StringInterpolationSyntaxIssue {
+    token.span.start => cursor!
+    true -> while {
+        source -> syntax.nextStringInterpolationFragment(token, cursor!) => fragment
+        not fragment.found -> if {
+            StringInterpolationSyntaxIssue { code: 0, expressionSpan: fragment.span } -> return
+        }
+        fragment.issue != 0 -> if {
+            StringInterpolationSyntaxIssue { code: fragment.issue, expressionSpan: fragment.span } -> return
+        }
+        source -> slice(fragment.span.start, fragment.span.length) => expression
+        expression -> parseExpressionEvents => events
+        events[(events -> len) - 1].value == 0 -> if {
+            StringInterpolationSyntaxIssue { code: 4, expressionSpan: fragment.span } -> return
+        }
+        fragment.next => cursor!
+    }
+    StringInterpolationSyntaxIssue { code: 0, expressionSpan: token.span }
+}
+
+nextSignificantToken tokens: [syntax.SyntaxToken; ~], index: Int -> Int {
+    index + 1 => next!
+    next! < (tokens -> len) and tokens[next!].kind >= grammar.triviaIdWhitespace()
+        -> while { next! + 1 => next! }
+    next!
+}
+
+# Match the managed parser's declaration dispatch before trying a function rule.
+functionDeclarationStart source: Text, tokens: [syntax.SyntaxToken; ~], start: Int -> Bool {
+    start >= (tokens -> len) or tokens[start].kind != grammar.tokenIdIdentifier()
+        -> if { false -> return }
+    start => nameIndex!
+    tokens[nameIndex!] => first
+    source -> slice(first.span.start, first.span.length) => firstText
+    firstText == "public" -> if {
+        tokens -> nextSignificantToken(nameIndex!) => nameIndex!
+    }
+    tokens -> nextSignificantToken(nameIndex!) => cursor!
+    cursor! < (tokens -> len) and tokens[cursor!].kind == grammar.tokenIdDot()
+        -> while {
+            tokens -> nextSignificantToken(cursor!) => cursor!
+            cursor! >= (tokens -> len) or tokens[cursor!].kind != grammar.tokenIdIdentifier()
+                -> if { false -> return }
+            tokens -> nextSignificantToken(cursor!) => cursor!
+        }
+    cursor! < (tokens -> len) and tokens[cursor!].kind == grammar.tokenIdLess()
+        -> if {
+            0 => depth!
+            cursor! < (tokens -> len) and tokens[cursor!].kind != grammar.tokenIdNewLine()
+                and tokens[cursor!].kind != grammar.tokenIdEnd()
+                -> while {
+                    tokens[cursor!].kind == grammar.tokenIdLess()
+                        -> if { depth! + 1 => depth! }
+                    tokens[cursor!].kind == grammar.tokenIdGreater()
+                        -> if { depth! - 1 => depth! }
+                    tokens -> nextSignificantToken(cursor!) => cursor!
+                    depth! == 0 -> if { break }
+                }
+            depth! != 0 -> if { false -> return }
+        }
+    cursor! < (tokens -> len) and tokens[cursor!].kind == grammar.tokenIdColon()
+        -> if { true -> return }
+    cursor! < (tokens -> len) and tokens[cursor!].kind == grammar.tokenIdIdentifier()
+        -> if {
+            tokens -> nextSignificantToken(cursor!) => cursor!
+            cursor! < (tokens -> len) and tokens[cursor!].kind == grammar.tokenIdColon()
+                -> if { true -> return }
+        }
+    false
+}
+
+struct NumericSyntaxIssue {
+    code: Int
+    tokenIndex: Int
+}
+
+numericExtentTokenValid source: Text, token: syntax.SyntaxToken, positive: Bool -> Bool {
+    source -> syntax.numericExtentTokenValue(token) => extent
+    extent >= 0 and (not positive or extent > 0)
+}
+
+dictionaryInitializerCount events: ref [ParseEvent; ~], length: Int, ownerRule: Int, ownerStart: Int -> Int {
+    length - 1 => start!
+    start! >= 0 -> while {
+        events[start!].kind == 0 and events[start!].value == ownerRule
+            and events[start!].tokenIndex == ownerStart -> if { break }
+        start! - 1 => start!
+    }
+    start! < 0 -> if { 0 -> return }
+    -1 => depth!
+    0 => count!
+    start! => index!
+    index! < length -> while {
+        events[index!] => event
+        event.kind == 0 -> if {
+            depth! + 1 => depth!
+            depth! == 1 and event.value == grammar.ruleIdDictionaryEntry()
+                -> if { count! + 1 => count! }
+        }
+        event.kind == 1 -> if { depth! - 1 => depth! }
+        index! + 1 => index!
+    }
+    count!
+}
+
+numericTypeSyntaxIssue source: Text, tokens: ref [syntax.SyntaxToken; ~], start: Int, numberIndex: Int -> NumericSyntaxIssue {
+    start => first!
+    first! < numberIndex and tokens[first!].kind >= grammar.triviaIdWhitespace()
+        -> while { first! + 1 => first! }
+    numberIndex - 1 => previous!
+    previous! >= first! and tokens[previous!].kind >= grammar.triviaIdWhitespace()
+        -> while { previous! - 1 => previous! }
+    previous! < first! -> if {
+        NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return
+    }
+    0 => code!
+    tokens[first!].kind == grammar.tokenIdLeftBracket()
+        -> if {
+            tokens[previous!].kind == grammar.tokenIdLessEqual()
+                -> if { 23 => code! }
+            tokens[previous!].kind == grammar.tokenIdSemicolon()
+                -> if { 14 => code! }
+        }
+    tokens[first!].kind == grammar.tokenIdLeftBrace()
+        and tokens[previous!].kind == grammar.tokenIdLessEqual()
+        -> if { 26 => code! }
+    tokens[first!].kind == grammar.tokenIdIdentifier()
+        and tokens[previous!].kind == grammar.tokenIdLess()
+        -> if {
+            source -> slice(tokens[first!].span.start, tokens[first!].span.length) => name
+            name == "BitSet" -> if { 27 => code! }
+        }
+    code! == 0 -> if { NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return }
+    source -> numericExtentTokenValid(tokens[numberIndex], code! != 14)
+        -> if {
+            NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return
+        }
+    NumericSyntaxIssue { code: code!, tokenIndex: numberIndex }
+}
+
+previousArrayToken tokens: ref [syntax.SyntaxToken; ~], index: Int -> Int {
+    index - 1 => previous!
+    previous! >= 0 and (tokens[previous!].kind >= grammar.triviaIdWhitespace()
+        or tokens[previous!].kind == grammar.tokenIdNewLine())
+        -> while { previous! - 1 => previous! }
+    previous!
+}
+
+# The managed parser validates a repeat count only after consuming ']'.
+arrayRepeatSyntaxIssue source: Text, tokens: ref [syntax.SyntaxToken; ~], end: Int -> NumericSyntaxIssue {
+    tokens -> previousArrayToken(end) => closing
+    closing < 0 or tokens[closing].kind != grammar.tokenIdRightBracket()
+        -> if { NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return }
+    tokens -> previousArrayToken(closing) => count
+    count < 0 or tokens[count].kind != grammar.tokenIdNumber()
+        -> if { NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return }
+    tokens -> previousArrayToken(count) => separator
+    separator < 0 or tokens[separator].kind != grammar.tokenIdSemicolon()
+        -> if { NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return }
+    source -> numericExtentTokenValid(tokens[count], false)
+        -> if { NumericSyntaxIssue { code: 0, tokenIndex: -1 } -> return }
+    NumericSyntaxIssue { code: 25, tokenIndex: count }
+}
+
+# Executes generated parser bytecode. Literal and numeric annotation admission
+# commit compiler-owned syntax diagnostics; backtracking rolls abandoned events back.
+public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
+    request.source => source
+    source -> lexer.lex => tokens
+    request -> parsePreparedRuleEvents(tokens)
+}
+
+public parsePreparedRuleEvents request: ParseRequest, tokens: ref [syntax.SyntaxToken; ~] -> [ParseEvent; ~] {
+    request.source => source
+    grammar.parserProgram() => program
+    grammar.ruleOffsets() => ruleOffsets
+    grammar.keywordTexts() => keywords
+
+    [Int; ~] => returnPcs!
+    [Int; ~] => choicePcs!
+    [Int; ~] => choiceTokens!
+    [Int; ~] => choiceCallDepths!
+    [Int; ~] => choiceEventDepths!
+    [Int; ~] => activeRules!
+    [Int; ~] => activeRuleStarts!
+    # A managed declaration dispatch commits to that function. Retain outer
+    # grammar choices for successful return, but never recover a failed function
+    # by reinterpreting its prefix as a statement.
+    [Int; ~] => functionCommitCallDepths!
+    [Int; ~] => functionCommitChoiceDepths!
+    0 => functionCommitCount!
+    0 => functionChoiceBarrier!
+    [Int; ~] => failedRuleTokens!
+    [Int; ~] => expectedCodes!
+    [ParseEvent; ~] => events!
+    0 => callDepth!
+    0 => choiceDepth!
+    0 => eventDepth!
+    request.startRule => startRule
+    ruleOffsets[startRule] => pc!
+    0 => tokenIndex!
+    true => running!
+    false => accepted!
+    false => invalidSeen!
+    -1 => firstInvalidToken!
+    0 => lexicalTokenIndex!
+    not invalidSeen! and lexicalTokenIndex! < (tokens -> len)
+        -> while {
+            tokens[lexicalTokenIndex!].kind == grammar.tokenIdInvalid()
+                -> if {
+                    true => invalidSeen!
+                    lexicalTokenIndex! => firstInvalidToken!
+                }
+            lexicalTokenIndex! + 1 => lexicalTokenIndex!
+        }
+    -1 => stringLiteralIssueToken!
+    0 => stringLiteralIssue!
+    -1 => numericArrayIssueToken!
+    0 => numericArrayIssueCode!
+    -1 => functionIssueToken!
+    0 => furthestToken!
+    -1 => expectedAtToken!
+    0 => expectedCount!
+    1 => failureCacheWidth!
+    failureCacheWidth! < (tokens -> len) -> while {
+        failureCacheWidth! * 2 => failureCacheWidth!
+    }
+    ruleOffsets -> len => failureRuleCount
+    failureRuleCount * failureCacheWidth! => failureCacheSize
+    0 => failureCacheIndex!
+    failureCacheIndex! < failureCacheSize -> while {
+        failedRuleTokens! -> push(-1)
+        failureCacheIndex! + 1 => failureCacheIndex!
+    }
+
+    ParseEvent { kind: 0, value: startRule, tokenIndex: tokenIndex! } => startEvent
+    events! -> push(startEvent)
+    activeRules! -> push(startRule)
+    activeRuleStarts! -> push(0)
+    1 => eventDepth!
+
+    running! -> while {
+        tokenIndex! < (tokens -> len) and (tokens[tokenIndex!].kind >= grammar.triviaIdWhitespace()
+            or (callDepth! == 0 and startRule == grammar.ruleIdExpression() and tokens[tokenIndex!].kind == grammar.tokenIdNewLine()))
+            -> while {
+                tokens[tokenIndex!].kind => triviaKind
+                triviaKind == grammar.tokenIdInvalid()
+                    -> if {
+                        true => invalidSeen!
+                        firstInvalidToken! < 0 -> if {
+                            tokenIndex! => firstInvalidToken!
+                        }
+                    }
+                ParseEvent { kind: 2, value: triviaKind, tokenIndex: tokenIndex! } => triviaEvent
+                eventDepth! < (events! -> len) -> if {
+                    triviaEvent => events![eventDepth!]
+                }
+                eventDepth! >= (events! -> len) -> if {
+                    events! -> push(triviaEvent)
+                }
+                eventDepth! + 1 => eventDepth!
+                tokenIndex! + 1 => tokenIndex!
+            }
+        tokenIndex! > furthestToken! -> if {
+            tokenIndex! => furthestToken!
+        }
+        program[pc!] => opcode
+        opcode == 0 -> if {
+            functionCommitCount! > 0 and functionCommitCallDepths![functionCommitCount! - 1] == callDepth!
+                -> if {
+                    functionCommitCount! - 1 => functionCommitCount!
+                    0 => functionChoiceBarrier!
+                    functionCommitCount! > 0 -> if {
+                        functionCommitChoiceDepths![functionCommitCount! - 1] => functionChoiceBarrier!
+                    }
+                }
+            activeRules![callDepth!] == grammar.ruleIdArrayExpression() and not invalidSeen!
+                -> if {
+                    source -> arrayRepeatSyntaxIssue(tokens, tokenIndex!) => repeatIssue
+                    repeatIssue.code != 0 -> if {
+                        repeatIssue.tokenIndex => numericArrayIssueToken!
+                        repeatIssue.code => numericArrayIssueCode!
+                        false => running!
+                    }
+                }
+            ParseEvent {
+                kind: 1
+                value: activeRules![callDepth!]
+                tokenIndex: tokenIndex!
+            } => exitEvent
+            eventDepth! < (events! -> len) -> if {
+                exitEvent => events![eventDepth!]
+            }
+            eventDepth! >= (events! -> len) -> if {
+                events! -> push(exitEvent)
+            }
+            eventDepth! + 1 => eventDepth!
+            callDepth! == 0 -> if {
+                tokens -> len => tokenCount
+                (tokenIndex! == tokenCount or (tokenIndex! + 1 == tokenCount and tokens[tokenIndex!].kind == grammar.tokenIdEnd())) and not invalidSeen! => accepted!
+                not accepted! and not invalidSeen! and expectedAtToken! <= tokenIndex!
+                    -> if {
+                        tokenIndex! => furthestToken!
+                        tokenIndex! => expectedAtToken!
+                        1 => expectedCount!
+                        (expectedCodes! -> len) == 0 -> if {
+                            expectedCodes! -> push(grammar.tokenIdEnd())
+                        } else { grammar.tokenIdEnd() => expectedCodes![0] }
+                    }
+                false => running!
+            } else {
+                callDepth! - 1 => callDepth!
+                returnPcs![callDepth!] => pc!
+            }
+        } else {
+            opcode == 1 -> if {
+                program[pc! + 1] => expectedKind
+                tokens[tokenIndex!].kind == expectedKind -> if {
+                    false => speculativeCollectionConstructor!
+                    0 => ancestorDepth!
+                    expectedKind == grammar.tokenIdNumber()
+                        and activeRules![callDepth!] == grammar.ruleIdTypeAnnotation()
+                        and ancestorDepth! <= callDepth!
+                        -> while {
+                            activeRules![ancestorDepth!] == grammar.ruleIdEnumConstructorExpression()
+                                and (tokens[activeRuleStarts![ancestorDepth!]].kind == grammar.tokenIdLeftBracket()
+                                or tokens[activeRuleStarts![ancestorDepth!]].kind == grammar.tokenIdLeftBrace())
+                                -> if { true => speculativeCollectionConstructor! }
+                            ancestorDepth! + 1 => ancestorDepth!
+                        }
+                    expectedKind == grammar.tokenIdNumber()
+                        and activeRules![callDepth!] == grammar.ruleIdTypeAnnotation()
+                        and not speculativeCollectionConstructor!
+                        and not invalidSeen!
+                        -> if {
+                            source -> numericTypeSyntaxIssue(tokens, activeRuleStarts![callDepth!], tokenIndex!) => extentIssue
+                            extentIssue.code != 0 -> if {
+                                extentIssue.tokenIndex => numericArrayIssueToken!
+                                extentIssue.code => numericArrayIssueCode!
+                                false => running!
+                            }
+                        }
+                    expectedKind == grammar.tokenIdNumber() and not invalidSeen!
+                        and (activeRules![callDepth!] == grammar.ruleIdTypedEmptyArray()
+                        or activeRules![callDepth!] == grammar.ruleIdArrayItems()
+                        or activeRules![callDepth!] == grammar.ruleIdTypedRecordArray())
+                        -> if {
+                            tokens -> previousArrayToken(tokenIndex!) => previous
+                            previous >= 0 -> if {
+                                tokens[previous].kind == grammar.tokenIdLessEqual() => bounded
+                                tokens -> nextSignificantToken(tokenIndex!) => following
+                                activeRules![callDepth!] == grammar.ruleIdTypedEmptyArray() and not bounded
+                                    and following < (tokens -> len) and tokens[following].kind == grammar.tokenIdTilde() => hint
+                                (bounded or hint) and not (source -> numericExtentTokenValid(tokens[tokenIndex!], bounded))
+                                    -> if {
+                                        tokenIndex! => numericArrayIssueToken!
+                                        bounded -> if { 23 } else { 24 } => numericArrayIssueCode!
+                                        false => running!
+                                    }
+                            }
+                        }
+                    expectedKind == grammar.tokenIdNumber() and not invalidSeen!
+                        and (activeRules![callDepth!] == grammar.ruleIdTypedEmptyDictionary()
+                        or activeRules![callDepth!] == grammar.ruleIdDictionaryExpression())
+                        -> if {
+                            tokens -> previousArrayToken(tokenIndex!) => previous
+                            tokens -> nextSignificantToken(tokenIndex!) => following
+                            previous >= 0 -> if {
+                                tokens[previous].kind == grammar.tokenIdLessEqual() => bounded
+                                not bounded and following < (tokens -> len)
+                                    and tokens[following].kind == grammar.tokenIdTilde() => hint
+                                bounded or hint -> if {
+                                    source -> syntax.numericExtentTokenValue(tokens[tokenIndex!]) => extent
+                                    events! -> dictionaryInitializerCount(eventDepth!, activeRules![callDepth!], activeRuleStarts![callDepth!]) => entries
+                                    extent < 0 or (bounded and (extent == 0 or entries > extent))
+                                        -> if {
+                                            tokenIndex! => numericArrayIssueToken!
+                                            hint -> if { 28 } else {
+                                                entries > 0 -> if { 29 } else { 26 }
+                                            } => numericArrayIssueCode!
+                                            false => running!
+                                        }
+                                }
+                            }
+                        }
+                    expectedKind == grammar.tokenIdString()
+                        and activeRules![callDepth!] == grammar.ruleIdStringExpression()
+                        and not invalidSeen!
+                        -> if {
+                            source -> syntax.rawStringLayout(tokens[tokenIndex!]) => layout
+                            layout.issue => literalIssue!
+                            literalIssue! == 0 -> if {
+                                source -> stringInterpolationSyntaxIssue(tokens[tokenIndex!]) => interpolationIssue
+                                interpolationIssue.code > 0 -> if { 4 + interpolationIssue.code => literalIssue! }
+                            }
+                            literalIssue! != 0 -> if {
+                                tokenIndex! => stringLiteralIssueToken!
+                                literalIssue! => stringLiteralIssue!
+                                false => running!
+                            }
+                        }
+                    ParseEvent { kind: 2, value: expectedKind, tokenIndex: tokenIndex! } => tokenEvent
+                    eventDepth! < (events! -> len) -> if {
+                        tokenEvent => events![eventDepth!]
+                    }
+                    eventDepth! >= (events! -> len) -> if {
+                        events! -> push(tokenEvent)
+                    }
+                    eventDepth! + 1 => eventDepth!
+                    tokenIndex! + 1 => tokenIndex!
+                    pc! + 2 => pc!
+                } else {
+                    tokenIndex! > expectedAtToken! -> if {
+                        tokenIndex! => expectedAtToken!
+                        0 => expectedCount!
+                    }
+                    tokenIndex! == expectedAtToken! -> if {
+                        false => tokenExpectedExists!
+                        0 => tokenExpectedIndex!
+                        tokenExpectedIndex! < expectedCount! -> while {
+                            expectedCodes![tokenExpectedIndex!] == expectedKind
+                                -> if {
+                                    true => tokenExpectedExists!
+                                }
+                            tokenExpectedIndex! + 1 => tokenExpectedIndex!
+                        }
+                        not tokenExpectedExists! -> if {
+                            expectedCount! < (expectedCodes! -> len) -> if {
+                                expectedKind => expectedCodes![expectedCount!]
+                            }
+                            expectedCount! >= (expectedCodes! -> len) -> if {
+                                expectedCodes! -> push(expectedKind)
+                            }
+                            expectedCount! + 1 => expectedCount!
+                        }
+                    }
+                    0 => failedFromDepth!
+                    choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => failedFromDepth! }
+                    failedFromDepth! => failedDepth!
+                    failedDepth! <= callDepth! -> while {
+                        activeRules![failedDepth!] => failedRule
+                        activeRuleStarts![failedDepth!] => failedToken
+                        failedRule * failureCacheWidth! + failedToken => failedSlot
+                        failedToken => failedRuleTokens![failedSlot]
+                        failedDepth! + 1 => failedDepth!
+                    }
+                    choiceDepth! > functionChoiceBarrier! -> if {
+                        choiceDepth! - 1 => choiceDepth!
+                        choicePcs![choiceDepth!] => pc!
+                        choiceTokens![choiceDepth!] => tokenIndex!
+                        choiceCallDepths![choiceDepth!] => callDepth!
+                        choiceEventDepths![choiceDepth!] => eventDepth!
+                    } else {
+                        false => running!
+                    }
+                }
+            } else {
+                opcode == 2 -> if {
+                    program[pc! + 1] => expectedKind
+                    program[pc! + 2] => keywordIndex
+                    tokens[tokenIndex!] => token
+                    source -> slice(token.span.start, token.span.length) => tokenText
+                    keywords[keywordIndex] => expectedText
+                    tokenText -> len => tokenTextLength
+                    UIntSize(expectedText -> len) => expectedTextLength
+                    tokenTextLength == expectedTextLength => keywordMatches!
+                    UIntSize(0) => keywordByte!
+                    keywordMatches! and keywordByte! < tokenTextLength
+                        -> while {
+                            tokenText -> byte(keywordByte!) => actualByte
+                            expectedText -> byte(keywordByte!) => expectedByte
+                            actualByte != expectedByte -> if {
+                                false => keywordMatches!
+                            }
+                            keywordByte! + 1 => keywordByte!
+                        }
+                    token.kind == expectedKind and keywordMatches!
+                        -> if {
+                            ParseEvent { kind: 2, value: expectedKind, tokenIndex: tokenIndex! } => keywordEvent
+                            eventDepth! < (events! -> len) -> if {
+                                keywordEvent => events![eventDepth!]
+                            }
+                            eventDepth! >= (events! -> len) -> if {
+                                events! -> push(keywordEvent)
+                            }
+                            eventDepth! + 1 => eventDepth!
+                            tokenIndex! + 1 => tokenIndex!
+                            pc! + 3 => pc!
+                        } else {
+                            0 - keywordIndex - 1 => expectedKeywordCode
+                            tokenIndex! > expectedAtToken! -> if {
+                                tokenIndex! => expectedAtToken!
+                                0 => expectedCount!
+                            }
+                            tokenIndex! == expectedAtToken! -> if {
+                                false => keywordExpectedExists!
+                                0 => keywordExpectedIndex!
+                                keywordExpectedIndex! < expectedCount! -> while {
+                                    expectedCodes![keywordExpectedIndex!] == expectedKeywordCode
+                                        -> if {
+                                            true => keywordExpectedExists!
+                                        }
+                                    keywordExpectedIndex! + 1 => keywordExpectedIndex!
+                                }
+                                not keywordExpectedExists! -> if {
+                                    expectedCount! < (expectedCodes! -> len) -> if {
+                                        expectedKeywordCode => expectedCodes![expectedCount!]
+                                    }
+                                    expectedCount! >= (expectedCodes! -> len) -> if {
+                                        expectedCodes! -> push(expectedKeywordCode)
+                                    }
+                                    expectedCount! + 1 => expectedCount!
+                                }
+                            }
+                            0 => keywordFailedFromDepth!
+                            choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => keywordFailedFromDepth! }
+                            keywordFailedFromDepth! => keywordFailedDepth!
+                            keywordFailedDepth! <= callDepth! -> while {
+                                activeRules![keywordFailedDepth!] => keywordFailedRule
+                                activeRuleStarts![keywordFailedDepth!] => keywordFailedToken
+                                keywordFailedRule * failureCacheWidth! + keywordFailedToken => keywordFailedSlot
+                                keywordFailedToken => failedRuleTokens![keywordFailedSlot]
+                                keywordFailedDepth! + 1 => keywordFailedDepth!
+                            }
+                            choiceDepth! > functionChoiceBarrier! -> if {
+                                choiceDepth! - 1 => choiceDepth!
+                                choicePcs![choiceDepth!] => pc!
+                                choiceTokens![choiceDepth!] => tokenIndex!
+                                choiceCallDepths![choiceDepth!] => callDepth!
+                                choiceEventDepths![choiceDepth!] => eventDepth!
+                            } else {
+                                false => running!
+                            }
+                        }
+                } else {
+                    opcode == 3 -> if {
+                        program[pc! + 1] => rule
+                        rule * failureCacheWidth! + tokenIndex! => failureSlot
+                        failedRuleTokens![failureSlot] == tokenIndex!
+                            -> if {
+                                choiceDepth! > functionChoiceBarrier! -> if {
+                                    choiceDepth! - 1 => choiceDepth!
+                                    choicePcs![choiceDepth!] => pc!
+                                    choiceTokens![choiceDepth!] => tokenIndex!
+                                    choiceCallDepths![choiceDepth!] => callDepth!
+                                    choiceEventDepths![choiceDepth!] => eventDepth!
+                                } else {
+                                    0 => failedDepth!
+                                    failedDepth! <= callDepth! -> while {
+                                        activeRules![failedDepth!] => failedRule
+                                        activeRuleStarts![failedDepth!] => failedToken
+                                        failedRule * failureCacheWidth! + failedToken => failedSlot
+                                        failedToken => failedRuleTokens![failedSlot]
+                                        failedDepth! + 1 => failedDepth!
+                                    }
+                                    false => running!
+                                }
+                            } else {
+                                returnPcs! -> len => returnCount
+                                callDepth! < returnCount -> if {
+                                    pc! + 2 => returnPcs![callDepth!]
+                                }
+                                callDepth! >= returnCount -> if {
+                                    returnPcs! -> push(pc! + 2)
+                                }
+                                callDepth! + 1 => callDepth!
+                                activeRules! -> len => activeRuleCount
+                                callDepth! < activeRuleCount -> if {
+                                    rule => activeRules![callDepth!]
+                                    tokenIndex! => activeRuleStarts![callDepth!]
+                                }
+                                callDepth! >= activeRuleCount -> if {
+                                    activeRules! -> push(rule)
+                                    activeRuleStarts! -> push(tokenIndex!)
+                                }
+                                ParseEvent { kind: 0, value: rule, tokenIndex: tokenIndex! } => enterEvent
+                                eventDepth! < (events! -> len) -> if {
+                                    enterEvent => events![eventDepth!]
+                                }
+                                eventDepth! >= (events! -> len) -> if {
+                                    events! -> push(enterEvent)
+                                }
+                                eventDepth! + 1 => eventDepth!
+                                ruleOffsets[rule] => pc!
+                            }
+                    } else {
+                        opcode == 4 -> if {
+                            choicePcs! -> len => choiceCount
+                            choiceDepth! < choiceCount -> if {
+                                program[pc! + 1] => choicePcs![choiceDepth!]
+                                tokenIndex! => choiceTokens![choiceDepth!]
+                                callDepth! => choiceCallDepths![choiceDepth!]
+                                eventDepth! => choiceEventDepths![choiceDepth!]
+                            }
+                            choiceDepth! >= choiceCount -> if {
+                                choicePcs! -> push(program[pc! + 1])
+                                choiceTokens! -> push(tokenIndex!)
+                                choiceCallDepths! -> push(callDepth!)
+                                choiceEventDepths! -> push(eventDepth!)
+                            }
+                            choiceDepth! + 1 => choiceDepth!
+                            pc! + 2 => pc!
+                        } else {
+                            opcode == 5 -> if {
+                                choiceDepth! - 1 => choiceDepth!
+                                program[pc! + 1] => pc!
+                            } else {
+                                opcode == 6 -> if {
+                                    program[pc! + 1] => pc!
+                                } else {
+                                    opcode == 7 -> if {
+                                        program[pc! + 1] => expectedKind
+                                        tokens[tokenIndex!].kind == expectedKind -> if {
+                                            pc! + 2 => pc!
+                                        } else {
+                                            tokenIndex! > expectedAtToken! -> if {
+                                                tokenIndex! => expectedAtToken!
+                                                0 => expectedCount!
+                                            }
+                                            tokenIndex! == expectedAtToken! -> if {
+                                                false => lookaheadExpectedExists!
+                                                0 => lookaheadExpectedIndex!
+                                                lookaheadExpectedIndex! < expectedCount! -> while {
+                                                    expectedCodes![lookaheadExpectedIndex!] == expectedKind
+                                                        -> if {
+                                                            true => lookaheadExpectedExists!
+                                                        }
+                                                    lookaheadExpectedIndex! + 1 => lookaheadExpectedIndex!
+                                                }
+                                                not lookaheadExpectedExists! -> if {
+                                                    expectedCount! < (expectedCodes! -> len) -> if {
+                                                        expectedKind => expectedCodes![expectedCount!]
+                                                    }
+                                                    expectedCount! >= (expectedCodes! -> len) -> if {
+                                                        expectedCodes! -> push(expectedKind)
+                                                    }
+                                                    expectedCount! + 1 => expectedCount!
+                                                }
+                                            }
+                                            0 => lookaheadFailedFromDepth!
+                                            choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => lookaheadFailedFromDepth! }
+                                            lookaheadFailedFromDepth! => lookaheadFailedDepth!
+                                            lookaheadFailedDepth! <= callDepth! -> while {
+                                                activeRules![lookaheadFailedDepth!] => lookaheadFailedRule
+                                                activeRuleStarts![lookaheadFailedDepth!] => lookaheadFailedToken
+                                                lookaheadFailedRule * failureCacheWidth! + lookaheadFailedToken => lookaheadFailedSlot
+                                                lookaheadFailedToken => failedRuleTokens![lookaheadFailedSlot]
+                                                lookaheadFailedDepth! + 1 => lookaheadFailedDepth!
+                                            }
+                                            choiceDepth! > functionChoiceBarrier! -> if {
+                                                choiceDepth! - 1 => choiceDepth!
+                                                choicePcs![choiceDepth!] => pc!
+                                                choiceTokens![choiceDepth!] => tokenIndex!
+                                                choiceCallDepths![choiceDepth!] => callDepth!
+                                                choiceEventDepths![choiceDepth!] => eventDepth!
+                                            } else {
+                                                false => running!
+                                            }
+                                        }
+                                    } else {
+                                        opcode == 8 -> if {
+                                            program[pc! + 1] => rejectedKeywordIndex
+                                            tokens[tokenIndex!] => rejectedToken
+                                            source -> slice(rejectedToken.span.start, rejectedToken.span.length) => rejectedTokenText
+                                            keywords[rejectedKeywordIndex] => rejectedText
+                                            rejectedTokenText -> len => rejectedTokenLength
+                                            UIntSize(rejectedText -> len) => rejectedTextLength
+                                            rejectedTokenLength == rejectedTextLength => rejectedKeywordMatches!
+                                            UIntSize(0) => rejectedKeywordByte!
+                                            rejectedKeywordMatches! and rejectedKeywordByte! < rejectedTokenLength
+                                                -> while {
+                                                    rejectedTokenText -> byte(rejectedKeywordByte!) => rejectedActualByte
+                                                    rejectedText -> byte(rejectedKeywordByte!) => rejectedExpectedByte
+                                                    rejectedActualByte != rejectedExpectedByte -> if {
+                                                        false => rejectedKeywordMatches!
+                                                    }
+                                                    rejectedKeywordByte! + 1 => rejectedKeywordByte!
+                                                }
+                                            not rejectedKeywordMatches! -> if {
+                                                pc! + 2 => pc!
+                                            } else {
+                                                0 => rejectedFailedFromDepth!
+                                                choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => rejectedFailedFromDepth! }
+                                                rejectedFailedFromDepth! => rejectedFailedDepth!
+                                                rejectedFailedDepth! <= callDepth! -> while {
+                                                    activeRules![rejectedFailedDepth!] => rejectedFailedRule
+                                                    activeRuleStarts![rejectedFailedDepth!] => rejectedFailedToken
+                                                    rejectedFailedRule * failureCacheWidth! + rejectedFailedToken => rejectedFailedSlot
+                                                    rejectedFailedToken => failedRuleTokens![rejectedFailedSlot]
+                                                    rejectedFailedDepth! + 1 => rejectedFailedDepth!
+                                                }
+                                                choiceDepth! > functionChoiceBarrier! -> if {
+                                                    choiceDepth! - 1 => choiceDepth!
+                                                    choicePcs![choiceDepth!] => pc!
+                                                    choiceTokens![choiceDepth!] => tokenIndex!
+                                                    choiceCallDepths![choiceDepth!] => callDepth!
+                                                    choiceEventDepths![choiceDepth!] => eventDepth!
+                                                } else {
+                                                    false => running!
+                                                }
+                                            }
+                                        } else {
+                                            opcode == 9 -> if {
+                                                source -> functionDeclarationStart(tokens, tokenIndex!)
+                                                    -> if {
+                                                        tokens[tokenIndex!] => declarationToken
+                                                        source -> slice(declarationToken.span.start, declarationToken.span.length) => declarationText
+                                                        false => localFunction!
+                                                        declarationText == "public" and not invalidSeen!
+                                                            -> if {
+                                                                0 => parentRuleIndex!
+                                                                not localFunction! and parentRuleIndex! < callDepth!
+                                                                    -> while {
+                                                                        activeRules![parentRuleIndex!] == grammar.ruleIdFunctionBody()
+                                                                            -> if { true => localFunction! }
+                                                                        parentRuleIndex! + 1 => parentRuleIndex!
+                                                                    }
+                                                            }
+                                                        localFunction! -> if {
+                                                            tokenIndex! => functionIssueToken!
+                                                            false => running!
+                                                        } else {
+                                                            functionCommitCount! < (functionCommitCallDepths! -> len)
+                                                                -> if {
+                                                                    callDepth! => functionCommitCallDepths![functionCommitCount!]
+                                                                    choiceDepth! => functionCommitChoiceDepths![functionCommitCount!]
+                                                                } else {
+                                                                    functionCommitCallDepths! -> push(callDepth!)
+                                                                    functionCommitChoiceDepths! -> push(choiceDepth!)
+                                                                }
+                                                            functionCommitCount! + 1 => functionCommitCount!
+                                                            choiceDepth! => functionChoiceBarrier!
+                                                            pc! + 1 => pc!
+                                                        }
+                                                    } else {
+                                                        choiceDepth! > functionChoiceBarrier! -> if {
+                                                            choiceDepth! - 1 => choiceDepth!
+                                                            choicePcs![choiceDepth!] => pc!
+                                                            choiceTokens![choiceDepth!] => tokenIndex!
+                                                            choiceCallDepths![choiceDepth!] => callDepth!
+                                                            choiceEventDepths![choiceDepth!] => eventDepth!
+                                                        } else {
+                                                            false => running!
+                                                        }
+                                                    }
+                                            } else {
+                                                false => running!
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    functionIssueToken! >= 0 -> if {
+        ParseEvent { kind: 8, value: 30, tokenIndex: functionIssueToken! } => functionIssueEvent
+        eventDepth! < (events! -> len) -> if { functionIssueEvent => events![eventDepth!] }
+        eventDepth! >= (events! -> len) -> if { events! -> push(functionIssueEvent) }
+        eventDepth! + 1 => eventDepth!
+    }
+
+    numericArrayIssueToken! >= 0 -> if {
+        ParseEvent { kind: 8, value: numericArrayIssueCode!, tokenIndex: numericArrayIssueToken! } => numericIssueEvent
+        eventDepth! < (events! -> len) -> if { numericIssueEvent => events![eventDepth!] }
+        eventDepth! >= (events! -> len) -> if { events! -> push(numericIssueEvent) }
+        eventDepth! + 1 => eventDepth!
+    }
+
+    stringLiteralIssueToken! >= 0 -> if {
+        ParseEvent { kind: 7, value: stringLiteralIssue!, tokenIndex: stringLiteralIssueToken! } => stringLiteralIssueEvent
+        eventDepth! < (events! -> len) -> if { stringLiteralIssueEvent => events![eventDepth!] }
+        eventDepth! >= (events! -> len) -> if { events! -> push(stringLiteralIssueEvent) }
+        eventDepth! + 1 => eventDepth!
+    }
+
+    not accepted! and not invalidSeen! and stringLiteralIssueToken! < 0 and numericArrayIssueToken! < 0 and functionIssueToken! < 0
+        -> if {
+            expectedAtToken! >= 0 and expectedAtToken! < (tokens -> len)
+                -> if {
+                    [grammar.ruleIdStatementEnd(), grammar.ruleIdPrimaryExpression(), grammar.ruleIdTypeName()]
+                        -> each failedRule {
+                            failedRule * failureCacheWidth! + expectedAtToken! => slot
+                            failedRuleTokens![slot] == expectedAtToken!
+                                -> if {
+                                    ParseEvent { kind: 6, value: failedRule, tokenIndex: expectedAtToken! } => failedEvent
+                                    eventDepth! < (events! -> len)
+                                        -> if { failedEvent => events![eventDepth!] }
+                                    eventDepth! >= (events! -> len)
+                                        -> if { events! -> push(failedEvent) }
+                                    eventDepth! + 1 => eventDepth!
+                                }
+                        }
+                }
+            0 => expectedEventIndex!
+            expectedEventIndex! < expectedCount! -> while {
+                ParseEvent {
+                    kind: 4
+                    value: expectedCodes![expectedEventIndex!]
+                    tokenIndex: expectedAtToken!
+                } => expectedEvent
+                eventDepth! < (events! -> len) -> if {
+                    expectedEvent => events![eventDepth!]
+                }
+                eventDepth! >= (events! -> len) -> if {
+                    events! -> push(expectedEvent)
+                }
+                eventDepth! + 1 => eventDepth!
+                expectedEventIndex! + 1 => expectedEventIndex!
+            }
+        }
+
+    not accepted! and stringLiteralIssueToken! < 0 and numericArrayIssueToken! < 0 and functionIssueToken! < 0
+        -> if {
+            furthestToken! => recoveryStart!
+            firstInvalidToken! >= 0 -> if { firstInvalidToken! => recoveryStart! }
+            recoveryStart! => recoveryEnd!
+            recoveryEnd! < (tokens -> len) and tokens[recoveryEnd!].kind != grammar.tokenIdNewLine() and tokens[recoveryEnd!].kind != grammar.tokenIdRightBrace() and tokens[recoveryEnd!].kind != grammar.tokenIdEnd()
+                -> while {
+                    recoveryEnd! + 1 => recoveryEnd!
+                }
+            ParseEvent { kind: 5, value: recoveryEnd!, tokenIndex: recoveryStart! } => errorRangeEvent
+            eventDepth! < (events! -> len) -> if {
+                errorRangeEvent => events![eventDepth!]
+            }
+            eventDepth! >= (events! -> len) -> if {
+                events! -> push(errorRangeEvent)
+            }
+            eventDepth! + 1 => eventDepth!
+
+            recoveryEnd! => recoveryTailIndex!
+            recoveryTailIndex! < (tokens -> len) -> while {
+                ParseEvent {
+                    kind: 2
+                    value: tokens[recoveryTailIndex!].kind
+                    tokenIndex: recoveryTailIndex!
+                } => recoveryTailEvent
+                eventDepth! < (events! -> len) -> if {
+                    recoveryTailEvent => events![eventDepth!]
+                }
+                eventDepth! >= (events! -> len) -> if {
+                    events! -> push(recoveryTailEvent)
+                }
+                eventDepth! + 1 => eventDepth!
+                recoveryTailIndex! + 1 => recoveryTailIndex!
+            }
+        }
+
+    [ParseEvent; ~] => result!
+    true -> if {
+        0 => outcomeValue!
+        furthestToken! => outcomeTokenIndex!
+        firstInvalidToken! >= 0 -> if { firstInvalidToken! => outcomeTokenIndex! }
+        stringLiteralIssueToken! >= 0 -> if { stringLiteralIssueToken! => outcomeTokenIndex! }
+        functionIssueToken! >= 0 -> if { functionIssueToken! => outcomeTokenIndex! }
+        accepted! -> if {
+            1 => outcomeValue!
+            tokenIndex! => outcomeTokenIndex!
+        }
+        ParseEvent {
+            kind: 3
+            value: outcomeValue!
+            tokenIndex: outcomeTokenIndex!
+        } => outcome
+        eventDepth! < (events! -> len) -> if {
+            outcome => events![eventDepth!]
+        }
+        eventDepth! >= (events! -> len) -> if {
+            events! -> push(outcome)
+        }
+        eventDepth! + 1 => eventDepth!
+
+        0 => copyIndex!
+        copyIndex! < eventDepth! -> while {
+            result! -> push(events![copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+    }
+    result!
+}
+
+public parseSourceEvents source: file.SourceText -> [ParseEvent; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
+    grammar.startRule() => sourceStartRule
+    ParseRequest {
+        source: view
+        startRule: sourceStartRule
+    } -> parseRuleEvents
+}
+
+public parseSourceExpressionEvents source: file.SourceText -> [ParseEvent; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
+    grammar.ruleIdExpression() => expressionStartRule
+    ParseRequest {
+        source: view
+        startRule: expressionStartRule
+    } -> parseRuleEvents
+}
+
+public parseEvents source: Text -> [ParseEvent; ~] {
+    grammar.startRule() => sourceStartRule
+    ParseRequest {
+        source: source
+        startRule: sourceStartRule
+    } -> parseRuleEvents
+}
+
+public parseExpressionEvents source: Text -> [ParseEvent; ~] {
+    grammar.ruleIdExpression() => expressionStartRule
+    ParseRequest {
+        source: source
+        startRule: expressionStartRule
+    } -> parseRuleEvents
+}

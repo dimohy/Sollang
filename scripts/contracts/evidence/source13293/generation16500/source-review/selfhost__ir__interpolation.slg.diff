@@ -1,0 +1,106 @@
+--- selfhost/ir/interpolation.slg (reviewed)
++++ selfhost/ir/interpolation.slg (current)
+@@ -15,9 +15,10 @@
+ # 8 resolved source function call, 9 builtin scalar conversion,
+ # 10 unresolved source call retained for diagnostics, 11 Result propagation,
+ # 12 contextual struct literal, 13 struct field name, 14 nominal struct literal,
+ # 15 generic enum constructor with a canonical source-local type AST,
+-# 16 array literal retaining its actual source-local expression AST.
++# 16 array literal retaining its actual source-local expression AST,
++# 17 suspending expression evaluated through its canonical Typed IR identity.
+ # Builtin result ids match the nominal
+ # table. Member nodes retain their absolute source span and point at the
+ # lexical base through operand0 so code generation can project the field.
+ public struct InterpolationNode {
+@@ -281,15 +282,29 @@
+                                     }
+                                 }
+                                 qualifiedPathIndex! + 1 => qualifiedPathIndex!
+                             }
++                            # Suspending fragments need their complete source tree in
++                            # the common semantic and coroutine indexes. Keeping only
++                            # the target token loses its flow receiver and async owner.
++                            false => retainFlowValues!
++                            fragmentAst -> each candidate {
++                                candidate.kind == 16 and candidate.parent >= 0
++                                    and fragmentAst[candidate.parent].kind == 10
++                                    and candidate.payloadToken >= 0
++                                    -> if {
++                                        fragmentTokens[candidate.payloadToken] => targetToken
++                                        (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
++                                            -> if { true => retainFlowValues! }
++                                    }
++                            }
+                             # Preserve real array subtrees alongside type syntax. Their
+                             # expression identities are consumed by the canonical literal typer.
+                             [Int; ~] => fragmentTypeAst!
+                             0 => retainedAstIndex!
+                             retainedAstIndex! < (fragmentAst -> len) -> while {
+                                 fragmentAst[retainedAstIndex!] => typeCandidate
+-                                typeCandidate.kind == 12 or qualifiedCallByPath![retainedAstIndex!] >= 0
++                                retainFlowValues! or typeCandidate.kind == 12 or qualifiedCallByPath![retainedAstIndex!] >= 0
+                                     or (typeCandidate.kind == 16 and typeCandidate.parent >= 0
+                                     and fragmentAst[typeCandidate.parent].kind == 10) => retain!
+                                 retainedAstIndex! => valueAncestor!
+                                 valueAncestor! >= 0 and not retain! -> while {
+@@ -313,9 +328,9 @@
+                             typeRelocationIndex! < (fragmentAst -> len) -> while {
+                                 fragmentTypeAst![typeRelocationIndex!] => mappedType
+                                 mappedType >= 0 -> if {
+                                     fragmentAst[typeRelocationIndex!] => typeNode!
+-                                    qualifiedCallByPath![typeRelocationIndex!] >= 0
++                                    not retainFlowValues! and qualifiedCallByPath![typeRelocationIndex!] >= 0
+                                         -> if { 16 => typeNode!.kind }
+                                     typeNode!.parent => typeParent!
+                                     typeParent! >= 0 and fragmentTypeAst![typeParent!] < 0
+                                         -> while { fragmentAst[typeParent!].parent => typeParent! }
+@@ -582,8 +597,13 @@
+                                             suffixDepth! == 1 and suffixSyntax.kind == grammar.tokenIdSemicolon() and fragmentNode.start > suffixSyntax.span.start
+                                                 -> if { -1 => loweredKind! }
+                                             suffixToken! + 1 => suffixToken!
+                                         }
++                                }
++                                # A suspending fragment has one bridge to ordinary IR.
++                                # Its descendants are already owned by the retained AST.
++                                retainFlowValues! -> if {
++                                    fragmentNode.parent < 0 -> if { 17 => loweredKind! } else { -1 => loweredKind! }
+                                 }
+                                 loweredKind! >= 0 -> if {
+                                     -1 => loweredParent!
+                                     fragmentNode.parent => parentAst!
+@@ -862,8 +882,10 @@
+                                             0 => argumentListIndex!
+                                             argumentListIndex! < (fragmentAst -> len) -> while {
+                                                 fragmentAst[argumentListIndex!] => argumentList
+                                                 argumentList.parent == fragmentAstIndex! and argumentList.kind == 11
++                                                    and flowTargetPayloadToken! >= 0
++                                                    and argumentList.start >= fragmentTokens[flowTargetPayloadToken!].span.start + fragmentTokens[flowTargetPayloadToken!].span.length
+                                                     -> if {
+                                                         0 => argumentIndex!
+                                                         argumentIndex! < (fragmentAst -> len) -> while {
+                                                             fragmentAst[argumentIndex!].parent == argumentListIndex!
+@@ -1022,9 +1044,10 @@
+                                         expressionStart: loweredDecodedExpressionStart
+                                         expressionLength: loweredDecodedSuffixStart - loweredDecodedExpressionStart - 1
+                                         targetAst: loweredTargetAst!
+                                         typeAst: loweredTypeAst!
+-                                        valueAst: loweredKind! == 16 -> if { fragmentTypeAst![fragmentAstIndex!] } else { -1 }
++                                        valueAst: loweredKind! == 16 or loweredKind! == 17
++                                            -> if { fragmentTypeAst![fragmentAstIndex!] } else { -1 }
+                                         typeSymbol: loweredTypeSymbol!
+                                     } => lowered
+                                     nodes! -> len => loweredIndex
+                                     nodes! -> push(lowered)
+@@ -1210,9 +1233,11 @@
+     # be folded into this receiver chain.
+     0 => callParentIndex!
+     callParentIndex! < (wiredNodes! -> len) -> while {
+         wiredNodes![callParentIndex!] => callParent!
+-        callParent!.kind == 8 or callParent!.kind == 9 or callParent!.kind == 10
++        # An intrinsic can terminate the same receiver chain, for example
++        # owner.values -> copy -> len. Its receiver call still owns its input.
++        callParent!.kind == 6 or callParent!.kind == 8 or callParent!.kind == 9 or callParent!.kind == 10
+             -> if {
+                 -1 => callNestedCandidate!
+                 # A suffix can follow more than three direct children. Inspect
+                 # the full parent relation before fixed-width operands discard it.

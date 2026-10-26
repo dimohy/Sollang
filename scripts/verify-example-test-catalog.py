@@ -28,6 +28,17 @@ def read(path: Path) -> dict:
     return json.loads(path.read_text(encoding='utf-8-sig'))
 
 
+def is_collectable_failure(exit_code: int, inner: dict, scope: str, case_id: str) -> bool:
+    """Only a completed, closed single-case runner failure may be collected."""
+    cases = inner.get('cases')
+    return (exit_code == 1 and inner.get('status') == 'failed'
+            and inner.get('verificationScope', 'regression') == scope
+            and inner.get('completed') == 1 and inner.get('total') == 1
+            and inner.get('inputsStable') is True and inner.get('processesStopped') is True
+            and isinstance(cases, list) and len(cases) == 1
+            and cases[0].get('id') == case_id and cases[0].get('status') == 'failed')
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preflight', required=True, type=Path)
@@ -41,7 +52,12 @@ def main() -> None:
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--source-closure-result', type=Path,
                         help='Fresh receipt under repository artifacts; allows case outputs on another approved volume')
-    parser.add_argument('--exact', action='append', default=[])
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--exact', action='append', default=[])
+    selection.add_argument('--selection-file', type=Path,
+                           help='JSON selectedCatalog subset; preserves preflight order')
+    parser.add_argument('--continue-on-assertion-failure', action='store_true',
+                        help='Collect completed closed failures; any failure still makes this run fail')
     parser.add_argument('--managed-reference', action='store_true')
     parser.add_argument('--stage-baselines', type=Path,
                         help='Stage non-mutating linked LLVM candidates after runtime/reference checks; not regression acceptance')
@@ -79,10 +95,15 @@ def main() -> None:
     if (not ids or len(ids) != proof.get('total') or len(set(ids)) != len(ids)
             or any(type(row.get('requiresSelfHostCompiler')) is not bool for row in rows)):
         raise ValueError('CATALOG_SELECTION_INVALID')
-    if args.exact:
-        if len(set(args.exact)) != len(args.exact) or not set(args.exact).issubset(ids):
+    selection_path = args.selection_file.resolve() if args.selection_file is not None else None
+    selected = read(selection_path).get('selectedCatalog') if selection_path is not None else args.exact
+    if selection_path is not None or selected:
+        if (not isinstance(selected, list) or not selected
+                or any(not isinstance(name, str) for name in selected)
+                or len(set(selected)) != len(selected) or not set(selected).issubset(ids)):
             raise ValueError('CATALOG_EXACT_SELECTION_INVALID')
-        rows = [row for row in rows if row['id'] in args.exact]
+        selected_ids = set(selected)
+        rows = [row for row in rows if row['id'] in selected_ids]
     scope = 'regression'
     candidate_plan = None
     if args.stage_baselines is not None:
@@ -104,6 +125,8 @@ def main() -> None:
     if dotnet is None or not runner.is_file() or not compiler.is_file():
         raise ValueError('CATALOG_EXECUTOR_MISSING')
     pins = dict(proof['inputHashes'])
+    if selection_path is not None:
+        pins[str(selection_path)] = sha(selection_path)
     if candidate_plan is not None:
         pins[str(candidate_plan)] = sha(candidate_plan)
     closure_tool = fixture_repo / 'scripts/update-example-source-manifests.ps1'
@@ -128,7 +151,7 @@ def main() -> None:
     initialize_output(repo, output, reusable_directories=reusable)
     output.mkdir(parents=True)
     result = dict(status='prepared', verificationScope=scope,
-                  completed=0, total=len(rows), fullCatalogTotal=len(ids),
+                  completed=0, attempted=0, failedCases=[], total=len(rows), fullCatalogTotal=len(ids),
                   selectedCatalog=[row['id'] for row in rows],
                   sourceManifests=[str(path) for row in rows
                                    if not row['requiresSelfHostCompiler']
@@ -142,6 +165,7 @@ def main() -> None:
                   managedReference=args.managed_reference,
                   inputHashes=pins, inputsStable=True, processesStopped=True, cases=[],
                   retryPolicy='no-automatic-retry', executionOrder='sequential',
+                  continueOnAssertionFailure=args.continue_on_assertion_failure,
                   caseBudgetSeconds=args.case_budget_seconds,
                   totalBudgetSeconds=args.total_budget_seconds)
     if reusable is not None:
@@ -206,6 +230,7 @@ def main() -> None:
                                cases=[dict(id=row['id'], status='running', expectedBuildExit=0)])
             execution = VerificationExecution(repo, case_root, case_result, stable, sha)
             error = None
+            collect_failure = False
             try:
                 exit_code = execution.run(command, case_root / 'execution',
                                           timeout=min(args.case_budget_seconds, remaining)).returncode
@@ -220,15 +245,21 @@ def main() -> None:
                         or inner.get('inputsStable') is not True
                         or inner.get('processesStopped') is not True
                         or [item['id'] for item in inner['cases']] != [row['id']]):
-                    raise ValueError('CATALOG_CASE_NOT_PASSED: ' + row['id'])
-                case_result.update(status='passed', completed=1,
+                    if not (args.continue_on_assertion_failure
+                            and is_collectable_failure(exit_code, inner, scope, row['id'])):
+                        raise ValueError('CATALOG_CASE_NOT_PASSED: ' + row['id'])
+                    collect_failure = True
+                    error = ValueError('CATALOG_CASE_NOT_PASSED: ' + row['id'])
+                case_result.update(status='failed' if collect_failure else 'passed', completed=1,
                                    authoritativeRunnerResult=str(inner_path),
                                    authoritativeRunnerResultSha256=sha(inner_path))
-                case_result['cases'][0].update(status='passed', buildExit=0)
+                case_result['cases'][0].update(status='failed' if collect_failure else 'passed',
+                                             buildExit=exit_code)
                 # The C# result owns this nested output tree. Cleaning only the
                 # supervisor deliberately leaves nested owners untouched.
-                cleanup_output(repo, inner_path.parent, execute=True,
-                               reusable_directories=reusable)
+                if not collect_failure:
+                    cleanup_output(repo, inner_path.parent, execute=True,
+                                   reusable_directories=reusable)
             except BaseException as caught:
                 error = caught
                 raise
@@ -247,12 +278,22 @@ def main() -> None:
                     raise
                 finally:
                     case.update(status=case_result['status'],
+                                inputsStable=case_result['inputsStable'],
                                 processesStopped=case_result['processesStopped'])
+                    result['attempted'] = sum(item['status'] != 'running' for item in result['cases'])
                     save()
+            if (collect_failure and case_result['status'] == 'failed'
+                    and case_result['inputsStable'] is True
+                    and case_result['processesStopped'] is True):
+                result['failedCases'].append(row['id'])
+                save()
+                continue
             if case_result['status'] != 'passed':
                 raise ValueError('CATALOG_CASE_CLOSURE_FAILED: ' + row['id'])
             result['completed'] += 1
             save()
+        if result['failedCases']:
+            raise ValueError(f"CATALOG_ASSERTION_FAILURES_COLLECTED: {len(result['failedCases'])}")
         result['status'] = 'passed'
     except BaseException as error:
         result.update(status='canceled' if isinstance(error, KeyboardInterrupt)

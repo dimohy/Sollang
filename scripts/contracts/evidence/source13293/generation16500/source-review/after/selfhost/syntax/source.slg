@@ -1,0 +1,337 @@
+namespace sollang.compiler.syntax
+
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+
+# Byte offsets remain stable across UTF-8 decoding and are shared by tokens,
+# CST nodes, diagnostics, and source maps.
+public struct SourceSpan {
+    public fileId: Int
+    public start: UIntSize
+    public length: UIntSize
+}
+
+public struct SyntaxToken {
+    public kind: Int
+    public span: SourceSpan
+}
+
+# Number tokens retain source spelling; extent consumers share normalized digits.
+public numericExtentTokenValue source: Text, token: SyntaxToken -> Int {
+    0 => extent!
+    UIntSize(0) => index!
+    index! < token.span.length -> while {
+        source -> byte(token.span.start + index!) => digit
+        digit == 95 -> if {
+            index! + 1 => index!
+            continue
+        }
+        digit < 48 or digit > 57 -> if { -1 -> return }
+        Int(digit - 48) => value
+        extent! > (2_147_483_647 - value) / 10 -> if { -1 -> return }
+        extent! * 10 + value => extent!
+        index! + 1 => index!
+    }
+    token.span.length == 0 -> if { -1 -> return }
+    extent!
+}
+
+# Raw expression layout is shared by parser admission and LLVM text decoding.
+# Issue order matches StringLiteralParser.NormalizeRawString.
+public struct RawStringLayout {
+    public raw: Bool
+    public multiline: Bool
+    public contentStart: UIntSize
+    public contentEnd: UIntSize
+    public indentationStart: UIntSize
+    public indentationLength: UIntSize
+    public issue: Int
+}
+
+public struct RawStringLine {
+    public start: UIntSize
+    public end: UIntSize
+    public next: UIntSize
+    public newline: Bool
+    public issue: Bool
+}
+
+public rawStringLine source: Text, layout: RawStringLayout, start: UIntSize -> RawStringLine {
+    start => end!
+    end! < layout.contentEnd and (source -> byte(end!)) != 10
+        -> while { end! + 1 => end! }
+    end! < layout.contentEnd => newline
+    end! => contentEnd!
+    newline and contentEnd! > start and (source -> byte(contentEnd! - 1)) == 13
+        -> if { contentEnd! - 1 => contentEnd! }
+    start => cursor!
+    true => blank!
+    blank! and cursor! < contentEnd! -> while {
+        source -> unicodeIdentifier.whitespaceWidth(cursor!, contentEnd!) => width
+        width == 0 -> if { false => blank! } else { cursor! + width => cursor! }
+    }
+    start => contentStart!
+    false => issue!
+    blank! -> if { contentEnd! => contentStart! } else {
+        contentEnd! - start < layout.indentationLength
+            -> if { true => issue! } else {
+                UIntSize(0) => prefix!
+                not issue! and prefix! < layout.indentationLength
+                    -> while {
+                        (source -> byte(start + prefix!)) != (source -> byte(layout.indentationStart + prefix!))
+                            -> if { true => issue! }
+                        prefix! + 1 => prefix!
+                    }
+                start + layout.indentationLength => contentStart!
+            }
+    }
+    end! => next!
+    newline -> if { next! + 1 => next! }
+    RawStringLine { start: contentStart!, end: contentEnd!, next: next!, newline: newline, issue: issue! }
+}
+
+public rawStringTokenLayout source: Text, token: SyntaxToken -> RawStringLayout {
+    token.span.start + 1 => start!
+    token.span.start + token.span.length - 1 => end!
+    token.span.length >= 6 and (source -> byte(token.span.start)) == 34
+        and (source -> byte(token.span.start + 1)) == 34
+        and (source -> byte(token.span.start + 2)) == 34 => raw
+    raw -> if {
+        UIntSize(0) => width!
+        width! < token.span.length and (source -> byte(token.span.start + width!)) == 34
+            -> while { width! + 1 => width! }
+        token.span.start + width! => start!
+        token.span.start + token.span.length - width! => end!
+    }
+    RawStringLayout { raw: raw, multiline: false, contentStart: start!, contentEnd: end!, indentationStart: end!, indentationLength: 0, issue: 0 }
+}
+
+public rawStringLayout source: Text, token: SyntaxToken -> RawStringLayout {
+    source -> rawStringTokenLayout(token) => layout!
+    layout!.contentStart => start!
+    layout!.contentEnd => end!
+    not layout!.raw or start! >= end! -> if { layout! -> return }
+    source -> byte(start!) => opening
+    opening == 13 and start! + 1 < end! and (source -> byte(start! + 1)) == 10
+        -> if { start! + 2 => start! } else {
+            opening == 10 -> if { start! + 1 => start! } else { layout! -> return }
+        }
+    true => layout!.multiline
+    start! => layout!.contentStart
+    end! => closing!
+    closing! > start! and (source -> byte(closing! - 1)) != 10
+        -> while { closing! - 1 => closing! }
+    closing! <= start! -> if {
+        1 => layout!.issue
+        layout! -> return
+    }
+    closing! => layout!.indentationStart
+    end! - closing! => layout!.indentationLength
+    closing! => cursor!
+    cursor! < end! -> while {
+        source -> byte(cursor!) => current
+        current != 32 and current != 9 -> if {
+            2 => layout!.issue
+            layout! -> return
+        }
+        cursor! + 1 => cursor!
+    }
+    token.span.start => lineStart!
+    lineStart! > 0 and (source -> byte(lineStart! - 1)) != 10 and (source -> byte(lineStart! - 1)) != 13
+        -> while { lineStart! - 1 => lineStart! }
+    UIntSize(0) => openingIndent!
+    lineStart! < token.span.start -> while {
+        source -> unicodeIdentifier.scalarWidth(lineStart!) => width
+        width == 4 -> if { openingIndent! + 2 => openingIndent! } else { openingIndent! + 1 => openingIndent! }
+        lineStart! + width => lineStart!
+    }
+    openingIndent! != layout!.indentationLength -> if {
+        3 => layout!.issue
+        layout! -> return
+    }
+    closing! - 1 => end!
+    end! > start! and (source -> byte(end! - 1)) == 13
+        -> if { end! - 1 => end! }
+    end! => layout!.contentEnd
+    start! => cursor!
+    cursor! < end! -> while {
+        source -> rawStringLine(layout!, cursor!) => line
+        line.issue -> if {
+            4 => layout!.issue
+            layout! -> return
+        }
+        line.next => cursor!
+    }
+    layout!
+}
+
+# Boundary issues match StringLiteralParser before fragment expression parsing:
+# 1 empty expression, 2 missing closing parenthesis, 3 missing nested quote.
+public struct StringInterpolationFragment {
+    public found: Bool
+    public span: SourceSpan
+    public next: UIntSize
+    public issue: Int
+}
+
+public nextStringInterpolationFragment source: Text, token: SyntaxToken, start: UIntSize -> StringInterpolationFragment {
+    source -> rawStringTokenLayout(token) => layout
+    start => cursor!
+    cursor! < layout.contentStart -> if { layout.contentStart => cursor! }
+    not layout.raw and cursor! + 1 < layout.contentEnd
+        -> while {
+            (source -> byte(cursor!)) == 36 and (source -> byte(cursor! + 1)) == 40
+                -> if {
+                    cursor! + 2 => expressionStart
+                    expressionStart => close!
+                    1 => depth!
+                    false => inString!
+                    close! < layout.contentEnd and depth! > 0 -> while {
+                        source -> byte(close!) => current
+                        current == '\'' and not inString! -> if {
+                            close! + 1 => close!
+                            false => characterClosed!
+                            close! < layout.contentEnd and not characterClosed!
+                                -> while {
+                                    source -> byte(close!) => characterByte
+                                    characterByte == '\\' and close! + 1 < layout.contentEnd
+                                        -> if {
+                                            close! + 2 => close!
+                                        } else {
+                                            characterByte == '\'' -> if {
+                                                true => characterClosed!
+                                            } else {
+                                                close! + 1 => close!
+                                            }
+                                        }
+                                }
+                        } else {
+                            current == '"' -> if { not inString! => inString! } else {
+                            not inString! -> if {
+                                current == '(' -> if { depth! + 1 => depth! }
+                                current == ')' -> if { depth! - 1 => depth! }
+                            }
+                        }
+                    }
+                    depth! > 0 and close! < layout.contentEnd -> if { close! + 1 => close! }
+                }
+            0 => issue!
+            inString! -> if { 3 => issue! } else {
+                depth! > 0 -> if { 2 => issue! }
+            }
+            expressionStart => content!
+            content! < close! -> while {
+                source -> unicodeIdentifier.whitespaceWidth(content!, close!) => width
+                width == 0 -> if { break }
+                content! + width => content!
+            }
+            issue! == 0 and content! == close! -> if { 1 => issue! }
+            StringInterpolationFragment {
+                found: true
+                span: SourceSpan { fileId: token.span.fileId, start: expressionStart, length: close! - expressionStart }
+                next: close! + 1
+                issue: issue!
+            } -> return
+        }
+    cursor! + 1 => cursor!
+}
+StringInterpolationFragment {
+    found: false
+    span: SourceSpan { fileId: token.span.fileId, start: layout.contentEnd, length: 0 }
+    next: layout.contentEnd
+    issue: 0
+}
+}
+
+public stringInterpolationIssue source: Text, token: SyntaxToken -> Int {
+    token.span.start => cursor!
+    true -> while {
+        source -> nextStringInterpolationFragment(token, cursor!) => fragment
+        not fragment.found -> if { 0 -> return }
+        fragment.issue != 0 -> if { fragment.issue -> return }
+        fragment.next => cursor!
+    }
+    0
+}
+
+impl SourceSpan {
+    public end: self -> UIntSize {
+        self.start + self.length
+    }
+}
+
+# Decode and classify one single-quoted Unicode scalar. All scalar consumers
+# and lexical diagnostic renderers share this checked authority.
+public enum CharacterLiteralError {
+    Unterminated
+    ScalarCount
+    UnsupportedEscape(UIntSize)
+}
+
+characterEscapeScalar value: UInt8 -> Option<Int> {
+    value == 48 -> if { 0 -> Option<Int>.Some -> return }
+    value == 98 -> if { 8 -> Option<Int>.Some -> return }
+    value == 102 -> if { 12 -> Option<Int>.Some -> return }
+    value == 110 -> if { 10 -> Option<Int>.Some -> return }
+    value == 114 -> if { 13 -> Option<Int>.Some -> return }
+    value == 116 -> if { 9 -> Option<Int>.Some -> return }
+    value == 92 -> if { 92 -> Option<Int>.Some -> return }
+    value == 39 -> if { 39 -> Option<Int>.Some -> return }
+    value == 34 -> if { 34 -> Option<Int>.Some -> return }
+    Option<Int>.None
+}
+
+public decodeCharacterLiteralChecked source: Text, span: SourceSpan -> Result<Int, CharacterLiteralError> {
+    source -> len => sourceLength
+    span.start > sourceLength or span.length > sourceLength - span.start or span.length == 0
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    (source -> byte(span.start)) != 39
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    span.start + span.length => end
+    span.start + 1 => cursor!
+    cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+        -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+    source -> byte(cursor!) => first
+    first == 39
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    0 => scalar!
+    first == 92 -> if {
+        cursor! + 1 => cursor!
+        cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+            -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+        source -> byte(cursor!) -> characterEscapeScalar -> when {
+            Some(value) { value => scalar! }
+            None {
+                CharacterLiteralError.UnsupportedEscape(cursor!) -> Result<Int, CharacterLiteralError>.Err -> return
+            }
+        }
+        cursor! + 1 => cursor!
+    } else {
+        source -> unicodeIdentifier.scalarWidth(cursor!) => width
+        width == 0 or width > end - cursor!
+            -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+        width == 1 -> if { Int(first) => scalar! }
+        width == 2 -> if {
+            (Int(first) - 192) * 64 + Int(source -> byte(cursor! + 1)) - 128 => scalar!
+        }
+        width == 3 -> if {
+            (Int(first) - 224) * 4096 + (Int(source -> byte(cursor! + 1)) - 128) * 64 + Int(source -> byte(cursor! + 2)) - 128 => scalar!
+        }
+        width == 4 -> if {
+            (Int(first) - 240) * 262_144 + (Int(source -> byte(cursor! + 1)) - 128) * 4096 + (Int(source -> byte(cursor! + 2)) - 128) * 64 + Int(source -> byte(cursor! + 3)) - 128 => scalar!
+        }
+        cursor! + width => cursor!
+    }
+    cursor! >= end or (source -> byte(cursor!)) == 10 or (source -> byte(cursor!)) == 13
+        -> if { CharacterLiteralError.Unterminated -> Result<Int, CharacterLiteralError>.Err -> return }
+    (source -> byte(cursor!)) != 39 or cursor! + 1 != end
+        -> if { CharacterLiteralError.ScalarCount -> Result<Int, CharacterLiteralError>.Err -> return }
+    scalar! -> Result<Int, CharacterLiteralError>.Ok
+}
+
+# Scalar consumers keep the Option surface; diagnostic consumers retain reasons.
+public decodeCharacterLiteral source: Text, span: SourceSpan -> Option<Int> {
+    source -> decodeCharacterLiteralChecked(span) -> when {
+        Ok(value) { value -> Option<Int>.Some }
+        Err(issue) { Option<Int>.None }
+    }
+}
