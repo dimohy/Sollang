@@ -54,17 +54,32 @@ def validate_sources(paths: list[str] | tuple[str, ...], *, contract_path: Path 
             assert entry["kind"] == "document" and relative in ('docs/SPEC.md', 'docs/AI_SLG_BEST_PRACTICES.md'), relative
 
 
-def historical_compiler_hash(value: str) -> str:
+def historical_compiler_hash(value: str, *, build_record: str | None = None,
+                             contract_path: Path = CONTRACT) -> str:
     """Use the existing explicit archived-native-build identity authority."""
     path = (ROOT / value).resolve()
     if path.is_file():
         return sha(path)
+    if build_record is not None:
+        # Explicit immutable snapshot of an existing historical build receipt.
+        # Do not send a relocated external junction to the destructive lifecycle.
+        contract = json.loads(contract_path.read_text(encoding='utf-8-sig'))
+        entry = contract['historicalNativeBuildRecords'][build_record]
+        archive = (ROOT / entry['record']).resolve()
+        assert archive.is_relative_to((ROOT / 'artifacts').resolve())
+        assert archive.name == 'result.json' and sha(archive) == entry['sha256']
+        assert Path(build_record).resolve().parent / 'compiler.exe' == path
+        record = json.loads(archive.read_text(encoding='utf-8-sig'))
+        assert record['compilerSha256'] == entry['compilerSha256']
+        # The shared authority below still validates successful, stable build
+        # fingerprints and source counts. This is a recorded identity only.
+        path = archive.parent / 'compiler.exe'
     quote = lambda text: "'" + str(text).replace("'", "''") + "'"
     script = (". " + quote(ROOT / 'scripts/verification-artifact-identity.ps1')
         + "; Get-CompilerEvidenceHash -RepositoryRoot " + quote(ROOT)
         + " -LiteralPath " + quote(path) + " -ArchivedNativeBuild | ConvertTo-Json -Compress")
     result = subprocess.run(['pwsh', '-NoProfile', '-Command', script], cwd=ROOT,
-                            capture_output=True, text=True, check=True, timeout=30)
+                            capture_output=True, text=True, encoding='utf-8', check=True, timeout=30)
     identity = json.loads(result.stdout)
     assert identity['IdentitySource'] == 'recorded-native-build'
     return identity['Hash']

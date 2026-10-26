@@ -39,7 +39,7 @@ $memberDirect = Get-Content -LiteralPath (Join-Path $root $contract.memberDirect
 $indexedArray = Get-Content -LiteralPath (Join-Path $root $contract.indexedArrayPreIrEvidence) -Raw | ConvertFrom-Json
 & (Join-Path $PSScriptRoot 'verify-cli-diagnostic-encoding.ps1') -RepositoryRoot $root -ContractPath $contract.diagnosticEncodingEvidence
 $expressionContract = Get-Content -LiteralPath (Join-Path $root 'scripts/contracts/expression-lowering-parity.json') -Raw | ConvertFrom-Json
-$source = Get-Content -LiteralPath (Join-Path $root 'selfhost/ir/interpolation.slg') -Raw
+$interpolationSourceText = Get-Content -LiteralPath (Join-Path $root 'selfhost/ir/interpolation.slg') -Raw
 $semanticContext = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/context.slg') -Raw
 $semanticAnalysis = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/analysis.slg') -Raw
 $ownershipCheck = Get-Content -LiteralPath (Join-Path $root 'selfhost/semantic/ownership_check.slg') -Raw
@@ -2256,11 +2256,11 @@ if ($semanticKinds -ccontains 0) {
         throw 'integer interpolation evidence names a different compiler candidate'
     }
 }
-$kindComment = [regex]::Match($source, '(?s)# Kinds:.*?(?=# Builtin result ids)')
+$kindComment = [regex]::Match($interpolationSourceText, '(?s)# Kinds:.*?(?=# Builtin result ids)')
 if (-not $kindComment.Success) { throw 'interpolation kind source contract is missing' }
 $documentedKinds = @([regex]::Matches($kindComment.Value, '(?<!\d)(\d{1,2})\s+([^,\r\n]+)'))
 $sourceKindCatalog = @($contract.sourceKindCatalog)
-if ($sourceKindCatalog.Count -ne 17 -or ($sourceKindCatalog.id -join ',') -cne ((0..16) -join ',') -or
+if ($sourceKindCatalog.Count -ne 18 -or ($sourceKindCatalog.id -join ',') -cne ((0..17) -join ',') -or
     $documentedKinds.Count -ne $sourceKindCatalog.Count) {
     throw 'interpolation source kinds differ from the semantic parity contract'
 }
@@ -2273,7 +2273,7 @@ for ($kindIndex = 0; $kindIndex -lt $sourceKindCatalog.Count; $kindIndex++) {
     }
 }
 if ($contract.additionalSourceKindsQualification.status -cne 'pending-current-phase-exhaustive-proof' -or
-    ($contract.additionalSourceKindsQualification.ids -join ',') -cne '12,13,14,15,16' -or
+    ($contract.additionalSourceKindsQualification.ids -join ',') -cne '12,13,14,15,16,17' -or
     $sourceKindCatalog[13].role -cne 'field-metadata') {
     throw 'Additional interpolation source kind qualification must remain explicit and separate from original12 families'
 }
@@ -2295,7 +2295,7 @@ foreach ($row in $rows) {
         $evidenceCount++
     }
 }
-if (-not $source.Contains('11 Result propagation', [StringComparison]::Ordinal)) {
+if (-not $interpolationSourceText.Contains('11 Result propagation', [StringComparison]::Ordinal)) {
     throw 'interpolation Result propagation source identity is missing'
 }
 $partialIndexEvidence = Join-Path $root $contract.partialSemanticIndexRuleEvidence
@@ -2645,4 +2645,4 @@ if ([regex]::Matches($semanticAnalysis, '-> interpolation\.lowerPreparedWithType
     $emitterPreparation -notmatch 'prepared -> interpolationInference\.classifyIntrinsicFlowReceivers\(streamPlan, recursiveTypes!, ir!, recursiveTypes!\.types, recursiveTypes!\.fields\) => analysisInterpolations') {
     throw 'interpolation source nodes must be prepared once in the semantic snapshot and consumed downstream'
 }
-Write-Output "[interpolation semantic parity] PASS original mapped kinds 12/12; source kind inventory17/17; recorded focused receipts $evidenceCount/12; original semantic decision owners $($semanticKinds.Count)/12; additional kinds and whole source ownership pending"
+Write-Output "[interpolation semantic parity] PASS original mapped kinds 12/12; source kind inventory$($sourceKindCatalog.Count)/$($sourceKindCatalog.Count); recorded focused receipts $evidenceCount/12; original semantic decision owners $($semanticKinds.Count)/12; additional kinds and whole source ownership pending"

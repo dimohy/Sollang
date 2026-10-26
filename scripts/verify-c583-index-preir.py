@@ -54,7 +54,7 @@ assert managed_negative["inputHashesStart"]["source"] == sha(
 assert build["status"] == "passed" and build["inputsStable"]
 assert build["compilerSha256"] == proof["selfhostCompilerSha256"]
 compiler = str(path(proof["selfhostBuild"]).parent / "compiler.exe")
-assert historical_compiler_hash(compiler) == proof["selfhostCompilerSha256"]
+assert historical_compiler_hash(compiler, build_record=proof['selfhostBuild'], contract_path=args.contract) == proof["selfhostCompilerSha256"]
 
 probe = proof["preIrProbe"]
 assert sha(probe["source"]) == probe["sourceSha256"]
@@ -92,8 +92,13 @@ assert producer.index("interpolationLexicalTypeByNode!") < producer.index("inter
 assert producer.index("interpolationIndexedTypeByNode!") < producer.index("interpolationUnaryTypeByNode!")
 assert "bindingFacts.interpolationIndexedTypeByNode[nodeIndex] -> return" in consumer
 assert "bindingFacts.interpolationIndexExpectedTypeByNode[nodeIndex!] => invalidExpected!" in consumer
-assert prepare.index("initialPrepared -> expressionTypeIds.resolveCallContext => resolvedCallContext") < prepare.index("prepared -> lowerPreparedIr(")
+assert prepare.index("initialPrepared -> expressionTypeIds.resolveCallContextWithExternalResults(externalResults) => resolvedCallContext") < prepare.index("prepared -> lowerPreparedIr(")
 assert "resolvedCallContext.types => recursiveTypes!" in prepare
+assert "initialPrepared.package -> libraryImports.callResultTypes(initialPrepared.semantic.types, libraries, libraryCalls) => externalResults" in prepare
+assert "request -> prepareResolvedSnapshot(resolvedCallContext, libraries, libraryCalls, unresolvedMutableNames, signatureTypeDiagnostic)" in prepare
+external_context = producer.split('public resolveCallContextWithExternalResults ', 1)[1].split('\n}', 1)[0]
+assert 'initialPrepared -> resolveContextCoreSeeded(seeds, externalResults) => initialTypes' in external_context
+assert 'initialPrepared -> completeResolvedCallContextSeeded(initialTypes, seeds, externalResults)' in external_context
 resolve_call_context = producer.split('public resolveCallContext ', 1)[1].split('\n}', 1)[0]
 assert 'initialPrepared -> resolveContextCore => initialTypes' in resolve_call_context
 assert 'initialPrepared -> completeResolvedCallContext(initialTypes)' in resolve_call_context

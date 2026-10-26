@@ -42,7 +42,7 @@ assert comparison["slgSources"]["selfhost/semantic/expression_type_ids_paths.slg
 assert build["status"] == "passed" and build["inputsStable"]
 assert build["compilerSha256"] == proof["selfhostCompilerSha256"]
 compiler = str(path(proof["selfhostBuild"]).parent / "compiler.exe")
-assert historical_compiler_hash(compiler) == proof["selfhostCompilerSha256"]
+assert historical_compiler_hash(compiler, build_record=proof['selfhostBuild'], contract_path=args.contract) == proof["selfhostCompilerSha256"]
 validate_sources(list(proof["changedSourceHashes"]), contract_path=args.contract)
 for value, expected in proof["fixtureHashes"].items():
     assert sha(value) == expected, value
