@@ -12,13 +12,18 @@ public enum BoundType
     OptionSourceText,
     ResultSourceText,
     Arena,
-    OwnedBytes
+    OwnedBytes,
+    Arguments,
+    TextArray,
+    RefTextArray
 }
 
 public enum BoundFunctionInputOwnership { Default, Move, MutableBorrow }
 
 public abstract record Expression(int Line, int Column);
 public sealed record NameExpression(string Name, int SourceLine = 1, int SourceColumn = 1)
+    : Expression(SourceLine, SourceColumn);
+public sealed record IndexExpression(Expression Source, Expression Index, int SourceLine = 1, int SourceColumn = 1)
     : Expression(SourceLine, SourceColumn);
 public sealed record CallExpression(
     IReadOnlyList<string> Path,
@@ -64,7 +69,7 @@ public sealed class SemanticCompilerProbe
         public bool IsDynamicArray(BoundType type) => false;
         public bool IsDictionary(BoundType type) => false;
         public bool IsBox(BoundType type) => false;
-        public bool IsReference(BoundType type) => false;
+        public bool IsReference(BoundType type) => type == BoundType.RefTextArray;
         public bool IsStruct(BoundType type) => Structs.ContainsKey(type);
         public bool IsEnum(BoundType type) => Enums.ContainsKey(type);
         public bool TryResolve(string name, out BoundType type)
@@ -80,7 +85,8 @@ public sealed class SemanticCompilerProbe
         public ElementDefinition GetDynamicArray(BoundType type) => throw new InvalidOperationException();
         public DictionaryDefinition GetDictionary(BoundType type) => throw new InvalidOperationException();
         public ElementDefinition GetBox(BoundType type) => throw new InvalidOperationException();
-        public ElementDefinition GetReference(BoundType type) => throw new InvalidOperationException();
+        public ElementDefinition GetReference(BoundType type) => type == BoundType.RefTextArray
+            ? new(BoundType.TextArray) : throw new InvalidOperationException();
         public StructDefinition GetStruct(BoundType type) => Structs[type];
         public EnumDefinition GetEnum(BoundType type) => Enums[type];
     }
@@ -107,6 +113,12 @@ public sealed class SemanticCompilerProbe
     /*PRODUCTION_PARAMETER_HELPER*/
 
     private bool IsBorrowedTextByteStorage(BoundType type) => type == BoundType.OwnedBytes;
+    private static IReadOnlySet<string> EmptyBorrowOrigins() => new HashSet<string>(StringComparer.Ordinal);
+    private bool TryGetContextualArrayElementType(BoundType type, out BoundType elementType)
+    {
+        elementType = BoundType.Text;
+        return type == BoundType.TextArray;
+    }
 
     /*PRODUCTION_ENUM_HELPERS*/
 
@@ -246,6 +258,17 @@ public sealed class SemanticCompilerProbe
             || !ReferenceEquals(fallbackFunction, observedFallback))
             throw new InvalidOperationException("textual-call-fallback: unresolved call did not use the textual fallback");
         passed++;
-        return $"PASS {passed}/{checks.Length + parameterChecks.Length + enumChecks.Length + 5}";
+        foreach (var carrierType in new[] { BoundType.Arguments, BoundType.TextArray, BoundType.RefTextArray })
+        {
+            ownerBindings["items"] = carrierType;
+            probe._activeBorrowedTextOrigins["items"] = new HashSet<string>(["owner"], StringComparer.Ordinal);
+            if (!probe.TryGetBorrowedSourceCallSiteOrigins(
+                    new IndexExpression(new NameExpression("items"), new NameExpression("index")),
+                    functions, ownerBindings, out var itemOrigins)
+                || !itemOrigins.SetEquals(carrierType == BoundType.Arguments ? Array.Empty<string>() : new[] { "owner" }))
+                throw new InvalidOperationException($"indexed-payload-{carrierType}: payload origin was not preserved");
+            passed++;
+        }
+        return $"PASS {passed}/{checks.Length + parameterChecks.Length + enumChecks.Length + 8}";
     }
 }

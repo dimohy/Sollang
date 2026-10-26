@@ -5,6 +5,12 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'verification-process.ps1')
 $root = [IO.Path]::GetFullPath($RepositoryRoot)
+$llvmHome = Join-Path $root '.tools/llvm-22.1.8'
+foreach ($tool in @('clang.exe', 'lld-link.exe', 'llvm-lib.exe')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $llvmHome "bin/$tool") -PathType Leaf)) {
+        throw "Mapped layout probe LLVM tool is missing: $tool"
+    }
+}
 $output = Join-Path $root ('artifacts/scratch/1708-map-layout-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($output)
 $typePath = Join-Path $root 'selfhost/semantic/type_ids.slg'
@@ -26,8 +32,11 @@ $declarations = @(
     Select-Declaration $typeSource 'PayloadEdge'
     Select-Declaration $layoutSource 'TypeLayoutRequest'
     Select-Declaration $layoutSource 'TypeLayouts'
+    Select-Declaration $layoutSource 'TypeLayout'
+    Select-Declaration $layoutSource 'aggregateFieldLayout'
     Select-Declaration $layoutSource 'BoundedDictionaryLayout'
-    Select-Declaration $layoutSource 'canonicalDictionaryFieldAlign'
+    Select-Declaration $layoutSource 'DictionaryEntryLayout'
+    Select-Declaration $layoutSource 'dictionaryEntryLayout'
     Select-Declaration $layoutSource 'boundedDictionaryLayout'
     Select-Declaration $typeSource 'classifyWithResources'
     Select-Declaration $layoutSource 'layoutsFor'
@@ -36,7 +45,7 @@ $source = Join-Path $output 'probe.slg'
 $executable = Join-Path $output 'probe.exe'
 [IO.File]::WriteAllText($source, ($declarations -join "`n`n") + "`n`n" + [IO.File]::ReadAllText($testPath))
 $compiler = Join-Path $root 'src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll'
-$build = Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compiler, 'build', $source, '-o', $executable, '--keep-temps') -Description 'isolated mapped layout and traits' -TimeoutMilliseconds 30000
+$build = Invoke-VerificationProcessCapture -FilePath 'dotnet' -ArgumentList @($compiler, 'build', $source, '-o', $executable, '--keep-temps', '--llvm', $llvmHome) -Description 'isolated mapped layout and traits' -TimeoutMilliseconds 30000
 [IO.File]::WriteAllText((Join-Path $output 'build.log'), $build.Stdout + $build.Stderr)
 if ($build.ExitCode -ne 0 -or $build.Stderr -match '\S') { throw "Map layout probe compilation failed: $($build.Stdout)$($build.Stderr)" }
 $run = Invoke-VerificationProcessCapture -FilePath $executable -ArgumentList @() -Description 'mapped layout and trait assertions' -TimeoutMilliseconds 10000

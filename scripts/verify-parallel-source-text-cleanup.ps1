@@ -19,11 +19,13 @@ $llvmHome = Join-Path $root '.tools/llvm-22.1.8'
 $baselineCommit = 'baf9f8cb897c0971077823c4d4f4ec20ea85f1de'
 
 function Get-PayloadBranch {
-    param([string]$Text, [ValidateSet('source', 'array')][string]$Kind)
+    param([string]$Text, [ValidateSet('source', 'array', 'array-delegated')][string]$Kind)
     $pattern = if ($Kind -eq 'source') {
         '(?ms)^    payloadType\.kind == 1 and payloadType\.origin == 1 and payloadType\.symbol == 24\n        -> if \{\n(?<body>.*?)^        \}'
-    } else {
+    } elseif ($Kind -eq 'array') {
         '(?ms)^    payloadType\.kind == 3 -> if \{\n(?<body>.*?)^    \}'
+    } else {
+        '(?ms)^    payloadType\.kind == 3 or payloadType\.kind == 5 or payloadType\.kind == 6\n        -> if \{\n(?<body>.*?)^        \}'
     }
     $matches = [regex]::Matches($Text.Replace("`r`n", "`n"), $pattern)
     if ($matches.Count -ne 1) { throw "Expected one production $Kind payload branch; found $($matches.Count)." }
@@ -43,9 +45,13 @@ function Convert-PayloadInstructions {
             [void]$output.Append("8`n")
             continue
         }
+        if ($trimmed -ceq 'request.payloadTypeId -> writeSemanticTypeId(context, state)') {
+            [void]$output.Append('%sollang.array.i32')
+            continue
+        }
         $print = [regex]::Match($trimmed, '^"(?<text>[^"\r\n]*)" -> (?<sink>print|println)$')
         if (-not $print.Success) { throw "Unsupported production payload instruction: $trimmed" }
-        $value = $print.Groups['text'].Value.Replace('$(request.nameRoot)', '1').Replace('$(request.pointerRoot)', '1')
+        $value = $print.Groups['text'].Value.Replace('$(request.nameRoot)', '1').Replace('$(request.pointerRoot)', '1').Replace('$(request.payloadTypeId)', '0')
         if ($value.Contains('$(')) { throw "Unresolved production interpolation: $value" }
         [void]$output.Append($value)
         if ($print.Groups['sink'].Value -ceq 'println') { [void]$output.Append("`n") }
@@ -111,9 +117,14 @@ if (-not $transferSource.Contains(
 $sourceBranches = [ordered]@{ baseline = (Get-PayloadBranch $baseline source) }
 if (-not $BaselineOnly) { $sourceBranches.candidate = Get-PayloadBranch $candidate source }
 $arrayBaseline = Get-PayloadBranch $baseline array
-$arrayCandidate = Get-PayloadBranch $candidate array
-if ($arrayBaseline.Value -cne $arrayCandidate.Value) { throw 'The existing array cleanup branch changed outside this repair.' }
+$arrayCandidate = Get-PayloadBranch $candidate array-delegated
 $arrayInstructions = Convert-PayloadInstructions $arrayCandidate.Groups['body'].Value
+# Follow the production scalar growable-array cleanup helper. This probe fixes
+# kind=3, element=Int (no element cleanup), and alignment=8 explicitly.
+$arrayDropData = [regex]::Matches($candidate.Replace("`r`n", "`n"), '(?m)^ {28}"(?<line>  %data = extractvalue %sollang\.array\.i32 %value, 0)" -> println$')
+$arrayDropFree = [regex]::Matches($candidate.Replace("`r`n", "`n"), '(?m)^\s*dropType\.kind == 3 or \(dropType\.kind == 7 and dropType\.origin == 4 and dropType\.symbol == 7\)\n\s*-> if \{ "(?<line>  call void @free\(ptr %data\))" -> println \}\n\s*"  ret void" -> println')
+if ($arrayDropData.Count -ne 1 -or $arrayDropFree.Count -ne 1) { throw 'Expected one scalar growable-array cleanup data load and terminal.' }
+$arrayDropHelper = "define internal void @sollang_drop_t0(%sollang.array.i32 %value) {`nentry:`n$($arrayDropData[0].Groups['line'].Value)`n$($arrayDropFree[0].Groups['line'].Value)`n  ret void`n}"
 $runtimeFunctions = [regex]::Matches($runtime, '(?ms)^\s*define void @sollang_runtime_unmap_text\([^\n]+\) \{.*?^\s*\}')
 if ($runtimeFunctions.Count -ne 2) { throw 'Expected exactly two production native SourceText runtime cleanup declarations.' }
 $platformRuntimes = [ordered]@{}
@@ -245,7 +256,7 @@ try {
     foreach ($mode in $sourceBranches.Keys) {
         $sourceInstructions = Convert-PayloadInstructions $sourceBranches[$mode].Groups['body'].Value
         foreach ($platform in $platformRuntimes.Keys) {
-            $body = "$declarations`n$($platformRuntimes[$platform])`n" + $wrappers.Replace('__SOURCE_PAYLOAD__', $sourceInstructions).Replace('__ARRAY_PAYLOAD__', $arrayInstructions)
+            $body = "$declarations`n$arrayDropHelper`n$($platformRuntimes[$platform])`n" + $wrappers.Replace('__SOURCE_PAYLOAD__', $sourceInstructions).Replace('__ARRAY_PAYLOAD__', $arrayInstructions)
             # Only terminal symbols are redirected. All production LLVM owner,
             # sentinel, payload load and control-flow instructions stay intact.
             $body = $body.Replace('@free(', '@sollang_probe_free(').Replace('@UnmapViewOfFile(', '@sollang_probe_windows_unmap(').Replace('@munmap(', '@sollang_probe_linux_unmap(')
@@ -275,7 +286,8 @@ try {
     $record.completed = 8
     $record.status = 'passed'
     $record.baselineMappedMisdispatchObserved = $true
-    $record.arrayBranchUnchanged = $true
+    $record.arrayCleanupTerminalPreserved = $true
+    $record.arrayCleanupDelegatedHelperSha256 = Get-StringHash $arrayDropHelper
     $record.inputsStable = $true
 } catch {
     $record.status = 'failed'

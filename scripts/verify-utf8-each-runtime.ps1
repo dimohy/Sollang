@@ -15,10 +15,17 @@ $bodyLines = @([regex]::Matches($fragment.Groups['body'].Value, '(?m)^\s*"(?<tex
 if ($bodyLines.Count -ne 9) { throw "Text each decode materializer inventory changed: $($bodyLines.Count)" }
 $nextLine = [regex]::Matches($foundation, '(?m)^\s*"(?<text>  %each\$\(eachIndex\)_next = add i64 %each\$\(eachIndex\)_index, %each\$\(eachIndex\)_width)" -> println\s*$')
 if ($nextLine.Count -ne 1) { throw 'Text each must advance by the decoded byte width.' }
-$textRoleType = [regex]::Matches(
+$textRoleDelegate = [regex]::Matches(
     $foundation,
-    '(?s)directEachElementTypeId source:.*?source -> isDirectTextEachSource\(context\) -> if \{ 14 \} else \{\s*source -> arrayElementTypeId\(context, state\)')
-if ($textRoleType.Count -ne 1) {
+    '(?m)^directEachElementTypeId source: typedIr\.TypedIrNode, context: ref emitterContext\.EmitContext, state: ref CoreEmitterState -> Int \{\n\s*source -> typeQueries\.directEachElementTypeId\(context\)\n\}')
+$typeQueriesPath = Join-Path $root 'selfhost/llvm/emitter/type_queries.slg'
+$typeQueries = [IO.File]::ReadAllText($typeQueriesPath).Replace("`r`n", "`n")
+$elementTypeDeclaration = [regex]::Matches($typeQueries, '(?ms)^public directEachElementTypeId [^\n]+\{.*?^\}')
+$textRoleType = @($elementTypeDeclaration | Where-Object {
+    $_.Value -match 'typeId! >= 0 and context\.types\[typeId!\]\.kind == 8\s*-> if \{ context\.types\[typeId!\]\.first => typeId! \}' -and
+    $_.Value -match 'typeId! >= 0 and context\.types\[typeId!\]\.kind == 1\s*and context\.types\[typeId!\]\.origin == 1 and context\.types\[typeId!\]\.symbol == 1\s*-> if \{ 14 \} else \{ source -> arrayElementTypeId\(context\) \}'
+})
+if ($textRoleDelegate.Count -ne 1 -or $elementTypeDeclaration.Count -ne 1 -or $textRoleType.Count -ne 1) {
     throw 'Text each role must have the canonical CodePoint type before interpolation lowering.'
 }
 $textRoleConversion = [regex]::Matches(
@@ -93,6 +100,7 @@ foreach ($authority in $sources.Keys) {
     compilerIntegration = 'pending'
     harnessHash = (Get-FileHash -LiteralPath $harness -Algorithm SHA256).Hash
     foundationHash = (Get-FileHash -LiteralPath $foundationPath -Algorithm SHA256).Hash
+    typeQueriesHash = (Get-FileHash -LiteralPath $typeQueriesPath -Algorithm SHA256).Hash
     authorities = $results
 } | ConvertTo-Json -Depth 5) + "`n"))
 Write-Host "[UTF-8 runtime] Evidence: $($probe.Output)"

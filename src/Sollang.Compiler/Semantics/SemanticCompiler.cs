@@ -15524,7 +15524,8 @@ internal sealed partial class SemanticCompiler
                     field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
                 structs.Add(product, new BoundStructDefinition(
                     product, typeName, boundFields, line, column,
-                    ModuleName: string.Empty, IsPublic: true, IsProduct: true));
+                    ModuleName: string.Empty, IsPublic: true, IsProduct: true,
+                    ProductLabels: Array.AsReadOnly(fields.Select(static field => field.Label).ToArray())));
                 declaredProducts.Add(shape, product);
                 names.TryAdd(typeName, product);
                 return product;

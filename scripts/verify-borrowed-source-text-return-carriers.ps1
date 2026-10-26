@@ -15,7 +15,7 @@ $record = [ordered]@{
     defectId = 'C2026-09-12-397'
     status = 'running'
     completed = 0
-    total = 45
+    total = 48
     checks = @()
 }
 try {
@@ -146,7 +146,10 @@ try {
     $record.completed++
     $record.checks += 'semantic-call-resolution-authority'
     if ([regex]::Matches($production,
-            'TryGetBorrowedCallSiteFunction\(').Count -ne 3) {
+            'TryGetBorrowedCallSiteFunction\(').Count -ne 4 -or
+        -not $production.Contains('TryGetBorrowedCallSiteFunction(call, call.Path, functions, out var called)', [StringComparison]::Ordinal) -or
+        -not $production.Contains('TryGetBorrowedCallSiteFunction(target, target.Path, functions, out var targetFunction)', [StringComparison]::Ordinal) -or
+        -not $production.Contains('TryGetBorrowedCallSiteFunction(site, path, functions, out var called)', [StringComparison]::Ordinal)) {
         throw 'direct and flowed borrowed-origin paths must share one resolved call-site authority'
     }
     $record.completed++
@@ -165,7 +168,8 @@ try {
         $returnEscapeStart,
         $returnEscapeEnd - $returnEscapeStart)
     if (-not $returnEscapeHelper.Contains('!TypeCanCarryBorrowedTextOrigin(returnType)', [StringComparison]::Ordinal) -or
-        -not $returnEscapeHelper.Contains('returnOuterBindings.ContainsKey(root)', [StringComparison]::Ordinal) -or
+        -not $returnEscapeHelper.Contains('returnOuterBindings.TryGetValue(root, out var outerType)', [StringComparison]::Ordinal) -or
+        -not $returnEscapeHelper.Contains('!(_currentMoveInputNames.Contains(root) && _types.ContainsOwnedStorage(outerType))', [StringComparison]::Ordinal) -or
         -not $returnEscapeHelper.Contains('cannot escape function', [StringComparison]::Ordinal)) {
         throw 'local borrowed-return escape helper does not guard scalar returns, preserve outer origins, and reject local origins'
     }
@@ -244,7 +248,7 @@ try {
         Replace('/*PRODUCTION_BORROW_SOURCE_HELPER*/', $borrowSourceHelper.Trim())
     Add-Type -TypeDefinition $source -Language CSharp
     $observed = [SemanticCompilerProbe]::Run()
-    if ($observed -cne 'PASS 26/26') { throw "borrowed carrier probe failed: $observed" }
+    if ($observed -cne 'PASS 29/29') { throw "borrowed carrier probe failed: $observed" }
     foreach ($name in @(
             'text', 'nested-text-struct', 'source-text', 'nested-source-struct',
             'nested-source-option', 'nested-source-result', 'unrelated-int',
@@ -267,7 +271,8 @@ try {
     }
     foreach ($name in @(
             'local-owner-source', 'borrowed-view-source', 'unknown-source',
-            'resolved-call-site', 'textual-call-fallback')) {
+            'resolved-call-site', 'textual-call-fallback',
+            'indexed-arguments-payload', 'indexed-array-payload', 'indexed-reference-array-payload')) {
         $record.completed++
         $record.checks += $name
     }
