@@ -1159,6 +1159,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitDictionaryLiteral(DictionaryLiteralExpression expression)
     {
         var entries = new List<(RuntimeValue Key, RuntimeValue Value)>(expression.Entries.Count);
+        var carriers = new List<(AsyncExpressionCarrier? Key, AsyncExpressionCarrier? Value)>(expression.Entries.Count);
         BoundType? inferredKeyType = expression.KeyType is not null
             && _program.Types.TryResolve(expression.KeyType, out var declaredKeyType)
                 ? declaredKeyType
@@ -1175,6 +1176,7 @@ internal sealed partial class LlvmEmitter
                     ? EmitContextualStructLiteral(contextual, contextualKeyType)
                     : EmitExpression(entry.Key);
             inferredKeyType ??= key.Type;
+            var keyCarrier = PreserveAsyncExpressionValue(key, ownsValue: true);
             var value = entry.Value is DictionaryLiteralExpression contextualValue
                 && inferredValueType is { } contextualValueType
                 && _program.Types.IsStruct(contextualValueType)
@@ -1182,7 +1184,12 @@ internal sealed partial class LlvmEmitter
                     : EmitExpression(entry.Value);
             inferredValueType ??= value.Type;
             entries.Add((key, value));
+            carriers.Add((keyCarrier, PreserveAsyncExpressionValue(value, ownsValue: true)));
         }
+        for (var index = 0; index < entries.Count; index++)
+            entries[index] = (
+                RestoreAsyncExpressionValue(carriers[index].Key, entries[index].Key),
+                RestoreAsyncExpressionValue(carriers[index].Value, entries[index].Value));
         if (expression.BoundedCapacity is { } boundedCapacity)
         {
             var boundedType = _program.Types.GetOrAddBoundedDictionary(
