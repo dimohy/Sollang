@@ -26,7 +26,12 @@ forceLabelHashes types: mut [typeIds.SemanticType; ~] -> Unit {
 }
 
 main {
-    ["namespace cache.products\npair value: (left: Int, rght: Int) -> Int => value.left\n"; ~] -> analysis.analyze => before
+    [
+    """
+    namespace cache.products
+    pair value: (left: Int, rght: Int) -> Int => value.left
+
+    """; ~] -> analysis.analyze => before
     before -> modules.identitiesAnalyzed => beforeModules
     before -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => keys
     before -> typeIds.resolveAnalyzed => old!
@@ -34,7 +39,13 @@ main {
     details.status == 0 -> println
     old!.types -> productType => oldProduct
 
-    ["namespace cache.products\nhidden value: (xxxx: Int, yyyy: Int) -> Int => value.xxxx\npair value: (left: Int, rght: Int) -> Int => value.left\n"; ~] -> analysis.analyze => after
+    [
+    """
+    namespace cache.products
+    hidden value: (xxxx: Int, yyyy: Int) -> Int => value.xxxx
+    pair value: (left: Int, rght: Int) -> Int => value.left
+
+    """; ~] -> analysis.analyze => after
     after -> modules.identitiesAnalyzed => afterModules
     after -> interfaces.declarationIdentitiesAnalyzed(afterModules) => current
     after -> typeIds.resolveAnalyzed => fresh!
@@ -65,7 +76,12 @@ main {
     firstField.ownerType == seeded.typeIds[oldProduct] and firstField.ordinal == 0
         and seeded.types[firstField.fieldType].symbol == 2 and fieldName == "left" => readableField
     readableField -> println
-    ["namespace missing\nmain { 0 -> println }\n"; ~] -> analysis.analyze => missingLabels
+    [
+    """
+    namespace missing
+    main { 0 -> println }
+
+    """; ~] -> analysis.analyze => missingLabels
     seeded -> artifacts.materializeProductFields(missingLabels, seed.fields, seed.types -> len) => missingFields
     missingFields.status == 5 and (missingFields.fields -> len) == 0 => missingLabelRejected
     missingLabelRejected -> println

@@ -82,15 +82,36 @@ sameOwner expected: ref expressions.ResolvedCallContext, actual: ref expressions
 }
 
 main {
-    "import stored.provider as provider\nmain { UInt8(3) => input\nprovider.plus(input) => value\nvalue + (true -> if { 1 } else { 2 }) => total\nvalue -> println\ntotal -> println\n}\n" => mainSource
-    "namespace stored.provider\npublic plus<T> value: T -> T => value\n" => provider
-    "namespace unrelated\npublic value: -> Int => 1\n" => unrelated
+    """
+    import stored.provider as provider
+    main { UInt8(3) => input
+    provider.plus(input) => value
+    value + (true -> if { 1 } else { 2 }) => total
+    value -> println
+    total -> println
+    }
+
+    """ => mainSource
+    """
+    namespace stored.provider
+    public plus<T> value: T -> T => value
+
+    """ => provider
+    """
+    namespace unrelated
+    public value: -> Int => 1
+
+    """ => unrelated
     [mainSource, provider, unrelated; ~] -> context.prepare -> expressions.resolveCallContext => before
     ["main.slg", "provider.slg", "other.slg"; ~] => paths
     generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
     before.prepared -> generations.captureCurrent(before.types, paths, 0, identity) => encoded
     encoded.status == 0 -> println
-    "namespace unrelated\npublic value: -> Int => 2\n" => changedOther
+    """
+    namespace unrelated
+    public value: -> Int => 2
+
+    """ => changedOther
     [changedOther, provider, mainSource; ~] -> context.prepare -> expressions.resolveCallContext => expected
     ["other.slg", "provider.slg", "main.slg"; ~] => reorderedPaths
     [changedOther, provider, mainSource; ~] -> context.prepare => current
@@ -107,7 +128,12 @@ main {
     [mainSource, provider, unrelated; ~] -> context.prepare => wrongShape
     expressions.CallContextSeeds { ownerBySource: [true,; ~], bindingTypeBySymbol: [Int; ~], values: [expressions.ExpressionTypeId; ~], calls: [calls.ModuleCallResolution; ~], arguments: [expressions.ResolvedCallArgument; ~] } => malformed
     wrongShape -> expressions.resolveCallContextSeeded(malformed) -> when { Ok(_) { false -> println } Err(code) { code == 1 -> println } }
-    [mainSource, "namespace stored.provider\npublic plus<T> value: T -> T { value }\n", unrelated; ~] -> context.prepare => changedGeneric
+    [mainSource,
+    """
+    namespace stored.provider
+    public plus<T> value: T -> T { value }
+
+    """, unrelated; ~] -> context.prepare => changedGeneric
     encoded.words -> generations.resolveCurrent(changedGeneric, paths, identity) -> when { Ok(_) { false -> println } Err(code) { code == 14 -> println } }
     [mainSource, provider, unrelated; ~] -> context.prepare => changedContext
     generations.CompilationIdentity { compiler: 2, target: 2, configuration: 3 } => wrongIdentity

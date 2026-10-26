@@ -23,9 +23,23 @@ reseal content: ref [UInt64; ~] -> [UInt64; ~] {
 }
 
 main {
-    "import stored.provider as provider\nmain { provider.plus(UInt8(3)) => value\nvalue -> println\n}\n" => mainSource
-    "namespace stored.provider\npublic plus<T> value: T -> T => value\n" => provider
-    "namespace unrelated\npublic value: -> Int => 1\n" => unrelated
+    """
+    import stored.provider as provider
+    main { provider.plus(UInt8(3)) => value
+    value -> println
+    }
+
+    """ => mainSource
+    """
+    namespace stored.provider
+    public plus<T> value: T -> T => value
+
+    """ => provider
+    """
+    namespace unrelated
+    public value: -> Int => 1
+
+    """ => unrelated
     [mainSource, provider, unrelated; ~] -> context.prepare => before
     before -> expressions.resolveCallContext => resolved
     ["main.slg", "provider.slg", "other.slg"; ~] => paths
@@ -37,11 +51,20 @@ main {
     ["other.slg", "provider.slg", "main.slg"; ~] => currentPaths
     encoded.words -> generations.restore(current, currentPaths, identity, fingerprint) => restored
     restored.status == 0 -> println
-    "namespace stored.provider\npublic plus<T> value: T -> T { value }\n" => providerChanged
+    """
+    namespace stored.provider
+    public plus<T> value: T -> T { value }
+
+    """ => providerChanged
     [mainSource, providerChanged, unrelated; ~] -> context.prepare => changed
     encoded.words -> generations.restore(changed, paths, identity, fingerprint) => rejected
     (rejected.status == 14 and (rejected.calls -> len) == 0 and (rejected.owner.bindings -> len) == 0) -> println
-    [mainSource, provider, "namespace unrelated\npublic value: -> Int => 2\n"; ~] -> context.prepare => independent
+    [mainSource, provider,
+    """
+    namespace unrelated
+    public value: -> Int => 2
+
+    """; ~] -> context.prepare => independent
     encoded.words -> generations.restore(independent, paths, identity, fingerprint) => reused
     reused.status == 0 -> println
     generations.CompilationIdentity { compiler: 2, target: 2, configuration: 3 } => changedCompiler
@@ -94,21 +117,43 @@ main {
     [UInt8(0); 31] => shortFingerprint
     resolved.prepared -> generations.capture(resolved.types, paths, 0, identity, shortFingerprint) => invalidCapture
     (invalidCapture.status == 10 and (invalidCapture.words -> len) == 0) -> println
-    "namespace stored.provider\nprivatePart: -> Int => 1\n" => providerPart
+    """
+    namespace stored.provider
+    privatePart: -> Int => 1
+
+    """ => providerPart
     [mainSource, provider, providerPart, unrelated; ~] -> context.prepare => multi
     multi -> expressions.resolveCallContext => multiResolved
     ["main.slg", "provider.slg", "part.slg", "other.slg"; ~] => multiPaths
     multiResolved.prepared -> generations.capture(multiResolved.types, multiPaths, 0, identity, fingerprint) => multiEncoded
-    [mainSource, provider, "namespace stored.provider\nprivatePart: -> Int => 2\n", unrelated; ~] -> context.prepare => changedPart
+    [mainSource, provider,
+    """
+    namespace stored.provider
+    privatePart: -> Int => 2
+
+    """, unrelated; ~] -> context.prepare => changedPart
     multiEncoded.words -> generations.restore(changedPart, multiPaths, identity, fingerprint) => partRejected
     partRejected.status == 14 -> println
-    "import stored.provider as provider\nmain { provider.value() -> println }\n" => plainMain
-    "namespace stored.provider\npublic value: -> Int => 1\n" => plainProvider
+    """
+    import stored.provider as provider
+    main { provider.value() -> println }
+
+    """ => plainMain
+    """
+    namespace stored.provider
+    public value: -> Int => 1
+
+    """ => plainProvider
     [plainMain, plainProvider; ~] -> context.prepare => plain
     plain -> expressions.resolveCallContext => plainResolved
     ["main.slg", "provider.slg"; ~] => plainPaths
     plainResolved.prepared -> generations.capture(plainResolved.types, plainPaths, 0, identity, fingerprint) => plainEncoded
-    [plainMain, "namespace stored.provider\npublic value: -> Int => 2\n"; ~] -> context.prepare => plainChanged
+    [plainMain,
+    """
+    namespace stored.provider
+    public value: -> Int => 2
+
+    """; ~] -> context.prepare => plainChanged
     plainEncoded.words -> generations.restore(plainChanged, plainPaths, identity, fingerprint) => plainReused
     plainReused.status == 0 -> println
 }

@@ -15,7 +15,13 @@ nominal types: ref [typeIds.SemanticType; ~], symbol: Int -> Int {
 }
 
 main {
-    ["namespace cache.types\npublic struct Entry { public value: Int }\npublic entry: -> Entry => Entry { value: 1 }\n"; ~] -> analysis.analyze => before
+    [
+    """
+    namespace cache.types
+    public struct Entry { public value: Int }
+    public entry: -> Entry => Entry { value: 1 }
+
+    """; ~] -> analysis.analyze => before
     before -> modules.identitiesAnalyzed => beforeModules
     before -> interfaces.declarationIdentitiesAnalyzed(beforeModules) => keys
     before -> typeIds.resolveAnalyzed => oldTypes
@@ -26,7 +32,14 @@ main {
     recipes! -> push(typeIds.SemanticType { kind: 3, origin: -1, module: -1, symbol: -1, first: oldEntry, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
     recipes! -> push(typeIds.SemanticType { kind: 1, origin: 2, module: 0, symbol: 0, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: false, status: 0 })
 
-    ["namespace cache.types\nhidden: -> Int => 99\npublic struct Entry { public value: Int }\npublic entry: -> Entry => Entry { value: 2 }\n"; ~] -> analysis.analyze => after
+    [
+    """
+    namespace cache.types
+    hidden: -> Int => 99
+    public struct Entry { public value: Int }
+    public entry: -> Entry => Entry { value: 2 }
+
+    """; ~] -> analysis.analyze => after
     after -> modules.identitiesAnalyzed => afterModules
     after -> interfaces.declarationIdentitiesAnalyzed(afterModules) => current
     after -> typeIds.resolveAnalyzed => fresh
@@ -47,14 +60,29 @@ main {
     nestedPreserved -> println
     (fresh.types -> len) == freshCount -> println
 
-    ["namespace absent\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => absent
+    [
+    """
+    namespace absent
+    public struct Entry { public value: Int }
+
+    """; ~] -> analysis.analyze => absent
     absent -> modules.identitiesAnalyzed => absentModules
     absent -> interfaces.declarationIdentitiesAnalyzed(absentModules) => missingIndex
     recipes! -> artifacts.rebind(keys, missingIndex, fresh.types) => missing
     missing.status == 2 and (missing.types -> len) == 0 and (missing.typeIds -> len) == 0 => missingRejected
     missingRejected -> println
 
-    ["namespace cache.types\npublic struct Entry { public value: Int }\n","namespace cache.types\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => duplicate
+    [
+    """
+    namespace cache.types
+    public struct Entry { public value: Int }
+
+    """,
+    """
+    namespace cache.types
+    public struct Entry { public value: Int }
+
+    """; ~] -> analysis.analyze => duplicate
     duplicate -> modules.identitiesAnalyzed => duplicateModules
     duplicate -> interfaces.declarationIdentitiesAnalyzed(duplicateModules) => ambiguousIndex
     recipes! -> artifacts.rebind(keys, ambiguousIndex, fresh.types) => ambiguous

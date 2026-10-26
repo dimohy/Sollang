@@ -44,9 +44,23 @@ runChecks: -> Unit uses Console, File, Process {
     "$folder/staged.semantic" -> materialize(stageStorage!) => staged
     destination -> cache.load => cold
     (cold.status == 50 and (cold.words -> len) == 0) -> println
-    "import stored.provider as provider\nmain { provider.plus(UInt8(3)) => value\nvalue -> println\n}\n" => mainSource
-    "namespace stored.provider\npublic plus<T> value: T -> T => value\n" => provider
-    "namespace unrelated\npublic value: -> Int => 1\n" => other
+    """
+    import stored.provider as provider
+    main { provider.plus(UInt8(3)) => value
+    value -> println
+    }
+
+    """ => mainSource
+    """
+    namespace stored.provider
+    public plus<T> value: T -> T => value
+
+    """ => provider
+    """
+    namespace unrelated
+    public value: -> Int => 1
+
+    """ => other
     ["main.slg", "provider.slg", "other.slg"; ~] => paths
     generations.CompilationIdentity { compiler: 1, target: 2, configuration: 3 } => identity
     [mainSource, provider, other; ~] -> context.prepare => initial
@@ -67,7 +81,11 @@ runChecks: -> Unit uses Console, File, Process {
     destination -> cache.load => loaded
     staged -> cache.load => removedStage
     (loaded.status == 0 and removedStage.status == 50) -> println
-    "namespace unrelated\npublic value: -> Int => 2\n" => changedOther
+    """
+    namespace unrelated
+    public value: -> Int => 2
+
+    """ => changedOther
     [changedOther, provider, mainSource; ~] -> context.prepare => changed
     ["other.slg", "provider.slg", "main.slg"; ~] => changedPaths
     changed -> cache.resolve(loaded, changedPaths, identity) -> when {

@@ -25,9 +25,32 @@ binding package: ref analysis.PackageAnalysis, owner: ref facts.RestoredOwnerTyp
 }
 
 public verify: -> Unit uses Console {
-    "import cached.provider as provider\npeer: -> UInt8 => 3\nmain {\n    (true -> if { 1 } else { 2 }) + peer() => first\n    UInt16(4) => second\n    provider.value() => third\n    provider.Entry { value: 5 } => entry\n    (left: entry, right: first) => record\n    record.right -> println\n}\n" => mainSource
-    "namespace cached.provider\npublic struct Entry { public value: Int }\npublic value: -> Int => 1\n" => providerBefore
-    "namespace cached.provider\nhidden: -> Int => 99\npublic struct Entry { public value: Int }\npublic value: -> Int => 2\n" => providerAfter
+    """
+    import cached.provider as provider
+    peer: -> UInt8 => 3
+    main {
+        (true -> if { 1 } else { 2 }) + peer() => first
+        UInt16(4) => second
+        provider.value() => third
+        provider.Entry { value: 5 } => entry
+        (left: entry, right: first) => record
+        record.right -> println
+    }
+
+    """ => mainSource
+    """
+    namespace cached.provider
+    public struct Entry { public value: Int }
+    public value: -> Int => 1
+
+    """ => providerBefore
+    """
+    namespace cached.provider
+    hidden: -> Int => 99
+    public struct Entry { public value: Int }
+    public value: -> Int => 2
+
+    """ => providerAfter
     [mainSource, providerBefore; ~] -> context.prepare => before
     before -> expressions.resolveCallContext => resolved
     resolved.prepared -> facts.capture(resolved.types, 0) => encoded
@@ -56,7 +79,20 @@ public verify: -> Unit uses Console {
             -> if { true => numericValue! }
     }
     numericValue! -> println
-    "import cached.provider as provider\npeer: -> UInt8 => 3\nmain {\n    (true -> if { 1 } else { 2 }) + peer() => first\n    UInt16(4) => second\n    provider.value() => third\n    provider.Entry { value: 5 } => entry\n    (left: entry, right: first) => record\n    record.right -> println\n}\n# changed\n" => changedSource
+    """
+    import cached.provider as provider
+    peer: -> UInt8 => 3
+    main {
+        (true -> if { 1 } else { 2 }) + peer() => first
+        UInt16(4) => second
+        provider.value() => third
+        provider.Entry { value: 5 } => entry
+        (left: entry, right: first) => record
+        record.right -> println
+    }
+    # changed
+
+    """ => changedSource
     [providerAfter, changedSource; ~] -> context.prepare => changed
     encoded.words -> facts.restore(changed.package, changed.semantic) => rejectedOwner
     rejectedOwner.status == 2 and (rejectedOwner.bindings -> len) == 0 => changedRejected

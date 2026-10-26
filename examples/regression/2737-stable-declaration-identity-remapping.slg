@@ -27,14 +27,31 @@ forceLookupHashes hashes: mut [UInt64; ~], value: UInt64 -> Unit {
 }
 
 main {
-    ["namespace numeric_cache.provider\n\npublic struct Entry { public value: Int }\npublic struct Other { public marker: Int }\npublic entry: -> Entry => Entry { value: 1 }\n"; ~] -> analysis.analyze => original
+    [
+    """
+    namespace numeric_cache.provider
+
+    public struct Entry { public value: Int }
+    public struct Other { public marker: Int }
+    public entry: -> Entry => Entry { value: 1 }
+
+    """; ~] -> analysis.analyze => original
     original -> modules.identitiesAnalyzed => originalModules
     original -> namedSymbol(3, "Entry") => oldType
     original -> namedSymbol(7, "entry") => oldFunction
     original -> interfaces.declarationIdentityAnalyzed(originalModules, 0, oldType) => typeKey
     original -> interfaces.declarationIdentityAnalyzed(originalModules, 0, oldFunction) => functionKey
 
-    ["namespace numeric_cache.provider\n\nhidden: -> Int => 99\npublic struct Other { public marker: Int }\npublic struct Entry { public value: Int }\npublic entry: -> Entry => Entry { value: 2 }\n"; ~] -> analysis.analyze => reordered
+    [
+    """
+    namespace numeric_cache.provider
+
+    hidden: -> Int => 99
+    public struct Other { public marker: Int }
+    public struct Entry { public value: Int }
+    public entry: -> Entry => Entry { value: 2 }
+
+    """; ~] -> analysis.analyze => reordered
     reordered -> modules.identitiesAnalyzed => currentModules
     reordered -> interfaces.declarationIdentitiesAnalyzed(currentModules) => currentIndex!
     reordered -> namedSymbol(3, "Entry") => currentType
@@ -53,7 +70,17 @@ main {
     fullMatch.status == 0 and fullMatch.symbol == currentType => collisionRejected
     collisionRejected -> println
 
-    ["namespace identity.mmmmmmmmmmmmmmmmmmmmmmmm\npublic struct Entry { public value: Int }\n","namespace identity.nkllmlnlmpnjnmnmmomooioj\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => collisionPackage
+    [
+    """
+    namespace identity.mmmmmmmmmmmmmmmmmmmmmmmm
+    public struct Entry { public value: Int }
+
+    """,
+    """
+    namespace identity.nkllmlnlmpnjnmnmmomooioj
+    public struct Entry { public value: Int }
+
+    """; ~] -> analysis.analyze => collisionPackage
     collisionPackage -> modules.identitiesAnalyzed => collisionModules
     collisionPackage -> interfaces.declarationIdentitiesAnalyzed(collisionModules) => collisionIndex
     collisionPackage -> interfaces.declarationIdentityAnalyzed(collisionModules, 1, 0) => rightKey
@@ -62,20 +89,46 @@ main {
         and rightMatch.status == 0 and rightMatch.sourceModule == 1 => namespacePreserved
     namespacePreserved -> println
 
-    ["namespace numeric_cache.provider\n\npublic struct Entry { public value: Int }\npublic struct Other { public marker: Int }\npublic entry: -> Entry => Entry { value: 1 }\n","namespace numeric_cache.provider\n\npublic struct Entry { public value: Int }\npublic struct Other { public marker: Int }\npublic entry: -> Entry => Entry { value: 1 }\n"; ~] -> analysis.analyze => duplicate
+    [
+    """
+    namespace numeric_cache.provider
+
+    public struct Entry { public value: Int }
+    public struct Other { public marker: Int }
+    public entry: -> Entry => Entry { value: 1 }
+
+    """,
+    """
+    namespace numeric_cache.provider
+
+    public struct Entry { public value: Int }
+    public struct Other { public marker: Int }
+    public entry: -> Entry => Entry { value: 1 }
+
+    """; ~] -> analysis.analyze => duplicate
     duplicate -> modules.identitiesAnalyzed => duplicateModules
     duplicate -> interfaces.declarationIdentitiesAnalyzed(duplicateModules) => duplicateIndex
     duplicateIndex -> interfaces.findDeclarationIdentity(typeKey.words) => ambiguous
     ambiguous.status == 2 and ambiguous.sourceModule == -1 and ambiguous.symbol == -1 => ambiguityRejected
     ambiguityRejected -> println
 
-    ["namespace missing\npublic struct Entry { public value: Int }\n"; ~] -> analysis.analyze => absent
+    [
+    """
+    namespace missing
+    public struct Entry { public value: Int }
+
+    """; ~] -> analysis.analyze => absent
     absent -> modules.identitiesAnalyzed => absentModules
     absent -> interfaces.declarationIdentityAnalyzed(absentModules, 0, 0) => absentKey
     currentIndex! -> interfaces.findDeclarationIdentity(absentKey.words) => notFound
     notFound.status == 1 -> println
 
-    ["namespace 네임.모듈\npublic struct 이름 { public 값: Int }\n"; ~] -> analysis.analyze => unicodePackage
+    [
+    """
+    namespace 네임.모듈
+    public struct 이름 { public 값: Int }
+
+    """; ~] -> analysis.analyze => unicodePackage
     unicodePackage -> modules.identitiesAnalyzed => unicodeModules
     unicodePackage -> interfaces.declarationIdentitiesAnalyzed(unicodeModules) => unicodeIndex
     unicodePackage -> interfaces.declarationIdentityAnalyzed(unicodeModules, 0, 0) => unicodeKey

@@ -14,16 +14,45 @@ pathStatus sources: [Text; ~], expectedPath: Text -> Int {
 }
 
 main {
-    "import stored.header as provider\nmain { provider.Item.count() -> println }\n" => caller
-    "namespace stored . header\npublic struct Item {}\n" => owner
-    "namespace stored.header\nimpl Item { public count: -> Int => 7 }\n" => method
+    """
+    import stored.header as provider
+    main { provider.Item.count() -> println }
+
+    """ => caller
+    """
+    namespace stored . header
+    public struct Item {}
+
+    """ => owner
+    """
+    namespace stored.header
+    impl Item { public count: -> Int => 7 }
+
+    """ => method
     pathStatus([caller, owner, method; ~], "provider.Item.count") -> println
-    "namespace stored . header\nstruct Item {}\n" => privateOwner
+    """
+    namespace stored . header
+    struct Item {}
+
+    """ => privateOwner
     pathStatus([caller, privateOwner, method; ~], "provider.Item.count") -> println
-    "namespace stored.header\nimpl Item { count: -> Int => 7 }\n" => privateMethod
+    """
+    namespace stored.header
+    impl Item { count: -> Int => 7 }
+
+    """ => privateMethod
     pathStatus([caller, owner, privateMethod; ~], "provider.Item.count") -> println
-    "namespace stored . header\nmain { stored.header.Item.count() -> println }\n" => sameModuleCaller
+    """
+    namespace stored . header
+    main { stored.header.Item.count() -> println }
+
+    """ => sameModuleCaller
     pathStatus([sameModuleCaller, privateOwner, privateMethod; ~], "stored.header.Item.count") -> println
-    "namespace stored.other\npublic struct Item {}\nimpl Item { public count: -> Int => 7 }\n" => foreignMethod
+    """
+    namespace stored.other
+    public struct Item {}
+    impl Item { public count: -> Int => 7 }
+
+    """ => foreignMethod
     pathStatus([caller, owner, foreignMethod; ~], "provider.Item.count") -> println
 }

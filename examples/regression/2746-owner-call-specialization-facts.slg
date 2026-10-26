@@ -15,9 +15,29 @@ referenceEnd words: ref [UInt64; ~], start: Int -> Int {
 
 main {
     checks.verify()
-    "import cached.calls as provider\nmain {\n    provider.plus(UInt8(3)) => first\n    provider.plus(UInt16(4)) => second\n    provider.value() => third\n    first -> println\n}\n" => mainSource
-    "namespace cached.calls\npublic plus<T> value: T -> T => value\npublic value: -> Int => 1\n" => providerBefore
-    "namespace cached.calls\nhidden: -> Int => 99\npublic plus<T> value: T -> T { value }\npublic value: -> Int => 2\n" => providerAfter
+    """
+    import cached.calls as provider
+    main {
+        provider.plus(UInt8(3)) => first
+        provider.plus(UInt16(4)) => second
+        provider.value() => third
+        first -> println
+    }
+
+    """ => mainSource
+    """
+    namespace cached.calls
+    public plus<T> value: T -> T => value
+    public value: -> Int => 1
+
+    """ => providerBefore
+    """
+    namespace cached.calls
+    hidden: -> Int => 99
+    public plus<T> value: T -> T { value }
+    public value: -> Int => 2
+
+    """ => providerAfter
     [mainSource, providerBefore; ~] -> context.prepare => before
     before -> expressions.resolveCallContext => resolved
     resolved.prepared -> facts.capture(resolved.types, 0) => encoded
@@ -103,7 +123,12 @@ main {
     badOrdinal! -> facts.restore(current.package, current.semantic) => invalidOrdinal
     invalidOrdinal.status != 0 and (invalidOrdinal.arguments -> len) == 0 => ordinalRejected
     ordinalRejected -> println
-    [mainSource, "namespace cached.calls\npublic value: -> Int => 2\n"; ~] -> context.prepare => missing
+    [mainSource,
+    """
+    namespace cached.calls
+    public value: -> Int => 2
+
+    """; ~] -> context.prepare => missing
     encoded.words -> facts.restore(missing.package, missing.semantic) => missingFunction
     missingFunction.status != 0 and (missingFunction.owner.bindings -> len) == 0 => missingRejected
     missingRejected -> println

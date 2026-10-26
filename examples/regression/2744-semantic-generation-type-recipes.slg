@@ -62,7 +62,25 @@ sameWords left: ref [UInt64; ~], right: ref [UInt64; ~] -> Bool {
 }
 
 main {
-    ["namespace cache.recipes.a\npublic struct Entry { public value: Int }\nimpl Entry { public first: self -> Int => self.value }\nimpl Entry { public second: self -> Int => self.value }\nmain {\n    (left: Entry { value: 1 }, rght: 2) => first\n    (xxxx: Entry { value: 3 }, yyyy: 4) => second\n    first.rght -> println\n    second.yyyy -> println\n}\n", "namespace cache.recipes.b\npublic struct Other { public marker: Int }\n"; ~] => beforeSources
+    [
+    """
+    namespace cache.recipes.a
+    public struct Entry { public value: Int }
+    impl Entry { public first: self -> Int => self.value }
+    impl Entry { public second: self -> Int => self.value }
+    main {
+        (left: Entry { value: 1 }, rght: 2) => first
+        (xxxx: Entry { value: 3 }, yyyy: 4) => second
+        first.rght -> println
+        second.yyyy -> println
+    }
+
+    """,
+    """
+    namespace cache.recipes.b
+    public struct Other { public marker: Int }
+
+    """; ~] => beforeSources
     beforeSources -> context.prepare => before
     before -> expressions.resolveContext => finalTypes
     before.package -> modules.identitiesAnalyzed => beforeModules
@@ -79,7 +97,26 @@ main {
     encoded.status == 0 and decoded.status == 0 and (decoded.types -> len) == (finalTypes.types -> len) => valid
     valid -> println
 
-    ["namespace cache.recipes.b\npublic struct Other { public marker: Int }\n", "namespace cache.recipes.a\nhidden: -> Int => 9\npublic struct Entry { public value: Int }\nimpl Entry { public first: self -> Int => self.value }\nimpl Entry { public second: self -> Int => self.value }\nmain {\n    (left: Entry { value: 5 }, rght: 6) => first\n    (xxxx: Entry { value: 7 }, yyyy: 8) => second\n    first.rght -> println\n    second.yyyy -> println\n}\n"; ~] => afterSources
+    [
+    """
+    namespace cache.recipes.b
+    public struct Other { public marker: Int }
+
+    """,
+    """
+    namespace cache.recipes.a
+    hidden: -> Int => 9
+    public struct Entry { public value: Int }
+    impl Entry { public first: self -> Int => self.value }
+    impl Entry { public second: self -> Int => self.value }
+    main {
+        (left: Entry { value: 5 }, rght: 6) => first
+        (xxxx: Entry { value: 7 }, yyyy: 8) => second
+        first.rght -> println
+        second.yyyy -> println
+    }
+
+    """; ~] => afterSources
     afterSources -> context.prepare => after
     after.package -> modules.identitiesAnalyzed => afterModules
     after.package -> interfaces.declarationIdentitiesAnalyzed(afterModules) => currentKeys
