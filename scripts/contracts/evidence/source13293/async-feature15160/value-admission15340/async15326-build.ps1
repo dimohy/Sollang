@@ -1,0 +1,4 @@
+$ErrorActionPreference = 'Stop'
+$base = Join-Path (Get-Location).Path 'artifacts/scratch/resume-20261006-owner-continuation22'
+& ./scripts/build-focused-selfhost-compiler.ps1 -SeedCompiler (Join-Path $base 'managed15302/compiler/Sollang.Compiler.exe') -OutputDirectory (Join-Path $base 'v15325/compiler-build01') -Optimization O2 -Jobs 4 -FormatCompiler (Join-Path $base 'v12432/compiler-build01/compiler.exe') -ReusableCompilerDirectories @((Join-Path $base 'v12432/compiler-build01'), (Join-Path $base 'v14775/compiler-build01')) -ManagedProofRecord @((Join-Path $base 'async15320-semantic/result.json'), (Join-Path $base 'async15307-managed7/result.json'), (Join-Path $base 'async15303-value-managed5/result.json'), (Join-Path $base 'async15321-callers-managed2/result.json'), (Join-Path $base 'async15306-regressions-managed2/result.json')) -StdlibSourceProofRecord (Join-Path $base 'async15318-stdlib/result.json')
+if (-not $?) { throw 'Current Native build failed' }

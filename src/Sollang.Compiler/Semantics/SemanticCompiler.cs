@@ -1221,17 +1221,15 @@ internal sealed partial class SemanticCompiler
             && function.IsIntrinsic
             && IsAsyncRuntimeIntrinsicKind(kind);
         if (function.IsAsync
-            && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
-                || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
-                || (!isAsyncRuntimeIntrinsic && additionalParameters.Any(parameter =>
-                    !IsAsyncInputTypeSupported(parameter.Type, parameter.Ownership)))
+            && ((!isAsyncRuntimeIntrinsic && !IsAsyncSignatureTypeSupported(
+                    inputType, inputOwnership, returnType, additionalParameters))
                 || isLocal
                 || (function.IsIntrinsic && !isAsyncRuntimeIntrinsic)))
         {
             throw Error(
                 function.Line,
                 function.Column,
-                "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
+                AsyncSignatureRequirement);
         }
         if (kind == BoundFunctionKind.Native && function.Com is null)
         {
@@ -14300,6 +14298,10 @@ internal sealed partial class SemanticCompiler
                 AdditionalParameters = SpecializeValueGenericAdditionalParameters(
                     template, valueArgument.Value)
             };
+            // A deferred value-generic declaration has no concrete input type.
+            // Check its actual signature for cold binding and cache restoration,
+            // including the path that deliberately skips body revalidation.
+            ValidateConcreteAsyncSignature(specialization);
             _boundFunctions.Add(specializedName, specialization);
             if (validateSpecialization
                 && specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
@@ -17271,6 +17273,30 @@ internal sealed partial class SemanticCompiler
     private bool IsAsyncResultTypeSupported(BoundType type)
     {
         return type == BoundType.Unit || IsAsyncValueTypeSupported(type);
+    }
+
+    private const string AsyncSignatureRequirement =
+        "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move";
+
+    private bool IsAsyncSignatureTypeSupported(
+        BoundType? inputType,
+        BoundFunctionInputOwnership inputOwnership,
+        BoundType returnType,
+        IReadOnlyList<BoundFunctionParameter> additionalParameters) =>
+        IsAsyncResultTypeSupported(returnType)
+        && IsAsyncInputTypeSupported(inputType, inputOwnership)
+        && additionalParameters.All(parameter =>
+            IsAsyncInputTypeSupported(parameter.Type, parameter.Ownership));
+
+    private void ValidateConcreteAsyncSignature(BoundFunction function)
+    {
+        var isRuntimeIntrinsic = function.IsStandardLibrary && IsAsyncRuntimeIntrinsicKind(function.Kind);
+        if (function.IsAsync && !isRuntimeIntrinsic && !IsAsyncSignatureTypeSupported(
+                function.InputType, function.InputOwnership, function.ReturnType,
+                function.AdditionalParameters ?? []))
+        {
+            throw ErrorAtModule(function.Line, function.Column, function.ModuleName, AsyncSignatureRequirement);
+        }
     }
 
     private bool IsAsyncInputTypeSupported(

@@ -1739,6 +1739,66 @@ firstPreparedAsyncDeclarationDiagnostic prepared: ref semanticContext.SemanticSn
     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
 }
 
+concreteAsyncCallerIsDeferred prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~], instance: typedIr.GenericFunctionInstance -> Bool {
+    instance.ownerFunction => owner!
+    instance.callNode >= 0 and instance.callNode < (ir -> len)
+        -> if {
+            ir[instance.callNode].parent => owner!
+            0 => depth!
+            owner! >= 0 and owner! < (ir -> len) and depth! < (ir -> len)
+                and ir[owner!].kind != 0 and ir[owner!].kind != 11
+                -> while {
+                    ir[owner!].parent => owner!
+                    depth! + 1 => depth!
+                }
+        }
+    owner! < 0 or owner! >= (ir -> len) or ir[owner!].kind != 0
+        -> if { false -> return }
+    instances -> each concrete {
+        concrete.status == 0 and concrete.functionNode == owner!
+            -> if { false -> return }
+    }
+    (ir -> typedIr.functionSignatureContainsParameter(resolved.types, owner!))
+        or (ir[owner!] -> typedIr.functionDeclaresGenericParameters(prepared.package.ranges, prepared.package.symbols))
+}
+
+# A deferred declaration cannot decide ownership of its concrete arguments.
+# Enforce the existing async move rule after substitution, also when resolved
+# semantic facts came from cache. Unused template bodies remain deferred.
+public firstConcreteAsyncOwnedInputDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~] -> SignatureTypeDiagnostic {
+    instances -> each instance {
+        instance.status == 0 and instance.functionNode >= 0 and instance.functionNode < (ir -> len)
+            -> if {
+                ir[instance.functionNode] => function
+                function.flags / 8 % 2 == 1 and function.flags / 128 % 2 == 0
+                    and function.sourceModule >= 0 and function.sourceModule < (prepared.package.ranges -> len)
+                    and not (prepared -> concreteAsyncCallerIsDeferred(resolved, ir, instances, instance))
+                    -> if {
+                        prepared.package.ranges[function.sourceModule] => range
+                        function.symbol >= 0 and function.symbol < range.symbolCount
+                            -> if {
+                                prepared.package.symbols[range.symbolStart + function.symbol] => declaration
+                                function.operand1 => parameterIndex!
+                                0 => ordinal!
+                                parameterIndex! >= 0 and parameterIndex! < (ir -> len) and ordinal! < (ir -> len)
+                                    -> while {
+                                        ir[parameterIndex!] => parameter
+                                        parameter.typeId < 0 or parameter.typeId >= (resolved.types -> len)
+                                            or (parameter.flags % 2 == 0
+                                            and (prepared -> semanticContext.typeContainsOwnedStorageWithFields(resolved.types, resolved.fields, parameter.typeId)))
+                                            -> if {
+                                                SignatureTypeDiagnostic { code: 23, sourceModule: function.sourceModule, functionSymbol: function.symbol, typeAst: declaration.astNode, nameToken: declaration.nameToken, genericToken: -1 } -> return
+                                            }
+                                        ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
+                                        ordinal! + 1 => ordinal!
+                                    }
+                            }
+                    }
+            }
+    }
+    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+}
+
 public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
     prepared -> firstPreparedNominalSignatureDiagnostic => nominalDiagnostic
     # Import ambiguity is a path-resolution error before semantic admission.

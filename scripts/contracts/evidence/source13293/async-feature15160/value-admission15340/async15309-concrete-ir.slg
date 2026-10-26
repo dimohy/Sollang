@@ -1,0 +1,125 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+
+main {
+    """"
+    work<N> values: [Int; N] -> async Int where N: Int {
+        values -> len
+    }
+
+    main {
+        [1, 2] => values
+        values -> work<2> => pending
+        pending -> await -> println
+    }
+    """" => source0
+    [source0,; ~] -> semanticContext.prepare => prepared0
+    prepared0 -> expressionTypeIds.resolveContext => resolved0!
+    prepared0 -> typedIr.lowerResolvedContext(resolved0!) => ir0!
+    ir0! -> typedIr.materializeGenericClosure(prepared0, resolved0!) => instances0
+    prepared0 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved0!, ir0!, instances0) => diagnostic0
+    "case0=$(diagnostic0.code)" -> println
+    """"
+    work<N> value: Int, values: [Int; N] -> async Int where N: Int {
+        values -> len
+    }
+
+    main {
+        [1, 2] => values
+        0 -> work<2>(values) => pending
+        pending -> await -> println
+    }
+    """" => source1
+    [source1,; ~] -> semanticContext.prepare => prepared1
+    prepared1 -> expressionTypeIds.resolveContext => resolved1!
+    prepared1 -> typedIr.lowerResolvedContext(resolved1!) => ir1!
+    ir1! -> typedIr.materializeGenericClosure(prepared1, resolved1!) => instances1
+    prepared1 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved1!, ir1!, instances1) => diagnostic1
+    "case1=$(diagnostic1.code)" -> println
+    """"
+    work<N, T> values: [T; N] -> async Int where N: Int {
+        values -> len
+    }
+
+    main { }
+    """" => source2
+    [source2,; ~] -> semanticContext.prepare => prepared2
+    prepared2 -> expressionTypeIds.resolveContext => resolved2!
+    prepared2 -> typedIr.lowerResolvedContext(resolved2!) => ir2!
+    ir2! -> typedIr.materializeGenericClosure(prepared2, resolved2!) => instances2
+    prepared2 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved2!, ir2!, instances2) => diagnostic2
+    "case2=$(diagnostic2.code)" -> println
+    """"
+    work<N> values: [Int; N] -> Int where N: Int {
+        values -> len
+    }
+
+    main {
+        [1, 2] => values
+        values -> work<2> -> println
+    }
+    """" => source3
+    [source3,; ~] -> semanticContext.prepare => prepared3
+    prepared3 -> expressionTypeIds.resolveContext => resolved3!
+    prepared3 -> typedIr.lowerResolvedContext(resolved3!) => ir3!
+    ir3! -> typedIr.materializeGenericClosure(prepared3, resolved3!) => instances3
+    prepared3 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved3!, ir3!, instances3) => diagnostic3
+    "case3=$(diagnostic3.code)" -> println
+    """"
+    work<N> value: Int -> async Int where N: Int {
+        yield
+        value
+    }
+
+    main {
+        5 -> work<2> => pending
+        pending -> await -> println
+    }
+    """" => source4
+    [source4,; ~] -> semanticContext.prepare => prepared4
+    prepared4 -> expressionTypeIds.resolveContext => resolved4!
+    prepared4 -> typedIr.lowerResolvedContext(resolved4!) => ir4!
+    ir4! -> typedIr.materializeGenericClosure(prepared4, resolved4!) => instances4
+    prepared4 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved4!, ir4!, instances4) => diagnostic4
+    "case4=$(diagnostic4.code)" -> println
+    """"
+    work<N> values: [Int; N] -> async Int where N: Int {
+        values -> len
+    }
+
+    outer<T> value: T -> Int {
+        [1, 2] => values
+        values -> work<2> => pending
+        1
+    }
+
+    main { }
+    """" => source5
+    [source5,; ~] -> semanticContext.prepare => prepared5
+    prepared5 -> expressionTypeIds.resolveContext => resolved5!
+    prepared5 -> typedIr.lowerResolvedContext(resolved5!) => ir5!
+    ir5! -> typedIr.materializeGenericClosure(prepared5, resolved5!) => instances5
+    prepared5 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved5!, ir5!, instances5) => diagnostic5
+    "case5=$(diagnostic5.code)" -> println
+    """"
+    work<N> values: [Int; N] -> async Int where N: Int {
+        values -> len
+    }
+
+    outer<T> value: T -> Int {
+        [1, 2] => values
+        values -> work<2> => pending
+        1
+    }
+
+    main { 0 -> outer<Int> -> println }
+    """" => source6
+    [source6,; ~] -> semanticContext.prepare => prepared6
+    prepared6 -> expressionTypeIds.resolveContext => resolved6!
+    prepared6 -> typedIr.lowerResolvedContext(resolved6!) => ir6!
+    ir6! -> typedIr.materializeGenericClosure(prepared6, resolved6!) => instances6
+    prepared6 -> semanticDiagnostics.firstConcreteAsyncOwnedInputDiagnostic(resolved6!, ir6!, instances6) => diagnostic6
+    "case6=$(diagnostic6.code)" -> println
+}
