@@ -52,4 +52,34 @@ try { & $verifier -CollectStaticAssertionFailures } catch {
 }
 if (-not $rejected) { throw 'Collection mode entered full verification' }
 $completed++
-@{ status = 'passed'; completed = $completed; total = 16; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true } | ConvertTo-Json
+
+function Test-StaticExecutionOrder([Management.Automation.Language.ScriptBlockAst]$Ast) {
+    $aggregation = @($Ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.IfStatementAst] -and
+        $node.Extent.Text.StartsWith('if ($staticAssertionFailures.Count -gt 0)')
+    }, $true))
+    if ($aggregation.Count -ne 1) { return $false }
+    $boundary = $aggregation[0].Extent.StartOffset
+    $commands = @($Ast.FindAll({ param($node)
+        $node -is [Management.Automation.Language.CommandAst]
+    }, $true))
+    $lateAssertions = @($commands | Where-Object {
+        $_.GetCommandName() -in $names -and $_.Extent.StartOffset -gt $boundary
+    })
+    $earlyChildren = @($commands | Where-Object {
+        $_.GetCommandName() -eq 'Invoke-CheckedContract' -and $_.Extent.StartOffset -lt $boundary
+    })
+    return $lateAssertions.Count -eq 0 -and $earlyChildren.Count -eq 0
+}
+if (-not (Test-StaticExecutionOrder $tree)) { throw 'Source assertions must finish before child contracts and success output' }
+$completed++
+$source = [IO.File]::ReadAllText($verifier)
+$earlyChildSource = $source.Insert($tree.ParamBlock.Extent.EndOffset, "`nInvoke-CheckedContract -Name 'must-not-run.ps1'`n")
+$earlyChildTree = [Management.Automation.Language.Parser]::ParseInput($earlyChildSource, [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0 -or (Test-StaticExecutionOrder $earlyChildTree)) { throw 'Early child execution was not rejected' }
+$completed++
+$lateAssertionTree = [Management.Automation.Language.Parser]::ParseInput(
+    $source + "`nAssert-Contains 'input' 'missing' 'late assertion'`n", [ref]$tokens, [ref]$parseErrors)
+if ($parseErrors.Count -ne 0 -or (Test-StaticExecutionOrder $lateAssertionTree)) { throw 'Assertion after the final failure gate was not rejected' }
+$completed++
+@{ status = 'passed'; completed = $completed; total = 19; defaultFailuresRejected = 5; collectedFailures = 5; fullModeRejected = $true; executionOrderControls = 3 } | ConvertTo-Json

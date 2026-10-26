@@ -29,94 +29,6 @@ function Invoke-CheckedContract {
     }
 }
 
-if (-not $StaticAssertionsOnly) {
-$childFailureRejected = $false
-try {
-    Invoke-CheckedContract `
-        -Name "contracts\fixtures\detached-verification-probe.ps1" `
-        -Parameters @{ Outcome = "Fail" } *> $null
-} catch {
-    if ($_.Exception.Message -eq "Self-host compiler child contract failed: contracts\fixtures\detached-verification-probe.ps1") {
-        $childFailureRejected = $true
-    } else {
-        throw
-    }
-}
-if (-not $childFailureRejected) {
-    throw "Self-host compiler child contract failure was not propagated"
-}
-
-$repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
-Invoke-CheckedContract -Name "verify-formal-exact-source-closures.ps1" -Parameters $repositoryParameters
-foreach ($name in @(
-    "verify-ai-slg-best-practices.ps1"
-    "verify-focused-slg-format.ps1"
-    "verify-llvm-no-allocation-audit.ps1"
-    "verify-process-child-try-wait-contract.ps1"
-    "verify-process-child-kill-contract.ps1"
-    "verify-async-result-propagation-contract.ps1"
-    "verify-async-owned-array-cancellation-contract.ps1"
-    "verify-portable-memory-io-contract.ps1"
-    "verify-project-progress.ps1"
-    "verify-http-server-contract.ps1"
-    "verify-socket-datagram-contract.ps1"
-    "verify-socket-vectored-contract.ps1"
-    "verify-socket-try-clone-contract.ps1"
-    "verify-socket-reactor-contract.ps1"
-    "verify-struct-field-migration.ps1"
-    "verify-uri-normalization-contract.ps1"
-    "verify-expression-lowering-parity.ps1"
-)) {
-    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
-}
-Invoke-CheckedContract -Name "verify-native-exact-source-closure-contract.ps1"
-
-# Execute small production-method and focused-source probes before the
-# expensive compiler build. These never rebuild the compiler itself.
-if ($IsWindows) {
-    Invoke-CheckedContract -Name "verify-mapped-layout-traits.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-mapped-resize-failure.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-utf8-each-runtime.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-contextual-integer-literals.ps1"
-    Invoke-CheckedContract -Name "verify-generic-type-contexts.ps1" -Parameters @{ RepositoryRoot = $RepositoryRoot; TypeDelimiters = $true; ReadonlyTextSlice = $true }
-    Invoke-CheckedContract -Name "verify-borrowed-source-text-return-carriers.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-deferred-text-storage.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-source-text-borrowed-drop.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-c401-known-borrowed-source-text-drop.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-parallel-source-text-cleanup.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-parallel-mapped-source-consumer.ps1" -Parameters $repositoryParameters
-    Invoke-CheckedContract -Name "verify-text-glob-focused.ps1" -Parameters $repositoryParameters
-}
-
-$RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
-Invoke-CheckedContract -Name "update-llvm-emitter-module-manifests.ps1" -Parameters @{ Mode = "Check" }
-foreach ($name in @(
-    "verify-selfhost-fragment-manifests.ps1"
-    "verify-selfhost-source-structure.ps1"
-    "verify-llvm-emitter-modules.ps1"
-    "verify-input-fingerprint-stability-contract.ps1"
-    "verify-verified-stage3-install-contract.ps1"
-    "verify-browser-stage2-input-fingerprint-contract.ps1"
-)) {
-    Invoke-CheckedContract -Name $name
-}
-if ([string]::IsNullOrWhiteSpace($LlvmEmitterSplitAbiOutputDirectory)) {
-    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1"
-} else {
-    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1" -Parameters @{
-        OutputDirectory = $LlvmEmitterSplitAbiOutputDirectory
-    }
-}
-foreach ($name in @(
-    "verify-selfhost-llvm-function-diff.ps1"
-    "verify-selfhost-stage3-seed-provenance.ps1"
-    "verify-quic-stream-api-contract.ps1"
-    "verify-cpu-target-contract.ps1"
-)) {
-    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
-}
-}
-
 $RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
 
 function Register-StaticAssertionFailure {
@@ -1060,9 +972,15 @@ Assert-Contains $containers "ownedMove.regionIr == request.regionIndex or (owned
 Assert-Contains $containers "partialMoveActiveBefore(ownedMove.regionIr, request.beforeAst, context, state)" "nested early-return partial-move cleanup region"
 Assert-NotContains $containers "partialMoveActiveBefore(request.regionIndex, request.beforeAst, context, state)" "outer-region partial-move cleanup regression"
 Assert-Contains $ownership "emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int" "drop glue explicit cleanup-edge identity"
-Assert-Matches $functionExpressions '(?s)emittedFieldIndex -> promotedFixedArrayCall\(context, state\) => fieldBackingCall\s+fieldBackingCall >= 0 -> if \{\s+fieldBackingCall -> emitPromotedFixedBackingDrop\(expressionIndex\)' "function field materialization drops only fresh promoted fixed backing"
-Assert-Matches $controlRegions '(?s)regionEmittedFieldIndex -> promotedFixedArrayCall\(context, state\) => regionFieldBackingCall\s+regionFieldBackingCall >= 0 -> if \{\s+regionFieldBackingCall -> emitPromotedFixedBackingDrop\(regionNodeIndex\)' "control-region field materialization drops only fresh promoted fixed backing"
-Assert-Matches $entryExpressions '(?s)entryEmittedFieldIndex -> promotedFixedArrayCall\(context, state\) => entryFieldBackingCall\s+entryFieldBackingCall >= 0 -> if \{\s+entryFieldBackingCall -> emitPromotedFixedBackingDrop\(entryExpressionIndex\)' "entry field materialization drops only fresh promoted fixed backing"
+Assert-Matches $functionExpressions '(?s)targetFieldTypeId! >= 0 and context.types\[targetFieldTypeId!\].kind == 4.*?context.typeTraits\[context.types\[targetFieldTypeId!\].first\] % 2 == 0.*?emittedFieldValue.kind == 5 or copyProjectedFixedField.*?true => copyNamedFixedField!' "ordinary aggregate fields copy only named copyable fixed storage"
+Assert-NotContains $functionExpressions 'emitPromotedFixedBackingDrop' "ordinary aggregate fields transfer fresh backing without an immediate drop"
+Assert-Contains $controlRegions 'regionNodeIndex -> aggregateFieldCopiesFixedStorage(regionEmittedFieldIndex, regionFieldPosition!, context, state)' "control aggregate fields use canonical fixed-storage copy admission"
+Assert-NotContains $controlRegions 'emitPromotedFixedBackingDrop' "control aggregate fields retain fresh backing for owner cleanup"
+Assert-Contains $entryExpressions 'entryExpressionIndex -> aggregateFieldCopiesFixedStorage(entryEmittedFieldIndex, entryFieldPosition!, context, state)' "entry aggregate fields use canonical fixed-storage copy admission"
+Assert-NotContains $entryExpressions 'emitPromotedFixedBackingDrop' "entry aggregate fields retain fresh backing for owner cleanup"
+Assert-Matches $ownership '(?s)aggregateFieldCopiesFixedStorage aggregateIndex:.*?context.ir\[sourceIndex\].kind == 5 or \(sourceIndex -> namedStructFieldProjection\(context\)\).*?unless \{ false -> return \}.*?targetType.kind == 4.*?context.typeTraits\[targetType.first\] % 2 == 0' "shared aggregate field copy admission excludes fresh temporaries and affine elements"
+Assert-Matches $functionReturns '(?s)dropBackingCall >= 0 and dropCandidateInitialized!.*?not dropCandidateMoved!.*?dropBackingCall != returnedBackingSource.*?returnedOwnedBindingRoot < 0 or returnedOwnedBindingRoot != dropCandidateRoot!.*?emitPromotedFixedBackingDrop' "function cleanup drops retained promoted backing only after transfer exclusions"
+Assert-Matches $containers '(?s)ownedBackingValue! >= 0 and ownedDropBeforeEdge! and not ownedFixedBackingReleased!.*?not ownedDropMoved!.*?ownedBackingValue! != ownedTransferredBacking!.*?not fixedBackingTransferred!.*?ownedBackingValue! -> emitPromotedFixedBackingDrop' "region cleanup drops retained backing only after exact transfer and release exclusions"
 Assert-MatchCount $functionReturns '(?m)^\s+context\.types\[dropCandidate\.typeId\]\.kind == 4\s*$' 2 "function-return cleanup fixed-array inline ABI guards"
 Assert-MatchCount $containers '(?m)^\s+and context\.types\[context\.ir\[ownedDropEdgeNode\]\.typeId\]\.kind == 4\s*$' 1 "control-edge cleanup fixed-array inline ABI guard"
 Assert-MatchCount $containers 'ownedDropCandidate\.typeId < \(context\.types -> len\) and context\.types\[ownedDropCandidate\.typeId\]\.kind == 4' 2 "control-binding cleanup checks bounded type identity at root and drop admission"
@@ -1239,7 +1157,7 @@ Assert-Matches $typedResolvedContextFinalize '(?s)currentLeftAst\.start >= binar
 Assert-Contains $typedResolvedContextFinalize 'nodes -> sealFinalBinaryOperandTopology(prepared)' "final binary topology seals before contextual numeric literals"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealEachRoleTypes\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+# Final return convergence.*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology' "final return convergence seals each-role types before nominal fields and arithmetic topology"
 Assert-Contains $typedCore 'call result -> binding/read -> member -> method' "late mutable receiver dependency closure"
-Assert-Matches $typedFunctionLowering '(?s)returnedEnumExistingResult\.parent == returnedEnumRegionIndex!.*?returnedEnumExistingResult\.typeId == returnedEnumReturn!\.typeId.*?3 => returnedEnumArmResultRank!.*?returnedEnumCandidateRank! > returnedEnumArmResultRank!' "returned enum arms preserve an exact direct terminal ahead of nested same-typed candidates"
+Assert-Matches $typedFunctionLowering '(?s)returnedEnumExistingResult.parent == returnedEnumRegionIndex!.*?returnedEnumExistingResult.kind != 23.*?returnedEnumExistingResultIndex => returnedEnumArmResult!.*?3 => returnedEnumArmResultRank!.*?returnedEnumCandidateRank! > 0 and returnedEnumCandidate.typeId == returnedEnumReturn!.typeId.*?returnedEnumCandidateRank! > returnedEnumArmResultRank!' "returned enum arms preserve the linked terminal ahead of same-typed nested candidates"
 Assert-Matches $typedFunctionLowering '(?s)repairReturnedEnumMatchResults results:.*?results\[returnedEnumMatch!\.parent\]\.kind == 1.*?results\[returnedEnumMatch!\.parent\]\.operand0 == returnedEnumMatchRepairIndex!.*?results\[returnedEnumMatch!\.parent\]\.typeId >= 0' "returned enum repair mutates only the match already selected by its exact return owner"
 Assert-MatchCount $typedResolvedContextFinalize 'nodes -> sealFinalProjectedMatchSubjectsAndPayloads' 5 "projected enum subject and payload sealing runs at every bounded projected-method producer boundary"
 Assert-Contains $typedCore '(finalPatternSubject!.kind == 27 or finalPatternSubject!.kind == 34)' "nested enum and subject when share canonical arm-payload repair"
@@ -1849,7 +1767,7 @@ Assert-Contains $emitterDiagnostics 'collectionTraitMethodFunction("Hash", "hash
 Assert-Contains $emitterDiagnostics 'collectionTraitMethodFunction("Eq", "eq", functionBySymbol!, context)' "reachable collection Eq edge"
 Assert-Contains $emitterDiagnostics 'keyTypeId -> traitMethodSymbol(traitName, methodName, context)' "collection trait resolver edge"
 Assert-Contains $coreCalls "diagnostics.traitMethodSymbol" "LLVM implicit trait resolver consumer"
-Assert-Contains $emitterDiagnostics "instanceInterpolation.kind == 8 or instanceInterpolation.kind == 10" "resolved and deferred interpolation call-graph edges"
+Assert-Matches $emitterDiagnostics '(?s)interpolation.kind == 8 or interpolation.kind == 10.*?interpolation.sourceToken == use.payloadToken.*?emitterContext.interpolationFunctionForOwner\(ownerIndex!, interpolationNodeIndex\).*?true => reachable!\[interpolationTarget\]' "resolved and deferred interpolation reachability uses the exact owner and source token"
 Assert-Contains $emitterDiagnostics "interpolationFormatterTypeDeferred" "deferred interpolation scalar formatter capability"
 Assert-Contains $emitterDiagnostics "kind == 5 or kind == 7 or kind == 8 or kind == 10" "member, index, and source-call interpolation formatter coverage"
 Assert-Contains $foundation "diagnostics.interpolationCallNameMatches" "canonical interpolation call-name resolver consumer"
@@ -1943,7 +1861,7 @@ Assert-Contains $semanticContext "current.first >= 0 -> if { pending! -> push(cu
 Assert-Contains $semanticOwnership 'prepared -> semanticContext.typeContainsOwnedStorage(types, typeId)' "ownership analysis uses the canonical semantic ownership query"
 Assert-Contains $typed 'prepared -> semanticContext.typeContainsOwnedStorage(types, value.typeId)' "Typed IR moves use the canonical semantic ownership query"
 Assert-Contains $semanticOwnership 'not referenceBorrowUsedAfterMutation! -> if {' "E23 index/call mutation falls back to field-sensitive carrier liveness"
-Assert-Contains $semanticOwnership 'prepared -> borrowedBindingUsedAfterSite(typed, referenceBindingIndex!, referenceMutationIndex!, referenceBindingCarrierType!) => referenceBorrowUsedAfterMutation!' "E23 follows live when-payload aliases after carrier direct use"
+Assert-Matches $semanticOwnership '(?s)referenceBindingUsedAfterIndexSite\(typed, referenceBindingIndex!, referenceMutationIndex\) => referenceBorrowUsedAfterMutation!.*?not referenceBorrowUsedAfterMutation! -> if \{.*?borrowedBindingPathUsedAfterSite\(typed, referenceBindingIndex!, referenceMutationIndex, referenceBindingCarrierType!, terminatingControls, referenceLoan.path, referenceViewTypes!, callFunctionIndex.irIndex\) => referenceBorrowUsedAfterMutation!' "E23 follows exact live payload loan paths after carrier direct use"
 Assert-Contains $storedArrayReferenceDiagnostic "`$result.ExitCode -ne 1" "stored-array E23 validator rejects abnormal compiler termination"
 Assert-Contains $storedArrayReferenceDiagnostic "`$matches.Count -ne 1" "stored-array E23 validator requires exactly one source diagnostic"
 Assert-Contains $storedArrayReferenceDiagnostic 'S052|compiler-integrity defect|^target (datalayout|triple)' "stored-array E23 validator rejects late backend failure"
@@ -2341,7 +2259,8 @@ Assert-NotContains $incrementalVerifier 'RedirectStandardOutput $stdoutPath' "se
 Assert-Contains $coreCalls 'sollang compiler verification failure V009: readonly projected call argument lost its addressable root' "missing readonly projection root diagnostic before bounds access"
 Assert-Contains $coreCalls 'referenceNeedsTemporaryRoot and referenceRootBinding >= 0' "missing readonly projection root bounds guard"
 Assert-Matches $coreCalls '(?s)referenceRootValueIndex rootBinding: Int.*?rootBinding => valueIndex!.*?context\.ir\[rootBinding\]\.kind != 29.*?context\.ir\[rootBinding\]\.operand0 -> aggregateValueIndex.*?valueIndex!' "projected enum payload roots materialize from their own SSA binding"
-Assert-MatchCount $coreCalls 'referenceRootBinding -> referenceRootValueIndex\(context, state\)' 2 "ordinary and while projected-reference paths share enum payload root resolution"
+Assert-MatchCount $coreCalls 'referenceRootBinding -> writeReferenceRootValue\(ownerIndex, context, state\)' 2 "ordinary and while projected-reference paths share root value emission"
+Assert-Matches $coreCalls '(?s)writeReferenceRootValue rootBinding:.*?rootBinding -> referenceRootValueIndex\(context, state\) -> writeValue\(ownerIndex, context, state\)' "shared projected-reference emitter uses canonical enum payload root identity"
 Assert-Contains $coreCalls 'rootBinding -> referenceRootValueIndex(context, state) => referenceRootValue' "forwarded readonly payload addresses share enum payload root resolution"
 Assert-Matches $coreCalls 'resolved! >= 0\s+and resolved! < \(context\.ir -> len\)\s+and resolved! != wrapperIndex' "aggregate wrapper sentinel bounds guard"
 Assert-Contains $coreCalls 'resolved! >= 0 and resolved! < (context.ir -> len) => commonArmRootOpen!' "missing enum arm result sentinel guard"
@@ -2406,7 +2325,7 @@ Assert-Contains $typedResolvedContextFinalize 'nodes -> settleLateFinalFunctionC
 Assert-Contains $typedResolvedContextFinalize 'sealFinalFunctionReturnAncestors nodes:' "final implicit return ancestor authority"
 Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> settleLateFinalFunctionControlResults\(prepared\).*?nodes -> sealFinalFunctionReturnAncestors' "function return ancestor sealing is the final result-edge pass"
 Assert-Contains $typedResolvedContextFinalize 'sealFinalContextualNumericLiterals nodes:' "final contextual numeric literal closure"
-Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\).*?nodes -> sealLateValueAliasTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared\)\s+nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealCompletedIfAndRegionTypes\s+nodes -> sealControlBindingAliasTypes' "late aliases feed the final nominal-member, binary, arithmetic, alias, numeric, enum, and control consumers in bounded order"
+Assert-Matches $typedResolvedContextFinalize '(?s)nodes -> sealFinalFunctionReturnAncestors\(prepared\).*?nodes -> sealLateNominalMemberTypes\(prepared, recursiveTypes, frozenRecursiveSemanticTypes, recursiveTypeFlags, lateNominalMemberChanges!\)\s+nodes -> sealFinalBinaryOperandTopology\(prepared\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealPostArithmeticSlotTypes\(prepared\).*?nodes -> sealLateValueAliasTypes\(prepared\)\s+nodes -> sealFinalContextualNumericLiterals\(prepared, frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealEnumMatchTypesFromTerminalArms\(frozenRecursiveSemanticTypes, recursiveTypeFlags\)\s+nodes -> sealCompletedIfAndRegionTypes\s+nodes -> sealControlBindingAliasTypes' "late aliases feed the final nominal-member, binary, arithmetic, alias, numeric, enum, and control consumers in bounded order"
 Assert-Contains $typedResolvedContextFinalize 'canonicalLeft.typeId == canonicalRight.typeId' "final arithmetic width requires exact operand identity"
 Assert-Contains $typedResolvedContextSeal 'not finalReturnRootInsideControl! -> if {' "branch-local returned aggregate parent preservation"
 Assert-Contains $functionReturns 'scheduledTopLevelReturnCandidate.kind != 26' "straight-line return excludes contextual enum wrapper candidates"
@@ -2730,7 +2649,7 @@ Assert-Contains $nativeExactFixtureBatchVerifier 'Assert-NativeExactFixturePlan 
 Assert-Contains $foundation 'and context.ir[functionBodyIndex].operand0 == nodeIndex!' "function-body direct control result materialization demand"
 Assert-Contains $foundation 'context.ir[ownerIndex].kind == 0 or context.ir[ownerIndex].kind == 11' "ordinary and entry function control result owners"
 Assert-Contains $typedResolvedContextFinalize 'sealBooleanWhenResultTypes nodes: mut [TypedIrNode; ~] -> Unit' "late Boolean when result-type sealing authority"
-Assert-Contains $typedResolvedContextFinalize 'booleanWhenFirstArmType.typeId => booleanWhen!.typeId' "Boolean when adopts its first arm canonical result type"
+Assert-Contains $typedResolvedContextFinalize 'nodes -> sealControlTypeFromValue(booleanWhenIndex!, booleanWhenFirstArmType)' "Boolean when seals its first arm canonical value type"
 Assert-Contains $foundation 'node.kind == 33 or node.kind == 34 -> if {' "Boolean and subject when hoisted result storage"
 Assert-Contains $control 'emitBooleanWhen whenIndex: Int' "shared Boolean when LLVM control emitter"
 Assert-Contains $control 'arm.operand1 -> emitRegionValueRoot(emissionOrder, context, state)' "Boolean when conditional arm root emission"
@@ -2854,8 +2773,8 @@ Assert-Contains $functionScheduling 'scheduleNode.kind == 6 or scheduleNode.kind
 Assert-Contains $functionScheduling 'node.kind == 18 or node.kind == 20 or node.kind == 27 or node.kind == 32 or node.kind == 34' "shared scheduling control effect classification"
 Assert-NotContains $functionScheduling 'earlierEffect.kind == 6 or earlierEffect.kind == 15 or earlierEffect.kind == 18' "checked-index child reused as generic earlier-effect barrier"
 Assert-Matches $functionScheduling '(?s)parallelRoleMatchesSourceType nodeIndex: Int, parallelIndex: Int.*?false => matches!.*?context\.types\[sourceTypeId!\]\.kind == 8.*?context\.types\[sourceTypeId!\]\.first => sourceTypeId!.*?context\.types\[sourceTypeId!\]\.kind == 3.*?context\.types\[sourceTypeId!\]\.kind == 4.*?context\.types\[sourceTypeId!\]\.kind == 12.*?context\.ir\[nodeIndex\]\.typeId == context\.types\[sourceTypeId!\]\.first\s+=> matches!' "structured parallel roles require exact source-element type identity"
-Assert-Matches $functionScheduling '(?s)roleSymbol\.kind == 35.*?parallelCallbackOwner\(context\) => owner!.*?not \(nodeIndex -> parallelRoleMatchesSourceType\(owner!, context\)\).*?-1 => owner!' "provisional structured role symbols fail closed when source element type differs"
-Assert-Matches $functionScheduling '(?s)scheduleReady! and \(scheduleNode\.kind == 18 or scheduleNode\.kind == 20 or scheduleNode\.kind == 27 or scheduleNode\.kind == 33 or scheduleNode\.kind == 34\).*?controlDependencyInside! and controlDependencyUse\.kind == 5.*?context\.ir\[controlDependencyUse\.operand0\]\.kind == 17.*?context\.ir\[controlDependencyUse\.operand0\]\.operand0 => controlDependencyValue.*?not controlDependencyValueInside! and not expressionScheduled!\[controlDependencyValue - expressionStart\].*?false => scheduleReady!' "enum matches share the immutable lexical initializer dominance contract with every structured control region"
+Assert-Matches $functionScheduling '(?s)roleSymbol.kind == 35.*?parallelRoleSymbolOwner\(role.symbol, nodeIndex, context\) => owner!.*?owner! >= 0 and not \(nodeIndex -> parallelRoleMatchesSourceType\(owner!, context\)\).*?-1 => owner!' "provisional structured role symbols reject a mismatched exact source owner"
+Assert-Matches $functionScheduling '(?s)scheduleReady! and \(\(scheduleNode -> isSchedulingControlEffect\) or scheduleNode.kind == 33\).*?controlDependencyInside! and controlDependencyUse\.kind == 5.*?context\.ir\[controlDependencyUse\.operand0\]\.kind == 17.*?context\.ir\[controlDependencyUse\.operand0\]\.operand0 => controlDependencyValue.*?not controlDependencyValueInside! and not expressionScheduled!\[controlDependencyValue - expressionStart\].*?false => scheduleReady!' "enum matches share the immutable lexical initializer dominance contract with every structured control region"
 Assert-Contains $checkedIndexControlLogicalFixture 'context.nodes[context.nodes[parameterIndex].symbol].kind == 3' "nested checked-index logical result shape"
 Assert-Contains $stage3Verifier 'Verify LLVM structure, then compare the complete compiler fixed point.' "Windows Stage3 structural verification before fixed-point comparison"
 Assert-Contains $linuxStage3 'Verify LLVM structure, compare the fixed point, and link the native compiler.' "Linux Stage3 structural verification before fixed-point comparison"
@@ -2870,7 +2789,8 @@ Assert-Contains $containers '"while$(whileIndex)_v$(valueNodeIndex)_index_ok:"' 
 Assert-Contains $containers '[Int; ~] => entryValueNodes!' "logical entry-block value schedule"
 Assert-Contains $containers 'not emittedLogicalLabel! -> if { entryValueNodes! -> push(valueNodeIndex) }' "logical entry-block dominance capture"
 Assert-Contains $containers 'not valueProvidedByEntry! -> if {' "logical RHS duplicate-value suppression"
-Assert-MatchCount $containers 'pushBorrowOrdinal >= 0 and not pushStructMember\s+-> if \{' 2 "projected growable-field push excludes direct container-parameter ABI"
+Assert-MatchCount $containers 'pushBorrowOrdinal >= 0 and not pushStructMember and not pushReturnsOwner\s+-> if \{' 1 "projected growable-field push excludes direct ABI and returned-owner inputs"
+Assert-MatchCount $containers 'pushBorrowOrdinal >= 0 and not pushStructMember\s+-> if \{' 1 "projected growable-field push updates direct parameter ABI only for nonprojections"
 Assert-MatchCount $containers 'takeBorrowOrdinal >= 0 and not takeStructMember\s+-> if \{' 2 "projected growable-field take excludes direct container-parameter ABI"
 Assert-Contains $containers 'false => hasMemberProjection!' "mutable borrow parameter projection classification"
 Assert-Contains $containers 'context.ir[bindingRoot!].kind == 13 -> if { true => hasMemberProjection! }' "nominal member boundary excludes direct container ABI"
@@ -3290,8 +3210,8 @@ Assert-Contains $managedUtilitiesEmitter 'CallTransfersOwnerName(call, callFunct
 Assert-Contains $managedUtilitiesEmitter 'parameters[index].Ownership == BoundFunctionInputOwnership.Move' "managed additional move-parameter transfer mapping"
 Assert-Contains $managedEnumEmitter 'RemoveOwnedLiteralSources(expression.Arguments[0], payloadType);' "managed enum payload recursive owner transfer"
 Assert-NotContains $managedEnumEmitter 'expression.Arguments[0] is NameExpression sourceName' "managed enum payload direct-name-only transfer"
-Assert-Matches $managedEnumEmitter '(?s)if \(armTransfers\[arm\]\)\s*\{\s*DropOwnedStructFieldsExcept\(.*?\}\s*else\s*\{\s*DropOwnedProjectedSubjectIfRetained' "managed projected enum payload known-transfer cleanup"
-Assert-Matches $managedEnumEmitter '(?s)anonymousSubject \|\| removedNamedSubject.*?payloadTransferFlag is not null\)\s*\{.*?MovedOwnedStructFields\.TryGetValue\(.*?DropOwnedStructFieldsExceptTransferredIfRetained\(.*?else if \(!armTransfers\[arm\]\)\s*\{\s*DropOwnedRuntimeValueIfRetained' "managed enum payload preserves partial-field transfer and omits unreachable root drop"
+Assert-Matches $managedEnumEmitter '(?s)if \(payloadTransferFlag is not null\).*?DropOwnedProjectedSubjectIfRetained\(.*?else if \(armTransfers\[arm\]\).*?DropOwnedStructFieldsExcept\(removedProjectedOwner, projectedSubjectField!.Name\).*?else.*?DropOwnedRuntimeValue\(removedProjectedOwner\)' "managed projected enum cleanup prioritizes runtime transfer flags before syntax and retained owner cleanup"
+Assert-Matches $managedEnumEmitter '(?s)anonymousSubject \|\| removedNamedSubject.*?payloadTransferFlag is not null\).*?MovedOwnedStructFields.TryGetValue\(.*?DropOwnedStructFieldsExceptTransferredIfRetained\(.*?Locals.TryGetValue\(pattern.BindingName, out var retainedPayload\).*?DropOwnedRuntimeValueIfRetained\(payloadTransferFlag, retainedPayload\)' "managed enum payload preserves partial-field transfer and drops only retained payload values"
 Assert-NotContains $managedEnumEmitter 'var outerOwnerTransfers = _locals' "managed enum arms do not balance ownership by dropping live outer owners"
 Assert-Contains $managedEnumEmitter 'var continuingPaths = new List<EnumContinuingPath>();' "managed enum ownership normalization records only continuing predecessors"
 Assert-Contains $managedEnumEmitter 'NormalizeEnumOuterOwnerScopes(outerOwnedLocals, continuingPaths);' "managed enum outer-owner cleanup uses continuing-path normalization"
@@ -3364,10 +3284,11 @@ Assert-Contains $nativeExactFixtureBatchVerifier '"1280-mutable-owned-projection
 Assert-Contains $stage2Verifier 'verify-selfhost-owned-container-rebind-diagnostic.ps1' "Stage2 E28 owned container rebind gate"
 Assert-Contains $stage3Verifier 'verify-selfhost-owned-container-rebind-diagnostic.ps1' "Stage3 E28 owned container rebind gate"
 Assert-Contains $semanticOwnership 'code: 28' "self-host owned container rebind diagnostic"
-Assert-Contains $semanticOwnership '(previousCandidateIr -> lexicalExecutableAst) == (mutableBindingIrIndex! -> lexicalExecutableAst)' "self-host E28 uses canonical lexical function scope"
+Assert-Matches $semanticOwnership '(?s)borrowedTextFunctionIdentity\(mutableRootSeed.sourceModule, mutableRootSeedIndex! -> lexicalExecutableAst\) => mutableRootKey.*?borrowedTextFunctionIdentity\(mutableBinding.sourceModule, mutableBindingIrIndex! -> lexicalExecutableAst\) => mutableRootKey.*?priorMutableRoots!\[priorMutableBindingSearch!\] == mutableRootKey' "self-host E28 indexes and checks the same canonical lexical function identity"
 Assert-Contains $semanticOwnership 'typed[previousCandidateIr].astNode != mutableBinding.astNode' "self-host E28 compares distinct source declarations rather than duplicate Typed IR nodes"
 Assert-Contains $semanticOwnership 'previousCandidateIr -> useReachableAfterMove(mutableBindingIrIndex!)' "self-host E28 excludes mutually exclusive and terminating predecessor bindings"
-Assert-Contains $emitterDiagnostics 'error[E28]: owned container binding' "self-host actionable owned container rebind diagnostic"
+Assert-Contains $emitterDiagnostics "owned container binding '" "self-host actionable owned container rebind diagnostic"
+Assert-Contains $emitterDiagnostics "cannot be rebound; bind the selected owner once" "self-host owned rebind diagnostic preserves repair guidance"
 foreach ($processStdioFixture in @(
     '1179-process-stdio-file-instance',
     '1180-process-stdio-null-instance',
@@ -3409,8 +3330,9 @@ Assert-Contains $typedFunctionLowering 'prepared -> semanticContext.ownedResourc
 Assert-Contains $typedResolvedContextFinalize 'and (recursiveTypeFlags[ownedResourceNode!.typeId] / 4) % 2 == 1' "Typed IR finalization publishes the frozen affine native-resource trait"
 Assert-Contains $typedCore 'or (ir[site.operand0].typeFlags / 4) % 2 == 1)' "affine native-resource member move classification"
 Assert-Contains $typedCore 'bindingIr: moveBindingIr!' "move events retain exact pattern-binding identity"
-Assert-Contains $semanticOwnership 'borrowedSlice.operand0 -> placeRootBinding => borrowedSliceRootBinding' "borrowed Text return traces a projected SourceText receiver to its root"
-Assert-Contains $semanticOwnership 'borrowedSliceRootBinding == borrowedParameterIr!' "borrowed Text return matches the exact parameter root"
+Assert-Matches $semanticOwnership '(?s)borrowedTextPlaceUsesOrigin typed:.*?resolvedPlaceRootBinding\(valuePlaceIr\) => owner.*?owner >= 0 and owner == originIr.*?resolvedPlaceRootBinding\(originIr\) => queriedOwner.*?owner < 0 or owner != queriedOwner.*?false -> return' "borrowed Text origin query resolves projection roots and rejects another owner"
+Assert-Contains $semanticOwnership 'borrowedReturn.operand0, borrowedParameterIr!))' "borrowed Text return queries its exact parameter origin"
+Assert-Matches $semanticOwnership '(?s)borrowedTextValueUsesOrigin typed:.*?borrowedTextValueOriginFact\(.*?valueIr, originIr\) => fact.*?fact.status == 2 and fact.usesOrigin' "borrowed Text return admits only a resolved matching origin"
 Assert-Contains $borrowedProjectedTextFixture 'request!.head -> text => view' "projected borrowed Text regression origin"
 Assert-Contains $borrowedProjectedTextFixture 'request! -> consume' "projected borrowed Text regression owner move"
 Assert-Contains $borrowedProjectedTextFixture 'view -> len -> println' "projected borrowed Text regression use after move"
@@ -3429,7 +3351,8 @@ Assert-Contains $coreCalls 'store i1 false, ptr %arg$(transferredParameter)_owne
 Assert-Contains $ownership 'enumMatchOwnsSubject subjectIndex:' "enum payload cleanup has one producer-ownership authority"
 Assert-Contains $ownership 'context.types[producerType].kind == 8' "reference-result enum producers remain borrowed"
 Assert-NotContains $ownership 'producerType -> semanticTypeOwns(context, state)' "fresh enum payload cleanup does not depend on the container ownership trait"
-Assert-Matches $ownership '(?s)regionFullyMovesBinding regionIndex:.*?context\.ir\[regionIndex\] => region\s+region\.kind != 0 and region\.kind != 11\s+-> if \{\s+regionIndex -> regionReturns\(context, state\)\s+-> if \{ true -> return \}' "only terminating control regions discharge ownership at a continuing merge"
+Assert-Contains $ownership 'regionIndex -> regionFullyMovesPlace(sourceModule, symbol, -1, afterStart, -1, -1, context, state)' "whole-binding cleanup delegates shared place ownership"
+Assert-Matches $ownership '(?s)regionFullyMovesPlace regionIndex:.*?context.ir\[regionIndex\] => region.*?region.kind != 0 and region.kind != 11.*?edgeIndex < 0 or not \(regionIndex -> ownershipRegionContainsEdge\(edgeIndex, context, state\)\).*?regionIndex -> regionReturns\(context, state\).*?true -> return' "only terminating external control regions discharge ownership at a continuing merge"
 Assert-Contains $ownership 'armIndex! -> enumMatchArmRegion(context, state) => armRegion' "enum ownership analysis resolves the emitted body region"
 Assert-Contains $control 'enumMatchArmRegion armIndex:' "canonical enum arm body resolver"
 Assert-Contains $control 'armIndex! -> enumMatchArmRegion(context, state) => emittedArmRegion' "enum emission shares the ownership body resolver"
@@ -3438,7 +3361,7 @@ Assert-Contains $ownership '(match.operand0 -> enumMatchOwnsSubject(context, sta
 Assert-Matches $ownership '(?s)enumMatchOwnsPayload matchIndex:.*?subject\.kind == 5 and subject\.operand0 >= 0.*?context\.ir\[subject\.operand0\]\.kind == 17.*?kind == 29.*?state\.frozenEnumMatchConsumed -> ownershipEmitter\.enumMatchConsumes\(match\.operand0, subject\.kind, subject\.operand0\)' "enum match also derives transferred binding ownership from the frozen consumption snapshot"
 Assert-Matches $control 'armBindingIndex >= 0\s+and matchOwnsSubject\s+and context.ir\[armBindingIndex\].typeId >= 0' "borrowed enum payloads have no independent cleanup"
 $memberAssignmentSource = [IO.File]::ReadAllText($containerControlPath)
-Assert-Matches $memberAssignmentSource '(?s)store %sollang.struct.*?assignmentBinding -> storageAlign\(context, state\) -> writeDecimalLine\s+request.nodeIndex -> emitCompletedPatternBindingTransferMarks' "member assignment marks ownership transfer after the successful store"
+Assert-Matches $memberAssignmentSource '(?s)"  store " -> print.*?%member_assign\$\(request.nodeIndex\)_field_address.*?assignmentTargetFieldTypeId! >= 0 -> if \{ context.typeAligns\[assignmentTargetFieldTypeId!\] -> writeDecimalLine \} else \{ assignmentBinding -> storageAlign\(context, state\) -> writeDecimalLine \}\s+\}\s+request.nodeIndex -> emitCompletedPatternBindingTransferMarks' "member assignment marks ownership transfer after store and canonical field alignment"
 Assert-Matches $memberAssignmentSource '(?s)producerPipelineConsumesBinding bindingIndex:.*?context\.streamPlan\.junctions.*?junction\.kind == 1.*?junction\.source0 -> streamIr\.resolveProducer\(context\.ir\).*?source == context\.ir\[bindingIndex\]\.operand0' "partition source ownership is consumed by its direct-dispatch junction"
 Assert-Contains $functions '%drop_arg$(ownedParameterOrdinal!)_still_owned = load i1' "common epilogue guards the sibling-path parameter drop"
 
@@ -3525,8 +3448,99 @@ Assert-Contains $detachedResultSchema '"status": { "const": "cancelled" }' "comp
 Assert-Contains $detachedResultSchema '"failureIds": { "const": ["CANCELLATION_REQUESTED"] }' "cancelled completion requires the exact failure ID"
 Assert-Contains $detachedVerificationContract 'cooperative parent/child cancellation preserved cancelled, exit 130, exact acknowledgement, CANCELLATION_REQUESTED, and zero orphans' "supported cancellation behavior evidence"
 
+Assert-Contains $typed 'public isDirectIterationOpcode opcode: Int -> Bool => opcode == -208 or opcode == repeatOpcode()' "direct iteration classifier admits each and repeat exactly"
+
 if ($staticAssertionFailures.Count -gt 0) {
     throw "STATIC_ASSERTION_FAILURES: $($staticAssertionFailures.Count) assertion(s) failed"
+}
+
+# Source assertions reject invalid inputs before compiler or runtime child work.
+if (-not $StaticAssertionsOnly) {
+$childFailureRejected = $false
+try {
+    Invoke-CheckedContract `
+        -Name "contracts\fixtures\detached-verification-probe.ps1" `
+        -Parameters @{ Outcome = "Fail" } *> $null
+} catch {
+    if ($_.Exception.Message -eq "Self-host compiler child contract failed: contracts\fixtures\detached-verification-probe.ps1") {
+        $childFailureRejected = $true
+    } else {
+        throw
+    }
+}
+if (-not $childFailureRejected) {
+    throw "Self-host compiler child contract failure was not propagated"
+}
+
+$repositoryParameters = @{ RepositoryRoot = $RepositoryRoot }
+Invoke-CheckedContract -Name "verify-formal-exact-source-closures.ps1" -Parameters $repositoryParameters
+foreach ($name in @(
+    "verify-ai-slg-best-practices.ps1"
+    "verify-focused-slg-format.ps1"
+    "verify-llvm-no-allocation-audit.ps1"
+    "verify-process-child-try-wait-contract.ps1"
+    "verify-process-child-kill-contract.ps1"
+    "verify-async-result-propagation-contract.ps1"
+    "verify-async-owned-array-cancellation-contract.ps1"
+    "verify-portable-memory-io-contract.ps1"
+    "verify-project-progress.ps1"
+    "verify-http-server-contract.ps1"
+    "verify-socket-datagram-contract.ps1"
+    "verify-socket-vectored-contract.ps1"
+    "verify-socket-try-clone-contract.ps1"
+    "verify-socket-reactor-contract.ps1"
+    "verify-struct-field-migration.ps1"
+    "verify-uri-normalization-contract.ps1"
+    "verify-expression-lowering-parity.ps1"
+)) {
+    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
+}
+Invoke-CheckedContract -Name "verify-native-exact-source-closure-contract.ps1"
+
+# Execute small production-method and focused-source probes before the
+# expensive compiler build. These never rebuild the compiler itself.
+if ($IsWindows) {
+    Invoke-CheckedContract -Name "verify-mapped-layout-traits.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-mapped-resize-failure.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-utf8-each-runtime.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-contextual-integer-literals.ps1"
+    Invoke-CheckedContract -Name "verify-generic-type-contexts.ps1" -Parameters @{ RepositoryRoot = $RepositoryRoot; TypeDelimiters = $true; ReadonlyTextSlice = $true }
+    Invoke-CheckedContract -Name "verify-borrowed-source-text-return-carriers.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-deferred-text-storage.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-source-text-borrowed-drop.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-c401-known-borrowed-source-text-drop.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-parallel-source-text-cleanup.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-parallel-mapped-source-consumer.ps1" -Parameters $repositoryParameters
+    Invoke-CheckedContract -Name "verify-text-glob-focused.ps1" -Parameters $repositoryParameters
+}
+
+$RepositoryRoot = [System.IO.Path]::GetFullPath($RepositoryRoot)
+Invoke-CheckedContract -Name "update-llvm-emitter-module-manifests.ps1" -Parameters @{ Mode = "Check" }
+foreach ($name in @(
+    "verify-selfhost-fragment-manifests.ps1"
+    "verify-selfhost-source-structure.ps1"
+    "verify-llvm-emitter-modules.ps1"
+    "verify-input-fingerprint-stability-contract.ps1"
+    "verify-verified-stage3-install-contract.ps1"
+    "verify-browser-stage2-input-fingerprint-contract.ps1"
+)) {
+    Invoke-CheckedContract -Name $name
+}
+if ([string]::IsNullOrWhiteSpace($LlvmEmitterSplitAbiOutputDirectory)) {
+    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1"
+} else {
+    Invoke-CheckedContract -Name "verify-llvm-emitter-split-abi.ps1" -Parameters @{
+        OutputDirectory = $LlvmEmitterSplitAbiOutputDirectory
+    }
+}
+foreach ($name in @(
+    "verify-selfhost-llvm-function-diff.ps1"
+    "verify-selfhost-stage3-seed-provenance.ps1"
+    "verify-quic-stream-api-contract.ps1"
+    "verify-cpu-target-contract.ps1"
+)) {
+    Invoke-CheckedContract -Name $name -Parameters $repositoryParameters
+}
 }
 
 if ($StaticAssertionsOnly) {
@@ -3534,5 +3548,3 @@ if ($StaticAssertionsOnly) {
 } else {
     Write-Host "[selfhost compiler contracts] PASS native/browser analysis routing, exact runtime intrinsic identity, native-library ABI separation, explicit socket/process opcodes, affine Child cleanup, fixed-point artifact provenance, materialized console effects, reachable parallel callbacks, and Set intrinsic regression gates."
 }
-
-Assert-Contains $typed 'public isDirectIterationOpcode opcode: Int -> Bool => opcode == -208 or opcode == repeatOpcode()' "direct iteration classifier admits each and repeat exactly"
