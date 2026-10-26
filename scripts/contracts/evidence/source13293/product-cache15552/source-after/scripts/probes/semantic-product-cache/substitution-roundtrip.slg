@@ -1,0 +1,45 @@
+namespace probes.semantic_product_cache.substitution_roundtrip
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.ir.module_artifact_types as artifacts
+import sys.file as file
+import sollang.compiler.semantic.type_ids as types
+
+main {
+    "scripts/probes/async-task-observability/product-cache-labels.slg" -> file.mapText => owner
+    owner -> slice(UIntSize(0), owner -> len) => source
+    ["scripts/probes/async-task-observability/product-cache-labels.slg",; ~] => paths
+    generations.CompilationIdentity { compiler: 1, target: 1, configuration: 1 } => identity
+    cache.Loaded { words: [UInt64; ~], status: 1 } => empty
+    [source,; ~] -> context.prepare -> cache.resolve(empty, paths, identity) -> when {
+        Err(code) { "cold-error=$(code)" -> println }
+        Ok(cold) {
+            "cold skipped=$(cold.skipped) status=$(cold.words -> cache.validate)" -> println
+            [types.NominalField; ~] => wrongTypes!
+            [types.NominalField; ~] => wrongLabels!
+            [types.NominalField; ~] => duplicated!
+            cold.resolved.types.fields -> each field {
+                wrongTypes! -> push(types.NominalField { ownerType: field.ownerType, sourceModule: field.sourceModule, ownerSymbol: field.ownerSymbol, fieldSymbol: field.fieldSymbol, labelToken: field.labelToken, ordinal: field.ordinal, fieldType: -1, status: field.status })
+                wrongLabels! -> push(types.NominalField { ownerType: field.ownerType, sourceModule: field.sourceModule, ownerSymbol: field.ownerSymbol, fieldSymbol: field.fieldSymbol, labelToken: -1, ordinal: field.ordinal, fieldType: field.fieldType, status: field.status })
+                duplicated! -> push(field)
+                duplicated! -> push(field)
+            }
+            [types.NominalField; ~] => absent
+            cold.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(cold.resolved.types.types, cold.resolved.types.references, wrongTypes!) => wrongType
+            cold.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(cold.resolved.types.types, cold.resolved.types.references, wrongLabels!) => wrongLabel
+            cold.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(cold.resolved.types.types, cold.resolved.types.references, duplicated!) => duplicate
+            cold.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(cold.resolved.types.types, cold.resolved.types.references, absent) => missing
+            "rejected wrong-type=$(wrongType.status) wrong-label=$(wrongLabel.status) duplicate=$(duplicate.status) missing=$(missing.status)" -> println
+            cache.Loaded { words: cold.words, status: 0 } => loaded
+            [source,; ~] -> context.prepare -> cache.resolve(loaded, paths, identity) -> when {
+                Err(code) { "warm-error=$(code)" -> println }
+                Ok(warm) {
+                    warm.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(warm.resolved.types.types, warm.resolved.types.references, warm.resolved.types.fields) => details
+                    "warm load=$(warm.loadStatus) reused=$(warm.reused) rejected=$(warm.rejected) skipped=$(warm.skipped) details=$(details.status)" -> println
+                }
+            }
+        }
+    }
+}

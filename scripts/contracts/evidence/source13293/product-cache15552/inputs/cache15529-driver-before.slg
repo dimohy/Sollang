@@ -1,0 +1,74 @@
+namespace probes.semantic_product_cache.substitution_roundtrip
+
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.semantic_cache as cache
+import sollang.compiler.semantic.semantic_generations as generations
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.semantic.type_ids as types
+import sollang.compiler.ir.module_artifact_types as artifacts
+
+check source: Text -> Unit uses Console {
+    ["product.slg",; ~] => paths
+    generations.CompilationIdentity { compiler: 1, target: 1, configuration: 1 } => identity
+    cache.Loaded { words: [UInt64; ~], status: 1 } => empty
+    [source,; ~] -> context.prepare -> cache.resolve(empty, paths, identity) -> when {
+        Err(code) { "cold-error=$(code)" -> println }
+        Ok(cold) {
+            "cold skipped=$(cold.skipped) status=$(cold.words -> cache.validate)" -> println
+            cache.Loaded { words: cold.words, status: 0 } => loaded
+            [source,; ~] -> context.prepare -> cache.resolve(loaded, paths, identity) -> when {
+                Err(code) { "warm-error=$(code)" -> println }
+                Ok(warm) {
+                    warm.resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(warm.resolved.types.types, warm.resolved.types.references, warm.resolved.types.fields) => details
+                    "warm load=$(warm.loadStatus) reused=$(warm.reused) rejected=$(warm.rejected) skipped=$(warm.skipped) details=$(details.status)" -> println
+                }
+            }
+        }
+    }
+}
+
+rejectCorruptFields source: Text -> Unit uses Console {
+    [source,; ~] -> context.prepare -> expressions.resolveCallContext => resolved
+    [types.NominalField; ~] => wrongTypes!
+    [types.NominalField; ~] => wrongLabels!
+    [types.NominalField; ~] => duplicated!
+    resolved.types.fields -> each field {
+        wrongTypes! -> push(types.NominalField { ownerType: field.ownerType, sourceModule: field.sourceModule, ownerSymbol: field.ownerSymbol, fieldSymbol: field.fieldSymbol, labelToken: field.labelToken, ordinal: field.ordinal, fieldType: -1, status: field.status })
+        wrongLabels! -> push(types.NominalField { ownerType: field.ownerType, sourceModule: field.sourceModule, ownerSymbol: field.ownerSymbol, fieldSymbol: field.fieldSymbol, labelToken: -1, ordinal: field.ordinal, fieldType: field.fieldType, status: field.status })
+        duplicated! -> push(field)
+        duplicated! -> push(field)
+    }
+    [types.NominalField; ~] => absent
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(resolved.types.types, resolved.types.references, wrongTypes!) => wrongType
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(resolved.types.types, resolved.types.references, wrongLabels!) => wrongLabel
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(resolved.types.types, resolved.types.references, duplicated!) => duplicate
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(resolved.types.types, resolved.types.references, absent) => missing
+    "rejected wrong-type=$(wrongType.status) wrong-label=$(wrongLabel.status) duplicate=$(duplicate.status) missing=$(missing.status)" -> println
+}
+
+main {
+    """namespace sample
+make<T> value: T -> (_0: T, tail: Bool) => (_0: value, tail: true)
+main {
+    7 -> make<Int> => item
+    item._0 -> println
+    item.tail -> println
+}
+""" => explicit
+    explicit -> check
+    explicit -> rejectCorruptFields
+    """namespace sample
+make<T> value: T -> (T, Bool) => (value, true)
+main {
+    7 -> make<Int> => item
+    item._0 -> println
+}
+""" -> check
+    """namespace sample
+make<T> value: T -> (head: (value: T, valid: Bool), tail: Bool) => (head: (value: value, valid: true), tail: true)
+main {
+    7 -> make<Int> => item
+    item.tail -> println
+}
+""" -> check
+}
