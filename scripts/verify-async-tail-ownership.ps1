@@ -26,7 +26,7 @@ $inputs = @($compilerPath, $contractPath, $PSCommandPath, (Join-Path $PSScriptRo
 $inputs += $llvmTools
 $inputs += @('Sollang.Compiler.deps.json','Sollang.Compiler.runtimeconfig.json' | ForEach-Object { Join-Path (Split-Path $compilerPath) $_ })
 $inputs += @(Get-ChildItem -LiteralPath (Join-Path $root 'stdlib') -Recurse -File -Filter '*.slg' | ForEach-Object FullName)
-$inputs += @('src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs','src/Sollang.Compiler/Semantics/SemanticCompiler.cs' | ForEach-Object { Join-Path $root $_ })
+$inputs += @('src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Core.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.FunctionCalls.cs','src/Sollang.Compiler/CodeGen/LlvmEmitter.Expressions.Control.cs','src/Sollang.Compiler/Semantics/SemanticCompiler.cs' | ForEach-Object { Join-Path $root $_ })
 $ids = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 foreach ($case in $contract.cases) {
     if ($case.id -notmatch '^[a-z-]+$' -or -not $ids.Add($case.id)) { throw 'ASYNC_TAIL_CASE_ID' }

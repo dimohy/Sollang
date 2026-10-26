@@ -785,6 +785,7 @@ internal sealed partial class LlvmEmitter
                 ? declaredElementType
                 : null;
         var elements = new RuntimeValue[expression.Elements.Count];
+        var carriers = new AsyncExpressionCarrier?[elements.Length];
         for (var index = 0; index < expression.Elements.Count; index++)
         {
             var element = expression.Elements[index];
@@ -792,7 +793,10 @@ internal sealed partial class LlvmEmitter
                 ? EmitFunctionArgumentExpression(element, contextualElementType)
                 : EmitExpression(element);
             elementType ??= elements[index].Type;
+            carriers[index] = PreserveAsyncExpressionValue(elements[index], ownsValue: true);
         }
+        for (var index = 0; index < elements.Length; index++)
+            elements[index] = RestoreAsyncExpressionValue(carriers[index], elements[index]);
         return elements;
     }
 
