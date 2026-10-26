@@ -77,6 +77,8 @@ def main():
     parser.add_argument("--source-comparison", type=Path)
     parser.add_argument("--format-compiler", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--producer-preparation-plan", type=Path,
+                        help="Explicit preparation-only budget; individual arithmetic executions remain 180 seconds")
     parser.add_argument("--llvm", type=Path, default=ROOT / ".tools/llvm-22.1.8")
     parser.add_argument("--reusable-directory", type=Path, action="append", required=True)
     args = parser.parse_args()
@@ -121,6 +123,20 @@ def main():
     require(Path(comparison["managedFirstRecord"]).resolve() == args.managed_proof.resolve(), "DICTIONARY_GEOMETRY_COMPARISON_BASELINE")
     require(sha(ROOT / comparison["managedSource"]) == comparison["managedSourceSha256"] and all(sha(ROOT / name) == digest for name, digest in comparison["selfhostSources"].items()), "DICTIONARY_GEOMETRY_COMPARISON_DRIFT")
     inputs.append(args.source_comparison.resolve())
+    preparation_budget = 180
+    if args.producer_preparation_plan is not None:
+        plan_path = args.producer_preparation_plan.resolve()
+        plan = read(plan_path)
+        require(plan["schemaVersion"] == 1 and plan["scope"] == "dictionary-geometry-producer-preparation"
+                and plan["programCaseBudgetSeconds"] == 180
+                and plan["producerPreparationBudgetSeconds"] == 1200
+                and plan["maximumProducerBuilds"] == 1
+                and plan["manifestSha256"] == sha(manifest)
+                and plan["matrixSha256"] == sha(matrix_path)
+                and plan["producerSourceSha256"] == sha(PROBE / "geometry-emitter.slg"),
+                "DICTIONARY_GEOMETRY_PREPARATION_AUTHORITY")
+        preparation_budget = plan["producerPreparationBudgetSeconds"]
+        inputs.append(plan_path)
     managed = args.build is None
     if managed:
         inputs += managed_runtime_inputs(compiler)
@@ -140,11 +156,12 @@ def main():
     table = "\n".join("    {" + str(r["length"]) + ", UINT64_C(" + str(r["capacity"]) + "), UINT64_C(" + str(r["entriesOffset"]) + "), UINT64_C(" + str(r["allocationBytes"]) + ")}," for r in rows)
     header.write_text("struct ExpectedRow { int32_t length; uint64_t capacity, offset, bytes; };\nstatic const struct ExpectedRow expected_rows[] = {\n" + table + "\n};\nstatic const size_t expected_count = 12;\n" + f"static const int expected_value_offset = {matrix['expectedValueOffset']};\nstatic const int expected_stride = {matrix['expectedStride']};\nstatic const int expected_alignment = {matrix['expectedAlignment']};\n", encoding="utf-8")
     pins[str(header)] = sha(header)
-    record = dict(schemaVersion=1, status="running", scope="Actual SLG Int dictionary capacity and emitted LLVM arithmetic with explicit nonallocating observers; includes a rejected offset mutation. This does not prove real large allocation, allocation placement, whole compiler or Stage acceptance.", provider="managed-compiled-slg-source" if managed else "native-compiled-slg-source", inputHashes=pins, completed=0, total=14, cases=[], producerBuildCount=0, producerBuildMaximum=1, caseBudgetSeconds=180, usesAllocatorObservers=True, claimsLargeAllocationPassed=False, claimsGoalComplete=False)
+    record = dict(schemaVersion=1, status="running", scope="Actual SLG Int dictionary capacity and emitted LLVM arithmetic with explicit nonallocating observers; includes a rejected offset mutation. This does not prove real large allocation, allocation placement, whole compiler or Stage acceptance.", provider="managed-compiled-slg-source" if managed else "native-compiled-slg-source", inputHashes=pins, completed=0, total=14, cases=[], producerBuildCount=0, producerBuildMaximum=1, caseBudgetSeconds=180, producerPreparationBudgetSeconds=preparation_budget, usesAllocatorObservers=True, claimsLargeAllocationPassed=False, claimsGoalComplete=False)
     execution = VerificationExecution(ROOT, output, record, lambda: all(Path(p).is_file() and sha(p) == h for p, h in pins.items()), sha)
     error = None
     def run(command, label):
-        return execution.run([str(p) for p in command], output / label, timeout=180)
+        return execution.run([str(p) for p in command], output / label,
+                             timeout=preparation_budget if label == "producer-build" else 180)
     try:
         tools = run([llvm / "bin/clang.exe", "--version"], "clang-version")
         require(tools.returncode == 0 and "22.1.8" in tools.stdout, "DICTIONARY_GEOMETRY_LLVM_VERSION")
