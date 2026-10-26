@@ -9208,7 +9208,11 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
     0 => aggregateMoveIndex!
     aggregateMoveIndex! < (moves! -> len) -> while {
         moves![aggregateMoveIndex!] => currentMove
-        currentMove.valueIr -> aggregateForTransfer(ownedStorageByType!) => currentAggregate
+        # Await consumes the Task, not another position of its result literal.
+        # Keep that move for use-after-move checks, outside aggregate overlap.
+        currentMove.awaited -> if { -1 } else {
+            currentMove.valueIr -> aggregateForTransfer(ownedStorageByType!)
+        } => currentAggregate
         -1 => previousAggregateMove!
         currentAggregate >= 0 -> if {
             aggregateHeads![currentAggregate] => previousAggregateMove!
@@ -9269,7 +9273,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                 priorMoveIndex! < (moves! -> len) and classifiedCode! != aggregateTransferOverlapCode()
                     -> while {
                         moves![priorMoveIndex!] => priorMove
-                        priorMove.siteIr == diagnostic.expectedSymbol
+                        priorMove.siteIr == diagnostic.expectedSymbol and not priorMove.awaited
                             -> if {
                                 priorMove.valueIr -> aggregateForTransfer(ownedStorageByType!) => priorAggregate
                                 priorAggregate >= 0 -> if {
@@ -9277,7 +9281,8 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                                     nextMoveIndex! < (moves! -> len) and classifiedCode! != aggregateTransferOverlapCode()
                                         -> while {
                                             moves![nextMoveIndex!] => nextMove
-                                            priorMove.sourceModule == nextMove.sourceModule
+                                            not nextMove.awaited
+                                                and priorMove.sourceModule == nextMove.sourceModule
                                                 and priorMove.symbol == nextMove.symbol
                                                 and (diagnostic.actualSymbol -> nodeBelongsTo(nextMove.valueIr))
                                                 and (nextMove.valueIr -> aggregateForTransfer(ownedStorageByType!)) == priorAggregate
