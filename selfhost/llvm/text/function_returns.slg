@@ -563,14 +563,17 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 }
             dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves! or ((dropCandidate.typeId -> directCopyableFixedStructType(context)) and not (dropCandidate.typeId -> semanticTypeOwns(context, state)))) and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
                 -> if {
-                    dropCandidate.flags == 1 -> if {
-                        "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
-                        dropCandidate -> storageAlign(context, state) -> writeDecimalLine
-                    }
+                    dropIndex! -> emitAsyncBindingDropValue(functionIndex, dropIndex!, context, state) => dropFromAsyncFrame
+                    not dropFromAsyncFrame and dropCandidate.flags == 1
+                        -> if {
+                            "  %dropg$(dropIndex!)_p0 = load %sollang.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
+                            dropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                        }
                     0 => dropCandidateValueKind!
                     dropIndex! => dropCandidateBindingIndex
                     dropCandidateParameterIndex! >= 0 -> if { 3 => dropCandidateValueKind! }
-                    dropCandidate.flags == 1 -> if { 2 => dropCandidateValueKind! }
+                    dropFromAsyncFrame or dropCandidate.flags == 1
+                        -> if { 2 => dropCandidateValueKind! }
                     DropGlueRequest {
                         typeId: dropCandidate.typeId
                         typeOrigin: dropCandidate.typeOrigin

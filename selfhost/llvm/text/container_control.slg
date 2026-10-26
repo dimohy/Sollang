@@ -2391,13 +2391,16 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
         ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves! or ((ownedDropCandidate.typeId -> directCopyableFixedStructType(context)) and not (ownedDropCandidate.typeId -> semanticTypeOwns(context, state)))) and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != ownedTransferredSymbol!
             -> if {
                 request.edgeIndex * 1000 + ownedDropIndex! => ownedDropNameRoot
-                ownedDropCandidate.flags == 1 -> if {
-                    "  %dropg$(ownedDropNameRoot)_p0 = load %sollang.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print
-                    ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
-                }
+                ownedDropIndex! -> emitAsyncBindingDropValue(ownedDropOwner!, ownedDropNameRoot, context, state) => ownedDropFromAsyncFrame
+                not ownedDropFromAsyncFrame and ownedDropCandidate.flags == 1
+                    -> if {
+                        "  %dropg$(ownedDropNameRoot)_p0 = load %sollang.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print
+                        ownedDropCandidate -> storageAlign(context, state) -> writeDecimalLine
+                    }
                 0 => ownedDropValueKind!
                 ownedDropParameterIndex! >= 0 -> if { 3 => ownedDropValueKind! }
-                ownedDropCandidate.flags == 1 -> if { 2 => ownedDropValueKind! }
+                ownedDropFromAsyncFrame or ownedDropCandidate.flags == 1
+                    -> if { 2 => ownedDropValueKind! }
                 DropGlueRequest {
                     typeId: ownedDropCandidate.typeId
                     typeOrigin: ownedDropCandidate.typeOrigin
