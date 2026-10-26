@@ -16,7 +16,8 @@ import syntax.generated.slg as grammar
 # 10 unresolved source call retained for diagnostics, 11 Result propagation,
 # 12 contextual struct literal, 13 struct field name, 14 nominal struct literal,
 # 15 generic enum constructor with a canonical source-local type AST,
-# 16 array literal retaining its actual source-local expression AST.
+# 16 array literal retaining its actual source-local expression AST,
+# 17 suspending expression evaluated through its canonical Typed IR identity.
 # Builtin result ids match the nominal
 # table. Member nodes retain their absolute source span and point at the
 # lexical base through operand0 so code generation can project the field.
@@ -282,13 +283,27 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                 }
                                 qualifiedPathIndex! + 1 => qualifiedPathIndex!
                             }
+                            # Suspending fragments need their complete source tree in
+                            # the common semantic and coroutine indexes. Keeping only
+                            # the target token loses its flow receiver and async owner.
+                            false => retainFlowValues!
+                            fragmentAst -> each candidate {
+                                candidate.kind == 16 and candidate.parent >= 0
+                                    and fragmentAst[candidate.parent].kind == 10
+                                    and candidate.payloadToken >= 0
+                                    -> if {
+                                        fragmentTokens[candidate.payloadToken] => targetToken
+                                        (fragment -> slice(targetToken.span.start, targetToken.span.length)) == "await"
+                                            -> if { true => retainFlowValues! }
+                                    }
+                            }
                             # Preserve real array subtrees alongside type syntax. Their
                             # expression identities are consumed by the canonical literal typer.
                             [Int; ~] => fragmentTypeAst!
                             0 => retainedAstIndex!
                             retainedAstIndex! < (fragmentAst -> len) -> while {
                                 fragmentAst[retainedAstIndex!] => typeCandidate
-                                typeCandidate.kind == 12 or qualifiedCallByPath![retainedAstIndex!] >= 0
+                                retainFlowValues! or typeCandidate.kind == 12 or qualifiedCallByPath![retainedAstIndex!] >= 0
                                     or (typeCandidate.kind == 16 and typeCandidate.parent >= 0
                                     and fragmentAst[typeCandidate.parent].kind == 10) => retain!
                                 retainedAstIndex! => valueAncestor!
@@ -314,7 +329,7 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                 fragmentTypeAst![typeRelocationIndex!] => mappedType
                                 mappedType >= 0 -> if {
                                     fragmentAst[typeRelocationIndex!] => typeNode!
-                                    qualifiedCallByPath![typeRelocationIndex!] >= 0
+                                    not retainFlowValues! and qualifiedCallByPath![typeRelocationIndex!] >= 0
                                         -> if { 16 => typeNode!.kind }
                                     typeNode!.parent => typeParent!
                                     typeParent! >= 0 and fragmentTypeAst![typeParent!] < 0
@@ -583,6 +598,11 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                                 -> if { -1 => loweredKind! }
                                             suffixToken! + 1 => suffixToken!
                                         }
+                                }
+                                # A suspending fragment has one bridge to ordinary IR.
+                                # Its descendants are already owned by the retained AST.
+                                retainFlowValues! -> if {
+                                    fragmentNode.parent < 0 -> if { 17 => loweredKind! } else { -1 => loweredKind! }
                                 }
                                 loweredKind! >= 0 -> if {
                                     -1 => loweredParent!
@@ -1025,7 +1045,8 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                         expressionLength: loweredDecodedSuffixStart - loweredDecodedExpressionStart - 1
                                         targetAst: loweredTargetAst!
                                         typeAst: loweredTypeAst!
-                                        valueAst: loweredKind! == 16 -> if { fragmentTypeAst![fragmentAstIndex!] } else { -1 }
+                                        valueAst: loweredKind! == 16 or loweredKind! == 17
+                                            -> if { fragmentTypeAst![fragmentAstIndex!] } else { -1 }
                                         typeSymbol: loweredTypeSymbol!
                                     } => lowered
                                     nodes! -> len => loweredIndex

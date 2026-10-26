@@ -451,6 +451,7 @@ struct BodySchedulePlan {
     failureTerminal: Int
 }
 struct CoreEmitterState {
+    frozenCanonicalInterpolationRootByIr: [Int; ~]
     frozenDeferredTextValues: [Bool; ~]
     frozenDeferredTextCaptureLeaves: [Bool; ~]
     coroutine: typedIr.CoroutineTables
@@ -1840,8 +1841,59 @@ writeParallelRoleValue node: interpolation.InterpolationNode, sourceModule: Int,
     false
 }
 
+canonicalInterpolationValueIndex node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ranges[sourceModule] => range
+    -1 => selected!
+    (context.nodes -> len) + 1 => selectedDepth!
+    ownerIndex + 1 => candidateIndex!
+    ownerIndex -> functionEnd(context, state) => end
+    candidateIndex! < end -> while {
+        context.ir[candidateIndex!] => candidate
+        candidate.sourceModule == sourceModule and candidate.astNode >= 0
+            and state.frozenCanonicalInterpolationRootByIr[candidateIndex!] == node.valueAst
+            -> if {
+                candidate.astNode => ancestor!
+                0 => depth!
+                ancestor! >= 0 and ancestor! != node.valueAst
+                    -> while {
+                        context.nodes[range.astStart + ancestor!].parent => ancestor!
+                        depth! + 1 => depth!
+                    }
+                ancestor! == node.valueAst and depth! < selectedDepth!
+                    -> if {
+                        candidateIndex! => selected!
+                        depth! => selectedDepth!
+                    }
+            }
+        candidateIndex! + 1 => candidateIndex!
+    }
+    selected!
+}
+
+emitCanonicalInterpolation node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    ownerIndex -> functionEnd(context, state) => end
+    ownerIndex -> prepareFunctionExpressionOrder(end, ownerIndex + 1, context, state) => order
+    order -> each valueIndex {
+        context.ir[valueIndex].sourceModule == sourceModule
+            and state.frozenCanonicalInterpolationRootByIr[valueIndex] == node.valueAst
+            -> if {
+                valueIndex -> emitRegionValueRoot(order, context, state)
+                valueIndex -> emitAsyncLocalWrite(ownerIndex, context, state)
+            }
+    }
+}
+
 writeInterpolationValue labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     nodes[nodeIndex] => node
+    node.kind == 17 -> if {
+        node -> canonicalInterpolationValueIndex(sourceModule, ownerIndex, context, state) => valueIndex
+        valueIndex < 0 -> if {
+            "sollang: canonical interpolation value is missing" -> runtime.eprintln
+            process.exit(1)
+        }
+        valueIndex -> writeValue(ownerIndex, context, state)
+        return
+    }
     node -> writeParallelRoleValue(sourceModule, beforeIndex, context)
         -> if { return }
     node.kind == 1 -> if {
@@ -2180,6 +2232,11 @@ interpolationNodeTypeId nodeIndex: Int, nodes: ref [interpolation.InterpolationN
         context.interpolationEnumConstructors[enumConstructorIndex].enumTypeId -> return
     }
     nodes[nodeIndex] => node
+    node.kind == 17 -> if {
+        node -> canonicalInterpolationValueIndex(sourceModule, ownerIndex, context, state) => valueIndex
+        valueIndex >= 0 -> if { context.ir[valueIndex].typeId -> return }
+        -1 -> return
+    }
     -1 => typeId!
     node.kind == 16 -> if {
         node -> semanticInterpolationNodeIndex(sourceModule, context) => semanticIndex
@@ -2637,7 +2694,7 @@ interpolationNodeIntegerWidth nodeIndex: Int, nodes: ref [interpolation.Interpol
                 roleWidth! > 0 -> if { roleWidth! => width! }
             }
     }
-    node.kind == 0 or node.kind == 2 or node.kind == 3 or node.kind == 5 or node.kind == 6 or node.kind == 7 or node.kind == 8 or node.kind == 10 or node.kind == 11
+    node.kind == 0 or node.kind == 2 or node.kind == 3 or node.kind == 5 or node.kind == 6 or node.kind == 7 or node.kind == 8 or node.kind == 10 or node.kind == 11 or node.kind == 17
         -> if {
             nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => indexTypeId
             indexTypeId >= 0 -> if {
@@ -2673,7 +2730,7 @@ interpolationNodeSigned nodeIndex: Int, nodes: ref [interpolation.InterpolationN
             context.types[referenceValueTypeId].symbol -> integerSigned(context, state) => signed!
         }
     }
-    node.kind == 2 or node.kind == 3 or node.kind == 5 or node.kind == 6 or node.kind == 7 or node.kind == 8 or node.kind == 10
+    node.kind == 2 or node.kind == 3 or node.kind == 5 or node.kind == 6 or node.kind == 7 or node.kind == 8 or node.kind == 10 or node.kind == 17
         -> if {
             nodeIndex -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => typeId
             typeId >= 0 -> if { context.types[typeId].symbol -> integerSigned(context, state) => signed! }
@@ -3552,6 +3609,10 @@ emitInterpolationIndexBounds labelIndex: Int, nodeIndex: Int, category: Text -> 
 
 emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpolation.InterpolationNode; ~], sourceModule: Int, ownerIndex: Int, beforeIndex: Int, lexicalLoads: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     nodes[nodeIndex] => node
+    node.kind == 17 -> if {
+        node -> emitCanonicalInterpolation(sourceModule, ownerIndex, context, state)
+        return
+    }
     node.kind == 16 -> if {
         labelIndex -> emitInterpolationArray(nodeIndex, nodes, sourceModule, ownerIndex, beforeIndex, lexicalLoads, false, context, state)
         return

@@ -1,0 +1,31 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressions
+import sollang.compiler.ir.module_artifact_types as artifacts
+import sys.process as process
+import sys.file as file
+
+main {
+    process.arguments() => arguments
+    arguments[1] -> file.mapText => owner
+    owner -> slice(UIntSize(0), owner -> len) => source
+    [source,; ~] -> semanticContext.prepare -> expressions.resolveCallContext => resolved
+    resolved.prepared.package -> artifacts.captureTypeDetailsAnalyzed(resolved.types.types, resolved.types.references, resolved.types.fields) => details
+    "details=$(details.status) types=$(resolved.types.types -> len) fields=$(resolved.types.fields -> len)" -> println
+    0 => index!
+    resolved.types.types -> each type {
+        type.kind == 10 or type.kind == 11 -> if {
+            "type=$(index!) k=$(type.kind) first=$(type.first) second=$(type.second) length=$(type.length) param=$(type.containsParameter)" -> println
+            resolved.types.fields -> each field {
+                field.ownerType == index! -> if {
+                    "  field ordinal=$(field.ordinal) type=$(field.fieldType) status=$(field.status) source=$(field.sourceModule) label=$(field.labelToken)" -> println
+                }
+            }
+            resolved.types.references -> each reference {
+                reference.typeId == index! -> if {
+                    "  reference source=$(reference.sourceModule) ast=$(reference.typeAst) status=$(reference.status)" -> println
+                }
+            }
+        }
+        index! + 1 => index!
+    }
+}

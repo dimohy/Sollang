@@ -2731,7 +2731,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
                                                         }
                                                     entryExpressionRoot.typeSymbol => entryExpressionRootTypeSymbol!
                                                     -1 => entryExpressionRootTypeId!
-                                                    entryExpressionRoot.kind == 1 or entryExpressionRoot.kind == 5 or entryExpressionRoot.kind == 7 or entryExpressionRoot.kind == 8 or entryExpressionRoot.kind == 10 or entryExpressionRoot.kind == 11
+                                                    entryExpressionRoot.kind == 1 or entryExpressionRoot.kind == 5 or entryExpressionRoot.kind == 7 or entryExpressionRoot.kind == 8 or entryExpressionRoot.kind == 10 or entryExpressionRoot.kind == 17 or entryExpressionRoot.kind == 11
                                                         -> if {
                                                             entryExpressionRootSearch! -> interpolationNodeTypeId(entryExpressionInterpolation, runtimeArgument.sourceModule, functionIndex, entryExpressionIndex, context, state) => entryExpressionRootTypeId!
                                                             entryExpressionRootTypeId! >= 0 -> if { context.types[entryExpressionRootTypeId!].symbol => entryExpressionRootTypeSymbol! }
@@ -3673,154 +3673,157 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
     0 => entryOrderIndex!
     entryOrderIndex! < (plan.order -> len) -> while {
         plan.order[entryOrderIndex!] => entryExpressionIndex
-        context.ir[entryExpressionIndex] => entryExpression
-        entryExpressionIndex -> emitEntryOpeningStreamExpression(functionIndex, entryEnd, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
-        entryExpressionIndex -> emitEntryControlExpression(functionIndex, plan.order, context, state)
-        entryExpressionIndex -> emitEntryValueExpression(functionIndex, entryEnd, entryPointerAlignment, plan.order, entryActiveEach!, entryActiveEachSize!, context, state) => entryActiveEachSize!
-        entryExpressionIndex -> emitEntryOperationExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
-        entryExpressionIndex -> emitEntryTerminalExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
-        -1 => entryNextExpressionIndex!
-        entryOrderIndex! + 1 < (plan.order -> len) -> if { plan.order[entryOrderIndex! + 1] => entryNextExpressionIndex! }
-        true => entryCloseEachProgress!
-        entryActiveEachSize! > 0 and entryCloseEachProgress!
-            -> while {
-                entryActiveEach![entryActiveEachSize! - 1] => entryCloseEachIndex
-                false => entryNextInsideEach!
-                entryNextExpressionIndex! >= 0 -> if {
-                    NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseEachIndex } => entryCloseEachAncestorRequest
-                    entryCloseEachAncestorRequest -> irDescendsFrom(context, state) => entryNextInsideEach!
-                }
-                entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
-                    entryCloseEachIndex -> emitDirectEachEnd(false, context)
-                    entryActiveEachSize! - 1 => entryActiveEachSize!
-                }
-            }
-        true => entryCloseStreamProgress!
-        entryActiveStreamSize! > 0 and entryCloseStreamProgress!
-            -> while {
-                entryActiveStreams![entryActiveStreamSize! - 1] => entryCloseStreamPipelineIndex
-                context.streamPlan.pipelines[entryCloseStreamPipelineIndex] => entryCloseStreamPipeline
-                false => entryNextInsideStream!
-                entryNextExpressionIndex! >= 0 -> if {
-                    NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseStreamPipeline.terminalIr } -> irDescendsFrom(context, state) => entryNextInsideStream!
-                    not entryNextInsideStream! -> if { entryNextExpressionIndex! -> streamPipelineOwnsCallback(entryCloseStreamPipelineIndex, context, state) => entryNextInsideStream! }
-                    not entryNextInsideStream! -> if {
-                        entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryCloseCandidatePartitionRoute
-                        entryNextExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCloseCandidatePredicateRoute
-                        entryCloseCandidatePartitionRoute >= 0 and entryCloseCandidatePredicateRoute >= 0
-                            -> if {
-                                entryCloseCandidatePartitionRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePartitionJunction
-                                entryCloseCandidatePredicateRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePredicateJunction
-                                entryCloseCandidatePartitionJunction == entryCloseCandidatePredicateJunction and entryCloseStreamPipeline.terminalIr == (entryCloseCandidatePartitionJunction -> partitionFirstTerminal(context, state))
-                                    -> if { true => entryNextInsideStream! }
-                            }
+        state.frozenCanonicalInterpolationRootByIr[entryExpressionIndex] < 0
+            -> if {
+                context.ir[entryExpressionIndex] => entryExpression
+                entryExpressionIndex -> emitEntryOpeningStreamExpression(functionIndex, entryEnd, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+                entryExpressionIndex -> emitEntryControlExpression(functionIndex, plan.order, context, state)
+                entryExpressionIndex -> emitEntryValueExpression(functionIndex, entryEnd, entryPointerAlignment, plan.order, entryActiveEach!, entryActiveEachSize!, context, state) => entryActiveEachSize!
+                entryExpressionIndex -> emitEntryOperationExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+                entryExpressionIndex -> emitEntryTerminalExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+                -1 => entryNextExpressionIndex!
+                entryOrderIndex! + 1 < (plan.order -> len) -> if { plan.order[entryOrderIndex! + 1] => entryNextExpressionIndex! }
+                true => entryCloseEachProgress!
+                entryActiveEachSize! > 0 and entryCloseEachProgress!
+                    -> while {
+                        entryActiveEach![entryActiveEachSize! - 1] => entryCloseEachIndex
+                        false => entryNextInsideEach!
+                        entryNextExpressionIndex! >= 0 -> if {
+                            NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseEachIndex } => entryCloseEachAncestorRequest
+                            entryCloseEachAncestorRequest -> irDescendsFrom(context, state) => entryNextInsideEach!
+                        }
+                        entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
+                            entryCloseEachIndex -> emitDirectEachEnd(false, context)
+                            entryActiveEachSize! - 1 => entryActiveEachSize!
+                        }
                     }
-                }
-                entryNextInsideStream! -> if { false => entryCloseStreamProgress! } else {
-                    entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryClosePartitionRoute
-                    entryClosePartitionRoute >= 0 -> if {
-                        entryClosePartitionRoute -> plannedPartitionJunction(context, state) => entryClosePartitionJunction
-                        context.streamPlan.junctions[entryClosePartitionJunction] => entryClosePartition
-                        entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
-                        entryStreamStops![entryActiveStreamSize! - 1] == 1
-                            -> if {
-                                "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
-                            } else {
-                                "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
-                            }
-                        entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal
-                            -> if {
-                                "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
-                                "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
-                                "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
-                                "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
-                                "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
-                                "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
-                                "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
-                                "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
-                                "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
-                                "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
-                            }
-                        entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1
-                            -> if {
-                                "partition$(entryClosePartition.junctionIr)_done:" -> println
-                            }
-                    } else {
-                        -1 => entryCloseTakeStage!
-                        -1 => entryCloseFlatMapStage!
-                        -1 => entryCloseAfterEachStage!
-                        entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
-                        entryCloseStageSearch! < entryCloseStreamPipeline.stageStart + entryCloseStreamPipeline.stageCount
-                            -> while {
-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 1
-                                    -> if { entryCloseStageSearch! => entryCloseTakeStage! }
-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 3
-                                    -> if { entryCloseStageSearch! => entryCloseFlatMapStage! }
-                                context.streamPlan.stages[entryCloseStageSearch!].flags == 5 and context.streamPlan.stages[entryCloseStageSearch!].callbackRoot >= 0
-                                    -> if { entryCloseStageSearch! => entryCloseAfterEachStage! }
-                                entryCloseStageSearch! + 1 => entryCloseStageSearch!
-                            }
-                        entryStreamStops![entryActiveStreamSize! - 1] == 1
-                            -> if {
-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
-                            } else {
-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_continue" -> println
-                            }
-                        "stream$(entryCloseStreamPipeline.terminalIr)_continue:" -> println
-                        entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
-                            -> if {
-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
-                            } else {
-                                entryCloseFlatMapStage! >= 0 -> if {
-                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
-                                    entryCloseTakeStage! >= 0 -> if {
-                                        context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
-                                        WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
-                                        "" -> println
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
-                                        "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
+                true => entryCloseStreamProgress!
+                entryActiveStreamSize! > 0 and entryCloseStreamProgress!
+                    -> while {
+                        entryActiveStreams![entryActiveStreamSize! - 1] => entryCloseStreamPipelineIndex
+                        context.streamPlan.pipelines[entryCloseStreamPipelineIndex] => entryCloseStreamPipeline
+                        false => entryNextInsideStream!
+                        entryNextExpressionIndex! >= 0 -> if {
+                            NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseStreamPipeline.terminalIr } -> irDescendsFrom(context, state) => entryNextInsideStream!
+                            not entryNextInsideStream! -> if { entryNextExpressionIndex! -> streamPipelineOwnsCallback(entryCloseStreamPipelineIndex, context, state) => entryNextInsideStream! }
+                            not entryNextInsideStream! -> if {
+                                entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryCloseCandidatePartitionRoute
+                                entryNextExpressionIndex! -> plannedPartitionPredicateRoute(context, state) => entryCloseCandidatePredicateRoute
+                                entryCloseCandidatePartitionRoute >= 0 and entryCloseCandidatePredicateRoute >= 0
+                                    -> if {
+                                        entryCloseCandidatePartitionRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePartitionJunction
+                                        entryCloseCandidatePredicateRoute -> plannedPartitionJunction(context, state) => entryCloseCandidatePredicateJunction
+                                        entryCloseCandidatePartitionJunction == entryCloseCandidatePredicateJunction and entryCloseStreamPipeline.terminalIr == (entryCloseCandidatePartitionJunction -> partitionFirstTerminal(context, state))
+                                            -> if { true => entryNextInsideStream! }
                                     }
-                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
-                                    entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
-                                    ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
-                                    "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
-                                    "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
-                                    "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
-                                    entryCloseStreamPipeline.status == 3 -> if {
+                            }
+                        }
+                        entryNextInsideStream! -> if { false => entryCloseStreamProgress! } else {
+                            entryCloseStreamPipeline.terminalIr -> plannedPartitionRoute(context, state) => entryClosePartitionRoute
+                            entryClosePartitionRoute >= 0 -> if {
+                                entryClosePartitionRoute -> plannedPartitionJunction(context, state) => entryClosePartitionJunction
+                                context.streamPlan.junctions[entryClosePartitionJunction] => entryClosePartition
+                                entryClosePartitionJunction -> partitionFirstTerminal(context, state) => entryClosePartitionFirstTerminal
+                                entryStreamStops![entryActiveStreamSize! - 1] == 1
+                                    -> if {
+                                        "  br label %stream$(entryClosePartitionFirstTerminal)_exit" -> println
+                                    } else {
+                                        "  br label %stream$(entryClosePartitionFirstTerminal)_continue" -> println
+                                    }
+                                entryCloseStreamPipeline.terminalIr == entryClosePartitionFirstTerminal
+                                    -> if {
+                                        "stream$(entryClosePartitionFirstTerminal)_continue:" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal)_header" -> println
+                                        "stream$(entryClosePartitionFirstTerminal)_exit:" -> println
+                                        "  %stream$(entryClosePartitionFirstTerminal)_has_drop = icmp ne ptr %stream$(entryClosePartitionFirstTerminal)_producer_drop, null" -> println
+                                        "  br i1 %stream$(entryClosePartitionFirstTerminal)_has_drop, label %stream$(entryClosePartitionFirstTerminal)_drop, label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                        "stream$(entryClosePartitionFirstTerminal)_drop:" -> println
+                                        "  call void %stream$(entryClosePartitionFirstTerminal)_producer_drop(ptr %stream$(entryClosePartitionFirstTerminal)_producer_context, i1 true)" -> println
+                                        "  br label %stream$(entryClosePartitionFirstTerminal)_drop_done" -> println
+                                        "stream$(entryClosePartitionFirstTerminal)_drop_done:" -> println
+                                        "  br label %partition$(entryClosePartition.junctionIr)_done" -> println
+                                    }
+                                entryClosePartitionRoute == entryClosePartition.routeStart + entryClosePartition.routeCount - 1
+                                    -> if {
+                                        "partition$(entryClosePartition.junctionIr)_done:" -> println
+                                    }
+                            } else {
+                                -1 => entryCloseTakeStage!
+                                -1 => entryCloseFlatMapStage!
+                                -1 => entryCloseAfterEachStage!
+                                entryCloseStreamPipeline.stageStart => entryCloseStageSearch!
+                                entryCloseStageSearch! < entryCloseStreamPipeline.stageStart + entryCloseStreamPipeline.stageCount
+                                    -> while {
+                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 1
+                                            -> if { entryCloseStageSearch! => entryCloseTakeStage! }
+                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 3
+                                            -> if { entryCloseStageSearch! => entryCloseFlatMapStage! }
+                                        context.streamPlan.stages[entryCloseStageSearch!].flags == 5 and context.streamPlan.stages[entryCloseStageSearch!].callbackRoot >= 0
+                                            -> if { entryCloseStageSearch! => entryCloseAfterEachStage! }
+                                        entryCloseStageSearch! + 1 => entryCloseStageSearch!
+                                    }
+                                entryStreamStops![entryActiveStreamSize! - 1] == 1
+                                    -> if {
                                         "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
                                     } else {
-                                        entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_continue" -> println
                                     }
-                                } else {
-                                    entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
-                                    entryCloseTakeStage! >= 0 -> if {
-                                        context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
-                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
-                                        WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
-                                        "" -> println
-                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
-                                        "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
+                                "stream$(entryCloseStreamPipeline.terminalIr)_continue:" -> println
+                                entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
+                                    -> if {
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                    } else {
+                                        entryCloseFlatMapStage! >= 0 -> if {
+                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(true)
+                                            entryCloseTakeStage! >= 0 -> if {
+                                                context.streamPlan.stages[entryCloseTakeStage!] => entryCloseInnerTake
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+                                                WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseInnerTake.argument0 } -> writeWhileValue(context, state)
+                                                "" -> println
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue" -> println
+                                                "stream$(entryCloseStreamPipeline.terminalIr)_inner_range_continue:" -> println
+                                            }
+                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_inner_last, label %stream$(entryCloseStreamPipeline.terminalIr)_" -> print
+                                            entryCloseAfterEachStage! >= 0 -> if { "after_each" -> print } else { "inner_exit" -> print }
+                                            ", label %stream$(entryCloseStreamPipeline.terminalIr)_inner_header" -> println
+                                            "stream$(entryCloseStreamPipeline.terminalIr)_inner_exit:" -> println
+                                            "  br label %stream$(entryCloseStreamPipeline.terminalIr)_outer_continue" -> println
+                                            "stream$(entryCloseStreamPipeline.terminalIr)_outer_continue:" -> println
+                                            entryCloseStreamPipeline.status == 3 -> if {
+                                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_exit" -> println
+                                            } else {
+                                                entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                            }
+                                        } else {
+                                            entryCloseStreamPipeline.terminalIr -> emitEntryRangeAdvance(false)
+                                            entryCloseTakeStage! >= 0 -> if {
+                                                context.streamPlan.stages[entryCloseTakeStage!] => entryCloseTake
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value = load i32, ptr %stream$(entryCloseStreamPipeline.terminalIr)_slice$(entryCloseTakeStage!)_slot, align 4" -> println
+                                                "  %stream$(entryCloseStreamPipeline.terminalIr)_taken_done = icmp sge i32 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done_value, " -> print
+                                                WhileValueRequest { whileIndex: entryCloseStreamPipeline.terminalIr, ownerIndex: functionIndex, nodeIndex: entryCloseTake.argument0 } -> writeWhileValue(context, state)
+                                                "" -> println
+                                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_taken_done, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_range_continue" -> println
+                                                "stream$(entryCloseStreamPipeline.terminalIr)_range_continue:" -> println
+                                            }
+                                            "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
+                                        }
                                     }
-                                    "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_last, label %stream$(entryCloseStreamPipeline.terminalIr)_exit, label %stream$(entryCloseStreamPipeline.terminalIr)_header" -> println
-                                }
+                                "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
+                                entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
+                                    -> if {
+                                        "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
+                                        "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
+                                        "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
+                                        "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
+                                        "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
+                                    }
                             }
-                        "stream$(entryCloseStreamPipeline.terminalIr)_exit:" -> println
-                        entryCloseStreamPipeline.status > 0 and entryCloseStreamPipeline.status < 3
-                            -> if {
-                                "  %stream$(entryCloseStreamPipeline.terminalIr)_has_drop = icmp ne ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop, null" -> println
-                                "  br i1 %stream$(entryCloseStreamPipeline.terminalIr)_has_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop, label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
-                                "stream$(entryCloseStreamPipeline.terminalIr)_drop:" -> println
-                                "  call void %stream$(entryCloseStreamPipeline.terminalIr)_producer_drop(ptr %stream$(entryCloseStreamPipeline.terminalIr)_producer_context, i1 true)" -> println
-                                "  br label %stream$(entryCloseStreamPipeline.terminalIr)_drop_done" -> println
-                                "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
-                            }
+                            entryActiveStreamSize! - 1 => entryActiveStreamSize!
+                        }
                     }
-                    entryActiveStreamSize! - 1 => entryActiveStreamSize!
-                }
             }
         entryOrderIndex! + 1 => entryOrderIndex!
     }

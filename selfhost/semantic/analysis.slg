@@ -175,6 +175,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
     [SourceAnalysisRange; ~] => ranges!
     [typeTerms.TypeTerm; ~] => terms!
     [types.TypeUse; ~] => typeUses!
+    [resolution.ResolvedName; ~] => names!
     [interpolation.InterpolationSourceRange; ~] => interpolationRanges!
     [interpolation.InterpolationNode; ~] => interpolations!
     0 => sourceIndex!
@@ -202,7 +203,22 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
         source -> completeSourceInterpolations(sourceNodes!, sourceTokens!, sourceSymbols!) => completed
         source -> typeTerms.lowerPrepared(completed.nodes, completed.tokens) => sourceTerms
         source -> types.canonicalizePrepared(completed.nodes, completed.tokens) => sourceTypeUses
+        names! -> len => sourceNameStart
+        0 => copyNameIndex!
+        copyNameIndex! < originalRange.nameCount -> while {
+            names! -> push(package.names[originalRange.nameStart + copyNameIndex!])
+            copyNameIndex! + 1 => copyNameIndex!
+        }
+        (completed.nodes -> len) > originalRange.astCount
+            -> if {
+                source -> resolution.resolvePrepared(completed.nodes, sourceSymbols!, completed.tokens) => completedNames
+                completedNames -> each name {
+                    name.astNode >= originalRange.astCount -> if { names! -> push(name) }
+                }
+            }
         originalRange => range!
+        sourceNameStart => range!.nameStart
+        (names! -> len) - sourceNameStart => range!.nameCount
         nodes! -> len => range!.astStart
         completed.nodes -> len => range!.astCount
         tokens! -> len => range!.tokenStart
@@ -233,7 +249,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
     PackageAnalysis {
         sources: package.sources, entrySourceModule: package.entrySourceModule,
         interpolationRanges: interpolationRanges!, ranges: ranges!, nodes: nodes!, tokens: tokens!,
-        symbols: package.symbols, names: package.names, terms: terms!, typeUses: typeUses!,
+        symbols: package.symbols, names: names!, terms: terms!, typeUses: typeUses!,
         constantLiterals: package.constantLiterals, constantFailures: package.constantFailures,
         interpolations: interpolations!
     }
@@ -266,11 +282,11 @@ analyzeLoweredSource sourceText: file.SourceText, lowered: move constantLowering
     sourceText -> len => sourceLength
     sourceText -> slice(UIntSize(0), sourceLength) => source
     lowered.nodes -> symbols.collectPrepared => sourceSymbols
-    source -> resolution.resolvePrepared(lowered.nodes, sourceSymbols, originalTokens) => sourceNames
     source -> completeSourceInterpolations(lowered.nodes, originalTokens, sourceSymbols) => completed
     completed.nodes => sourceNodes
     completed.tokens => sourceTokens
     completed.interpolations => sourceInterpolations
+    source -> resolution.resolvePrepared(sourceNodes, sourceSymbols, sourceTokens) => sourceNames
     source -> typeTerms.lowerPrepared(sourceNodes, sourceTokens) => sourceTerms
     source -> types.canonicalizePrepared(sourceNodes, sourceTokens) => sourceTypeUses
 

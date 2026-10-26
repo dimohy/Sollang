@@ -288,6 +288,30 @@ expressionTypeId prepared: ref semanticContext.SemanticSnapshot, plan: ref strea
     nodeIndex < 0 or nodeIndex >= (prepared.interpolations -> len)
         -> if { -1 -> return }
     prepared.interpolations[nodeIndex] => node
+    node.kind == 17 -> if {
+        prepared.package.ranges[sourceModule] => range
+        -1 => selectedType!
+        range.astCount + 1 => selectedDepth!
+        ir -> each candidate {
+            candidate.sourceModule == sourceModule and candidate.astNode >= 0
+                and candidate.typeId >= 0 and candidate.typeId < (types -> len)
+                -> if {
+                    candidate.astNode => ancestor!
+                    0 => depth!
+                    ancestor! >= 0 and ancestor! != node.valueAst
+                        -> while {
+                            prepared.package.nodes[range.astStart + ancestor!].parent => ancestor!
+                            depth! + 1 => depth!
+                        }
+                    ancestor! == node.valueAst and depth! < selectedDepth!
+                        -> if {
+                            candidate.typeId => selectedType!
+                            depth! => selectedDepth!
+                        }
+                }
+        }
+        selectedType! -> return
+    }
     (node.kind == 0 or node.kind == 2 or node.kind == 16) and nodeIndex < (bindingFacts.interpolationContextualStructTypeByNode -> len)
         and bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] >= 0
         -> if { bindingFacts.interpolationContextualStructTypeByNode[nodeIndex] -> return }

@@ -1,0 +1,1532 @@
+namespace sollang.compiler.ir.interpolation
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.syntax as syntax
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import syntax.generated.slg as grammar
+
+# Relocatable interpolation IR. Segment offsets are relative to the first byte
+# inside the source string token. Expression-node indexes are global offsets in
+# one owned table, matching the rest of the self-hosted compiler IR.
+# Kinds: 0 integer literal, 1 lexical name, 2 unary, 3 binary,
+# 4 boolean literal, 5 member access, 6 intrinsic flow call, 7 index access,
+# 8 resolved source function call, 9 builtin scalar conversion,
+# 10 unresolved source call retained for diagnostics, 11 Result propagation,
+# 12 contextual struct literal, 13 struct field name, 14 nominal struct literal,
+# 15 generic enum constructor with a canonical source-local type AST,
+# 16 array literal retaining its actual source-local expression AST.
+# Builtin result ids match the nominal
+# table. Member nodes retain their absolute source span and point at the
+# lexical base through operand0 so code generation can project the field.
+public struct InterpolationNode {
+    public kind: Int
+    public segment: Int
+    public parent: Int
+    public symbol: Int
+    public ownerSymbol: Int
+    public prefixSymbol: Int
+    # 0 no lexical receiver, 1 readable direct receiver, 2 mutable name mismatch.
+    public qualifiedReceiverStatus: Int
+    public bareFunctionStatus: Int
+    public opcode: Int
+    public payloadStart: UIntSize
+    public payloadLength: UIntSize
+    public diagnosticStart: UIntSize
+    public memberDotStart: UIntSize
+    public callNameStart: UIntSize
+    public callNameLength: UIntSize
+    public operand0: Int
+    public operand1: Int
+    public operand2: Int
+    public argumentCount: Int
+    public sourceToken: Int
+    public literalStart: UIntSize
+    public literalLength: UIntSize
+    public expressionStart: UIntSize
+    public expressionLength: UIntSize
+    public typeSymbol: Int
+    # Source-local canonical type AST retained from the same fragment parse.
+    public typeAst: Int
+    # Actual literal expression identity; never a type annotation or call target.
+    public valueAst: Int
+    # Exact target path from a direct or flowed call, resolved by semantic.qualified.
+    public targetAst: Int
+}
+
+public struct InterpolationSourceRange {
+    public sourceModule: Int
+    public nodeStart: Int
+    public nodeCount: Int
+}
+
+public struct PreparedInterpolationProduct {
+    public nodes: [InterpolationNode; ~]
+    public typeNodes: [ast.AstNode; ~]
+    public typeTokens: [syntax.SyntaxToken; ~]
+}
+
+public struct PreparedInterpolationRequest {
+    public source: Text
+    public nodes: [ast.AstNode; ~]
+    public tokens: [syntax.SyntaxToken; ~]
+    public symbols: [symbols.Symbol; ~]
+}
+
+builtinConversionSymbol source: Text, token: syntax.SyntaxToken -> Int {
+    ["Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Float", "Float32", "Float64", "Double"] => names
+    [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 19, 20, 21, 22] => symbols
+    -1 => symbol!
+    0 => nameIndex!
+    nameIndex! < (names -> len) -> while {
+        names[nameIndex!] => name
+        token.span.length == UIntSize(name -> len) => equal!
+        UIntSize(0) => byteIndex!
+        equal! and byteIndex! < token.span.length -> while {
+            (source -> byte(token.span.start + byteIndex!)) != (name -> byte(byteIndex!))
+                -> if { false => equal! }
+            byteIndex! + 1 => byteIndex!
+        }
+        equal! -> if { symbols[nameIndex!] => symbol! }
+        nameIndex! + 1 => nameIndex!
+    }
+    symbol!
+}
+
+isRawStringToken source: Text, token: syntax.SyntaxToken -> Bool {
+    token.span.length >= 6
+        and (source -> byte(token.span.start)) == 34
+        and (source -> byte(token.span.start + 1)) == 34
+        and (source -> byte(token.span.start + 2)) == 34
+}
+
+# The token's byte span is a UIntSize interval. Keep its interior endpoints
+# typed at the function boundary before mutable scanner offsets inherit them.
+stringTokenContentStart token: syntax.SyntaxToken -> UIntSize {
+    token.span.start + 1
+}
+
+stringTokenContentEnd token: syntax.SyntaxToken -> UIntSize {
+    token.span.start + token.span.length - 1
+}
+
+sourceReferenceAst nodes: ref [ast.AstNode; ~], token: syntax.SyntaxToken -> Int {
+    -1 => referenceAst!
+    0 => referenceAstSearch!
+    referenceAstSearch! < (nodes -> len) -> while {
+        nodes[referenceAstSearch!] => candidate
+        candidate.start <= token.span.start and token.span.start + token.span.length <= candidate.start + candidate.length
+            -> if {
+                referenceAst! < 0 or candidate.length <= nodes[referenceAst!].length
+                    -> if { referenceAstSearch! => referenceAst! }
+            }
+        referenceAstSearch! + 1 => referenceAstSearch!
+    }
+    referenceAst!
+}
+
+lexicalOwner request: ref PreparedInterpolationRequest, referenceAst: Int -> Int {
+    -1 => ownerSymbol!
+    2_147_483_647 => ownerDistance!
+    0 => ownerSearch!
+    ownerSearch! < (request.symbols -> len) -> while {
+        request.symbols[ownerSearch!] => candidate
+        candidate.kind == 7 or candidate.kind == 29 or candidate.kind == 31 or candidate.kind == 48 or candidate.kind == 58 or candidate.kind == 64
+            -> if {
+                referenceAst => ancestor!
+                0 => distance!
+                false => ownsReference!
+                ancestor! >= 0 and not ownsReference! -> while {
+                    ancestor! == candidate.astNode -> if { true => ownsReference! } else {
+                        request.nodes[ancestor!].parent => ancestor!
+                        distance! + 1 => distance!
+                    }
+                }
+                ownsReference! and (ownerSymbol! < 0 or distance! < ownerDistance!)
+                    -> if {
+                        ownerSearch! => ownerSymbol!
+                        distance! => ownerDistance!
+                    }
+            }
+        ownerSearch! + 1 => ownerSearch!
+    }
+    ownerSymbol!
+}
+
+# C# parses identifier-only dotted paths before postfix call/index/Bang barriers.
+# Retain that identity through the canonical AST receiver chain, not spelling.
+identifierPathMember nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], receiverByAst: ref [Int; ~], memberIndex: Int -> Bool {
+    nodes[memberIndex].start => pathStart
+    memberIndex => receiverIndex!
+    receiverIndex! >= 0 -> while {
+        nodes[receiverIndex!] => receiver
+        receiver.start != pathStart -> if { false -> return }
+        receiver.kind == 15 and receiver.cstRuleId == grammar.ruleIdNameExpression()
+            and receiver.firstToken >= 0 and receiver.firstToken < (tokens -> len)
+            -> if {
+                tokens[receiver.firstToken] => identifier
+                identifier.kind == grammar.tokenIdIdentifier()
+                    and receiver.start == identifier.span.start
+                    and receiver.length == identifier.span.length
+                    => isIdentifierPath
+                isIdentifierPath -> return
+            }
+        receiver.kind == 16 and receiver.cstRuleId == grammar.ruleIdPath()
+            -> if { true -> return }
+        receiver.kind != 36 or receiver.cstRuleId != grammar.ruleIdPostfixExpression()
+            or receiver.operatorKind != grammar.tokenIdDot()
+            -> if { false -> return }
+        receiverByAst[receiverIndex!] => nextReceiver
+        nextReceiver == receiverIndex! -> if { false -> return }
+        nextReceiver => receiverIndex!
+    }
+    false
+}
+
+public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> PreparedInterpolationProduct {
+    decodedSpanLength source: Text, start: UIntSize, end: UIntSize, decodeEscapes: Bool -> UIntSize {
+        UIntSize(0) => length!
+        start => byteIndex!
+        byteIndex! < end -> while {
+            false => decodedEscape!
+            decodeEscapes and (source -> byte(byteIndex!)) == 92 and byteIndex! + 1 < end
+                -> if {
+                    source -> byte(byteIndex! + 1) => escaped
+                    escaped == 110 or escaped == 114 or escaped == 116 or escaped == 92
+                        -> if {
+                            true => decodedEscape!
+                        }
+                }
+            decodedEscape! -> if { byteIndex! + 1 => byteIndex! }
+            length! + 1 => length!
+            byteIndex! + 1 => byteIndex!
+        }
+        length!
+    }
+    [InterpolationNode; ~] => nodes!
+    [ast.AstNode; ~] => typeNodes!
+    [syntax.SyntaxToken; ~] => typeTokens!
+    request.source => source
+    0 => segmentIndex!
+
+    0 => stringTokenIndex!
+    stringTokenIndex! < (request.tokens -> len) -> while {
+        request.tokens[stringTokenIndex!] => stringToken
+        stringToken.kind == grammar.tokenIdString()
+            and not (source -> isRawStringToken(stringToken))
+            -> if {
+                stringToken -> stringTokenContentStart => contentStart
+                stringToken -> stringTokenContentEnd => contentEnd
+                contentStart => literalStart!
+                contentStart => cursor!
+                cursor! < contentEnd -> while {
+                    false => interpolationStart!
+                    (source -> byte(cursor!)) == 36 -> if {
+                        cursor! + 1 < contentEnd -> if {
+                            source -> byte(cursor! + 1) => interpolationNextByte
+                            interpolationNextByte == 40 -> if { true => interpolationStart! } else {
+                                source -> unicodeIdentifier.startWidth(cursor! + 1) > 0 => interpolationStart!
+                            }
+                        }
+                    }
+                    interpolationStart! -> if {
+                        cursor! + 1 => fragmentStart!
+                        fragmentStart! => fragmentEnd!
+                        0 => depth!
+                        false => parenthesizedInterpolation!
+                        (source -> byte(cursor! + 1)) == 40 -> if {
+                            true => parenthesizedInterpolation!
+                            cursor! + 2 => fragmentStart!
+                            fragmentStart! => fragmentEnd!
+                            1 => depth!
+                            source -> syntax.nextStringInterpolationFragment(stringToken, cursor!) => boundary
+                            boundary.span.start => fragmentStart!
+                            boundary.span.start + boundary.span.length => fragmentEnd!
+                            boundary.issue == 0 -> if { 0 => depth! }
+                        } else {
+                            fragmentStart! => fragmentEnd!
+                            source -> unicodeIdentifier.continueWidth(fragmentEnd!) => fragmentWidth!
+                            fragmentWidth! > 0 and fragmentEnd! + fragmentWidth! <= contentEnd
+                                -> while {
+                                    fragmentEnd! + fragmentWidth! => fragmentEnd!
+                                    source -> unicodeIdentifier.continueWidth(fragmentEnd!) => fragmentWidth!
+                                }
+                        }
+                        depth! == 0 -> if {
+                            source -> slice(fragmentStart!, fragmentEnd! - fragmentStart!) => fragment
+                            fragment -> ast.lowerExpression => fragmentAst
+                            fragment -> lexer.lex => fragmentTokens
+                            [Int; ~] => qualifiedCallByPath!
+                            [Int; ~] => qualifiedPathByCall!
+                            fragmentAst -> each candidate {
+                                qualifiedCallByPath! -> push(-1)
+                                qualifiedPathByCall! -> push(-1)
+                            }
+                            0 => qualifiedPathIndex!
+                            qualifiedPathIndex! < (fragmentAst -> len) -> while {
+                                fragmentAst[qualifiedPathIndex!] => path
+                                path.kind == 36 -> if {
+                                    0 => qualifiedCallIndex!
+                                    qualifiedCallIndex! < (fragmentAst -> len) -> while {
+                                        fragmentAst[qualifiedCallIndex!] => call
+                                        call.kind == 11 and call.parent == qualifiedPathIndex!
+                                            and call.cstRuleId == grammar.ruleIdCallExpression()
+                                            and call.start == path.start and call.length == path.length
+                                            -> if {
+                                                qualifiedCallIndex! => qualifiedCallByPath![qualifiedPathIndex!]
+                                                qualifiedPathIndex! => qualifiedPathByCall![qualifiedCallIndex!]
+                                            }
+                                        qualifiedCallIndex! + 1 => qualifiedCallIndex!
+                                    }
+                                }
+                                qualifiedPathIndex! + 1 => qualifiedPathIndex!
+                            }
+                            # Preserve real array subtrees alongside type syntax. Their
+                            # expression identities are consumed by the canonical literal typer.
+                            [Int; ~] => fragmentTypeAst!
+                            0 => retainedAstIndex!
+                            retainedAstIndex! < (fragmentAst -> len) -> while {
+                                fragmentAst[retainedAstIndex!] => typeCandidate
+                                typeCandidate.kind == 12 or qualifiedCallByPath![retainedAstIndex!] >= 0
+                                    or (typeCandidate.kind == 16 and typeCandidate.parent >= 0
+                                    and fragmentAst[typeCandidate.parent].kind == 10) => retain!
+                                retainedAstIndex! => valueAncestor!
+                                valueAncestor! >= 0 and not retain! -> while {
+                                    fragmentAst[valueAncestor!].kind == 37 -> if { true => retain! }
+                                    fragmentAst[valueAncestor!].parent => valueAncestor!
+                                }
+                                -1 => mappedType!
+                                retain! -> if { typeNodes! -> len => mappedType! }
+                                fragmentTypeAst! -> push(mappedType!)
+                                retain! -> if { typeNodes! -> push(typeCandidate) }
+                                retainedAstIndex! + 1 => retainedAstIndex!
+                            }
+                            typeTokens! -> len => fragmentTokenStart
+                            fragmentTokens -> each typeToken {
+                                typeTokens! -> push(syntax.SyntaxToken {
+                                    kind: typeToken.kind
+                                    span: syntax.SourceSpan { fileId: typeToken.span.fileId, start: typeToken.span.start + fragmentStart!, length: typeToken.span.length }
+                                })
+                            }
+                            0 => typeRelocationIndex!
+                            typeRelocationIndex! < (fragmentAst -> len) -> while {
+                                fragmentTypeAst![typeRelocationIndex!] => mappedType
+                                mappedType >= 0 -> if {
+                                    fragmentAst[typeRelocationIndex!] => typeNode!
+                                    qualifiedCallByPath![typeRelocationIndex!] >= 0
+                                        -> if { 16 => typeNode!.kind }
+                                    typeNode!.parent => typeParent!
+                                    typeParent! >= 0 and fragmentTypeAst![typeParent!] < 0
+                                        -> while { fragmentAst[typeParent!].parent => typeParent! }
+                                    -1 => typeNode!.parent
+                                    typeParent! >= 0 -> if { fragmentTypeAst![typeParent!] => typeNode!.parent }
+                                    typeNode!.firstToken + fragmentTokenStart => typeNode!.firstToken
+                                    typeNode!.payloadToken >= 0 -> if { typeNode!.payloadToken + fragmentTokenStart => typeNode!.payloadToken }
+                                    typeNode!.secondaryToken >= 0 -> if { typeNode!.secondaryToken + fragmentTokenStart => typeNode!.secondaryToken }
+                                    typeNode!.tertiaryToken >= 0 -> if { typeNode!.tertiaryToken + fragmentTokenStart => typeNode!.tertiaryToken }
+                                    typeNode!.start + fragmentStart! => typeNode!.start
+                                    typeNode! => typeNodes![mappedType]
+                                }
+                                typeRelocationIndex! + 1 => typeRelocationIndex!
+                            }
+                            [Int; ~] => astToNode!
+                            [Int; ~] => memberReceiverByAst!
+                            0 => astMapIndex!
+                            astMapIndex! < (fragmentAst -> len) -> while {
+                                astToNode! -> push(-1)
+                                memberReceiverByAst! -> push(-1)
+                                astMapIndex! + 1 => astMapIndex!
+                            }
+                            0 => memberReceiverIndex!
+                            memberReceiverIndex! < (fragmentAst -> len) -> while {
+                                fragmentAst[memberReceiverIndex!] => receiver
+                                receiver.parent >= 0 -> if {
+                                    fragmentAst[receiver.parent] => parent
+                                    parent.kind == 36 and receiver.start == parent.start
+                                        and memberReceiverByAst![receiver.parent] < 0
+                                        -> if { memberReceiverIndex! => memberReceiverByAst![receiver.parent] }
+                                }
+                                memberReceiverIndex! + 1 => memberReceiverIndex!
+                            }
+                            nodes! -> len => firstNode
+                            0 => fragmentAstIndex!
+                            fragmentAstIndex! < (fragmentAst -> len) -> while {
+                                fragmentAst[fragmentAstIndex!] => fragmentNode
+                                0 => fragmentChildCount!
+                                0 => fragmentChildSearch!
+                                fragmentChildSearch! < (fragmentAst -> len) -> while {
+                                    fragmentAst[fragmentChildSearch!].parent == fragmentAstIndex!
+                                        -> if { fragmentChildCount! + 1 => fragmentChildCount! }
+                                    fragmentChildSearch! + 1 => fragmentChildSearch!
+                                }
+                                -1 => loweredKind!
+                                fragmentNode.kind == 14 -> if { 0 => loweredKind! }
+                                fragmentNode.kind == 83 -> if { 4 => loweredKind! }
+                                fragmentNode.kind == 15 -> if {
+                                    1 => loweredKind!
+                                    fragmentNode.parent >= 0 and qualifiedCallByPath![fragmentNode.parent] >= 0
+                                        -> if { -1 => loweredKind! }
+                                }
+                                fragmentNode.kind == 55 -> if { 15 => loweredKind! }
+                                fragmentNode.kind == 37 -> if { 16 => loweredKind! }
+                                fragmentNode.kind == 22 -> if { 2 => loweredKind! }
+                                fragmentNode.kind == 36 -> if { 5 => loweredKind! }
+                                fragmentNode.kind == 36 -> if {
+                                    # A qualified call's parser member shell spans the same
+                                    # expression as its immediate call child. The call owns
+                                    # the result; later field projections have a larger span.
+                                    0 => transparentCallIndex!
+                                    transparentCallIndex! < (fragmentAst -> len) -> while {
+                                        fragmentAst[transparentCallIndex!] => transparentCall
+                                        transparentCall.parent == fragmentAstIndex!
+                                            and (transparentCall.kind == 11 or transparentCall.kind == 55)
+                                            and transparentCall.start == fragmentNode.start
+                                            and transparentCall.length == fragmentNode.length
+                                            -> if { -1 => loweredKind! }
+                                        transparentCallIndex! + 1 => transparentCallIndex!
+                                    }
+                                    0 => transparentLiteralIndex!
+                                    transparentLiteralIndex! < (fragmentAst -> len)
+                                        -> while {
+                                            fragmentAst[transparentLiteralIndex!].kind == 39
+                                                and fragmentAst[transparentLiteralIndex!].start == fragmentNode.start
+                                                and fragmentAst[transparentLiteralIndex!].length >= fragmentNode.length
+                                                -> if {
+                                                    fragmentAst[transparentLiteralIndex!].parent => transparentAncestor!
+                                                    transparentAncestor! >= 0 and transparentAncestor! != fragmentAstIndex!
+                                                        -> while { fragmentAst[transparentAncestor!].parent => transparentAncestor! }
+                                                    transparentAncestor! == fragmentAstIndex! -> if { -1 => loweredKind! }
+                                                }
+                                            transparentLiteralIndex! + 1 => transparentLiteralIndex!
+                                        }
+                                }
+                                fragmentNode.kind == 41 -> if { 7 => loweredKind! }
+                                fragmentNode.kind == 82 -> if { 11 => loweredKind! }
+                                fragmentNode.kind == 38 -> if { 12 => loweredKind! }
+                                fragmentNode.kind == 39 -> if { 14 => loweredKind! }
+                                fragmentNode.kind == 40 and fragmentNode.parent >= 0
+                                    and fragmentAst[fragmentNode.parent].kind == 39
+                                    -> if { 13 => loweredKind! }
+                                fragmentNode.kind == 15 and fragmentNode.parent >= 0
+                                    and fragmentAst[fragmentNode.parent].kind == 38
+                                    -> if {
+                                        0 => fieldChildOrdinal!
+                                        0 => precedingFieldChild!
+                                        precedingFieldChild! < fragmentAstIndex! -> while {
+                                            fragmentAst[precedingFieldChild!].parent == fragmentNode.parent
+                                                -> if { fieldChildOrdinal! + 1 => fieldChildOrdinal! }
+                                            precedingFieldChild! + 1 => precedingFieldChild!
+                                        }
+                                        fieldChildOrdinal! % 2 == 0 -> if { 13 => loweredKind! }
+                                    }
+                                fragmentChildCount! >= 2 and ((fragmentNode.kind >= 18 and fragmentNode.kind <= 21) or fragmentNode.kind == 24 or fragmentNode.kind == 25)
+                                    -> if { 3 => loweredKind! }
+                                -1 => intrinsicFlowOpcode!
+                                -1 => flowTargetPayloadToken!
+                                UIntSize(0) => flowTargetPathLength!
+                                false => flowFunctionTarget!
+                                false => flowQualifiedTarget!
+                                -1 => resolvedFlowSymbol!
+                                -1 => flowConversionSymbol!
+                                # The expression grammar retains a call wrapper (10)
+                                # and its concrete call shell (11). Builtin scalar
+                                # conversion identity belongs to the shell whose
+                                # direct child is the function target.
+                                fragmentNode.kind == 10 or fragmentNode.kind == 11
+                                    -> if {
+                                        0 => flowTargetSearch!
+                                        flowTargetSearch! < (fragmentAst -> len) -> while {
+                                            fragmentAst[flowTargetSearch!] => flowTarget
+                                            flowTarget.parent == fragmentAstIndex!
+                                                and (flowTarget.kind == 16 or (flowTarget.kind == 11 and flowTarget.start == fragmentNode.start and not flowFunctionTarget!))
+                                                and flowTarget.payloadToken >= 0 -> if {
+                                                    flowTarget.payloadToken => flowTargetPayloadToken!
+                                                    flowTarget.length => flowTargetPathLength!
+                                                    flowTarget.kind == 16 -> if { true => flowFunctionTarget! }
+                                                    fragmentTokens[flowTarget.payloadToken] => flowTargetName
+                                                    flowTarget.kind == 16
+                                                        and flowTargetName.span.start + flowTargetName.span.length < UIntSize(fragment -> len)
+                                                        and (fragment -> byte(flowTargetName.span.start + flowTargetName.span.length)) == 46
+                                                        -> if {
+                                                            true => flowQualifiedTarget!
+                                                        }
+                                                    flowTargetName.span.length == 3
+                                                        and (fragment -> byte(flowTargetName.span.start)) == 108
+                                                        and (fragment -> byte(flowTargetName.span.start + 1)) == 101
+                                                        and (fragment -> byte(flowTargetName.span.start + 2)) == 110
+                                                        -> if {
+                                                            -101 => intrinsicFlowOpcode!
+                                                        }
+                                                    (fragment -> slice(flowTargetName.span.start, flowTargetName.span.length)) == "capacity"
+                                                        -> if { -236 => intrinsicFlowOpcode! }
+                                                    (fragment -> slice(flowTargetName.span.start, flowTargetName.span.length)) == "count"
+                                                        -> if { -244 => intrinsicFlowOpcode! }
+                                                    (fragment -> slice(flowTargetName.span.start, flowTargetName.span.length)) == "contains"
+                                                        -> if { -243 => intrinsicFlowOpcode! }
+                                                    flowTargetName.span.length == 4
+                                                        and (fragment -> byte(flowTargetName.span.start)) == 98
+                                                        and (fragment -> byte(flowTargetName.span.start + 1)) == 121
+                                                        and (fragment -> byte(flowTargetName.span.start + 2)) == 116
+                                                        and (fragment -> byte(flowTargetName.span.start + 3)) == 101
+                                                        -> if {
+                                                            -202 => intrinsicFlowOpcode!
+                                                        }
+                                                    flowTargetName.span.length == 5
+                                                        and (fragment -> byte(flowTargetName.span.start)) == 115
+                                                        and (fragment -> byte(flowTargetName.span.start + 1)) == 108
+                                                        and (fragment -> byte(flowTargetName.span.start + 2)) == 105
+                                                        and (fragment -> byte(flowTargetName.span.start + 3)) == 99
+                                                        and (fragment -> byte(flowTargetName.span.start + 4)) == 101
+                                                        -> if {
+                                                            -203 => intrinsicFlowOpcode!
+                                                        }
+                                                }
+                                            flowTargetSearch! + 1 => flowTargetSearch!
+                                        }
+                                        # A member path can be the receiver rather than the
+                                        # called function, as in `outer.inner -> read`. Treat
+                                        # only a path that actually contains the target-name
+                                        # token as a qualified function target; otherwise the
+                                        # complete projected value must become operand0.
+                                        flowTargetPayloadToken! >= 0 -> if {
+                                            fragmentTokens[flowTargetPayloadToken!] => qualifiedFlowTargetName
+                                            0 => qualifiedFlowPathSearch!
+                                            qualifiedFlowPathSearch! < (fragmentAst -> len)
+                                                -> while {
+                                                    fragmentAst[qualifiedFlowPathSearch!] => qualifiedFlowPath
+                                                    qualifiedFlowPath.parent == fragmentAstIndex!
+                                                        and qualifiedFlowPath.kind == 36
+                                                        and qualifiedFlowPath.start <= qualifiedFlowTargetName.span.start
+                                                        and qualifiedFlowTargetName.span.start + qualifiedFlowTargetName.span.length <= qualifiedFlowPath.start + qualifiedFlowPath.length
+                                                        -> if {
+                                                            true => flowQualifiedTarget!
+                                                        }
+                                                    qualifiedFlowPathSearch! + 1 => qualifiedFlowPathSearch!
+                                                }
+                                        }
+                                        flowTargetPayloadToken! >= 0 and not flowQualifiedTarget!
+                                            -> if {
+                                                fragmentTokens[flowTargetPayloadToken!] => requestedFlowName
+                                                request.nodes -> sourceReferenceAst(stringToken) => functionReferenceAst
+                                                request -> lexicalOwner(functionReferenceAst) => functionScope!
+                                                false => functionScopesDone!
+                                                resolvedFlowSymbol! < 0 and not functionScopesDone!
+                                                    -> while {
+                                                        0 => functionSymbolSearch!
+                                                        functionSymbolSearch! < (request.symbols -> len) and resolvedFlowSymbol! < 0
+                                                            -> while {
+                                                                request.symbols[functionSymbolSearch!] => functionSymbol
+                                                                functionSymbol.kind == 7 and functionSymbol.parent == functionScope! and functionSymbol.nameToken >= 0
+                                                                    and not (functionSymbol -> symbols.hasQualifiedFunctionName(request.tokens, 0, request.tokens -> len))
+                                                                    -> if {
+                                                                        request.tokens[functionSymbol.nameToken] => declaredFunctionName
+                                                                        declaredFunctionName.span.length == requestedFlowName.span.length => functionNamesEqual!
+                                                                        UIntSize(0) => functionNameByte!
+                                                                        functionNamesEqual! and functionNameByte! < declaredFunctionName.span.length
+                                                                            -> while {
+                                                                                (source -> byte(declaredFunctionName.span.start + functionNameByte!)) != (fragment -> byte(requestedFlowName.span.start + functionNameByte!))
+                                                                                    -> if {
+                                                                                        false => functionNamesEqual!
+                                                                                    }
+                                                                                functionNameByte! + 1 => functionNameByte!
+                                                                            }
+                                                                        functionNamesEqual! -> if { functionSymbolSearch! => resolvedFlowSymbol! }
+                                                                    }
+                                                                functionSymbolSearch! + 1 => functionSymbolSearch!
+                                                            }
+                                                        functionScope! < 0 -> if { true => functionScopesDone! } else {
+                                                            request.symbols[functionScope!].parent => functionScope!
+                                                        }
+                                                    }
+                                                fragment -> builtinConversionSymbol(requestedFlowName) => flowConversionSymbol!
+                                            }
+                                        intrinsicFlowOpcode! < -1 -> if { 6 => loweredKind! }
+                                        resolvedFlowSymbol! >= 0 -> if { 8 => loweredKind! }
+                                        flowConversionSymbol! >= 0 -> if { 9 => loweredKind! }
+                                        flowFunctionTarget! and flowTargetPayloadToken! >= 0 and loweredKind! < 0
+                                            -> if { 10 => loweredKind! }
+                                    }
+                                qualifiedPathByCall![fragmentAstIndex!] >= 0 -> if {
+                                    fragmentAst[qualifiedPathByCall![fragmentAstIndex!]] => path
+                                    path.firstToken => flowTargetPayloadToken!
+                                    path.firstToken => targetEnd!
+                                    targetEnd! < path.firstToken + path.tokenCount
+                                        and fragmentTokens[targetEnd!].kind != grammar.tokenIdLeftParen()
+                                        -> while { targetEnd! + 1 => targetEnd! }
+                                    targetEnd! < path.firstToken + path.tokenCount
+                                        -> if {
+                                            fragmentTokens[targetEnd!].span.start - fragmentTokens[path.firstToken].span.start => flowTargetPathLength!
+                                            true => flowQualifiedTarget!
+                                            10 => loweredKind!
+                                        }
+                                }
+                                # A storage suffix is array syntax, never an evaluated element.
+                                # Use the nearest actual array AST and its own semicolon only.
+                                fragmentNode.parent => arrayAncestor!
+                                arrayAncestor! >= 0 and fragmentAst[arrayAncestor!].kind != 37
+                                    -> while {
+                                        fragmentAst[arrayAncestor!].parent => arrayAncestor!
+                                    }
+                                arrayAncestor! >= 0 -> if {
+                                    fragmentAst[arrayAncestor!] => enclosingArray
+                                    0 => suffixDepth!
+                                    enclosingArray.firstToken => suffixToken!
+                                    suffixToken! < enclosingArray.firstToken + enclosingArray.tokenCount
+                                        -> while {
+                                            fragmentTokens[suffixToken!] => suffixSyntax
+                                            suffixSyntax.kind == grammar.tokenIdLeftBracket() or suffixSyntax.kind == grammar.tokenIdLeftBrace() or suffixSyntax.kind == grammar.tokenIdLeftParen()
+                                                -> if { suffixDepth! + 1 => suffixDepth! }
+                                            suffixSyntax.kind == grammar.tokenIdRightBracket() or suffixSyntax.kind == grammar.tokenIdRightBrace() or suffixSyntax.kind == grammar.tokenIdRightParen()
+                                                -> if { suffixDepth! - 1 => suffixDepth! }
+                                            suffixDepth! == 1 and suffixSyntax.kind == grammar.tokenIdSemicolon() and fragmentNode.start > suffixSyntax.span.start
+                                                -> if { -1 => loweredKind! }
+                                            suffixToken! + 1 => suffixToken!
+                                        }
+                                }
+                                loweredKind! >= 0 -> if {
+                                    -1 => loweredParent!
+                                    fragmentNode.parent => parentAst!
+                                    parentAst! >= 0 and fragmentAst[parentAst!].kind == 40
+                                        -> if { fragmentAst[parentAst!].parent => parentAst! }
+                                    parentAst! >= 0 and loweredParent! < 0 -> while {
+                                        astToNode![parentAst!] => mappedParent
+                                        mappedParent >= 0 -> if { mappedParent => loweredParent! } else { fragmentAst[parentAst!].parent => parentAst! }
+                                    }
+                                    resolvedFlowSymbol! => resolvedSymbol!
+                                    -1 => resolvedOwner!
+                                    -1 => resolvedPrefixSymbol!
+                                    -1 => directReceiverSymbol!
+                                    UIntSize(0) => directReceiverLength!
+                                    0 => qualifiedReceiverStatus!
+                                    -1 => resolvedBareFunctionStatus!
+                                    (loweredKind! == 1 and fragmentNode.kind == 15)
+                                        or (loweredKind! == 10 and flowQualifiedTarget!)
+                                        -> if {
+                                            fragmentTokens[loweredKind! == 10 -> if { flowTargetPayloadToken! } else { fragmentNode.payloadToken }] => fragmentName
+                                            false => referenceMutable!
+                                            loweredKind! == 1 -> if {
+                                                fragmentNode.firstToken => referenceToken!
+                                                referenceToken! < fragmentNode.firstToken + fragmentNode.tokenCount
+                                                    -> while {
+                                                        fragmentTokens[referenceToken!] => referenceToken
+                                                        referenceToken.span.length == 1 and (fragment -> byte(referenceToken.span.start)) == 33
+                                                            -> if { true => referenceMutable! }
+                                                        referenceToken! + 1 => referenceToken!
+                                                    }
+                                            }
+                                            -1 => ownerSymbol!
+                                            request.nodes -> sourceReferenceAst(stringToken) => referenceAst
+                                            request -> lexicalOwner(referenceAst) => ownerSymbol!
+                                            ownerSymbol! => resolvedOwner!
+                                            UIntSize(0) => longestPrefixLength!
+                                            UIntSize(0) => prefixVisibleStart!
+                                            ownerSymbol! => searchScope!
+                                            false => scopesDone!
+                                            false => visibleMutablePrefix!
+                                            resolvedSymbol! < 0 and not scopesDone! -> while {
+                                                -1 => nearestSymbol!
+                                                UIntSize(0) => nearestStart!
+                                                0 => candidateSymbol!
+                                                candidateSymbol! < (request.symbols -> len) -> while {
+                                                    request.symbols[candidateSymbol!] => candidate
+                                                    (candidate.kind == 9 or candidate.kind == 61 or candidate.kind == 32 or candidate.kind == 35) and candidate.parent == searchScope!
+                                                        -> if {
+                                                            request.tokens[candidate.nameToken] => candidateName
+                                                            candidateName.span.length => candidateNameLength
+                                                            loweredKind! == 10 -> if { flowTargetPathLength! } else { fragmentName.span.length } => fragmentNameRawLength
+                                                            candidate -> symbols.contextualName => contextualName
+                                                            (contextualName -> len) > 0 => contextualRole
+                                                            contextualRole and (fragment -> slice(fragmentName.span.start, fragmentNameRawLength)) == contextualName => nameEqual!
+                                                            false => prefixEqual!
+                                                            not contextualRole -> if {
+                                                                candidateNameLength < fragmentNameRawLength -> if {
+                                                                    loweredKind! != 10 or (fragment -> byte(fragmentName.span.start + candidateNameLength)) == 46 => prefixEqual!
+                                                                }
+                                                                candidateNameLength == fragmentNameRawLength
+                                                                    -> if {
+                                                                        true => nameEqual!
+                                                                    } else {
+                                                                        fragmentNameRawLength == candidateNameLength + 1
+                                                                            -> if {
+                                                                                (fragment -> byte(fragmentName.span.start + fragmentNameRawLength - 1)) == 33
+                                                                                    -> if {
+                                                                                        true => nameEqual!
+                                                                                    }
+                                                                            }
+                                                                    }
+                                                                UIntSize(0) => nameByte!
+                                                                (nameEqual! or prefixEqual!) and nameByte! < candidateNameLength
+                                                                    -> while {
+                                                                        (fragment -> byte(fragmentName.span.start + nameByte!)) != (source -> byte(candidateName.span.start + nameByte!))
+                                                                            -> if {
+                                                                                false => nameEqual!
+                                                                                false => prefixEqual!
+                                                                            }
+                                                                        nameByte! + 1 => nameByte!
+                                                                    }
+                                                            }
+                                                            (candidate.kind == 9 or candidate.kind == 61) and candidate.flags % 2 == 1 => candidateMutable
+                                                            loweredKind! == 1 and not contextualRole
+                                                                and ((referenceMutable! and not candidateMutable) or (not referenceMutable! and candidateMutable))
+                                                                -> if {
+                                                                    false => nameEqual!
+                                                                    false => prefixEqual!
+                                                                }
+                                                            nameEqual! or prefixEqual! -> if {
+                                                                request.nodes[candidate.astNode].start => candidateStart
+                                                                (candidate.kind == 32 or candidate.kind == 35) => candidateVisible!
+                                                                candidate.kind == 9 or candidate.kind == 61
+                                                                    -> if {
+                                                                        -1 => candidateBlockAst!
+                                                                        candidate.astNode => candidateOwnerAst!
+                                                                        candidateOwnerAst! >= 0 and candidateBlockAst! < 0
+                                                                            -> while {
+                                                                                request.nodes[candidateOwnerAst!].kind == 43
+                                                                                    -> if {
+                                                                                        candidateOwnerAst! => candidateBlockAst!
+                                                                                    } else {
+                                                                                        request.nodes[candidateOwnerAst!].parent => candidateOwnerAst!
+                                                                                    }
+                                                                            }
+                                                                        candidateBlockAst! < 0 => candidateVisible!
+                                                                        referenceAst => referenceBlockSearch!
+                                                                        referenceBlockSearch! >= 0 -> while {
+                                                                            referenceBlockSearch! == candidateBlockAst! -> if { true => candidateVisible! }
+                                                                            request.nodes[referenceBlockSearch!].parent => referenceBlockSearch!
+                                                                        }
+                                                                        searchScope! == ownerSymbol! and candidateStart >= stringToken.span.start
+                                                                            -> if { false => candidateVisible! }
+                                                                    }
+                                                                candidateVisible! -> if {
+                                                                    loweredKind! == 10 and candidateMutable -> if {
+                                                                        prefixEqual! -> if { true => visibleMutablePrefix! }
+                                                                        false => nameEqual!
+                                                                        false => prefixEqual!
+                                                                    }
+                                                                    nameEqual! -> if {
+                                                                        nearestSymbol! < 0 or candidateStart >= nearestStart!
+                                                                            -> if {
+                                                                                candidateSymbol! => nearestSymbol!
+                                                                                candidateStart => nearestStart!
+                                                                            }
+                                                                    }
+                                                                    prefixEqual! and (candidateNameLength > longestPrefixLength!
+                                                                        or (loweredKind! == 10 and candidateNameLength == longestPrefixLength! and candidateStart >= prefixVisibleStart!))
+                                                                        -> if {
+                                                                            candidateSymbol! => resolvedPrefixSymbol!
+                                                                            candidateNameLength => longestPrefixLength!
+                                                                            candidateStart => prefixVisibleStart!
+                                                                        }
+                                                                }
+                                                            }
+                                                        }
+                                                    candidateSymbol! + 1 => candidateSymbol!
+                                                }
+                                                nearestSymbol! >= 0 -> if { nearestSymbol! => resolvedSymbol! }
+                                                loweredKind! == 10 and resolvedPrefixSymbol! >= 0
+                                                    -> if { true => scopesDone! }
+                                                resolvedSymbol! < 0 -> if {
+                                                    searchScope! >= 0 -> if {
+                                                        request.symbols[searchScope!].parent => searchScope!
+                                                    } else {
+                                                        true => scopesDone!
+                                                    }
+                                                }
+                                            }
+                                            loweredKind! == 10 and resolvedPrefixSymbol! >= 0
+                                                -> if {
+                                                    resolvedPrefixSymbol! => resolvedSymbol!
+                                                }
+                                            # A mutable reassignment has its own source
+                                            # symbol, but every read and write targets
+                                            # the original mutable storage binding.
+                                            # Normalize the interpolation reference to
+                                            # that declaration so type lookup and LLVM
+                                            # slot lookup share one identity.
+                                            resolvedSymbol! >= 0
+                                                and (request.symbols[resolvedSymbol!].kind == 9 or request.symbols[resolvedSymbol!].kind == 61)
+                                                and request.symbols[resolvedSymbol!].flags == 1
+                                                -> if {
+                                                    request.symbols[resolvedSymbol!] => mutableReassignment
+                                                    request.tokens[mutableReassignment.nameToken] => mutableReassignmentName
+                                                    -1 => mutableDeclarationSymbol!
+                                                    UIntSize(0) => mutableDeclarationStart!
+                                                    0 => mutableDeclarationSearch!
+                                                    mutableDeclarationSearch! < (request.symbols -> len)
+                                                        -> while {
+                                                            request.symbols[mutableDeclarationSearch!] => mutableDeclaration
+                                                            mutableDeclaration.kind == 9 and mutableDeclaration.flags == 1
+                                                                -> if {
+                                                                    request.tokens[mutableDeclaration.nameToken] => mutableDeclarationName
+                                                                    mutableDeclarationName.span.length == mutableReassignmentName.span.length => mutableDeclarationNameEqual!
+                                                                    UIntSize(0) => mutableDeclarationNameByte!
+                                                                    mutableDeclarationNameEqual! and mutableDeclarationNameByte! < mutableDeclarationName.span.length
+                                                                        -> while {
+                                                                            (source -> byte(mutableDeclarationName.span.start + mutableDeclarationNameByte!)) != (source -> byte(mutableReassignmentName.span.start + mutableDeclarationNameByte!))
+                                                                                -> if {
+                                                                                    false => mutableDeclarationNameEqual!
+                                                                                }
+                                                                            mutableDeclarationNameByte! + 1 => mutableDeclarationNameByte!
+                                                                        }
+                                                                    mutableDeclaration.parent == mutableReassignment.parent => mutableDeclarationVisible!
+                                                                    mutableReassignment.parent => mutableDeclarationScope!
+                                                                    not mutableDeclarationVisible! and mutableDeclarationScope! >= 0
+                                                                        -> while {
+                                                                            request.symbols[mutableDeclarationScope!].parent => mutableDeclarationScope!
+                                                                            mutableDeclarationScope! == mutableDeclaration.parent
+                                                                                -> if { true => mutableDeclarationVisible! }
+                                                                        }
+                                                                    request.nodes[mutableDeclaration.astNode].start => mutableDeclarationCandidateStart
+                                                                    request.nodes[mutableReassignment.astNode].start => mutableReassignmentStart
+                                                                    mutableDeclarationNameEqual!
+                                                                        and mutableDeclarationVisible!
+                                                                        and mutableDeclarationCandidateStart < mutableReassignmentStart
+                                                                        and (mutableDeclarationSymbol! < 0 or mutableDeclarationCandidateStart < mutableDeclarationStart!)
+                                                                        -> if {
+                                                                            mutableDeclarationSearch! => mutableDeclarationSymbol!
+                                                                            mutableDeclarationCandidateStart => mutableDeclarationStart!
+                                                                        }
+                                                                }
+                                                            mutableDeclarationSearch! + 1 => mutableDeclarationSearch!
+                                                        }
+                                                    mutableDeclarationSymbol! >= 0 -> if { mutableDeclarationSymbol! => resolvedSymbol! }
+                                                }
+                                            loweredKind! == 10 and resolvedPrefixSymbol! >= 0
+                                                -> if {
+                                                    1 => qualifiedReceiverStatus!
+                                                    resolvedSymbol! => directReceiverSymbol!
+                                                    longestPrefixLength! => directReceiverLength!
+                                                    resolvedFlowSymbol! => resolvedSymbol!
+                                                }
+                                            loweredKind! == 10 and resolvedPrefixSymbol! < 0
+                                                and visibleMutablePrefix! and resolvedFlowSymbol! < 0
+                                                -> if { 2 => qualifiedReceiverStatus! }
+                                            resolvedSymbol! < 0 -> if {
+                                                ownerSymbol! => localFunctionOwner!
+                                                ownerSymbol! >= 0
+                                                    and (request.symbols[ownerSymbol!].kind == 7 or request.symbols[ownerSymbol!].kind == 31)
+                                                    and request.symbols[ownerSymbol!].parent >= 0
+                                                    -> if { request.symbols[ownerSymbol!].parent => localFunctionOwner! }
+                                                0 => functionSymbolSearch!
+                                                functionSymbolSearch! < (request.symbols -> len) and resolvedBareFunctionStatus! < 0
+                                                    -> while {
+                                                        request.symbols[functionSymbolSearch!] => functionSymbol
+                                                        functionSymbol.kind == 7 and functionSymbol.nameToken >= 0
+                                                            and (functionSymbol.parent < 0 or functionSymbol.parent == localFunctionOwner!)
+                                                            and not (functionSymbol -> symbols.hasQualifiedFunctionName(request.tokens, 0, request.tokens -> len))
+                                                            -> if {
+                                                                request.tokens[functionSymbol.nameToken] => declaredFunctionName
+                                                                declaredFunctionName.span.length == fragmentName.span.length => functionNameEqual!
+                                                                UIntSize(0) => functionNameByte!
+                                                                functionNameEqual! and functionNameByte! < fragmentName.span.length
+                                                                    -> while {
+                                                                        (source -> byte(declaredFunctionName.span.start + functionNameByte!)) != (fragment -> byte(fragmentName.span.start + functionNameByte!))
+                                                                            -> if { false => functionNameEqual! }
+                                                                        functionNameByte! + 1 => functionNameByte!
+                                                                    }
+                                                                functionNameEqual! -> if {
+                                                                    request.nodes[functionSymbol.astNode].secondaryToken >= 0
+                                                                        -> if { 1 => resolvedBareFunctionStatus! } else { 0 => resolvedBareFunctionStatus! }
+                                                                }
+                                                            }
+                                                        functionSymbolSearch! + 1 => functionSymbolSearch!
+                                                    }
+                                            }
+                                        }
+                                    -1 => loweredTypeSymbol!
+                                    loweredKind! == 0 -> if { 2 => loweredTypeSymbol! }
+                                    loweredKind! == 4 -> if { 23 => loweredTypeSymbol! }
+                                    loweredKind! == 2 -> if {
+                                        fragmentNode.operatorKind == -26 -> if { 23 => loweredTypeSymbol! } else { 2 => loweredTypeSymbol! }
+                                    }
+                                    loweredKind! == 3 -> if {
+                                        fragmentNode.operatorKind == grammar.tokenIdEqualEqual() or fragmentNode.operatorKind == grammar.tokenIdBangEqual() or fragmentNode.operatorKind == grammar.tokenIdLess() or fragmentNode.operatorKind == grammar.tokenIdLessEqual() or fragmentNode.operatorKind == grammar.tokenIdGreater() or fragmentNode.operatorKind == grammar.tokenIdGreaterEqual() or fragmentNode.operatorKind == -24 or fragmentNode.operatorKind == -25
+                                            -> if { 23 => loweredTypeSymbol! } else { 2 => loweredTypeSymbol! }
+                                    }
+                                    loweredKind! == 6 -> if {
+                                        intrinsicFlowOpcode! == -101 or intrinsicFlowOpcode! == -236
+                                            -> if { 13 => loweredTypeSymbol! }
+                                        intrinsicFlowOpcode! == -202 -> if { 8 => loweredTypeSymbol! }
+                                        intrinsicFlowOpcode! == -203 -> if { 1 => loweredTypeSymbol! }
+                                        intrinsicFlowOpcode! == -244 -> if { 2 => loweredTypeSymbol! }
+                                        intrinsicFlowOpcode! == -243 -> if { 23 => loweredTypeSymbol! }
+                                    }
+                                    loweredKind! == 9 -> if { flowConversionSymbol! => loweredTypeSymbol! }
+                                    -1 => loweredArgumentCount!
+                                    loweredKind! == 6 and (intrinsicFlowOpcode! == -202 or intrinsicFlowOpcode! == -203
+                                        or intrinsicFlowOpcode! == -101 or intrinsicFlowOpcode! == -236
+                                        or intrinsicFlowOpcode! == -244 or intrinsicFlowOpcode! == -243)
+                                        -> if {
+                                            0 => loweredArgumentCount!
+                                            0 => argumentListIndex!
+                                            argumentListIndex! < (fragmentAst -> len) -> while {
+                                                fragmentAst[argumentListIndex!] => argumentList
+                                                argumentList.parent == fragmentAstIndex! and argumentList.kind == 11
+                                                    and flowTargetPayloadToken! >= 0
+                                                    and argumentList.start >= fragmentTokens[flowTargetPayloadToken!].span.start + fragmentTokens[flowTargetPayloadToken!].span.length
+                                                    -> if {
+                                                        0 => argumentIndex!
+                                                        argumentIndex! < (fragmentAst -> len) -> while {
+                                                            fragmentAst[argumentIndex!].parent == argumentListIndex!
+                                                                -> if { loweredArgumentCount! + 1 => loweredArgumentCount! }
+                                                            argumentIndex! + 1 => argumentIndex!
+                                                        }
+                                                    }
+                                                argumentListIndex! + 1 => argumentListIndex!
+                                            }
+                                        }
+                                    loweredKind! == 16 -> if {
+                                        0 => loweredArgumentCount!
+                                        fragmentNode.start + fragmentNode.length => valueEnd!
+                                        0 => arrayDepth!
+                                        fragmentNode.firstToken => arrayToken!
+                                        arrayToken! < fragmentNode.firstToken + fragmentNode.tokenCount
+                                            -> while {
+                                                fragmentTokens[arrayToken!] => arraySyntaxToken
+                                                arraySyntaxToken.kind == grammar.tokenIdLeftBracket() or arraySyntaxToken.kind == grammar.tokenIdLeftBrace() or arraySyntaxToken.kind == grammar.tokenIdLeftParen()
+                                                    -> if { arrayDepth! + 1 => arrayDepth! }
+                                                arraySyntaxToken.kind == grammar.tokenIdRightBracket() or arraySyntaxToken.kind == grammar.tokenIdRightBrace() or arraySyntaxToken.kind == grammar.tokenIdRightParen()
+                                                    -> if { arrayDepth! - 1 => arrayDepth! }
+                                                arrayDepth! == 1 and arraySyntaxToken.kind == grammar.tokenIdSemicolon()
+                                                    -> if { arraySyntaxToken.span.start => valueEnd! }
+                                                arrayToken! + 1 => arrayToken!
+                                            }
+                                        0 => arrayChild!
+                                        arrayChild! < (fragmentAst -> len) -> while {
+                                            fragmentAst[arrayChild!] => arrayElementAst
+                                            arrayElementAst.parent == fragmentAstIndex! and arrayElementAst.start < valueEnd!
+                                                and arrayElementAst.kind != 12 and arrayElementAst.kind != 16
+                                                -> if { loweredArgumentCount! + 1 => loweredArgumentCount! }
+                                            arrayChild! + 1 => arrayChild!
+                                        }
+                                    }
+                                    fragmentStart! - contentStart => loweredExpressionStart!
+                                    not parenthesizedInterpolation! -> if { cursor! - contentStart => loweredExpressionStart! }
+                                    fragmentEnd! => loweredInterpolationEnd!
+                                    parenthesizedInterpolation! -> if { fragmentEnd! + 1 => loweredInterpolationEnd! }
+                                    source -> decodedSpanLength(contentStart, contentStart + loweredExpressionStart!, true) => loweredDecodedExpressionStart
+                                    source -> decodedSpanLength(contentStart, loweredInterpolationEnd!, true) => loweredDecodedSuffixStart
+                                    UIntSize(0) => loweredCallNameStart!
+                                    UIntSize(0) => loweredCallNameLength!
+                                    -1 => loweredTypeAst!
+                                    -1 => loweredTargetAst!
+                                    qualifiedPathByCall![fragmentAstIndex!] >= 0 -> if {
+                                        fragmentTypeAst![qualifiedPathByCall![fragmentAstIndex!]] => loweredTargetAst!
+                                    }
+                                    fragmentNode.kind == 10 -> if {
+                                        0 => targetPathIndex!
+                                        targetPathIndex! < (fragmentAst -> len) -> while {
+                                            fragmentAst[targetPathIndex!] => targetPath
+                                            targetPath.kind == 16 and targetPath.parent == fragmentAstIndex!
+                                                -> if { fragmentTypeAst![targetPathIndex!] => loweredTargetAst! }
+                                            targetPathIndex! + 1 => targetPathIndex!
+                                        }
+                                    }
+                                    fragmentNode.kind == 55 -> if {
+                                        fragmentNode.payloadToken >= 0 -> if {
+                                            fragmentTokens[fragmentNode.payloadToken] => variantName
+                                            fragmentStart! + variantName.span.start => loweredCallNameStart!
+                                            variantName.span.length => loweredCallNameLength!
+                                        }
+                                        0 => constructorTypeIndex!
+                                        constructorTypeIndex! < (fragmentAst -> len) -> while {
+                                            fragmentAst[constructorTypeIndex!].kind == 12
+                                                and fragmentAst[constructorTypeIndex!].parent == fragmentAstIndex!
+                                                -> if { fragmentTypeAst![constructorTypeIndex!] => loweredTypeAst! }
+                                            constructorTypeIndex! + 1 => constructorTypeIndex!
+                                        }
+                                    }
+                                    flowTargetPayloadToken! >= 0 -> if {
+                                        fragmentTokens[flowTargetPayloadToken!] => loweredCallNameToken
+                                        fragmentStart! + loweredCallNameToken.span.start => loweredCallNameStart!
+                                        loweredCallNameToken.span.length => loweredCallNameLength!
+                                        flowQualifiedTarget! -> if { flowTargetPathLength! => loweredCallNameLength! }
+                                    }
+                                    directReceiverSymbol! >= 0 -> if {
+                                        loweredCallNameStart! + directReceiverLength! + 1 => loweredCallNameStart!
+                                        loweredCallNameLength! - directReceiverLength! - 1 => loweredCallNameLength!
+                                    }
+                                    loweredKind! == 14 -> if {
+                                        0 => nominalPathIndex!
+                                        nominalPathIndex! < (fragmentAst -> len) -> while {
+                                            fragmentAst[nominalPathIndex!].parent == fragmentAstIndex!
+                                                and fragmentAst[nominalPathIndex!].kind == 16
+                                                -> if {
+                                                    fragmentStart! + fragmentAst[nominalPathIndex!].start => loweredCallNameStart!
+                                                    fragmentAst[nominalPathIndex!].length => loweredCallNameLength!
+                                                    fragmentAst -> len => nominalPathIndex!
+                                                } else {
+                                                    nominalPathIndex! + 1 => nominalPathIndex!
+                                                }
+                                        }
+                                    }
+                                    fragmentStart! + fragmentNode.start => loweredDiagnosticStart!
+                                    loweredDiagnosticStart! => loweredMemberDotStart!
+                                    loweredKind! == 5 and fragmentNode.payloadToken >= 0
+                                        and fragmentNode.payloadToken < (fragmentTokens -> len)
+                                        -> if {
+                                            fragmentTokens[fragmentNode.payloadToken] => memberDotToken
+                                            fragmentStart! + memberDotToken.span.start => loweredMemberDotStart!
+                                            # Primary identifier paths retain their first token;
+                                            # postfix projections use the actual dot location.
+                                            not identifierPathMember(fragmentAst, fragmentTokens, memberReceiverByAst!, fragmentAstIndex!)
+                                                -> if { loweredMemberDotStart! => loweredDiagnosticStart! }
+                                            fragmentNode.payloadToken + 1 => memberNameTokenIndex!
+                                            memberNameTokenIndex! < (fragmentTokens -> len)
+                                                and (fragmentTokens[memberNameTokenIndex!].kind == grammar.triviaIdWhitespace()
+                                                or fragmentTokens[memberNameTokenIndex!].kind == grammar.triviaIdComment())
+                                                -> while { memberNameTokenIndex! + 1 => memberNameTokenIndex! }
+                                            memberNameTokenIndex! < (fragmentTokens -> len)
+                                                and fragmentTokens[memberNameTokenIndex!].kind == grammar.tokenIdIdentifier()
+                                                -> if {
+                                                    fragmentTokens[memberNameTokenIndex!] => memberNameToken
+                                                    fragmentStart! + memberNameToken.span.start => loweredCallNameStart!
+                                                    memberNameToken.span.length => loweredCallNameLength!
+                                                }
+                                        }
+                                    loweredKind! == 13 and fragmentNode.kind == 40
+                                        and fragmentNode.payloadToken >= 0
+                                        -> if {
+                                            fragmentTokens[fragmentNode.payloadToken] => fieldNameToken
+                                            fragmentStart! + fieldNameToken.span.start => loweredDiagnosticStart!
+                                        }
+                                    (loweredKind! == 3 or loweredKind! == 11) and fragmentNode.payloadToken >= 0
+                                        and fragmentNode.payloadToken < (fragmentTokens -> len)
+                                        -> if {
+                                            fragmentStart! + fragmentTokens[fragmentNode.payloadToken].span.start => loweredDiagnosticStart!
+                                        }
+                                    InterpolationNode {
+                                        kind: loweredKind!
+                                        segment: segmentIndex!
+                                        parent: loweredParent!
+                                        symbol: resolvedSymbol!
+                                        ownerSymbol: resolvedOwner!
+                                        prefixSymbol: resolvedPrefixSymbol!
+                                        qualifiedReceiverStatus: qualifiedReceiverStatus!
+                                        bareFunctionStatus: resolvedBareFunctionStatus!
+                                        opcode: loweredKind! == 6 -> if { intrinsicFlowOpcode! } else { fragmentNode.operatorKind }
+                                        payloadStart: loweredKind! == 13 and fragmentNode.kind == 40
+                                            -> if { loweredDiagnosticStart! } else { fragmentStart! + fragmentNode.start }
+                                        payloadLength: loweredKind! == 13 and fragmentNode.kind == 40
+                                            -> if { fragmentTokens[fragmentNode.payloadToken].span.length } else { fragmentNode.length }
+                                        diagnosticStart: loweredDiagnosticStart!
+                                        memberDotStart: loweredMemberDotStart!
+                                        callNameStart: loweredCallNameStart!
+                                        callNameLength: loweredCallNameLength!
+                                        operand0: -1
+                                        operand1: -1
+                                        operand2: -1
+                                        argumentCount: loweredArgumentCount!
+                                        sourceToken: stringTokenIndex!
+                                        literalStart: source -> decodedSpanLength(contentStart, literalStart!, true)
+                                        literalLength: source -> decodedSpanLength(literalStart!, cursor!, true)
+                                        expressionStart: loweredDecodedExpressionStart
+                                        expressionLength: loweredDecodedSuffixStart - loweredDecodedExpressionStart - 1
+                                        targetAst: loweredTargetAst!
+                                        typeAst: loweredTypeAst!
+                                        valueAst: loweredKind! == 16 -> if { fragmentTypeAst![fragmentAstIndex!] } else { -1 }
+                                        typeSymbol: loweredTypeSymbol!
+                                    } => lowered
+                                    nodes! -> len => loweredIndex
+                                    nodes! -> push(lowered)
+                                    loweredIndex => astToNode![fragmentAstIndex!]
+                                    directReceiverSymbol! >= 0 -> if {
+                                        # The parser retains the qualified path as a target,
+                                        # not a receiver child. Wire the lexical receiver
+                                        # before explicit arguments using the same identity
+                                        # as an ordinary interpolation read.
+                                        InterpolationNode {
+                                            kind: 1
+                                            segment: segmentIndex!
+                                            parent: loweredIndex
+                                            symbol: directReceiverSymbol!
+                                            ownerSymbol: resolvedOwner!
+                                            prefixSymbol: -1
+                                            qualifiedReceiverStatus: 0
+                                            bareFunctionStatus: -1
+                                            opcode: 0
+                                            payloadStart: fragmentStart! + fragmentTokens[flowTargetPayloadToken!].span.start
+                                            payloadLength: directReceiverLength!
+                                            diagnosticStart: fragmentStart! + fragmentTokens[flowTargetPayloadToken!].span.start
+                                            memberDotStart: fragmentStart! + fragmentTokens[flowTargetPayloadToken!].span.start + directReceiverLength!
+                                            callNameStart: 0
+                                            callNameLength: 0
+                                            operand0: -1
+                                            operand1: -1
+                                            operand2: -1
+                                            argumentCount: -1
+                                            sourceToken: stringTokenIndex!
+                                            literalStart: lowered.literalStart
+                                            literalLength: lowered.literalLength
+                                            expressionStart: lowered.expressionStart
+                                            expressionLength: lowered.expressionLength
+                                            targetAst: -1
+                                            typeAst: -1
+                                            valueAst: -1
+                                            typeSymbol: -1
+                                        } => receiver
+                                        nodes! -> push(receiver)
+                                    }
+                                }
+                                fragmentAstIndex! + 1 => fragmentAstIndex!
+                            }
+                            segmentIndex! + 1 => segmentIndex!
+                            fragmentEnd! => interpolationEnd!
+                            parenthesizedInterpolation! -> if { fragmentEnd! + 1 => interpolationEnd! }
+                            interpolationEnd! => literalStart!
+                            interpolationEnd! - 1 => cursor!
+                        }
+                    }
+                    cursor! + 1 => cursor!
+                }
+            }
+        stringTokenIndex! + 1 => stringTokenIndex!
+    }
+
+    [InterpolationNode; ~] => wiredNodes!
+    0 => nodeIndex!
+    nodeIndex! < (nodes! -> len) -> while {
+        nodes![nodeIndex!] => node
+        node.operand0 => operand0!
+        node.operand1 => operand1!
+        node.operand2 => operand2!
+        0 => childIndex!
+        childIndex! < (nodes! -> len) -> while {
+            nodes![childIndex!].parent == nodeIndex! -> if {
+                operand0! < 0 -> if {
+                    childIndex! => operand0!
+                } else {
+                    operand1! < 0 -> if {
+                        childIndex! => operand1!
+                    } else {
+                        operand2! < 0 -> if { childIndex! => operand2! }
+                    }
+                }
+            }
+            childIndex! + 1 => childIndex!
+        }
+        wiredNodes! -> push(InterpolationNode {
+            kind: node.kind
+            segment: node.segment
+            parent: node.parent
+            symbol: node.symbol
+            ownerSymbol: node.ownerSymbol
+            prefixSymbol: node.prefixSymbol
+            qualifiedReceiverStatus: node.qualifiedReceiverStatus
+            bareFunctionStatus: node.bareFunctionStatus
+            opcode: node.opcode
+            payloadStart: node.payloadStart
+            payloadLength: node.payloadLength
+            diagnosticStart: node.diagnosticStart
+            memberDotStart: node.memberDotStart
+            callNameStart: node.callNameStart
+            callNameLength: node.callNameLength
+            operand0: operand0!
+            operand1: operand1!
+            operand2: operand2!
+            argumentCount: node.argumentCount
+            sourceToken: node.sourceToken
+            literalStart: node.literalStart
+            literalLength: node.literalLength
+            expressionStart: node.expressionStart
+            expressionLength: node.expressionLength
+            targetAst: node.targetAst
+            typeAst: node.typeAst
+            valueAst: node.valueAst
+            typeSymbol: node.typeSymbol
+        })
+        nodeIndex! + 1 => nodeIndex!
+    }
+    # The parser keeps repeated postfix suffixes as siblings of the outer
+    # member or index node. Fold every suffix-only member or index into the value chain
+    # so interpolation IR preserves the same left-to-right postfix semantics
+    # as ordinary Typed IR: base -> member -> index -> member.
+    0 => postfixParentIndex!
+    postfixParentIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![postfixParentIndex!] => postfixParent!
+        postfixParent!.kind == 5 or postfixParent!.kind == 7
+            -> if {
+                -1 => lastPostfixChild!
+                0 => postfixChildCount!
+                0 => postfixChildScan!
+                postfixChildScan! < (nodes! -> len) -> while {
+                    nodes![postfixChildScan!].parent == postfixParentIndex!
+                        -> if {
+                            postfixChildScan! => lastPostfixChild!
+                            postfixChildCount! + 1 => postfixChildCount!
+                        }
+                    postfixChildScan! + 1 => postfixChildScan!
+                }
+                -1 => postfixValue!
+                true => postfixChainValid!
+                0 => postfixChildIndex!
+                postfixChildIndex! < (nodes! -> len)
+                    and (postfixParent!.kind == 5 or postfixChildCount! >= 2)
+                    -> while {
+                        nodes![postfixChildIndex!].parent == postfixParentIndex!
+                            and not (postfixParent!.kind == 7 and postfixChildIndex! == lastPostfixChild!)
+                            -> if {
+                                postfixValue! < 0 -> if {
+                                    postfixChildIndex! => postfixValue!
+                                } else {
+                                    wiredNodes![postfixChildIndex!] => postfixSuffix!
+                                    postfixSuffix!.kind == 5 and postfixSuffix!.operand0 < 0
+                                        -> if {
+                                            postfixValue! => postfixSuffix!.operand0
+                                            postfixSuffix! => wiredNodes![postfixChildIndex!]
+                                            postfixChildIndex! => postfixValue!
+                                        } else {
+                                            postfixSuffix!.kind == 7 and postfixSuffix!.operand0 >= 0 and postfixSuffix!.operand1 < 0
+                                                -> if {
+                                                    postfixSuffix!.operand0 => postfixSubscript
+                                                    postfixValue! => postfixSuffix!.operand0
+                                                    postfixSubscript => postfixSuffix!.operand1
+                                                    postfixSuffix! => wiredNodes![postfixChildIndex!]
+                                                    postfixChildIndex! => postfixValue!
+                                                } else {
+                                                    false => postfixChainValid!
+                                                }
+                                        }
+                                }
+                            }
+                        postfixChildIndex! + 1 => postfixChildIndex!
+                    }
+                postfixChainValid! and postfixValue! >= 0 -> if {
+                    postfixValue! => postfixParent!.operand0
+                    postfixParent!.kind == 7 -> if {
+                        lastPostfixChild! => postfixParent!.operand1
+                    } else { -1 => postfixParent!.operand1 }
+                    -1 => postfixParent!.operand2
+                    postfixParent! => wiredNodes![postfixParentIndex!]
+                }
+            }
+        postfixParentIndex! + 1 => postfixParentIndex!
+    }
+
+    # The parser also keeps repeated call suffixes as siblings of the outer
+    # call. Their spans all start at the same base and grow with each postfix
+    # step. Rebuild the shortest call first, then feed that result into the
+    # next call while assigning only the arguments introduced by its span.
+    # A nested call used as an ordinary argument starts later, so it must not
+    # be folded into this receiver chain.
+    0 => callParentIndex!
+    callParentIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![callParentIndex!] => callParent!
+        # An intrinsic can terminate the same receiver chain, for example
+        # owner.values -> copy -> len. Its receiver call still owns its input.
+        callParent!.kind == 6 or callParent!.kind == 8 or callParent!.kind == 9 or callParent!.kind == 10
+            -> if {
+                -1 => callNestedCandidate!
+                # A suffix can follow more than three direct children. Inspect
+                # the full parent relation before fixed-width operands discard it.
+                0 => callChildIndex!
+                callChildIndex! < (wiredNodes! -> len) -> while {
+                    wiredNodes![callChildIndex!] => callChild
+                    callChild.parent == callParentIndex!
+                        and (callChild.kind == 8 or callChild.kind == 9 or callChild.kind == 10)
+                        and callChild.payloadStart == callParent!.payloadStart
+                        and callChild.payloadLength < callParent!.payloadLength
+                        and callChild.operand0 < 0 and callChild.operand1 < 0 and callChild.operand2 < 0
+                        -> if { callChildIndex! => callNestedCandidate! }
+                    callChildIndex! + 1 => callChildIndex!
+                }
+                callNestedCandidate! >= 0 -> if {
+                    [Int; ~] => callShells!
+                    [Int; ~] => callValues!
+                    [Bool; ~] => callConsumed!
+                    0 => callSeedIndex!
+                    callSeedIndex! < (wiredNodes! -> len) -> while {
+                        callConsumed! -> push(false)
+                        nodes![callSeedIndex!] => callSeed
+                        callSeed.parent == callParentIndex! -> if {
+                            # Only an operand-free suffix is a shell to rebuild.
+                            # A nested call with its own arguments is an input
+                            # value, so its existing child edges must survive.
+                            (callSeed.kind == 8 or callSeed.kind == 9 or callSeed.kind == 10)
+                                and callSeed.payloadStart == callParent!.payloadStart
+                                and callSeed.payloadLength < callParent!.payloadLength
+                                and wiredNodes![callSeedIndex!].operand0 < 0
+                                and wiredNodes![callSeedIndex!].operand1 < 0
+                                and wiredNodes![callSeedIndex!].operand2 < 0
+                                -> if { callShells! -> push(callSeedIndex!) } else {
+                                    callValues! -> push(callSeedIndex!)
+                                }
+                        }
+                        callSeedIndex! + 1 => callSeedIndex!
+                    }
+                    -1 => callPrevious!
+                    0 => callShellOrdinal!
+                    callShellOrdinal! < (callShells! -> len) -> while {
+                        -1 => callNextShell!
+                        UIntSize(0) => callNextLength!
+                        0 => callShellSearch!
+                        callShellSearch! < (callShells! -> len) -> while {
+                            callShells![callShellSearch!] => callShellCandidateIndex
+                            not callConsumed![callShellCandidateIndex] -> if {
+                                wiredNodes![callShellCandidateIndex] => callShellCandidate
+                                callNextShell! < 0 or callShellCandidate.payloadLength < callNextLength!
+                                    -> if {
+                                        callShellCandidateIndex => callNextShell!
+                                        callShellCandidate.payloadLength => callNextLength!
+                                    }
+                            }
+                            callShellSearch! + 1 => callShellSearch!
+                        }
+                        callNextShell! >= 0 -> if {
+                            wiredNodes![callNextShell!] => callShell!
+                            -1 => callShell!.operand0
+                            -1 => callShell!.operand1
+                            -1 => callShell!.operand2
+                            0 => callOperandOrdinal!
+                            callPrevious! >= 0 -> if {
+                                callPrevious! => callShell!.operand0
+                                wiredNodes![callPrevious!] => previousCall!
+                                callNextShell! => previousCall!.parent
+                                previousCall! => wiredNodes![callPrevious!]
+                                1 => callOperandOrdinal!
+                            }
+                            true => callArgumentProgress!
+                            callArgumentProgress! and callOperandOrdinal! < 3
+                                -> while {
+                                    false => callArgumentProgress!
+                                    -1 => callNextArgument!
+                                    UIntSize(0) => callNextArgumentStart!
+                                    0 => callArgumentSearch!
+                                    callArgumentSearch! < (callValues! -> len) -> while {
+                                        callValues![callArgumentSearch!] => callArgumentCandidateIndex
+                                        nodes![callArgumentCandidateIndex] => callArgumentCandidate
+                                        not callConsumed![callArgumentCandidateIndex]
+                                            and callArgumentCandidate.payloadStart + callArgumentCandidate.payloadLength <= callShell!.payloadStart + callShell!.payloadLength
+                                            and (callNextArgument! < 0 or callArgumentCandidate.payloadStart < callNextArgumentStart!)
+                                            -> if {
+                                                callArgumentCandidateIndex => callNextArgument!
+                                                callArgumentCandidate.payloadStart => callNextArgumentStart!
+                                            }
+                                        callArgumentSearch! + 1 => callArgumentSearch!
+                                    }
+                                    callNextArgument! >= 0 -> if {
+                                        callOperandOrdinal! == 0 -> if { callNextArgument! => callShell!.operand0 }
+                                        callOperandOrdinal! == 1 -> if { callNextArgument! => callShell!.operand1 }
+                                        callOperandOrdinal! == 2 -> if { callNextArgument! => callShell!.operand2 }
+                                        wiredNodes![callNextArgument!] => argumentNode!
+                                        callNextShell! => argumentNode!.parent
+                                        argumentNode! => wiredNodes![callNextArgument!]
+                                        true => callConsumed![callNextArgument!]
+                                        callOperandOrdinal! + 1 => callOperandOrdinal!
+                                        true => callArgumentProgress!
+                                    }
+                                }
+                            # Retain excess arguments as children of their own
+                            # call so arity checks reject them before emission.
+                            0 => excessArgumentIndex!
+                            excessArgumentIndex! < (callValues! -> len) -> while {
+                                callValues![excessArgumentIndex!] => excessArgumentNodeIndex
+                                nodes![excessArgumentNodeIndex] => excessArgument
+                                not callConsumed![excessArgumentNodeIndex]
+                                    and excessArgument.payloadStart + excessArgument.payloadLength <= callShell!.payloadStart + callShell!.payloadLength
+                                    -> if {
+                                        wiredNodes![excessArgumentNodeIndex] => excessArgumentNode!
+                                        callNextShell! => excessArgumentNode!.parent
+                                        excessArgumentNode! => wiredNodes![excessArgumentNodeIndex]
+                                        true => callConsumed![excessArgumentNodeIndex]
+                                    }
+                                excessArgumentIndex! + 1 => excessArgumentIndex!
+                            }
+                            callShell! => wiredNodes![callNextShell!]
+                            true => callConsumed![callNextShell!]
+                            callNextShell! => callPrevious!
+                        }
+                        callShellOrdinal! + 1 => callShellOrdinal!
+                    }
+                    callPrevious! >= 0 -> if {
+                        callPrevious! => callParent!.operand0
+                        wiredNodes![callPrevious!] => finalPreviousCall!
+                        callParentIndex! => finalPreviousCall!.parent
+                        finalPreviousCall! => wiredNodes![callPrevious!]
+                        -1 => callParent!.operand1
+                        -1 => callParent!.operand2
+                        1 => callParentOperandOrdinal!
+                        true => callParentArgumentProgress!
+                        callParentArgumentProgress! and callParentOperandOrdinal! < 3
+                            -> while {
+                                false => callParentArgumentProgress!
+                                -1 => callParentNextArgument!
+                                UIntSize(0) => callParentNextArgumentStart!
+                                0 => callParentArgumentSearch!
+                                callParentArgumentSearch! < (callValues! -> len)
+                                    -> while {
+                                        callValues![callParentArgumentSearch!] => callParentArgumentCandidateIndex
+                                        nodes![callParentArgumentCandidateIndex] => callParentArgumentCandidate
+                                        not callConsumed![callParentArgumentCandidateIndex]
+                                            and (callParentNextArgument! < 0 or callParentArgumentCandidate.payloadStart < callParentNextArgumentStart!)
+                                            -> if {
+                                                callParentArgumentCandidateIndex => callParentNextArgument!
+                                                callParentArgumentCandidate.payloadStart => callParentNextArgumentStart!
+                                            }
+                                        callParentArgumentSearch! + 1 => callParentArgumentSearch!
+                                    }
+                                callParentNextArgument! >= 0 -> if {
+                                    callParentOperandOrdinal! == 1 -> if { callParentNextArgument! => callParent!.operand1 }
+                                    callParentOperandOrdinal! == 2 -> if { callParentNextArgument! => callParent!.operand2 }
+                                    true => callConsumed![callParentNextArgument!]
+                                    callParentOperandOrdinal! + 1 => callParentOperandOrdinal!
+                                    true => callParentArgumentProgress!
+                                }
+                            }
+                        callParent! => wiredNodes![callParentIndex!]
+                    }
+                }
+            }
+        callParentIndex! + 1 => callParentIndex!
+    }
+
+    # A repeated infix chain is represented as flat value children plus
+    # childless prefix-operator shells below the outer operator. Rebuild those
+    # shells from shortest prefix to longest, then attach the remaining value
+    # to the outer operator. This preserves precedence already encoded by the
+    # AST while preventing a third direct child from replacing a real operand.
+    0 => infixParentIndex!
+    infixParentIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![infixParentIndex!] => infixParent!
+        infixParent!.kind == 3 -> if {
+            [Int; ~] => infixValues!
+            [Int; ~] => infixShells!
+            0 => infixChildIndex!
+            infixChildIndex! < (nodes! -> len) -> while {
+                nodes![infixChildIndex!].parent == infixParentIndex!
+                    -> if {
+                        wiredNodes![infixChildIndex!] => infixChild
+                        infixChild.kind == 3 and infixChild.operand0 < 0 and infixChild.operand1 < 0
+                            -> if {
+                                infixShells! -> push(infixChildIndex!)
+                            } else {
+                                infixValues! -> push(infixChildIndex!)
+                            }
+                    }
+                infixChildIndex! + 1 => infixChildIndex!
+            }
+            (infixShells! -> len) > 0 and (infixValues! -> len) == (infixShells! -> len) + 2
+                -> if {
+                    [Bool; ~] => infixSelected!
+                    0 => infixSelectedSeed!
+                    infixSelectedSeed! < (wiredNodes! -> len) -> while {
+                        infixSelected! -> push(false)
+                        infixSelectedSeed! + 1 => infixSelectedSeed!
+                    }
+                    -1 => infixPrevious!
+                    0 => infixValueOrdinal!
+                    0 => infixShellOrdinal!
+                    infixShellOrdinal! < (infixShells! -> len) -> while {
+                        -1 => infixNextShell!
+                        UIntSize(0) => infixNextLength!
+                        0 => infixShellSearch!
+                        infixShellSearch! < (infixShells! -> len) -> while {
+                            infixShells![infixShellSearch!] => infixShellCandidateIndex
+                            wiredNodes![infixShellCandidateIndex] => infixShellCandidate
+                            infixShellCandidate.parent == infixParentIndex! and not infixSelected![infixShellCandidateIndex] and (infixNextShell! < 0 or infixShellCandidate.payloadLength < infixNextLength!)
+                                -> if {
+                                    infixShellCandidateIndex => infixNextShell!
+                                    infixShellCandidate.payloadLength => infixNextLength!
+                                }
+                            infixShellSearch! + 1 => infixShellSearch!
+                        }
+                        infixNextShell! >= 0 -> if {
+                            wiredNodes![infixNextShell!] => infixShell!
+                            infixPrevious! >= 0 -> if {
+                                infixPrevious! => infixShell!.operand0
+                            } else {
+                                infixValues![infixValueOrdinal!] => infixShell!.operand0
+                                infixValueOrdinal! + 1 => infixValueOrdinal!
+                            }
+                            infixValues![infixValueOrdinal!] => infixShell!.operand1
+                            infixValueOrdinal! + 1 => infixValueOrdinal!
+                            -1 => infixShell!.operand2
+                            infixShell! => wiredNodes![infixNextShell!]
+                            true => infixSelected![infixNextShell!]
+                            infixNextShell! => infixPrevious!
+                        }
+                        infixShellOrdinal! + 1 => infixShellOrdinal!
+                    }
+                    infixPrevious! => infixParent!.operand0
+                    infixValues![infixValueOrdinal!] => infixParent!.operand1
+                    -1 => infixParent!.operand2
+                    infixParent! => wiredNodes![infixParentIndex!]
+                }
+        }
+        infixParentIndex! + 1 => infixParentIndex!
+    }
+    # The source AST records a postfix Result propagation shell beside its
+    # operand. Make that dependency explicit before emission order and root
+    # selection consume this IR, just as ordinary Typed IR does for kind 30.
+    0 => tryIndex!
+    tryIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![tryIndex!] => tryNode!
+        tryNode!.kind == 11 and tryNode!.operand0 < 0
+            -> if {
+                -1 => tryOperand!
+                0 => trySearch!
+                trySearch! < tryIndex! -> while {
+                    wiredNodes![trySearch!] => tryCandidate
+                    tryCandidate.sourceToken == tryNode!.sourceToken
+                        and tryCandidate.segment == tryNode!.segment
+                        and tryCandidate.parent == tryNode!.parent
+                        and tryCandidate.kind != 11
+                        and tryCandidate.payloadStart == tryNode!.payloadStart
+                        and tryCandidate.payloadLength == tryNode!.payloadLength
+                        -> if { trySearch! => tryOperand! }
+                    trySearch! + 1 => trySearch!
+                }
+                tryOperand! >= 0 -> if {
+                    tryOperand! => tryNode!.operand0
+                    tryNode! => wiredNodes![tryIndex!]
+                    wiredNodes![tryOperand!] => tryValue!
+                    tryIndex! => tryValue!.parent
+                    tryValue! => wiredNodes![tryOperand!]
+                }
+            }
+        tryIndex! + 1 => tryIndex!
+    }
+    0 => callCountIndex!
+    callCountIndex! < (wiredNodes! -> len) -> while {
+        wiredNodes![callCountIndex!] => callNode!
+        callNode!.kind == 8 or callNode!.kind == 10 or callNode!.kind == 15
+            -> if {
+                0 => callOperandCount!
+                callNode!.operand0 >= 0 -> if { callOperandCount! + 1 => callOperandCount! }
+                callNode!.operand1 >= 0 -> if { callOperandCount! + 1 => callOperandCount! }
+                callNode!.operand2 >= 0 -> if { callOperandCount! + 1 => callOperandCount! }
+                0 => directChildCount!
+                0 => directChildIndex!
+                directChildIndex! < (wiredNodes! -> len) -> while {
+                    wiredNodes![directChildIndex!].parent == callCountIndex!
+                        -> if { directChildCount! + 1 => directChildCount! }
+                    directChildIndex! + 1 => directChildIndex!
+                }
+                directChildCount! > 3 -> if { directChildCount! => callOperandCount! }
+                callOperandCount! => callNode!.argumentCount
+                callNode! => wiredNodes![callCountIndex!]
+            }
+        callCountIndex! + 1 => callCountIndex!
+    }
+    PreparedInterpolationProduct { nodes: wiredNodes!, typeNodes: typeNodes!, typeTokens: typeTokens! }
+}
+
+public lowerPrepared request: move PreparedInterpolationRequest -> [InterpolationNode; ~] {
+    request -> lowerPreparedWithTypes => product
+    product.nodes => nodes
+    nodes
+}
+
+public lower source: Text -> [InterpolationNode; ~] {
+    source -> lexer.lex => sourceTokens
+    source -> ast.lower => sourceAst
+    sourceAst -> symbols.collectPrepared => table
+    PreparedInterpolationRequest {
+        source: source
+        nodes: sourceAst
+        tokens: sourceTokens
+        symbols: table
+    } => request
+    request -> lowerPrepared
+}

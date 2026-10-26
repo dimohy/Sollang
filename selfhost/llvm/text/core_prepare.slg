@@ -545,7 +545,41 @@ prepareCoreEmitterState context: ref emitterContext.EmitContext -> CoreEmitterSt
                 -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
             intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
         }
+    [Int; ~] => canonicalRootByAst!
+    0 => canonicalAstIndex!
+    canonicalAstIndex! < (context.nodes -> len) -> while {
+        canonicalRootByAst! -> push(-1)
+        canonicalAstIndex! + 1 => canonicalAstIndex!
+    }
+    context.interpolationRanges -> each interpolationRange {
+        interpolationRange.nodeStart => fragmentIndex!
+        fragmentIndex! < interpolationRange.nodeStart + interpolationRange.nodeCount
+            -> while {
+                context.interpolations[fragmentIndex!] => fragment
+                fragment.kind == 17 and fragment.valueAst >= 0
+                    -> if {
+                        context.ranges[interpolationRange.sourceModule].astStart + fragment.valueAst => globalRoot
+                        fragment.valueAst => canonicalRootByAst![globalRoot]
+                    }
+                fragmentIndex! + 1 => fragmentIndex!
+            }
+    }
+    [Int; ~] => canonicalRootByIr!
+    context.ir -> each value {
+        -1 => root!
+        value.astNode >= 0 and value.kind != 0 and value.kind != 11
+            -> if {
+                context.ranges[value.sourceModule] => range
+                value.astNode => ancestor!
+                ancestor! >= 0 and root! < 0 -> while {
+                    canonicalRootByAst![range.astStart + ancestor!] => root!
+                    context.nodes[range.astStart + ancestor!].parent => ancestor!
+                }
+            }
+        canonicalRootByIr! -> push(root!)
+    }
     CoreEmitterState {
+        frozenCanonicalInterpolationRootByIr: canonicalRootByIr!
         frozenDeferredTextValues: [Bool; ~]
         frozenDeferredTextCaptureLeaves: [Bool; ~]
         coroutine: coroutine
@@ -1656,6 +1690,8 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
 
 # Keep prepared-emitter failures ahead of target headers and LLVM output.
 preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context -> asyncArenaFrameDiagnosticCount(state) => arenaCount
+    arenaCount > 0 -> if { arenaCount -> return }
     context -> deferredTextCaptureDiagnosticCount(state) => captureCount
     captureCount > 0 -> if { captureCount -> return }
     state -> bodyScheduleDiagnosticCount => scheduleCount

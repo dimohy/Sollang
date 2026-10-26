@@ -138,11 +138,36 @@ interpolationTokenMembership prepared: ref semanticContext.SemanticSnapshot, sou
     membership!
 }
 
-isInterpolationOwnedAst prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, localAst: Int, interpolatedTokenBySource: ref [Bool; ~] -> Bool {
+canonicalInterpolationAstMembership prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int -> [Bool; ~] {
+    prepared.package.ranges[sourceIndex] => sourceRange
+    [Bool; ~] => membership!
+    0 => astIndex!
+    astIndex! < sourceRange.astCount -> while {
+        membership! -> push(false)
+        astIndex! + 1 => astIndex!
+    }
+    prepared.interpolationRanges -> each fragmentRange {
+        fragmentRange.sourceModule == sourceIndex -> if {
+            fragmentRange.nodeStart => fragmentIndex!
+            fragmentIndex! < fragmentRange.nodeStart + fragmentRange.nodeCount
+                -> while {
+                    prepared.interpolations[fragmentIndex!] => fragment
+                    fragment.kind == 17 and fragment.valueAst >= 0 and fragment.valueAst < sourceRange.astCount
+                        -> if { true => membership![fragment.valueAst] }
+                    fragmentIndex! + 1 => fragmentIndex!
+                }
+        }
+    }
+    membership!
+}
+
+isInterpolationOwnedAst prepared: ref semanticContext.SemanticSnapshot, sourceIndex: Int, localAst: Int, interpolatedTokenBySource: ref [Bool; ~], canonicalRootByAst: ref [Bool; ~] -> Bool {
+    canonicalRootByAst[localAst] -> if { false -> return }
     prepared.package.ranges[sourceIndex] => sourceRange
     prepared.package.nodes[sourceRange.astStart + localAst].parent => ownerAst!
     ownerAst! >= 0 and ownerAst! < sourceRange.astCount
         -> while {
+            canonicalRootByAst[ownerAst!] -> if { false -> return }
             prepared.package.nodes[sourceRange.astStart + ownerAst!] => owner
             owner.kind == 13 and owner.payloadToken >= 0 and owner.payloadToken < sourceRange.tokenCount
                 -> if {
@@ -1214,6 +1239,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
         -> while {
             prepared.package.ranges[functionOwnerSource!] => functionOwnerRange
             prepared -> interpolationTokenMembership(functionOwnerSource!) => interpolatedTokenBySource
+            prepared -> canonicalInterpolationAstMembership(functionOwnerSource!) => canonicalRootByAst
             0 => functionOwnerLocalAst!
             functionOwnerLocalAst! < functionOwnerRange.astCount
                 -> while {
@@ -1229,7 +1255,7 @@ lowerResolvedContextWithMode prepared: semanticContext.SemanticSnapshot, recursi
                                     functionOwnerCandidate.parent => functionOwnerAncestor!
                                 }
                         }
-                    prepared -> isInterpolationOwnedAst(functionOwnerSource!, functionOwnerLocalAst!, interpolatedTokenBySource)
+                    prepared -> isInterpolationOwnedAst(functionOwnerSource!, functionOwnerLocalAst!, interpolatedTokenBySource, canonicalRootByAst)
                         -> if { -1 => functionOwnerGlobalAst! }
                     functionOwnerRange.astStart + functionOwnerLocalAst! => functionOwnedGlobalAst
                     functionOwnerGlobalAst! => functionOwnerByAst![functionOwnedGlobalAst]
@@ -2035,8 +2061,6 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                         }
                     functionAstIndex! >= 0 and (nodes[sourceRange.astStart + functionAstIndex!].flags / 8) % 2 == 1
                         -> if {
-                            -1 => functionIr!
-                            -1 => awaitIr!
                             awaitAstIndex! => suspendSourceAst!
                             isAwait! -> if {
                                 -1 => suspendSourceAst!
@@ -2049,39 +2073,41 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                                     flowChild! + 1 => flowChild!
                                 }
                             }
-                            0 => irIndex!
-                            irIndex! < (ir -> len) -> while {
-                                ir[irIndex!] => node
-                                node.sourceModule == sourceIndex! and node.astNode == functionAstIndex! and node.kind == 0
-                                    and ((selectedFunctions -> len) == 0 or selectedFunctions[irIndex!])
+                            # Each materialized generic function owns a distinct
+                            # continuation, even when its source AST is shared.
+                            0 => functionIr!
+                            functionIr! < (ir -> len) -> while {
+                                ir[functionIr!] => function
+                                function.sourceModule == sourceIndex! and function.astNode == functionAstIndex!
+                                    and function.kind == 0 and function.flags / 8 % 2 == 1
+                                    and ((selectedFunctions -> len) == 0 or selectedFunctions[functionIr!])
                                     -> if {
-                                        irIndex! => functionIr!
+                                        -1 => awaitIr!
+                                        0 => candidateIr!
+                                        candidateIr! < (ir -> len) and awaitIr! < 0 -> while {
+                                            ir[candidateIr!] => candidate
+                                            candidate.sourceModule == sourceIndex! and candidate.astNode == suspendSourceAst!
+                                                and ((isYield! and candidate.kind == 44) or (isAwait! and candidate.kind == 5))
+                                                -> if {
+                                                    candidate.parent => ownerIr!
+                                                    ownerIr! >= 0 and ir[ownerIr!].kind != 0 and ir[ownerIr!].kind != 11
+                                                        -> while { ir[ownerIr!].parent => ownerIr! }
+                                                    ownerIr! == functionIr! -> if { candidateIr! => awaitIr! }
+                                                }
+                                            candidateIr! + 1 => candidateIr!
+                                        }
+                                        awaitIr! >= 0 -> if {
+                                            points! -> push(CoroutineSuspendPoint {
+                                                functionIr: functionIr!
+                                                sourceModule: sourceIndex!
+                                                awaitAst: awaitAstIndex!
+                                                awaitIr: awaitIr!
+                                                state: 0
+                                                kind: isYield! -> if { 1 } else { 0 }
+                                            })
+                                        }
                                     }
-                                node.sourceModule == sourceIndex! and node.astNode == suspendSourceAst!
-                                    and ((isYield! and node.kind == 44) or (isAwait! and node.kind == 5))
-                                    -> if {
-                                        irIndex! => awaitIr!
-                                    }
-                                irIndex! + 1 => irIndex!
-                            }
-                            functionIr! >= 0 -> if {
-                                1 => state!
-                                0 => pointSearch!
-                                pointSearch! < (points! -> len) -> while {
-                                    points![pointSearch!].functionIr == functionIr!
-                                        -> if { state! + 1 => state! }
-                                    pointSearch! + 1 => pointSearch!
-                                }
-                                0 => suspendKind!
-                                isYield! -> if { 1 => suspendKind! }
-                                points! -> push(CoroutineSuspendPoint {
-                                    functionIr: functionIr!
-                                    sourceModule: sourceIndex!
-                                    awaitAst: awaitAstIndex!
-                                    awaitIr: awaitIr!
-                                    state: state!
-                                    kind: suspendKind!
-                                })
+                                functionIr! + 1 => functionIr!
                             }
                         }
                 }
@@ -2089,6 +2115,25 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
             }
             sourceIndex! + 1 => sourceIndex!
         }
+    # Fragment AST is appended after the original parse. Resume numbering
+    # follows source evaluation order rather than append order.
+    0 => orderedPointIndex!
+    orderedPointIndex! < (points! -> len) -> while {
+        points![orderedPointIndex!] => point!
+        ranges[point!.sourceModule] => range
+        nodes[range.astStart + point!.awaitAst].start => start
+        1 => state!
+        points! -> each earlier {
+            earlier.functionIr == point!.functionIr -> if {
+                nodes[range.astStart + earlier.awaitAst].start => earlierStart
+                earlierStart < start or (earlierStart == start and earlier.awaitAst < point!.awaitAst)
+                    -> if { state! + 1 => state! }
+            }
+        }
+        state! => point!.state
+        point! => points![orderedPointIndex!]
+        orderedPointIndex! + 1 => orderedPointIndex!
+    }
     [CoroutineFrameSlot; ~] => slots!
     0 => pointIndex!
     pointIndex! < (points! -> len) -> while {
@@ -2117,10 +2162,15 @@ public coroutineTablesFromSources sources: ref [Text; ~], ranges: ref [analysis.
                 }
             (definition.kind == 17 or definition.kind == 29) and definition.sourceModule == point.sourceModule and definition.symbol >= 0 and definition.astNode != awaitBindingAst! and belongsToFunction! and nodes[sourceRange.astStart + definition.astNode].start < awaitStart
                 -> if {
+                    # A shared source symbol must not select the binding or
+                    # concrete type of another generic materialization.
+                    definition.parent => definitionOwner!
+                    definitionOwner! >= 0 and ir[definitionOwner!].kind != 0 and ir[definitionOwner!].kind != 11
+                        -> while { ir[definitionOwner!].parent => definitionOwner! }
                     # C# snapshots every active lexical binding, including names
                     # used only by interpolation and owners needed by cleanup.
                     false => activeAtSuspension!
-                    point.awaitIr => scopeAncestor!
+                    definitionOwner! == point.functionIr -> if { point.awaitIr } else { -1 } => scopeAncestor!
                     scopeAncestor! >= 0 and scopeAncestor! < (ir -> len) and not activeAtSuspension!
                         -> while {
                             scopeAncestor! == definition.parent -> if {

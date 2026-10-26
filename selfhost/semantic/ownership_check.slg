@@ -9293,7 +9293,7 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         priorMoveIndex! + 1 => priorMoveIndex!
                     }
             }
-        false => duplicateAggregate!
+        false => duplicateDiagnostic!
         classifiedCode! == aggregateTransferOverlapCode()
             -> if {
                 classifiedDiagnostics! -> each previous {
@@ -9301,10 +9301,30 @@ analyzeResolvedLoweredContextWithReturnSites prepared: ref semanticContext.Seman
                         and previous.actualSymbol >= 0 and classifiedActual! >= 0
                         and typed[previous.actualSymbol].sourceModule == typed[classifiedActual!].sourceModule
                         and typed[previous.actualSymbol].symbol == typed[classifiedActual!].symbol
-                        -> if { true => duplicateAggregate! }
+                        -> if { true => duplicateDiagnostic! }
                 }
             }
-        not duplicateAggregate! -> if {
+        # Generic materializations retain one source identity for an invalid
+        # direct deferred-Text binding. Publish that source diagnostic once.
+        classifiedCode! == 35 and classifiedActual! >= 0 and classifiedActual! < (typed -> len)
+            and typed[classifiedActual!].kind == 17
+            -> if {
+                typed[classifiedActual!] => consumer
+                prepared.package.ranges[consumer.sourceModule] => range
+                prepared.package.nodes[range.astStart + consumer.astNode] => storage
+                storage.kind == 9 or storage.kind == 48 -> if {
+                    classifiedDiagnostics! -> each previous {
+                        previous.code == 35 and previous.sourceModule == diagnostic.sourceModule
+                            and previous.span.start == diagnostic.span.start and previous.span.length == diagnostic.span.length
+                            and previous.actualSymbol >= 0 and previous.actualSymbol < (typed -> len)
+                            and typed[previous.actualSymbol].kind == 17
+                            and typed[previous.actualSymbol].sourceModule == consumer.sourceModule
+                            and typed[previous.actualSymbol].astNode == consumer.astNode
+                            -> if { true => duplicateDiagnostic! }
+                    }
+                }
+            }
+        not duplicateDiagnostic! -> if {
             classifiedDiagnostics! -> push(OwnershipDiagnostic {
                 code: classifiedCode!
                 sourceModule: diagnostic.sourceModule

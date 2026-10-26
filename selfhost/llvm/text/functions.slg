@@ -209,6 +209,28 @@ asyncArgumentContextStorageSize functionIndex: Int, context: ref emitterContext.
     size!
 }
 
+# Match the existing C# Arena spill boundary on actual continuation slots.
+# Keep this check before target headers rather than failing in LLVM lowering.
+asyncArenaFrameDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    state.coroutine.slots -> each slot {
+        slot.typeOrigin == 1 and slot.typeSymbol == 15
+            and state.frozenReachableFunctions[slot.functionIr]
+            -> if {
+                context.ranges[slot.sourceModule] => range
+                context.symbols[range.symbolStart + slot.symbol] => binding
+                context.tokens[range.tokenStart + binding.nameToken] => name
+                "sollang: binding '" -> print
+                context.sources[slot.sourceModule] -> slice(name.span.start, name.span.length) -> print
+                name.span.start + name.span.length < (context.sources[slot.sourceModule] -> len)
+                    and (context.sources[slot.sourceModule] -> byte(name.span.start + name.span.length)) == 33
+                    -> if { "!" -> print }
+                "' of type Arena cannot cross async suspension" -> println
+                1 -> return
+            }
+    }
+    0
+}
+
 asyncFrameBindingRoot bindingIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     functionIndex < 0 or context.ir[functionIndex].flags / 8 % 2 != 1
         or bindingIndex < 0 or bindingIndex >= (context.ir -> len)
@@ -1573,125 +1595,128 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
     expressionOrderIndex! < (expressionOrder -> len)
         -> while {
             expressionOrder[expressionOrderIndex!] => expressionIndex
-            true => expressionEmitted![expressionIndex - expressionStart]
-            context.ir[expressionIndex] => expression
-            expressionIndex -> emitNamedBindingOwnershipInitialization(state)
-            expressionIndex -> emitFunctionIntrinsicExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> isDirectEachEmission(context, state)
+            state.frozenCanonicalInterpolationRootByIr[expressionIndex] < 0
                 -> if {
-                    expressionIndex -> emitDirectEachStart(functionIndex, expressionStart, functionEnd!, context, state)
-                    activeEachSize! == (activeEach! -> len) -> if { activeEach! -> push(expressionIndex) } else { expressionIndex => activeEach![activeEachSize!] }
-                    activeEachSize! + 1 => activeEachSize!
-                }
-            expression.kind == 32 and expression.operand0 >= 0 and expression.operand1 >= 0 and expression.nextOperand >= 0
-                -> if {
-                    expressionIndex -> emitFoldExpression(functionIndex, functionEnd!, expressionOrder, context, state)
-                }
-            expression.kind == 17 and expression.flags == 1
-                -> if {
-                    expressionIndex -> mutableBindingRoot(context, state) => mutableRoot
-                    context.ir[mutableRoot] => mutableBinding
-                    context.ir[expression.operand0] => mutableValue
-                    expression.operand0 -> callResultPropagationBindingIndex(context, state) => mutablePropagationBinding
-                    mutableBinding -> integerNodeWidth(context, state) => mutableTargetWidth
-                    mutableValue -> integerNodeWidth(context, state) => mutableSourceWidth
-                    (mutableTargetWidth > 0 and mutableSourceWidth > 0 and mutableTargetWidth != mutableSourceWidth and mutableValue.kind != 3 and mutableValue.kind != 4) => castMutableValue
-                    castMutableValue -> if {
-                        "  %v$(expressionIndex)_mutable_cast = " -> print
-                        mutableTargetWidth < mutableSourceWidth -> if { "trunc " -> print } else { mutableValue -> integerNodeSigned(context, state)
-                                -> if { "sext " -> print } else { "zext " -> print } }
-                        mutableValue -> writeIrType(context, state)
+                    true => expressionEmitted![expressionIndex - expressionStart]
+                    context.ir[expressionIndex] => expression
+                    expressionIndex -> emitNamedBindingOwnershipInitialization(state)
+                    expressionIndex -> emitFunctionIntrinsicExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> isDirectEachEmission(context, state)
+                        -> if {
+                            expressionIndex -> emitDirectEachStart(functionIndex, expressionStart, functionEnd!, context, state)
+                            activeEachSize! == (activeEach! -> len) -> if { activeEach! -> push(expressionIndex) } else { expressionIndex => activeEach![activeEachSize!] }
+                            activeEachSize! + 1 => activeEachSize!
+                        }
+                    expression.kind == 32 and expression.operand0 >= 0 and expression.operand1 >= 0 and expression.nextOperand >= 0
+                        -> if {
+                            expressionIndex -> emitFoldExpression(functionIndex, functionEnd!, expressionOrder, context, state)
+                        }
+                    expression.kind == 17 and expression.flags == 1
+                        -> if {
+                            expressionIndex -> mutableBindingRoot(context, state) => mutableRoot
+                            context.ir[mutableRoot] => mutableBinding
+                            context.ir[expression.operand0] => mutableValue
+                            expression.operand0 -> callResultPropagationBindingIndex(context, state) => mutablePropagationBinding
+                            mutableBinding -> integerNodeWidth(context, state) => mutableTargetWidth
+                            mutableValue -> integerNodeWidth(context, state) => mutableSourceWidth
+                            (mutableTargetWidth > 0 and mutableSourceWidth > 0 and mutableTargetWidth != mutableSourceWidth and mutableValue.kind != 3 and mutableValue.kind != 4) => castMutableValue
+                            castMutableValue -> if {
+                                "  %v$(expressionIndex)_mutable_cast = " -> print
+                                mutableTargetWidth < mutableSourceWidth -> if { "trunc " -> print } else { mutableValue -> integerNodeSigned(context, state)
+                                        -> if { "sext " -> print } else { "zext " -> print } }
+                                mutableValue -> writeIrType(context, state)
+                                " " -> print
+                                mutableValue.kind == 5 and function.operand1 >= 0 and mutableValue.symbol == context.ir[function.operand1].symbol
+                                    -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                                " to " -> print
+                                mutableBinding -> writeIrType(context, state)
+                                "" -> println
+                            }
+                            "  store " -> print
+                            mutableBinding -> writeIrType(context, state)
+                            " " -> print
+                            mutableValue.kind == 3 or mutableValue.kind == 4
+                                -> if {
+                                    mutableValue -> sourceToken(context, state) => mutableToken
+                                    mutableValue.kind == 3 -> if { mutableValue -> writeIntegerLiteral(context, state) } else {
+                                        (context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == 116
+                                            -> if { "1" -> print } else { "0" -> print }
+                                    }
+                                } else {
+                                    mutablePropagationBinding == expressionIndex
+                                        -> if {
+                                            "%v$(expressionIndex)" -> print
+                                        } else {
+                                            castMutableValue -> if { "%v$(expressionIndex)_mutable_cast" -> print } else {
+                                                expression.operand0 -> writeValue(functionIndex, context, state)
+                                            }
+                                        }
+                                }
+                            ", ptr " -> print
+                            mutableRoot -> writeMutableStoragePointer(functionIndex, context, state)
+                            ", align " -> print
+                            mutableBinding -> storageAlign(context, state) -> writeDecimalLine
+                        }
+                    expression.kind == 24 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitIndexAssignment(context, state)
+                    }
+                    expression.kind == 25 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitMemberAssignment(context, state)
+                    }
+                    expression.kind == 26 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitEnumConstructor(context, state)
+                        expressionIndex -> emitCompletedPatternBindingTransferMarks(context, state)
+                    }
+                    expression.kind == 27 -> if { expressionIndex -> emitEnumMatch(expressionOrder, context, state) }
+                    expression.kind == 34 -> if { expressionIndex -> emitSubjectWhen(expressionOrder, context, state) }
+                    expression.kind == 30 and context.nodes[context.ranges[expression.sourceModule].astStart + expression.astNode].kind == 82
+                        -> if {
+                            expressionIndex -> emitResultPropagation(functionIndex, expressionOrder, context, state)
+                        }
+                    expression.kind == 2 -> if {
+                        expression -> sourceToken(context, state) => expressionToken
+                        TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
+                        "  %v$(expressionIndex)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex), 0" -> println
+                        "  %v$(expressionIndex) = insertvalue %sollang.text %v$(expressionIndex)_ptr, i64 $expressionLength, 1" -> println
+                        expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+                    }
+                    expression.kind == 36 -> if {
+                        "  %v$(expressionIndex) = freeze " -> print
+                        expression -> writeIrType(context, state)
                         " " -> print
-                        mutableValue.kind == 5 and function.operand1 >= 0 and mutableValue.symbol == context.ir[function.operand1].symbol
-                            -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                        " to " -> print
-                        mutableBinding -> writeIrType(context, state)
+                        expression.operand0 -> writeValue(functionIndex, context, state)
                         "" -> println
                     }
-                    "  store " -> print
-                    mutableBinding -> writeIrType(context, state)
-                    " " -> print
-                    mutableValue.kind == 3 or mutableValue.kind == 4
-                        -> if {
-                            mutableValue -> sourceToken(context, state) => mutableToken
-                            mutableValue.kind == 3 -> if { mutableValue -> writeIntegerLiteral(context, state) } else {
-                                (context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == 116
-                                    -> if { "1" -> print } else { "0" -> print }
-                            }
-                        } else {
-                            mutablePropagationBinding == expressionIndex
-                                -> if {
-                                    "%v$(expressionIndex)" -> print
-                                } else {
-                                    castMutableValue -> if { "%v$(expressionIndex)_mutable_cast" -> print } else {
-                                        expression.operand0 -> writeValue(functionIndex, context, state)
-                                    }
-                                }
+                    expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+                    expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
+                    expressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
+                    expression.kind == 38 and context.supportsComputePool
+                        -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
+                    expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionLoopExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionArrayExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionEnumExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionMemberExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionOperatorExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionCalls(functionIndex, expressionStart, functionEnd!, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionTerminalExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitAsyncLocalWrite(functionIndex, context, state)
+                    -1 => nextExpressionIndex!
+                    expressionOrderIndex! + 1 < (expressionOrder -> len)
+                        -> if { expressionOrder[expressionOrderIndex! + 1] => nextExpressionIndex! }
+                    true => closeEachProgress!
+                    activeEachSize! > 0 and closeEachProgress! -> while {
+                        activeEach![activeEachSize! - 1] => activeEachIndex
+                        false => nextInsideEach!
+                        nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> irDescendsFrom(context, state) => nextInsideEach! }
+                        nextInsideEach! -> if { false => closeEachProgress! } else {
+                            activeEachIndex -> emitDirectEachEnd(false, context)
+                            activeEachSize! - 1 => activeEachSize!
                         }
-                    ", ptr " -> print
-                    mutableRoot -> writeMutableStoragePointer(functionIndex, context, state)
-                    ", align " -> print
-                    mutableBinding -> storageAlign(context, state) -> writeDecimalLine
-                }
-            expression.kind == 24 -> if {
-                WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitIndexAssignment(context, state)
-            }
-            expression.kind == 25 -> if {
-                WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitMemberAssignment(context, state)
-            }
-            expression.kind == 26 -> if {
-                WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitEnumConstructor(context, state)
-                expressionIndex -> emitCompletedPatternBindingTransferMarks(context, state)
-            }
-            expression.kind == 27 -> if { expressionIndex -> emitEnumMatch(expressionOrder, context, state) }
-            expression.kind == 34 -> if { expressionIndex -> emitSubjectWhen(expressionOrder, context, state) }
-            expression.kind == 30 and context.nodes[context.ranges[expression.sourceModule].astStart + expression.astNode].kind == 82
-                -> if {
-                    expressionIndex -> emitResultPropagation(functionIndex, expressionOrder, context, state)
-                }
-            expression.kind == 2 -> if {
-                expression -> sourceToken(context, state) => expressionToken
-                TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
-                "  %v$(expressionIndex)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex), 0" -> println
-                "  %v$(expressionIndex) = insertvalue %sollang.text %v$(expressionIndex)_ptr, i64 $expressionLength, 1" -> println
-                expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
-            }
-            expression.kind == 36 -> if {
-                "  %v$(expressionIndex) = freeze " -> print
-                expression -> writeIrType(context, state)
-                " " -> print
-                expression.operand0 -> writeValue(functionIndex, context, state)
-                "" -> println
-            }
-            expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
-            expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
-            expressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
-            expression.kind == 38 and context.supportsComputePool
-                -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
-            expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionLoopExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionArrayExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionEnumExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionMemberExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionOperatorExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitFunctionCalls(functionIndex, expressionStart, functionEnd!, expressionOrder, context, state)
-            expressionIndex -> emitFunctionTerminalExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
-            expressionIndex -> emitAsyncLocalWrite(functionIndex, context, state)
-            -1 => nextExpressionIndex!
-            expressionOrderIndex! + 1 < (expressionOrder -> len)
-                -> if { expressionOrder[expressionOrderIndex! + 1] => nextExpressionIndex! }
-            true => closeEachProgress!
-            activeEachSize! > 0 and closeEachProgress! -> while {
-                activeEach![activeEachSize! - 1] => activeEachIndex
-                false => nextInsideEach!
-                nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> irDescendsFrom(context, state) => nextInsideEach! }
-                nextInsideEach! -> if { false => closeEachProgress! } else {
-                    activeEachIndex -> emitDirectEachEnd(false, context)
-                    activeEachSize! - 1 => activeEachSize!
-                }
-            }
-            expressionOrderIndex! + 1 => expressionOrderIndex!
-            expression.kind == 23 -> if { Int(expressionOrder -> len) => expressionOrderIndex! }
+                    }
+                    expressionOrderIndex! + 1 => expressionOrderIndex!
+                    expression.kind == 23 -> if { Int(expressionOrder -> len) => expressionOrderIndex! }
+                } else { expressionOrderIndex! + 1 => expressionOrderIndex! }
         }
     functionIndex -> emitFunctionReturn(expressionStart, functionEnd!, expressionOrder, expressionEmitted!, context, state)
     "}" -> println
