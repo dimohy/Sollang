@@ -559,6 +559,28 @@ internal sealed partial class LlvmEmitter
 
     private sealed record AsyncExpressionCarrier(string Name, bool Introduced);
 
+    private RuntimeValue[] EmitPreservedExpressionValues<T>(
+        IEnumerable<T> expressions,
+        Func<T, RuntimeValue> emit,
+        Func<T, bool>? ownsValue = null)
+    {
+        var values = new List<RuntimeValue>();
+        var carriers = new List<AsyncExpressionCarrier?>();
+        foreach (var expression in expressions)
+        {
+            var value = emit(expression);
+            values.Add(value);
+            carriers.Add(PreserveAsyncExpressionValue(value, ownsValue?.Invoke(expression) ?? true));
+        }
+        for (var index = 0; index < values.Count; index++)
+            values[index] = RestoreAsyncExpressionValue(carriers[index], values[index]);
+        return values.ToArray();
+    }
+
+    private bool OwnsPendingExpressionValue(Expression expression, BoundType? copiedType = null) =>
+        copiedType is { } type && CopiesFixedStorageField(expression, type)
+        || !TryGetOwnedFieldProjection(expression, out _, out _);
+
     private AsyncExpressionCarrier? PreserveAsyncExpressionValue(RuntimeValue value, bool ownsValue)
     {
         if (_activeAsyncCfg is null || value is RuntimeUnit)

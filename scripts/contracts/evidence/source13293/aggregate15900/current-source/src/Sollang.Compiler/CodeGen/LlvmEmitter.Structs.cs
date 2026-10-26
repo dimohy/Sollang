@@ -1,0 +1,1524 @@
+using System.Globalization;
+using System.Text;
+using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Syntax;
+
+namespace Sollang.Compiler.CodeGen;
+
+internal sealed partial class LlvmEmitter
+{
+    private readonly HashSet<Expression> _accountedOwnedStructLiterals =
+        new(ReferenceEqualityComparer.Instance);
+    private int _ownedStructLiteralDepth;
+
+    private string EmitStructTypeDefinitions()
+    {
+        if (_program.Types.Structs.Count == 0 && _program.Types.Enums.Count == 0
+            && _program.Types.BoundedArrays.Count == 0
+            && _program.Types.BoundedDictionaries.Count == 0
+            && _program.Types.BitSets.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        foreach (var definition in _program.Types.BoundedArrays.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBoundedArrayType(definition.Id))
+                .Append(" = type { i64, [")
+                .Append(definition.Capacity.ToString(CultureInfo.InvariantCulture))
+                .Append(" x ")
+                .Append(LlvmType(definition.ElementType))
+                .AppendLine("] }");
+        }
+        foreach (var definition in _program.Types.BoundedDictionaries.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBoundedDictionaryType(definition.Id))
+                .Append(" = type { i64, [")
+                .Append(definition.StorageSize.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i8] }");
+        }
+        foreach (var definition in _program.Types.BitSets.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmBitSetType(definition.Id))
+                .Append(" = type { [")
+                .Append(definition.WordCount.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i64] }");
+        }
+        foreach (var definition in _program.Types.Structs
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsConcreteTypeDefinition(definition.Id))
+                     .OrderBy(static definition => definition.Id))
+        {
+            var fields = string.Join(", ", definition.Fields.Select(field => LlvmType(field.Type)));
+            builder.Append(LlvmStructType(definition.Id))
+                .Append(" = type { ")
+                .Append(fields)
+                .AppendLine(" }");
+        }
+
+        foreach (var definition in _program.Types.Enums
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && IsConcreteTypeDefinition(definition.Id))
+                     .OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmEnumType(definition.Id))
+                .Append(" = type { i32, [")
+                .Append(definition.PayloadWords.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i64] }");
+        }
+
+        builder.AppendLine();
+        return builder.ToString();
+    }
+
+    private bool ShouldEmitTypeDefinition(TypeId type) =>
+        _usesDirectoryTraversal
+        || type is not (TypeId.DirectoryRaw
+            or TypeId.DirectoryEntry
+            or TypeId.DynamicDirectoryEntryArray
+            or TypeId.DirectoryRawResult
+            or TypeId.DirectoryReadResult)
+        || IsDropTypeReachable(type);
+
+    private bool IsConcreteTypeDefinition(TypeId type) =>
+        IsConcreteTypeDefinition(type, new HashSet<TypeId>());
+
+    private bool IsConcreteTypeDefinition(TypeId type, ISet<TypeId> visiting)
+    {
+        if (type is TypeId.GenericParameter
+            or TypeId.SecondaryGenericParameter
+            or TypeId.TertiaryGenericParameter)
+        {
+            return false;
+        }
+        if (!visiting.Add(type))
+        {
+            return true;
+        }
+        try
+        {
+            if (_program.Types.IsStruct(type))
+            {
+                return _program.Types.GetStruct(type).Fields.All(field =>
+                    IsConcreteTypeDefinition(field.Type, visiting));
+            }
+            if (_program.Types.IsEnum(type))
+            {
+                return _program.Types.GetEnum(type).Variants.All(variant =>
+                    variant.PayloadType is not { } payload
+                    || IsConcreteTypeDefinition(payload, visiting));
+            }
+            return true;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
+    }
+
+    private static string LlvmBoundedArrayType(TypeId type) => $"%sollang.bounded_array.t{(int)type}";
+
+    private static string LlvmBoundedDictionaryType(TypeId type) => $"%sollang.bounded_dictionary.t{(int)type}";
+
+    private static string LlvmBitSetType(TypeId type) => $"%sollang.bitset.t{(int)type}";
+
+    private RuntimeStruct EmitStructLiteralExpression(StructLiteralExpression expression)
+    {
+        _ownedStructLiteralDepth++;
+        try
+        {
+            return EmitStructLiteralExpressionCore(expression);
+        }
+        finally
+        {
+            _ownedStructLiteralDepth--;
+        }
+    }
+
+    private RuntimeStruct EmitStructLiteralExpressionCore(StructLiteralExpression expression)
+    {
+        if (!_program.Types.TryResolve(expression.TypeName, out var type) || !_program.Types.IsStruct(type))
+        {
+            throw new SollangException($"unknown runtime struct type '{expression.TypeName}'");
+        }
+
+        var definition = _program.Types.GetStruct(type);
+        var fieldsByName = definition.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        var values = EmitPreservedExpressionValues(expression.Fields, initializer =>
+        {
+            var field = fieldsByName[initializer.Name];
+            var value = EmitFunctionArgumentExpression(initializer.Value, field.Type);
+            var copiesFixedValue = CopiesFixedStorageField(initializer.Value, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            return value;
+        }, initializer => OwnsPendingExpressionValue(initializer.Value, fieldsByName[initializer.Name].Type));
+        var aggregate = "poison";
+        for (var index = 0; index < expression.Fields.Count; index++)
+        {
+            var field = fieldsByName[expression.Fields[index].Name];
+            var value = values[index];
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("struct_init");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        if (_ownedStructLiteralDepth == 1)
+        {
+            AccountOwnedStructLiteralSources(expression, type);
+            _accountedOwnedStructLiterals.Add(expression);
+        }
+
+        return new RuntimeStruct(type, aggregate);
+    }
+
+    private void AccountOwnedStructLiteralSources(Expression expression, BoundType expectedType)
+    {
+        var wholeOwners = new HashSet<string>(StringComparer.Ordinal);
+        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
+        CollectOwnedLiteralTransfers(expression, expectedType, wholeOwners, projectedTransfers);
+        foreach (var ownerName in wholeOwners)
+        {
+            RemoveLocal(ownerName);
+        }
+        foreach (var (ownerName, transferredPaths) in projectedTransfers)
+        {
+            if (!_locals.TryGetValue(ownerName, out var ownerValue) || ownerValue is not RuntimeStruct)
+            {
+                continue;
+            }
+            RecordOwnedFieldProjectionTransfers(ownerName, transferredPaths);
+        }
+    }
+
+    private void CollectOwnedLiteralTransfers(
+        Expression expression,
+        BoundType expectedType,
+        ISet<string> wholeOwners,
+        IDictionary<string, List<IReadOnlyList<string>>> projectedTransfers)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+        if (expression is NameExpression name
+            && _locals.TryGetValue(name.Name, out var source)
+            && source.Type == expectedType)
+        {
+            wholeOwners.Add(name.Name);
+            return;
+        }
+        if (RegisterOwnedFieldProjectionTransfer(expression, expectedType, projectedTransfers))
+        {
+            return;
+        }
+        if (_program.Types.IsDynamicArray(expectedType)
+            && expression is ArrayLiteralExpression array)
+        {
+            var elementType = _program.Types.GetDynamicArray(expectedType).ElementType;
+            foreach (var element in array.Elements)
+            {
+                CollectOwnedLiteralTransfers(element, elementType, wholeOwners, projectedTransfers);
+            }
+            return;
+        }
+        if (_program.Types.IsDictionary(expectedType)
+            && expression is DictionaryLiteralExpression dictionary)
+        {
+            var definition = _program.Types.GetDictionary(expectedType);
+            foreach (var entry in dictionary.Entries)
+            {
+                CollectOwnedLiteralTransfers(entry.Key, definition.KeyType, wholeOwners, projectedTransfers);
+                CollectOwnedLiteralTransfers(entry.Value, definition.ValueType, wholeOwners, projectedTransfers);
+            }
+            return;
+        }
+        if (!_program.Types.IsStruct(expectedType))
+        {
+            return;
+        }
+
+        IReadOnlyDictionary<string, Expression>? initializers = expression switch
+        {
+            StructLiteralExpression structure => structure.Fields.ToDictionary(
+                static field => field.Name,
+                static field => field.Value,
+                StringComparer.Ordinal),
+            ProductExpression product => product.Elements
+                .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                .ToDictionary(static element => element.Name, static element => element.Value, StringComparer.Ordinal),
+            DictionaryLiteralExpression contextual => contextual.Entries.ToDictionary(
+                entry => ((NameExpression)entry.Key).Name,
+                static entry => entry.Value,
+                StringComparer.Ordinal),
+            _ => null
+        };
+        if (initializers is null)
+        {
+            return;
+        }
+        foreach (var field in _program.Types.GetStruct(expectedType).Fields)
+        {
+            if (initializers.TryGetValue(field.Name, out var initializer)
+                && !CopiesFixedStorageField(initializer, field.Type))
+            {
+                CollectOwnedLiteralTransfers(initializer, field.Type, wholeOwners, projectedTransfers);
+            }
+        }
+    }
+
+    private bool RegisterOwnedFieldProjectionTransfer(
+        Expression expression,
+        BoundType expectedType,
+        IDictionary<string, List<IReadOnlyList<string>>> projectedTransfers)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType)
+            || !TryGetOwnedFieldProjection(expression, out var ownerName, out var fieldPath)
+            || !_locals.TryGetValue(ownerName, out var ownerValue)
+            || ownerValue is not RuntimeStruct owner
+            || !_program.Types.IsStruct(owner.Type)
+            || !OwnedFieldProjectionTypeMatches(owner.Type, fieldPath, expectedType))
+        {
+            return false;
+        }
+
+        if (IsMovedOwnedStructPath(ownerName, fieldPath, allowMovedDescendant: false))
+        {
+            throw new SollangException($"owned field '{ownerName}.{string.Join('.', fieldPath)}' overlaps an already moved field");
+        }
+
+        if (!projectedTransfers.TryGetValue(ownerName, out var paths))
+        {
+            paths = [];
+            projectedTransfers.Add(ownerName, paths);
+        }
+        paths.Add(fieldPath);
+        return true;
+    }
+
+    private static bool TryGetOwnedFieldProjection(
+        Expression expression,
+        out string ownerName,
+        out IReadOnlyList<string> fieldPath)
+    {
+        var fields = new Stack<string>();
+        var current = expression;
+        while (current is FieldAccessExpression field)
+        {
+            fields.Push(field.FieldName);
+            current = field.Source;
+        }
+
+        if (current is not NameExpression owner || fields.Count == 0)
+        {
+            ownerName = string.Empty;
+            fieldPath = [];
+            return false;
+        }
+
+        ownerName = owner.Name;
+        fieldPath = fields.ToArray();
+        return true;
+    }
+
+    private bool OwnedFieldProjectionTypeMatches(
+        BoundType ownerType,
+        IReadOnlyList<string> fieldPath,
+        BoundType expectedType)
+    {
+        var currentType = ownerType;
+        foreach (var fieldName in fieldPath)
+        {
+            if (!_program.Types.IsStruct(currentType)
+                || _program.Types.GetStruct(currentType).Fields.FirstOrDefault(field =>
+                    string.Equals(field.Name, fieldName, StringComparison.Ordinal)) is not { } field)
+            {
+                return false;
+            }
+            currentType = field.Type;
+        }
+        return currentType == expectedType;
+    }
+
+    private RuntimeStruct EmitProductExpression(ProductExpression expression)
+    {
+        _ownedStructLiteralDepth++;
+        try
+        {
+            return EmitProductExpressionCore(expression);
+        }
+        finally
+        {
+            _ownedStructLiteralDepth--;
+        }
+    }
+
+    private RuntimeStruct EmitProductExpressionCore(ProductExpression expression)
+    {
+        var values = EmitPreservedExpressionValues(expression.Elements, element => EmitExpression(element.Value),
+            element => OwnsPendingExpressionValue(element.Value));
+        var definition = _program.Types.Structs.SingleOrDefault(candidate =>
+            candidate.IsProduct
+            && candidate.Fields.Count == values.Length
+            && candidate.Fields.Select(static field => field.Type).SequenceEqual(values.Select(static value => value.Type))
+            && candidate.Fields.Select(static field => field.Name).SequenceEqual(
+                expression.Elements.Select((element, index) => element.Label ?? $"_{index}"),
+                StringComparer.Ordinal))
+            ?? throw new SollangException("semantic product type is missing during LLVM emission");
+
+        var aggregate = "poison";
+        for (var index = 0; index < values.Length; index++)
+        {
+            var field = definition.Fields[index];
+            var value = values[index];
+            var copiesFixedValue = CopiesFixedStorageField(expression.Elements[index].Value, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("product_init");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(definition.Id)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        if (_ownedStructLiteralDepth == 1)
+        {
+            AccountOwnedStructLiteralSources(expression, definition.Id);
+            _accountedOwnedStructLiterals.Add(expression);
+        }
+        return new RuntimeStruct(definition.Id, aggregate);
+    }
+
+    private RuntimeStruct EmitContextualStructLiteral(
+        DictionaryLiteralExpression expression,
+        BoundType type)
+    {
+        _ownedStructLiteralDepth++;
+        try
+        {
+            return EmitContextualStructLiteralCore(expression, type);
+        }
+        finally
+        {
+            _ownedStructLiteralDepth--;
+        }
+    }
+
+    private RuntimeStruct EmitContextualStructLiteralCore(
+        DictionaryLiteralExpression expression,
+        BoundType type)
+    {
+        var definition = _program.Types.GetStruct(type);
+        var fieldsByName = definition.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        var values = EmitPreservedExpressionValues(expression.Entries, entry =>
+        {
+            var field = fieldsByName[((NameExpression)entry.Key).Name];
+            var initializer = entry.Value;
+            var value = EmitFunctionArgumentExpression(initializer, field.Type);
+            var copiesFixedValue = CopiesFixedStorageField(initializer, field.Type);
+            if (copiesFixedValue)
+            {
+                value = CopyFixedStorageValue(value);
+            }
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            return value;
+        }, entry => OwnsPendingExpressionValue(entry.Value, fieldsByName[((NameExpression)entry.Key).Name].Type));
+        var aggregate = "poison";
+        for (var index = 0; index < expression.Entries.Count; index++)
+        {
+            var entry = expression.Entries[index];
+            var field = fieldsByName[((NameExpression)entry.Key).Name];
+            var value = values[index];
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("contextual_struct_init");
+            EmitAssign(next,
+                $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        if (_ownedStructLiteralDepth == 1)
+        {
+            AccountOwnedStructLiteralSources(expression, type);
+            _accountedOwnedStructLiterals.Add(expression);
+        }
+        return new RuntimeStruct(type, aggregate);
+    }
+
+    private bool CopiesFixedStorageField(Expression expression, BoundType type) =>
+        _program.Types.RequiresFixedStorageCopy(type)
+        && (expression is NameExpression
+            || IsBorrowedFixedStorageFieldProjection(expression, type)
+            || RegisterOwnedFieldProjectionTransfer(expression, type,
+                new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal)));
+
+    private bool IsBorrowedFixedStorageFieldProjection(Expression expression, BoundType expectedType) =>
+        TryGetOwnedFieldProjection(expression, out var ownerName, out var fieldPath)
+        && _locals.TryGetValue(ownerName, out var ownerValue)
+        && ownerValue is RuntimeReference reference
+        && _program.Types.IsStruct(reference.ElementType)
+        && OwnedFieldProjectionTypeMatches(reference.ElementType, fieldPath, expectedType);
+
+    private RuntimeValue CopyFixedStorageValue(RuntimeValue value)
+    {
+        if (_program.Types.IsCopyableFixedArray(value.Type))
+            return PrepareStaticArrayBlockResult(value, copyExistingValue: true);
+        if (value is not RuntimeStruct structure
+            || !_program.Types.RequiresFixedStorageCopy(value.Type))
+            throw new SollangException($"value {value.Type} has no supported fixed-storage copy contract");
+        var aggregate = structure.ValueName;
+        foreach (var field in _program.Types.GetStruct(value.Type).Fields)
+        {
+            if (!_program.Types.RequiresFixedStorageCopy(field.Type)) continue;
+            var extracted = NextTemp("copy_field");
+            EmitAssign(extracted, $"extractvalue {LlvmStructType(value.Type)} {aggregate}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            var copy = CopyFixedStorageValue(DematerializeAggregateValue(field.Type, extracted));
+            var materialized = MaterializeAggregateValue(copy);
+            var next = NextTemp("copy_struct");
+            EmitAssign(next, $"insertvalue {LlvmStructType(value.Type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        return new RuntimeStruct(value.Type, aggregate);
+    }
+
+    private RuntimeValue PrepareBorrowedFixedStorageReturn(Expression expression, RuntimeValue value)
+    {
+        if (!_program.Types.RequiresFixedStorageCopy(value.Type)) return value;
+        var owner = expression is NameExpression name ? name.Name
+            : TryGetOwnedFieldProjection(expression, out var fieldOwner, out _) ? fieldOwner : null;
+        return owner is not null && _borrowedOwnedLocals.Contains(owner)
+            ? CopyFixedStorageValue(value) : value;
+    }
+
+    private void RemoveOwnedLiteralSources(Expression expression, BoundType expectedType)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+
+        if (_accountedOwnedStructLiterals.Contains(expression))
+        {
+            return;
+        }
+
+        if (expression is NameExpression name)
+        {
+            RemoveLocal(name.Name);
+            return;
+        }
+
+        if (ConsumeOwnedFieldProjection(expression, expectedType))
+        {
+            return;
+        }
+
+        if (expression is TapExpression tap)
+        {
+            RemoveOwnedLiteralSources(tap.Source, expectedType);
+            return;
+        }
+
+        if (expression is ArrayLiteralExpression array
+            && (_program.Types.IsDynamicArray(expectedType)
+                || _program.Types.IsStaticArray(expectedType)
+                || _program.Types.IsBoundedArray(expectedType)))
+        {
+            var elementType = _program.Types.IsDynamicArray(expectedType)
+                ? _program.Types.GetDynamicArray(expectedType).ElementType
+                : _program.Types.IsStaticArray(expectedType)
+                    ? _program.Types.GetStaticArray(expectedType).ElementType
+                    : _program.Types.GetBoundedArray(expectedType).ElementType;
+            foreach (var element in array.Elements)
+            {
+                RemoveOwnedLiteralSources(element, elementType);
+            }
+            return;
+        }
+
+        if (_program.Types.IsDictionary(expectedType)
+            && expression is DictionaryLiteralExpression dictionary)
+        {
+            var dictionaryDefinition = _program.Types.GetDictionary(expectedType);
+            foreach (var entry in dictionary.Entries)
+            {
+                RemoveOwnedLiteralSources(entry.Key, dictionaryDefinition.KeyType);
+                RemoveOwnedLiteralSources(entry.Value, dictionaryDefinition.ValueType);
+            }
+            return;
+        }
+
+        if (!_program.Types.IsStruct(expectedType))
+        {
+            return;
+        }
+
+        var definition = _program.Types.GetStruct(expectedType);
+        IReadOnlyDictionary<string, Expression>? initializers = expression switch
+        {
+            StructLiteralExpression structure => structure.Fields.ToDictionary(
+                static field => field.Name,
+                static field => field.Value,
+                StringComparer.Ordinal),
+            ProductExpression product => product.Elements
+                .Select((element, index) => (Name: element.Label ?? $"_{index}", element.Value))
+                .ToDictionary(
+                    static element => element.Name,
+                    static element => element.Value,
+                    StringComparer.Ordinal),
+            DictionaryLiteralExpression contextual => contextual.Entries.ToDictionary(
+                entry => ((NameExpression)entry.Key).Name,
+                static entry => entry.Value,
+                StringComparer.Ordinal),
+            _ => null
+        };
+        if (initializers is null)
+        {
+            return;
+        }
+
+        foreach (var field in definition.Fields)
+        {
+            if (initializers.TryGetValue(field.Name, out var value)
+                && !CopiesFixedStorageField(value, field.Type))
+            {
+                RemoveOwnedLiteralSources(value, field.Type);
+            }
+        }
+    }
+
+    private bool ConsumeOwnedFieldProjection(Expression expression, BoundType expectedType)
+    {
+        var projectedTransfers = new Dictionary<string, List<IReadOnlyList<string>>>(StringComparer.Ordinal);
+        if (!RegisterOwnedFieldProjectionTransfer(expression, expectedType, projectedTransfers))
+        {
+            return false;
+        }
+
+        foreach (var (ownerName, transferredPaths) in projectedTransfers)
+        {
+            RecordOwnedFieldProjectionTransfers(ownerName, transferredPaths);
+        }
+        return true;
+    }
+
+    private void RecordOwnedFieldProjectionTransfers(
+        string ownerName,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths)
+    {
+        // A projected move leaves independent fields live. Their cleanup stays
+        // with the owner's scope; the moved paths exclude transferred storage.
+        foreach (var path in transferredPaths)
+        {
+            MarkMovedOwnedStructField(ownerName, string.Join('.', path));
+        }
+    }
+
+    private bool OwnedProjectionPathsCoverStorage(
+        BoundType ownerType,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths) =>
+        OwnedProjectionPathsCoverStorage(ownerType, [], transferredPaths, new HashSet<BoundType>());
+
+    private bool OwnedProjectionPathsCoverStorage(
+        BoundType type,
+        IReadOnlyList<string> prefix,
+        IReadOnlyList<IReadOnlyList<string>> transferredPaths,
+        ISet<BoundType> visiting)
+    {
+        if (transferredPaths.Any(path => path.SequenceEqual(prefix, StringComparer.Ordinal)))
+        {
+            return true;
+        }
+        if (!_program.Types.IsStruct(type) || !visiting.Add(type))
+        {
+            return false;
+        }
+        try
+        {
+            var ownedFields = _program.Types.GetStruct(type).Fields
+                .Where(field => _program.Types.ContainsOwnedStorage(field.Type))
+                .ToArray();
+            return ownedFields.Length > 0
+                && ownedFields.All(field => OwnedProjectionPathsCoverStorage(
+                    field.Type,
+                    prefix.Append(field.Name).ToArray(),
+                    transferredPaths,
+                    visiting));
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
+    }
+
+    private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression, bool asProjectionSource = false)
+    {
+        if (TryEmitPayloadlessEnumVariant(expression, out var enumValue))
+        {
+            return enumValue;
+        }
+        if (expression.Source is NameExpression functionOwner
+            && !_locals.ContainsKey(functionOwner.Name)
+            && _currentFunctions.TryGetValue(functionOwner.Name + "." + expression.FieldName, out var zeroArgumentFunction)
+            && zeroArgumentFunction.InputType is null)
+        {
+            return EmitFunctionCall(zeroArgumentFunction, argument: null);
+        }
+        if (expression.Source is NameExpression typeName
+            && !_locals.ContainsKey(typeName.Name)
+            && _program.Types.TryResolve(typeName.Name, out var type)
+            && _program.Types.IsStruct(type)
+            && _currentFunctions.TryGetValue(typeName.Name + "." + expression.FieldName, out var associated)
+            && associated.InputType is null)
+        {
+            return EmitFunctionCall(associated, argument: null);
+        }
+
+        if (TryGetOwnedFieldProjection(expression, out var movedOwnerName, out var movedFieldPath)
+            && IsMovedOwnedStructPath(movedOwnerName, movedFieldPath, allowMovedDescendant: asProjectionSource))
+        {
+            throw new SollangException($"owned field '{movedOwnerName}.{string.Join('.', movedFieldPath)}' overlaps an already moved field");
+        }
+        var source = expression.Source switch
+        {
+            NameExpression ownerPlace => EmitNameExpression(ownerPlace, allowPartialOwner: true),
+            FieldAccessExpression parentField => EmitFieldAccessExpression(parentField, asProjectionSource: true),
+            _ => EmitExpression(expression.Source)
+        };
+        if (source is RuntimeReference reference)
+        {
+            source = LoadReference(reference);
+        }
+        if (source is RuntimeBox box)
+        {
+            var loaded = NextTemp("box_value");
+            EmitLoad(loaded, LlvmType(box.ElementType), box.PointerName, RuntimeAlignment(box.ElementType));
+            source = DematerializeAggregateValue(box.ElementType, loaded);
+        }
+        if (source is not RuntimeStruct value)
+        {
+            throw new SollangException("field access expects a runtime struct value");
+        }
+
+        var definition = _program.Types.GetStruct(value.Type);
+        var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
+        if (field is null)
+        {
+            if (TryResolveInstanceMethod(value.Type, expression.FieldName, out var method)
+                && method.InputOwnership == BoundFunctionInputOwnership.Default)
+            {
+                return EmitFunctionCall(method, value);
+            }
+
+            throw new SollangException(
+                $"struct '{definition.Name}' has no field or readonly computed member '{expression.FieldName}'");
+        }
+        var extracted = NextTemp("field");
+        EmitAssign(
+            extracted,
+            $"extractvalue {LlvmStructType(value.Type)} {value.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+        var projected = DematerializeAggregateValue(field.Type, extracted);
+        if (IsAnonymousOwnedExpression(expression.Source)
+            && IsOwnedContainerRuntimeValue(source))
+        {
+            _anonymousProjectionOwners[expression] =
+                _anonymousProjectionOwners.GetValueOrDefault(expression.Source) ?? source;
+        }
+        return projected;
+    }
+
+    private RuntimeValue LoadReference(RuntimeReference reference)
+    {
+        var loaded = NextTemp("ref_value");
+        EmitLoad(
+            loaded,
+            LlvmType(reference.ElementType),
+            reference.PointerName,
+            RuntimeAlignment(reference.ElementType));
+        return DematerializeAggregateValue(reference.ElementType, loaded);
+    }
+
+    private RuntimeReference EmitReferencePlace(Expression expression, BoundType expectedReferenceType)
+    {
+        var expectedElementType = _program.Types.GetReference(expectedReferenceType).ElementType;
+        var place = EmitReferencePlace(expression);
+        if (place.ElementType != expectedElementType)
+        {
+            throw new SollangException(
+                $"reference place has type {place.ElementType} but {expectedElementType} was expected");
+        }
+        return new RuntimeReference(expectedReferenceType, expectedElementType, place.PointerName);
+    }
+
+    private RuntimeReference EmitReferencePlace(Expression expression)
+    {
+        if (expression is NameExpression name
+            && _locals.TryGetValue(name.Name, out var local))
+        {
+            if (local is RuntimeReference reference)
+            {
+                return reference;
+            }
+            if (_mutableStructSlots.TryGetValue(name.Name, out var mutablePointer))
+            {
+                var mutableReferenceType = _program.Types.GetOrAddReference(local.Type);
+                return new RuntimeReference(mutableReferenceType, local.Type, mutablePointer);
+            }
+            if (_readonlyCaptureBorrowPointers.TryGetValue(name.Name, out var capturePointer))
+            {
+                var captureReferenceType = _program.Types.GetOrAddReference(local.Type);
+                return new RuntimeReference(captureReferenceType, local.Type, capturePointer);
+            }
+
+            var pointer = GetOrCreateReadonlyValuePointer(local, "ref_place");
+            var referenceType = _program.Types.GetOrAddReference(local.Type);
+            return new RuntimeReference(referenceType, local.Type, pointer);
+        }
+
+        if (expression is FieldAccessExpression field)
+        {
+            var source = EmitReferencePlace(field.Source);
+            if (!_program.Types.IsStruct(source.ElementType))
+            {
+                throw new SollangException("reference field access expects a struct place");
+            }
+            var definition = _program.Types.GetStruct(source.ElementType);
+            var member = definition.Fields.FirstOrDefault(candidate => candidate.Name == field.FieldName)
+                ?? throw new SollangException(
+                    $"struct '{definition.Name}' has no field '{field.FieldName}'");
+            var pointer = NextTemp("ref_field");
+            EmitAssign(
+                pointer,
+                $"getelementptr inbounds {LlvmStructType(source.ElementType)}, ptr {source.PointerName}, i32 0, i32 {member.Index.ToString(CultureInfo.InvariantCulture)}");
+            if (_program.Types.IsReference(member.Type))
+            {
+                var storedPointer = NextTemp("stored_ref");
+                EmitLoad(storedPointer, "ptr", pointer, RuntimeAlignment(member.Type));
+                return new RuntimeReference(
+                    member.Type,
+                    _program.Types.GetReference(member.Type).ElementType,
+                    storedPointer);
+            }
+            var memberReferenceType = _program.Types.GetOrAddReference(member.Type);
+            return new RuntimeReference(memberReferenceType, member.Type, pointer);
+        }
+
+        if (expression is IndexExpression index)
+        {
+            return EmitReferenceIndexPlace(index);
+        }
+
+        var value = EmitExpression(expression);
+        if (value is RuntimeReference producedReference)
+        {
+            return producedReference;
+        }
+
+        throw new SollangException(
+            "reference returns require a named place, projection, or reference-producing expression");
+    }
+
+    private RuntimeReference EmitReferenceIndexPlace(IndexExpression expression)
+    {
+        var source = EmitExpression(expression.Source);
+        if (source is RuntimeReference reference)
+            source = LoadReference(reference);
+        if (source is RuntimeIntDictionaryView dictionaryView)
+            source = new RuntimeIntDictionary(
+                dictionaryView.PointerName, dictionaryView.LengthName, dictionaryView.CapacityName);
+        var indexSize = string.Empty;
+        if (source is not RuntimeInlineDictionary and not RuntimeIntDictionary)
+        {
+            var index = EmitIntExpression(expression.Index);
+            indexSize = EmitIntAsSize(index, "ref_index_size");
+        }
+
+        BoundType elementType;
+        string pointer;
+        switch (source)
+        {
+            case RuntimeIntSlice slice:
+                elementType = BoundType.Int;
+                pointer = EmitReferenceElementPointer(
+                    slice.PointerName,
+                    slice.LengthName,
+                    "i32",
+                    indexSize,
+                    "ref_slice");
+                break;
+            case RuntimeInlineSlice slice:
+                elementType = slice.ElementType;
+                pointer = EmitReferenceElementPointer(
+                    slice.PointerName,
+                    slice.LengthName,
+                    LlvmType(slice.ElementType),
+                    indexSize,
+                    "ref_slice");
+                break;
+            case RuntimeStaticIntArray array:
+                elementType = BoundType.Int;
+                pointer = EmitReferenceStaticIntElementPointer(array, indexSize);
+                break;
+            case RuntimeStaticTextArray array:
+                elementType = BoundType.Text;
+                pointer = EmitReferenceElementPointer(
+                    array.PointerName,
+                    array.LengthName,
+                    "%sollang.text",
+                    indexSize,
+                    "ref_text_array");
+                break;
+            case RuntimeStaticInlineArray array:
+                elementType = array.ElementType;
+                pointer = EmitReferenceElementPointer(
+                    array.PointerName,
+                    array.LengthName,
+                    LlvmType(array.ElementType),
+                    indexSize,
+                    "ref_inline_array");
+                break;
+            case RuntimeDynamicIntArray array:
+                elementType = BoundType.Int;
+                pointer = EmitReferenceElementPointer(
+                    array.PointerName,
+                    array.LengthName,
+                    "i32",
+                    indexSize,
+                    "ref_dynamic_array");
+                break;
+            case RuntimeDynamicInlineArray array:
+                elementType = array.ElementType;
+                pointer = EmitReferenceElementPointer(
+                    array.PointerName,
+                    array.LengthName,
+                    LlvmType(array.ElementType),
+                    indexSize,
+                    "ref_dynamic_inline_array");
+                break;
+            case RuntimeInlineDictionary dictionary:
+                elementType = dictionary.ValueType;
+                var key = EmitExpression(expression.Index);
+                var found = EmitInlineDictionaryFindSlot(dictionary, key);
+                EmitTrapUnless(found.FoundName, "ref_dictionary_missing");
+                var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+                pointer = EmitInlineDictionaryEntryPointer(
+                    dictionary,
+                    found.SlotName,
+                    definition.ValueOffset,
+                    "ref_dictionary_value");
+                if (_program.Types.IsReference(elementType))
+                {
+                    var storedPointer = NextTemp("ref_dictionary_stored");
+                    EmitLoad(storedPointer, "ptr", pointer, RuntimeAlignment(elementType));
+                    pointer = storedPointer;
+                    elementType = _program.Types.GetReference(elementType).ElementType;
+                }
+                break;
+            case RuntimeIntDictionary dictionary:
+                elementType = BoundType.Int;
+                var integerKey = EmitIntExpression(expression.Index);
+                var integerSlot = EmitDictionaryFindSlot(dictionary, integerKey.ValueName);
+                EmitTrapUnless(integerSlot.FoundName, "ref_dictionary_missing");
+                pointer = EmitDictionaryValueSlot(dictionary, integerSlot.SlotName);
+                break;
+            default:
+                throw new SollangException("reference indexing currently requires an array, dictionary, or IntSlice place");
+        }
+
+        return new RuntimeReference(_program.Types.GetOrAddReference(elementType), elementType, pointer);
+    }
+
+    private string EmitReferenceStaticIntElementPointer(RuntimeStaticIntArray array, string index)
+    {
+        var inBounds = NextTemp("ref_array_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "ref_array_bounds");
+        var pointer = NextTemp("ref_array_place");
+        EmitAssign(
+            pointer,
+            $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 {index}");
+        return pointer;
+    }
+
+    private string EmitReferenceElementPointer(
+        string sourcePointer,
+        string length,
+        string llvmElementType,
+        string index,
+        string prefix)
+    {
+        var inBounds = NextTemp(prefix + "_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, length);
+        EmitTrapUnless(inBounds, prefix + "_bounds");
+        var pointer = NextTemp(prefix + "_place");
+        EmitAssign(pointer, $"getelementptr {llvmElementType}, ptr {sourcePointer}, i64 {index}");
+        return pointer;
+    }
+
+    private (string TypeName, string ValueName) MaterializeAggregateValue(RuntimeValue value)
+    {
+        return value switch
+        {
+            RuntimeArguments arguments => ("i64", arguments.LengthName),
+            RuntimeInt integer => (LlvmType(integer.Type), integer.ValueName),
+            RuntimeFloat floating => (LlvmType(floating.Type), floating.ValueName),
+            RuntimeBool boolean => ("i1", boolean.ValueName),
+            RuntimeTask task => ("%sollang.task", BuildTaskAggregate(task)),
+            RuntimeProducerStream stream => (
+                stream.IsEvent ? "%sollang.event_stream" : "%sollang.stream",
+                BuildProducerStreamAggregate(stream)),
+            RuntimeText text => ("%sollang.text", BuildTextAggregate(text)),
+            RuntimeSourceText source => ("%sollang.source_text", BuildSourceTextAggregate(source)),
+            RuntimeMappedBytes mapped => ("%sollang.mapped_bytes", BuildMappedBytesAggregate(mapped)),
+            RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
+            RuntimeEnum enumeration => (LlvmEnumType(enumeration.Type), enumeration.ValueName),
+            RuntimeBox box => ("ptr", box.PointerName),
+            RuntimeReference reference => ("ptr", reference.PointerName),
+            RuntimeDynTrait dyn => ("%sollang.dyn", BuildDynTraitAggregate(dyn)),
+            RuntimeArena arena => (
+                "%sollang.dynamic_int_array",
+                BuildDynamicArrayAggregate(arena.PointerName, arena.UsedName, arena.CapacityName)),
+            RuntimeDynamicIntArray array => (
+                "%sollang.dynamic_int_array",
+                BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeDynamicInlineArray array when _program.Types.IsBoundedArray(array.Type) => (
+                LlvmBoundedArrayType(array.Type),
+                BuildBoundedArrayAggregate(array)),
+            RuntimeDynamicInlineArray array => (
+                "%sollang.dynamic_int_array",
+                BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeStaticIntArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
+            RuntimeStaticTextArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
+            RuntimeStaticInlineArray array => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(array.PointerName, array.LengthName)),
+            RuntimeIntSlice slice => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(slice.PointerName, slice.LengthName)),
+            RuntimeInlineSlice slice => (
+                "%sollang.int_slice",
+                BuildIntSliceAggregate(slice.PointerName, slice.LengthName)),
+            RuntimeIntDictionaryView dictionary => (
+                "%sollang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeIntDictionary dictionary => (
+                "%sollang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeInlineDictionary dictionary when _program.Types.IsBoundedDictionary(dictionary.Type) => (
+                LlvmBoundedDictionaryType(dictionary.Type),
+                BuildBoundedDictionaryAggregate(dictionary)),
+            RuntimeInlineDictionary dictionary => (
+                "%sollang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeBitSet bitSet => (LlvmBitSetType(bitSet.Type), BuildBitSetAggregate(bitSet)),
+            _ => throw new SollangException(
+                $"runtime value {value.GetType().Name} with type {value.Type} is not supported in an inline struct field "
+                + $"while emitting '{_currentFunction?.ModuleName}.{_currentFunction?.Name ?? "main"}'")
+        };
+    }
+
+    private string BuildTaskAggregate(RuntimeTask task)
+    {
+        var withHandle = NextTemp("task_with_handle");
+        EmitAssign(withHandle, $"insertvalue %sollang.task poison, ptr {task.HandleName}, 0");
+        var aggregate = NextTemp("task_with_context");
+        EmitAssign(aggregate, $"insertvalue %sollang.task {withHandle}, ptr {task.ContextName}, 1");
+        return aggregate;
+    }
+
+    private string BuildProducerStreamAggregate(RuntimeProducerStream stream)
+    {
+        var llvmType = stream.IsEvent ? "%sollang.event_stream" : "%sollang.stream";
+        var withContext = NextTemp("stream_with_context");
+        EmitAssign(withContext, $"insertvalue {llvmType} poison, ptr {stream.ContextName}, 0");
+        var withNext = NextTemp("stream_with_next");
+        EmitAssign(withNext, $"insertvalue {llvmType} {withContext}, ptr {stream.NextName}, 1");
+        var aggregate = NextTemp("stream_with_drop");
+        EmitAssign(aggregate, $"insertvalue {llvmType} {withNext}, ptr {stream.DropName}, 2");
+        return aggregate;
+    }
+
+    private RuntimeValue DematerializeAggregateValue(BoundType type, string valueName)
+    {
+        if (type == BoundType.Arguments)
+        {
+            return new RuntimeArguments(valueName);
+        }
+        if (type == BoundType.Unit)
+        {
+            return RuntimeUnit.Instance;
+        }
+        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            return ExtractMappedBytesAggregate(type, valueName);
+        }
+        if (type == BoundType.SourceText)
+        {
+            return ExtractSourceTextAggregate(valueName);
+        }
+        if (_program.Types.IsStruct(type))
+        {
+            return new RuntimeStruct(type, valueName);
+        }
+        if (_program.Types.IsEnum(type))
+        {
+            return new RuntimeEnum(type, valueName);
+        }
+        if (_program.Types.IsBox(type))
+        {
+            var box = _program.Types.GetBox(type);
+            return new RuntimeBox(type, box.ElementType, valueName);
+        }
+        if (_program.Types.IsReference(type))
+        {
+            return new RuntimeReference(type, _program.Types.GetReference(type).ElementType, valueName);
+        }
+        if (_program.Types.IsDynTrait(type))
+        {
+            var data = NextTemp("dyn_data");
+            EmitAssign(data, $"extractvalue %sollang.dyn {valueName}, 0");
+            var vtable = NextTemp("dyn_vtable");
+            EmitAssign(vtable, $"extractvalue %sollang.dyn {valueName}, 1");
+            return new RuntimeDynTrait(type, data, vtable);
+        }
+        if (_program.Types.IsBitSet(type))
+        {
+            var definition = _program.Types.GetBitSet(type);
+            var owner = NextTemp("bitset_owner");
+            EmitAlloca(owner, LlvmBitSetType(type), definition.Alignment);
+            EmitStore(LlvmBitSetType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bitset_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBitSetType(type)}, ptr {owner}, i64 0, i32 0, i64 0");
+            return new RuntimeBitSet(type, pointer);
+        }
+        if (_program.Types.TryGetStreamValue(type, out var streamElementType)
+            || _program.Types.TryGetEventStreamValue(type, out streamElementType))
+        {
+            var isEvent = _program.Types.IsEventStream(type);
+            var llvmType = isEvent ? "%sollang.event_stream" : "%sollang.stream";
+            var context = NextTemp("stream_context");
+            EmitAssign(context, $"extractvalue {llvmType} {valueName}, 0");
+            var next = NextTemp("stream_next");
+            EmitAssign(next, $"extractvalue {llvmType} {valueName}, 1");
+            var drop = NextTemp("stream_drop");
+            EmitAssign(drop, $"extractvalue {llvmType} {valueName}, 2");
+            return new RuntimeProducerStream(type, streamElementType, context, next, drop, isEvent);
+        }
+        if (type == BoundType.Arena)
+        {
+            var (pointer, used, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeArena(pointer, used, capacity);
+        }
+        if (type == BoundType.DynamicIntArray)
+        {
+            var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeDynamicIntArray(pointer, length, capacity);
+        }
+        if (_program.Types.IsDynamicArray(type))
+        {
+            var definition = _program.Types.GetDynamicArray(type);
+            var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeDynamicInlineArray(type, definition.ElementType, pointer, length, capacity);
+        }
+        if (_program.Types.IsStaticArray(type))
+        {
+            var definition = _program.Types.GetStaticArray(type);
+            var pointer = NextTemp("fixed_array_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {valueName}, 0");
+            var length = NextTemp("fixed_array_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
+            var fixedLength = definition.FixedLength
+                ?? throw new SollangException("an inline struct field requires a concrete fixed array length");
+            return new RuntimeStaticInlineArray(
+                type,
+                definition.ElementType,
+                pointer,
+                length,
+                fixedLength,
+                Math.Max(fixedLength, 1),
+                RuntimeContainerStorage.Heap);
+        }
+        if (_program.Types.IsBoundedArray(type))
+        {
+            var definition = _program.Types.GetBoundedArray(type);
+            var owner = NextTemp("bounded_array_owner");
+            EmitAlloca(owner, LlvmBoundedArrayType(type), definition.Alignment);
+            EmitStore(LlvmBoundedArrayType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bounded_array_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBoundedArrayType(type)}, ptr {owner}, i64 0, i32 1, i64 0");
+            var length = NextTemp("bounded_array_length");
+            EmitAssign(length, $"extractvalue {LlvmBoundedArrayType(type)} {valueName}, 0");
+            return new RuntimeDynamicInlineArray(
+                type, definition.ElementType, pointer, length,
+                definition.Capacity.ToString(CultureInfo.InvariantCulture), RuntimeContainerStorage.Stack);
+        }
+        if (type == BoundType.IntDictionary)
+        {
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeIntDictionary(pointer, length, capacity);
+        }
+        if (type == BoundType.IntDictionaryView)
+        {
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeIntDictionaryView(pointer, length, capacity);
+        }
+        if (type == BoundType.IntSlice)
+        {
+            var pointer = NextTemp("slice_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {valueName}, 0");
+            var length = NextTemp("slice_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
+            return new RuntimeIntSlice(pointer, length);
+        }
+        if (_program.Types.IsSlice(type))
+        {
+            var pointer = NextTemp("slice_ptr");
+            EmitAssign(pointer, $"extractvalue %sollang.int_slice {valueName}, 0");
+            var length = NextTemp("slice_len");
+            EmitAssign(length, $"extractvalue %sollang.int_slice {valueName}, 1");
+            return new RuntimeInlineSlice(type, _program.Types.GetSliceElement(type), pointer, length);
+        }
+        if (_program.Types.IsBoundedDictionary(type))
+        {
+            var definition = _program.Types.GetBoundedDictionary(type);
+            var owner = NextTemp("bounded_dictionary_owner");
+            EmitAlloca(owner, LlvmBoundedDictionaryType(type), definition.Alignment);
+            EmitStore(LlvmBoundedDictionaryType(type), valueName, owner, definition.Alignment);
+            var pointer = NextTemp("bounded_dictionary_data");
+            EmitAssign(pointer, $"getelementptr {LlvmBoundedDictionaryType(type)}, ptr {owner}, i64 0, i32 1, i64 0");
+            var length = NextTemp("bounded_dictionary_length");
+            EmitAssign(length, $"extractvalue {LlvmBoundedDictionaryType(type)} {valueName}, 0");
+            return new RuntimeInlineDictionary(
+                type, definition.KeyType, definition.ValueType, pointer, length,
+                definition.BucketCapacity.ToString(CultureInfo.InvariantCulture), RuntimeContainerStorage.Stack);
+        }
+        if (_program.Types.IsDictionary(type))
+        {
+            var definition = _program.Types.GetDictionary(type);
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeInlineDictionary(
+                type, definition.KeyType, definition.ValueType, pointer, length, capacity);
+        }
+        if (_program.Types.TryGetTaskValue(type, out var taskResultType))
+        {
+            var handle = NextTemp("task_field_handle");
+            EmitAssign(handle, $"extractvalue %sollang.task {valueName}, 0");
+            var context = NextTemp("task_field_context");
+            EmitAssign(context, $"extractvalue %sollang.task {valueName}, 1");
+            return new RuntimeTask(type, null, taskResultType, handle, context);
+        }
+        if (IsIntegerType(type))
+        {
+            return new RuntimeInt(type, valueName);
+        }
+        if (IsFloatType(type))
+        {
+            return new RuntimeFloat(type, valueName);
+        }
+
+        return type switch
+        {
+            BoundType.Bool => new RuntimeBool(valueName),
+            BoundType.Text => ExtractTextAggregate(valueName),
+            _ => throw new SollangException(
+                $"type {type} is not supported in an inline struct field "
+                + $"while emitting '{_currentFunction?.ModuleName}.{_currentFunction?.Name ?? "main"}'")
+        };
+    }
+
+    private string BuildTextAggregate(RuntimeText text)
+    {
+        var aggregate0 = NextTemp("text_value");
+        EmitAssign(aggregate0, $"insertvalue %sollang.text poison, ptr {text.PointerName}, 0");
+        var aggregate1 = NextTemp("text_value");
+        EmitAssign(aggregate1, $"insertvalue %sollang.text {aggregate0}, i64 {text.LengthName}, 1");
+        return aggregate1;
+    }
+
+    private string BuildDynTraitAggregate(RuntimeDynTrait dyn)
+    {
+        var withData = NextTemp("dyn_value");
+        EmitAssign(withData, $"insertvalue %sollang.dyn poison, ptr {dyn.DataPointerName}, 0");
+        var aggregate = NextTemp("dyn_value");
+        EmitAssign(aggregate, $"insertvalue %sollang.dyn {withData}, ptr {dyn.VtablePointerName}, 1");
+        return aggregate;
+    }
+
+    private string BuildIntSliceAggregate(string pointer, string length)
+    {
+        var aggregate0 = NextTemp("slice_value");
+        EmitAssign(aggregate0, $"insertvalue %sollang.int_slice poison, ptr {pointer}, 0");
+        var aggregate1 = NextTemp("slice_value");
+        EmitAssign(aggregate1, $"insertvalue %sollang.int_slice {aggregate0}, i64 {length}, 1");
+        return aggregate1;
+    }
+
+    private string BuildBoundedArrayAggregate(RuntimeDynamicInlineArray array)
+    {
+        var definition = _program.Types.GetBoundedArray(array.Type);
+        var storageType = $"[{definition.Capacity.ToString(CultureInfo.InvariantCulture)} x {LlvmType(definition.ElementType)}]";
+        var storage = NextTemp("bounded_array_value_storage");
+        EmitLoad(storage, storageType, array.PointerName, definition.ElementAlignment);
+        var withLength = NextTemp("bounded_array_value");
+        EmitAssign(withLength, $"insertvalue {LlvmBoundedArrayType(array.Type)} poison, i64 {array.LengthName}, 0");
+        var aggregate = NextTemp("bounded_array_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBoundedArrayType(array.Type)} {withLength}, {storageType} {storage}, 1");
+        return aggregate;
+    }
+
+    private string BuildBoundedDictionaryAggregate(RuntimeInlineDictionary dictionary)
+    {
+        var definition = _program.Types.GetBoundedDictionary(dictionary.Type);
+        var storageType = $"[{definition.StorageSize.ToString(CultureInfo.InvariantCulture)} x i8]";
+        var storage = NextTemp("bounded_dictionary_value_storage");
+        EmitLoad(storage, storageType, dictionary.PointerName, definition.Alignment);
+        var withLength = NextTemp("bounded_dictionary_value");
+        EmitAssign(withLength, $"insertvalue {LlvmBoundedDictionaryType(dictionary.Type)} poison, i64 {dictionary.LengthName}, 0");
+        var aggregate = NextTemp("bounded_dictionary_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBoundedDictionaryType(dictionary.Type)} {withLength}, {storageType} {storage}, 1");
+        return aggregate;
+    }
+
+    private string BuildBitSetAggregate(RuntimeBitSet bitSet)
+    {
+        var definition = _program.Types.GetBitSet(bitSet.Type);
+        var storageType = $"[{definition.WordCount.ToString(CultureInfo.InvariantCulture)} x i64]";
+        var storage = NextTemp("bitset_value_storage");
+        EmitLoad(storage, storageType, bitSet.PointerName, definition.Alignment);
+        var aggregate = NextTemp("bitset_value");
+        EmitAssign(aggregate, $"insertvalue {LlvmBitSetType(bitSet.Type)} poison, {storageType} {storage}, 0");
+        return aggregate;
+    }
+
+    private RuntimeText ExtractTextAggregate(string aggregate)
+    {
+        var pointer = NextTemp("text_ptr");
+        EmitAssign(pointer, $"extractvalue %sollang.text {aggregate}, 0");
+        var length = NextTemp("text_len");
+        EmitAssign(length, $"extractvalue %sollang.text {aggregate}, 1");
+        return new RuntimeText(pointer, length);
+    }
+
+    private string BuildSourceTextAggregate(RuntimeSourceText source)
+    {
+        var value0 = NextTemp("source_text_value");
+        EmitAssign(value0, $"insertvalue %sollang.source_text poison, ptr {source.DataPointerName}, 0");
+        var value1 = NextTemp("source_text_value");
+        EmitAssign(value1, $"insertvalue %sollang.source_text {value0}, i64 {source.LengthName}, 1");
+        var value2 = NextTemp("source_text_value");
+        EmitAssign(value2, $"insertvalue %sollang.source_text {value1}, ptr {source.BasePointerName}, 2");
+        var value3 = NextTemp("source_text_value");
+        EmitAssign(value3, $"insertvalue %sollang.source_text {value2}, i64 {source.MappedLengthName}, 3");
+        return value3;
+    }
+
+    private RuntimeSourceText ExtractSourceTextAggregate(string aggregate)
+    {
+        var data = NextTemp("source_text_data");
+        EmitAssign(data, $"extractvalue %sollang.source_text {aggregate}, 0");
+        var length = NextTemp("source_text_length");
+        EmitAssign(length, $"extractvalue %sollang.source_text {aggregate}, 1");
+        var basePointer = NextTemp("source_text_base");
+        EmitAssign(basePointer, $"extractvalue %sollang.source_text {aggregate}, 2");
+        var mappedLength = NextTemp("source_text_mapped_length");
+        EmitAssign(mappedLength, $"extractvalue %sollang.source_text {aggregate}, 3");
+        return new RuntimeSourceText(data, length, basePointer, mappedLength);
+    }
+
+    private string BuildMappedBytesAggregate(RuntimeMappedBytes mapped)
+    {
+        var value0 = NextTemp("mapped_value");
+        EmitAssign(value0, $"insertvalue %sollang.mapped_bytes poison, ptr {mapped.DataPointerName}, 0");
+        var value1 = NextTemp("mapped_value");
+        EmitAssign(value1, $"insertvalue %sollang.mapped_bytes {value0}, i64 {mapped.LengthName}, 1");
+        var value2 = NextTemp("mapped_value");
+        EmitAssign(value2, $"insertvalue %sollang.mapped_bytes {value1}, ptr {mapped.BasePointerName}, 2");
+        var value3 = NextTemp("mapped_value");
+        EmitAssign(value3, $"insertvalue %sollang.mapped_bytes {value2}, i64 {mapped.MappedLengthName}, 3");
+        var value4 = NextTemp("mapped_value");
+        EmitAssign(value4,
+            $"insertvalue %sollang.mapped_bytes {value3}, i1 {(mapped.Type == BoundType.MutableMappedBytes ? "true" : "false")}, 4");
+        return value4;
+    }
+
+    private RuntimeMappedBytes ExtractMappedBytesAggregate(BoundType type, string aggregate)
+    {
+        var data = NextTemp("mapped_data");
+        EmitAssign(data, $"extractvalue %sollang.mapped_bytes {aggregate}, 0");
+        var length = NextTemp("mapped_length");
+        EmitAssign(length, $"extractvalue %sollang.mapped_bytes {aggregate}, 1");
+        var basePointer = NextTemp("mapped_base");
+        EmitAssign(basePointer, $"extractvalue %sollang.mapped_bytes {aggregate}, 2");
+        var mappedLength = NextTemp("mapped_base_length");
+        EmitAssign(mappedLength, $"extractvalue %sollang.mapped_bytes {aggregate}, 3");
+        return new RuntimeMappedBytes(type, data, length, basePointer, mappedLength);
+    }
+
+    private (string Pointer, string Length, string Capacity) ExtractDynamicArrayAggregate(string aggregate)
+    {
+        var pointer = NextTemp("array_ptr");
+        EmitAssign(pointer, $"extractvalue %sollang.dynamic_int_array {aggregate}, 0");
+        var length = NextTemp("array_len");
+        EmitAssign(length, $"extractvalue %sollang.dynamic_int_array {aggregate}, 1");
+        var capacity = NextTemp("array_capacity");
+        EmitAssign(capacity, $"extractvalue %sollang.dynamic_int_array {aggregate}, 2");
+        return (pointer, length, capacity);
+    }
+
+    private (string Pointer, string Length, string Capacity) ExtractDictionaryAggregate(string aggregate)
+    {
+        var pointer = NextTemp("dictionary_ptr");
+        EmitAssign(pointer, $"extractvalue %sollang.int_dictionary {aggregate}, 0");
+        var length = NextTemp("dictionary_len");
+        EmitAssign(length, $"extractvalue %sollang.int_dictionary {aggregate}, 1");
+        var capacity = NextTemp("dictionary_capacity");
+        EmitAssign(capacity, $"extractvalue %sollang.int_dictionary {aggregate}, 2");
+        return (pointer, length, capacity);
+    }
+
+    private string LlvmType(BoundType type)
+    {
+        // Arguments copies only its count; element storage belongs to the process runtime.
+        if (type == BoundType.Arguments)
+        {
+            return "i64";
+        }
+        if (_program.Types.IsBitSet(type))
+        {
+            return LlvmBitSetType(type);
+        }
+        if (type == BoundType.SourceText)
+        {
+            return "%sollang.source_text";
+        }
+        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            return "%sollang.mapped_bytes";
+        }
+        if (_program.Types.IsStruct(type))
+        {
+            return LlvmStructType(type);
+        }
+        if (_program.Types.IsEnum(type))
+        {
+            return LlvmEnumType(type);
+        }
+        if (_program.Types.IsBox(type))
+        {
+            return "ptr";
+        }
+        if (_program.Types.IsReference(type))
+        {
+            return "ptr";
+        }
+        if (_program.Types.IsDynTrait(type))
+        {
+            return "%sollang.dyn";
+        }
+        if (_program.Types.IsBoundedDictionary(type))
+        {
+            return LlvmBoundedDictionaryType(type);
+        }
+        if (_program.Types.IsDictionary(type))
+        {
+            return "%sollang.int_dictionary";
+        }
+        if (_program.Types.IsBoundedArray(type))
+        {
+            return LlvmBoundedArrayType(type);
+        }
+        if (_program.Types.IsDynamicArray(type))
+        {
+            return "%sollang.dynamic_int_array";
+        }
+        if (_program.Types.IsStaticArray(type))
+        {
+            return "%sollang.int_slice";
+        }
+        if (_program.Types.IsTask(type))
+        {
+            return "%sollang.task";
+        }
+        if (_program.Types.IsStream(type))
+        {
+            return "%sollang.stream";
+        }
+        if (_program.Types.IsEventStream(type))
+        {
+            return "%sollang.event_stream";
+        }
+        if (_program.Types.IsSlice(type))
+        {
+            return "%sollang.int_slice";
+        }
+
+        return type switch
+        {
+            BoundType.Unit => "void",
+            BoundType.Text => "%sollang.text",
+            BoundType.Int => "i32",
+            BoundType.Int8 or BoundType.UInt8 => "i8",
+            BoundType.Int16 or BoundType.UInt16 => "i16",
+            BoundType.UInt32 => "i32",
+            BoundType.Int64 => "i64",
+            BoundType.UInt64 => "i64",
+            BoundType.Size or BoundType.UIntSize => $"i{_platform.PointerBitWidth}",
+            BoundType.CodePoint => "i32",
+            BoundType.Float32 => "float",
+            BoundType.Float64 => "double",
+            BoundType.Bool => "i1",
+            BoundType.IntSlice => "%sollang.int_slice",
+            BoundType.DynamicIntArray => "%sollang.dynamic_int_array",
+            BoundType.IntDictionaryView or BoundType.IntDictionary => "%sollang.int_dictionary",
+            BoundType.Arena => "%sollang.dynamic_int_array",
+            BoundType.SourceText => "%sollang.source_text",
+            BoundType.MappedBytes or BoundType.MutableMappedBytes => "%sollang.mapped_bytes",
+            _ => throw new SollangException($"type {type} has no first-class LLVM representation")
+        };
+    }
+
+    private static bool IsIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64
+        or BoundType.UInt8 or BoundType.UInt16 or BoundType.UInt32 or BoundType.UInt64
+        or BoundType.Size or BoundType.UIntSize or BoundType.CodePoint;
+
+    private static bool IsSignedIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64 or BoundType.Size;
+
+    private static bool IsFloatType(BoundType type) => type is BoundType.Float32 or BoundType.Float64;
+
+    private static bool IsNumericType(BoundType type) => IsIntegerType(type) || IsFloatType(type);
+
+    private int NumericBitWidth(BoundType type) => type switch
+    {
+        BoundType.Int8 or BoundType.UInt8 => 8,
+        BoundType.Int16 or BoundType.UInt16 => 16,
+        BoundType.Int or BoundType.UInt32 or BoundType.Float32 => 32,
+        BoundType.CodePoint => 32,
+        BoundType.Int64 or BoundType.UInt64 or BoundType.Float64 => 64,
+        BoundType.Size or BoundType.UIntSize => _platform.PointerBitWidth,
+        _ => throw new SollangException($"type {type} is not numeric")
+    };
+
+    private static string LlvmStructType(BoundType type)
+    {
+        return "%sollang.struct." + ((int)type).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string LlvmEnumType(BoundType type)
+    {
+        return "%sollang.enum." + ((int)type).ToString(CultureInfo.InvariantCulture);
+    }
+}

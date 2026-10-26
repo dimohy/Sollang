@@ -825,9 +825,9 @@ internal sealed partial class LlvmEmitter
             var elementType = expectedType == BoundType.DynamicIntArray
                 ? BoundType.Int
                 : _program.Types.GetDynamicArray(expectedType).ElementType;
-            var elements = contextualDynamicLiteral.Elements
-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
-                .ToArray();
+            var elements = EmitPreservedExpressionValues(contextualDynamicLiteral.Elements,
+                element => EmitFunctionArgumentExpression(element, elementType),
+                element => OwnsPendingExpressionValue(element));
             return expectedType == BoundType.DynamicIntArray
                 ? EmitDynamicIntArrayLiteral(contextualDynamicLiteral, elements.Cast<RuntimeInt>().ToArray())
                 : EmitDynamicInlineArrayLiteral(expectedType, elements);
@@ -836,9 +836,9 @@ internal sealed partial class LlvmEmitter
             && _program.Types.IsBoundedArray(expectedType))
         {
             var elementType = _program.Types.GetBoundedArray(expectedType).ElementType;
-            var elements = boundedArray.Elements
-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
-                .ToArray();
+            var elements = EmitPreservedExpressionValues(boundedArray.Elements,
+                element => EmitFunctionArgumentExpression(element, elementType),
+                element => OwnsPendingExpressionValue(element));
             return EmitBoundedInlineArrayLiteral(expectedType, elements);
         }
         if (expression is ArrayLiteralExpression fixedArray
@@ -852,9 +852,9 @@ internal sealed partial class LlvmEmitter
                 BoundType.StaticTextArray => BoundType.Text,
                 _ => _program.Types.GetStaticArray(expectedType).ElementType
             };
-            var elements = fixedArray.Elements
-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
-                .ToArray();
+            var elements = EmitPreservedExpressionValues(fixedArray.Elements,
+                element => EmitFunctionArgumentExpression(element, elementType),
+                element => OwnsPendingExpressionValue(element));
             if (expectedType == BoundType.StaticIntArray)
             {
                 return EmitStaticIntArrayLiteral(fixedArray, elements.Cast<RuntimeInt>().ToArray());
@@ -896,9 +896,9 @@ internal sealed partial class LlvmEmitter
             && expression is ArrayLiteralExpression array)
         {
             var elementType = _program.Types.GetSliceElement(expectedType);
-            var elements = array.Elements
-                .Select(element => EmitFunctionArgumentExpression(element, elementType))
-                .ToArray();
+            var elements = EmitPreservedExpressionValues(array.Elements,
+                element => EmitFunctionArgumentExpression(element, elementType),
+                element => OwnsPendingExpressionValue(element));
             if (elementType == BoundType.Int)
             {
                 return EmitStaticIntArrayLiteral(array, elements.Cast<RuntimeInt>().ToArray());

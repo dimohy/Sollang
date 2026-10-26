@@ -1,0 +1,47 @@
+struct Pair {
+    left: Values
+    right: Values
+}
+
+measure values: Pair -> Int => (values.left.items -> len) + (values.right.items -> len)
+
+struct Values {
+    items: [Int; ~]
+}
+
+arrayChild: -> async Values {
+    yield
+    Values { items: [2, 3, 5; ~] }
+}
+
+secondChild: -> async Values {
+    yield
+    yield
+    yield
+    Values { items: [7, 11, 13; ~] }
+}
+
+gate: -> async Int {
+    yield
+    yield
+    yield
+    0
+}
+
+combine values: [Int; ~], extra: Int -> Int => (values -> len) + extra
+
+parent: -> async Int uses Console {
+    "parent-started" -> println
+    arrayChild() => first
+    secondChild() => second
+    Pair { left: first -> await, right: second -> await } => values
+    (values.left.items -> len) + (values.right.items -> len)
+}
+
+main {
+    parent() => pending
+    gate() => ready
+    ready -> await => ignored
+    pending -> cancel
+    "cancelled" -> println
+}

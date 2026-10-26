@@ -793,7 +793,7 @@ internal sealed partial class LlvmEmitter
                 ? EmitFunctionArgumentExpression(element, contextualElementType)
                 : EmitExpression(element);
             elementType ??= elements[index].Type;
-            carriers[index] = PreserveAsyncExpressionValue(elements[index], ownsValue: true);
+            carriers[index] = PreserveAsyncExpressionValue(elements[index], OwnsPendingExpressionValue(element));
         }
         for (var index = 0; index < elements.Length; index++)
             elements[index] = RestoreAsyncExpressionValue(carriers[index], elements[index]);
@@ -1176,7 +1176,7 @@ internal sealed partial class LlvmEmitter
                     ? EmitContextualStructLiteral(contextual, contextualKeyType)
                     : EmitExpression(entry.Key);
             inferredKeyType ??= key.Type;
-            var keyCarrier = PreserveAsyncExpressionValue(key, ownsValue: true);
+            var keyCarrier = PreserveAsyncExpressionValue(key, OwnsPendingExpressionValue(entry.Key));
             var value = entry.Value is DictionaryLiteralExpression contextualValue
                 && inferredValueType is { } contextualValueType
                 && _program.Types.IsStruct(contextualValueType)
@@ -1184,7 +1184,7 @@ internal sealed partial class LlvmEmitter
                     : EmitExpression(entry.Value);
             inferredValueType ??= value.Type;
             entries.Add((key, value));
-            carriers.Add((keyCarrier, PreserveAsyncExpressionValue(value, ownsValue: true)));
+            carriers.Add((keyCarrier, PreserveAsyncExpressionValue(value, OwnsPendingExpressionValue(entry.Value))));
         }
         for (var index = 0; index < entries.Count; index++)
             entries[index] = (
