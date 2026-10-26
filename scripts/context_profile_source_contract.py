@@ -50,6 +50,19 @@ def render_loader(standard_library_count):
     return LOADER_TEMPLATE.replace("__STDLIB_COUNT__", str(standard_library_count))
 
 
+def render_profile_prefix(canonical):
+    # Retain the complete original module. Checked-preparation types and helper
+    # functions may follow lowerPreparedIr; slicing at that function silently
+    # dropped their declarations when the production module evolved.
+    decoder = "import sollang.compiler.syntax.source_decoding as sourceDecoding"
+    if decoder not in canonical:
+        anchor = "import sys.file as file"
+        if canonical.count(anchor) != 1:
+            raise ValueError("PROFILE_CANONICAL_FILE_IMPORT_REQUIRED")
+        canonical = canonical.replace(anchor, decoder + "\n" + anchor, 1)
+    return canonical.rstrip() + "\n"
+
+
 def validate_loader(profile, standard_library_count):
     marker = "\npublic profileResolvedFiles"
     if profile.count(marker) != 1:

@@ -1,10 +1,29 @@
 """Reject old owning profile loaders before compiler or runtime work."""
 import unittest
 from pathlib import Path
-from context_profile_source_contract import render_loader, validate_loader
+from context_profile_source_contract import render_loader, render_profile_prefix, validate_loader
 
 
 class ProfileSourceContractTests(unittest.TestCase):
+    def test_checked_preparation_declarations_after_lowering_are_retained(self):
+        canonical = (Path(__file__).parent.parent / "selfhost/llvm/text/context_prepare.slg").read_text()
+        prefix = render_profile_prefix(canonical)
+        self.assertIn("struct InterpolationImportRejection {", prefix)
+        self.assertIn("prepareResolvedSnapshot request:", prefix)
+        self.assertIn("\nprepare request:", prefix)
+        self.assertEqual(prefix.count("prepareResolvedSnapshot request:"), 1)
+        self.assertEqual(prefix.replace(
+            "import sollang.compiler.syntax.source_decoding as sourceDecoding\n", ""),
+            canonical.rstrip() + "\n")
+
+    def test_existing_decoder_import_is_not_duplicated(self):
+        source = "import sollang.compiler.syntax.source_decoding as sourceDecoding\nimport sys.file as file\n"
+        self.assertEqual(render_profile_prefix(source), source)
+
+    def test_missing_file_import_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "PROFILE_CANONICAL_FILE_IMPORT_REQUIRED"):
+            render_profile_prefix("namespace example\n")
+
     def test_generated_loader_retains_outer_mappings(self):
         validate_loader("namespace example\n" + render_loader(144), 144)
         self.assertTrue(render_loader(144).endswith("\n"))

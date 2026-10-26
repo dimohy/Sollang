@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from context_profile_source_contract import render_loader, validate_loader
+from context_profile_source_contract import render_loader, render_profile_prefix, validate_loader
 
 root = Path.cwd()
 parser = argparse.ArgumentParser(description=__doc__)
@@ -82,7 +82,7 @@ body = body[:-len('    context!\n}')] + '    "context-complete" -> profileMark\n
 unmarked = '\n'.join(line for line in body.splitlines() if not re.fullmatch(r'    "[a-z0-9-]+" -> profileMark', line))
 assert original == header + '\n' + unmarked
 header = header.replace('prepareResolvedSnapshot request:', 'profileResolvedSnapshot request:', 1).replace(' -> emitterContext.EmitContext {', ' -> emitterContext.EmitContext uses Console {', 1)
-prefix = text[:text.index('\nlowerPreparedIr ')].replace('import sys.file as file', 'import sollang.compiler.syntax.source_decoding as sourceDecoding\nimport sys.file as file', 1)
+prefix = render_profile_prefix(text)
 marker = '''
 profileMark label: Text -> Unit uses Console {
     "context-stage $label" -> runtime.eprintln
