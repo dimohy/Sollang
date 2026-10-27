@@ -42,6 +42,14 @@ internal static class StoragePlacementTests
         if (!string.Equals(assembly.Location, compiler, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The supplied compiler product was not loaded.");
         var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
+        if (root.TryGetProperty("scope", out var scope)
+            && scope.GetString() == "candidate-syntax")
+        {
+            var exit = RunSyntax(assembly, analyzer, root, result, compiler, fixture,
+                compilerHash, fixtureHash);
+            context.Unload();
+            return exit;
+        }
         var budget = (int)analyzer.GetField("StackPromotionBudgetBytes",
             BindingFlags.NonPublic | BindingFlags.Static)!.GetRawConstantValue()!;
         if (budget != root.GetProperty("budgetBytes").GetInt32())
@@ -119,6 +127,55 @@ internal static class StoragePlacementTests
             cases
         }, Json) + "\n");
         context.Unload();
+        return accepted ? 0 : 1;
+    }
+
+    private static int RunSyntax(Assembly assembly, Type analyzer, JsonElement root,
+        string result, string compiler, string fixture, string compilerHash, string fixtureHash)
+    {
+        var lexerType = assembly.GetType("Sollang.Compiler.Lexing.Lexer", true)!;
+        var parserType = assembly.GetType("Sollang.Compiler.Parsing.Parser", true)!;
+        var candidate = analyzer.GetMethod("TryGetCandidate", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var cases = new List<object>();
+        var identifiers = new HashSet<string>(StringComparer.Ordinal);
+        var completed = 0;
+        foreach (var item in root.GetProperty("cases").EnumerateArray())
+        {
+            var id = item.GetProperty("id").GetString()!;
+            if (string.IsNullOrWhiteSpace(id) || !identifiers.Add(id))
+                throw new InvalidDataException("Missing or duplicate syntax fixture identity.");
+            var expression = item.GetProperty("expression").GetString()!;
+            var lexer = Activator.CreateInstance(lexerType, ["main { " + expression + " => value }"])!;
+            var tokens = lexerType.GetMethod("Lex")!.Invoke(lexer, null)!;
+            var parser = Activator.CreateInstance(parserType, [tokens, false, null])!;
+            var program = parserType.GetMethod("Parse")!.Invoke(parser, null)!;
+            var binding = ((IEnumerable)Property(program, "Statements")).Cast<object>().Single();
+            if (binding.GetType().Name != "BindingStatement")
+                throw new InvalidDataException("One direct binding is required.");
+            object?[] arguments = [Property(binding, "Value"), null, 0];
+            var selected = (bool)candidate.Invoke(null, arguments)!;
+            var kind = selected ? arguments[1]!.ToString()! : "None";
+            var size = selected ? (int)arguments[2]! : 0;
+            var expected = item.GetProperty("expected");
+            var passed = kind == expected.GetProperty("kind").GetString()
+                && size == expected.GetProperty("size").GetInt32();
+            if (passed) completed++;
+            cases.Add(new { id, status = passed ? "passed" : "failed", passed,
+                expression, actual = new { kind, size },
+                expressionKind = arguments[0]!.GetType().Name });
+        }
+        if (cases.Count == 0) throw new InvalidDataException("At least one syntax fixture is required.");
+        string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+        var stable = Hash(compiler) == compilerHash && Hash(fixture) == fixtureHash;
+        var accepted = stable && completed == cases.Count;
+        Directory.CreateDirectory(Path.GetDirectoryName(result)!);
+        File.WriteAllText(result, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1, scope = "production-stack-candidate-syntax-reference",
+            status = accepted ? "passed" : "failed", completed, total = cases.Count,
+            compiler, compilerDllSha256 = compilerHash, fixture, fixtureSha256 = fixtureHash,
+            inputsStable = stable, cases
+        }, Json) + "\n");
         return accepted ? 0 : 1;
     }
 }
