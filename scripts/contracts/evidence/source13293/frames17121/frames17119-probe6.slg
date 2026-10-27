@@ -1,0 +1,130 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_frames as frames
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.diagnostics as diagnostics
+import sys.process as process
+
+struct Query { label: Text, name: Text, line: Int }
+
+location nodeIndex: Int, source: Text, prepared: ref semanticContext.SemanticSnapshot, indexed: ref sourceIndex.SourceIndex, units: ref sourceUnits.UnitPlan -> diagnostics.SourceLocation {
+    prepared.package.ranges[0] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    node.start => offset!
+    node.kind == 9 -> if {
+        prepared.package.tokens[range.tokenStart + node.payloadToken].span.start => offset!
+    }
+    units.units -> each unit { unit.astNode == nodeIndex -> if {
+            prepared.package.tokens[range.tokenStart + unit.locationToken].span.start => offset!
+    } }
+    source -> diagnostics.sourceLocation(offset!)
+}
+
+kindCode nodeIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    prepared.package.ranges[0] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    node.kind == 9 -> if { 2 -> return }
+    node.kind == 38 -> if { 3 -> return }
+    prepared.package -> typeIds.arrayStorageSyntax(0, nodeIndex) => storage
+    storage.isRepeat -> if { 1 } else { 0 }
+}
+
+inspect label: Text, source: Text, queries: [Query] -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypes.resolveContext => facts
+    prepared.package.ranges[0] => range
+    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) { prepared.package -> sourceUnits.build(0, indexed) -> when {
+                Err(_) { process.exit(2) }
+                Ok(units) {
+                    "case:$label" -> println
+                    queries -> each query {
+                        -1 => frame!
+                        0 => i!
+                        i! < range.astCount -> while {
+                            prepared.package.nodes[range.astStart + i!] => node
+                            query.line == 0 and node.kind == 8 -> if { i! => frame! }
+                            query.line > 0 and (node.kind == 7 or node.kind == 31)
+                                -> if {
+                                    source -> diagnostics.sourceLocation(node.start) => location
+                                    prepared.package.tokens[range.tokenStart + node.payloadToken] => name
+                                    location.line == query.line and (source -> slice(name.span.start, name.span.length)) == query.name
+                                        -> if { i! => frame! }
+                                }
+                            i! + 1 => i!
+                        }
+                        frame! < 0 -> if { process.exit(3) }
+                        frame! -> frames.build(source, prepared, facts, 0, indexed, units) -> when {
+                            Err(_) { process.exit(4) }
+                            Ok(plan) {
+                                "$(query.label)|slots:$(plan.slots -> len)" -> println
+                                0 => slot!
+                                plan.slots -> each item {
+                                    "s|$(slot!):$(item.size):$(item.align)" -> println
+                                    slot! + 1 => slot!
+                                }
+                                0 => ordinal!
+                                plan.candidates -> each candidate {
+                                    candidate.source -> kindCode(prepared) => kind
+                                    candidate.source -> location(source, prepared, indexed, units) => start
+                                    candidate.endUnit -> location(source, prepared, indexed, units) => end
+                                    "c|$(ordinal!):$kind:$(start.line):$(start.column):$(candidate.size):$(candidate.start):$(candidate.end):$(end.line):$(end.column):$(candidate.automaticEnd):$(plan.slotsByCandidate[ordinal!])" -> println
+                                    ordinal! + 1 => ordinal!
+                                }
+                                plan.ends -> each ending {
+                                    ending.unit -> location(source, prepared, indexed, units) => end
+                                    units.isResultByAst[ending.unit] -> if { "V" } else { "S" } => kind
+                                    "e|$(ending.position):$(end.line):$(end.column):$kind:$(ending.slot):$(ending.size)" -> println
+                                }
+                            }
+                        }
+                    }
+                }
+        } }
+    }
+}
+
+main {
+    """
+    main {
+        [Int; ~] => values!
+    }
+    """ => source0
+    "mutable-empty-array" -> inspect(source0, [Query { label: "main", name: "", line: 0 }])
+    """
+    main {
+        box 13 => value!
+    }
+    """ => source1
+    "mutable-box" -> inspect(source1, [Query { label: "main", name: "", line: 0 }])
+    """
+    main {
+        { 1: 2 } => values!
+    }
+    """ => source2
+    "mutable-dictionary" -> inspect(source2, [Query { label: "main", name: "", line: 0 }])
+    """
+    main {
+        true -> if { [1; ~] } else { [2; ~] } => values!
+    }
+    """ => source3
+    "mutable-if-array" -> inspect(source3, [Query { label: "main", name: "", line: 0 }])
+    """
+    make: -> [Int; ~] { [7; ~] }
+    main {
+        make() => values!
+    }
+    """ => source4
+    "mutable-call-array" -> inspect(source4, [Query { label: "main", name: "", line: 0 }, Query { label: "function:make@1", name: "make", line: 1 }])
+    """
+    work: -> async Int {
+        [1, 2] => values
+        values[0]
+    }
+    main {}
+    """ => source5
+    "async-excludes-frame" -> inspect(source5, [Query { label: "main", name: "", line: 0 }, Query { label: "function:work@1", name: "work", line: 1 }])
+}
