@@ -1,0 +1,178 @@
+--- before/selfhost/semantic/ownership_check.slg
++++ after/selfhost/semantic/ownership_check.slg
+@@ -124,7 +124,8 @@
+         typed[functionIndex!] => function
+         true => active!
+         function.kind == 0 -> if {
+-            typed -> typedIr.functionSignatureContainsParameter(types, functionIndex!)
++            (typed -> typedIr.functionSignatureContainsParameter(types, functionIndex!))
++                or (function -> typedIr.functionDeclaresGenericParameters(prepared.package.ranges, prepared.package.symbols))
+                 -> if { false => active! } else {
+                     function.sourceModule >= 0 and function.sourceModule < (prepared.package.ranges -> len)
+                         -> if {
+@@ -3671,7 +3672,8 @@
+             -> if {
+                 prepared.package.ranges[operation.sourceModule] => range
+                 operation.astNode < range.astCount -> if {
+-                    operation.kind == 5 and prepared.awaitSourceByAst[range.astStart + operation.astNode] => awaits
++                    operation.kind == 5 and not (operation -> typedIr.isAsyncExpressionRead)
++                        and prepared.awaitSourceByAst[range.astStart + operation.astNode] => awaits
+                     (operation.kind == 6 or operation.kind == 9) and operation.opcode == -321 => cancels
+                     (awaits or cancels) and operation.operand0 >= 0 and operation.operand0 < (typed -> len)
+                         -> if {
+@@ -6337,7 +6339,13 @@
+                 ownedEscapeAncestor! >= 0 and ownedEscapeFunctionIr! < 0 and ownershipPreserved!
+                     -> while {
+                         typed[ownedEscapeAncestor!] => ownedEscapeParent
+-                        (ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25)
++                        (ownedEscapeParent.kind == 24 or ownedEscapeParent.kind == 25
++                            or (ownedEscapeParent.kind == 17
++                            and not (ownedEscapeAncestor! -> materializedBlockInputIsBorrowed)
++                            and (typed[ownedEscapeChild!].kind == 12
++                            or typed[ownedEscapeChild!].kind == 14
++                            or typed[ownedEscapeChild!].kind == 16
++                            or typed[ownedEscapeChild!].kind == 35)))
+                             and ownedEscapeParent.operand0 == ownedEscapeChild!
+                             -> if {
+                                 true => reachesOwnedStorage!
+@@ -6382,6 +6390,8 @@
+                                                                 or ownedEscapeParent.kind == 26
+                                                                 or ownedEscapeParent.kind == 35)
+                                                                 and (prepared -> semanticTypeContainsOwnedStorageCached(types, fields, ownedStorageByType!, ownedEscapeParent.typeId))
++                                                                and not (ownedEscapeParent.kind == 13
++                                                                and (prepared -> semanticContext.typeRequiresFixedStorageCopy(types, types -> typeIds.materializedReadTypeId(ownedEscapeParent.typeId))))
+                                                                 -> unless { false => ownershipPreserved! }
+                                                         }
+                                                 }
+@@ -6392,6 +6402,12 @@
+                                     ownedEscapeParent.parent => ownedEscapeAncestor!
+                                 }
+                             }
++                    }
++                # Storage owns its initializer even inside a control region.
++                # Function ownership follows lexical parents independently of value origin.
++                reachesOwnedStorage! and ownedEscapeFunctionIr! < 0
++                    -> if {
++                        typed -> borrowedTextFunctionIr(ownedEscapeStorageDestinationIr!) => ownedEscapeFunctionIr!
+                     }
+                 # A collection role borrows its element, including in main.
+                 # Resolve its exact role declaration rather than a function input.
+@@ -6467,7 +6483,10 @@
+                                         typed[ownedEscapeStorageDestinationIr!].kind == 25
+                                             -> if { 1 } else {
+                                                 typed[ownedEscapeStorageDestinationIr!].kind == 24
+-                                                    -> if { 2 } else { 0 }
++                                                    -> if { 2 } else {
++                                                        typed[ownedEscapeStorageDestinationIr!].kind == 17
++                                                            -> if { 3 } else { 0 }
++                                                    }
+                                             }
+                                     } else { ownedEscapeReturnKind }
+                                     expectedModule: reachesOwnedStorage! -> if { ownedEscapeStorageDestinationIr! } else { typed[ownedEscapeFunctionIr!].sourceModule }
+@@ -6684,9 +6703,10 @@
+             }
+         sliceReturnIndex! + 1 => sliceReturnIndex!
+     }
+-    # A value passed to ref T must already be a reference or resolve to an
+-    # immutable binding place. Literals, constructor results, and call results
+-    # are temporaries and cannot become the origin of a returned reference.
++    # Source eligibility also admits a transient current flow result when the
++    # original input is a place. The returned-loan analysis below still uses
++    # the actual argument and requires a stable origin for escaping references.
++    prepared -> semanticDiagnostics.primaryFlowPlaceRoots => referenceFlowPlaces
+     0 => referenceCallIndex!
+     referenceCallIndex! < (typed -> len) -> while {
+         typed[referenceCallIndex!] => referenceCall
+@@ -6735,6 +6755,16 @@
+                                         referenceRoot.kind == 10 or referenceRoot.kind == 17 or referenceRoot.kind == 29
+                                             -> if { true => referenceAddressable! }
+                                     }
++                                    referenceParameterIr! == referenceTarget.operand1
++                                        and referenceCall.sourceModule >= 0 and referenceCall.sourceModule < (prepared.package.ranges -> len)
++                                        -> if {
++                                            prepared.package.ranges[referenceCall.sourceModule] => flowRange
++                                            referenceCall.astNode >= 0 and referenceCall.astNode < flowRange.astCount
++                                                and referenceFlowPlaces[flowRange.astStart + referenceCall.astNode] >= 0
++                                                -> if {
++                                                    true => referenceAddressable!
++                                                }
++                                        }
+                                     not referenceAddressable!
+                                         and not (types -> typeIds.typedArrayArgumentElementMismatch(referenceArgument.typeId, referenceParameter.typeId))
+                                         -> if {
+@@ -9178,7 +9208,11 @@
+     0 => aggregateMoveIndex!
+     aggregateMoveIndex! < (moves! -> len) -> while {
+         moves![aggregateMoveIndex!] => currentMove
+-        currentMove.valueIr -> aggregateForTransfer(ownedStorageByType!) => currentAggregate
++        # Await consumes the Task, not another position of its result literal.
++        # Keep that move for use-after-move checks, outside aggregate overlap.
++        currentMove.awaited -> if { -1 } else {
++            currentMove.valueIr -> aggregateForTransfer(ownedStorageByType!)
++        } => currentAggregate
+         -1 => previousAggregateMove!
+         currentAggregate >= 0 -> if {
+             aggregateHeads![currentAggregate] => previousAggregateMove!
+@@ -9239,7 +9273,7 @@
+                 priorMoveIndex! < (moves! -> len) and classifiedCode! != aggregateTransferOverlapCode()
+                     -> while {
+                         moves![priorMoveIndex!] => priorMove
+-                        priorMove.siteIr == diagnostic.expectedSymbol
++                        priorMove.siteIr == diagnostic.expectedSymbol and not priorMove.awaited
+                             -> if {
+                                 priorMove.valueIr -> aggregateForTransfer(ownedStorageByType!) => priorAggregate
+                                 priorAggregate >= 0 -> if {
+@@ -9247,7 +9281,8 @@
+                                     nextMoveIndex! < (moves! -> len) and classifiedCode! != aggregateTransferOverlapCode()
+                                         -> while {
+                                             moves![nextMoveIndex!] => nextMove
+-                                            priorMove.sourceModule == nextMove.sourceModule
++                                            not nextMove.awaited
++                                                and priorMove.sourceModule == nextMove.sourceModule
+                                                 and priorMove.symbol == nextMove.symbol
+                                                 and (diagnostic.actualSymbol -> nodeBelongsTo(nextMove.valueIr))
+                                                 and (nextMove.valueIr -> aggregateForTransfer(ownedStorageByType!)) == priorAggregate
+@@ -9264,7 +9299,7 @@
+                         priorMoveIndex! + 1 => priorMoveIndex!
+                     }
+             }
+-        false => duplicateAggregate!
++        false => duplicateDiagnostic!
+         classifiedCode! == aggregateTransferOverlapCode()
+             -> if {
+                 classifiedDiagnostics! -> each previous {
+@@ -9272,10 +9307,30 @@
+                         and previous.actualSymbol >= 0 and classifiedActual! >= 0
+                         and typed[previous.actualSymbol].sourceModule == typed[classifiedActual!].sourceModule
+                         and typed[previous.actualSymbol].symbol == typed[classifiedActual!].symbol
+-                        -> if { true => duplicateAggregate! }
+-                }
+-            }
+-        not duplicateAggregate! -> if {
++                        -> if { true => duplicateDiagnostic! }
++                }
++            }
++        # Generic materializations retain one source identity for an invalid
++        # direct deferred-Text binding. Publish that source diagnostic once.
++        classifiedCode! == 35 and classifiedActual! >= 0 and classifiedActual! < (typed -> len)
++            and typed[classifiedActual!].kind == 17
++            -> if {
++                typed[classifiedActual!] => consumer
++                prepared.package.ranges[consumer.sourceModule] => range
++                prepared.package.nodes[range.astStart + consumer.astNode] => storage
++                storage.kind == 9 or storage.kind == 48 -> if {
++                    classifiedDiagnostics! -> each previous {
++                        previous.code == 35 and previous.sourceModule == diagnostic.sourceModule
++                            and previous.span.start == diagnostic.span.start and previous.span.length == diagnostic.span.length
++                            and previous.actualSymbol >= 0 and previous.actualSymbol < (typed -> len)
++                            and typed[previous.actualSymbol].kind == 17
++                            and typed[previous.actualSymbol].sourceModule == consumer.sourceModule
++                            and typed[previous.actualSymbol].astNode == consumer.astNode
++                            -> if { true => duplicateDiagnostic! }
++                    }
++                }
++            }
++        not duplicateDiagnostic! -> if {
+             classifiedDiagnostics! -> push(OwnershipDiagnostic {
+                 code: classifiedCode!
+                 sourceModule: diagnostic.sourceModule

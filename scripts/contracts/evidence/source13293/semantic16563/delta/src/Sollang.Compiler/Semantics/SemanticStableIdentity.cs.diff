@@ -1,0 +1,54 @@
+--- before/src/Sollang.Compiler/Semantics/SemanticStableIdentity.cs
++++ after/src/Sollang.Compiler/Semantics/SemanticStableIdentity.cs
+@@ -315,6 +315,17 @@
+         }
+         if (types.IsStruct(type))
+         {
++            if (types.IsProduct(type))
++            {
++                var product = types.GetStruct(type);
++                var labels = types.GetProductLabels(type);
++                return "Product<" + string.Join(",", product.Fields.Select((field, index) =>
++                {
++                    var label = labels[index] ?? string.Empty;
++                    return label.Length.ToString(CultureInfo.InvariantCulture) + ":" + label + ":"
++                        + Type(types, field.Type);
++                })) + ">";
++            }
+             return "struct:" + types.GetStruct(type).Name;
+         }
+         if (types.IsEnum(type))
+@@ -705,6 +716,33 @@
+ 
+         public TypeId Parse()
+         {
++            if (Take("Product<"))
++            {
++                var fields = new List<(string? Label, TypeId Type)>();
++                while (true)
++                {
++                    var labelLength = ParseNumber();
++                    Expect(':');
++                    if (labelLength > text.Length - _position)
++                        throw Invalid("product label exceeds its identity");
++                    var label = text.Substring(_position, labelLength);
++                    _position += labelLength;
++                    Expect(':');
++                    var fieldType = Parse();
++                    if (fieldType == TypeId.Unit)
++                        throw Invalid("product fields must produce values");
++                    fields.Add((labelLength == 0 ? null : label, fieldType));
++                    if (Take(">"))
++                        break;
++                    Expect(',');
++                }
++                if (fields.Count < 2)
++                    throw Invalid("product types require at least two fields");
++                var displayName = "(" + string.Join(", ", fields.Select(field =>
++                    (field.Label is null ? string.Empty : field.Label + ": ")
++                    + types.DisplayTypeName(field.Type))) + ")";
++                return types.GetOrAddProduct(fields, displayName, 0, 0);
++            }
+             if (Take("Option<"))
+                 return Close(types.GetOrAddOption(Parse(), "Option"));
+             if (Take("Task<"))

@@ -1,0 +1,83 @@
+--- before/selfhost/semantic/expression_type_ids_resolution_phases.slg
++++ after/selfhost/semantic/expression_type_ids_resolution_phases.slg
+@@ -2039,10 +2039,20 @@
+ public contextualRecordField package: ref analysis.PackageAnalysis, fields: ref [typeIds.NominalField; ~], firstField: ref [Int; ~], nextField: ref [Int; ~], ownerType: Int, sourceModule: Int, labelAst: Int -> Int {
+     package.ranges[sourceModule] => range
+     package.nodes[range.astStart + labelAst] => label
+-    label.kind != 15 or label.cstRuleId != grammar.ruleIdNameExpression()
+-        or label.payloadToken < 0 or ownerType < 0 or ownerType >= (firstField -> len)
++    not ((label.kind == 15 and label.cstRuleId == grammar.ruleIdNameExpression()) or label.kind == 40)
++        or ownerType < 0 or ownerType >= (firstField -> len)
+         -> if { -1 -> return }
+-    package.tokens[range.tokenStart + label.payloadToken] => token
++    label.payloadToken => labelToken!
++    label.kind == 40 -> if {
++        label.firstToken => labelToken!
++        labelToken! < label.firstToken + label.tokenCount
++            and package.tokens[range.tokenStart + labelToken!].kind != grammar.tokenIdIdentifier()
++            -> while { labelToken! + 1 => labelToken! }
++        labelToken! >= label.firstToken + label.tokenCount
++            -> if { -1 -> return }
++    }
++    labelToken! < 0 -> if { -1 -> return }
++    package.tokens[range.tokenStart + labelToken!] => token
+     package.sources[sourceModule] -> slice(token.span.start, token.span.length) => name
+     firstField[ownerType] => fieldIndex!
+     fieldIndex! >= 0 -> while {
+@@ -2084,7 +2094,7 @@
+         local! < range.astCount -> while {
+             range.astStart + local! => global
+             package.nodes[global] => node
+-            node.kind == 38 -> if {
++            node.kind == 38 or node.kind == 39 -> if {
+                 records! -> push(ContextualRecordAst { sourceModule: range.sourceModule, astNode: local! })
+             }
+             node.parent >= 0 -> if {
+@@ -2258,6 +2268,22 @@
+     package.sources[sourceModule] -> len => sourceLength
+     package.sources[sourceModule] -> slice(UIntSize(0), sourceLength) => source
+     false => changed!
++    package.nodes[range.astStart + literalAst].kind == 39
++        -> if {
++            index.firstChild[range.astStart + literalAst] => initializer!
++            initializer! >= 0 -> while {
++                package.nodes[initializer!].kind == 40 -> if {
++                    package -> contextualRecordField(fields, firstField, nextField, ownerType, sourceModule, initializer! - range.astStart) => field
++                    index.firstChild[initializer!] => value
++                    field >= 0 and value >= 0 -> if {
++                        package -> resolveContextualRecordFieldValue(types, expressions, expressionIndexByAst, index, sourceModule, value, fields[field].fieldType, expectedContextByAst)
++                            -> if { true => changed! }
++                    }
++                }
++                index.nextChild[initializer!] => initializer!
++            }
++            changed! -> return
++        }
+     -1 => label!
+     0 => ordinal!
+     index.firstChild[range.astStart + literalAst] => child!
+@@ -2285,7 +2311,7 @@
+         prepared.package.ranges[record.sourceModule] => range
+         range.astStart + record.astNode => global
+         prepared.package.nodes[global] => node
+-        -1 => expected!
++        expectedContextByAst[global] => expected!
+         node.parent >= 0 -> if {
+             range.astStart + node.parent => parentGlobal
+             prepared.package.nodes[parentGlobal] => parent
+@@ -2422,6 +2448,15 @@
+                     }
+             }
+         }
++        # An explicit nominal constructor already supplies its field contracts
++        # even when the enclosing binding has no expected type. Reuse the
++        # same recursive field context as a contextually typed record.
++        expected! < 0 and expressionIndexByAst[global] >= 0
++            -> if {
++                expressions[expressionIndexByAst[global]].typeId => declaredRecordType
++                prepared.package -> nominalStructType(types, declaredRecordType)
++                    -> if { declaredRecordType => expected! }
++            }
+         prepared.package -> nominalStructType(types, expected!)
+             -> if {
+                 setContextualRecordExpressionType(expressions, expressionIndexByAst, record.sourceModule, record.astNode, global, expected!)

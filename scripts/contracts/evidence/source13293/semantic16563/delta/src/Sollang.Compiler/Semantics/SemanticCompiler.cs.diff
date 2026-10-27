@@ -1,0 +1,365 @@
+--- before/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
++++ after/src/Sollang.Compiler/Semantics/SemanticCompiler.cs
+@@ -36,6 +36,11 @@
+         new(ReferenceEqualityComparer.Instance);
+     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
+         new(ReferenceEqualityComparer.Instance);
++    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionTypeNames =
++        new(ReferenceEqualityComparer.Instance);
++    private Dictionary<string, BoundType>? _currentFunctionTypeNames;
++    private IReadOnlyDictionary<string, BoundType>? _currentFunctionTypeNameBindings;
++    private string? _currentFunctionTypeNameModule;
+     private readonly Dictionary<object, BoundFunction> _resolvedCaptureCalls =
+         new(ReferenceEqualityComparer.Instance);
+     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCaptureCandidates =
+@@ -304,6 +309,7 @@
+             mainBindings,
+             _functionBindings,
+             _functionCapturedBindings,
++            _functionTypeNames,
+             storagePlacement.MainFrame,
+             storagePlacement.FunctionFrames,
+             stableFunctionIdentities,
+@@ -571,10 +577,19 @@
+                 continue;
+             }
+ 
+-            ValidateUserFunction(
+-                function,
+-                functions,
+-                new Dictionary<string, BoundType>(StringComparer.Ordinal));
++            if (function.SpecializedType is not null)
++            {
++                // A concrete signature may leave type parameters in body syntax.
++                // Revalidation needs the same environment as its first binding.
++                ValidateGenericSpecialization(function, functions);
++            }
++            else
++            {
++                ValidateUserFunction(
++                    function,
++                    functions,
++                    new Dictionary<string, BoundType>(StringComparer.Ordinal));
++            }
+         }
+ 
+         return (reused, total);
+@@ -590,18 +605,21 @@
+         if (!CollectReusableFunctionTree(root, parentIdentity: null, reusePlan, tree))
+             return false;
+         Dictionary<BoundFunction, (IReadOnlyDictionary<string, BoundType> Bindings,
+-            IReadOnlyDictionary<string, BoundType> Captured)> materialized;
++            IReadOnlyDictionary<string, BoundType> Captured,
++            IReadOnlyDictionary<string, BoundType> TypeNames)> materialized;
+         try
+         {
+             materialized = new Dictionary<BoundFunction, (
+                 IReadOnlyDictionary<string, BoundType> Bindings,
+-                IReadOnlyDictionary<string, BoundType> Captured)>(ReferenceEqualityComparer.Instance);
++                IReadOnlyDictionary<string, BoundType> Captured,
++                IReadOnlyDictionary<string, BoundType> TypeNames)>(ReferenceEqualityComparer.Instance);
+             foreach (var item in tree)
+             {
+                 materialized.Add(
+                     item.Function,
+                     (RestoreBindings(item.Reuse.Bindings),
+-                        RestoreBindings(item.Reuse.CapturedBindings)));
++                        RestoreBindings(item.Reuse.CapturedBindings),
++                        RestoreBindings(item.Reuse.TypeNames)));
+             }
+         }
+         catch (InvalidDataException)
+@@ -618,6 +636,7 @@
+         {
+             _functionBindings[function] = bindings.Bindings;
+             _functionCapturedBindings[function] = bindings.Captured;
++            _functionTypeNames[function] = bindings.TypeNames;
+         }
+         return true;
+     }
+@@ -710,13 +729,15 @@
+ 
+             var materializedBindings = new Dictionary<BoundFunction, (
+                 IReadOnlyDictionary<string, BoundType> Bindings,
+-                IReadOnlyDictionary<string, BoundType> Captured)>(ReferenceEqualityComparer.Instance);
++                IReadOnlyDictionary<string, BoundType> Captured,
++                IReadOnlyDictionary<string, BoundType> TypeNames)>(ReferenceEqualityComparer.Instance);
+             foreach (var pair in restoredBindings)
+             {
+                 materializedBindings.Add(
+                     pair.Key,
+                     (RestoreBindings(pair.Value.Bindings),
+-                        RestoreBindings(pair.Value.CapturedBindings)));
++                        RestoreBindings(pair.Value.CapturedBindings),
++                        RestoreBindings(pair.Value.TypeNames)));
+             }
+             restoredOwners.UnionWith(restoredBindings.Values.Select(static binding => binding.Identity));
+             var numericAnnotations = reusePlan.ContextualNumericTypes.Where(pair =>
+@@ -751,6 +772,7 @@
+             {
+                 _functionBindings[function] = bindings.Bindings;
+                 _functionCapturedBindings[function] = bindings.Captured;
++                _functionTypeNames[function] = bindings.TypeNames;
+             }
+             return true;
+         }
+@@ -1199,17 +1221,15 @@
+             && function.IsIntrinsic
+             && IsAsyncRuntimeIntrinsicKind(kind);
+         if (function.IsAsync
+-            && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
+-                || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
+-                || (!isAsyncRuntimeIntrinsic && additionalParameters.Any(parameter =>
+-                    !IsAsyncInputTypeSupported(parameter.Type, parameter.Ownership)))
++            && ((!isAsyncRuntimeIntrinsic && !IsAsyncSignatureTypeSupported(
++                    inputType, inputOwnership, returnType, additionalParameters))
+                 || isLocal
+                 || (function.IsIntrinsic && !isAsyncRuntimeIntrinsic)))
+         {
+             throw Error(
+                 function.Line,
+                 function.Column,
+-                "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
++                AsyncSignatureRequirement);
+         }
+         if (kind == BoundFunctionKind.Native && function.Com is null)
+         {
+@@ -2465,6 +2485,12 @@
+         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
+         IReadOnlyDictionary<string, BoundType> capturedBindings)
+     {
++        var previousTypeNames = _currentFunctionTypeNames;
++        var previousTypeNameBindings = _currentFunctionTypeNameBindings;
++        var previousTypeNameModule = _currentFunctionTypeNameModule;
++        _currentFunctionTypeNames = new Dictionary<string, BoundType>(StringComparer.Ordinal);
++        _currentFunctionTypeNameBindings = _activeGenericTypeArguments;
++        _currentFunctionTypeNameModule = function.ModuleName;
+         var previousExpressionContext = _expressionInferenceContext;
+         _expressionInferenceContext = null;
+         var previousFunctionDeclarationName = _currentFunctionDeclarationName;
+@@ -2490,9 +2516,13 @@
+             ValidateUserFunctionCore(function, parentFunctions, capturedBindings);
+             WarnUnusedMutableBindings();
+             WarnFixedLengthGrowableArrays();
++            _functionTypeNames[function] = _currentFunctionTypeNames;
+         }
+         finally
+         {
++            _currentFunctionTypeNames = previousTypeNames;
++            _currentFunctionTypeNameBindings = previousTypeNameBindings;
++            _currentFunctionTypeNameModule = previousTypeNameModule;
+             _expressionInferenceContext = previousExpressionContext;
+             _currentFunctionDeclarationName = previousFunctionDeclarationName;
+             _currentFunctionIsMain = previousFunctionIsMain;
+@@ -2613,9 +2643,17 @@
+         var functionBorrowedTextOrigins = new Dictionary<string, IReadOnlySet<string>>(
+             _activeBorrowedTextOrigins,
+             StringComparer.Ordinal);
++        // A descendant can need an ancestor binding that this function does
++        // not read directly. Preserve lexical candidates during child validation;
++        // current parameters and locals still shadow the outer binding.
++        var localCaptureCandidates = new Dictionary<string, BoundType>(capturedBindings, StringComparer.Ordinal);
++        foreach (var binding in bodyBindings)
++        {
++            localCaptureCandidates[binding.Key] = binding.Value;
++        }
+         foreach (var localFunction in function.LocalFunctions.Values)
+         {
+-            ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
++            ValidateUserFunction(localFunction, scopedFunctions, localCaptureCandidates);
+         }
+         _activeBorrowedTextOrigins.Clear();
+         _activeReadonlyReferenceBindings.Clear();
+@@ -2634,7 +2672,9 @@
+             }
+             foreach (var calledCapture in calledCaptures)
+             {
+-                if (capturedBindings.ContainsKey(calledCapture.Key))
++                if (!bodyBindings.ContainsKey(calledCapture.Key)
++                    && capturedBindings.TryGetValue(calledCapture.Key, out var ancestorType)
++                    && ancestorType == calledCapture.Value)
+                 {
+                     effectiveCapturedBindings[calledCapture.Key] = calledCapture.Value;
+                 }
+@@ -5154,6 +5194,12 @@
+                         .Select(static transfer => transfer.OwnerName)
+                         .Distinct(StringComparer.Ordinal)
+                         .ToArray();
++                    RejectBorrowedOwnedStorageTransfers(
++                        aggregateLiteralSourceNames,
++                        binding.Value.Line,
++                        binding.Value.Column,
++                        $"owned binding '{binding.Name}'",
++                        bindings);
+                     var transferredSourceNames = aggregateLiteralSourceNames
+                         .Concat(bindingMutationConsumedSourceNames)
+                         .Distinct(StringComparer.Ordinal)
+@@ -5196,7 +5242,8 @@
+                                 "owned containers can only be bound in a scope where the compiler can insert deterministic drops");
+                         }
+ 
+-                        if (!IsContainerCreationExpression(binding.Value)
++                        if (_types.ContainsOwnedStorage(valueType)
++                            && !IsContainerCreationExpression(binding.Value)
+                             && movedSourceName is null
+                             && movedFieldOwnerName is null
+                             && !copiesFixedStorageBinding)
+@@ -8833,7 +8880,7 @@
+         if (expression.BoundedCapacity is { } boundedCapacity)
+         {
+             var boundedElementType = ParseType(expression.ElementType, expression.Line, expression.Column);
+-            if (boundedElementType == BoundType.Unit || IsNestedContainerElementType(boundedElementType))
++            if (IsUnsupportedInlineArrayElementType(boundedElementType))
+             {
+                 throw Error(expression.Line, expression.Column, "bounded array elements must be inline scalar or user values");
+             }
+@@ -13874,8 +13921,9 @@
+         if (_types.IsProduct(type))
+         {
+             var definition = _types.GetStruct(type);
++            var labels = _types.GetProductLabels(type);
+             var fields = definition.Fields.Select(field => (
+-                Label: field.Name == $"_{field.Index}" ? null : field.Name,
++                Label: labels[field.Index],
+                 Type: (TypeId)SubstituteGenericType(
+                     field.Type, primaryType, secondaryType, tertiaryType))).ToArray();
+             return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
+@@ -13973,8 +14021,9 @@
+         if (_types.IsProduct(type))
+         {
+             var definition = _types.GetStruct(type);
++            var labels = _types.GetProductLabels(type);
+             var fields = definition.Fields.Select(field => (
+-                Label: field.Name == $"_{field.Index}" ? null : field.Name,
++                Label: labels[field.Index],
+                 Type: (TypeId)SubstituteGenericType(field.Type, template, specializedTypes))).ToArray();
+             return _types.GetOrAddProduct(fields, definition.Name, definition.Line, definition.Column);
+         }
+@@ -14251,6 +14300,10 @@
+                 AdditionalParameters = SpecializeValueGenericAdditionalParameters(
+                     template, valueArgument.Value)
+             };
++            // A deferred value-generic declaration has no concrete input type.
++            // Check its actual signature for cold binding and cache restoration,
++            // including the path that deliberately skips body revalidation.
++            ValidateConcreteAsyncSignature(specialization);
+             _boundFunctions.Add(specializedName, specialization);
+             if (validateSpecialization
+                 && specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
+@@ -15471,7 +15524,8 @@
+                     field.Label ?? $"_{index}", field.Type, index, line, column)).ToArray();
+                 structs.Add(product, new BoundStructDefinition(
+                     product, typeName, boundFields, line, column,
+-                    ModuleName: string.Empty, IsPublic: true, IsProduct: true));
++                    ModuleName: string.Empty, IsPublic: true, IsProduct: true,
++                    ProductLabels: Array.AsReadOnly(fields.Select(static field => field.Label).ToArray())));
+                 declaredProducts.Add(shape, product);
+                 names.TryAdd(typeName, product);
+                 return product;
+@@ -15978,6 +16032,20 @@
+ 
+     private BoundType ParseType(string typeName, int line, int column)
+     {
++        var type = ParseTypeCore(typeName, line, column);
++        // Source spellings belong to the owner and its generic environment.
++        // A nested callee's signature must not replace the caller's aliases.
++        if (_currentFunctionTypeNames is not null
++            && ReferenceEquals(_activeGenericTypeArguments, _currentFunctionTypeNameBindings)
++            && StringComparer.Ordinal.Equals(_currentModuleName, _currentFunctionTypeNameModule))
++        {
++            _currentFunctionTypeNames[typeName.Trim()] = type;
++        }
++        return type;
++    }
++
++    private BoundType ParseTypeCore(string typeName, int line, int column)
++    {
+         if (typeName.StartsWith("box ", StringComparison.Ordinal))
+         {
+             var elementType = ParseType(typeName[4..].Trim(), line, column);
+@@ -16138,7 +16206,7 @@
+                 throw Error(line, column, "fixed array length must be a nonnegative integer literal");
+             }
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "fixed array elements must be inline scalar or user values");
+             }
+@@ -16150,7 +16218,7 @@
+         {
+             var elementName = typeName[1..^1].Trim();
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "readonly array views require inline scalar or user-value elements");
+             }
+@@ -16168,7 +16236,7 @@
+                 throw Error(line, column, "bounded array capacity must be a positive integer literal");
+             }
+             var elementType = ParseType(elementName, line, column);
+-            if (elementType == BoundType.Unit || IsNestedContainerElementType(elementType))
++            if (IsUnsupportedInlineArrayElementType(elementType))
+             {
+                 throw Error(line, column, "bounded array elements must be inline scalar or user values");
+             }
+@@ -16528,8 +16596,14 @@
+         return type == BoundType.Unit
+             || (IsNestedContainerElementType(type)
+                 && type != BoundType.DynamicIntArray
+-                && !_types.IsDynamicArray(type));
+-    }
++                && !_types.IsDynamicArray(type)
++                && !_types.IsBoundedArray(type));
++    }
++
++    private bool IsUnsupportedInlineArrayElementType(BoundType type) =>
++        type == BoundType.Unit
++        || (IsNestedContainerElementType(type) && !_types.IsBoundedArray(type));
++
+     private bool IsNestedContainerElementType(BoundType type)
+     {
+         return type is BoundType.IntSlice
+@@ -17204,6 +17278,30 @@
+         return type == BoundType.Unit || IsAsyncValueTypeSupported(type);
+     }
+ 
++    private const string AsyncSignatureRequirement =
++        "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move";
++
++    private bool IsAsyncSignatureTypeSupported(
++        BoundType? inputType,
++        BoundFunctionInputOwnership inputOwnership,
++        BoundType returnType,
++        IReadOnlyList<BoundFunctionParameter> additionalParameters) =>
++        IsAsyncResultTypeSupported(returnType)
++        && IsAsyncInputTypeSupported(inputType, inputOwnership)
++        && additionalParameters.All(parameter =>
++            IsAsyncInputTypeSupported(parameter.Type, parameter.Ownership));
++
++    private void ValidateConcreteAsyncSignature(BoundFunction function)
++    {
++        var isRuntimeIntrinsic = function.IsStandardLibrary && IsAsyncRuntimeIntrinsicKind(function.Kind);
++        if (function.IsAsync && !isRuntimeIntrinsic && !IsAsyncSignatureTypeSupported(
++                function.InputType, function.InputOwnership, function.ReturnType,
++                function.AdditionalParameters ?? []))
++        {
++            throw ErrorAtModule(function.Line, function.Column, function.ModuleName, AsyncSignatureRequirement);
++        }
++    }
++
+     private bool IsAsyncInputTypeSupported(
+         BoundType? type,
+         BoundFunctionInputOwnership ownership)
+@@ -17283,6 +17381,10 @@
+             if (_types.IsDynamicArray(type))
+             {
+                 return IsValueTypeSupported(_types.GetDynamicArray(type).ElementType, allowSharedSourceText, visiting);
++            }
++            if (_types.IsBoundedArray(type))
++            {
++                return IsValueTypeSupported(_types.GetBoundedArray(type).ElementType, allowSharedSourceText, visiting);
+             }
+             if (_types.IsDictionary(type))
+             {

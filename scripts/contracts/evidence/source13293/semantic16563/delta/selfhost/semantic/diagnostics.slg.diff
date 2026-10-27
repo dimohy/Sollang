@@ -1,0 +1,627 @@
+--- before/selfhost/semantic/diagnostics.slg
++++ after/selfhost/semantic/diagnostics.slg
+@@ -260,6 +260,7 @@
+ public struct CallArityDiagnostic {
+     public nativePathStyle: Bool
+     public runtimeRequest: Bool
++    public genericTypeArguments: Bool
+     public sourceModule: Int
+     public callAst: Int
+     public targetPathAst: Int
+@@ -351,7 +352,7 @@
+ }
+ 
+ public firstCallArityDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet -> CallArityDiagnostic {
+-    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
++    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, genericTypeArguments: false, sourceModule: -1, callAst: -1, targetPathAst: -1, targetSourceModule: -1, functionSymbol: -1, expectedAdditionalArguments: -1 } => selected!
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+     prepared.package -> semanticContext.indexDirectFlowTargetPathsByAst => targetPaths
+     prepared.calls -> each call {
+@@ -360,6 +361,43 @@
+             and call.functionSymbol >= 0 and call.functionSymbol < prepared.package.ranges[call.targetSourceModule].symbolCount
+             -> if {
+                 prepared.package.ranges[call.sourceModule] => range
++                # A zero-input generic declaration has no value argument from
++                # which to infer its type parameters. Missing explicit arguments
++                # are a source diagnostic, before body materialization or LLVM.
++                call.callAst >= 0 and call.callAst < range.astCount
++                    and prepared.package.nodes[range.astStart + call.callAst].kind == 11
++                    and (prepared -> declarationBodyIsActive(resolved, call.sourceModule, call.callAst))
++                    -> if {
++                        prepared.package -> semanticContext.functionParameterSymbolsInSourceOrder(call.targetSourceModule, call.functionSymbol) => valueParameters
++                        (valueParameters -> len) == 0 -> if {
++                            prepared.package.ranges[call.targetSourceModule] => genericRange
++                            0 => genericCount!
++                            0 => genericIndex!
++                            genericIndex! < genericRange.symbolCount -> while {
++                                prepared.package.symbols[genericRange.symbolStart + genericIndex!] => parameter
++                                parameter.kind == 32 and parameter.parent == call.functionSymbol
++                                    -> if { genericCount! + 1 => genericCount! }
++                                genericIndex! + 1 => genericIndex!
++                            }
++                            -1 => pathAst!
++                            prepared.package.nodes[range.astStart + call.callAst].cstRuleId == grammar.ruleIdTypeApplicationExpression() => explicitTypes!
++                            0 => childIndex!
++                            childIndex! < range.astCount -> while {
++                                prepared.package.nodes[range.astStart + childIndex!] => child
++                                child.parent == call.callAst -> if {
++                                    child.kind == 16 -> if { childIndex! => pathAst! }
++                                    child.cstRuleId == grammar.ruleIdTypeApplicationExpression()
++                                        -> if { true => explicitTypes! }
++                                }
++                                childIndex! + 1 => childIndex!
++                            }
++                            genericCount! > 0 and not explicitTypes!
++                                and (prepared.package -> diagnosticOriginBefore(call.sourceModule, call.callAst, selected!.sourceModule, selected!.callAst))
++                                -> if {
++                                    CallArityDiagnostic { nativePathStyle: false, runtimeRequest: false, genericTypeArguments: true, sourceModule: call.sourceModule, callAst: call.callAst, targetPathAst: pathAst!, targetSourceModule: call.targetSourceModule, functionSymbol: call.functionSymbol, expectedAdditionalArguments: genericCount! } => selected!
++                                }
++                        }
++                    }
+                 prepared.package -> calls.isNativePathStyleIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol) => nativePathStyle
+                 prepared -> directCallExpectedArguments(call) => directExpected
+                 call.callAst >= 0 and call.callAst < range.astCount
+@@ -409,6 +447,7 @@
+                                     }
+                                 CallArityDiagnostic {
+                                     nativePathStyle: nativePathStyle
++                                    genericTypeArguments: false
+                                     runtimeRequest: prepared.package -> calls.isProcessAdditionalRuntimeIntrinsic(prepared.modules, call.targetSourceModule, call.functionSymbol, prepared.standardLibrarySourceStart, prepared.standardLibrarySourceCount)
+                                     sourceModule: call.sourceModule
+                                     callAst: call.callAst
+@@ -1199,6 +1238,11 @@
+                     function.typeNode => inputType!
+                     function.kind == 7 and function.flags / 16 % 2 == 1
+                         -> if { -1 => inputType! }
++                    # Without a primary input, typeNode is the result annotation.
++                    # Keep unnamed inputs (and omitted-result inputs) distinct.
++                    function.kind == 7 and function.secondaryTypeNode < 0
++                        and function.flags / 32 % 2 == 0
++                        -> if { -1 => inputType! }
+                     function.kind == 31 -> if {
+                         -1 => inputType!
+                         declaration.secondaryToken >= 0 and function.parent >= 0
+@@ -1484,6 +1528,277 @@
+     SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
+ }
+ 
++# Nominal declarations own recursion. Only structural constructor arguments
++# are visited here, in the same child-first order as the managed type parser.
++firstArrayLayoutFailure types: ref [typeIds.SemanticType; ~], typeId: Int, definition: Bool, failures: mut [Int; ~] -> Int {
++    typeId < 0 or typeId >= (types -> len) -> if { -1 -> return }
++    failures[typeId] != -2 -> if { failures[typeId] -> return }
++    types[typeId] => type
++    -1 => failure!
++    type.status == 0 and type.kind != 1 -> if {
++        type.kind == 2 or type.kind == 3 or type.kind == 4 or type.kind == 5
++            or type.kind == 6 or type.kind == 7 or type.kind == 8
++            or type.kind == 12 or type.kind == 13
++            -> if {
++                types -> firstArrayLayoutFailure(type.first, definition, failures) => failure!
++            }
++        failure! < 0 and (type.kind == 5 or type.kind == 7 or type.kind == 13)
++            -> if {
++                types -> firstArrayLayoutFailure(type.second, definition, failures) => failure!
++            }
++        failure! < 0 -> if {
++            definition -> if {
++                type.first >= 0 and type.first < (types -> len)
++                    -> if {
++                        types[type.first] => element
++                        type.kind == 2 and not (element.kind == 1 and element.origin == 1 and element.symbol == 2)
++                            -> if { typeId => failure! }
++                        (type.kind == 3 or type.kind == 4 or type.kind == 12)
++                            and element.kind == 1 and element.origin == 1 and element.symbol == 0
++                            -> if { typeId => failure! }
++                    }
++            } else {
++                types -> typeIds.unsupportedArraySignatureElement(typeId)
++                    -> if { typeId => failure! }
++            }
++        }
++    }
++    failure! => failures[typeId]
++    failure!
++}
++
++firstPreparedArraySignatureDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
++    [Int; ~] => referenceByAst!
++    prepared.package.nodes -> each node { referenceByAst! -> push(-1) }
++    prepared.semantic.references -> each reference {
++        reference.status == 0 and reference.typeAst >= 0
++            -> if {
++                prepared.package.ranges[reference.sourceModule] => range
++                reference.typeId => referenceByAst![range.astStart + reference.typeAst]
++            }
++    }
++    [Int; ~] => signatureFailures!
++    [Int; ~] => definitionFailures!
++    prepared.semantic.types -> each type {
++        signatureFailures! -> push(-2)
++        definitionFailures! -> push(-2)
++    }
++    0 => phase!
++    phase! < 2 -> while {
++        prepared.package.ranges -> each range {
++            0 => symbolIndex!
++            symbolIndex! < range.symbolCount -> while {
++                prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
++                symbol.kind == 26 => field
++                symbol.kind == 7 or symbol.kind == 31 => function
++                symbol.kind == 35 and symbol.parent >= 0
++                    and prepared.package.nodes[range.astStart + symbol.astNode].kind == 60
++                    and (prepared.package.symbols[range.symbolStart + symbol.parent].kind == 7
++                    or prepared.package.symbols[range.symbolStart + symbol.parent].kind == 31)
++                    => parameter
++                (phase! == 0 and field) or (phase! == 1 and (function or parameter))
++                    -> if {
++                        [symbol.typeNode, symbol.secondaryTypeNode, symbol.blockTypeNode, symbol.blockResultTypeNode] => roots
++                        roots -> each root {
++                            root >= 0 -> if {
++                                referenceByAst![range.astStart + root] => typeId
++                                typeId >= 0 and typeId < (prepared.semantic.types -> len)
++                                    -> if {
++                                        field -> if {
++                                            prepared.semantic.types -> firstArrayLayoutFailure(typeId, true, definitionFailures!)
++                                        } else {
++                                            prepared.semantic.types -> firstArrayLayoutFailure(typeId, false, signatureFailures!)
++                                        } => failure
++                                        0 => code!
++                                        root => typeAst!
++                                        failure >= 0 -> if {
++                                            field -> if { 21 => code! } else {
++                                                prepared.semantic.types[failure].kind => kind
++                                                kind == 2 -> if { 17 => code! }
++                                                kind == 3 -> if { 18 => code! }
++                                                kind == 4 -> if { 19 => code! }
++                                                kind == 12 -> if { 20 => code! }
++                                            }
++                                            prepared.semantic.references -> each reference {
++                                                reference.sourceModule == range.sourceModule and reference.typeId == failure
++                                                    and (prepared.package -> semanticContext.declarationAncestor(range.sourceModule, root, reference.typeAst))
++                                                    -> if { reference.typeAst => typeAst! }
++                                            }
++                                        } else {
++                                            prepared.semantic.types[typeId] => type
++                                            field and (type.kind == 2 or (type.kind == 1 and type.origin == 1 and type.symbol == 0))
++                                                -> if { 22 => code! }
++                                        }
++                                        code! > 0 -> if {
++                                            parameter -> if { symbol.parent } else { symbolIndex! } => owner
++                                            SignatureTypeDiagnostic { code: code!, sourceModule: range.sourceModule, functionSymbol: owner, typeAst: typeAst!, nameToken: symbol.nameToken, genericToken: -1 } -> return
++                                        }
++                                    }
++                            }
++                        }
++                    }
++                symbolIndex! + 1 => symbolIndex!
++            }
++        }
++        phase! + 1 => phase!
++    }
++    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
++}
++
++preparedSignatureHasUnboundTypeParameter prepared: ref semanticContext.SemanticSnapshot, root: Int -> Bool {
++    [root,; ~] => pending!
++    [Int; ~] => visited!
++    0 => cursor!
++    cursor! < (pending! -> len) -> while {
++        pending![cursor!] => typeId
++        false => seen!
++        visited! -> each previous { previous == typeId -> if { true => seen! } }
++        not seen! and typeId >= 0 and typeId < (prepared.semantic.types -> len)
++            -> if {
++                visited! -> push(typeId)
++                prepared.semantic.types[typeId] => type
++                type.kind == 1 and type.origin == 3 -> if { true -> return }
++                type.containsParameter -> if {
++                    type.first >= 0 -> if { pending! -> push(type.first) }
++                    type.second >= 0 -> if { pending! -> push(type.second) }
++                    prepared.semantic.fields -> each field {
++                        field.ownerType == typeId -> if { pending! -> push(field.fieldType) }
++                    }
++                }
++            }
++        cursor! + 1 => cursor!
++    }
++    # Symbolic array lengths are value parameters, not unsendable type values.
++    false
++}
++
++firstPreparedAsyncDeclarationDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
++    [Int; ~] => referenceByAst!
++    prepared.package.nodes -> each node { referenceByAst! -> push(-1) }
++    prepared.semantic.references -> each reference {
++        reference.status == 0 and reference.typeAst >= 0
++            -> if {
++                prepared.package.ranges[reference.sourceModule] => range
++                reference.typeId => referenceByAst![range.astStart + reference.typeAst]
++            }
++    }
++    prepared.package.ranges -> each range {
++        0 => functionIndex!
++        functionIndex! < range.symbolCount -> while {
++            prepared.package.symbols[range.symbolStart + functionIndex!] => function
++            function.kind == 7 and function.flags / 8 % 2 == 1
++                and function.astNode >= 0 and function.astNode < range.astCount
++                -> if {
++                    prepared.package.nodes[range.astStart + function.astNode].parent => ancestor!
++                    ancestor! >= 0 and ancestor! < range.astCount
++                        -> while {
++                            prepared.package.nodes[range.astStart + ancestor!] => owner
++                            owner.kind == 7 or owner.kind == 31 or owner.kind == 8
++                                -> if {
++                                    SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: -1, nameToken: function.nameToken, genericToken: -1 } -> return
++                                }
++                            owner.parent => ancestor!
++                        }
++                    # Ordinary async declarations must establish transferable
++                    # signature values before any call specializes their body.
++                    # Runtime intrinsic declarations keep their separate contract.
++                    false => deferredValueGeneric!
++                    0 => clauseIndex!
++                    clauseIndex! < range.astCount -> while {
++                        prepared.package.nodes[range.astStart + clauseIndex!] => clause
++                        clause.kind == 32 and clause.parent == function.astNode and clause.payloadToken >= 0
++                            and (prepared.package -> signatureFirstGenericIsValue(range.sourceModule, function.astNode, clause.payloadToken))
++                            -> if { true => deferredValueGeneric! }
++                        clauseIndex! + 1 => clauseIndex!
++                    }
++                    function.flags / 128 % 2 == 0 and not deferredValueGeneric!
++                        -> if {
++                            [function.typeNode, function.secondaryTypeNode,; ~] => roots!
++                            0 => parameterIndex!
++                            parameterIndex! < range.symbolCount -> while {
++                                prepared.package.symbols[range.symbolStart + parameterIndex!] => parameter
++                                parameter.kind == 35 and parameter.parent == functionIndex!
++                                    -> if { roots! -> push(parameter.typeNode) }
++                                parameterIndex! + 1 => parameterIndex!
++                            }
++                            roots! -> each root {
++                                root >= 0 and root < range.astCount -> if {
++                                    referenceByAst![range.astStart + root] => typeId
++                                    typeId >= 0 and typeId < (prepared.semantic.types -> len)
++                                        and (prepared -> preparedSignatureHasUnboundTypeParameter(typeId))
++                                        -> if {
++                                            SignatureTypeDiagnostic { code: 23, sourceModule: range.sourceModule, functionSymbol: functionIndex!, typeAst: root, nameToken: function.nameToken, genericToken: -1 } -> return
++                                        }
++                                }
++                            }
++                        }
++                }
++            functionIndex! + 1 => functionIndex!
++        }
++    }
++    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
++}
++
++concreteAsyncCallerIsDeferred prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~], instance: typedIr.GenericFunctionInstance -> Bool {
++    instance.ownerFunction => owner!
++    instance.callNode >= 0 and instance.callNode < (ir -> len)
++        -> if {
++            ir[instance.callNode].parent => owner!
++            0 => depth!
++            owner! >= 0 and owner! < (ir -> len) and depth! < (ir -> len)
++                and ir[owner!].kind != 0 and ir[owner!].kind != 11
++                -> while {
++                    ir[owner!].parent => owner!
++                    depth! + 1 => depth!
++                }
++        }
++    owner! < 0 or owner! >= (ir -> len) or ir[owner!].kind != 0
++        -> if { false -> return }
++    instances -> each concrete {
++        concrete.status == 0 and concrete.functionNode == owner!
++            -> if { false -> return }
++    }
++    (ir -> typedIr.functionSignatureContainsParameter(resolved.types, owner!))
++        or (ir[owner!] -> typedIr.functionDeclaresGenericParameters(prepared.package.ranges, prepared.package.symbols))
++}
++
++# A deferred declaration cannot decide ownership of its concrete arguments.
++# Enforce the existing async move rule after substitution, also when resolved
++# semantic facts came from cache. Unused template bodies remain deferred.
++public firstConcreteAsyncOwnedInputDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], instances: ref [typedIr.GenericFunctionInstance; ~] -> SignatureTypeDiagnostic {
++    instances -> each instance {
++        instance.status == 0 and instance.functionNode >= 0 and instance.functionNode < (ir -> len)
++            -> if {
++                ir[instance.functionNode] => function
++                function.flags / 8 % 2 == 1 and function.flags / 128 % 2 == 0
++                    and function.sourceModule >= 0 and function.sourceModule < (prepared.package.ranges -> len)
++                    and not (prepared -> concreteAsyncCallerIsDeferred(resolved, ir, instances, instance))
++                    -> if {
++                        prepared.package.ranges[function.sourceModule] => range
++                        function.symbol >= 0 and function.symbol < range.symbolCount
++                            -> if {
++                                prepared.package.symbols[range.symbolStart + function.symbol] => declaration
++                                function.operand1 => parameterIndex!
++                                0 => ordinal!
++                                parameterIndex! >= 0 and parameterIndex! < (ir -> len) and ordinal! < (ir -> len)
++                                    -> while {
++                                        ir[parameterIndex!] => parameter
++                                        parameter.typeId < 0 or parameter.typeId >= (resolved.types -> len)
++                                            or (parameter.flags % 2 == 0
++                                            and (prepared -> semanticContext.typeContainsOwnedStorageWithFields(resolved.types, resolved.fields, parameter.typeId)))
++                                            -> if {
++                                                SignatureTypeDiagnostic { code: 23, sourceModule: function.sourceModule, functionSymbol: function.symbol, typeAst: declaration.astNode, nameToken: declaration.nameToken, genericToken: -1 } -> return
++                                            }
++                                        ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
++                                        ordinal! + 1 => ordinal!
++                                    }
++                            }
++                    }
++            }
++    }
++    SignatureTypeDiagnostic { code: 0, sourceModule: -1, functionSymbol: -1, typeAst: -1, nameToken: -1, genericToken: -1 }
++}
++
+ public firstPreparedSignatureTypeDiagnostic prepared: ref semanticContext.SemanticSnapshot -> SignatureTypeDiagnostic {
+     prepared -> firstPreparedNominalSignatureDiagnostic => nominalDiagnostic
+     # Import ambiguity is a path-resolution error before semantic admission.
+@@ -1492,10 +1807,14 @@
+     layoutDiagnostic.code != 0 -> if { layoutDiagnostic -> return }
+     prepared -> firstPreparedExplicitSignatureTypeDiagnostic => explicitDiagnostic
+     explicitDiagnostic.code != 0 -> if { explicitDiagnostic -> return }
++    prepared -> firstPreparedArraySignatureDiagnostic => arrayDiagnostic
++    arrayDiagnostic.code != 0 -> if { arrayDiagnostic -> return }
+     nominalDiagnostic.code != 0 -> if { nominalDiagnostic -> return }
+     # Reject inaccessible nominal paths before an unresolved constructor can
+     # enter typed IR. Existing declaration/signature errors keep their priority.
+-    prepared -> firstPreparedPrivateNominalDiagnostic
++    prepared -> firstPreparedPrivateNominalDiagnostic => privateDiagnostic
++    privateDiagnostic.code != 0 -> if { privateDiagnostic -> return }
++    prepared -> firstPreparedAsyncDeclarationDiagnostic
+ }
+ 
+ # Unchecked emission preserves its explicit-signature contract. Nominal path
+@@ -2722,22 +3041,61 @@
+ 
+ # Argument eligibility belongs to the resolved source contract. Lowered IR
+ # retains the separate overlapping-borrow and live-reference analysis.
++public primaryFlowPlaceRoots prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
++    prepared.package -> semanticContext.indexExpressionSourceAsts => sources
++    [Int; ~] => names!
++    [Int; ~] => roots!
++    prepared.package.nodes -> each node {
++        names! -> push(-1)
++        roots! -> push(-1)
++    }
++    prepared.package.ranges -> each range {
++        0 => nameIndex!
++        nameIndex! < range.nameCount -> while {
++            prepared.package.names[range.nameStart + nameIndex!] => name
++            name.astNode >= 0 and name.symbol >= 0 -> if {
++                name.symbol => names![range.astStart + name.astNode]
++            }
++            nameIndex! + 1 => nameIndex!
++        }
++        0 => flowIndex!
++        flowIndex! < range.astCount -> while {
++            prepared.package.nodes[range.astStart + flowIndex!].kind == 10
++                -> if {
++                    flowIndex! + 0 => root!
++                    root! >= 0 and prepared.package.nodes[range.astStart + root!].kind == 10
++                        -> while {
++                            sources[range.astStart + root!] => source
++                            source >= 0 and prepared.package.nodes[range.astStart + source].kind == 10
++                                and prepared.package.nodes[range.astStart + source].start != prepared.package.nodes[range.astStart + root!].start
++                                -> if {
++                                    -1 => root!
++                                } else { source => root! }
++                        }
++                    root! >= 0 and (prepared.package.nodes[range.astStart + root!].kind == 36 or prepared.package.nodes[range.astStart + root!].kind == 41)
++                        -> while {
++                            sources[range.astStart + root!] => root!
++                        }
++                    root! >= 0 and prepared.package.nodes[range.astStart + root!].kind == 15
++                        and names![range.astStart + root!] >= 0 -> if {
++                            root! => roots![range.astStart + flowIndex!]
++                        }
++                }
++            flowIndex! + 1 => flowIndex!
++        }
++    }
++    roots!
++}
++
+ public firstCallOwnershipDiagnostic prepared: ref semanticContext.SemanticSnapshot, resolved: ref expressionTypeIds.ExpressionTypeIdSet, traits: ref [Int; ~] -> CallOwnershipDiagnostic {
+     emptyCallOwnershipDiagnostic() => selected!
+-    [Int; ~] => sourceByAst!
++    prepared.package -> semanticContext.indexExpressionSourceAsts => sourceByAst
++    prepared -> primaryFlowPlaceRoots => flowPlaces
+     [Int; ~] => symbolByAst!
+     prepared.package.nodes -> each node {
+-        sourceByAst! -> push(-1)
+         symbolByAst! -> push(-1)
+     }
+     prepared.package.ranges -> each range {
+-        0 => localAst!
+-        localAst! < range.astCount -> while {
+-            prepared.package.nodes[range.astStart + localAst!] => node
+-            node.parent >= 0 and node.start == prepared.package.nodes[range.astStart + node.parent].start
+-                -> if { localAst! => sourceByAst![range.astStart + node.parent] }
+-            localAst! + 1 => localAst!
+-        }
+         0 => nameIndex!
+         nameIndex! < range.nameCount -> while {
+             prepared.package.names[range.nameStart + nameIndex!] => name
+@@ -2760,6 +3118,12 @@
+                     -> if {
+                         prepared.package.ranges[argument.sourceModule] => range
+                         argument.argumentAst => rootAst!
++                        readonlyBorrow and argument.parameterOrdinal == 0
++                            and argument.callAst >= 0
++                            -> if {
++                                flowPlaces[range.astStart + argument.callAst] => flowPlace
++                                flowPlace >= 0 -> if { flowPlace => rootAst! }
++                            }
+                         false => priorOperandFailure!
+                         rootAst! >= 0 and (prepared.package.nodes[range.astStart + rootAst!].kind == 36 or prepared.package.nodes[range.astStart + rootAst!].kind == 41)
+                             -> while {
+@@ -2767,7 +3131,7 @@
+                                 # source rule; this later parameter rule must not mask it.
+                                 prepared.package.nodes[range.astStart + rootAst!].kind == 41 and traits[argument.actualTypeId] % 2 == 1
+                                     -> if { true => priorOperandFailure! }
+-                                sourceByAst![range.astStart + rootAst!] => rootAst!
++                                sourceByAst[range.astStart + rootAst!] => rootAst!
+                             }
+                         0 => code!
+                         readonlyBorrow -> if {
+@@ -2901,7 +3265,7 @@
+         => contextualOperandLiteralFailure
+     contextualSource >= 0 and contextualCode > 0
+         and not contextualOperandLiteralFailure
+-        and (contextualOwnerAst >= 0 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
++        and (contextualOwnerAst >= 0 or contextualCode == 23 or (contextualCode >= 33 and contextualCode <= 43) or contextualCode == 71)
+         -> if {
+             package -> diagnosticOriginBefore(contextualSource, contextualOrigin!, source!, location!) => contextualEarlier
+             selected! == 4 and source! == contextualSource and location! == contextualOrigin! => sameContextualInitializer
+@@ -5222,6 +5586,9 @@
+                                         -> if {
+                                             arrayRange.astStart + element.astNode => elementGlobal
+                                             element.typeId => actual!
++                                            package.nodes[elementGlobal].kind == 15 -> if {
++                                                resolved.types -> typeIds.materializedReadTypeId(actual!) => actual!
++                                            }
+                                             # A numeric IR carrier cannot turn an originally floating
+                                             # literal into an integer during generic specialization.
+                                             floatingLiteralTypeByAst![elementGlobal] => floatingType
+@@ -5738,72 +6105,73 @@
+                                 }
+                             }
+                     }
+-                flowSource! >= 0 and materializeTarget! >= 0 -> if {
+-                    typeIdByAst![flowSource!] => receiverTypeId
+-                    receiverTypeId >= 0 -> if {
+-                        resolved.types[receiverTypeId] => receiverType
+-                        receiverType.kind == 1 and receiverType.origin == 1
+-                            and receiverType.symbol == 1 -> if {
+-                                0 => argumentCount!
+-                                -1 => argumentGlobal!
+-                                materializeCall! >= 0 -> if {
+-                                    firstChildByAst![materializeCall!] => argumentChild!
+-                                    argumentChild! >= 0 -> while {
+-                                        argumentCount! + 1 => argumentCount!
+-                                        argumentChild! => argumentGlobal!
+-                                        nextChildByAst![argumentChild!] => argumentChild!
++                flowSource! >= 0 and materializeTarget! >= 0 and not declaredArenaTarget!
++                    -> if {
++                        typeIdByAst![flowSource!] => receiverTypeId
++                        receiverTypeId >= 0 -> if {
++                            resolved.types[receiverTypeId] => receiverType
++                            receiverType.kind == 1 and receiverType.origin == 1
++                                and receiverType.symbol == 1 -> if {
++                                    0 => argumentCount!
++                                    -1 => argumentGlobal!
++                                    materializeCall! >= 0 -> if {
++                                        firstChildByAst![materializeCall!] => argumentChild!
++                                        argumentChild! >= 0 -> while {
++                                            argumentCount! + 1 => argumentCount!
++                                            argumentChild! => argumentGlobal!
++                                            nextChildByAst![argumentChild!] => argumentChild!
++                                        }
++                                    }
++                                    0 => materializeFailure!
++                                    -1 => materializeArgumentType!
++                                    package.nodes[materializeTarget!].start => failureOffset!
++                                    argumentCount! != 1 -> if { 12 => materializeFailure! } else {
++                                        typeIdByAst![argumentGlobal!] => materializeArgumentType!
++                                        materializeArgumentType! >= 0 -> if {
++                                            resolved.types[materializeArgumentType!] => argumentType
++                                            not (argumentType.kind == 1 and argumentType.origin == 1
++                                                and argumentType.symbol == 15) -> if {
++                                                    13 => materializeFailure!
++                                                    package.nodes[argumentGlobal!].start => failureOffset!
++                                                } else {
++                                                    package.nodes[argumentGlobal!] => argumentNode
++                                                    argumentNode.kind != 15 -> if {
++                                                        15 => materializeFailure!
++                                                        argumentNode.start => failureOffset!
++                                                    } else {
++                                                        resolvedSymbolByAst![argumentGlobal!] => ownerSymbolIndex
++                                                        ownerSymbolIndex >= 0 -> if {
++                                                            package.symbols[ownerSymbolIndex] => ownerSymbol
++                                                            not (package -> mutableBorrowOwnerSymbol(sourceIndex!, ownerSymbol))
++                                                                -> if {
++                                                                    14 => materializeFailure!
++                                                                    argumentNode.start => failureOffset!
++                                                                }
++                                                        }
++                                                    }
++                                                }
++                                        }
++                                    }
++                                    materializeFailure! > 0 -> if {
++                                        materializeFailure! == 12 -> if { materializeTarget! } else { argumentGlobal! }
++                                            => failureAst
++                                        ExpressionOperandDiagnostic {
++                                            code: materializeFailure!
++                                            sourceModule: sourceIndex!
++                                            astNode: astIndex!
++                                            operandAst: failureAst - range.astStart
++                                            operatorKind: -1
++                                            locationOffset: failureOffset!
++                                            operandTypeSymbol: -1
++                                            operandTypeId: materializeArgumentType!
++                                            firstTypeId: -1
++                                        } => candidate
++                                        package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
++                                            -> if { candidate => selected! }
+                                     }
+                                 }
+-                                0 => materializeFailure!
+-                                -1 => materializeArgumentType!
+-                                package.nodes[materializeTarget!].start => failureOffset!
+-                                argumentCount! != 1 -> if { 12 => materializeFailure! } else {
+-                                    typeIdByAst![argumentGlobal!] => materializeArgumentType!
+-                                    materializeArgumentType! >= 0 -> if {
+-                                        resolved.types[materializeArgumentType!] => argumentType
+-                                        not (argumentType.kind == 1 and argumentType.origin == 1
+-                                            and argumentType.symbol == 15) -> if {
+-                                                13 => materializeFailure!
+-                                                package.nodes[argumentGlobal!].start => failureOffset!
+-                                            } else {
+-                                                package.nodes[argumentGlobal!] => argumentNode
+-                                                argumentNode.kind != 15 -> if {
+-                                                    15 => materializeFailure!
+-                                                    argumentNode.start => failureOffset!
+-                                                } else {
+-                                                    resolvedSymbolByAst![argumentGlobal!] => ownerSymbolIndex
+-                                                    ownerSymbolIndex >= 0 -> if {
+-                                                        package.symbols[ownerSymbolIndex] => ownerSymbol
+-                                                        not (package -> mutableBorrowOwnerSymbol(sourceIndex!, ownerSymbol))
+-                                                            -> if {
+-                                                                14 => materializeFailure!
+-                                                                argumentNode.start => failureOffset!
+-                                                            }
+-                                                    }
+-                                                }
+-                                            }
+-                                    }
+-                                }
+-                                materializeFailure! > 0 -> if {
+-                                    materializeFailure! == 12 -> if { materializeTarget! } else { argumentGlobal! }
+-                                        => failureAst
+-                                    ExpressionOperandDiagnostic {
+-                                        code: materializeFailure!
+-                                        sourceModule: sourceIndex!
+-                                        astNode: astIndex!
+-                                        operandAst: failureAst - range.astStart
+-                                        operatorKind: -1
+-                                        locationOffset: failureOffset!
+-                                        operandTypeSymbol: -1
+-                                        operandTypeId: materializeArgumentType!
+-                                        firstTypeId: -1
+-                                    } => candidate
+-                                    package -> expressionDiagnosticPrecedes(resolved.fields, candidate, selected!)
+-                                        -> if { candidate => selected! }
+-                                }
+-                            }
+-                    }
+-                }
++                        }
++                    }
+             }
+             logical.kind == 22 and (logical.operatorKind == -26 or logical.operatorKind == 16)
+                 -> if {

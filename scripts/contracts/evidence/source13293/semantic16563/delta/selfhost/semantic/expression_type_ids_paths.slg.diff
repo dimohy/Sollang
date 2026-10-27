@@ -1,0 +1,64 @@
+--- before/selfhost/semantic/expression_type_ids_paths.slg
++++ after/selfhost/semantic/expression_type_ids_paths.slg
+@@ -852,6 +852,39 @@
+     # expression; an intrinsic argument is not the flow's result.
+     prepared.package -> semanticContext.indexFlowSourcesByAst => flowSourceByAst
+     prepared.package -> indexContextualRecords => contextualRecords
++    # A concrete nominal parameter owns an unqualified record argument's
++    # field labels before ordinary name lookup and IR lowering run.
++    argumentBindings -> each binding {
++        binding.sourceModule >= 0 and binding.sourceModule < (prepared.package.ranges -> len)
++            and binding.targetSourceModule >= 0 and binding.targetSourceModule < (prepared.package.ranges -> len)
++            -> if {
++                prepared.package.ranges[binding.sourceModule] => argumentRange
++                binding.argumentAst >= 0 and binding.argumentAst < argumentRange.astCount
++                    -> if {
++                        argumentRange.astStart + binding.argumentAst => argumentGlobal
++                        prepared.package.nodes[argumentGlobal].kind == 38
++                            and expectedContextByAst[argumentGlobal] < 0
++                            -> if {
++                                false => explicitlyTyped!
++                                contextualRecords.firstChild[argumentGlobal] => argumentChild!
++                                argumentChild! >= 0 -> while {
++                                    prepared.package.nodes[argumentChild!].kind == 12
++                                        or prepared.package.nodes[argumentChild!].kind == 16
++                                        -> if { true => explicitlyTyped! }
++                                    contextualRecords.nextChild[argumentChild!] => argumentChild!
++                                }
++                                not explicitlyTyped! -> if {
++                                    prepared.package -> typeIds.functionParameterTypeId(references, referenceIndexByTypeAst, binding.targetSourceModule, binding.parameterSymbol) => expectedRecord
++                                    prepared.package -> nominalStructType(types, expectedRecord)
++                                        -> if {
++                                            not types[expectedRecord].containsParameter
++                                                -> if { expectedRecord => expectedContextByAst[argumentGlobal] }
++                                        }
++                                }
++                            }
++                    }
++            }
++    }
+     prepared.package -> indexUserBlockResultRoots => userBlockResultRoots
+     [Int; ~] => firstUserBlockArgumentByAst!
+     prepared.package.nodes -> each node { firstUserBlockArgumentByAst! -> push(-1) }
+@@ -918,17 +951,17 @@
+                                                             continue
+                                                         }
+                                                     types[sourceTypeId!] => sourceType
+-                                                    false => selectedArenaFunction!
++                                                    false => selectedDeclaredFunction!
+                                                     prepared.callIndexByAst[intrinsicGlobal] => selectedCall
+-                                                    arenaSignature.operation > 0 and selectedCall >= 0
++                                                    selectedCall >= 0
+                                                         -> if {
+                                                             prepared.calls[selectedCall] => selected
+                                                             selected.status == 0 and selected.targetSourceModule >= 0 and selected.functionSymbol >= 0
+-                                                                -> if { true => selectedArenaFunction! }
++                                                                -> if { true => selectedDeclaredFunction! }
+                                                         }
+                                                     intrinsicName == "materialize" -> if { 1 } else { 15 } => expectedReceiver
+                                                     sourceType.kind == 1 and sourceType.origin == 1
+-                                                        and sourceType.symbol == expectedReceiver and not selectedArenaFunction!
++                                                        and sourceType.symbol == expectedReceiver and not selectedDeclaredFunction!
+                                                         -> if {
+                                                             intrinsicGlobal => intrinsicResultAst
+                                                             expressionIndexByAst[intrinsicResultAst] => resultIndex!

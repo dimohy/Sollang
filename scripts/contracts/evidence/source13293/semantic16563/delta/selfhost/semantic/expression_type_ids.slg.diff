@@ -1,0 +1,134 @@
+--- before/selfhost/semantic/expression_type_ids.slg
++++ after/selfhost/semantic/expression_type_ids.slg
+@@ -1180,7 +1180,10 @@
+     types[elementTypeId] => element
+     element.kind == 1 and element.origin == 1 and element.symbol == 0
+         -> if { true -> return }
+-    element.kind == 2 or element.kind == 4 or element.kind == 5 or element.kind == 12 or element.kind == 13
++    # Bounded inline owners are values in an ordinary literal. Explicit typed
++    # empties keep their separate constructor admission below.
++    element.kind == 2 or element.kind == 4 or element.kind == 5
++        or (dynamic and element.kind == 13)
+         -> if { true -> return }
+     element.kind == 3 and not dynamic
+ }
+@@ -1341,11 +1344,18 @@
+         }
+     elementTypeId! < 0 -> if { types -> typeIds.builtinTypeId(2) => elementTypeId! }
+     nodeIndex => result!.diagnosticNode
+-    types -> arrayLiteralUnsupportedElement(elementTypeId!, storage.dynamic)
+-        -> if {
+-            explicitElementType! and childCount! == 0 -> if { 11 } else { 3 } => result!.status
+-            result! -> return
+-        }
++    # Ordinary elements were checked in source order above. An empty contextual
++    # literal has no element to reject; only typed empty syntax validates its
++    # declared element here, as InferTypedEmptyArrayExpression does in C#.
++    explicitElementType! and childCount! == 0 -> if {
++        types[elementTypeId!].kind => elementKind
++        (types -> arrayLiteralUnsupportedElement(elementTypeId!, storage.dynamic))
++            or (not storage.dynamic and (elementKind == 12 or elementKind == 13))
++            -> if {
++                11 => result!.status
++                result! -> return
++            }
++    }
+     elementTypeId! => result!.elementTypeId
+     childCount! => result!.elementCount
+     not storage.dynamic and not storage.bounded and storage.length >= 0
+@@ -3514,6 +3524,32 @@
+     true
+ }
+ 
++callReceiverTypesEqual left: ref [Int; ~], right: ref [Int; ~] -> Bool {
++    (left -> len) != (right -> len) -> if { false -> return }
++    0 => index!
++    index! < (left -> len) -> while {
++        left[index!] != right[index!] -> if { false -> return }
++        index! + 1 => index!
++    }
++    true
++}
++
++callResolvedTypesEqual left: ref [typeIds.SemanticType; ~], right: ref [typeIds.SemanticType; ~] -> Bool {
++    (left -> len) != (right -> len) -> if { false -> return }
++    0 => index!
++    index! < (left -> len) -> while {
++        left[index!] => previous
++        right[index!] => current
++        previous.kind != current.kind or previous.origin != current.origin or previous.module != current.module or previous.symbol != current.symbol
++            or previous.first != current.first or previous.second != current.second or previous.length != current.length
++            or previous.lengthHash != current.lengthHash or (previous.containsParameter and not current.containsParameter) or (not previous.containsParameter and current.containsParameter) or previous.status != current.status
++            -> if { false -> return }
++        index! + 1 => index!
++    }
++    true
++}
++
++
+ completeResolvedCallContextSeeded initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~] -> ResolvedCallContext {
+     initialPrepared -> refineResolvedCallContext(initialTypes, seeds, externalResults, false)
+ }
+@@ -3521,6 +3557,13 @@
+ # Transfer each completed context into the next refinement. Owned analysis
+ # tables are bound once; no owner rebinding or name-check bypass is needed.
+ refineResolvedCallContext initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool -> ResolvedCallContext {
++    [Int; ~] => previousReceiverTypes
++    [typeIds.SemanticType; ~] => previousResolvedTypes
++    [calls.ModuleCallResolution; ~] => previousSeededCalls
++    initialPrepared -> refineResolvedCallContextWithMatchingInputs(initialTypes, seeds, externalResults, committedTypes, false, previousReceiverTypes, previousResolvedTypes, previousSeededCalls)
++}
++
++refineResolvedCallContextWithMatchingInputs initialPrepared: move semanticContext.SemanticSnapshot, initialTypes: move ExpressionTypeIdSet, seeds: ref CallContextSeeds, externalResults: ref [ExpressionTypeId; ~], committedTypes: Bool, hasPreviousMatchingInputs: Bool, previousReceiverTypes: ref [Int; ~], previousResolvedTypes: ref [typeIds.SemanticType; ~], previousSeededCalls: ref [calls.ModuleCallResolution; ~] -> ResolvedCallContext {
+     initialPrepared.package -> semanticContext.indexFlowSourcesByAst => flowSources
+     [Int; ~] => receiverTypeByCallAst!
+     initialPrepared.package.nodes -> each node { receiverTypeByCallAst! -> push(-1) }
+@@ -3541,6 +3584,21 @@
+                     }
+             }
+     }
++    [calls.ModuleCallResolution; ~] => seededCalls!
++    initialPrepared.calls -> each call {
++        call.sourceModule >= 0 and call.sourceModule < (seeds.ownerBySource -> len) and seeds.ownerBySource[call.sourceModule]
++            -> if { seededCalls! -> push(call) }
++    }
++    # The previous query owns these exact inputs. A committed snapshot already
++    # contains its output and indexes; immutable declaration inputs are shared
++    # throughout this refinement, so repeating the pure query adds no facts.
++    hasPreviousMatchingInputs and committedTypes
++        and callReceiverTypesEqual(previousReceiverTypes, receiverTypeByCallAst!)
++        and callResolvedTypesEqual(previousResolvedTypes, initialTypes.types)
++        and callContextDecisionsEqual(previousSeededCalls, seededCalls!)
++        -> if {
++            ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
++        }
+     initialPrepared.package -> calls.resolveModulesTypedWithPreparedFacts(
+     initialPrepared.semantic,
+     receiverTypeByCallAst!,
+@@ -3553,6 +3611,14 @@
+     initialPrepared.qualified
+     ) => resolvedCalls
+     not callContextDecisionsEqual(initialPrepared.calls, resolvedCalls) => decisionsChanged
++    # A committed round already owns the types for this exact prepared call
++    # table. Equality covers every call field; its binding and move indexes
++    # were derived from the same package/calls with the same readonly seeds
++    # and external results. Publish that completed pair before rebuilding
++    # identical indexes and running the full type core again.
++    committedTypes and not decisionsChanged -> if {
++        ResolvedCallContext { prepared: initialPrepared, types: initialTypes } -> return
++    }
+     initialPrepared => prepared!
+     resolvedCalls => prepared!.calls
+     prepared!.package -> semanticContext.indexCallsByAst(prepared!.calls) => prepared!.callIndexByAst
+@@ -3562,10 +3628,7 @@
+     prepared!.package -> semanticContext.indexDeclaredMoveReadsByAst(prepared!.declaredMoveArgumentByAst) => prepared!.declaredMoveReadByAst
+     prepared! -> semanticContext.freeze => finalPrepared
+     finalPrepared -> resolveContextWithCallArgumentBindings(finalBindings, seeds, externalResults) => finalTypes
+-    committedTypes and not decisionsChanged -> if {
+-        ResolvedCallContext { prepared: finalPrepared, types: finalTypes } -> return
+-    }
+-    finalPrepared -> refineResolvedCallContext(finalTypes, seeds, externalResults, true)
++    finalPrepared -> refineResolvedCallContextWithMatchingInputs(finalTypes, seeds, externalResults, true, true, receiverTypeByCallAst!, initialTypes.types, seededCalls!)
+ }
+ 
+ # Measurement-only entry: exposes a completed pair, never initial type facts.
