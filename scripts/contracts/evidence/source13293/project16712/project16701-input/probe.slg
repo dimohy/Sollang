@@ -1,0 +1,47 @@
+import sollang.compiler.cli_sources as sources
+import sys.path as path
+import sys.text as text
+import sys.process as process
+
+verifyCase label: Text, root: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], expectedStatus: Int, expectedDiagnostic: Text, expectedPaths: ref [Text; ~] -> Bool uses Console, File {
+    Arena(0) => storage!
+    root -> sources.loadForTarget(manifests, names, "windows-x64", path.Style.Windows, storage!) => result
+    result.status == expectedStatus and (result.sources -> len) == (expectedPaths -> len) => valid!
+    (expectedDiagnostic -> len) > 0 -> if {
+        result.diagnostic -> text.contains(expectedDiagnostic)
+            -> unless { false => valid! }
+    } else {
+        (result.diagnostic -> len) != 0 -> if { false => valid! }
+    }
+    0 => index!
+    index! < (expectedPaths -> len) and index! < (result.sources -> len)
+        -> while {
+            (result.sources[index!] -> pathText) != expectedPaths[index!]
+                -> if { false => valid! }
+            result.owners[index!] != index! -> if { false => valid! }
+            index! + 1 => index!
+        }
+    "$label=$(valid!)" -> println
+    not valid! -> if { "status=$(result.status) count=$(result.sources -> len) diagnostic=$(result.diagnostic)" -> println }
+    valid!
+}
+
+main {
+    true => valid!
+    [path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\good.project", path.Style.Windows), path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\dep\\sollang.project", path.Style.Windows), path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\leaf\\sollang.project", path.Style.Windows); ~] => manifests0
+    [path.fromText("app", path.Style.Windows), path.fromText("dep", path.Style.Windows), path.fromText("leaf", path.Style.Windows); ~] => names0
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\root.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\dep\\root.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\leaf\\root.slg"; ~] => expected0
+    "transitive" -> verifyCase("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\root.slg", manifests0, names0, 0, "", expected0)
+        -> unless { false => valid! }
+    [path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\undeclared.project", path.Style.Windows), path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\dep\\sollang.project", path.Style.Windows), path.fromText("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\leaf\\sollang.project", path.Style.Windows); ~] => manifests1
+    [path.fromText("app", path.Style.Windows), path.fromText("dep", path.Style.Windows), path.fromText("leaf", path.Style.Windows); ~] => names1
+    [Text; ~] => expected1
+    "undeclared" -> verifyCase("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\root.slg", manifests1, names1, 4, "dependency", expected1)
+        -> unless { false => valid! }
+    [path.Path; ~] => manifests2
+    [path.Path; ~] => names2
+    [Text; ~] => expected2
+    "incomplete" -> verifyCase("W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\project16701-input\\app\\root.slg", manifests2, names2, 8, "source package context is incomplete", expected2)
+        -> unless { false => valid! }
+    not valid! -> if { process.exit(1) }
+}
