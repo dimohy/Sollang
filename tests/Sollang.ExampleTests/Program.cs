@@ -743,7 +743,11 @@ if (testTarget == TestTarget.WindowsX64
             "-File", Path.Combine(repoRoot, "scripts", "build-com-interop-fixture.ps1")
         ],
         input: null,
-        repoRoot);
+        repoRoot,
+        environment: new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["SOLLANG_LLVM_HOME"] = llvmDir
+        });
     if (fixtureBuild.ExitCode != 0)
     {
         Console.Error.WriteLine("FAIL COM fixture build");
