@@ -1,0 +1,80 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_function_facts as functionFacts
+import sollang.compiler.diagnostics as diagnostics
+import sys.process as process
+
+struct Query { label: Text, name: Text, line: Int }
+
+inspect source: Text, queries: [Query] -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared.package.ranges[0] => range
+    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) {
+            queries -> each query {
+                -1 => frame!
+                0 => i!
+                i! < range.astCount -> while {
+                    prepared.package.nodes[range.astStart + i!] => node
+                    node.kind == 7 or node.kind == 31 -> if {
+                        source -> diagnostics.sourceLocation(node.start) => location
+                        prepared.package.tokens[range.tokenStart + node.payloadToken] => name
+                        location.line == query.line and (source -> slice(name.span.start, name.span.length)) == query.name
+                            -> if { i! => frame! }
+                    }
+                    i! + 1 => i!
+                }
+                frame! < 0 -> if { process.exit(2) }
+                frame! -> functionFacts.requiresStandalone(prepared, 0, indexed) -> when {
+                    Err(_) { process.exit(3) }
+                    Ok(value) { "$(query.label)|standalone:$value" -> println }
+                }
+            }
+        }
+    }
+}
+
+main {
+    "case:result-propagation" -> println
+    """
+    work value: Result<Int, Int> -> Result<Int, Int> { value? -> Result<Int, Int>.Ok }
+    main {}
+    """ => source0
+    source0 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:generic-enum-constructor" -> println
+    """
+    work: -> Result<[Int; ~], Int> { Result<[Int; ~], Int>.Ok([1; ~]) }
+    main {}
+    """ => source1
+    source1 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:mutable-box-header" -> println
+    """
+    work: -> Int {
+        box 13 => owner!
+        1
+    }
+    main {}
+    """ => source2
+    source2 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:when-array" -> println
+    """
+    work input: Int -> [Int; ~] {
+        input -> when {
+            == 1 => [1; ~]
+            else => [2; ~]
+        }
+    }
+    main {}
+    """ => source3
+    source3 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:generic-enum-interpolation" -> println
+    """
+    size value: Result<[Int; ~], Int> -> Int { 0 }
+    work: -> Unit uses Console {
+        "$(size(Result<[Int; ~], Int>.Ok([1; ~])))" -> println
+    }
+    main {}
+    """ => source4
+    source4 -> inspect([Query { label: "function:size@1", name: "size", line: 1 }, Query { label: "function:work@2", name: "work", line: 2 }])
+}

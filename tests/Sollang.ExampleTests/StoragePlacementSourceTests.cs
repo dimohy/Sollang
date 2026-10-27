@@ -82,6 +82,8 @@ internal static class StoragePlacementSourceTests
         var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
         var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
         var indexUnits = analyzer.GetMethod("BuildUnitPositions", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var controlFacts = root.GetProperty("scope").GetString() == "source-control-facts";
+        var controlType = assembly.GetType("Sollang.Compiler.Semantics.FunctionControlFlowFacts", true)!;
         var cases = new List<object>();
         var identifiers = new HashSet<string>(StringComparer.Ordinal);
         var loadedInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -121,16 +123,26 @@ internal static class StoragePlacementSourceTests
                 var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
                 warnings = ((IEnumerable)Property(bound, "Warnings")).Cast<object>()
                     .Select(warning => Property(warning, "Code") + "@" + Property(warning, "Line")).ToArray();
-                observed.AddRange(ObserveFrame("main", Property(bound, "MainStackFrame")));
-                unitReferences.AddRange(ObserveUnits("main", indexUnits,
-                    Property(bound, "MainStatements"), null));
-                candidateReferences.AddRange(ObserveCandidates("main", analyzer,
-                    Property(bound, "MainStatements"), null, Property(bound, "Functions")));
+                if (!controlFacts)
+                {
+                    observed.AddRange(ObserveFrame("main", Property(bound, "MainStackFrame")));
+                    unitReferences.AddRange(ObserveUnits("main", indexUnits,
+                        Property(bound, "MainStatements"), null));
+                    candidateReferences.AddRange(ObserveCandidates("main", analyzer,
+                        Property(bound, "MainStatements"), null, Property(bound, "Functions")));
+                }
                 foreach (var pair in Entries(Property(bound, "FunctionStackFrames"))
                     .OrderBy(pair => (string)Property(pair.Key, "Name"), StringComparer.Ordinal)
                     .ThenBy(pair => (int)Property(pair.Key, "Line")))
                 {
                     var name = "function:" + Property(pair.Key, "Name") + "@" + Property(pair.Key, "Line");
+                    if (controlFacts)
+                    {
+                        var standalone = (bool)controlType.GetMethod("RequiresStandaloneStandardLibraryEmission")!
+                            .Invoke(null, [pair.Key])!;
+                        observed.Add(name + "|standalone:" + standalone.ToString().ToLowerInvariant());
+                        continue;
+                    }
                     observed.AddRange(ObserveFrame(name, pair.Value!));
                     unitReferences.AddRange(ObserveUnits(name, indexUnits,
                         Property(pair.Key, "BlockBody"), Property(pair.Key, "Body")));
@@ -160,7 +172,8 @@ internal static class StoragePlacementSourceTests
         Directory.CreateDirectory(Path.GetDirectoryName(result)!);
         File.WriteAllText(result, JsonSerializer.Serialize(new
         {
-            schemaVersion = 1, scope = "production-source-frame-analysis-reference",
+            schemaVersion = 1, scope = controlFacts ? "production-source-function-control-facts-reference"
+                : "production-source-frame-analysis-reference",
             status = accepted ? "passed" : "failed", completed, total = cases.Count,
             compiler, compilerDllSha256 = compilerHash, fixture, fixtureSha256 = fixtureHash,
             inputsStable = stable, productionLoadedInputs = loadedInputs, cases

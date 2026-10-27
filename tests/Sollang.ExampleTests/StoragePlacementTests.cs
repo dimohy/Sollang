@@ -51,7 +51,7 @@ internal static class StoragePlacementTests
             return exit;
         }
         if (root.TryGetProperty("scope", out var sourceScope)
-            && sourceScope.GetString() == "source-frames")
+            && sourceScope.GetString() is "source-frames" or "source-control-facts")
         {
             var exit = StoragePlacementSourceTests.Run(assembly, root, result, compiler, fixture,
                 compilerHash, fixtureHash);

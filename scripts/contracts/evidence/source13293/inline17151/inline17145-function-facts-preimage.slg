@@ -1,0 +1,91 @@
+namespace sollang.compiler.semantic.storage_placement_function_facts
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import syntax.generated.slg as grammar
+
+public enum Error { InvalidSourceDomain, InvalidFrame, InvalidInterpolationIdentity }
+
+interpolationFact index: Int, frameAst: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<Bool, Error> {
+    index < 0 or index >= (prepared.interpolations -> len)
+        -> if { Error.InvalidInterpolationIdentity -> Result<Bool, Error>.Err -> return }
+    prepared.interpolations[index] => node
+    node.kind == 11 or node.kind == 16 -> if { true -> Result<Bool, Error>.Ok -> return }
+    node.kind == 17 -> if {
+        node.valueAst < 0 or node.valueAst >= indexed.astCount
+            -> if { Error.InvalidInterpolationIdentity -> Result<Bool, Error>.Err -> return }
+        node.valueAst -> walk(frameAst, prepared, sourceModule, indexed) -> return
+    }
+    # C# TypeApplicationExpression is opaque even when it has arguments.
+    node.kind == 15 -> if { false -> Result<Bool, Error>.Ok -> return }
+    0 => child!
+    child! < (prepared.interpolations -> len) -> while {
+        prepared.interpolations[child!].parent == index
+            -> if {
+                child! -> interpolationFact(frameAst, prepared, sourceModule, indexed) -> when {
+                    Err(error) { error -> Result<Bool, Error>.Err -> return }
+                    Ok(found) { found -> if { true -> Result<Bool, Error>.Ok -> return } }
+                }
+            }
+        child! + 1 => child!
+    }
+    false -> Result<Bool, Error>.Ok
+}
+
+walk nodeIndex: Int, frameAst: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<Bool, Error> {
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    nodeIndex != frameAst and (node.kind == 7 or node.kind == 31)
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    node.kind == 12 or node.kind == 17 or node.kind == 32 or node.kind == 33 or node.kind == 34
+        or node.cstRuleId == grammar.ruleIdTypeApplicationExpression()
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    node.kind == 37 or node.kind == 38 or node.kind == 47 or node.kind == 82
+        -> if { true -> Result<Bool, Error>.Ok -> return }
+    node.kind == 13 -> if {
+        prepared.interpolationRanges -> each fragments {
+            fragments.sourceModule == sourceModule -> if {
+                fragments.nodeStart => fragment!
+                fragment! < fragments.nodeStart + fragments.nodeCount
+                    -> while {
+                        prepared.interpolations[fragment!] => expression
+                        expression.sourceToken == node.payloadToken and expression.parent < 0
+                            -> if {
+                                fragment! -> interpolationFact(frameAst, prepared, sourceModule, indexed) -> when {
+                                    Err(error) { error -> Result<Bool, Error>.Err -> return }
+                                    Ok(found) { found -> if { true -> Result<Bool, Error>.Ok -> return } }
+                                }
+                            }
+                        fragment! + 1 => fragment!
+                    }
+            }
+        }
+    }
+    indexed.firstChild[nodeIndex] => child!
+    child! >= 0 -> while {
+        child! -> walk(frameAst, prepared, sourceModule, indexed) -> when {
+            Err(error) { error -> Result<Bool, Error>.Err -> return }
+            Ok(found) { found -> if { true -> Result<Bool, Error>.Ok -> return } }
+        }
+        indexed.nextSibling[child!] => child!
+    }
+    false -> Result<Bool, Error>.Ok
+}
+
+# Mirror RequiresStandaloneStandardLibraryEmission before choosing inline frames.
+# Box allocation alone is not a payload stack candidate. Local declarations have
+# their own ownership boundary; callback bodies remain part of this decision.
+public requiresStandalone frameAst: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<Bool, Error> {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        or frameAst < 0 or frameAst >= indexed.astCount
+        or (indexed.firstChild -> len) != indexed.astCount or (indexed.nextSibling -> len) != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+    prepared.package.ranges[sourceModule] => range
+    range.astStart != indexed.astStart or range.astCount != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+    prepared.package.nodes[range.astStart + frameAst] => frame
+    frame.kind != 7 and frame.kind != 31
+        -> if { Error.InvalidFrame -> Result<Bool, Error>.Err -> return }
+    frame.flags / 8 % 2 == 1 -> if { true -> Result<Bool, Error>.Ok -> return }
+    frameAst -> walk(frameAst, prepared, sourceModule, indexed)
+}

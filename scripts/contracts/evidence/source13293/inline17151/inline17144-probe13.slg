@@ -1,0 +1,142 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_function_facts as functionFacts
+import sollang.compiler.diagnostics as diagnostics
+import sys.process as process
+
+struct Query { label: Text, name: Text, line: Int }
+
+inspect source: Text, queries: [Query] -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared.package.ranges[0] => range
+    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) {
+            queries -> each query {
+                -1 => frame!
+                0 => i!
+                i! < range.astCount -> while {
+                    prepared.package.nodes[range.astStart + i!] => node
+                    node.kind == 7 or node.kind == 31 -> if {
+                        source -> diagnostics.sourceLocation(node.start) => location
+                        prepared.package.tokens[range.tokenStart + node.payloadToken] => name
+                        location.line == query.line and (source -> slice(name.span.start, name.span.length)) == query.name
+                            -> if { i! => frame! }
+                    }
+                    i! + 1 => i!
+                }
+                frame! < 0 -> if { process.exit(2) }
+                frame! -> functionFacts.requiresStandalone(prepared, 0, indexed) -> when {
+                    Err(_) { process.exit(3) }
+                    Ok(value) { "$(query.label)|standalone:$value" -> println }
+                }
+            }
+        }
+    }
+}
+
+main {
+    "case:simple" -> println
+    """
+    work: -> Int { 1 }
+    main {}
+    """ => source0
+    source0 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:fixed-array" -> println
+    """
+    work: -> Int {
+        [1, 2] => values
+        values[0]
+    }
+    main {}
+    """ => source1
+    source1 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:empty-dynamic" -> println
+    """
+    work: -> [Int; ~] { [Int; ~] }
+    main {}
+    """ => source2
+    source2 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:repeat-array" -> println
+    """
+    work: -> Int {
+        [1; 2] => values
+        values[0]
+    }
+    main {}
+    """ => source3
+    source3 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:dictionary" -> println
+    """
+    work: -> Int {
+        { 1: 2 } => values
+        values -> len
+    }
+    main {}
+    """ => source4
+    source4 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:box-only" -> println
+    """
+    work: -> Int {
+        box 13 => owner
+        1
+    }
+    main {}
+    """ => source5
+    source5 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:early-return" -> println
+    """
+    work: -> Int { 1 -> return }
+    main {}
+    """ => source6
+    source6 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:async" -> println
+    """
+    work: -> async Int { 1 }
+    main {}
+    """ => source7
+    source7 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:if-array" -> println
+    """
+    work flag: Bool -> [Int; ~] {
+        flag -> if { [1; ~] } else { [2; ~] }
+    }
+    main {}
+    """ => source8
+    source8 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:callback-array" -> println
+    """
+    work: -> Unit {
+        1..2 -> each value {
+            [value, 2] => values
+            values[0] => first
+        }
+    }
+    main {}
+    """ => source9
+    source9 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:plain-interpolation" -> println
+    """
+    work value: Int -> Unit uses Console { "value=$value" -> println }
+    main {}
+    """ => source10
+    source10 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:array-interpolation" -> println
+    """
+    work: -> Unit uses Console { "$([1, 2] -> len)" -> println }
+    main {}
+    """ => source11
+    source11 -> inspect([Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:nested-function-owner" -> println
+    """
+    outer: -> Int {
+        inner: -> Int {
+            [1, 2] => values
+            values[0]
+        }
+        1
+    }
+    main {}
+    """ => source12
+    source12 -> inspect([Query { label: "function:inner@2", name: "inner", line: 2 }, Query { label: "function:outer@1", name: "outer", line: 1 }])
+}
