@@ -18,6 +18,7 @@ from verification_execution import VerificationExecution
 from verification_fingerprints import managed_runtime_inputs
 
 ROOT = Path(__file__).resolve().parent.parent
+WITNESS_CONTRACT = "scripts/contracts/compiler-member-place-witnesses.json"
 BUDGETS = {"producerBuildSeconds": 180, "fullEmissionSeconds": 3600,
            "assemblySeconds": 180, "closureSeconds": 180}
 
@@ -59,11 +60,30 @@ def validate_inputs(pins):
                 "FULL_SOURCE_INPUT_CHANGED:" + name)
 
 
+def validate_fixed_producer(plan):
+    paths = plan["standardLibrarySources"] + plan["compilerSources"]
+    expected = (
+        "import sollang.compiler.llvm.text as compiler\n"
+        "import sys.process as process\n\nmain {\n    [Text; ~] => paths!\n"
+        + "".join("    paths! -> push(" + json.dumps(name) + ")\n" for name in paths)
+        + "    paths! -> compiler.emitCheckedFilesWithStandardLibrarySources(144) => diagnosticCount\n"
+        "    diagnosticCount != 0 -> if { process.exit(1) }\n}\n")
+    require(owned(plan["producer"]).read_text(encoding="utf-8-sig") == expected,
+            "FULL_SOURCE_PRODUCER_NOT_FIXED_CHECKED")
+
+
 def preflight(plan_path, focused_override=None):
     plan_path = owned(plan_path)
     plan = read(plan_path)
     require(plan.get("schemaVersion") == 1 and plan.get("budgets") == BUDGETS,
             "FULL_SOURCE_PLAN_OR_BUDGET_CHANGED")
+    witness_path = owned(WITNESS_CONTRACT)
+    authority = read(witness_path)
+    require(authority.get("schemaVersion") == 1
+            and plan.get("witnessContract") == {"path": WITNESS_CONTRACT, "sha256": sha(witness_path)}
+            and plan.get("qualificationWitnesses") == authority["requiredGroups"],
+            "FULL_SOURCE_WITNESS_CONTRACT_CHANGED")
+    validate_fixed_producer(plan)
     focused_path = owned(focused_override or plan["focusedQualification"])
     focused = read(focused_path)
     require(passed(focused), "FULL_SOURCE_FOCUSED_PROOF_INCOMPLETE")
@@ -79,6 +99,10 @@ def preflight(plan_path, focused_override=None):
                     for group in groups.values()), "FULL_SOURCE_WITNESSES_MISSING")
     missing = sorted({case for group in groups.values() for case in group} - set(ids))
     require(not missing, "FULL_SOURCE_FOCUSED_WITNESS_MISSING:" + ",".join(missing))
+    for case in cases:
+        if case["id"] in authority["caseSources"]:
+            require(case.get("programSha256") == authority["caseSources"][case["id"]]["sourceSha256"],
+                    "FULL_SOURCE_WITNESS_FIXTURE_CHANGED:" + case["id"])
     comparison = plan["sourceComparisonRecord"]
     comparison_path = owned(comparison["path"])
     require(sha(comparison_path) == comparison["sha256"]
@@ -114,7 +138,7 @@ def preflight(plan_path, focused_override=None):
             and command[3:command.index("-o")] == [str(owned(name)) for name in providers],
             "FULL_SOURCE_BUILD_COMMAND_CHANGED")
     inputs = list(dict.fromkeys([
-        Path(__file__), plan_path, focused_path, semantic_path, comparison_path,
+        Path(__file__), plan_path, focused_path, semantic_path, comparison_path, witness_path,
         ROOT / "scripts/verification_execution.py", ROOT / "scripts/verification_contract_lease.py",
         ROOT / "scripts/completed_artifact_plan.py", ROOT / "scripts/Invoke-CompletedArtifactCleanup.ps1",
         ROOT / "scripts/ArtifactLifecycle.ps1", ROOT / "scripts/contracts/artifact-lifecycle.json",
