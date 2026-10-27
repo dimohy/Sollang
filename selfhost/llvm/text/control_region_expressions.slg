@@ -574,7 +574,12 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                     "_address = getelementptr inbounds " -> print
                                     regionCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
                                     ", ptr " -> print
-                                    regionCanonicalMemberOrdinal! == 0 -> if { ownerIndex -> writeReferencePlaceValue(regionNode.operand0, context, state) } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
+                                    regionCanonicalMemberOrdinal! == 0 -> if {
+                                        regionNode.operand0 -> isLocalReadonlyReferenceName(ownerIndex, context, state)
+                                            -> if { ownerIndex -> writeForwardedReferenceValue(regionNode.operand0, context, state) } else {
+                                                ownerIndex -> writeReferencePlaceValue(regionNode.operand0, context, state)
+                                            }
+                                    } else { "%v$(regionNodeIndex)_m$(regionCanonicalMemberOrdinal! - 1)" -> print }
                                     ", i32 0, i32 $(regionCanonicalMemberField.ordinal)" -> println
                                     "  " -> print
                                     regionCanonicalMemberOrdinal! == regionCanonicalMemberCount! - 1
@@ -607,7 +612,10 @@ emitRegionControlExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref
                                 "  %v$(regionNodeIndex)_address = getelementptr inbounds " -> print
                                 regionReferenceMemberOwnerType -> writeSemanticTypeId(context, state)
                                 ", ptr " -> print
-                                ownerIndex -> writeReferencePlaceValue(regionNode.operand0, context, state)
+                                regionNode.operand0 -> isLocalReadonlyReferenceName(ownerIndex, context, state)
+                                    -> if { ownerIndex -> writeForwardedReferenceValue(regionNode.operand0, context, state) } else {
+                                        ownerIndex -> writeReferencePlaceValue(regionNode.operand0, context, state)
+                                    }
                                 ", i32 0, i32 $(regionNode.symbol)" -> println
                                 regionNode.typeId => regionReferenceMemberValueType!
                                 regionReferenceMemberValueType! >= 0 and context.types[regionReferenceMemberValueType!].kind == 8

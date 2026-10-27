@@ -797,6 +797,29 @@ public lowerPreparedWithTypes request: move PreparedInterpolationRequest -> Prep
                                                                             mutableDeclarationScope! == mutableDeclaration.parent
                                                                                 -> if { true => mutableDeclarationVisible! }
                                                                         }
+                                                                    # Symbol parents omit branch blocks. A prior mutable
+                                                                    # declaration must also own this binding's AST scope;
+                                                                    # a sibling branch cannot supply its storage identity.
+                                                                    request.nodes[mutableDeclaration.astNode].parent => mutableDeclarationAstScope!
+                                                                    false => mutableDeclarationScopeFound!
+                                                                    mutableDeclarationAstScope! >= 0 and not mutableDeclarationScopeFound!
+                                                                        -> while {
+                                                                            request.nodes[mutableDeclarationAstScope!] => mutableDeclarationScopeNode
+                                                                            mutableDeclarationScopeNode.kind == 7 or mutableDeclarationScopeNode.kind == 8
+                                                                                or mutableDeclarationScopeNode.kind == 31 or mutableDeclarationScopeNode.kind == 43
+                                                                                or mutableDeclarationScopeNode.kind == 48 or mutableDeclarationScopeNode.kind == 58
+                                                                                -> if { true => mutableDeclarationScopeFound! } else {
+                                                                                    mutableDeclarationScopeNode.parent => mutableDeclarationAstScope!
+                                                                                }
+                                                                        }
+                                                                    false => mutableDeclarationAstVisible!
+                                                                    mutableReassignment.astNode => mutableDeclarationUseAncestor!
+                                                                    mutableDeclarationUseAncestor! >= 0 -> while {
+                                                                        mutableDeclarationUseAncestor! == mutableDeclarationAstScope!
+                                                                            -> if { true => mutableDeclarationAstVisible! }
+                                                                        request.nodes[mutableDeclarationUseAncestor!].parent => mutableDeclarationUseAncestor!
+                                                                    }
+                                                                    not mutableDeclarationAstVisible! -> if { false => mutableDeclarationVisible! }
                                                                     request.nodes[mutableDeclaration.astNode].start => mutableDeclarationCandidateStart
                                                                     request.nodes[mutableReassignment.astNode].start => mutableReassignmentStart
                                                                     mutableDeclarationNameEqual!
