@@ -1,0 +1,393 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+reportPlacement context: ref emitterContext.EmitContext, expectedModule: Int -> Unit uses Console, Process {
+    context.storagePlacement -> when {
+        Err(_) {
+            context -> placementPreparationDiagnosticCount => failures
+            process.exit(1)
+        }
+        Ok(table) {
+            (table.frameByFunction -> len) != (context.ir -> len)
+                -> if { process.exit(2) }
+            0 => mains!
+            0 => functions!
+            0 => mainSlots!
+            0 => functionSlots!
+            0 => ordinal!
+            table.frames -> each frame {
+                frame.sourceModule != expectedModule or table.frameByFunction[frame.functionIr] != ordinal!
+                    or context.ir[frame.functionIr].astNode != frame.frameAst
+                    -> if { process.exit(3) }
+                frame.range.slotStart < 0 or frame.range.slotStart + frame.range.slotCount > (table.slots -> len)
+                    or frame.range.allocationStart < 0 or frame.range.allocationStart + frame.range.allocationCount > (table.allocations -> len)
+                    or frame.range.endStart < 0 or frame.range.endStart + frame.range.endCount > (table.ends -> len)
+                    -> if { process.exit(4) }
+                context.ir[frame.functionIr].kind == 11 -> if {
+                    mains! + 1 => mains!
+                    mainSlots! + frame.range.slotCount => mainSlots!
+                } else {
+                    context.ir[frame.functionIr].kind != 0 -> if { process.exit(5) }
+                    functions! + 1 => functions!
+                    functionSlots! + frame.range.slotCount => functionSlots!
+                }
+                ordinal! + 1 => ordinal!
+            }
+            "frames:$(table.frames -> len)" -> println
+            "main-frames:$(mains!)" -> println
+            "function-frames:$(functions!)" -> println
+            "main-slots:$(mainSlots!)" -> println
+            "function-slots:$(functionSlots!)" -> println
+            "allocations:$(table.allocations -> len)" -> println
+            "ends:$(table.ends -> len)" -> println
+            table.slots -> each slot { "slot:$(slot.size):$(slot.align)" -> println }
+        }
+    }
+}
+
+inspectPlacementFiles paths: move [Text; ~], label: Text -> Unit uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath { sourcePath -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => index!
+    index! < (owners! -> len) -> while {
+        owners![index!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        index! + 1 => index!
+    }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 144, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareCheckedLibraryFiles(paths, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) { rejection -> emitFunctionDeclarationRejection(paths)
+            process.exit(6)
+            return
+        }
+        Rejected(rejection) { rejection -> emitSignatureRejection(paths)
+            process.exit(7)
+            return
+        }
+        ImportRejected(rejection) { rejection -> emitInterpolationImportRejection(paths)
+            process.exit(8)
+            return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => count
+    count != 0 -> if { context -> diagnostics.emitBlockingDiagnostics
+        process.exit(9)
+    }
+    "case:$label" -> println
+    context -> reportPlacement(144)
+}
+
+main {
+    [
+    "stdlib/std/algorithm.slg",
+    "stdlib/std/archive/zip.slg",
+    "stdlib/std/archive/zip/decoder_phase.slg",
+    "stdlib/std/archive/zip/encoder_phase.slg",
+    "stdlib/std/archive/zip/error.slg",
+    "stdlib/std/async/diagnostics.slg",
+    "stdlib/std/compress/brotli.slg",
+    "stdlib/std/compress/brotli/command.slg",
+    "stdlib/std/compress/brotli/command/error.slg",
+    "stdlib/std/compress/brotli/compressed_header.slg",
+    "stdlib/std/compress/brotli/compressed_header/error.slg",
+    "stdlib/std/compress/brotli/compressed_stream.slg",
+    "stdlib/std/compress/brotli/context_map.slg",
+    "stdlib/std/compress/brotli/context_map/error.slg",
+    "stdlib/std/compress/brotli/decoder_phase.slg",
+    "stdlib/std/compress/brotli/error.slg",
+    "stdlib/std/compress/brotli/literal_context.slg",
+    "stdlib/std/compress/brotli/prefix_code.slg",
+    "stdlib/std/compress/brotli/prefix_code/error.slg",
+    "stdlib/std/compress/brotli/prefix_table.slg",
+    "stdlib/std/compress/brotli/prefix_table/error.slg",
+    "stdlib/std/compress/brotli/static_dictionary.slg",
+    "stdlib/std/compress/brotli/static_dictionary/error.slg",
+    "stdlib/std/compress/brotli/static_dictionary_data.slg",
+    "stdlib/std/compress/brotli/tree_group.slg",
+    "stdlib/std/compress/brotli/tree_group/error.slg",
+    "stdlib/std/compress/gzip.slg",
+    "stdlib/std/compress/gzip/decoder_phase.slg",
+    "stdlib/std/compress/gzip/error.slg",
+    "stdlib/std/compress/zstd.slg",
+    "stdlib/std/compress/zstd/decoder_phase.slg",
+    "stdlib/std/compress/zstd/error.slg",
+    "stdlib/std/compress/zstd/fse.slg",
+    "stdlib/std/compress/zstd/huffman.slg",
+    "stdlib/std/compress/zstd/sequence.slg",
+    "stdlib/std/crypto/aes128.slg",
+    "stdlib/std/crypto/aes128_gcm.slg",
+    "stdlib/std/crypto/aes128_gcm_result.slg",
+    "stdlib/std/crypto/bits.slg",
+    "stdlib/std/crypto/ed25519.slg",
+    "stdlib/std/crypto/ed25519_error.slg",
+    "stdlib/std/crypto/field25519.slg",
+    "stdlib/std/crypto/hkdf_sha256.slg",
+    "stdlib/std/crypto/hmac_sha256.slg",
+    "stdlib/std/crypto/random.slg",
+    "stdlib/std/crypto/sha256.slg",
+    "stdlib/std/crypto/sha512.slg",
+    "stdlib/std/crypto/tls13_hkdf.slg",
+    "stdlib/std/crypto/tls13_keys.slg",
+    "stdlib/std/crypto/x25519.slg",
+    "stdlib/std/encoding/base64.slg",
+    "stdlib/std/encoding/base64/error.slg",
+    "stdlib/std/encoding/base64/types.slg",
+    "stdlib/std/encoding/binary.slg",
+    "stdlib/std/encoding/binary/error.slg",
+    "stdlib/std/encoding/hex.slg",
+    "stdlib/std/encoding/hex/error.slg",
+    "stdlib/std/hash/crc32.slg",
+    "stdlib/std/hash/xxhash64.slg",
+    "stdlib/std/io.slg",
+    "stdlib/std/io/async.slg",
+    "stdlib/std/io/file.slg",
+    "stdlib/std/io/socket.slg",
+    "stdlib/std/log.slg",
+    "stdlib/std/net.slg",
+    "stdlib/std/net/dns.slg",
+    "stdlib/std/net/http.slg",
+    "stdlib/std/net/http/body.slg",
+    "stdlib/std/net/http/client.slg",
+    "stdlib/std/net/http/error.slg",
+    "stdlib/std/net/http/request.slg",
+    "stdlib/std/net/http/response.slg",
+    "stdlib/std/net/http/server.slg",
+    "stdlib/std/net/parse_error.slg",
+    "stdlib/std/net/quic.slg",
+    "stdlib/std/net/quic/application_engine.slg",
+    "stdlib/std/net/quic/connection_state.slg",
+    "stdlib/std/net/quic/crypto_stream.slg",
+    "stdlib/std/net/quic/error.slg",
+    "stdlib/std/net/quic/frame.slg",
+    "stdlib/std/net/quic/handshake_engine.slg",
+    "stdlib/std/net/quic/initial_engine.slg",
+    "stdlib/std/net/quic/keys.slg",
+    "stdlib/std/net/quic/loss_recovery.slg",
+    "stdlib/std/net/quic/p2p.slg",
+    "stdlib/std/net/quic/packet.slg",
+    "stdlib/std/net/quic/packet_number.slg",
+    "stdlib/std/net/quic/packet_recovery.slg",
+    "stdlib/std/net/quic/protection.slg",
+    "stdlib/std/net/quic/reassembly.slg",
+    "stdlib/std/net/quic/stream_state.slg",
+    "stdlib/std/net/quic/tls_auth.slg",
+    "stdlib/std/net/quic/tls_client_phase.slg",
+    "stdlib/std/net/quic/tls_client_state.slg",
+    "stdlib/std/net/quic/tls_handshake.slg",
+    "stdlib/std/net/quic/tls_hello.slg",
+    "stdlib/std/net/quic/tls_server_phase.slg",
+    "stdlib/std/net/quic/tls_server_state.slg",
+    "stdlib/std/net/quic/tls_transcript.slg",
+    "stdlib/std/net/quic/traffic_keys.slg",
+    "stdlib/std/net/quic/transport_parameters.slg",
+    "stdlib/std/net/quic/varint.slg",
+    "stdlib/std/net/quic/version_negotiation.slg",
+    "stdlib/std/net/quic/version_packet.slg",
+    "stdlib/std/net/quic/x509_ed25519.slg",
+    "stdlib/std/net/quic/x509_identity.slg",
+    "stdlib/std/net/socket.slg",
+    "stdlib/std/path.slg",
+    "stdlib/std/sequence.slg",
+    "stdlib/std/text/csv.slg",
+    "stdlib/std/text/glob.slg",
+    "stdlib/std/text/json.slg",
+    "stdlib/std/text/json/error.slg",
+    "stdlib/std/text/regex.slg",
+    "stdlib/std/time.slg",
+    "stdlib/std/uri.slg",
+    "stdlib/std/uri/error.slg",
+    "stdlib/std/uri/percent.slg",
+    "stdlib/std/uri/percent/error.slg",
+    "stdlib/std/uri/percent/types.slg",
+    "stdlib/std/uuid.slg",
+    "stdlib/std/uuid/error.slg",
+    "stdlib/sys/directory.slg",
+    "stdlib/sys/directory/kind.slg",
+    "stdlib/sys/file.slg",
+    "stdlib/sys/input/mouse.slg",
+    "stdlib/sys/io.slg",
+    "stdlib/sys/path.slg",
+    "stdlib/sys/process.slg",
+    "stdlib/sys/random.slg",
+    "stdlib/sys/runtime/clock.slg",
+    "stdlib/sys/runtime/console.slg",
+    "stdlib/sys/runtime/dns.slg",
+    "stdlib/sys/runtime/integer_file.slg",
+    "stdlib/sys/runtime/mouse_event.slg",
+    "stdlib/sys/runtime/parallel.slg",
+    "stdlib/sys/runtime/path.slg",
+    "stdlib/sys/runtime/path_absolute.slg",
+    "stdlib/sys/runtime/process.slg",
+    "stdlib/sys/runtime/random.slg",
+    "stdlib/sys/runtime/sequence.slg",
+    "stdlib/sys/runtime/socket.slg",
+    "stdlib/sys/runtime/time.slg",
+    "stdlib/sys/text.slg",
+    "artifacts/scratch/resume-20261006-owner-continuation22/context17263-generic.slg"
+    ] => declaredtype_specialization_frame_identities
+    [Text; ~] => pathstype_specialization_frame_identities!
+    declaredtype_specialization_frame_identities -> each sourcePath { pathstype_specialization_frame_identities! -> push(sourcePath) }
+    pathstype_specialization_frame_identities! -> inspectPlacementFiles("type-specialization-frame-identities")
+    [
+    "stdlib/std/algorithm.slg",
+    "stdlib/std/archive/zip.slg",
+    "stdlib/std/archive/zip/decoder_phase.slg",
+    "stdlib/std/archive/zip/encoder_phase.slg",
+    "stdlib/std/archive/zip/error.slg",
+    "stdlib/std/async/diagnostics.slg",
+    "stdlib/std/compress/brotli.slg",
+    "stdlib/std/compress/brotli/command.slg",
+    "stdlib/std/compress/brotli/command/error.slg",
+    "stdlib/std/compress/brotli/compressed_header.slg",
+    "stdlib/std/compress/brotli/compressed_header/error.slg",
+    "stdlib/std/compress/brotli/compressed_stream.slg",
+    "stdlib/std/compress/brotli/context_map.slg",
+    "stdlib/std/compress/brotli/context_map/error.slg",
+    "stdlib/std/compress/brotli/decoder_phase.slg",
+    "stdlib/std/compress/brotli/error.slg",
+    "stdlib/std/compress/brotli/literal_context.slg",
+    "stdlib/std/compress/brotli/prefix_code.slg",
+    "stdlib/std/compress/brotli/prefix_code/error.slg",
+    "stdlib/std/compress/brotli/prefix_table.slg",
+    "stdlib/std/compress/brotli/prefix_table/error.slg",
+    "stdlib/std/compress/brotli/static_dictionary.slg",
+    "stdlib/std/compress/brotli/static_dictionary/error.slg",
+    "stdlib/std/compress/brotli/static_dictionary_data.slg",
+    "stdlib/std/compress/brotli/tree_group.slg",
+    "stdlib/std/compress/brotli/tree_group/error.slg",
+    "stdlib/std/compress/gzip.slg",
+    "stdlib/std/compress/gzip/decoder_phase.slg",
+    "stdlib/std/compress/gzip/error.slg",
+    "stdlib/std/compress/zstd.slg",
+    "stdlib/std/compress/zstd/decoder_phase.slg",
+    "stdlib/std/compress/zstd/error.slg",
+    "stdlib/std/compress/zstd/fse.slg",
+    "stdlib/std/compress/zstd/huffman.slg",
+    "stdlib/std/compress/zstd/sequence.slg",
+    "stdlib/std/crypto/aes128.slg",
+    "stdlib/std/crypto/aes128_gcm.slg",
+    "stdlib/std/crypto/aes128_gcm_result.slg",
+    "stdlib/std/crypto/bits.slg",
+    "stdlib/std/crypto/ed25519.slg",
+    "stdlib/std/crypto/ed25519_error.slg",
+    "stdlib/std/crypto/field25519.slg",
+    "stdlib/std/crypto/hkdf_sha256.slg",
+    "stdlib/std/crypto/hmac_sha256.slg",
+    "stdlib/std/crypto/random.slg",
+    "stdlib/std/crypto/sha256.slg",
+    "stdlib/std/crypto/sha512.slg",
+    "stdlib/std/crypto/tls13_hkdf.slg",
+    "stdlib/std/crypto/tls13_keys.slg",
+    "stdlib/std/crypto/x25519.slg",
+    "stdlib/std/encoding/base64.slg",
+    "stdlib/std/encoding/base64/error.slg",
+    "stdlib/std/encoding/base64/types.slg",
+    "stdlib/std/encoding/binary.slg",
+    "stdlib/std/encoding/binary/error.slg",
+    "stdlib/std/encoding/hex.slg",
+    "stdlib/std/encoding/hex/error.slg",
+    "stdlib/std/hash/crc32.slg",
+    "stdlib/std/hash/xxhash64.slg",
+    "stdlib/std/io.slg",
+    "stdlib/std/io/async.slg",
+    "stdlib/std/io/file.slg",
+    "stdlib/std/io/socket.slg",
+    "stdlib/std/log.slg",
+    "stdlib/std/net.slg",
+    "stdlib/std/net/dns.slg",
+    "stdlib/std/net/http.slg",
+    "stdlib/std/net/http/body.slg",
+    "stdlib/std/net/http/client.slg",
+    "stdlib/std/net/http/error.slg",
+    "stdlib/std/net/http/request.slg",
+    "stdlib/std/net/http/response.slg",
+    "stdlib/std/net/http/server.slg",
+    "stdlib/std/net/parse_error.slg",
+    "stdlib/std/net/quic.slg",
+    "stdlib/std/net/quic/application_engine.slg",
+    "stdlib/std/net/quic/connection_state.slg",
+    "stdlib/std/net/quic/crypto_stream.slg",
+    "stdlib/std/net/quic/error.slg",
+    "stdlib/std/net/quic/frame.slg",
+    "stdlib/std/net/quic/handshake_engine.slg",
+    "stdlib/std/net/quic/initial_engine.slg",
+    "stdlib/std/net/quic/keys.slg",
+    "stdlib/std/net/quic/loss_recovery.slg",
+    "stdlib/std/net/quic/p2p.slg",
+    "stdlib/std/net/quic/packet.slg",
+    "stdlib/std/net/quic/packet_number.slg",
+    "stdlib/std/net/quic/packet_recovery.slg",
+    "stdlib/std/net/quic/protection.slg",
+    "stdlib/std/net/quic/reassembly.slg",
+    "stdlib/std/net/quic/stream_state.slg",
+    "stdlib/std/net/quic/tls_auth.slg",
+    "stdlib/std/net/quic/tls_client_phase.slg",
+    "stdlib/std/net/quic/tls_client_state.slg",
+    "stdlib/std/net/quic/tls_handshake.slg",
+    "stdlib/std/net/quic/tls_hello.slg",
+    "stdlib/std/net/quic/tls_server_phase.slg",
+    "stdlib/std/net/quic/tls_server_state.slg",
+    "stdlib/std/net/quic/tls_transcript.slg",
+    "stdlib/std/net/quic/traffic_keys.slg",
+    "stdlib/std/net/quic/transport_parameters.slg",
+    "stdlib/std/net/quic/varint.slg",
+    "stdlib/std/net/quic/version_negotiation.slg",
+    "stdlib/std/net/quic/version_packet.slg",
+    "stdlib/std/net/quic/x509_ed25519.slg",
+    "stdlib/std/net/quic/x509_identity.slg",
+    "stdlib/std/net/socket.slg",
+    "stdlib/std/path.slg",
+    "stdlib/std/sequence.slg",
+    "stdlib/std/text/csv.slg",
+    "stdlib/std/text/glob.slg",
+    "stdlib/std/text/json.slg",
+    "stdlib/std/text/json/error.slg",
+    "stdlib/std/text/regex.slg",
+    "stdlib/std/time.slg",
+    "stdlib/std/uri.slg",
+    "stdlib/std/uri/error.slg",
+    "stdlib/std/uri/percent.slg",
+    "stdlib/std/uri/percent/error.slg",
+    "stdlib/std/uri/percent/types.slg",
+    "stdlib/std/uuid.slg",
+    "stdlib/std/uuid/error.slg",
+    "stdlib/sys/directory.slg",
+    "stdlib/sys/directory/kind.slg",
+    "stdlib/sys/file.slg",
+    "stdlib/sys/input/mouse.slg",
+    "stdlib/sys/io.slg",
+    "stdlib/sys/path.slg",
+    "stdlib/sys/process.slg",
+    "stdlib/sys/random.slg",
+    "stdlib/sys/runtime/clock.slg",
+    "stdlib/sys/runtime/console.slg",
+    "stdlib/sys/runtime/dns.slg",
+    "stdlib/sys/runtime/integer_file.slg",
+    "stdlib/sys/runtime/mouse_event.slg",
+    "stdlib/sys/runtime/parallel.slg",
+    "stdlib/sys/runtime/path.slg",
+    "stdlib/sys/runtime/path_absolute.slg",
+    "stdlib/sys/runtime/process.slg",
+    "stdlib/sys/runtime/random.slg",
+    "stdlib/sys/runtime/sequence.slg",
+    "stdlib/sys/runtime/socket.slg",
+    "stdlib/sys/runtime/time.slg",
+    "stdlib/sys/text.slg",
+    "artifacts/scratch/resume-20261006-owner-continuation22/context17263-implicit.slg"
+    ] => declaredimplicit_fixed_overlap
+    [Text; ~] => pathsimplicit_fixed_overlap!
+    declaredimplicit_fixed_overlap -> each sourcePath { pathsimplicit_fixed_overlap! -> push(sourcePath) }
+    pathsimplicit_fixed_overlap! -> inspectPlacementFiles("implicit-fixed-overlap")
+}
