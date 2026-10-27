@@ -222,7 +222,7 @@ def expected_build_exit(record: dict, row: dict, *, default: int | None = 0) -> 
     return default
 
 
-def expected_runtime_exit(record: dict, row: dict) -> int | None:
+def expected_runtime_exit(record: dict, row: dict, *, emitted: bool = False) -> int | None:
     """Nonzero runtime success requires a unique, unchanged input contract."""
     expected = set()
     for name, digest in record.get('inputHashes', {}).items():
@@ -240,10 +240,19 @@ def expected_runtime_exit(record: dict, row: dict) -> int | None:
             continue
         for case in contract['cases']:
             if isinstance(case, dict) and case.get('id') == row.get('id'):
-                value = case.get('expectedRuntimeExit')
+                # A checked emitter and its emitted program have independent
+                # runtime exits. A reused C# contract may carry the same case
+                # id; it cannot authorize failure of the emitter process.
+                if emitted or 'emittedLlvmSha256' in row:
+                    if case.get('emittedLlvm') is not True:
+                        continue
+                elif case.get('emittedLlvm') is True:
+                    continue
+                field = 'expectedEmittedRuntimeExit' if emitted else 'expectedRuntimeExit'
+                value = case.get(field)
                 if type(value) is int:
                     expected.add(value)
-                elif 'expectedRuntimeExit' in case:
+                elif field in case:
                     return None
     return next(iter(expected)) if len(expected) == 1 else (0 if not expected else None)
 
@@ -372,6 +381,18 @@ def completed(record: dict) -> bool:
             return False
         if runtime_expected != 0 and not any(k in row for k in ('runExit', 'runExitCode')):
             return False
+        emitted_expected = expected_runtime_exit(record, row, emitted=True)
+        if emitted_expected is None:
+            return False
+        if 'nativeRunExit' in row or emitted_expected != 0:
+            if not runtime_exit_matches(row.get('nativeRunExit'), emitted_expected):
+                return False
+            if emitted_expected != 0 and record.get('processesStopped') is not True:
+                return False
+            if emitted_expected != 0 and any(row.get(k) != 0 for k in ('assemblyExit', 'nativeLinkExit')):
+                return False
+            if any(row.get(k, 0) != 0 for k in ('assemblyExit', 'nativeLinkExit')):
+                return False
         if any(row.get(k) for k in ('activeProcess', 'activeProcessIds', 'running')):
             return False
         if row.get('failureId') or row.get('failureIds') or row.get('cancelled') or row.get('canceled') or row.get('orphanProcessIds'):

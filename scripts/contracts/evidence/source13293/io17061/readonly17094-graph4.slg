@@ -1,0 +1,92 @@
+import sollang.compiler.semantic.analysis as analysis
+import sys.file as file
+
+capture source: Text -> Unit uses File {
+    [source,; ~] -> analysis.analyze => package
+    package.ranges[0] => range
+    range.astCount -> file.write
+    package.nodes -> each node {
+        Int(node.kind) -> file.write
+        Int(node.parent) -> file.write
+        Int(node.payloadToken) -> file.write
+        Int(node.secondaryToken) -> file.write
+        Int(node.tertiaryToken) -> file.write
+        Int(node.flags) -> file.write
+        Int(node.firstToken) -> file.write
+        Int(node.tokenCount) -> file.write
+        Int(node.start) -> file.write
+        Int(node.length) -> file.write
+    }
+    range.tokenCount -> file.write
+    package.tokens -> each token {
+        token.kind -> file.write
+        Int(token.span.start) -> file.write
+        Int(token.span.length) -> file.write
+    }
+    (package.interpolations -> len) -> file.write
+    package.interpolations -> each fragment {
+        Int(fragment.kind) -> file.write
+        Int(fragment.parent) -> file.write
+        Int(fragment.symbol) -> file.write
+        Int(fragment.ownerSymbol) -> file.write
+        Int(fragment.prefixSymbol) -> file.write
+        Int(fragment.qualifiedReceiverStatus) -> file.write
+        Int(fragment.bareFunctionStatus) -> file.write
+        Int(fragment.opcode) -> file.write
+        Int(fragment.payloadStart) -> file.write
+        Int(fragment.payloadLength) -> file.write
+        Int(fragment.operand0) -> file.write
+        Int(fragment.operand1) -> file.write
+        Int(fragment.operand2) -> file.write
+        Int(fragment.sourceToken) -> file.write
+        Int(fragment.callNameStart) -> file.write
+        Int(fragment.callNameLength) -> file.write
+        Int(fragment.targetAst) -> file.write
+        Int(fragment.valueAst) -> file.write
+        Int(fragment.argumentCount) -> file.write
+    }
+
+}
+
+
+main {
+    "artifacts/scratch/resume-20261006-owner-continuation22/readonly17094-graph4.bin" -> file.openWriter
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values[0])" -> println
+    }
+    """ => source0
+    source0 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> len)" -> println
+    }
+    """ => source1
+    source1 -> capture
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> readFirst)" -> println
+    }
+    """ => source2
+    source2 -> capture
+    """
+    readOwned values: [Int; ~] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> readOwned)" -> println
+    }
+    """ => source3
+    source3 -> capture
+    file.closeWriter()
+    "captured4" -> println
+}

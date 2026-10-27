@@ -52,14 +52,20 @@ def main():
     parser.add_argument("--jobs", type=int, default=1,
                         help="Explicit compiler worker limit for the verification harness")
     parser.add_argument("--optimization", choices=("O0", "O1", "O2", "O3"), default="O1")
+    parser.add_argument("--timeout-seconds", type=int, default=600,
+                        help="Explicit per-step budget; existing callers retain 600 seconds")
     parser.add_argument("--diagnostics-plan", type=Path)
     parser.add_argument("--reusable-compiler-directory", type=Path, action="append")
     parser.add_argument("--contract", type=Path, default=ROOT / "scripts/contracts/owned-index-full-stdlib-source-preflight.json")
     args = parser.parse_args()
     if args.jobs < 1:
         parser.error("--jobs expects a positive integer")
+    if args.timeout_seconds <= 0:
+        parser.error("--timeout-seconds expects a positive integer")
     diagnostics_plan = None if args.diagnostics_plan is None else args.diagnostics_plan.resolve()
     diagnostics_configuration = load_diagnostics_plan(diagnostics_plan)
+    if diagnostics_configuration is not None and args.timeout_seconds != 600:
+        raise ValueError("STDLIB_PREFLIGHT_DIAGNOSTIC_SELECTED_BUDGET_MISMATCH")
     compiler, output, contract_path = args.compiler.resolve(), args.output.resolve(), args.contract.resolve()
     contract_text = read(contract_path)
     contract = json.loads(contract_text)
@@ -136,14 +142,14 @@ def main():
 
             metadata = {}
             try:
-                row["formatExit"] = run([str(compiler), "format", "--check", str(driver), *map(str, closure)], "format", 600)
+                row["formatExit"] = run([str(compiler), "format", "--check", str(driver), *map(str, closure)], "format", args.timeout_seconds)
                 if row["formatExit"] != 0:
                     raise ValueError("STDLIB_PREFLIGHT_DRIVER_SOURCE_FORMAT_FAILED")
-                row["buildExit"] = run([str(compiler), "build", str(driver), *map(str, closure), "-o", str(output / "probe.exe"), "--target", "windows-x64", "--keep-temps", "--llvm", str(args.llvm.resolve()), "--jobs", str(args.jobs), "-" + args.optimization], "build", 600)
+                row["buildExit"] = run([str(compiler), "build", str(driver), *map(str, closure), "-o", str(output / "probe.exe"), "--target", "windows-x64", "--keep-temps", "--llvm", str(args.llvm.resolve()), "--jobs", str(args.jobs), "-" + args.optimization], "build", args.timeout_seconds)
                 row["buildStderr"] = read(output / "build.stderr").strip()
                 if row["buildExit"] != 0 or row["buildStderr"]:
                     raise ValueError("STDLIB_PREFLIGHT_DRIVER_BUILD_FAILED")
-                row["runExit"] = run([str(output / "probe.exe")], "run", 600)
+                row["runExit"] = run([str(output / "probe.exe")], "run", args.timeout_seconds)
                 row["runStdout"], row["runStderr"] = read(stdout_path).strip(), read(output / "run.stderr").strip()
                 metadata, diagnostic_messages = parse_observation(row["runStdout"])
                 row["checkedDiagnosticMessages"] = diagnostic_messages

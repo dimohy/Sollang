@@ -424,6 +424,14 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
             raise ValueError(f"RUN_STDERR_EXPECTATION_INVALID: {case['id']}")
         if "runStderr" in case and case["exit"] != 0:
             raise ValueError(f"RUN_STDERR_EXPECTATION_REQUIRES_SUCCESS: {case['id']}")
+        if "expectedRuntimeExit" in case:
+            if type(case["expectedRuntimeExit"]) is not int or case["exit"] != 0:
+                raise ValueError(f"RUNTIME_EXIT_EXPECTATION_INVALID: {case['id']}")
+            if case.get("emittedLlvm") or group is not None:
+                raise ValueError(f"RUNTIME_EXIT_EXPECTATION_REQUIRES_DIRECT_EXECUTION: {case['id']}")
+        if "expectedEmittedRuntimeExit" in case:
+            if type(case["expectedEmittedRuntimeExit"]) is not int or not case.get("emittedLlvm") or case["exit"] != 0:
+                raise ValueError(f"EMITTED_RUNTIME_EXIT_EXPECTATION_INVALID: {case['id']}")
         if not isinstance(case.get("emittedLlvm", False), bool):
             raise ValueError(f"EMISSION_PREFLIGHT_INVALID_CONTRACT: {case['id']}")
         if case.get("emittedLlvm") and (case["exit"] != 0 or case["stderr"]):
@@ -636,7 +644,8 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                 row["runExit"] = run([str(exe), *case["runArguments"]] if group is not None else [str(exe)], folder / "run")
                 row["runStdout"] = read(folder / "run.stdout").strip()
                 row["runStderr"] = read(folder / "run.stderr").strip()
-                passed = (passed and row["runExit"] == 0
+                row["expectedRuntimeExit"] = case.get("expectedRuntimeExit", 0)
+                passed = (passed and row["runExit"] == row["expectedRuntimeExit"]
                           and row["runStderr"] == case.get("runStderr", ""))
                 if case.get("emittedLlvm"):
                     llvm = folder / "emitted.ll"
@@ -665,7 +674,8 @@ def execute(args, parser, lease_mode, observed, stdlib_proof_inputs=(), runtime_
                     if passed:
                         row["nativeRunExit"] = run([str(native)], folder / "native-run")
                         row["nativeRunStdout"] = read(folder / "native-run.stdout").strip()
-                        passed = (row["nativeRunExit"] == 0
+                        row["expectedEmittedRuntimeExit"] = case.get("expectedEmittedRuntimeExit", 0)
+                        passed = (row["nativeRunExit"] == row["expectedEmittedRuntimeExit"]
                                   and row["nativeRunStdout"] == case["stdout"]
                                   and not read(folder / "native-run.stderr").strip())
 

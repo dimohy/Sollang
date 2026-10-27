@@ -1,0 +1,151 @@
+import sollang.compiler.semantic.analysis as analysis
+import sys.file as file
+
+capture source: Text -> Unit uses File {
+    [source,; ~] -> analysis.analyze => package
+    package.ranges[0] => range
+    range.astCount -> file.write
+    package.nodes -> each node {
+        Int(node.kind) -> file.write
+        Int(node.parent) -> file.write
+        Int(node.payloadToken) -> file.write
+        Int(node.secondaryToken) -> file.write
+        Int(node.tertiaryToken) -> file.write
+        Int(node.flags) -> file.write
+        Int(node.firstToken) -> file.write
+        Int(node.tokenCount) -> file.write
+        Int(node.start) -> file.write
+        Int(node.length) -> file.write
+    }
+    range.tokenCount -> file.write
+    package.tokens -> each token {
+        token.kind -> file.write
+        Int(token.span.start) -> file.write
+        Int(token.span.length) -> file.write
+    }
+}
+
+main {
+    "artifacts/scratch/resume-20261006-owner-continuation22/readonly17057-ast.bin" -> file.openWriter
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> readFirst => first
+    }
+    """ => source0
+    source0 -> capture
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        readFirst(values) => first
+    }
+    """ => source1
+    source1 -> capture
+    """
+    readOwnedFirst values: [Int; ~] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> readOwnedFirst => first
+    }
+    """ => source2
+    source2 -> capture
+    """
+    withFallback fallback: Int, values: [Int] -> Int => fallback + values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        0 -> withFallback(values) => first
+    }
+    """ => source3
+    source3 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> fold 0 total, item { total + item } => sum
+    }
+    """ => source4
+    source4 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> each item { item -> println }
+    }
+    """ => source5
+    source5 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values[0] => first
+        values -> append(3) => grown
+    }
+    """ => source6
+    source6 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+    }
+    """ => source7
+    source7 -> capture
+    """
+    main {
+        [1, 2; ~] => values!
+        values! -> capacity => allocated
+        values! -> push(3)
+        values![0] => first
+    }
+    """ => source8
+    source8 -> capture
+    """
+    readScore scores: {Int: Int} -> Int => scores[1]
+    
+    main {
+        { 1: 2 } => scores
+        scores -> readScore => first
+    }
+    """ => source9
+    source9 -> capture
+    """
+    main {
+        { 1: 2 } => scores
+        scores -> updated(1, 3) => changed
+    }
+    """ => source10
+    source10 -> capture
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        true -> if {
+            values[0] -> println
+        } else {
+            0 -> println
+        }
+    }
+    """ => source11
+    source11 -> capture
+    """
+    main {
+        true -> while {
+            [1, 2; ~] => values
+            values -> capacity => allocated
+            values[0] => first
+            break
+        }
+    }
+    """ => source12
+    source12 -> capture
+    file.closeWriter()
+    "captured13" -> println
+}

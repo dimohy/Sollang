@@ -1727,7 +1727,17 @@ internal sealed partial class LlvmEmitter
         EmitCompare(isOk, "ne", "i32", readOk, "0");
         EmitConditionalBranch(isOk, continueLabel, failLabel);
         EmitLabel(failLabel);
-        EmitRet("i32", "1");
+        if (_currentFunction is null)
+        {
+            EmitRet("i32", "1");
+        }
+        else
+        {
+            // An I/O status is a process failure, not a value in the caller's
+            // return ABI. Ordinary functions may return Unit or aggregates.
+            EmitRuntimeExitProcessIntrinsic(new RuntimeInt("1"), "runtime I/O failure");
+            EmitUnreachable();
+        }
         EmitLabel(continueLabel);
         _currentBlockLabel = continueLabel;
     }

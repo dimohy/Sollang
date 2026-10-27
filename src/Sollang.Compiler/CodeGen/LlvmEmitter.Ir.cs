@@ -45,6 +45,11 @@ internal sealed partial class LlvmEmitter
     private void EmitTrap()
     {
         EmitInstruction("call void @llvm.trap()");
+        EmitUnreachable();
+    }
+
+    private void EmitUnreachable()
+    {
         EmitInstruction("unreachable");
         _currentBlockTerminated = true;
     }

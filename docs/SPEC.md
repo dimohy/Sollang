@@ -4844,6 +4844,10 @@ little-endian bit representation and byte width of the specialized type. A
 generic write flushes the legacy Int64 record buffer first so mixing old and new
 calls cannot reorder bytes. I/O failure follows the existing fail-fast runtime
 status path.
+On native targets, a fail-fast writer error terminates with process status `1`
+without executing subsequent source statements. This behavior is independent
+of the enclosing function's return type; typed reads retain their `Result`
+errors.
 
 The reader uses explicit zero-input type application and call syntax:
 

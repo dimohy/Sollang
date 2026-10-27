@@ -1,0 +1,200 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_uses as uses
+import sollang.compiler.semantic.storage_placement_literals as literals
+import sys.process as process
+
+inspect label: Text, source: Text -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared.package.ranges[0] => range
+    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) { prepared.package -> sourceUnits.build(0, indexed) -> when {
+                Err(_) { process.exit(2) }
+                Ok(units) {
+                    -1 => binding!
+                    literals.Kind.DynamicArray => kind!
+                    0 => index!
+                    index! < range.astCount -> while {
+                        prepared.package.nodes[range.astStart + index!] => node
+                        node.kind == 9 -> if {
+                            indexed.firstChild[index!] => child
+                            child >= 0 -> if {
+                                prepared.package.nodes[range.astStart + child].kind => shape
+                                shape == 37 or shape == 38 -> if {
+                                    index! => binding!
+                                    shape == 38 -> if { literals.Kind.Dictionary => kind! }
+                                }
+                            }
+                        }
+                        index! + 1 => index!
+                    }
+                    binding! < 0 -> if { process.exit(3) }
+                    binding! -> uses.readonlyPayload(kind!, source, prepared, 0, indexed, units) -> when {
+                        Err(_) { process.exit(4) }
+                        Ok(admitted) { "$label|$admitted" -> println }
+                    }
+                }
+        } }
+    }
+}
+
+
+main {
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> readFirst => first
+    }
+    """ => source0
+    "readonly-view-primary" -> inspect(source0)
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        readFirst(values) => first
+    }
+    """ => source1
+    "readonly-view-prefix" -> inspect(source1)
+    """
+    readOwnedFirst values: [Int; ~] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> readOwnedFirst => first
+    }
+    """ => source2
+    "owning-input-rejects-payload" -> inspect(source2)
+    """
+    withFallback fallback: Int, values: [Int] -> Int => fallback + values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        0 -> withFallback(values) => first
+    }
+    """ => source3
+    "additional-view-conservative-rejection" -> inspect(source3)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> fold 0 total, item { total + item } => sum
+    }
+    """ => source4
+    "readonly-fold-input" -> inspect(source4)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values -> each item { item -> println }
+    }
+    """ => source5
+    "readonly-each-input" -> inspect(source5)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values[0] => first
+        values -> append(3) => grown
+    }
+    """ => source6
+    "later-escape-rejects-all-uses" -> inspect(source6)
+    """
+    main {
+        [1, 2; ~] => values
+    }
+    """ => source7
+    "diagnostic-unused-growable-payload" -> inspect(source7)
+    """
+    main {
+        [1, 2; ~] => values!
+        values! -> capacity => allocated
+        values! -> push(3)
+        values![0] => first
+    }
+    """ => source8
+    "mutable-owner-header-only" -> inspect(source8)
+    """
+    readScore scores: {Int: Int} -> Int => scores[1]
+    
+    main {
+        { 1: 2 } => scores
+        scores -> readScore => first
+    }
+    """ => source9
+    "readonly-dictionary-function" -> inspect(source9)
+    """
+    main {
+        { 1: 2 } => scores
+        scores -> updated(1, 3) => changed
+    }
+    """ => source10
+    "dictionary-transform-rejects-payload" -> inspect(source10)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        true -> if {
+            values[0] -> println
+        } else {
+            0 -> println
+        }
+    }
+    """ => source11
+    "nested-readonly-use" -> inspect(source11)
+    """
+    main {
+        true -> while {
+            [1, 2; ~] => values
+            values -> capacity => allocated
+            values[0] => first
+            break
+        }
+    }
+    """ => source12
+    "loop-transfer-conservative-rejection" -> inspect(source12)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values[0])" -> println
+    }
+    """ => source13
+    "interpolation-index-readonly" -> inspect(source13)
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> len)" -> println
+    }
+    """ => source14
+    "interpolation-length-readonly" -> inspect(source14)
+    """
+    readFirst values: [Int] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> readFirst)" -> println
+    }
+    """ => source15
+    "interpolation-primary-view-readonly" -> inspect(source15)
+    """
+    readOwned values: [Int; ~] -> Int => values[0]
+    
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        "value=$(values -> readOwned)" -> println
+    }
+    """ => source16
+    "interpolation-owning-function" -> inspect(source16)
+}

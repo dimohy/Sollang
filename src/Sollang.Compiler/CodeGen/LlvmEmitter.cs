@@ -166,7 +166,8 @@ internal sealed partial class LlvmEmitter
         _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
             || _reachableFunctions.Any(function =>
                 (function.Body is not null && UsesProcessExit(function.Body))
-                || function.BlockBody.Any(UsesProcessExit));
+                || function.BlockBody.Any(UsesProcessExit)
+                || function.Kind == BoundFunctionKind.RuntimeWriteScalar);
         _usesAsyncFile = _reachableFunctions.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync

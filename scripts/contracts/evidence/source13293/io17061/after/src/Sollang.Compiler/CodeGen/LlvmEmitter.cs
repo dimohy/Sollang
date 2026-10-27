@@ -1,0 +1,1099 @@
+using System.Globalization;
+using System.Text;
+using Sollang.Compiler.Diagnostics;
+using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Syntax;
+
+namespace Sollang.Compiler.CodeGen;
+
+internal sealed partial class LlvmEmitter
+{
+    private readonly BoundProgram _program;
+    private readonly LlvmRuntimePlatform _platform;
+    private readonly TargetContract _targetContract;
+    private readonly bool _sharedLibrary;
+    private readonly bool _usesProcessArguments;
+    private readonly bool _usesProcessEnvironment;
+    private readonly bool _usesChildProcesses;
+    private readonly bool _usesProcessCapture;
+    private readonly bool _usesProcessExit;
+    private readonly bool _usesAsync;
+    private readonly bool _usesAsyncDiagnostics;
+    private readonly bool _usesAsyncFile;
+    private bool _usesDirectoryTraversal;
+    private readonly bool _usesNetwork;
+    private readonly bool _usesSocketCompletion;
+    private readonly bool _usesDns;
+    private readonly bool _usesSecureRandom;
+    private readonly bool _usesParallel;
+    private readonly bool _usesMouseEvents;
+    private readonly bool _usesConcurrentStreamJoins;
+    private readonly bool _usesRangeStreams;
+    private readonly bool _usesStandardError;
+    private sealed record ParallelCallbackInfo(
+        string Name,
+        BoundFunction Target,
+        IReadOnlyList<KeyValuePair<string, BoundType>> Captures,
+        IReadOnlyList<ParallelCallbackArgument> AdditionalArguments);
+    private sealed record ParallelCallbackArgument(
+        Expression Expression,
+        BoundType Type,
+        BoundFunctionInputOwnership Ownership);
+    private sealed record ParallelBranchCapture(
+        Expression Expression,
+        BoundType Type,
+        bool UsesBorrowAbi,
+        bool IsSharedOwner,
+        string LocalName);
+    private sealed record ParallelBranchCallbackInfo(
+        string Name,
+        BoundParallelBranch Branch,
+        IReadOnlyList<ParallelBranchCapture> Captures,
+        IReadOnlyList<BranchArm> RewrittenArms,
+        string EnvironmentType);
+    private sealed record StreamJoinRuntimeInfo(
+        string Prefix,
+        string ContextType,
+        BoundStreamJoin Join);
+
+    private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BranchExpression, ParallelBranchCallbackInfo> _parallelBranchCallbacks =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<StreamJoinExpression, StreamJoinRuntimeInfo> _streamJoinRuntimeInfos =
+        new(ReferenceEqualityComparer.Instance);
+    private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
+    private MemoryOutputSink _activeGlobals = new();
+    private MemoryOutputSink _activeFunctions = new();
+    private readonly Dictionary<string, RuntimeValue> _locals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _borrowedOwnedLocals = new(StringComparer.Ordinal);
+    private readonly List<TerminatingOwnedCleanupObligation> _terminatingOwnedCleanupObligations = [];
+    private long _nextOwnedCleanupBindingId;
+    private readonly Dictionary<string, HashSet<string>> _movedOwnedStructFields =
+        new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _borrowedOwnedTransferFlags = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, MutableContainerSlot> _mutableContainerSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _readonlyCaptureBorrowPointers = new(StringComparer.Ordinal);
+    private readonly Dictionary<RuntimeValue, string> _readonlyValueSlots =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Expression, RuntimeValue> _anonymousProjectionOwners =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundFunction>> _functionScopes =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _activeStandardLibraryFunctionScans =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly List<BoundType> _dropReachabilityRoots;
+    private HashSet<BoundType>? _dropReachableTypes;
+    private long _dropReachabilityRevision = -1;
+    private long _dropReachabilityQueries;
+    private long _dropReachabilityBuilds;
+    private long _dropReachabilityNodeVisits;
+    private long _dropReachabilityEdgeVisits;
+
+    private readonly HashSet<BoundFunction> _reachableFunctions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundDynTraitConversion> _reachableDynTraitConversions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _usedNativeFunctions =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly List<BoundFunction> _inlineFunctionStack = [];
+    private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
+    private RuntimeBlockInvocation? _currentBlockInvocation;
+    private RuntimeStreamSink? _currentStreamContinuation;
+    private string? _currentStreamCancellationSlot;
+    private BoundFunction? _currentFunction;
+    private IReadOnlyDictionary<string, BoundFunction> _currentFunctions;
+    private int _stringId;
+    private int _staticDataId;
+    private int _tempId;
+    private int _labelId;
+    private string _activeUnitToken = "prefix";
+    private string _mainOk = "true";
+    private string _currentBlockLabel = "entry";
+    private bool _currentBlockTerminated;
+    private MemoryOutputSink? _currentHoistedAllocas;
+    private readonly Stack<LoopContext> _loopContexts = new();
+    private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
+    private AsyncCfgLowering? _activeAsyncCfg;
+    private string _currentAsyncDiagnosticHeader = "null";
+
+    public LlvmEmitter(
+        BoundProgram program,
+        LlvmRuntimePlatform platform,
+        TargetContract targetContract,
+        bool sharedLibrary = false)
+    {
+        _program = program;
+        _platform = platform;
+        _targetContract = targetContract;
+        _sharedLibrary = sharedLibrary;
+        _currentFunctions = program.Functions;
+        RecordFunctionScopes(program.Functions.Values, program.Functions);
+        CollectStandaloneStandardLibraryFunctions();
+        CollectReachableDictionaryTraitFunctions();
+        _dropReachabilityRoots = CollectDropReachabilityRoots();
+        _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments)
+            || _reachableFunctions
+                .Any(function =>
+                    (function.Body is not null && UsesProcessArguments(function.Body))
+                    || function.BlockBody.Any(UsesProcessArguments));
+        _usesProcessEnvironment = program.MainStatements.Any(UsesProcessEnvironment)
+            || _reachableFunctions.Any(function =>
+                (function.Body is not null && UsesProcessEnvironment(function.Body))
+                || function.BlockBody.Any(UsesProcessEnvironment));
+        _usesChildProcesses = program.MainStatements.Any(UsesChildProcess)
+            || program.Types.Structs.Any(definition =>
+                string.Equals(definition.Name, "sys.process.Child", StringComparison.Ordinal)
+                && IsDropTypeReachable(definition.Id))
+            || _reachableFunctions.Any(function =>
+                (function.Body is not null && UsesChildProcess(function.Body))
+                || function.BlockBody.Any(UsesChildProcess)
+                || function.Kind is BoundFunctionKind.RuntimeRunProcess
+                    or BoundFunctionKind.RuntimeRunProcessToFile
+                    or BoundFunctionKind.RuntimeCollectProcess
+                    or BoundFunctionKind.RuntimeSpawnProcess
+                    or BoundFunctionKind.RuntimeWaitProcess
+                    or BoundFunctionKind.RuntimePollChildProcess
+                    or BoundFunctionKind.RuntimeKillChildProcess);
+        _usesProcessCapture = _reachableFunctions.Any(static function =>
+                function.Kind == BoundFunctionKind.RuntimeCollectProcess);
+        _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
+            || _reachableFunctions.Any(function =>
+                (function.Body is not null && UsesProcessExit(function.Body))
+                || function.BlockBody.Any(UsesProcessExit)
+                || function.Kind == BoundFunctionKind.RuntimeWriteScalar);
+        _usesAsyncFile = _reachableFunctions.Any(function =>
+            function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
+                or BoundFunctionKind.RuntimeWriteScalarAtAsync
+                or BoundFunctionKind.RuntimeReadBytesAtAsync
+                or BoundFunctionKind.RuntimeWriteBytesAtAsync
+                or BoundFunctionKind.RuntimeSyncFileAsync
+                or BoundFunctionKind.RuntimeOpenFileAsync
+                or BoundFunctionKind.RuntimeOpenWriteFileAsync);
+        _usesParallel = _platform.SupportsComputePool
+            && (program.ParallelBranches.Count != 0
+                || program.ResolvedGenericCalls.Values.Any(function =>
+                function.Kind is BoundFunctionKind.RuntimeParallel
+                    or BoundFunctionKind.RuntimeTryParallel
+                    or BoundFunctionKind.RuntimeLimitParallelWorkers)
+                || _reachableFunctions.Any(static function =>
+                    function.Kind is BoundFunctionKind.RuntimeLimitParallelWorkers
+                        or BoundFunctionKind.RuntimeParallelWorkers
+                        or BoundFunctionKind.RuntimeParallelPeakWorkers));
+        _usesMouseEvents = program.EventStreamConsumers.Values.Any(static pipeline => pipeline.IsEvent)
+            || program.PartitionConsumers.Values.Any(static pipeline => pipeline.IsEvent)
+            || program.StreamJoins.Values.Any(join => join.Inputs.Any(static input => input.IsEvent))
+            || program.ResolvedGenericCalls.Values.Any(static function =>
+                function.Kind == BoundFunctionKind.RuntimeMouseEvents);
+        _usesConcurrentStreamJoins = program.StreamJoins.Values.Any(join =>
+            join.Policy is StreamJoinPolicy.Merge or StreamJoinPolicy.Latest
+            && join.Inputs.Any(static input => input.IsEvent));
+        _usesRangeStreams = program.MainStatements.Any(UsesRangeStream)
+            || _reachableFunctions.Any(function =>
+                (function.Body is not null && UsesRangeStream(function.Body))
+                || function.BlockBody.Any(UsesRangeStream));
+        _usesStandardError = _reachableFunctions.Any(
+            static function => function.Kind is BoundFunctionKind.RuntimePrintError
+                or BoundFunctionKind.RuntimePrintErrorLine);
+        _usesDns = _reachableFunctions.Any(static function =>
+            function.Kind == BoundFunctionKind.RuntimeDnsLookup);
+        _usesNetwork = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeSocketListen
+                or BoundFunctionKind.RuntimeSocketAccept
+                or BoundFunctionKind.RuntimeSocketConnect
+                or BoundFunctionKind.RuntimeSocketReceive
+                or BoundFunctionKind.RuntimeSocketReceiveAppend
+                or BoundFunctionKind.RuntimeSocketReceiveVectored
+                or BoundFunctionKind.RuntimeSocketPeek
+                or BoundFunctionKind.RuntimeSocketSend
+                or BoundFunctionKind.RuntimeSocketSendRange
+                or BoundFunctionKind.RuntimeSocketSendVectored
+                or BoundFunctionKind.RuntimeSocketTryClone
+                or BoundFunctionKind.RuntimeSocketSendText
+                or BoundFunctionKind.RuntimeSocketShutdown
+                or BoundFunctionKind.RuntimeSocketBindDatagram
+                or BoundFunctionKind.RuntimeSocketLocalPort
+                or BoundFunctionKind.RuntimeSocketLocalEndpoint
+                or BoundFunctionKind.RuntimeSocketRemoteEndpoint
+                or BoundFunctionKind.RuntimeSocketSetNoDelay
+                or BoundFunctionKind.RuntimeSocketNoDelay
+                or BoundFunctionKind.RuntimeSocketSetKeepAlive
+                or BoundFunctionKind.RuntimeSocketKeepAlive
+                or BoundFunctionKind.RuntimeSocketSetLinger
+                or BoundFunctionKind.RuntimeSocketLinger
+                or BoundFunctionKind.RuntimeSocketSetReadTimeout
+                or BoundFunctionKind.RuntimeSocketReadTimeout
+                or BoundFunctionKind.RuntimeSocketSetWriteTimeout
+                or BoundFunctionKind.RuntimeSocketWriteTimeout
+                or BoundFunctionKind.RuntimeSocketSendTo
+                or BoundFunctionKind.RuntimeSocketReceiveFrom
+                or BoundFunctionKind.RuntimeSocketPeekFrom
+                or BoundFunctionKind.RuntimeSocketClose
+                or BoundFunctionKind.RuntimeSocketSetNonblocking
+                or BoundFunctionKind.RuntimeSocketPoll
+                or BoundFunctionKind.RuntimeSocketReactorWait
+                or BoundFunctionKind.RuntimeSocketCompletionCreate
+                or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                or BoundFunctionKind.RuntimeSocketCompletionClose
+                or BoundFunctionKind.RuntimeDnsLookup);
+        _usesSocketCompletion = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeSocketCompletionCreate
+                or BoundFunctionKind.RuntimeSocketCompletionRegisterStream
+                or BoundFunctionKind.RuntimeSocketCompletionRemoveStream
+                or BoundFunctionKind.RuntimeSocketCompletionSubmit
+                or BoundFunctionKind.RuntimeSocketCompletionCancel
+                or BoundFunctionKind.RuntimeSocketCompletionDequeue
+                or BoundFunctionKind.RuntimeSocketCompletionClose);
+        _usesSecureRandom = _reachableFunctions.Any(static function =>
+            function.Kind == BoundFunctionKind.RuntimeSecureRandomBytes);
+        _usesAsyncDiagnostics = _reachableFunctions.Any(static function =>
+            function.Kind is BoundFunctionKind.RuntimeDiagnosticSessionStart
+                or BoundFunctionKind.RuntimeDiagnosticSessionTrack
+                or BoundFunctionKind.RuntimeDiagnosticSessionSnapshot
+                or BoundFunctionKind.RuntimeDiagnosticSessionClose);
+        _usesAsync = _reachableFunctions.Any(function => function.IsAsync)
+            || _usesAsyncFile
+            || program.MainStatements.Any(UsesRuntimeSleep)
+            || _reachableFunctions.Any(function =>
+                (function.Body is not null && UsesRuntimeSleep(function.Body))
+                || function.BlockBody.Any(UsesRuntimeSleep));
+        _platform.UsesAsyncFile = _usesAsyncFile || _usesSocketCompletion;
+        _platform.UsesProcessRuntime = UsesProcessRuntime;
+        _platform.UsesProcessCapture = _usesProcessCapture;
+        _platform.UsesProcessExit = _usesProcessExit;
+        _platform.UsesComputePool = _usesParallel;
+        _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
+        _platform.UsesNetwork = _usesNetwork;
+        _platform.UsesSocketCompletion = _usesSocketCompletion;
+        _platform.UsesSecureRandom = _usesSecureRandom;
+        _platform.UsesMouseEvents = _usesMouseEvents;
+        _platform.UsesConcurrentStreamJoins = _usesConcurrentStreamJoins;
+        _platform.UsesStandardError = _usesStandardError;
+    }
+
+    private void RecordFunctionScopes(
+        IEnumerable<BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundFunction> parentScope)
+    {
+        foreach (var function in functions)
+        {
+            var scope = CreateFunctionScope(parentScope, function.LocalFunctions);
+            _functionScopes[function] = scope;
+            RecordFunctionScopes(function.LocalFunctions.Values, scope);
+        }
+    }
+
+    private bool UsesChildProcess(Statement statement) => statement switch
+    {
+        BindingStatement value => UsesChildProcess(value.Value),
+        ExpressionStatement value => UsesChildProcess(value.Expression),
+        IndexAssignmentStatement value => UsesChildProcess(value.Index) || UsesChildProcess(value.Value),
+        FieldAssignmentStatement value => UsesChildProcess(value.Value),
+        BlockFunctionCallStatement value => UsesChildProcess(value.Source) || value.Body.Any(UsesChildProcess),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesChildProcess),
+        GuardLoopControlStatement value => UsesChildProcess(value.Condition),
+        ReturnStatement { Value: { } value } => UsesChildProcess(value),
+        _ => false
+    };
+
+    private bool UsesChildProcess(Expression expression)
+    {
+        if (expression is CallExpression call
+                && string.Join('.', call.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.Child.kill" or "sys.process.pollChild" or "sys.process.killChild") return true;
+        if (expression is FlowExpression flow
+                && flow.Targets.Any(target =>
+                    string.Join('.', target.Path) is "sys.process.Command.run" or "sys.process.Command.runToFile" or "sys.process.Command.collect" or "sys.process.Command.spawn" or "sys.process.Child.wait" or "sys.process.Child.tryWait" or "sys.process.Child.kill" or "sys.process.pollChild" or "sys.process.killChild")) return true;
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesChildProcess(x.Expression)),
+            AddExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            SubtractExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            MultiplyExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            DivideExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            ModuloExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            NegateExpression value => UsesChildProcess(value.Value),
+            CompareExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            AndExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            OrExpression value => UsesChildProcess(value.Left) || UsesChildProcess(value.Right),
+            NotExpression value => UsesChildProcess(value.Value),
+            FlowExpression value => UsesChildProcess(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            BranchExpression value => UsesChildProcess(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            TapExpression value => UsesChildProcess(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesChildProcess),
+            StreamJoinExpression value => UsesChildProcess(value.Source),
+            CallExpression value => value.Arguments.Any(UsesChildProcess),
+            RangeExpression value => UsesChildProcess(value.Start) || UsesChildProcess(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesChildProcess),
+            ArrayRepeatExpression value => UsesChildProcess(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(x => UsesChildProcess(x.Key) || UsesChildProcess(x.Value)),
+            IndexExpression value => UsesChildProcess(value.Source) || UsesChildProcess(value.Index),
+            StructLiteralExpression value => value.Fields.Any(x => UsesChildProcess(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesChildProcess(x.Value)),
+            BoxExpression value => UsesChildProcess(value.Value),
+            TryExpression value => UsesChildProcess(value.Value),
+            FieldAccessExpression value => UsesChildProcess(value.Source),
+            MapExpression value => UsesChildProcess(value.Path)
+                || (value.Offset is not null && UsesChildProcess(value.Offset))
+                || (value.Length is not null && UsesChildProcess(value.Length))
+                || (value.FileSize is not null && UsesChildProcess(value.FileSize)),
+            IfExpression value => UsesChildProcess(value.Condition) || UsesChildProcess(value.Then)
+                || (value.Else is not null && UsesChildProcess(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesChildProcess(value.Subject))
+                || value.Arms.Any(x => UsesChildProcess(x.Condition) || UsesChildProcess(x.Body))
+                || UsesChildProcess(value.Else),
+            EnumMatchExpression value => UsesChildProcess(value.Subject)
+                || value.Arms.Any(x => UsesChildProcess(x.Body))
+                || (value.Else is not null && UsesChildProcess(value.Else)),
+            FoldExpression value => UsesChildProcess(value.Source) || UsesChildProcess(value.Initial) || UsesChildProcess(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesChildProcess(BlockBody body) => body.Statements.Any(UsesChildProcess)
+        || (body.Value is not null && UsesChildProcess(body.Value));
+
+    private bool UsesProcessExit(Statement statement) => statement switch
+    {
+        BindingStatement value => UsesProcessExit(value.Value),
+        ExpressionStatement value => UsesProcessExit(value.Expression),
+        IndexAssignmentStatement value => UsesProcessExit(value.Index) || UsesProcessExit(value.Value),
+        FieldAssignmentStatement value => UsesProcessExit(value.Value),
+        BlockFunctionCallStatement value => UsesProcessExit(value.Source) || value.Body.Any(UsesProcessExit),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesProcessExit),
+        GuardLoopControlStatement value => UsesProcessExit(value.Condition),
+        ReturnStatement { Value: { } value } => UsesProcessExit(value),
+        _ => false
+    };
+
+    private bool UsesProcessExit(Expression expression)
+    {
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) == "sys.process.exit") return true;
+        if (expression is FlowExpression flow
+            && flow.Targets.Any(target => string.Join('.', target.Path) == "sys.process.exit")) return true;
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesProcessExit(x.Expression)),
+            AddExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            SubtractExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            MultiplyExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            DivideExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            ModuloExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            CompareExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            AndExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            OrExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            NegateExpression value => UsesProcessExit(value.Value),
+            NotExpression value => UsesProcessExit(value.Value),
+            FlowExpression value => UsesProcessExit(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            BranchExpression value => UsesProcessExit(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            TapExpression value => UsesProcessExit(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            StreamJoinExpression value => UsesProcessExit(value.Source),
+            CallExpression value => value.Arguments.Any(UsesProcessExit),
+            RangeExpression value => UsesProcessExit(value.Start) || UsesProcessExit(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesProcessExit),
+            ArrayRepeatExpression value => UsesProcessExit(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(x => UsesProcessExit(x.Key) || UsesProcessExit(x.Value)),
+            IndexExpression value => UsesProcessExit(value.Source) || UsesProcessExit(value.Index),
+            StructLiteralExpression value => value.Fields.Any(x => UsesProcessExit(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesProcessExit(x.Value)),
+            BoxExpression value => UsesProcessExit(value.Value),
+            TryExpression value => UsesProcessExit(value.Value),
+            FieldAccessExpression value => UsesProcessExit(value.Source),
+            MapExpression value => UsesProcessExit(value.Path)
+                || (value.Offset is not null && UsesProcessExit(value.Offset))
+                || (value.Length is not null && UsesProcessExit(value.Length))
+                || (value.FileSize is not null && UsesProcessExit(value.FileSize)),
+            IfExpression value => UsesProcessExit(value.Condition) || UsesProcessExit(value.Then)
+                || (value.Else is not null && UsesProcessExit(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesProcessExit(value.Subject))
+                || value.Arms.Any(x => UsesProcessExit(x.Condition) || UsesProcessExit(x.Body))
+                || UsesProcessExit(value.Else),
+            EnumMatchExpression value => UsesProcessExit(value.Subject)
+                || value.Arms.Any(x => UsesProcessExit(x.Body))
+                || (value.Else is not null && UsesProcessExit(value.Else)),
+            FoldExpression value => UsesProcessExit(value.Source) || UsesProcessExit(value.Initial) || UsesProcessExit(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesProcessExit(BlockBody body) => body.Statements.Any(UsesProcessExit)
+        || (body.Value is not null && UsesProcessExit(body.Value));
+
+    private bool UsesRuntimeSleep(Statement statement) => statement switch
+    {
+        BindingStatement value => UsesRuntimeSleep(value.Value),
+        ExpressionStatement value => UsesRuntimeSleep(value.Expression),
+        IndexAssignmentStatement value => UsesRuntimeSleep(value.Index) || UsesRuntimeSleep(value.Value),
+        FieldAssignmentStatement value => UsesRuntimeSleep(value.Value),
+        BlockFunctionCallStatement value => UsesRuntimeSleep(value.Source) || value.Body.Any(UsesRuntimeSleep),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesRuntimeSleep),
+        GuardLoopControlStatement value => UsesRuntimeSleep(value.Condition),
+        ReturnStatement { Value: { } value } => UsesRuntimeSleep(value),
+        _ => false
+    };
+
+    private bool UsesRuntimeSleep(Expression expression)
+    {
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) is "sleep" or "std.time.Duration.sleep") return true;
+        if (expression is FlowExpression flow
+            && flow.Targets.Any(target => string.Join('.', target.Path) is "sleep" or "std.time.Duration.sleep")) return true;
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesRuntimeSleep(x.Expression)),
+            AddExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            SubtractExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            MultiplyExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            DivideExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            ModuloExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            NegateExpression value => UsesRuntimeSleep(value.Value),
+            CompareExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            AndExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            OrExpression value => UsesRuntimeSleep(value.Left) || UsesRuntimeSleep(value.Right),
+            NotExpression value => UsesRuntimeSleep(value.Value),
+            FlowExpression value => UsesRuntimeSleep(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            BranchExpression value => UsesRuntimeSleep(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            TapExpression value => UsesRuntimeSleep(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRuntimeSleep),
+            StreamJoinExpression value => UsesRuntimeSleep(value.Source),
+            CallExpression value => value.Arguments.Any(UsesRuntimeSleep),
+            RangeExpression value => UsesRuntimeSleep(value.Start) || UsesRuntimeSleep(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesRuntimeSleep),
+            ArrayRepeatExpression value => UsesRuntimeSleep(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(x => UsesRuntimeSleep(x.Key) || UsesRuntimeSleep(x.Value)),
+            IndexExpression value => UsesRuntimeSleep(value.Source) || UsesRuntimeSleep(value.Index),
+            StructLiteralExpression value => value.Fields.Any(x => UsesRuntimeSleep(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesRuntimeSleep(x.Value)),
+            BoxExpression value => UsesRuntimeSleep(value.Value),
+            TryExpression value => UsesRuntimeSleep(value.Value),
+            FieldAccessExpression value => UsesRuntimeSleep(value.Source),
+            IfExpression value => UsesRuntimeSleep(value.Condition) || UsesRuntimeSleep(value.Then)
+                || (value.Else is not null && UsesRuntimeSleep(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesRuntimeSleep(value.Subject))
+                || value.Arms.Any(x => UsesRuntimeSleep(x.Condition) || UsesRuntimeSleep(x.Body))
+                || UsesRuntimeSleep(value.Else),
+            EnumMatchExpression value => UsesRuntimeSleep(value.Subject)
+                || value.Arms.Any(x => UsesRuntimeSleep(x.Body))
+                || (value.Else is not null && UsesRuntimeSleep(value.Else)),
+            FoldExpression value => UsesRuntimeSleep(value.Source) || UsesRuntimeSleep(value.Initial) || UsesRuntimeSleep(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesRuntimeSleep(BlockBody body) => body.Statements.Any(UsesRuntimeSleep)
+        || (body.Value is not null && UsesRuntimeSleep(body.Value));
+
+    private bool UsesRangeStream(Statement statement) => statement switch
+    {
+        BindingStatement value => UsesRangeStream(value.Value),
+        ExpressionStatement value => UsesRangeStream(value.Expression),
+        IndexAssignmentStatement value => UsesRangeStream(value.Index) || UsesRangeStream(value.Value),
+        FieldAssignmentStatement value => UsesRangeStream(value.Value),
+        BlockFunctionCallStatement value => UsesRangeStream(value.Source) || value.Body.Any(UsesRangeStream),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesRangeStream),
+        GuardLoopControlStatement value => UsesRangeStream(value.Condition),
+        ReturnStatement { Value: { } value } => UsesRangeStream(value),
+        _ => false
+    };
+
+    private bool UsesRangeStream(Expression expression)
+    {
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) is "defer" or "std.sequence.defer") return true;
+        if (expression is FlowExpression flow
+            && flow.Targets.Any(target =>
+                string.Join('.', target.Path) is "defer" or "std.sequence.defer")) return true;
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesRangeStream(x.Expression)),
+            AddExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            SubtractExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            MultiplyExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            DivideExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            ModuloExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            NegateExpression value => UsesRangeStream(value.Value),
+            CompareExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            AndExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            OrExpression value => UsesRangeStream(value.Left) || UsesRangeStream(value.Right),
+            NotExpression value => UsesRangeStream(value.Value),
+            FlowExpression value => UsesRangeStream(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            BranchExpression value => UsesRangeStream(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            TapExpression value => UsesRangeStream(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesRangeStream),
+            StreamJoinExpression value => UsesRangeStream(value.Source),
+            CallExpression value => value.Arguments.Any(UsesRangeStream),
+            RangeExpression value => UsesRangeStream(value.Start) || UsesRangeStream(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesRangeStream),
+            ArrayRepeatExpression value => UsesRangeStream(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(x => UsesRangeStream(x.Key) || UsesRangeStream(x.Value)),
+            IndexExpression value => UsesRangeStream(value.Source) || UsesRangeStream(value.Index),
+            StructLiteralExpression value => value.Fields.Any(x => UsesRangeStream(x.Value)),
+            ProductExpression value => value.Elements.Any(x => UsesRangeStream(x.Value)),
+            BoxExpression value => UsesRangeStream(value.Value),
+            TryExpression value => UsesRangeStream(value.Value),
+            FieldAccessExpression value => UsesRangeStream(value.Source),
+            IfExpression value => UsesRangeStream(value.Condition) || UsesRangeStream(value.Then)
+                || (value.Else is not null && UsesRangeStream(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesRangeStream(value.Subject))
+                || value.Arms.Any(x => UsesRangeStream(x.Condition) || UsesRangeStream(x.Body))
+                || UsesRangeStream(value.Else),
+            EnumMatchExpression value => UsesRangeStream(value.Subject)
+                || value.Arms.Any(x => UsesRangeStream(x.Body))
+                || (value.Else is not null && UsesRangeStream(value.Else)),
+            FoldExpression value => UsesRangeStream(value.Source) || UsesRangeStream(value.Initial) || UsesRangeStream(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesRangeStream(BlockBody body) => body.Statements.Any(UsesRangeStream)
+        || (body.Value is not null && UsesRangeStream(body.Value));
+
+    private bool UsesProcessArguments(Statement statement) => statement switch
+    {
+        BindingStatement binding => UsesProcessArguments(binding.Value),
+        ExpressionStatement expression => UsesProcessArguments(expression.Expression),
+        IndexAssignmentStatement assignment => UsesProcessArguments(assignment.Index) || UsesProcessArguments(assignment.Value),
+        FieldAssignmentStatement assignment => UsesProcessArguments(assignment.Value),
+        BlockFunctionCallStatement block => UsesProcessArguments(block.Source)
+            || block.Body.Any(UsesProcessArguments),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(UsesProcessArguments),
+        GuardLoopControlStatement guard => UsesProcessArguments(guard.Condition),
+        ReturnStatement { Value: { } value } => UsesProcessArguments(value),
+        _ => false
+    };
+
+    private bool UsesProcessArguments(Expression expression)
+    {
+        if (expression is CallExpression call
+            && _program.Functions.TryGetValue(string.Join('.', call.Path), out var calledFunction)
+            && calledFunction.Kind == BoundFunctionKind.RuntimeArguments)
+        {
+            return true;
+        }
+        if (expression is FieldAccessExpression { Source: NameExpression owner } field
+            && _program.Functions.TryGetValue(owner.Name + "." + field.FieldName, out var function)
+            && function.Kind == BoundFunctionKind.RuntimeArguments)
+        {
+            return true;
+        }
+
+        return expression switch
+        {
+            StringExpression text => text.Segments.OfType<InterpolationSegment>()
+                .Any(segment => UsesProcessArguments(segment.Expression)),
+            AddExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            SubtractExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            MultiplyExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            DivideExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            ModuloExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            NegateExpression value => UsesProcessArguments(value.Value),
+            CompareExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            AndExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            OrExpression value => UsesProcessArguments(value.Left) || UsesProcessArguments(value.Right),
+            NotExpression value => UsesProcessArguments(value.Value),
+            RangeExpression value => UsesProcessArguments(value.Start) || UsesProcessArguments(value.End),
+            FlowExpression value => UsesProcessArguments(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            BranchExpression value => UsesProcessArguments(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            TapExpression value => UsesProcessArguments(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessArguments),
+            StreamJoinExpression value => UsesProcessArguments(value.Source),
+            CallExpression value => value.Arguments.Any(UsesProcessArguments),
+            ArrayLiteralExpression value => value.Elements.Any(UsesProcessArguments),
+            ArrayRepeatExpression value => UsesProcessArguments(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(entry =>
+                UsesProcessArguments(entry.Key) || UsesProcessArguments(entry.Value)),
+            IndexExpression value => UsesProcessArguments(value.Source) || UsesProcessArguments(value.Index),
+            StructLiteralExpression value => value.Fields.Any(field => UsesProcessArguments(field.Value)),
+            ProductExpression value => value.Elements.Any(element => UsesProcessArguments(element.Value)),
+            BoxExpression value => UsesProcessArguments(value.Value),
+            FieldAccessExpression value => UsesProcessArguments(value.Source),
+            TryExpression value => UsesProcessArguments(value.Value),
+            MapExpression value => UsesProcessArguments(value.Path)
+                || (value.Offset is not null && UsesProcessArguments(value.Offset))
+                || (value.Length is not null && UsesProcessArguments(value.Length))
+                || (value.FileSize is not null && UsesProcessArguments(value.FileSize)),
+            IfExpression value => UsesProcessArguments(value.Condition)
+                || UsesProcessArguments(value.Then)
+                || (value.Else is not null && UsesProcessArguments(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesProcessArguments(value.Subject))
+                || value.Arms.Any(arm => UsesProcessArguments(arm.Condition) || UsesProcessArguments(arm.Body))
+                || UsesProcessArguments(value.Else),
+            EnumMatchExpression value => UsesProcessArguments(value.Subject)
+                || value.Arms.Any(arm => UsesProcessArguments(arm.Body))
+                || (value.Else is not null && UsesProcessArguments(value.Else)),
+            FoldExpression value => UsesProcessArguments(value.Source)
+                || UsesProcessArguments(value.Initial)
+                || UsesProcessArguments(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesProcessArguments(BlockBody body) =>
+        body.Statements.Any(UsesProcessArguments)
+        || (body.Value is not null && UsesProcessArguments(body.Value));
+
+    private bool UsesProcessEnvironment(Statement statement) => statement switch
+    {
+        BindingStatement binding => UsesProcessEnvironment(binding.Value),
+        ExpressionStatement value => UsesProcessEnvironment(value.Expression),
+        IndexAssignmentStatement value => UsesProcessEnvironment(value.Index) || UsesProcessEnvironment(value.Value),
+        FieldAssignmentStatement value => UsesProcessEnvironment(value.Value),
+        BlockFunctionCallStatement value => UsesProcessEnvironment(value.Source)
+            || value.Body.Any(UsesProcessEnvironment),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesProcessEnvironment),
+        GuardLoopControlStatement value => UsesProcessEnvironment(value.Condition),
+        ReturnStatement { Value: { } value } => UsesProcessEnvironment(value),
+        _ => false
+    };
+
+    private bool UsesProcessEnvironment(Expression expression)
+    {
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) == "sys.process.environment")
+        {
+            return true;
+        }
+        if (expression is FlowExpression flow
+            && flow.Targets.Any(target => string.Join('.', target.Path) == "sys.process.environment"))
+        {
+            return true;
+        }
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(segment => UsesProcessEnvironment(segment.Expression)),
+            AddExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            SubtractExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            MultiplyExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            DivideExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            ModuloExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            NegateExpression value => UsesProcessEnvironment(value.Value),
+            CompareExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            AndExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            OrExpression value => UsesProcessEnvironment(value.Left) || UsesProcessEnvironment(value.Right),
+            NotExpression value => UsesProcessEnvironment(value.Value),
+            FlowExpression value => UsesProcessEnvironment(value.Source) || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            BranchExpression value => UsesProcessEnvironment(value.Source)
+                || value.Arms.SelectMany(arm => arm.Targets).SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            TapExpression value => UsesProcessEnvironment(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessEnvironment),
+            StreamJoinExpression value => UsesProcessEnvironment(value.Source),
+            CallExpression value => value.Arguments.Any(UsesProcessEnvironment),
+            RangeExpression value => UsesProcessEnvironment(value.Start) || UsesProcessEnvironment(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesProcessEnvironment),
+            ArrayRepeatExpression value => UsesProcessEnvironment(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(entry => UsesProcessEnvironment(entry.Key) || UsesProcessEnvironment(entry.Value)),
+            IndexExpression value => UsesProcessEnvironment(value.Source) || UsesProcessEnvironment(value.Index),
+            StructLiteralExpression value => value.Fields.Any(field => UsesProcessEnvironment(field.Value)),
+            ProductExpression value => value.Elements.Any(element => UsesProcessEnvironment(element.Value)),
+            BoxExpression value => UsesProcessEnvironment(value.Value),
+            TryExpression value => UsesProcessEnvironment(value.Value),
+            FieldAccessExpression value => UsesProcessEnvironment(value.Source),
+            MapExpression value => UsesProcessEnvironment(value.Path)
+                || (value.Offset is not null && UsesProcessEnvironment(value.Offset))
+                || (value.Length is not null && UsesProcessEnvironment(value.Length))
+                || (value.FileSize is not null && UsesProcessEnvironment(value.FileSize)),
+            IfExpression value => UsesProcessEnvironment(value.Condition)
+                || UsesProcessEnvironment(value.Then)
+                || (value.Else is not null && UsesProcessEnvironment(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesProcessEnvironment(value.Subject))
+                || value.Arms.Any(arm => UsesProcessEnvironment(arm.Condition) || UsesProcessEnvironment(arm.Body))
+                || UsesProcessEnvironment(value.Else),
+            EnumMatchExpression value => UsesProcessEnvironment(value.Subject)
+                || value.Arms.Any(arm => UsesProcessEnvironment(arm.Body))
+                || (value.Else is not null && UsesProcessEnvironment(value.Else)),
+            FoldExpression value => UsesProcessEnvironment(value.Source)
+                || UsesProcessEnvironment(value.Initial)
+                || UsesProcessEnvironment(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesProcessEnvironment(BlockBody body) =>
+        body.Statements.Any(UsesProcessEnvironment)
+        || (body.Value is not null && UsesProcessEnvironment(body.Value));
+
+    public string Emit()
+    {
+        return EmitUnits(reuse: null).ToString();
+    }
+
+    public void Emit(ITextOutputSink output)
+    {
+        EmitUnits(reuse: null).CopyTo(output);
+    }
+
+    public LlvmCodegenOutput EmitUnits(LlvmCodegenReuse? reuse)
+    {
+        if (_usesChildProcesses && !_platform.SupportsChildProcesses)
+        {
+            throw new SollangException("child processes are unavailable on the current target");
+        }
+        if (_usesAsyncFile && !_platform.SupportsAsync)
+        {
+            throw new SollangException(
+                "asynchronous file I/O is unavailable on wasm32-browser; use a host-provided file adapter");
+        }
+        if (_usesAsync && !_platform.SupportsAsync)
+        {
+            throw new SollangException("async functions are unavailable on the current target");
+        }
+        if (_usesDirectoryTraversal && !_platform.SupportsDirectoryTraversal)
+        {
+            throw new SollangException("directory traversal is unavailable on the current target");
+        }
+        if (_usesSocketCompletion && !_platform.SupportsNetwork)
+        {
+            throw new SollangException(
+                "asynchronous socket completion is unavailable on wasm32-browser; use a host-provided network adapter");
+        }
+        if (_usesNetwork && !_platform.SupportsNetwork)
+        {
+            throw new SollangException(_usesDns
+                ? "system name resolution is unavailable on wasm32-browser; use an explicit host-provided resolver"
+                : "network sockets are unavailable on wasm32-browser; use a host-provided networking adapter");
+        }
+        if (_usesSecureRandom && !_platform.SupportsSecureRandom)
+        {
+            throw new SollangException(
+                "cryptographic random bytes are unavailable on wasm32-browser; use a host-provided cryptographic random source");
+        }
+        if (_usesConcurrentStreamJoins && !_platform.SupportsConcurrentStreamJoins)
+        {
+            throw new SollangException(
+                "merge/latest of EventStream<T> inputs are unavailable on the current target because bounded concurrent fan-in requires native worker wakeup and join support");
+        }
+        if (_usesMouseEvents && !_platform.SupportsEventStreams)
+        {
+            throw new SollangException(
+                "mouse event streams are unavailable on wasm32-browser; "
+                + "browser events require host-driven callback lowering");
+        }
+        var moduleGroups = GetEmittableUserFunctions()
+            .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal)
+            .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
+            .ThenBy(static group => group.Key, StringComparer.Ordinal)
+            .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
+            .ToArray();
+        _usesAes128CpuSpecialization = moduleGroups
+            .SelectMany(static group => group.Functions)
+            .Any(IsAes128CpuSpecialization);
+        if (reuse is not null && TryCreateFullyReusedOutput(reuse, moduleGroups, out var fullyReused))
+        {
+            return fullyReused;
+        }
+        var header = $$"""
+            ; sollang cpu contract {{_targetContract.CacheKey}}
+            target triple = "{{_platform.TargetTriple}}"
+
+            %sollang.text = type { ptr, i64 }
+            %sollang.source_text = type { ptr, i64, ptr, i64 }
+            %sollang.int_slice = type { ptr, i64 }
+            %sollang.mutable_container = type { ptr, ptr, ptr }
+            %sollang.dynamic_int_array = type { ptr, i64, i64 }
+            %sollang.int_dictionary = type { ptr, i64, i64 }
+            %sollang.read_int_result = type { i64, i32 }
+            %sollang.file_int_result = type { i64, i32 }
+            %sollang.file_count_result = type { i64, i32 }
+            %sollang.file_handle_result = type { i64, i32 }
+            %sollang.socket_result = type { i64, i32, i32 }
+            %sollang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
+            %sollang.environment_result = type { ptr, i64, i1, i1 }
+            %sollang.process_result = type { i32, i32 }
+            %sollang.process_poll_result = type { i32, i32 }
+            %sollang.process_spawn_result = type { i64, i64, i32 }
+            %sollang.process_capture_result = type { i32, ptr, i64, i64, i1, ptr, i64, i64, i1, i32 }
+            %sollang.process_environment_result = type { ptr, i64, i64, i1 }
+            %sollang.task = type { ptr, ptr }
+            %sollang.stream = type { ptr, ptr, ptr }
+            %sollang.event_stream = type { ptr, ptr, ptr }
+            %sollang.dyn = type { ptr, ptr }
+            %sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32, ptr, ptr }
+            """;
+        if (_usesAsyncDiagnostics)
+        {
+            header += """
+                %sollang.diagnostic_task_control = type { %sollang.task_control, ptr }
+                %sollang.diagnostic_session = type { i64, i64, i64, i64, ptr, ptr }
+                %sollang.diagnostic_record = type { i64, i64, ptr, i32, i32, i64, i64, ptr, i64, ptr, i64, i64, i64, i64, ptr }
+
+                """;
+        }
+        if (_usesDirectoryTraversal)
+        {
+            header += """
+                %sollang.directory_result = type { ptr, i64, i64, i32 }
+                %sollang.directory_node = type { ptr, i64, i8, [7 x i8] }
+                %sollang.path_query_result = type { ptr, i64, i8, i64, i64, i32 }
+                %sollang.path_absolute_result = type { ptr, i64, i32 }
+
+                """;
+        }
+        if (_usesParallel)
+        {
+            header += """
+                %sollang.output_sink = type { ptr, i64, i64 }
+                %sollang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
+
+                """;
+        }
+        header += EmitStructTypeDefinitions();
+
+        var units = new List<LlvmCodegenUnit>();
+        BeginUnit("prefix");
+        EmitPlatformGlobalBlock(_platform.EmitGlobals);
+        if (_platform is WindowsLlvmRuntimePlatform)
+        {
+            EmitGlobalLine("@_fltused = global i32 0");
+        }
+        EmitGlobalLine("@sollang_random_state = internal global i64 88172645463393265");
+        if (_usesAsyncDiagnostics)
+        {
+            EmitGlobalLine("@sollang_diagnostic_next_session_id = internal global i64 1");
+        }
+        EmitGlobalLine("@sollang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8");
+        EmitGlobalLine("@sollang_writer_buffer_count = internal global i64 0");
+        EmitNativeGlobals();
+        EmitComGlobals();
+        if (_usesAsync || _usesSocketCompletion)
+        {
+            EmitGlobalLine("@sollang_task_ready_head = internal global ptr null");
+            EmitGlobalLine("@sollang_task_ready_tail = internal global ptr null");
+            EmitGlobalLine("@sollang_task_timer_head = internal global ptr null");
+            EmitGlobalLine("@sollang_file_request_head = internal global ptr null");
+            EmitGlobalLine("@sollang_io_completion_head = internal global ptr null");
+            EmitGlobalLine("@sollang_file_worker_started = internal global i1 false");
+            EmitGlobalLine("@sollang_file_worker_stopping = internal global i32 0");
+            EmitGlobalLine("@sollang_io_outstanding = internal global i64 0");
+        }
+        if (_usesParallel)
+        {
+            EmitGlobalLine("@sollang_compute_group_current = internal global ptr null");
+            EmitGlobalLine("@sollang_compute_next = internal global i64 0");
+            EmitGlobalLine("@sollang_compute_active = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_barrier_departed = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_running = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_peak = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_parent_gate = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_stopping = internal global i32 0");
+        }
+        EmitGlobalLine();
+
+        EmitPlatformFunctionBlock(_platform.EmitExternalDeclarations);
+        EmitNativeDeclarations();
+        EmitComDeclarations();
+        EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
+        if (_usesNetwork)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitSocketPrimitives);
+        }
+        if (_usesSecureRandom)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitSecureRandomPrimitives);
+        }
+        if (_usesConcurrentStreamJoins)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitConcurrentStreamJoinPrimitives);
+        }
+        if (_usesAsync || _usesSocketCompletion)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitAsyncPrimitives);
+        }
+        if (_usesParallel)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitMemoryOutputSinkPrimitives);
+            EmitPlatformFunctionBlock(_platform.EmitComputePrimitives);
+        }
+        EmitFunctionLine("declare void @llvm.trap()");
+        EmitFunctionLine("declare i64 @llvm.ctpop.i64(i64)");
+        EmitFunctionLine("declare i16 @llvm.cttz.i16(i16, i1 immarg)");
+        EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");
+        EmitFunctionLine("declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)");
+        EmitFunctionLine("declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)");
+        EmitFunctionLine("declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)");
+        EmitFunctionLine();
+
+        EmitDynTraitTables();
+        EmitOwnedDropHelpers();
+        EmitAsyncFileBufferCancelFunctions();
+        EmitTaskResultCompletionFunctions();
+        EmitStreamJoinRuntimeCallbacks();
+        EmitParallelBranchCallbacks();
+        EmitParallelCallbacks();
+        var prefixKey = reuse?.PrefixKey ?? default;
+        units.Add(reuse is not null
+                  && reuse.TryGet(LlvmCodegenUnitKind.SharedPrefix, "", prefixKey, out var reusedPrefix)
+            ? new LlvmCodegenUnit(LlvmCodegenUnitKind.SharedPrefix, "", prefixKey, reusedPrefix, Reused: true)
+            : new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.SharedPrefix,
+                "",
+                prefixKey,
+                header + FinishUnit(),
+                Reused: false));
+
+        foreach (var group in moduleGroups)
+        {
+            var identity = group.Identity;
+            var cacheKey = reuse is not null && reuse.ModuleKeys.TryGetValue(identity, out var plannedKey)
+                ? RefineModuleCacheKey(plannedKey, group)
+                : default;
+            if (reuse is not null
+                && reuse.TryGet(LlvmCodegenUnitKind.Module, identity, cacheKey, out var reusedModule))
+            {
+                units.Add(new LlvmCodegenUnit(
+                    LlvmCodegenUnitKind.Module,
+                    identity,
+                    cacheKey,
+                    reusedModule,
+                    Reused: true));
+                continue;
+            }
+
+            BeginUnit("module." + LlvmCodegenUnit.SymbolIdentity(identity));
+            EmitUserFunctions(group.Functions);
+            units.Add(new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.Module,
+                identity,
+                cacheKey,
+                FinishUnit(),
+                Reused: false));
+        }
+
+        BeginUnit("suffix");
+        EmitRuntimeHelpers();
+        if (_sharedLibrary)
+        {
+            EmitLibraryExports();
+        }
+        else
+        {
+            EmitMain();
+        }
+        EmitFunctionLine("attributes #0 = { nounwind }");
+        if (_usesAes128CpuSpecialization)
+        {
+            EmitFunctionLine("attributes #1 = { nounwind \"target-features\"=\"+aes,+sse2\" }");
+        }
+        var suffixKey = reuse?.SuffixKey ?? default;
+        units.Add(reuse is not null
+                  && reuse.TryGet(LlvmCodegenUnitKind.SharedSuffix, "", suffixKey, out var reusedSuffix)
+            ? new LlvmCodegenUnit(LlvmCodegenUnitKind.SharedSuffix, "", suffixKey, reusedSuffix, Reused: true)
+            : new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.SharedSuffix,
+                "",
+                suffixKey,
+                FinishUnit(),
+                Reused: false));
+        return new LlvmCodegenOutput(units);
+    }
+
+    private bool TryCreateFullyReusedOutput(
+        LlvmCodegenReuse reuse,
+        IReadOnlyList<ModuleFunctionGroup> moduleGroups,
+        out LlvmCodegenOutput output)
+    {
+        var units = new List<LlvmCodegenUnit>(moduleGroups.Count + 2);
+        if (!reuse.TryGet(
+                LlvmCodegenUnitKind.SharedPrefix,
+                "",
+                reuse.PrefixKey,
+                out var prefix))
+        {
+            output = null!;
+            return false;
+        }
+        units.Add(new LlvmCodegenUnit(
+            LlvmCodegenUnitKind.SharedPrefix,
+            "",
+            reuse.PrefixKey,
+            prefix,
+            Reused: true));
+        foreach (var group in moduleGroups)
+        {
+            if (!reuse.ModuleKeys.TryGetValue(group.Identity, out var plannedKey))
+            {
+                output = null!;
+                return false;
+            }
+            var cacheKey = RefineModuleCacheKey(plannedKey, group);
+            if (!reuse.TryGet(
+                    LlvmCodegenUnitKind.Module,
+                    group.Identity,
+                    cacheKey,
+                    out var fragment))
+            {
+                output = null!;
+                return false;
+            }
+            units.Add(new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.Module,
+                group.Identity,
+                cacheKey,
+                fragment,
+                Reused: true));
+        }
+        if (!reuse.TryGet(
+                LlvmCodegenUnitKind.SharedSuffix,
+                "",
+                reuse.SuffixKey,
+                out var suffix))
+        {
+            output = null!;
+            return false;
+        }
+        units.Add(new LlvmCodegenUnit(
+            LlvmCodegenUnitKind.SharedSuffix,
+            "",
+            reuse.SuffixKey,
+            suffix,
+            Reused: true));
+        output = new LlvmCodegenOutput(units);
+        return true;
+    }
+
+    private LlvmCodegenKey RefineModuleCacheKey(
+        LlvmCodegenKey plannedKey,
+        ModuleFunctionGroup group) => plannedKey.WithEmissionSet(
+        group.Functions.Select(function => _program.StableFunctionIdentities[function]));
+
+    private void BeginUnit(string token)
+    {
+        _activeGlobals = new MemoryOutputSink();
+        _activeFunctions = new MemoryOutputSink();
+        _activeUnitToken = token;
+        _stringId = 0;
+        _staticDataId = 0;
+        _tempId = 0;
+        _labelId = 0;
+    }
+
+    private string FinishUnit()
+    {
+        var output = new MemoryOutputSink();
+        _activeGlobals.CopyTo(output);
+        _activeFunctions.CopyTo(output);
+        return output.ToString();
+    }
+
+    private sealed record ModuleFunctionGroup(string Identity, IReadOnlyList<BoundFunction> Functions);
+}

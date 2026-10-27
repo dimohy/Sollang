@@ -312,6 +312,41 @@ class ArtifactLifecycleTests(unittest.TestCase):
         self.assertTrue(policy.completed({'status': 'passed', 'inputsStable': True,
             'cases': [{'status': 'passed', 'buildExit': 0, 'runExit': 0}]}))
 
+    def test_emitted_exit_is_independent_of_pinned_managed_exit(self):
+        managed = self.repo / 'managed.json'
+        emitted = self.repo / 'emitted.json'
+        managed.write_text(json.dumps({'cases': [{'id': 'io', 'expectedRuntimeExit': 1}]}))
+        emitted.write_text(json.dumps({'cases': [{'id': 'io', 'exit': 0, 'emittedLlvm': True,
+                                                  'expectedEmittedRuntimeExit': 1}]}))
+        record = {'status': 'passed', 'inputsStable': True, 'processesStopped': True,
+                  'completed': 1, 'total': 1,
+                  'inputHashes': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in (managed, emitted)},
+                  'cases': [{'id': 'io', 'status': 'passed', 'buildExit': 0, 'runExit': 0,
+                             'emittedLlvmSha256': 'A' * 64, 'assemblyExit': 0, 'nativeLinkExit': 0,
+                             'nativeRunExit': 1}]}
+        self.assertTrue(policy.completed(record))
+        for mutation in ['producer-failed', 'native-mismatch', 'missing-native', 'missing-link',
+                         'assembly-failed', 'shutdown', 'unpinned']:
+            wrong = copy.deepcopy(record)
+            row = wrong['cases'][0]
+            if mutation == 'producer-failed': row['runExit'] = 1
+            if mutation == 'native-mismatch': row['nativeRunExit'] = 0
+            if mutation == 'missing-native': del row['nativeRunExit']
+            if mutation == 'missing-link': del row['nativeLinkExit']
+            if mutation == 'assembly-failed': row['assemblyExit'] = 1
+            if mutation == 'shutdown': wrong['processesStopped'] = False
+            if mutation == 'unpinned': del wrong['inputHashes'][str(emitted)]
+            self.assertFalse(policy.completed(wrong), mutation)
+        conflict = self.repo / 'emitted-conflict.json'
+        conflict.write_text(json.dumps({'cases': [{'id': 'io', 'emittedLlvm': True,
+                                                  'expectedEmittedRuntimeExit': 2}]}))
+        wrong = copy.deepcopy(record)
+        wrong['inputHashes'][str(conflict)] = hashlib.sha256(conflict.read_bytes()).hexdigest()
+        self.assertFalse(policy.completed(wrong))
+        emitted.write_text(json.dumps({'cases': [{'id': 'io', 'emittedLlvm': True,
+                                                 'expectedEmittedRuntimeExit': 0}]}))
+        self.assertFalse(policy.completed(record))
+
     def test_expected_negative_contract_is_completed(self):
         import hashlib
         contract = self.repo / 'negative.json'

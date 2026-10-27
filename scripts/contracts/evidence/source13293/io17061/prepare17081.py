@@ -1,0 +1,183 @@
+from pathlib import Path
+b=Path('artifacts/scratch/resume-20261006-owner-continuation22');p=b/'placement16881-candidate/storage_placement_readonly.slg';p.write_text('''namespace sollang.compiler.semantic.storage_placement_uses
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_literals as literals
+import sollang.compiler.semantic.type_ids as typeIds
+
+struct ReadonlyOwner { name: Text, frame: Int, kind: literals.Kind }
+
+isOwnerName nodeIndex: Int, owner: ReadonlyOwner, source: Text, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int -> Bool {
+    nodeIndex < 0 -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    node.kind != 15 or node.payloadToken < 0 -> if { false -> return }
+    prepared.package.tokens[range.tokenStart + node.payloadToken] => token
+    (source -> slice(token.span.start, token.span.length)) == owner.name
+        and not (node.payloadToken -> mutableSuffix(node.firstToken + node.tokenCount, source, prepared.package.tokens, range.tokenStart))
+}
+
+isIntType typeId: Int, types: ref [typeIds.SemanticType; ~] -> Bool {
+    typeId >= 0 and typeId < (types -> len) -> unless { false -> return }
+    types[typeId] => type
+    type.kind == 1 and type.origin == 1 and (type.symbol -> typeIds.canonicalBuiltinSymbol) == 2
+}
+
+readonlyFunction callAst: Int, owner: ReadonlyOwner, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int -> Bool {
+    prepared.calls -> each call {
+        call.sourceModule == sourceModule and call.callAst == callAst and call.status == 0
+            and call.targetSourceModule >= 0 and call.functionSymbol >= 0 -> if {
+                prepared.package.ranges[call.targetSourceModule] => targetRange
+                prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+                function.flags % 4 != 0 or function.typeNode < 0 -> if { false -> return }
+                prepared.semantic.references -> each reference {
+                    reference.sourceModule == call.targetSourceModule and reference.typeAst == function.typeNode
+                        and reference.status == 0 and reference.typeId >= 0 -> if {
+                            prepared.semantic.types[reference.typeId] => input
+                            owner.kind -> when {
+                                DynamicArray { input.kind == 2 and (input.first -> isIntType(prepared.semantic.types)) -> return }
+                                Dictionary { input.kind == 5 and (input.first -> isIntType(prepared.semantic.types)) and (input.second -> isIntType(prepared.semantic.types)) -> return }
+                                StaticArray { false -> return }
+                            }
+                        }
+                }
+                false -> return
+            }
+    }
+    false
+}
+
+# Transparent grammar metadata never becomes an independent C# value use.
+readonlyChildren nodeIndex: Int, skipped: Int, owner: ReadonlyOwner, source: Text, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Bool {
+    indexed.firstChild[nodeIndex] => child!
+    child! >= 0 -> while {
+        child! != skipped -> if {
+            child! -> readOnly(owner, source, prepared, sourceModule, indexed) -> unless { false -> return }
+        }
+        indexed.nextSibling[child!] => child!
+    }
+    true
+}
+
+firstValueChild nodeIndex: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Int {
+    prepared.package.ranges[sourceModule] => range
+    indexed.firstChild[nodeIndex] => child!
+    child! >= 0 -> while {
+        prepared.package.nodes[range.astStart + child!].kind => kind
+        kind != 12 and kind != 16 and kind != 17 -> if { child! -> return }
+        indexed.nextSibling[child!] => child!
+    }
+    -1
+}
+
+firstTarget nodeIndex: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Int {
+    prepared.package.ranges[sourceModule] => range
+    indexed.firstChild[nodeIndex] => child!
+    child! >= 0 -> while {
+        prepared.package.nodes[range.astStart + child!].kind => kind
+        kind == 16 or kind == 42 or kind == 44 or kind == 56 or kind == 64
+            or kind == 73 or kind == 74 or kind == 76 or kind == 78 or kind == 81
+            -> if { child! -> return }
+        indexed.nextSibling[child!] => child!
+    }
+    -1
+}
+
+readonlyTarget flowAst: Int, targetAst: Int, owner: ReadonlyOwner, source: Text, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int -> Bool {
+    targetAst < 0 -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.nodes[range.astStart + targetAst] => target
+    target.kind == 64 -> if { owner.kind -> when { DynamicArray { true -> return } _ { false -> return } } }
+    target.kind != 16 or target.payloadToken < 0 -> if { false -> return }
+    prepared.package.tokens[range.tokenStart + target.payloadToken] => token
+    source -> slice(token.span.start, token.span.length) => name
+    name == "len" or name == "capacity" -> if { true -> return }
+    flowAst -> readonlyFunction(owner, prepared, sourceModule)
+}
+
+readOnly nodeIndex: Int, owner: ReadonlyOwner, source: Text, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Bool {
+    prepared.package.ranges[sourceModule] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    # Nested declarations have their own frame. Their bodies are not statements
+    # of this owner, matching the production C# function dictionaries.
+    node.kind == 7 or node.kind == 8 or node.kind == 31 or node.kind == 12 or node.kind == 16 or node.kind == 17
+        -> if { true -> return }
+    node.kind == 15 -> if { not (nodeIndex -> isOwnerName(owner, source, prepared, sourceModule)) -> return }
+    node.kind == 45 or node.kind == 44 or node.kind == 54 or node.kind == 62
+        -> if { false -> return }
+    node.kind == 53 -> if {
+        prepared.package.tokens[range.tokenStart + node.payloadToken] => token
+        (source -> slice(token.span.start, token.span.length)) == owner.name -> if { false -> return }
+    }
+    node.kind == 47 and indexed.firstChild[nodeIndex] < 0 -> if { false -> return }
+    node.kind == 10 or node.kind == 41 or node.kind == 48 -> if {
+        nodeIndex -> firstValueChild(prepared, sourceModule, indexed) => input
+        input -> isOwnerName(owner, source, prepared, sourceModule) -> if {
+            node.kind == 10 -> if {
+                nodeIndex -> firstTarget(prepared, sourceModule, indexed) => target
+                nodeIndex -> readonlyTarget(target, owner, source, prepared, sourceModule) -> unless { false -> return }
+            }
+            node.kind == 48 -> if {
+                prepared.package.tokens[range.tokenStart + node.payloadToken] => token
+                source -> slice(token.span.start, token.span.length) => name
+                false => eachArray!
+                owner.kind -> when { DynamicArray { name == "each" => eachArray! } _ { } }
+                not eachArray! and not (nodeIndex -> readonlyFunction(owner, prepared, sourceModule)) -> if { false -> return }
+            }
+            nodeIndex -> readonlyChildren(input, owner, source, prepared, sourceModule, indexed) -> return
+        }
+    }
+    node.kind == 11 -> if {
+        nodeIndex -> firstValueChild(prepared, sourceModule, indexed) => argument
+        argument >= 0 and (argument -> isOwnerName(owner, source, prepared, sourceModule))
+            and indexed.nextSibling[argument] < 0 -> if {
+                nodeIndex -> readonlyFunction(owner, prepared, sourceModule) -> return
+            }
+    }
+    node.kind == 13 -> if {
+        # Legacy interpolation has a separate canonical graph; its complete
+        # readonly decisions are a distinct pending integration control.
+        nodeIndex -> contains(owner.name, false, owner.frame, source, prepared.package, sourceModule, indexed) -> when {
+            Err(_) { false -> return }
+            Ok(found) { not found -> return }
+        }
+    }
+    # The remaining supported C# expression families recurse through their
+    # operands. Unsupported statement/expression kinds fail conservatively.
+    node.kind == 9 or node.kind == 61 or node.kind == 10 or node.kind == 11
+        or (node.kind >= 18 and node.kind <= 25) or node.kind == 36
+        or (node.kind >= 37 and node.kind <= 43) or node.kind == 46 or node.kind == 47
+        or node.kind == 48 or node.kind == 49 or node.kind == 53
+        or (node.kind >= 55 and node.kind <= 60) or node.kind == 63 or node.kind == 64
+        or (node.kind >= 70 and node.kind <= 82)
+        -> if { nodeIndex -> readonlyChildren(-1, owner, source, prepared, sourceModule, indexed) -> return }
+    node.kind == 14 or node.kind == 83
+}
+
+public readonlyPayload bindingAst: Int, kind: literals.Kind, source: Text, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex, units: ref sourceUnits.UnitPlan -> Result<Bool, Error> {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        or bindingAst < 0 or bindingAst >= indexed.astCount
+        or (units.positionByAst -> len) != indexed.astCount
+        or (units.scopeByAst -> len) != indexed.astCount or (units.frameByAst -> len) != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+    prepared.package.ranges[sourceModule] => range
+    range.astStart != indexed.astStart or range.astCount != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+    prepared.package.nodes[range.astStart + bindingAst] => binding
+    binding.kind != 9 or binding.payloadToken < 0 or binding.payloadToken >= range.tokenCount
+        or units.positionByAst[bindingAst] < 0 -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+    binding.flags % 2 == 1 -> if { false -> Result<Bool, Error>.Ok -> return }
+    prepared.package.tokens[range.tokenStart + binding.payloadToken] => token
+    ReadonlyOwner { name: source -> slice(token.span.start, token.span.length), frame: units.frameByAst[bindingAst], kind: kind } => owner
+    units.units -> each unit {
+        unit.frameAst == owner.frame and unit.scopeAst == units.scopeByAst[bindingAst]
+            and unit.position > units.positionByAst[bindingAst] -> if {
+                unit.astNode -> readOnly(owner, source, prepared, sourceModule, indexed)
+                    -> unless { false -> Result<Bool, Error>.Ok -> return }
+            }
+    }
+    true -> Result<Bool, Error>.Ok
+}
+''',encoding='utf-8')
