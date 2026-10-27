@@ -417,6 +417,113 @@ ambientImport unit: ref SourceUnit, index: Int -> Bool {
     name == "sys" or name == "std" or (name -> text.startsWith("sys.")) or (name -> text.startsWith("std."))
 }
 
+# Project and explicit-file entry points share the same import walk.
+# Explicit roots remain in their supplied order; imports append once.
+resolveSourceSet initialUnits: move [SourceUnit; ~], packages: ref [PackageSource; ~], names: ref [path.Path; ~], initialRoot: Int, target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    initialUnits => units!
+    units! -> len => initialCount
+    [Int; ~] => states!
+    [Int; ~] => cursors!
+    [Int; ~] => stack!
+    0 => initialIndex!
+    initialIndex! < initialCount -> while {
+        states! -> push(0)
+        cursors! -> push(0)
+        initialIndex! + 1 => initialIndex!
+    }
+    0 => rootOrder!
+    rootOrder! < initialCount -> while {
+        rootOrder! == 0 -> if { initialRoot } else {
+            rootOrder! <= initialRoot -> if { rootOrder! - 1 } else { rootOrder! }
+        } => rootIndex
+        states![rootIndex] == 0 -> if {
+            1 => states![rootIndex]
+            stack! -> push(rootIndex)
+            (stack! -> len) > 0 -> while {
+                stack![(stack! -> len) - 1] => sourceIndex
+                cursors![sourceIndex] >= (units![sourceIndex].imports -> len)
+                    -> if {
+                        2 => states![sourceIndex]
+                        stack! -> take((stack! -> len) - 1) => completed
+                    } else {
+                        units![sourceIndex] -> ambientImport(cursors![sourceIndex])
+                            -> if { cursors![sourceIndex] + 1 => cursors![sourceIndex] } else {
+                                units![sourceIndex] -> importRequest(cursors![sourceIndex], packages, names, style) => request
+                                request.status != 0 -> if {
+                                    request -> importDiagnostic(names, diagnosticStorage) => diagnostic
+                                    SourceSet { status: request.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                }
+                                cursors![sourceIndex] + 1 => cursors![sourceIndex]
+                                -1 => existing!
+                                0 => index!
+                                index! < (units! -> len) -> while {
+                                    request.module -> pathText => requestedModule
+                                    units![index!].owner == request.owner and (units![index!].module -> pathText) == requestedModule
+                                        -> if {
+                                            index! => existing!
+                                            break
+                                        }
+                                    index! + 1 => index!
+                                }
+                                existing! < 0 -> if {
+                                    0 => index!
+                                    index! < (units! -> len) -> while {
+                                        request.location -> pathText => requestedPath
+                                        units![index!].location -> pathText -> pathIdentity.equalsOrdinalIgnoreCase(requestedPath)
+                                            -> if {
+                                                index! => existing!
+                                                break
+                                            }
+                                        index! + 1 => index!
+                                    }
+                                }
+                                existing! >= 0 -> if {
+                                    units![existing!].owner != request.owner -> if {
+                                        request.location -> pathText => location
+                                        names[units![existing!].owner] -> pathText => previousOwner
+                                        names[request.owner] -> pathText => requestedOwner
+                                        "source file '$location' belongs to both project '$previousOwner' and project '$requestedOwner'" -> materialize(diagnosticStorage) => diagnostic
+                                        SourceSet { status: 7, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    states![existing!] == 1 -> if {
+                                        units! -> moduleCycle(stack!, existing!, diagnosticStorage) => diagnostic
+                                        SourceSet { status: 6, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    states![existing!] == 0 -> if {
+                                        1 => states![existing!]
+                                        stack! -> push(existing!)
+                                    }
+                                } else {
+                                    request.module -> pathText => expectedModule
+                                    request.location -> readSource(request.owner, expectedModule, request.dependencyRoot, names, style, target) => unit
+                                    unit.status != 0 -> if {
+                                        unit -> sourceDiagnostic(expectedModule, names, target, diagnosticStorage) => diagnostic
+                                        SourceSet { status: unit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    units! -> len => next
+                                    units! -> push(unit)
+                                    states! -> push(1)
+                                    cursors! -> push(0)
+                                    stack! -> push(next)
+                                }
+                            }
+                    }
+            }
+        }
+        rootOrder! + 1 => rootOrder!
+    }
+    [path.Path; ~] => sources!
+    [Int; ~] => owners!
+    0 => index!
+    index! < (units! -> len) -> while {
+        units![index!].location -> pathText -> path.fromText(style) => location
+        sources! -> push(location)
+        owners! -> push(units![index!].owner)
+        index! + 1 => index!
+    }
+    SourceSet { status: 0, diagnostic: "", sources: sources!, owners: owners! }
+}
+
 public loadForTarget selectedRoot: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
     (manifests -> len) == 0 or (manifests -> len) != (names -> len)
         -> if {
@@ -442,85 +549,65 @@ public loadForTarget selectedRoot: Text, manifests: ref [path.Path; ~], names: r
         SourceSet { status: rootUnit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
     }
     units! -> push(rootUnit)
-    [1,; ~] => states!
-    [0,; ~] => cursors!
-    [0,; ~] => stack!
-    (stack! -> len) > 0 -> while {
-        stack![(stack! -> len) - 1] => sourceIndex
-        cursors![sourceIndex] >= (units![sourceIndex].imports -> len)
-            -> if {
-                2 => states![sourceIndex]
-                stack! -> take((stack! -> len) - 1) => completed
-            } else {
-                units![sourceIndex] -> ambientImport(cursors![sourceIndex])
-                    -> if { cursors![sourceIndex] + 1 => cursors![sourceIndex] } else {
-                        units![sourceIndex] -> importRequest(cursors![sourceIndex], packages!, names, style) => request
-                        request.status != 0 -> if {
-                            request -> importDiagnostic(names, diagnosticStorage) => diagnostic
-                            SourceSet { status: request.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
-                        }
-                        cursors![sourceIndex] + 1 => cursors![sourceIndex]
-                        -1 => existing!
-                        0 => index!
-                        index! < (units! -> len) -> while {
-                            request.module -> pathText => requestedModule
-                            units![index!].owner == request.owner and (units![index!].module -> pathText) == requestedModule
-                                -> if {
-                                    index! => existing!
-                                    break
-                                }
-                            index! + 1 => index!
-                        }
-                        existing! < 0 -> if {
-                            0 => index!
-                            index! < (units! -> len) -> while {
-                                request.location -> pathText => requestedPath
-                                units![index!].location -> pathText -> pathIdentity.equalsOrdinalIgnoreCase(requestedPath)
-                                    -> if {
-                                        index! => existing!
-                                        break
-                                    }
-                                index! + 1 => index!
-                            }
-                        }
-                        existing! >= 0 -> if {
-                            units![existing!].owner != request.owner -> if {
-                                request.location -> pathText => location
-                                names[units![existing!].owner] -> pathText => previousOwner
-                                names[request.owner] -> pathText => requestedOwner
-                                "source file '$location' belongs to both project '$previousOwner' and project '$requestedOwner'" -> materialize(diagnosticStorage) => diagnostic
-                                SourceSet { status: 7, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
-                            }
-                            states![existing!] == 1 -> if {
-                                units! -> moduleCycle(stack!, existing!, diagnosticStorage) => diagnostic
-                                SourceSet { status: 6, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
-                            }
-                        } else {
-                            request.module -> pathText => expectedModule
-                            request.location -> readSource(request.owner, expectedModule, request.dependencyRoot, names, style, target) => unit
-                            unit.status != 0 -> if {
-                                unit -> sourceDiagnostic(expectedModule, names, target, diagnosticStorage) => diagnostic
-                                SourceSet { status: unit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
-                            }
-                            units! -> len => next
-                            units! -> push(unit)
-                            states! -> push(1)
-                            cursors! -> push(0)
-                            stack! -> push(next)
-                        }
-                    }
+    units! -> resolveSourceSet(packages!, names, 0, target, style, diagnosticStorage)
+}
+
+# Standalone source files have one local package context and no declared
+# project dependencies. No project manifest is manufactured or discovered.
+public loadFilesForTarget roots: ref [Text; ~], target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    (roots -> len) == 0 -> if {
+        SourceSet { status: 8, diagnostic: "source file list is empty", sources: [path.Path; ~], owners: [Int; ~] } -> return
+    }
+    [path.Path; ~] => names!
+    names! -> push(path.fromText("", style))
+    [SourceUnit; ~] => units!
+    0 => rootIndex!
+    rootIndex! < (roots -> len) -> while {
+        roots[rootIndex!] -> path.fromText(style) -> absolute -> when {
+            Ok(location) { location }
+            Err(error) {
+                SourceSet { status: 8, diagnostic: error, sources: [path.Path; ~], owners: [Int; ~] } -> return
             }
+        } => location
+        location -> pathText => locationText
+        false => existing!
+        0 => unitIndex!
+        unitIndex! < (units! -> len) -> while {
+            units![unitIndex!].location -> pathText -> pathIdentity.equalsOrdinalIgnoreCase(locationText)
+                -> if { true => existing! }
+            unitIndex! + 1 => unitIndex!
+        }
+        not existing! -> if {
+            location -> readSource(0, "", false, names!, style, target) => unit
+            unit.status != 0 -> if {
+                unit -> sourceDiagnostic("", names!, target, diagnosticStorage) => diagnostic
+                SourceSet { status: unit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+            }
+            units! -> push(unit)
+        }
+        rootIndex! + 1 => rootIndex!
     }
-    [path.Path; ~] => sources!
-    [Int; ~] => owners!
-    0 => index!
-    index! < (units! -> len) -> while {
-        units![index!].location -> pathText -> path.fromText(style) => location
-        sources! -> push(location)
-        owners! -> push(units![index!].owner)
-        index! + 1 => index!
+    0 => entryCount!
+    0 => entryIndex!
+    0 => unitIndex!
+    unitIndex! < (units! -> len) -> while {
+        units![unitIndex!].hasEntry -> if {
+            entryCount! + 1 => entryCount!
+            unitIndex! => entryIndex!
+        }
+        unitIndex! + 1 => unitIndex!
     }
-    SourceSet { status: 0, diagnostic: "", sources: sources!, owners: owners! }
+    entryCount! > 1 -> if {
+        SourceSet { status: 8, diagnostic: "multiple source files contain executable top-level statements; exactly one root file may define the program entry point", sources: [path.Path; ~], owners: [Int; ~] } -> return
+    }
+    units![entryIndex!].location -> pathText => selectedRoot
+    [PackageSource; ~] => packages!
+    packages! -> push(PackageSource {
+        root: path.fromText(selectedRoot, style),
+        sourceRoot: path.fromText(selectedRoot -> directoryOf, style),
+        dependencies: [Int; ~]
+    })
+    units! -> resolveSourceSet(packages!, names!, entryIndex!, target, style, diagnosticStorage)
 }
 
 public load selectedRoot: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {

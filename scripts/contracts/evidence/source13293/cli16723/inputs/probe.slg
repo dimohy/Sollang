@@ -1,0 +1,87 @@
+import sollang.compiler.cli_sources as sources
+import sys.path as path
+import sys.text as text
+import sys.process as process
+
+verifyCase label: Text, roots: ref [Text; ~], expectedStatus: Int, expectedDiagnostic: Text, expectedPaths: ref [Text; ~] -> Bool uses Console, File {
+    Arena(0) => storage!
+    roots -> sources.loadFilesForTarget("windows-x64", path.Style.Windows, storage!) => result
+    result.status == expectedStatus and (result.sources -> len) == (expectedPaths -> len) => valid!
+    (expectedDiagnostic -> len) > 0 -> if {
+        result.diagnostic -> text.contains(expectedDiagnostic)
+            -> unless { false => valid! }
+    } else {
+        (result.diagnostic -> len) != 0 -> if { false => valid! }
+    }
+    result.status == 0 -> if {
+        0 => index!
+        index! < (expectedPaths -> len) and index! < (result.sources -> len)
+            -> while {
+                (result.sources[index!] -> pathText) != expectedPaths[index!]
+                    -> if { false => valid! }
+                index! + 1 => index!
+            }
+    }
+    "$label=$(valid!)" -> println
+    not valid! -> if {
+        "status=$(result.status) count=$(result.sources -> len) diagnostic=$(result.diagnostic)" -> println
+    }
+    valid!
+}
+
+main {
+    true => valid!
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg",; ~] => roots0
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg"; ~] => paths0
+    "module52" -> verifyCase(roots0, 0, "", paths0)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\53-public-module-types.slg",; ~] => roots1
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\53-public-module-types.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\types.slg"; ~] => paths1
+    "module53" -> verifyCase(roots1, 0, "", paths1)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\455-imported-owned-dictionary-key.slg",; ~] => roots2
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\455-imported-owned-dictionary-key.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\owned_keys.slg"; ~] => paths2
+    "module455" -> verifyCase(roots2, 0, "", paths2)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\module-not-found.slg",; ~] => roots3
+    [Text; ~] => paths3
+    "missing" -> verifyCase(roots3, 1, "imported module file not found:", paths3)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\module-cycle.slg",; ~] => roots4
+    [Text; ~] => paths4
+    "cycle" -> verifyCase(roots4, 6, "module import cycle: <root> -> cycle.a -> cycle.b -> cycle.a", paths4)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\cli-source-namespace-mismatch.slg",; ~] => roots5
+    [Text; ~] => paths5
+    "namespace" -> verifyCase(roots5, 2, "declares namespace 'helpers.actual' but import expects 'helpers.wrong'", paths5)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\cli-source-ignore-unimported-broken.slg",; ~] => roots6
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\cli-source-ignore-unimported-broken.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\helpers\\good.slg"; ~] => paths6
+    "unimported" -> verifyCase(roots6, 0, "", paths6)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\module-duplicate.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\duplicate\\first.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\duplicate\\second.slg"; ~] => roots7
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\module-duplicate.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\duplicate\\first.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\duplicate\\second.slg"; ~] => paths7
+    "namespace-providers" -> verifyCase(roots7, 0, "", paths7)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\cli-source-multiple-entry.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\diagnostics\\cli-multiple-root\\second.slg"; ~] => roots8
+    [Text; ~] => paths8
+    "multiple-entry" -> verifyCase(roots8, 8, "multiple source files contain executable top-level statements; exactly one root file may define the program entry point", paths8)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:/MyWorks/Sollang/artifacts/scratch/resume-20261006-owner-continuation22/runner16643-fixture/examples/regression/52-multi-file-modules.slg"; ~] => roots9
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg"; ~] => paths9
+    "separator-alias" -> verifyCase(roots9, 0, "", paths9)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "artifacts/scratch/resume-20261006-owner-continuation22/runner16643-fixture/examples/regression/52-multi-file-modules.slg"; ~] => roots10
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg"; ~] => paths10
+    "relative-alias" -> verifyCase(roots10, 0, "", paths10)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\..\\52-multi-file-modules.slg"; ~] => roots11
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg"; ~] => paths11
+    "dot-alias" -> verifyCase(roots11, 0, "", paths11)
+        -> unless { false => valid! }
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg"; ~] => roots12
+    ["W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\sample\\math.slg", "W:\\MyWorks\\Sollang\\artifacts\\scratch\\resume-20261006-owner-continuation22\\runner16643-fixture\\examples\\regression\\52-multi-file-modules.slg"; ~] => paths12
+    "provider-before-entry" -> verifyCase(roots12, 0, "", paths12)
+        -> unless { false => valid! }
+    not valid! -> if { process.exit(1) }
+}

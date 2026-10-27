@@ -1966,6 +1966,75 @@ class CompilerConsumerClosureTests(unittest.TestCase):
         self.assertEqual(2, run.returncode)
         self.assertIn('requires --close-consumers', run.stderr)
         self.assertTrue((old / 'compiler.exe').exists())
+    def attempted_runner_fixture(self):
+        old, replacement, consumer = self.products(True)
+        record = json.loads(consumer.read_text())
+        detail_path = consumer.parent / 'cases/first/result.json'
+        detail_path.parent.mkdir(parents=True)
+        case = record['cases'][0]
+        case.update(processes=[0], requiresSelfHostCompiler=True,
+                    oracle={'kind': 'llvm', 'expectedPath': 'preserved.stdout.txt'})
+        detail = {key: case[key] for key in ('id', 'status', 'oracle', 'requiresSelfHostCompiler')}
+        detail['processes'] = copy.deepcopy(record['processes'])
+        detail_path.write_text(json.dumps(detail))
+        case.update(resultPath=str(detail_path),
+                    resultSha256=hashlib.sha256(detail_path.read_bytes()).hexdigest())
+        record['completed'] = 1
+        consumer.write_text(json.dumps(record))
+        return old, replacement, consumer, record, detail_path
+
+    def test_attempted_runner_retirement_preserves_failed_result_and_outputs(self):
+        old, replacement, consumer, record, detail = self.attempted_runner_fixture()
+        original, original_detail = consumer.read_bytes(), detail.read_bytes()
+        unfinished = consumer.parent / 'failed.ll'
+        unfinished.write_text('failed output remains protected')
+        with self.assertRaisesRegex(ValueError, 'CASE_COVERAGE_INVALID'):
+            policy.consumer_closure_record(self.repo, old, [consumer], replacement)
+        closure = policy.close_compiler_consumers(self.repo, old, [consumer], replacement,
+                                                 legacy_terminal=True)
+        audit = json.loads(closure.read_text())
+        row = audit['consumers'][0]
+        self.assertEqual('terminal-attempted-count-runner', row['disposition'])
+        self.assertEqual((0, 0, 1, 1, 6), (row['completed'], row['observedPassed'],
+                         row['observedAttempted'], row['failed'], row['unexecuted']))
+        self.assertTrue(audit['verificationFailed'])
+        self.assertTrue(audit['pipelineAborted'])
+        self.assertEqual(original, consumer.read_bytes())
+        self.assertEqual(original_detail, detail.read_bytes())
+        policy.verified_consumer_closure(self.repo, old)
+        targets = [item['path'] for item in self.plan(retention_terminal=True)['targets']]
+        self.assertIn(str(old / 'compiler.exe'), targets)
+        self.assertNotIn(str(unfinished), targets)
+
+    def test_attempted_runner_rejects_unsealed_mismatched_or_reused_execution(self):
+        old, replacement, consumer, original, detail = self.attempted_runner_fixture()
+        detail_bytes = detail.read_bytes()
+        for kind in ('hash', 'verdict', 'identity', 'missing-process', 'duplicate-process',
+                     'count', 'live', 'detail-command', 'outside'):
+            record = copy.deepcopy(original)
+            detail.write_bytes(detail_bytes)
+            case = record['cases'][0]
+            if kind == 'hash': case['resultSha256'] = '0' * 64
+            elif kind == 'verdict': case['status'] = 'passed'
+            elif kind == 'identity': case['id'] = 'other'
+            elif kind == 'missing-process': case['processes'] = []
+            elif kind == 'duplicate-process': case['processes'] = [0, 0]
+            elif kind == 'count': record['completed'] = 2
+            elif kind == 'live': record['processesStopped'] = False
+            elif kind == 'detail-command':
+                changed = json.loads(detail_bytes)
+                changed['processes'][0]['exit'] = 0
+                detail.write_text(json.dumps(changed))
+                case['resultSha256'] = hashlib.sha256(detail.read_bytes()).hexdigest()
+            elif kind == 'outside':
+                other = self.root / 'outside-detail.json'
+                other.write_bytes(detail_bytes)
+                case['resultPath'] = str(other)
+            consumer.write_text(json.dumps(record))
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                policy.consumer_closure_record(self.repo, old, [consumer], replacement,
+                                               legacy_terminal=True)
+
     def products(self, failed=False):
         old = self.output('old', {'pendingConsumerProtection': True})
         replacement = self.output('replacement')

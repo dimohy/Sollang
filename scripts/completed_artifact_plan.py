@@ -1312,6 +1312,53 @@ def terminal_diagnostic_capture(record: dict) -> bool:
         and done == sum(case['matchesManagedDecision'] for case in by_role['native']))
 
 
+def terminal_attempted_runner_capture(repo: Path, path: Path, record: dict) -> bool:
+    """Recognize attempted-count example results for retirement, never acceptance."""
+    cases, processes = record.get('cases'), record.get('processes')
+    if (record.get('status') != 'failed' or not isinstance(cases, list) or not cases
+            or type(record.get('completed')) is not int or record['completed'] != len(cases)
+            or type(record.get('total')) is not int or not len(cases) <= record['total']
+            or not isinstance(processes, list) or not processes
+            or any(not isinstance(case, dict) for case in cases)
+            or any(not isinstance(process, dict) for process in processes)
+            or not any(case.get('status') == 'failed' for case in cases)):
+        return False
+    ids, used = set(), []
+    for case in cases:
+        case_id, indices = case.get('id'), case.get('processes')
+        if (not isinstance(case_id, str) or not case_id or case_id in ids
+                or case.get('status') not in ('passed', 'failed')
+                or not isinstance(indices, list) or not indices
+                or any(type(index) is not int or not 0 <= index < len(processes) for index in indices)
+                or not isinstance(case.get('resultPath'), str)
+                or not isinstance(case.get('resultSha256'), str)):
+            return False
+        ids.add(case_id)
+        used.extend(indices)
+        try:
+            detail_path = assert_artifact_path(repo, Path(case['resultPath']))
+            detail_path.relative_to(path.parent)
+            raw = detail_path.read_bytes()
+            if hashlib.sha256(raw).hexdigest().casefold() != case['resultSha256'].casefold():
+                return False
+            detail = json.loads(raw.decode('utf-8-sig'))
+        except (OSError, ValueError):
+            return False
+        if (not isinstance(detail, dict)
+                or any(detail.get(key) != case.get(key) for key in
+                       ('id', 'status', 'oracle', 'requiresSelfHostCompiler'))
+                or not isinstance(detail.get('processes'), list)
+                or len(detail['processes']) != len(indices)):
+            return False
+        for nested, index in zip(detail['processes'], indices):
+            outer = processes[index]
+            if (not isinstance(nested, dict)
+                    or any(nested.get(key) != value for key, value in outer.items())
+                    or any(value is not None for key, value in nested.items() if key not in outer)):
+                return False
+    return sorted(used) == list(range(len(processes)))
+
+
 def observed_cli_case_completed(row: dict) -> bool:
     """Read legacy CLI oracles for product retirement without rewriting results."""
     if ('status' in row or row.get('passed') is not True
@@ -1705,12 +1752,13 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         # Preserve that representation without rewriting immutable consumer records;
         # this path requires the entire record, including negative oracles, to pass.
         fully_completed = completed(record)
+        attempted_runner = legacy_terminal and terminal_attempted_runner_capture(repo, path, record)
         if not all((row.get('status') in ('passed', 'failed') and row.get('passed', row['status'] == 'passed') is (row['status'] == 'passed'))
                    or (fully_completed and 'status' not in row and row.get('passed') is True
                        and type(row.get('buildExit', row.get('buildExitCode', row.get('compileExit')))) is int
                        and not any(key in row for key in ('roles', 'managed', 'selfhost')))
                    or (legacy_terminal and fully_completed and observed_cli_case_completed(row))
-                   or row in legacy_failed_cases or row in diagnostic_observation_cases for row in cases) or record['completed'] != done or not (0 <= len(cases) <= record['total'] if pre_case_failure else 0 < len(cases) <= record['total']):
+                   or row in legacy_failed_cases or row in diagnostic_observation_cases for row in cases) or record['completed'] != (len(cases) if attempted_runner else done) or not (0 <= len(cases) <= record['total'] if pre_case_failure else 0 < len(cases) <= record['total']):
             raise ValueError('ARTIFACT_CONSUMER_CASE_COVERAGE_INVALID')
         missing_expectations = missing_negative_consumer_expectations(record) if record['status'] == 'passed' and not completed(record) else []
         if record['status'] == 'passed' and not completed(record) and not missing_expectations and not unpaired_start_pins or record['status'] == 'failed' and not failed and not input_drift and not pre_case_failure:
@@ -1741,6 +1789,9 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
             row.update(completed=0, disposition='terminal-unstructured-failed-case', observedPassed=done)
         if diagnostic_observation_cases:
             row.update(completed=0, disposition='terminal-flat-diagnostic-observation', observedPassed=done)
+        if attempted_runner:
+            row.update(completed=0, disposition='terminal-attempted-count-runner',
+                       observedPassed=done, observedAttempted=len(cases))
         if unpaired_start_pins:
             # Legacy start-only snapshots prove terminal binary consumption,
             # never successful verification or eligibility of consumer outputs.
@@ -1752,9 +1803,11 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
                 (missing_producer_pin, 'producer-record-unpinned'), (pre_case_failure, 'pre-case-failure'),
                 (bool(legacy_failed_cases), 'unstructured-failed-case'),
                 (bool(diagnostic_observation_cases), 'diagnostic-observation-retirement-only')) if condition]
+            if attempted_runner:
+                row['unprovenReasons'].append('attempted-count-runner-retirement-only')
         rows.append(row)
     return {'schemaVersion': 1, 'status': 'retiredCompleted', 'verificationFailed': any(row['status'] in ('failed', 'timed-out', 'mismatch') for row in rows),
-            'pipelineAborted': any(row['unexecuted'] is None or row['unexecuted'] > 0 or row.get('disposition') in ('terminal-input-drift', 'terminal-unproven-negative-expectations', 'terminal-producer-record-unpinned', 'terminal-pre-case-failure', 'terminal-unstructured-failed-case', 'terminal-flat-diagnostic-observation') for row in rows), 'retiredCompleted': True,
+            'pipelineAborted': any(row['unexecuted'] is None or row['unexecuted'] > 0 or row.get('disposition') in ('terminal-input-drift', 'terminal-unproven-negative-expectations', 'terminal-producer-record-unpinned', 'terminal-pre-case-failure', 'terminal-unstructured-failed-case', 'terminal-flat-diagnostic-observation', 'terminal-attempted-count-runner') for row in rows), 'retiredCompleted': True,
             'build': references[0], 'replacementBuild': references[1], 'consumers': rows,
             **({'evidenceMode': 'legacy-binary-pinned-terminal'} if legacy_terminal else {}),
             'purpose': 'compiler-product-retirement-only; incomplete verification is not completion'}

@@ -2106,12 +2106,27 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         "sollang: no source file, sollang.project, or sollang.workspace was found" -> println
         1 -> return
     }
+    hostTarget == 0 -> if { path.Style.Windows } else { path.Style.Posix } => standaloneStyle
+    Arena(0) => standaloneStorage!
+    sources! -> cliSources.loadFilesForTarget(target! -> nativeTargetName, standaloneStyle, standaloneStorage!) => standaloneSources
+    standaloneSources.status != 0 -> if {
+        "sollang: $(standaloneSources.diagnostic)" -> runtime.eprintln
+        1 -> return
+    }
+    [Text; ~] => expandedSources!
+    0 => standaloneSourceIndex!
+    standaloneSourceIndex! < (standaloneSources.sources -> len)
+        -> while {
+            standaloneSources.sources[standaloneSourceIndex!] -> pathText => sourcePath
+            expandedSources! -> push(sourcePath)
+            standaloneSourceIndex! + 1 => standaloneSourceIndex!
+        }
     Arena(0) => outputStorage!
     (outputOption! -> len) > 0 -> if {
         outputOption! => output
         target! -> nativeCliTargetMode => emitterMode
         [Text; ~] => emitterArguments
-        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)
@@ -2120,7 +2135,7 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         sources![0] -> defaultNativeOutput(target!, outputStorage!) => output
         target! -> nativeCliTargetMode => emitterMode
         [Text; ~] => emitterArguments
-        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+        expandedSources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
         buildCode != 0 -> if { buildCode -> return }
         runAfterBuild -> if {
             output -> executeNativeProgram(programArguments!)

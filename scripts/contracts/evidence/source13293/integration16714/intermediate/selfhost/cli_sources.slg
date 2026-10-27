@@ -1,0 +1,614 @@
+namespace sollang.compiler.cli_sources
+
+import sollang.compiler.cli_project as cliProject
+import sollang.compiler.library_paths as libraryPaths
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sollang.compiler.project as project
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.syntax as syntax
+import sollang.compiler.path_identity as pathIdentity
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.text as text
+
+struct PackageSource {
+    root: path.Path
+    sourceRoot: path.Path
+    dependencies: [Int; ~]
+}
+
+enum PackageSourceError {
+    InvalidManifest
+    MissingDependency
+    SelectionFailed
+}
+
+packageSourceDiagnostic error: PackageSourceError -> Text {
+    error -> when {
+        InvalidManifest { "invalid source package manifest" }
+        MissingDependency { "source package dependency is missing from graph" }
+        SelectionFailed { "validated package source selection failed" }
+    }
+}
+
+struct SourceUnit {
+    location: path.Path
+    owner: Int
+    module: path.Path
+    imports: [path.Path; ~]
+    hasEntry: Bool
+    status: Int
+    libraryNode: Int
+    libraryIssue: Option<interfaces.LibraryInterface>
+}
+
+public struct SourceSet {
+    public status: Int
+    public diagnostic: Text
+    public sources: [path.Path; ~]
+    public owners: [Int; ~]
+}
+
+struct ImportRequest {
+    location: path.Path
+    owner: Int
+    module: path.Path
+    dependencyRoot: Bool
+    status: Int
+}
+
+directoryOf value: Text -> Text {
+    value -> len => index!
+    index! > 0 -> while {
+        value -> byte(index! - 1) => current
+        current == 47 or current == 92 -> if {
+            value -> slice(0, index! - 1) -> return
+        }
+        index! - 1 => index!
+    }
+    "."
+}
+
+nameIndex names: ref [path.Path; ~], name: Text -> Int {
+    0 => index!
+    index! < (names -> len) -> while {
+        (names[index!] -> pathText) == name -> if { index! -> return }
+        index! + 1 => index!
+    }
+    -1
+}
+
+productName source: Text, manifest: project.ProjectManifest, name: Text -> Text {
+    0 => selected!
+    0 => index!
+    index! < (manifest.products -> len) -> while {
+        manifest.products[index!].name => span
+        source -> slice(span.start, span.length) => candidate
+        candidate == name -> if { candidate -> return }
+        manifest.products[selected!].name => selectedSpan
+        source -> slice(selectedSpan.start, selectedSpan.length) => previous
+        (candidate -> text.compareOrdinal(previous)) < 0
+            -> if { index! => selected! }
+        index! + 1 => index!
+    }
+    manifest.products[selected!].name => span
+    source -> slice(span.start, span.length)
+}
+
+packageSource manifest: ref path.Path, names: ref [path.Path; ~], index: Int, selectedRoot: Text, style: path.Style -> Result<PackageSource, PackageSourceError> uses File {
+    manifest -> pathText => manifestText
+    manifestText -> file.mapText => mapped
+    mapped -> slice(0, mapped -> len) => source
+    source -> project.parse => parsed
+    parsed.status != 0 or (parsed.products -> len) == 0
+        -> if {
+            Result<PackageSource, PackageSourceError>.Err(PackageSourceError.InvalidManifest) -> return
+        }
+    [Int; ~] => dependencies!
+    0 => dependency!
+    dependency! < (parsed.dependencies -> len) -> while {
+        parsed.dependencies[dependency!].name => span
+        source -> slice(span.start, span.length) => dependencyName
+        names -> nameIndex(dependencyName) => target
+        target < 0 -> if {
+            Result<PackageSource, PackageSourceError>.Err(PackageSourceError.MissingDependency) -> return
+        }
+        dependencies! -> push(target)
+        dependency! + 1 => dependency!
+    }
+    index == 0 -> if {
+        PackageSource { root: path.fromText(selectedRoot, style), sourceRoot: path.fromText(selectedRoot -> directoryOf, style), dependencies: dependencies! } => package
+        Result<PackageSource, PackageSourceError>.Ok(package) -> return
+    }
+    names[index] -> pathText => name
+    source -> productName(parsed, name) => selectedProduct
+    Arena(0) => manifestStorage!
+    Arena(0) => rootStorage!
+    Arena(0) => nameStorage!
+    manifestText -> cliProject.load(selectedProduct, manifestStorage!, rootStorage!, nameStorage!) => input
+    input.status != 0 -> if {
+        Result<PackageSource, PackageSourceError>.Err(PackageSourceError.SelectionFailed) -> return
+    }
+    PackageSource { root: path.fromText(input.source, style), sourceRoot: path.fromText(input.sourceDirectory, style), dependencies: dependencies! } => package
+    Result<PackageSource, PackageSourceError>.Ok(package)
+}
+
+qualifiedName source: Text, tokens: [syntax.SyntaxToken; ~], node: ast.AstNode, style: path.Style -> path.Path {
+    [UInt8; ~] => bytes!
+    node.firstToken => index!
+    index! < node.firstToken + node.tokenCount -> while {
+        tokens[index!] => token
+        token.kind == grammar.tokenIdIdentifier() or token.kind == grammar.tokenIdDot()
+            -> if {
+                UIntSize(0) => byteIndex!
+                byteIndex! < token.span.length -> while {
+                    bytes! -> push(source -> byte(token.span.start + byteIndex!))
+                    byteIndex! + 1 => byteIndex!
+                }
+            }
+        index! + 1 => index!
+    }
+    bytes! -> file.borrowBytes => view
+    view -> slice(0, view -> len) -> path.fromText(style)
+}
+
+executableRoot node: ast.AstNode, nodes: [ast.AstNode; ~] -> Bool {
+    node.kind == 8 -> if { true -> return }
+    node.parent < 0 -> if { false -> return }
+    nodes[node.parent].kind != 0 -> if { false -> return }
+    node.kind >= 1 and node.kind <= 7 -> if { false -> return }
+    node.kind >= 65 and node.kind <= 69 -> if { false -> return }
+    true
+}
+
+readSource location: ref path.Path, owner: Int, expectedModule: Text, dependencyRoot: Bool, names: ref [path.Path; ~], style: path.Style, target: Text -> SourceUnit uses File {
+    location -> pathText => locationText
+    locationText -> file.openRead -> when {
+        Err(_) {
+            SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: 1, libraryNode: -1, libraryIssue: Option<interfaces.LibraryInterface>.None } -> return
+        }
+        Ok(_) {}
+    }
+    locationText -> file.mapText => mapped
+    mapped -> slice(0, mapped -> len) => source
+    mapped -> parser.parseSourceEvents => events
+    (events -> len) == 0 or events[(events -> len) - 1].value != 1
+        -> if {
+            SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: 5, libraryNode: -1, libraryIssue: Option<interfaces.LibraryInterface>.None } -> return
+        }
+    mapped -> lexer.lexSource => tokens
+    mapped -> ast.lowerSource => nodes
+    [path.Path; ~] => imports!
+    false => hasEntry!
+    -1 => moduleNode!
+    0 => index!
+    index! < (nodes -> len) -> while {
+        nodes[index!] => node
+        node.kind == 69 -> if {
+            0 => previousLibrary!
+            previousLibrary! < index! -> while {
+                nodes[previousLibrary!].kind == 69 -> if {
+                    tokens[node.payloadToken] => alias
+                    tokens[nodes[previousLibrary!].payloadToken] => previousAlias
+                    (source -> slice(alias.span.start, alias.span.length)) == (source -> slice(previousAlias.span.start, previousAlias.span.length))
+                        and target != "wasm32-browser" -> if {
+                            SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: 53, libraryNode: index!, libraryIssue: Option<interfaces.LibraryInterface>.None } -> return
+                        }
+                }
+                previousLibrary! + 1 => previousLibrary!
+            }
+            target == "wasm32-browser" -> if { 51 } else {
+                locationText -> libraryPaths.manifestPath(source, tokens[node.secondaryToken], target, style) => manifest
+                manifest.status != 0 -> if { 52 } else {
+                    manifest.value -> pathText -> file.openRead -> when {
+                        Ok(_) { 0 }
+                        Err(_) { 50 }
+                    }
+                }
+            } => libraryStatus
+            libraryStatus != 0 -> if {
+                SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: libraryStatus, libraryNode: index!, libraryIssue: Option<interfaces.LibraryInterface>.None } -> return
+            }
+            locationText -> libraryPaths.manifestPath(source, tokens[node.secondaryToken], target, style) => manifest
+            manifest.value -> pathText -> interfaces.readPath(target) => document
+            document.status != 0 -> if {
+                SourceUnit { location: path.fromText(locationText, style), owner: owner, module: path.fromText("", style), imports: [path.Path; ~], hasEntry: false, status: 54, libraryNode: index!, libraryIssue: Option<interfaces.LibraryInterface>.Some(document) } -> return
+            }
+        }
+        node -> executableRoot(nodes) -> if { true => hasEntry! }
+        node.kind == 1 or node.kind == 2 -> if {
+            0 => child!
+            child! < (nodes -> len) -> while {
+                nodes[child!] => pathNode
+                pathNode.parent == index! and pathNode.kind == 16
+                    -> if {
+                        node.kind == 1 -> if { child! => moduleNode! } else {
+                            imports! -> push(source -> qualifiedName(tokens, pathNode, style))
+                        }
+                        break
+                    }
+                child! + 1 => child!
+            }
+        }
+        index! + 1 => index!
+    }
+    moduleNode! >= 0 -> if {
+        source -> qualifiedName(tokens, nodes[moduleNode!], style)
+    } else { path.fromText("", style) } => module
+    0 => status!
+    module -> pathText => actualModule
+    (expectedModule -> len) > 0 and actualModule != expectedModule
+        -> if {
+            2 => status!
+        } else {
+            dependencyRoot and hasEntry! -> if {
+                names[owner] -> pathText => name
+                3 => status!
+            }
+        }
+    SourceUnit { location: path.fromText(locationText, style), owner: owner, module: module, imports: imports!, hasEntry: hasEntry!, status: status!, libraryNode: -1, libraryIssue: Option<interfaces.LibraryInterface>.None }
+}
+
+
+sourceDiagnostic unit: ref SourceUnit, expectedModule: Text, names: ref [path.Path; ~], target: Text, diagnosticStorage: mut Arena -> Text uses File {
+    unit.location -> pathText => location
+    unit.status == 1 -> if {
+        "imported module file not found: $location" -> materialize(diagnosticStorage) -> return
+    }
+    unit.status == 2 -> if {
+        unit.module -> pathText => actualModule
+        "module file '$location' declares namespace '$actualModule' but import expects '$expectedModule'" -> materialize(diagnosticStorage) -> return
+    }
+    unit.status == 3 -> if {
+        names[unit.owner] -> pathText => name
+        "dependency product '$name' contains executable top-level statements: $location" -> materialize(diagnosticStorage) -> return
+    }
+    unit.status == 51 -> if { "Sollang library imports currently support windows-x64 and linux-x64" -> return }
+    location -> file.mapText => mapped
+    mapped -> slice(0, mapped -> len) => source
+    unit.status == 52 -> if { "invalid Sollang library interface path" -> return }
+    unit.status == 53 -> if {
+        mapped -> lexer.lexSource => tokens
+        mapped -> ast.lowerSource => nodes
+        nodes[unit.libraryNode] => node
+        tokens[node.payloadToken] => aliasToken
+        source -> slice(aliasToken.span.start, aliasToken.span.length) => alias
+        source -> syntaxDiagnostics.sourceLocation(node.start) => position
+        "$(position.line):$(position.column): library alias '$alias' already exists" -> materialize(diagnosticStorage) -> return
+    }
+    unit.status == 54 -> if {
+        mapped -> lexer.lexSource => tokens
+        mapped -> ast.lowerSource => nodes
+        nodes[unit.libraryNode] => node
+        location -> libraryPaths.manifestPath(source, tokens[node.secondaryToken], target, unit.location -> path.styleKind) => manifest
+        manifest.value -> pathText => interfacePath
+        source -> syntaxDiagnostics.sourceLocation(node.start) => position
+        unit.libraryIssue -> when {
+            Some(document) {
+                document.jsonIssue.kind != 0 -> if {
+                    document -> interfaces.jsonDiagnostic(interfacePath, position.line, position.column, diagnosticStorage) -> return
+                }
+                document.shape.kind != 0 -> if {
+                    document -> interfaces.shapeDiagnostic(interfacePath, position.line, position.column, diagnosticStorage) -> return
+                }
+                document -> interfaces.semanticDiagnostic(interfacePath, target, diagnosticStorage) -> return
+            }
+            None {
+                "missing failed library interface state" -> return
+            }
+        }
+    }
+    unit.status == 50 -> if {
+        mapped -> lexer.lexSource => tokens
+        mapped -> ast.lowerSource => nodes
+        nodes[unit.libraryNode] => node
+        location -> libraryPaths.manifestPath(source, tokens[node.secondaryToken], target, unit.location -> path.styleKind) => manifest
+        manifest.value -> pathText => interfacePath
+        source -> syntaxDiagnostics.sourceLocation(node.start) => position
+        "$(position.line):$(position.column): Sollang library interface not found: $interfacePath" -> materialize(diagnosticStorage) -> return
+    }
+    source -> syntaxDiagnostics.analyze => diagnostics
+    source -> syntaxDiagnostics.formatForFile(diagnostics[0], location, diagnosticStorage)
+}
+
+importDiagnostic request: ref ImportRequest, names: ref [path.Path; ~], diagnosticStorage: mut Arena -> Text {
+    request.module -> pathText => module
+    UIntSize(0) => length!
+    length! < (module -> len) and (module -> byte(length!)) != 46
+        -> while { length! + 1 => length! }
+    module -> slice(0, length!) => first
+    names[request.owner] -> pathText => owner
+    "project '$owner' imports undeclared dependency '$first'" -> materialize(diagnosticStorage)
+}
+
+importRequest unit: ref SourceUnit, importIndex: Int, packages: ref [PackageSource; ~], names: ref [path.Path; ~], style: path.Style -> ImportRequest {
+    unit.imports[importIndex] -> pathText => module
+    UIntSize(0) => firstLength!
+    firstLength! < (module -> len) and (module -> byte(firstLength!)) != 46
+        -> while { firstLength! + 1 => firstLength! }
+    module -> slice(0, firstLength!) => first
+    unit.owner => owner!
+    false => dependencyRoot!
+    names -> nameIndex(first) => namedPackage
+    namedPackage >= 0 and namedPackage != unit.owner
+        -> if {
+            false => declared!
+            0 => index!
+            index! < (packages[unit.owner].dependencies -> len)
+                -> while {
+                    packages[unit.owner].dependencies[index!] == namedPackage
+                        -> if { true => declared! }
+                    index! + 1 => index!
+                }
+            not declared! -> if {
+                names[unit.owner] -> pathText => ownerName
+                ImportRequest { location: path.fromText("", style), owner: unit.owner, module: path.fromText(module, style), dependencyRoot: false, status: 4 } -> return
+            }
+            namedPackage => owner!
+            firstLength! == (module -> len) => dependencyRoot!
+        }
+    [UInt8; ~] => bytes!
+    packages[owner!].sourceRoot -> pathText => directory
+    UIntSize(0) => index!
+    index! < (directory -> len) -> while {
+        bytes! -> push(directory -> byte(index!))
+        index! + 1 => index!
+    }
+    style -> when { Windows { UInt8(92) } Posix { UInt8(47) } } => separator
+    bytes! -> push(separator)
+    0 => index!
+    index! < (module -> len) -> while {
+        module -> byte(index!) => current
+        current == 46 -> if { separator } else { current } => portable
+        bytes! -> push(portable)
+        index! + 1 => index!
+    }
+    bytes! -> push(46)
+    bytes! -> push(115)
+    bytes! -> push(108)
+    bytes! -> push(103)
+    bytes! -> file.borrowBytes => view
+    dependencyRoot! -> if {
+        packages[owner!].root -> pathText -> path.fromText(style)
+    } else {
+        view -> slice(0, view -> len) -> path.fromText(style)
+    } => location
+    ImportRequest { location: location, owner: owner!, module: path.fromText(module, style), dependencyRoot: dependencyRoot! , status: 0 }
+}
+
+moduleCycle units: ref [SourceUnit; ~], stack: [Int; ~], target: Int, diagnosticStorage: mut Arena -> Text {
+    [UInt8; ~] => bytes!
+    "module import cycle: " => prefix
+    UIntSize(0) => byteIndex!
+    byteIndex! < (prefix -> len) -> while {
+        bytes! -> push(prefix -> byte(byteIndex!))
+        byteIndex! + 1 => byteIndex!
+    }
+    0 => index!
+    index! <= (stack -> len) -> while {
+        index! > 0 -> if {
+            " -> " => separator
+            0 => byteIndex!
+            byteIndex! < (separator -> len) -> while {
+                bytes! -> push(separator -> byte(byteIndex!))
+                byteIndex! + 1 => byteIndex!
+            }
+        }
+        index! < (stack -> len) -> if { stack[index!] } else { target } => sourceIndex
+        units[sourceIndex].module -> pathText => module
+        (module -> len) == 0 -> if { "<root>" } else { module } => name
+        0 => byteIndex!
+        byteIndex! < (name -> len) -> while {
+            bytes! -> push(name -> byte(byteIndex!))
+            byteIndex! + 1 => byteIndex!
+        }
+        index! + 1 => index!
+    }
+    bytes! -> file.borrowBytes => view
+    view -> slice(0, view -> len) -> materialize(diagnosticStorage)
+}
+
+ambientImport unit: ref SourceUnit, index: Int -> Bool {
+    unit.imports[index] -> pathText => name
+    name == "sys" or name == "std" or (name -> text.startsWith("sys.")) or (name -> text.startsWith("std."))
+}
+
+# Project and explicit-file entry points share the same import walk.
+# Explicit roots remain in their supplied order; imports append once.
+resolveSourceSet initialUnits: move [SourceUnit; ~], packages: ref [PackageSource; ~], names: ref [path.Path; ~], initialRoot: Int, target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    initialUnits => units!
+    units! -> len => initialCount
+    [Int; ~] => states!
+    [Int; ~] => cursors!
+    [Int; ~] => stack!
+    0 => initialIndex!
+    initialIndex! < initialCount -> while {
+        states! -> push(0)
+        cursors! -> push(0)
+        initialIndex! + 1 => initialIndex!
+    }
+    0 => rootOrder!
+    rootOrder! < initialCount -> while {
+        rootOrder! == 0 -> if { initialRoot } else {
+            rootOrder! <= initialRoot -> if { rootOrder! - 1 } else { rootOrder! }
+        } => rootIndex
+        states![rootIndex] == 0 -> if {
+            1 => states![rootIndex]
+            stack! -> push(rootIndex)
+            (stack! -> len) > 0 -> while {
+                stack![(stack! -> len) - 1] => sourceIndex
+                cursors![sourceIndex] >= (units![sourceIndex].imports -> len)
+                    -> if {
+                        2 => states![sourceIndex]
+                        stack! -> take((stack! -> len) - 1) => completed
+                    } else {
+                        units![sourceIndex] -> ambientImport(cursors![sourceIndex])
+                            -> if { cursors![sourceIndex] + 1 => cursors![sourceIndex] } else {
+                                units![sourceIndex] -> importRequest(cursors![sourceIndex], packages, names, style) => request
+                                request.status != 0 -> if {
+                                    request -> importDiagnostic(names, diagnosticStorage) => diagnostic
+                                    SourceSet { status: request.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                }
+                                cursors![sourceIndex] + 1 => cursors![sourceIndex]
+                                -1 => existing!
+                                0 => index!
+                                index! < (units! -> len) -> while {
+                                    request.module -> pathText => requestedModule
+                                    units![index!].owner == request.owner and (units![index!].module -> pathText) == requestedModule
+                                        -> if {
+                                            index! => existing!
+                                            break
+                                        }
+                                    index! + 1 => index!
+                                }
+                                existing! < 0 -> if {
+                                    0 => index!
+                                    index! < (units! -> len) -> while {
+                                        request.location -> pathText => requestedPath
+                                        units![index!].location -> pathText -> pathIdentity.equalsOrdinalIgnoreCase(requestedPath)
+                                            -> if {
+                                                index! => existing!
+                                                break
+                                            }
+                                        index! + 1 => index!
+                                    }
+                                }
+                                existing! >= 0 -> if {
+                                    units![existing!].owner != request.owner -> if {
+                                        request.location -> pathText => location
+                                        names[units![existing!].owner] -> pathText => previousOwner
+                                        names[request.owner] -> pathText => requestedOwner
+                                        "source file '$location' belongs to both project '$previousOwner' and project '$requestedOwner'" -> materialize(diagnosticStorage) => diagnostic
+                                        SourceSet { status: 7, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    states![existing!] == 1 -> if {
+                                        units! -> moduleCycle(stack!, existing!, diagnosticStorage) => diagnostic
+                                        SourceSet { status: 6, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    states![existing!] == 0 -> if {
+                                        1 => states![existing!]
+                                        stack! -> push(existing!)
+                                    }
+                                } else {
+                                    request.module -> pathText => expectedModule
+                                    request.location -> readSource(request.owner, expectedModule, request.dependencyRoot, names, style, target) => unit
+                                    unit.status != 0 -> if {
+                                        unit -> sourceDiagnostic(expectedModule, names, target, diagnosticStorage) => diagnostic
+                                        SourceSet { status: unit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+                                    }
+                                    units! -> len => next
+                                    units! -> push(unit)
+                                    states! -> push(1)
+                                    cursors! -> push(0)
+                                    stack! -> push(next)
+                                }
+                            }
+                    }
+            }
+        }
+        rootOrder! + 1 => rootOrder!
+    }
+    [path.Path; ~] => sources!
+    [Int; ~] => owners!
+    0 => index!
+    index! < (units! -> len) -> while {
+        units![index!].location -> pathText -> path.fromText(style) => location
+        sources! -> push(location)
+        owners! -> push(units![index!].owner)
+        index! + 1 => index!
+    }
+    SourceSet { status: 0, diagnostic: "", sources: sources!, owners: owners! }
+}
+
+public loadForTarget selectedRoot: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    (manifests -> len) == 0 or (manifests -> len) != (names -> len)
+        -> if {
+            SourceSet { status: 8, diagnostic: "source package context is incomplete", sources: [path.Path; ~], owners: [Int; ~] } -> return
+        }
+    [PackageSource; ~] => packages!
+    0 => packageIndex!
+    packageIndex! < (manifests -> len) -> while {
+        manifests[packageIndex!] -> packageSource(names, packageIndex!, selectedRoot, style) -> when {
+            Ok(package) { packages! -> push(package) }
+            Err(error) {
+                error -> packageSourceDiagnostic -> materialize(diagnosticStorage) => diagnostic
+                SourceSet { status: 8, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+            }
+        }
+        packageIndex! + 1 => packageIndex!
+    }
+    [SourceUnit; ~] => units!
+    selectedRoot -> path.fromText(style) => root
+    root -> readSource(0, "", false, names, style, target) => rootUnit
+    rootUnit.status != 0 -> if {
+        rootUnit -> sourceDiagnostic("", names, target, diagnosticStorage) => diagnostic
+        SourceSet { status: rootUnit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+    }
+    units! -> push(rootUnit)
+    units! -> resolveSourceSet(packages!, names, 0, target, style, diagnosticStorage)
+}
+
+# Standalone source files have one local package context and no declared
+# project dependencies. No project manifest is manufactured or discovered.
+public loadFilesForTarget roots: ref [Text; ~], target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    (roots -> len) == 0 -> if {
+        SourceSet { status: 8, diagnostic: "source file list is empty", sources: [path.Path; ~], owners: [Int; ~] } -> return
+    }
+    [path.Path; ~] => names!
+    names! -> push(path.fromText("", style))
+    [SourceUnit; ~] => units!
+    0 => rootIndex!
+    rootIndex! < (roots -> len) -> while {
+        roots[rootIndex!] -> path.fromText(style) => location
+        location -> pathText => locationText
+        false => existing!
+        0 => unitIndex!
+        unitIndex! < (units! -> len) -> while {
+            units![unitIndex!].location -> pathText -> pathIdentity.equalsOrdinalIgnoreCase(locationText)
+                -> if { true => existing! }
+            unitIndex! + 1 => unitIndex!
+        }
+        not existing! -> if {
+            location -> readSource(0, "", false, names!, style, target) => unit
+            unit.status != 0 -> if {
+                unit -> sourceDiagnostic("", names!, target, diagnosticStorage) => diagnostic
+                SourceSet { status: unit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+            }
+            units! -> push(unit)
+        }
+        rootIndex! + 1 => rootIndex!
+    }
+    0 => entryCount!
+    0 => entryIndex!
+    0 => unitIndex!
+    unitIndex! < (units! -> len) -> while {
+        units![unitIndex!].hasEntry -> if {
+            entryCount! + 1 => entryCount!
+            unitIndex! => entryIndex!
+        }
+        unitIndex! + 1 => unitIndex!
+    }
+    entryCount! > 1 -> if {
+        SourceSet { status: 8, diagnostic: "multiple source files contain executable top-level statements; exactly one root file may define the program entry point", sources: [path.Path; ~], owners: [Int; ~] } -> return
+    }
+    units![entryIndex!].location -> pathText => selectedRoot
+    [PackageSource; ~] => packages!
+    packages! -> push(PackageSource {
+        root: path.fromText(selectedRoot, style),
+        sourceRoot: path.fromText(selectedRoot -> directoryOf, style),
+        dependencies: [Int; ~]
+    })
+    units! -> resolveSourceSet(packages!, names!, entryIndex!, target, style, diagnosticStorage)
+}
+
+public load selectedRoot: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+    style -> when {
+        Windows { "windows-x64" }
+        Posix { "linux-x64" }
+    } => target
+    selectedRoot -> loadForTarget(manifests, names, target, style, diagnosticStorage)
+}
