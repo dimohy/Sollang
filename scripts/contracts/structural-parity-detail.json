@@ -3638,7 +3638,8 @@
           "llvm-generation.materialized-interpolation-scratch",
           "llvm-generation.text-slice-bounds-and-utf8-boundaries",
           "llvm-generation.runtime-io-failure-function-abi",
-          "llvm-generation.value-generic-repeat-cardinality"
+          "llvm-generation.value-generic-repeat-cardinality",
+          "llvm.async-fixed-heap-backing-cleanup"
         ],
         "decisions": [
           {
@@ -4169,6 +4170,25 @@
             "sourceComparisonRecord": "scripts/contracts/evidence/source13293/value17215/source-comparison.json",
             "managedFirstRecord": "scripts/contracts/evidence/source13293/value17215/table17209-managed2/result.json",
             "completionScope": "Value generic repeat cardinality only; whole phase and final gates pending."
+          },
+          {
+            "id": "llvm.async-fixed-heap-backing-cleanup",
+            "status": "pending",
+            "managedSources": [
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Async.cs",
+              "src/Sollang.Compiler/CodeGen/LlvmEmitter.Utilities.cs"
+            ],
+            "selfhostSources": [
+              "selfhost/llvm/text/function_returns.slg",
+              "selfhost/llvm/text/functions.slg"
+            ],
+            "structure": "C# LoadAsyncSpills restores RuntimeStaticIntArray heap backing into current locals; normal DropOwnedRuntimeValue and cancellation DropOnCancel use that restored pointer. SLG manual fixed literal backing cleanup instead names the initializer SSA; cancellation admits only semanticTypeOwns and omits readonly fixed heap backing.",
+            "branches": "A spilled fixed array still owns its heap backing even when its element type has no owned resource. Restore the frame value before normal cleanup, and include direct heap literal backing in initialized unborrowed cancellation cleanup. Preserve planned stack payload and nonasync branches, existing ownership flags and reverse cleanup order.",
+            "logic": "Reuse asyncFrameBindingRoot/writeAsyncLocalAddress, fixedArrayLiteralNeedsHeap and the existing async spill layout; do not move source arrays onto the stack or suppress llvm-as dominance verification.",
+            "diagnostics": "Actual SLG c742-async-storage-payload emits a store to async_local118109 but cleanup extracts from v118112 defined only before resume; llvm-as rejects non-dominating use. Cancel worker omits its readonly fixed backing. Cancellation omission is source/LLVM observation pending focused actual execution.",
+            "sourceComparisonRecord": "scripts/contracts/evidence/source13293/async17471/source-comparison.json",
+            "managedFirstRecord": "scripts/contracts/evidence/source13293/async17471/async17470-managed-audit2/result.json",
+            "completionScope": "Coroutine heap backing cleanup only; source/current Native/final/Stage gates pending."
           }
         ],
         "sourceComparisonRecord": null,
