@@ -1,0 +1,147 @@
+namespace sollang.compiler.semantic.storage_placement
+
+import std.algorithm as algorithm
+
+# A caller supplies one candidate per allocation source. Positions identify
+# ordered source units, independently of later IR scheduling or relocation.
+public struct Candidate {
+    public source: Int
+    public size: Int
+    public start: Int
+    public end: Int
+    public endUnit: Int
+    public automaticEnd: Bool
+}
+
+public struct Slot {
+    public size: Int
+    public align: Int
+}
+
+public struct LifetimeEnd {
+    public unit: Int
+    public position: Int
+    public slot: Int
+    public size: Int
+    public order: Int
+}
+
+public struct Plan {
+    public slots: [Slot; ~]
+    public slotsByCandidate: [Int; ~]
+    public ends: [LifetimeEnd; ~]
+}
+
+public enum Error {
+    InvalidCandidate(Int)
+}
+
+struct OrderedCandidate {
+    value: Candidate
+    ordinal: Int
+}
+
+struct CandidateOrder { }
+impl algorithm.Comparison for CandidateOrder {
+    type Item = OrderedCandidate
+    public compare: self, left: ref OrderedCandidate, right: ref OrderedCandidate -> Int {
+        left.value.start < right.value.start -> if { -1 -> return }
+        left.value.start > right.value.start -> if { 1 -> return }
+        left.ordinal < right.ordinal -> if { -1 } else {
+            left.ordinal > right.ordinal -> if { 1 } else { 0 }
+        }
+    }
+}
+
+struct EndOrder { }
+impl algorithm.Comparison for EndOrder {
+    type Item = LifetimeEnd
+    public compare: self, left: ref LifetimeEnd, right: ref LifetimeEnd -> Int {
+        left.position < right.position -> if { -1 -> return }
+        left.position > right.position -> if { 1 -> return }
+        left.order < right.order -> if { -1 } else {
+            left.order > right.order -> if { 1 } else { 0 }
+        }
+    }
+}
+
+public frameBudgetBytes: -> Int => 4096
+
+# Match production AllocateFrame: failed growth never reserves a slot, and a
+# resized slot keeps each earlier allocation's original lifetime byte count.
+public allocateFrame candidates: [Candidate] -> Result<Plan, Error> {
+    [OrderedCandidate; ~] => ordered!
+    [Int; ~] => slotsByCandidate!
+    0 => ordinal!
+    candidates -> each candidate {
+        candidate.source < 0 or candidate.size < 0 or candidate.start < 0
+            or candidate.end < candidate.start or candidate.endUnit < 0
+            -> if {
+                Error.InvalidCandidate(ordinal!) -> Result<Plan, Error>.Err -> return
+            }
+        ordered! -> push(OrderedCandidate { value: candidate, ordinal: ordinal! })
+        slotsByCandidate! -> push(-1)
+        ordinal! + 1 => ordinal!
+    }
+    algorithm.Ordering { direction: algorithm.Direction.Ascending } => ascending
+    ascending -> sort(ordered!, CandidateOrder { })
+    [Slot; ~] => slots!
+    [Int; ~] => occupiedUntil!
+    [LifetimeEnd; ~] => ends!
+    0 => frameBytes!
+    0 => candidateIndex!
+    candidateIndex! < (ordered! -> len) -> while {
+        ordered![candidateIndex!] => entry
+        candidateIndex! + 1 => candidateIndex!
+        entry.value => candidate
+        -1 => selected!
+        0 => selectedGrowth!
+        0 => selectedSize!
+        0 => slotIndex!
+        slotIndex! < (slots! -> len) -> while {
+            occupiedUntil![slotIndex!] < candidate.start -> if {
+                slots![slotIndex!].size => size
+                candidate.size > size -> if { candidate.size - size } else { 0 } => growth
+                selected! < 0 or growth < selectedGrowth!
+                    or (growth == selectedGrowth! and size < selectedSize!)
+                    -> if {
+                        slotIndex! => selected!
+                        growth => selectedGrowth!
+                        size => selectedSize!
+                    }
+            }
+            slotIndex! + 1 => slotIndex!
+        }
+        selected! >= 0 -> if {
+            selectedGrowth! > frameBudgetBytes() - frameBytes!
+                -> if { continue }
+            selectedGrowth! > 0 -> if {
+                slots![selected!] => slot!
+                candidate.size => slot!.size
+                slot! => slots![selected!]
+                frameBytes! + selectedGrowth! => frameBytes!
+            }
+            candidate.end => occupiedUntil![selected!]
+        } else {
+            candidate.size > frameBudgetBytes() - frameBytes!
+                -> if { continue }
+            slots! -> len => selected!
+            slots! -> push(Slot { size: candidate.size, align: 8 })
+            occupiedUntil! -> push(candidate.end)
+            frameBytes! + candidate.size => frameBytes!
+        }
+        selected! => slotsByCandidate![entry.ordinal]
+        candidate.automaticEnd -> if {
+            ends! -> push(LifetimeEnd {
+                unit: candidate.endUnit
+                position: candidate.end
+                slot: selected!
+                size: candidate.size
+                order: candidateIndex! - 1
+            })
+        }
+    }
+    ascending -> sort(ends!, EndOrder { })
+    Plan { slots: slots!, slotsByCandidate: slotsByCandidate!, ends: ends! }
+        -> Result<Plan, Error>.Ok
+}

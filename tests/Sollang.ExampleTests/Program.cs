@@ -6,6 +6,13 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+if (args.Length > 0 && args[0] == "--storage-placement-reference")
+{
+    if (args.Length != 4)
+        throw new ArgumentException("Expected compiler DLL, candidate fixtures, and a new result path.");
+    return StoragePlacementTests.Run(args[1], args[2], args[3]);
+}
+
 if (args.Length > 0 && args[0] == "--selfhost-product-tests")
 {
     if (args.Length != 2) throw new ArgumentException("Expected a new result path.");

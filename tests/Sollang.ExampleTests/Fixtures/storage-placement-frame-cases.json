@@ -1,0 +1,582 @@
+{
+  "schemaVersion": 1,
+  "scope": "Exact production AllocateFrame contract before SLG port: budget, intervals, reuse, ordering and automatic endings.",
+  "budgetBytes": 4096,
+  "cases": [
+    {
+      "id": "empty",
+      "candidates": [],
+      "expected": {
+        "slotSizes": [],
+        "slotAlignments": [],
+        "slotsByCandidate": [],
+        "ends": []
+      }
+    },
+    {
+      "id": "below-budget",
+      "candidates": [
+        {
+          "size": 4092,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          4092
+        ],
+        "slotAlignments": [
+          8
+        ],
+        "slotsByCandidate": [
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            4092
+          ]
+        ]
+      }
+    },
+    {
+      "id": "exact-budget",
+      "candidates": [
+        {
+          "size": 4096,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          4096
+        ],
+        "slotAlignments": [
+          8
+        ],
+        "slotsByCandidate": [
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            4096
+          ]
+        ]
+      }
+    },
+    {
+      "id": "above-budget",
+      "candidates": [
+        {
+          "size": 4100,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [],
+        "slotAlignments": [],
+        "slotsByCandidate": [
+          -1
+        ],
+        "ends": []
+      }
+    },
+    {
+      "id": "reused-slot-growth",
+      "candidates": [
+        {
+          "size": 32,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 56,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 8,
+          "start": 4,
+          "end": 5,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          56
+        ],
+        "slotAlignments": [
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          0,
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            32
+          ],
+          [
+            3,
+            0,
+            56
+          ],
+          [
+            5,
+            0,
+            8
+          ]
+        ]
+      }
+    },
+    {
+      "id": "overlapping-lifetimes",
+      "candidates": [
+        {
+          "size": 32,
+          "start": 0,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 56,
+          "start": 1,
+          "end": 2,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          32,
+          56
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1
+        ],
+        "ends": [
+          [
+            2,
+            1,
+            56
+          ],
+          [
+            3,
+            0,
+            32
+          ]
+        ]
+      }
+    },
+    {
+      "id": "touching-lifetimes",
+      "candidates": [
+        {
+          "size": 32,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 56,
+          "start": 1,
+          "end": 2,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          32,
+          56
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            32
+          ],
+          [
+            2,
+            1,
+            56
+          ]
+        ]
+      }
+    },
+    {
+      "id": "live-frame-budget",
+      "candidates": [
+        {
+          "size": 2048,
+          "start": 0,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 2048,
+          "start": 1,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 4,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          2048,
+          2048
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1,
+          -1
+        ],
+        "ends": [
+          [
+            3,
+            0,
+            2048
+          ],
+          [
+            3,
+            1,
+            2048
+          ]
+        ]
+      }
+    },
+    {
+      "id": "failed-growth-does-not-reserve",
+      "candidates": [
+        {
+          "size": 2048,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 2048,
+          "start": 0,
+          "end": 4,
+          "automaticEnd": true
+        },
+        {
+          "size": 2052,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 2048,
+          "start": 3,
+          "end": 5,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          2048,
+          2048
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1,
+          -1,
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            2048
+          ],
+          [
+            4,
+            1,
+            2048
+          ],
+          [
+            5,
+            0,
+            2048
+          ]
+        ]
+      }
+    },
+    {
+      "id": "minimum-growth-then-size",
+      "candidates": [
+        {
+          "size": 32,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 56,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 40,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 8,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          32,
+          56
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1,
+          1,
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            32
+          ],
+          [
+            1,
+            1,
+            56
+          ],
+          [
+            3,
+            1,
+            40
+          ],
+          [
+            3,
+            0,
+            8
+          ]
+        ]
+      }
+    },
+    {
+      "id": "smaller-free-slot-tie",
+      "candidates": [
+        {
+          "size": 64,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 32,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 8,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          64,
+          32
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1,
+          1
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            64
+          ],
+          [
+            1,
+            1,
+            32
+          ],
+          [
+            3,
+            1,
+            8
+          ]
+        ]
+      }
+    },
+    {
+      "id": "stable-unsorted-candidates",
+      "candidates": [
+        {
+          "size": 32,
+          "start": 2,
+          "end": 3,
+          "automaticEnd": true
+        },
+        {
+          "size": 16,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          32
+        ],
+        "slotAlignments": [
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            16
+          ],
+          [
+            3,
+            0,
+            32
+          ]
+        ]
+      }
+    },
+    {
+      "id": "manual-end-still-occupies-slot",
+      "candidates": [
+        {
+          "size": 24,
+          "start": 0,
+          "end": 4,
+          "automaticEnd": false
+        },
+        {
+          "size": 16,
+          "start": 1,
+          "end": 2,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          24,
+          16
+        ],
+        "slotAlignments": [
+          8,
+          8
+        ],
+        "slotsByCandidate": [
+          0,
+          1
+        ],
+        "ends": [
+          [
+            2,
+            1,
+            16
+          ]
+        ]
+      }
+    },
+    {
+      "id": "oversized-rejection-keeps-budget",
+      "candidates": [
+        {
+          "size": 2147483647,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        },
+        {
+          "size": 32,
+          "start": 0,
+          "end": 1,
+          "automaticEnd": true
+        }
+      ],
+      "expected": {
+        "slotSizes": [
+          32
+        ],
+        "slotAlignments": [
+          8
+        ],
+        "slotsByCandidate": [
+          -1,
+          0
+        ],
+        "ends": [
+          [
+            1,
+            0,
+            32
+          ]
+        ]
+      }
+    }
+  ]
+}
