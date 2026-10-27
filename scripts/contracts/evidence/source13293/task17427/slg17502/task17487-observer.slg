@@ -1,0 +1,45 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.process as process
+
+observe input: Text -> Unit uses Console {
+    [input,; ~] => sources
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepare => context
+    context.expressionOperandDiagnostic => diagnostic
+    "DIAG code=$(diagnostic.code) kind=$(diagnostic.operatorKind) ast=$(diagnostic.astNode)" -> println
+    (context.ir -> len) > 512 or (context.nodes -> len) > 512
+        -> if {
+            "observer-overflow" -> println
+            return
+        }
+    0 => index!
+    index! < (context.nodes -> len) -> while {
+        context.nodes[index!] => node
+        "AST $(index!) kind=$(node.kind) parent=$(node.parent) start=$(node.start) token=$(node.payloadToken)" -> println
+        index! + 1 => index!
+    }
+    0 => ir!
+    ir! < (context.ir -> len) -> while {
+        context.ir[ir!] => node
+        "IR $(ir!) kind=$(node.kind) parent=$(node.parent) ast=$(node.astNode) flags=$(node.flags) type=$(node.typeKind)/$(node.typeOrigin)/$(node.typeSymbol)/$(node.typeId) input=$(node.operand0) opcode=$(node.opcode)" -> println
+        ir! + 1 => ir!
+    }
+    "observer-complete" -> println
+}
+
+run: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    (arguments -> len) != 2 -> if {
+        "observer-argument-error" -> println
+        return
+    }
+    arguments[1] -> file.mapText => owner
+    owner -> sourceDecoding.utf8Text -> observe
+}
+
+main { run() }
