@@ -13,6 +13,39 @@ internal static class StoragePlacementSourceTests
         int Size, int StartPosition, int EndPosition, string EndKind, int EndLine, int EndColumn,
         bool EmitAutomaticEnd);
 
+    private sealed record FunctionReference(string Frame, string CompilerName, string DeclarationName,
+        string ModuleName, int Line, int Column, bool Local, int? ValueArgument,
+        string? TypeArgument, string? SecondaryTypeArgument, string? TertiaryTypeArgument);
+
+    private static FunctionReference FunctionIdentity(object function, object semantic, bool normalize)
+    {
+        var name = (string)Property(function, "Name");
+        var declaration = Property(function, "DeclarationName") as string ?? name;
+        string? TypeName(string property)
+        {
+            var type = Property(function, property);
+            return type is null ? null : (string)semantic.GetType()
+                .GetMethod("FormatType", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(semantic, [type])!;
+        }
+        var value = Property(function, "SpecializedValue") as int?;
+        var primary = TypeName("SpecializedType");
+        var secondary = TypeName("SpecializedSecondaryType");
+        var tertiary = TypeName("SpecializedTertiaryType");
+        var identity = normalize ? declaration : name;
+        if (normalize)
+        {
+            if (value is not null) identity += "<value:" + value + ">";
+            if (primary is not null) identity += "<type:" + primary + ">";
+            if (secondary is not null) identity += "<secondary:" + secondary + ">";
+            if (tertiary is not null) identity += "<tertiary:" + tertiary + ">";
+        }
+        return new FunctionReference("function:" + identity + "@" + Property(function, "Line"),
+            name, declaration, (string)Property(function, "ModuleName"),
+            (int)Property(function, "Line"), (int)Property(function, "Column"),
+            (bool)Property(function, "IsLocal"), value, primary, secondary, tertiary);
+    }
+
     private static IEnumerable<CandidateReference> ObserveCandidates(string frame, Type analyzer,
         object statements, object? result, object functions)
     {
@@ -85,6 +118,8 @@ internal static class StoragePlacementSourceTests
         var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
         var indexUnits = analyzer.GetMethod("BuildUnitPositions", BindingFlags.NonPublic | BindingFlags.Static)!;
         var controlFacts = root.GetProperty("scope").GetString() == "source-control-facts";
+        var normalizeInstances = root.TryGetProperty("normalizeFunctionInstances", out var normalize)
+            && normalize.GetBoolean();
         var controlType = assembly.GetType("Sollang.Compiler.Semantics.FunctionControlFlowFacts", true)!;
         var cases = new List<object>();
         var identifiers = new HashSet<string>(StringComparer.Ordinal);
@@ -103,6 +138,7 @@ internal static class StoragePlacementSourceTests
             var unitReferences = new List<UnitReference>();
             var candidateReferences = new List<CandidateReference>();
             var standardFunctionReferences = new List<StandardFunctionReference>();
+            var functionReferences = new List<FunctionReference>();
             var warnings = Array.Empty<string>();
             string? failure = null;
             try
@@ -170,10 +206,14 @@ internal static class StoragePlacementSourceTests
                         Property(bound, "MainStatements"), null, Property(bound, "Functions")));
                 }
                 foreach (var pair in Entries(Property(bound, "FunctionStackFrames"))
-                    .OrderBy(pair => (string)Property(pair.Key, "Name"), StringComparer.Ordinal)
+                    .OrderBy(pair => normalizeInstances ? FunctionIdentity(pair.Key, semantic, true).Frame
+                        : (string)Property(pair.Key, "Name"),
+                        StringComparer.Ordinal)
                     .ThenBy(pair => (int)Property(pair.Key, "Line")))
                 {
-                    var name = "function:" + Property(pair.Key, "Name") + "@" + Property(pair.Key, "Line");
+                    var identity = FunctionIdentity(pair.Key, semantic, normalizeInstances);
+                    functionReferences.Add(identity);
+                    var name = identity.Frame;
                     if (controlFacts)
                     {
                         var standalone = (bool)controlType.GetMethod("RequiresStandaloneStandardLibraryEmission")!
@@ -200,7 +240,7 @@ internal static class StoragePlacementSourceTests
             cases.Add(new { id, status = passed ? "passed" : "failed", passed, source, expected,
                 actual = observed,
                 observedUnitPositions = unitReferences.Select(unit => unit.Frame + "|unit:" + unit.Kind + "@" + unit.Line + "," + unit.Position),
-                unitReferences, candidateReferences, standardFunctionReferences, expectedWarnings, warnings, failure });
+                unitReferences, candidateReferences, functionReferences, standardFunctionReferences, expectedWarnings, warnings, failure });
         }
         if (cases.Count == 0) throw new InvalidDataException("At least one source frame fixture is required.");
         string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
