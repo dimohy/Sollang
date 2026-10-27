@@ -42,6 +42,14 @@ internal static class StoragePlacementTests
         if (!string.Equals(assembly.Location, compiler, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The supplied compiler product was not loaded.");
         var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
+        if (root.TryGetProperty("scope", out var mergeScope)
+            && mergeScope.GetString() == "frame-merge")
+        {
+            var exit = StoragePlacementMergeTests.Run(assembly, analyzer, root, result,
+                compiler, fixture, compilerHash, fixtureHash);
+            context.Unload();
+            return exit;
+        }
         if (root.TryGetProperty("scope", out var sourceScope)
             && sourceScope.GetString() == "source-frames")
         {

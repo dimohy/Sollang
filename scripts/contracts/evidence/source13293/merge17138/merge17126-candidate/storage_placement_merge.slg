@@ -1,0 +1,89 @@
+namespace sollang.compiler.semantic.storage_placement_merge
+
+import sollang.compiler.semantic.storage_placement as placement
+
+# Source identities remain distinct across modules when plans are inlined.
+public struct Allocation {
+    public sourceModule: Int
+    public sourceAst: Int
+    public slot: Int
+    public size: Int
+}
+
+public struct Ending {
+    public sourceModule: Int
+    public unitAst: Int
+    public slot: Int
+    public size: Int
+}
+
+public struct Frame {
+    public slots: [placement.Slot; ~]
+    public allocations: [Allocation; ~]
+    public ends: [Ending; ~]
+}
+
+public enum Error { InvalidFrame }
+
+valid frame: ref Frame -> Bool {
+    0 => bytes!
+    frame.slots -> each slot {
+        slot.size < 0 or slot.size > placement.frameBudgetBytes() - bytes! or slot.align != 8
+            -> if { false -> return }
+        bytes! + slot.size => bytes!
+    }
+    frame.allocations -> each allocation {
+        allocation.sourceModule < 0 or allocation.sourceAst < 0
+            or allocation.slot < 0 or allocation.slot >= (frame.slots -> len) or allocation.size < 0
+            -> if { false -> return }
+        allocation.size > frame.slots[allocation.slot].size
+            -> if { false -> return }
+    }
+    frame.ends -> each ending {
+        ending.sourceModule < 0 or ending.unitAst < 0 or ending.slot < 0
+            or ending.slot >= (frame.slots -> len) or ending.size < 0
+            -> if { false -> return }
+        ending.size > frame.slots[ending.slot].size -> if { false -> return }
+    }
+    true
+}
+
+# Production MergeFramePlans admits or rejects each entire inline frame.
+# Duplicate allocation identities and entire ending groups retain the first plan.
+public mergeInline frame: mut Frame, inline: ref Frame -> Result<Bool, Error> {
+    not (frame -> valid) or not (inline -> valid)
+        -> if { Error.InvalidFrame -> Result<Bool, Error>.Err -> return }
+    0 => bytes!
+    frame.slots -> each slot { bytes! + slot.size => bytes! }
+    0 => inlineBytes!
+    inline.slots -> each slot { inlineBytes! + slot.size => inlineBytes! }
+    inlineBytes! > placement.frameBudgetBytes() - bytes!
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    frame.slots -> len => offset
+    frame.ends -> len => previousEnds
+    inline.slots -> each slot { frame.slots -> push(slot) }
+    inline.allocations -> each allocation {
+        false => present!
+        frame.allocations -> each existing {
+            existing.sourceModule == allocation.sourceModule and existing.sourceAst == allocation.sourceAst
+                -> if { true => present! }
+        }
+        not present! -> if {
+            frame.allocations -> push(Allocation { sourceModule: allocation.sourceModule, sourceAst: allocation.sourceAst, slot: allocation.slot + offset, size: allocation.size })
+        }
+    }
+    inline.ends -> each ending {
+        false => present!
+        0 => i!
+        i! < previousEnds -> while {
+            frame.ends[i!] => existing
+            existing.sourceModule == ending.sourceModule and existing.unitAst == ending.unitAst
+                -> if { true => present! }
+            i! + 1 => i!
+        }
+        not present! -> if {
+            frame.ends -> push(Ending { sourceModule: ending.sourceModule, unitAst: ending.unitAst, slot: ending.slot + offset, size: ending.size })
+        }
+    }
+    true -> Result<Bool, Error>.Ok
+}

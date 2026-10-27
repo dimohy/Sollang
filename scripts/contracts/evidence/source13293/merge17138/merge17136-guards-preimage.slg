@@ -1,0 +1,32 @@
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement as placement
+import sys.process as process
+
+reject inline: ref frameMerge.Frame -> Unit uses Console, Process {
+    frameMerge.Frame { slots: [placement.Slot { size: 8, align: 8 }; ~], allocations: [frameMerge.Allocation; ~], ends: [frameMerge.Ending; ~] } => frame!
+    frame! -> frameMerge.mergeInline(inline) -> when {
+        Ok(_) { process.exit(1) }
+        Err(_) {
+            (frame!.slots -> len) == 1 and frame!.slots[0].size == 8
+                and (frame!.allocations -> len) == 0 and (frame!.ends -> len) == 0 -> println
+        }
+    }
+}
+
+main {
+    frameMerge.Frame { slots: [placement.Slot { size: 4097, align: 8 }; ~], allocations: [frameMerge.Allocation; ~], ends: [frameMerge.Ending; ~] } => oversized
+    oversized -> reject
+    frameMerge.Frame { slots: [placement.Slot { size: 8, align: 8 }; ~], allocations: [frameMerge.Allocation { sourceModule: 0, sourceAst: 1, slot: 1, size: 8 }; ~], ends: [frameMerge.Ending; ~] } => invalidSlot
+    invalidSlot -> reject
+    frameMerge.Frame { slots: [placement.Slot { size: 8, align: 8 }; ~], allocations: [frameMerge.Allocation { sourceModule: -1, sourceAst: 1, slot: 0, size: 8 }; ~], ends: [frameMerge.Ending; ~] } => invalidSource
+    invalidSource -> reject
+    frameMerge.Frame { slots: [placement.Slot { size: 8, align: 8 }; ~], allocations: [frameMerge.Allocation { sourceModule: 1, sourceAst: 1, slot: 0, size: 8 }; ~], ends: [frameMerge.Ending { sourceModule: 1, unitAst: 2, slot: 0, size: 8 }; ~] } => frame!
+    frameMerge.Frame { slots: [placement.Slot { size: 16, align: 8 }; ~], allocations: [frameMerge.Allocation { sourceModule: 2, sourceAst: 1, slot: 0, size: 16 }; ~], ends: [frameMerge.Ending { sourceModule: 2, unitAst: 2, slot: 0, size: 16 }; ~] } => inline
+    frame! -> frameMerge.mergeInline(inline) -> when {
+        Err(_) { process.exit(2) }
+        Ok(accepted) { accepted -> println }
+    }
+    (frame!.allocations -> len) == 2 and frame!.allocations[1].sourceModule == 2
+        and frame!.allocations[1].sourceAst == 1 and frame!.allocations[1].slot == 1
+        and (frame!.ends -> len) == 2 and frame!.ends[1].sourceModule == 2 and frame!.ends[1].slot == 1 -> println
+}
