@@ -15,7 +15,7 @@ internal static class StoragePlacementTests
         WriteIndented = true
     };
 
-    private static object Property(object value, string name) =>
+    internal static object Property(object value, string name) =>
         value.GetType().GetProperty(name,
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(value)!;
@@ -42,6 +42,14 @@ internal static class StoragePlacementTests
         if (!string.Equals(assembly.Location, compiler, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The supplied compiler product was not loaded.");
         var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
+        if (root.TryGetProperty("scope", out var sourceScope)
+            && sourceScope.GetString() == "source-frames")
+        {
+            var exit = StoragePlacementSourceTests.Run(assembly, root, result, compiler, fixture,
+                compilerHash, fixtureHash);
+            context.Unload();
+            return exit;
+        }
         if (root.TryGetProperty("scope", out var scope)
             && scope.GetString() == "candidate-syntax")
         {

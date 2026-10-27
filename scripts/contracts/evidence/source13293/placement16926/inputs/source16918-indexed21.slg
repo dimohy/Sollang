@@ -1,0 +1,55 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.storage_placement_literals as placement
+import sys.process as process
+
+inspect name: Text, source: Text -> Unit uses Console, Process {
+    source -> ast.lowerExpression => nodes
+    source -> lexer.lex => tokens
+    source -> typeIds.arrayStorageSyntaxFromTokens(tokens, 0, nodes[0]) => storage
+    placement.LiteralRequest { astNode: 0, tokenStart: 0 } => request
+    0 -> sourceIndex.build(Int(nodes -> len), nodes) -> when {
+        Err(_) { process.exit(2) }
+        Ok(indexed) {
+            request -> placement.payload(source, nodes, tokens, storage, indexed) -> when {
+                Err(_) { process.exit(1) }
+                Ok(value) { value -> when {
+                        None { "$name|None|0" -> println }
+                        Some(payload) {
+                            payload.kind -> when {
+                                StaticArray { "$name|StaticArray|$(payload.bytes)" -> println }
+                                DynamicArray { "$name|DynamicArray|$(payload.bytes)" -> println }
+                                Dictionary { "$name|Dictionary|$(payload.bytes)" -> println }
+                            }
+                        }
+                } }
+            }
+        }
+    }
+}
+
+main {
+    "fixed" -> inspect("[1, 2]")
+    "dynamic" -> inspect("[1, 2; ~]")
+    "empty" -> inspect("[]")
+    "typed-empty" -> inspect("[Int; ~]")
+    "repeat-zero" -> inspect("[1; 0]")
+    "repeat-boundary" -> inspect("[1; 1025]")
+    "repeat-float" -> inspect("[1.5; 2]")
+    "repeat-exponent" -> inspect("[1e2; 2]")
+    "repeat-name" -> inspect("[seed; 2]")
+    "repeat-negative" -> inspect("[-1; 2]")
+    "repeat-character" -> inspect("['a'; 2]")
+    "strings" -> inspect("""["a", "b"]""")
+    "structs" -> inspect("[Point { x: 1 }]")
+    "arithmetic" -> inspect("[1 + 2, 3]")
+    "calls" -> inspect("[make(), 2]")
+    "nested-array" -> inspect("[[1, 2], [3, 4]]")
+    "dictionary-one" -> inspect("{ 1: 2 }")
+    "dictionary-three" -> inspect("{ 1: 2, 3: 4, 5: 6 }")
+    "typed-empty-dictionary" -> inspect("{Int: Int}")
+    "scalar" -> inspect("7")
+    "generic-repeat" -> inspect("[1; N]")
+}

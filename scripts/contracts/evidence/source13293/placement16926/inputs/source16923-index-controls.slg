@@ -1,0 +1,91 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sys.process as process
+
+show name: Text, start: Int, count: Int, nodes: ref [ast.AstNode; ~] -> Unit uses Console {
+    start -> sourceIndex.build(count, nodes) -> when {
+        Err(error) { error -> when {
+                InvalidRange { "$name|InvalidRange" -> println }
+                InvalidParent { "$name|InvalidParent" -> println }
+                CyclicParents { "$name|CyclicParents" -> println }
+        } }
+        Ok(indexed) {
+            "$name|owners:" -> print
+            indexed.frameOwner -> each owner { "$owner," -> print }
+            "|first:" -> print
+            indexed.firstChild -> each child { "$child," -> print }
+            "|next:" -> print
+            indexed.nextSibling -> each sibling { "$sibling," -> print }
+            "" -> println
+        }
+    }
+}
+
+showBindings source: Text -> Unit uses Console, Process {
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    0 -> sourceIndex.build(Int(nodes -> len), nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) {
+            0 => nodeIndex!
+            nodes -> each node {
+                node.kind == 9 -> if {
+                    tokens[node.payloadToken].span => binding
+                    source -> slice(binding.start, binding.length) -> print
+                    "|" -> print
+                    indexed.frameOwner[nodeIndex!] => owner
+                    tokens[nodes[owner].payloadToken].span => frame
+                    source -> slice(frame.start, frame.length) -> println
+                }
+                nodeIndex! + 1 => nodeIndex!
+            }
+        }
+    }
+}
+
+main {
+    "[]" -> ast.lowerExpression => nodes
+    "negative-start" -> show(-1, 1, nodes)
+    "negative-count" -> show(0, -1, nodes)
+    "oversized-range" -> show(0, 2, nodes)
+    nodes[0] => invalid!
+    -2 => invalid!.parent
+    [invalid!; ~] => negativeParent
+    "negative-parent" -> show(0, 1, negativeParent)
+    1 => invalid!.parent
+    [invalid!; ~] => highParent
+    "high-parent" -> show(0, 1, highParent)
+    0 => invalid!.parent
+    [invalid!; ~] => selfCycle
+    "self-cycle" -> show(0, 1, selfCycle)
+    7 => invalid!.kind
+    [invalid!; ~] => frameCycle
+    "frame-cycle" -> show(0, 1, frameCycle)
+    nodes[0] => left!
+    1 => left!.parent
+    nodes[0] => right!
+    0 => right!.parent
+    [left!, right!; ~] => mutualCycle
+    "mutual-cycle" -> show(0, 2, mutualCycle)
+    9 => left!.kind
+    8 => right!.kind
+    -1 => right!.parent
+    [left!, right!; ~] => forwardParent
+    "forward-parent" -> show(0, 2, forwardParent)
+    [nodes[0], nodes[0]; ~] => offsetRange
+    "offset-range" -> show(1, 1, offsetRange)
+    """
+    outer: -> Int {
+        inner: -> Int {
+            [1, 2] => values
+            values[0]
+        }
+        [3; 3] => outerValues
+        inner() + outerValues[0]
+    }
+    main {
+        outer() => result
+    }
+    """ -> showBindings
+}

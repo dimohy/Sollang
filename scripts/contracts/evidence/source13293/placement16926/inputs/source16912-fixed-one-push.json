@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "scope": "source-frames",
+  "cases": [
+    {
+      "id": "oversized-fixed",
+      "source": "main {\n    [1; 1025] => values\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ]
+    },
+    {
+      "id": "sequential-slot-growth",
+      "source": "main {\n    [1, 2] => first\n    [3; 4] => second\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|alloc:ArrayRepeatExpression@3,0,16",
+        "main|end:BindingStatement@2,0,8",
+        "main|end:BindingStatement@3,0,16"
+      ]
+    },
+    {
+      "id": "source-lifetimes-consume-budget",
+      "source": "main {\n    [1; 512] => first\n    [2; 512] => second\n    [3; 1] => third\n    first[0] => firstValue\n    second[0] => secondValue\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:2048/8,2048/8",
+        "main|alloc:ArrayRepeatExpression@2,0,2048",
+        "main|alloc:ArrayRepeatExpression@3,1,2048",
+        "main|end:BindingStatement@5,0,2048",
+        "main|end:BindingStatement@6,1,2048"
+      ]
+    },
+    {
+      "id": "mutable-owner-header",
+      "source": "main {\n    [Int; ~] => values!\n    values! -> push(1)\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:24/8",
+        "main|alloc:BindingStatement@2,0,24"
+      ]
+    },
+    {
+      "id": "readonly-dynamic-capacity",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values[0] => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:BindingStatement@4,0,8"
+      ]
+    },
+    {
+      "id": "readonly-dictionary",
+      "source": "main {\n    { 1: 2 } => scores\n    scores[1] => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:56/8",
+        "main|alloc:DictionaryLiteralExpression@2,0,56",
+        "main|end:BindingStatement@3,0,56"
+      ]
+    },
+    {
+      "id": "owning-transform-rejects-promotion",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> append(3) => grown\n    grown -> capacity => allocated\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ]
+    },
+    {
+      "id": "nested-branch-slot-reuse",
+      "source": "main {\n    true -> if {\n        [1, 2] => first\n    } else {\n        [3; 4] => second\n    }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@3,0,8",
+        "main|alloc:ArrayRepeatExpression@5,0,16",
+        "main|end:BindingStatement@3,0,8",
+        "main|end:BindingStatement@5,0,16"
+      ]
+    },
+    {
+      "id": "ordinary-function-frame",
+      "source": "local: -> Int {\n    [1, 2] => values\n    values[0]\n}\nmain {\n    local() => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:local@1|slots:8/8",
+        "function:local@1|alloc:ArrayLiteralExpression@2,0,8",
+        "function:local@1|end:IndexExpression@3,0,8"
+      ]
+    },
+    {
+      "id": "owned-input-rejects-promotion",
+      "source": "take values: move [Int; ~] -> Int {\n    values -> len\n}\nmain {\n    [1, 2; ~] => values\n    values -> take => count\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:take@1|slots:"
+      ]
+    }
+  ]
+}

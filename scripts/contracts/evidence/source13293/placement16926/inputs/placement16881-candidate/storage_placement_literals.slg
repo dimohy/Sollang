@@ -1,0 +1,88 @@
+namespace sollang.compiler.semantic.storage_placement_literals
+
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
+
+public enum Kind { StaticArray, DynamicArray, Dictionary }
+public struct Payload {
+    public kind: Kind
+    public bytes: Int
+}
+public struct LiteralRequest {
+    public astNode: Int
+    public tokenStart: Int
+}
+public enum Error { InvalidSourceDomain, InvalidLiteralShape, PayloadOverflow }
+
+# Storage syntax comes from the canonical token analysis. Candidate admission
+# uses the original AST before constant lowering or LLVM body scheduling.
+public payload request: LiteralRequest, source: Text, nodes: ref [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~], storage: typeIds.ArrayStorageSyntax, indexed: ref sourceIndex.SourceIndex -> Result<Option<Payload>, Error> {
+    indexed.astStart < 0 or indexed.astCount < 0 or request.astNode < 0
+        or request.astNode >= indexed.astCount or request.tokenStart < 0
+        or indexed.astStart > Int(nodes -> len) - indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<Option<Payload>, Error>.Err -> return }
+    nodes[indexed.astStart + request.astNode] => literal
+    literal.kind != 37 and literal.kind != 38
+        -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+    0 => elementCount!
+    -1 => firstElement!
+    false => excludedArrayElement!
+    indexed.firstChild[request.astNode] => childIndex!
+    childIndex! >= 0 -> while {
+        nodes[indexed.astStart + childIndex!] => child
+        child.kind != 12 and child.kind != 16 -> if {
+            firstElement! < 0 -> if { childIndex! => firstElement! }
+            elementCount! + 1 => elementCount!
+            child.kind == 13 or child.kind == 39
+                -> if { true => excludedArrayElement! }
+        }
+        indexed.nextSibling[childIndex!] => childIndex!
+    }
+    literal.kind == 37 -> if {
+        storage.isRepeat -> if {
+            storage.length < 0 or elementCount! != 1
+                -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+            nodes[indexed.astStart + firstElement!] => seed
+            seed.kind != 14
+                -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+            seed.payloadToken < 0 or request.tokenStart > Int(tokens -> len) - 1 - seed.payloadToken
+                -> if { Error.InvalidSourceDomain -> Result<Option<Payload>, Error>.Err -> return }
+            tokens[request.tokenStart + seed.payloadToken] => token
+            token.kind != grammar.tokenIdCharacter() -> if {
+                UIntSize(0) => offset!
+                offset! < token.span.length -> while {
+                    source -> byte(token.span.start + offset!) => value
+                    value == '.' or value == 'e' or value == 'E'
+                        -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+                    offset! + 1 => offset!
+                }
+            }
+            storage.length > 0 -> if { storage.length } else { 1 } => count
+            Int64(count) * 4 => bytes
+            bytes > 2147483647
+                -> if { Error.PayloadOverflow -> Result<Option<Payload>, Error>.Err -> return }
+            Payload { kind: Kind.StaticArray, bytes: Int(bytes) } -> Option<Payload>.Some -> Result<Option<Payload>, Error>.Ok -> return
+        }
+        elementCount! == 0 or excludedArrayElement!
+            -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+        Int64(elementCount!) * 4 => bytes
+        bytes > 2147483647
+            -> if { Error.PayloadOverflow -> Result<Option<Payload>, Error>.Err -> return }
+        storage.dynamic -> if { Kind.DynamicArray } else { Kind.StaticArray } => kind
+        Payload { kind: kind, bytes: Int(bytes) } -> Option<Payload>.Some -> Result<Option<Payload>, Error>.Ok -> return
+    }
+    elementCount! == 0
+        -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+    elementCount! % 2 != 0
+        -> if { Error.InvalidLiteralShape -> Result<Option<Payload>, Error>.Err -> return }
+    Int64(elementCount! / 2) * 2 => minimum
+    Int64(4) => capacity!
+    capacity! < minimum -> while { capacity! * 2 => capacity! }
+    ((capacity! + 23) / 8) * 8 + capacity! * 8 => bytes
+    bytes > 2147483647
+        -> if { Option<Payload>.None -> Result<Option<Payload>, Error>.Ok -> return }
+    Payload { kind: Kind.Dictionary, bytes: Int(bytes) } -> Option<Payload>.Some -> Result<Option<Payload>, Error>.Ok
+}
