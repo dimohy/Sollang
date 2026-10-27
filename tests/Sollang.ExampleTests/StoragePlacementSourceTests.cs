@@ -6,6 +6,7 @@ using static StoragePlacementTests;
 
 internal static class StoragePlacementSourceTests
 {
+    private sealed record UnitReference(string Frame, string Kind, int Line, int Column, int Position);
     private static IEnumerable<DictionaryEntry> Entries(object dictionary)
     {
         var iterator = ((IDictionary)dictionary).GetEnumerator();
@@ -34,12 +35,16 @@ internal static class StoragePlacementSourceTests
                 yield return name + "|end:" + UnitIdentity(pair.Key) + "," + Property(allocation, "SlotIndex") + "," + Property(allocation, "Size");
     }
 
-    private static IEnumerable<string> ObserveUnits(string name, MethodInfo index,
+    private static IEnumerable<UnitReference> ObserveUnits(string name, MethodInfo index,
         object statements, object? result)
     {
         var positions = index.Invoke(null, [statements, result])!;
         foreach (var pair in Entries(positions).OrderBy(pair => (int)pair.Value!))
-            yield return name + "|unit:" + UnitIdentity(pair.Key) + "," + pair.Value;
+        {
+            var location = pair.Key.GetType().Name == "ExpressionStatement" ? Property(pair.Key, "Expression") : pair.Key;
+            yield return new UnitReference(name, pair.Key.GetType().Name,
+                (int)Property(location, "Line"), (int)Property(location, "Column"), (int)pair.Value!);
+        }
     }
 
     internal static int Run(Assembly assembly, JsonElement root, string result,
@@ -65,7 +70,7 @@ internal static class StoragePlacementSourceTests
             var expected = item.GetProperty("expected").EnumerateArray().Select(value => value.GetString()!).ToArray();
             var expectedWarnings = item.GetProperty("warnings").EnumerateArray().Select(value => value.GetString()!).ToArray();
             var observed = new List<string>();
-            var observedUnitPositions = new List<string>();
+            var unitReferences = new List<UnitReference>();
             var warnings = Array.Empty<string>();
             string? failure = null;
             try
@@ -90,7 +95,7 @@ internal static class StoragePlacementSourceTests
                 warnings = ((IEnumerable)Property(bound, "Warnings")).Cast<object>()
                     .Select(warning => Property(warning, "Code") + "@" + Property(warning, "Line")).ToArray();
                 observed.AddRange(ObserveFrame("main", Property(bound, "MainStackFrame")));
-                observedUnitPositions.AddRange(ObserveUnits("main", indexUnits,
+                unitReferences.AddRange(ObserveUnits("main", indexUnits,
                     Property(bound, "MainStatements"), null));
                 foreach (var pair in Entries(Property(bound, "FunctionStackFrames"))
                     .OrderBy(pair => (string)Property(pair.Key, "Name"), StringComparer.Ordinal)
@@ -98,7 +103,7 @@ internal static class StoragePlacementSourceTests
                 {
                     var name = "function:" + Property(pair.Key, "Name") + "@" + Property(pair.Key, "Line");
                     observed.AddRange(ObserveFrame(name, pair.Value!));
-                    observedUnitPositions.AddRange(ObserveUnits(name, indexUnits,
+                    unitReferences.AddRange(ObserveUnits(name, indexUnits,
                         Property(pair.Key, "BlockBody"), Property(pair.Key, "Body")));
                 }
             }
@@ -109,7 +114,9 @@ internal static class StoragePlacementSourceTests
             var passed = failure is null && expected.SequenceEqual(observed) && expectedWarnings.SequenceEqual(warnings);
             if (passed) completed++;
             cases.Add(new { id, status = passed ? "passed" : "failed", passed, source, expected,
-                actual = observed, observedUnitPositions, expectedWarnings, warnings, failure });
+                actual = observed,
+                observedUnitPositions = unitReferences.Select(unit => unit.Frame + "|unit:" + unit.Kind + "@" + unit.Line + "," + unit.Position),
+                unitReferences, expectedWarnings, warnings, failure });
         }
         if (cases.Count == 0) throw new InvalidDataException("At least one source frame fixture is required.");
         string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));

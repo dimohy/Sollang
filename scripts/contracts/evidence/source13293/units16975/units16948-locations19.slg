@@ -1,0 +1,284 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sys.process as process
+import sollang.compiler.diagnostics as syntaxDiagnostics
+
+struct Frame { label: Text, name: Text, line: Int }
+
+lineAt source: Text, offset: UIntSize -> Int {
+    1 => line!
+    UIntSize(0) => cursor!
+    cursor! < offset -> while {
+        (source -> byte(cursor!)) == '\n' -> if { line! + 1 => line! }
+        cursor! + 1 => cursor!
+    }
+    line!
+}
+
+showFrame frame: Frame, source: Text, package: ref analysis.PackageAnalysis, plan: ref sourceUnits.UnitPlan -> Unit uses Console, Process {
+    package.ranges[0] => range
+    frame.line == 0 -> if { 0 } else { -1 } => selected!
+    0 => nodeIndex!
+    nodeIndex! < range.astCount -> while {
+        package.nodes[range.astStart + nodeIndex!] => node
+        frame.line == 0 and node.kind == 8 -> if { nodeIndex! => selected! }
+        frame.line > 0 and (node.kind == 7 or node.kind == 31)
+            and (source -> lineAt(node.start)) == frame.line
+            -> if {
+                package.tokens[range.tokenStart + node.payloadToken].span => token
+                (source -> slice(token.start, token.length)) == frame.name
+                    -> if { nodeIndex! => selected! }
+            }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    selected! < 0 -> if { process.exit(3) }
+    plan.units -> each unit {
+        unit.frameAst == selected! -> if {
+            package.nodes[range.astStart + unit.astNode] => node
+            package.tokens[range.tokenStart + unit.locationToken].span.start => offset
+            source -> syntaxDiagnostics.sourceLocation(offset) => location!
+            -1 => selectedFragment!
+            UIntSize(0) => selectedLength!
+            0 => fragmentIndex!
+            package.interpolations -> each fragment {
+                fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength
+                    and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!)
+                    -> if {
+                        fragmentIndex! => selectedFragment!
+                        fragment.payloadLength => selectedLength!
+                    }
+                fragmentIndex! + 1 => fragmentIndex!
+            }
+            selectedFragment! >= 0 -> if {
+                package.interpolations[selectedFragment!] => fragment
+                source -> slice(fragment.payloadStart, fragment.payloadLength) -> syntaxDiagnostics.sourceLocation(offset - fragment.payloadStart) => location!
+            }
+            unit.isResult -> if { "V" } else { "S" } => kind
+            "$(frame.label)|unit:$(location!.line):$(location!.column),$kind,$(unit.position)" -> println
+        }
+    }
+}
+
+inspect name: Text, source: Text, frames: [Frame] -> Unit uses Console, Process {
+    [source,; ~] => sources
+    sources -> analysis.analyze => package
+    package.ranges[0] => range
+    range.astStart -> sourceIndex.build(range.astCount, package.nodes) -> when {
+        Err(_) { process.exit(1) }
+        Ok(indexed) { package -> sourceUnits.build(0, indexed) -> when {
+                Err(_) { process.exit(2) }
+                Ok(plan) {
+                    "case:$name" -> println
+                    frames -> each frame { frame -> showFrame(source, package, plan) }
+                }
+        } }
+    }
+}
+
+main {
+    """
+    main {
+        [1; 1025] => values
+    }
+    """ => source0
+    "oversized-fixed" -> inspect(source0, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        [1, 2] => first
+        [3; 4] => second
+    }
+    """ => source1
+    "sequential-slot-growth" -> inspect(source1, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        [1; 512] => first
+        [2; 512] => second
+        [3; 1] => third
+        first[0] => firstValue
+        second[0] => secondValue
+    }
+    """ => source2
+    "source-lifetimes-consume-budget" -> inspect(source2, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        [Int; ~] => values!
+        1..3 -> each value {
+            values! -> push(value)
+        }
+    }
+    """ => source3
+    "mutable-loop-owner-header" -> inspect(source3, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        [1, 2; ~] => values
+        values -> capacity => allocated
+        values[0] => first
+    }
+    """ => source4
+    "readonly-dynamic-capacity" -> inspect(source4, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        { 1: 2 } => scores
+        scores[1] => first
+    }
+    """ => source5
+    "readonly-dictionary" -> inspect(source5, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        [1, 2; ~] => values
+        values -> append(3) => grown
+        grown -> capacity => allocated
+    }
+    """ => source6
+    "owning-transform-rejects-promotion" -> inspect(source6, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        true -> if {
+            [1, 2] => first
+        } else {
+            [3; 4] => second
+        }
+    }
+    """ => source7
+    "nested-branch-slot-reuse" -> inspect(source7, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    local: -> Int {
+        [1, 2] => values
+        values[0]
+    }
+    main {
+        local() => first
+    }
+    """ => source8
+    "ordinary-function-frame" -> inspect(source8, [Frame { label: "main", name: "main", line: 0 }, Frame { label: "function:local@1", name: "local", line: 1 }])
+    """
+    take values: move [Int; ~] -> Int {
+        values -> len
+    }
+    main {
+        [1, 2; ~] => values
+        values -> take => count
+    }
+    """ => source9
+    "owned-input-rejects-promotion" -> inspect(source9, [Frame { label: "main", name: "main", line: 0 }, Frame { label: "function:take@1", name: "take", line: 1 }])
+    """
+    outer: -> Int {
+        inner: -> Int {
+            [1, 2] => values
+            values[0]
+        }
+        [3; 3] => outerValues
+        inner() + outerValues[0]
+    }
+    main {
+        outer() => result
+    }
+    """ => source10
+    "nested-function-frame-boundary" -> inspect(source10, [Frame { label: "main", name: "main", line: 0 }, Frame { label: "function:inner@2", name: "inner", line: 2 }, Frame { label: "function:outer@1", name: "outer", line: 1 }])
+    """
+    combine left: Int, right: Int -> Int => left + right
+    main {
+        1 -> combine(true -> if {
+            2 => first
+            first
+        } else {
+            3 => second
+            second
+        }) => answer
+    }
+    """ => source11
+    "additional-argument-nested-scopes" -> inspect(source11, [Frame { label: "main", name: "main", line: 0 }, Frame { label: "function:combine@1", name: "combine", line: 1 }])
+    """
+    main {
+        2 -> when {
+            == 1 => 10
+            else => 20
+        } => answer
+    }
+    """ => source12
+    "inline-when-results" -> inspect(source12, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        1..3 -> fold 0 total, item {
+            total + item => next
+            next
+        } => answer
+    }
+    """ => source13
+    "fold-result-unit" -> inspect(source13, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        "value=$(true -> if { 2 } else { 3 })" -> println
+    }
+    """ => source14
+    "interpolation-if-result-units" -> inspect(source14, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    # Result-producing block functions compose as ordinary pipeline stages.
+    map value: Int -> Int block item: Int -> Int {
+        value -> yield
+    }
+    
+    filter value: Int -> Int block item: Int -> Bool {
+        value -> yield => accepted
+        accepted -> if { value } else { 0 }
+    }
+    
+    tap value: Int -> Int block item: Int {
+        value -> yield
+        value
+    }
+    
+    main {
+        5
+            -> map { it * 3 }
+            -> tap { "tap=$it" -> println }
+            -> filter { it > 10 }
+            => result
+    
+        "result=$result" -> println
+    }
+    """ => source15
+    "frozen-result-block-pipeline-source" -> inspect(source15, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        0 => counter!
+        counter! < 1 -> while {
+            counter! + 1 => counter!
+        }
+        counter! => answer
+    }
+    """ => source16
+    "while-statement-and-reassignment" -> inspect(source16, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    main {
+        2 -> when {
+            == 1 {
+                10 => one
+                one
+            }
+            else {
+                20 => other
+                other
+            }
+        } => answer
+    }
+    """ => source17
+    "block-when-results" -> inspect(source17, [Frame { label: "main", name: "main", line: 0 }])
+    """
+    plus value: Int, delta: Int -> Int => value + delta
+    map value: Int -> Int block item: Int -> Int {
+        value -> yield
+    }
+    main {
+        5
+            -> plus(true -> if {
+                2 => increment
+                increment
+            } else { 3 })
+            -> map { it * 2 }
+            => result
+    }
+    """ => source18
+    "block-pipeline-additional-argument" -> inspect(source18, [Frame { label: "main", name: "main", line: 0 }, Frame { label: "function:plus@1", name: "plus", line: 1 }])
+}

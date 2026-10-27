@@ -20,6 +20,7 @@ def main() -> int:
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--managed", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--reusable-compiler-directory", type=Path, action="append")
     args = parser.parse_args()
     contract = args.contract.resolve(strict=True)
     managed = args.managed.resolve(strict=True)
@@ -42,7 +43,9 @@ def main() -> int:
     for path in inputs:
         if not path.is_file():
             parser.error(f"missing input: {path}")
-    initialize_output(ROOT, output)
+    reusable = (None if args.reusable_compiler_directory is None
+                else [path.resolve(strict=True) for path in args.reusable_compiler_directory])
+    initialize_output(ROOT, output, reusable_directories=reusable)
     output.mkdir(parents=True)
     source_paths = {}
     for case in cases:
@@ -77,7 +80,7 @@ def main() -> int:
     print(f"[managed first] {result['status']} "
           f"{sum(row['passed'] for row in result['cases'])}/{len(cases)}; result={result_path}")
     if result["status"] == "passed":
-        cleanup_output(ROOT, output)
+        cleanup_output(ROOT, output, reusable_directories=reusable)
     return 0 if result["status"] == "passed" else 1
 
 

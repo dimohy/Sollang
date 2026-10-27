@@ -1,0 +1,195 @@
+import sollang.compiler.cli_format as formatter
+import sys.file as file
+
+reportFormatted sourceText: Text, label: Text -> Unit uses Console {
+    sourceText -> file.borrowText => source
+    source -> formatter.format => result
+    "case=$label,status=$(result.status)" -> println
+    result.bytes -> file.borrowBytes => formatted
+    formatted -> slice(UIntSize(0), formatted -> len) -> print
+}
+
+main {
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength
+            and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!) -> if {
+            fragmentIndex => selectedFragment!
+            fragment.payloadLength => selectedLength!
+        }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source0
+    source0 -> reportFormatted("and-continuation")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength
+            and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!)
+            -> if {
+                fragmentIndex => selectedFragment!
+                fragment.payloadLength => selectedLength!
+            }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source1
+    source1 -> reportFormatted("and-continuation-idempotent")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 or offset >= fragment.payloadStart or offset < fragment.payloadStart + fragment.payloadLength
+            or (selectedFragment! < 0 or fragment.payloadLength < selectedLength!) -> if {
+            fragmentIndex => selectedFragment!
+            fragment.payloadLength => selectedLength!
+        }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source2
+    source2 -> reportFormatted("or-continuation")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 or offset >= fragment.payloadStart or offset < fragment.payloadStart + fragment.payloadLength
+            or (selectedFragment! < 0 or fragment.payloadLength < selectedLength!)
+            -> if {
+                fragmentIndex => selectedFragment!
+                fragment.payloadLength => selectedLength!
+            }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source3
+    source3 -> reportFormatted("or-continuation-idempotent")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        true -> if {
+            fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength
+                and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!) -> if {
+                fragmentIndex => selectedFragment!
+                fragment.payloadLength => selectedLength!
+            }
+        }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source4
+    source4 -> reportFormatted("nested-continuation")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        true -> if {
+            fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength
+                and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!)
+                -> if {
+                    fragmentIndex => selectedFragment!
+                    fragment.payloadLength => selectedLength!
+                }
+        }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source5
+    source5 -> reportFormatted("nested-continuation-idempotent")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!) -> if {
+            fragmentIndex => selectedFragment!
+            fragment.payloadLength => selectedLength!
+        }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source6
+    source6 -> reportFormatted("plain-control")
+    """
+    struct Fragment {
+        parent: Int
+        payloadStart: Int
+        payloadLength: Int
+    }
+    main {
+        Fragment { parent: -1, payloadStart: 0, payloadLength: 8 } => fragment
+        2 => offset
+        -1 => selectedFragment!
+        0 => selectedLength!
+        0 => fragmentIndex
+        fragment.parent < 0 and offset >= fragment.payloadStart and offset < fragment.payloadStart + fragment.payloadLength and (selectedFragment! < 0 or fragment.payloadLength < selectedLength!)
+            -> if {
+                fragmentIndex => selectedFragment!
+                fragment.payloadLength => selectedLength!
+            }
+        "$(selectedFragment!),$(selectedLength!)" -> println
+    }
+    
+    """ => source7
+    source7 -> reportFormatted("plain-control-idempotent")
+}
