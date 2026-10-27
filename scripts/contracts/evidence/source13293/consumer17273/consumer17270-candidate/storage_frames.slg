@@ -1,0 +1,61 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement_package as storagePackage
+import sys.process as process
+
+# Match the allocation source inside the concrete owning function. Neither an
+# AST identity alone nor a physical global slot offset identifies an instance.
+storageAllocationForNode nodeIndex: Int, context: ref emitterContext.EmitContext, table: ref storagePackage.Table -> Result<Option<frameMerge.Allocation>, storagePackage.Error> {
+    nodeIndex -> storagePackage.frameForNode(context.ir, table) -> when {
+        Err(error) { error -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Err }
+        Ok(frame) { frame -> when {
+                None { Option<frameMerge.Allocation>.None -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok }
+                Some(frameIndex) {
+                    context.ir[nodeIndex] => node
+                    table.frames[frameIndex].range => range
+                    range.allocationStart => allocationIndex!
+                    allocationIndex! < range.allocationStart + range.allocationCount
+                        -> while {
+                            table.allocations[allocationIndex!] => allocation
+                            allocation.sourceModule == node.sourceModule and allocation.sourceAst == node.astNode
+                                -> if { allocation -> Option<frameMerge.Allocation>.Some -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok -> return }
+                            allocationIndex! + 1 => allocationIndex!
+                        }
+                    Option<frameMerge.Allocation>.None -> Result<Option<frameMerge.Allocation>, storagePackage.Error>.Ok
+                }
+        } }
+    }
+}
+
+# The checked final context owns the table. Slot indexes are local to a concrete
+# IR function even when several instances share the same source declaration.
+emitStorageFrameAllocations ownerIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console, Process {
+    context.storagePlacement -> when {
+        Err(_) {
+            context -> placementPreparationDiagnosticCount => failures
+            process.exit(1)
+        }
+        Ok(table) {
+            ownerIndex -> storagePackage.frameForNode(context.ir, table) -> when {
+                Err(_) {
+                    "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP $ownerIndex" -> println
+                    process.exit(1)
+                }
+                Ok(frame) { frame -> when {
+                        None { }
+                        Some(frameIndex) {
+                            table.frames[frameIndex].range => range
+                            0 => slotIndex!
+                            slotIndex! < range.slotCount -> while {
+                                table.slots[range.slotStart + slotIndex!] => slot
+                                "  %stack_slot$(slotIndex!) = alloca [$(slot.size) x i8], align $(slot.align)" -> println
+                                slotIndex! + 1 => slotIndex!
+                            }
+                        }
+                } }
+            }
+        }
+    }
+}
