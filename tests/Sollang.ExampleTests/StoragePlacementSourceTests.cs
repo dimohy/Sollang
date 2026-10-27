@@ -7,6 +7,32 @@ using static StoragePlacementTests;
 internal static class StoragePlacementSourceTests
 {
     private sealed record UnitReference(string Frame, string Kind, int Line, int Column, int Position);
+    private sealed record CandidateReference(string Frame, string Kind, int Line, int Column,
+        int Size, int StartPosition, int EndPosition, string EndKind, int EndLine, int EndColumn,
+        bool EmitAutomaticEnd);
+
+    private static IEnumerable<CandidateReference> ObserveCandidates(string frame, Type analyzer,
+        object statements, object? result, object functions)
+    {
+        var flags = BindingFlags.NonPublic | BindingFlags.Static;
+        var positions = analyzer.GetMethod("BuildUnitPositions", flags)!.Invoke(null, [statements, result])!;
+        var candidateType = analyzer.GetNestedType("StackCandidate", BindingFlags.NonPublic)!;
+        var candidates = Activator.CreateInstance(typeof(List<>).MakeGenericType(candidateType))!;
+        analyzer.GetMethod("CollectScopeCandidates", flags)!.Invoke(null,
+            [statements, result, functions, positions, candidates]);
+        foreach (var candidate in (IEnumerable)candidates)
+        {
+            var allocation = Property(candidate, "AllocationUnit");
+            var end = Property(candidate, "EndUnit");
+            var endLocation = end.GetType().Name == "ExpressionStatement" ? Property(end, "Expression") : end;
+            yield return new CandidateReference(frame, allocation.GetType().Name,
+                (int)Property(allocation, "Line"), (int)Property(allocation, "Column"),
+                (int)Property(candidate, "Size"), (int)Property(candidate, "StartPosition"),
+                (int)Property(candidate, "EndPosition"), end.GetType().Name,
+                (int)Property(endLocation, "Line"), (int)Property(endLocation, "Column"),
+                (bool)Property(candidate, "EmitAutomaticEnd"));
+        }
+    }
     private static IEnumerable<DictionaryEntry> Entries(object dictionary)
     {
         var iterator = ((IDictionary)dictionary).GetEnumerator();
@@ -54,8 +80,8 @@ internal static class StoragePlacementSourceTests
         var loadProgram = app.GetMethod("LoadProgram", BindingFlags.NonPublic | BindingFlags.Static)!;
         var target = Enum.Parse(assembly.GetType("Sollang.Compiler.CompilationTarget", true)!, "WindowsX64");
         var semanticType = assembly.GetType("Sollang.Compiler.Semantics.SemanticCompiler", true)!;
-        var indexUnits = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!
-            .GetMethod("BuildUnitPositions", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var analyzer = assembly.GetType("Sollang.Compiler.Semantics.StoragePlacementAnalyzer", true)!;
+        var indexUnits = analyzer.GetMethod("BuildUnitPositions", BindingFlags.NonPublic | BindingFlags.Static)!;
         var cases = new List<object>();
         var identifiers = new HashSet<string>(StringComparer.Ordinal);
         var loadedInputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -71,6 +97,7 @@ internal static class StoragePlacementSourceTests
             var expectedWarnings = item.GetProperty("warnings").EnumerateArray().Select(value => value.GetString()!).ToArray();
             var observed = new List<string>();
             var unitReferences = new List<UnitReference>();
+            var candidateReferences = new List<CandidateReference>();
             var warnings = Array.Empty<string>();
             string? failure = null;
             try
@@ -97,6 +124,8 @@ internal static class StoragePlacementSourceTests
                 observed.AddRange(ObserveFrame("main", Property(bound, "MainStackFrame")));
                 unitReferences.AddRange(ObserveUnits("main", indexUnits,
                     Property(bound, "MainStatements"), null));
+                candidateReferences.AddRange(ObserveCandidates("main", analyzer,
+                    Property(bound, "MainStatements"), null, Property(bound, "Functions")));
                 foreach (var pair in Entries(Property(bound, "FunctionStackFrames"))
                     .OrderBy(pair => (string)Property(pair.Key, "Name"), StringComparer.Ordinal)
                     .ThenBy(pair => (int)Property(pair.Key, "Line")))
@@ -105,6 +134,11 @@ internal static class StoragePlacementSourceTests
                     observed.AddRange(ObserveFrame(name, pair.Value!));
                     unitReferences.AddRange(ObserveUnits(name, indexUnits,
                         Property(pair.Key, "BlockBody"), Property(pair.Key, "Body")));
+                    var scopedFunctions = analyzer.GetMethod("CreateFunctionScope",
+                        BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null,
+                            [Property(bound, "Functions"), Property(pair.Key, "LocalFunctions")])!;
+                    candidateReferences.AddRange(ObserveCandidates(name, analyzer,
+                        Property(pair.Key, "BlockBody"), Property(pair.Key, "Body"), scopedFunctions));
                 }
             }
             catch (TargetInvocationException error) when (error.InnerException is not null)
@@ -116,7 +150,7 @@ internal static class StoragePlacementSourceTests
             cases.Add(new { id, status = passed ? "passed" : "failed", passed, source, expected,
                 actual = observed,
                 observedUnitPositions = unitReferences.Select(unit => unit.Frame + "|unit:" + unit.Kind + "@" + unit.Line + "," + unit.Position),
-                unitReferences, expectedWarnings, warnings, failure });
+                unitReferences, candidateReferences, expectedWarnings, warnings, failure });
         }
         if (cases.Count == 0) throw new InvalidDataException("At least one source frame fixture is required.");
         string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));

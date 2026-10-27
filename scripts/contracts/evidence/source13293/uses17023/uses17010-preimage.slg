@@ -1,0 +1,126 @@
+namespace sollang.compiler.semantic.storage_placement_uses
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+public enum Error { InvalidSourceDomain }
+public struct LastUse {
+    public astNode: Int
+    public position: Int
+}
+
+mutableSuffix nameToken: Int, tokenEnd: Int, source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int -> Bool {
+    nameToken + 1 => index!
+    index! < tokenEnd -> while {
+        tokens[tokenStart + index!] => token
+        token.kind == grammar.triviaIdWhitespace() or token.kind == grammar.triviaIdComment()
+            -> if { index! + 1 => index! } else {
+                token.span.length == 1 and (source -> byte(token.span.start)) == 33 -> return
+            }
+    }
+    false
+}
+
+# Match source expression names, including the mutable suffix. A call's path
+# and type syntax are not value-name reads in the C# source analyzer.
+contains nodeIndex: Int, ownerName: Text, ownerMutable: Bool, frame: Int, source: Text, package: ref analysis.PackageAnalysis, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<Bool, Error> {
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + nodeIndex] => node
+    indexed.frameOwner[nodeIndex] >= 0 and indexed.frameOwner[nodeIndex] != frame
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    node.kind == 7 or node.kind == 8 or node.kind == 31 or node.kind == 12
+        or node.kind == 16 or node.kind == 59 or node.kind == 84
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    node.kind == 15 or node.kind == 53 or node.kind == 54
+        -> if {
+            node.payloadToken < 0 or node.payloadToken >= range.tokenCount
+                -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+            package.tokens[range.tokenStart + node.payloadToken] => token
+            node.payloadToken -> mutableSuffix(node.firstToken + node.tokenCount, source, package.tokens, range.tokenStart) => mutableName
+            mutableName and not ownerMutable or ownerMutable and not mutableName => mutableMismatch
+            (source -> slice(token.span.start, token.span.length)) == ownerName
+                and not mutableMismatch
+                -> if { true -> Result<Bool, Error>.Ok -> return }
+        }
+    # Simple interpolation keeps lexical names in interpolation IR rather than
+    # the retained AST. Read that canonical table instead of scanning strings.
+    node.kind == 13 -> if {
+        package.interpolationRanges -> each interpolationRange {
+            interpolationRange.sourceModule == sourceModule
+                -> if {
+                    interpolationRange.nodeStart => fragmentIndex!
+                    fragmentIndex! < interpolationRange.nodeStart + interpolationRange.nodeCount
+                        -> while {
+                            package.interpolations[fragmentIndex!] => fragment
+                            fragment.sourceToken == node.payloadToken and fragment.kind == 1
+                                -> if {
+                                    fragment.payloadStart > (source -> len)
+                                        or fragment.payloadLength > (source -> len) - fragment.payloadStart
+                                        -> if { Error.InvalidSourceDomain -> Result<Bool, Error>.Err -> return }
+                                    source -> slice(fragment.payloadStart, fragment.payloadLength) => nameSource
+                                    nameSource -> lexer.lex => nameTokens
+                                    (nameTokens -> len) > 0 and nameTokens[0].kind == grammar.tokenIdIdentifier()
+                                        -> if {
+                                            nameTokens[0] => name
+                                            0 -> mutableSuffix(Int(nameTokens -> len), nameSource, nameTokens, 0) => mutableName
+                                            mutableName and not ownerMutable or ownerMutable and not mutableName => mutableMismatch
+                                            (nameSource -> slice(name.span.start, name.span.length)) == ownerName
+                                                and not mutableMismatch
+                                                -> if { true -> Result<Bool, Error>.Ok -> return }
+                                        }
+                                }
+                            fragmentIndex! + 1 => fragmentIndex!
+                        }
+                }
+        }
+    }
+    indexed.firstChild[nodeIndex] => child!
+    child! >= 0 -> while {
+        child! -> contains(ownerName, ownerMutable, frame, source, package, sourceModule, indexed) -> when {
+            Err(error) { error -> Result<Bool, Error>.Err -> return }
+            Ok(found) { found -> if { true -> Result<Bool, Error>.Ok -> return } }
+        }
+        indexed.nextSibling[child!] => child!
+    }
+    false -> Result<Bool, Error>.Ok
+}
+
+# A use in an inner branch extends the containing statement in the binding's
+# scope. It does not replace that statement with the inner expression's unit.
+public lastUse bindingAst: Int, source: Text, package: ref analysis.PackageAnalysis, sourceModule: Int, indexed: ref sourceIndex.SourceIndex, units: ref sourceUnits.UnitPlan -> Result<LastUse, Error> {
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        or bindingAst < 0 or bindingAst >= indexed.astCount
+        or (units.positionByAst -> len) != UIntSize(indexed.astCount)
+        or (units.scopeByAst -> len) != UIntSize(indexed.astCount)
+        or (units.frameByAst -> len) != UIntSize(indexed.astCount)
+        -> if { Error.InvalidSourceDomain -> Result<LastUse, Error>.Err -> return }
+    package.ranges[sourceModule] => range
+    range.astStart != indexed.astStart or range.astCount != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<LastUse, Error>.Err -> return }
+    package.nodes[range.astStart + bindingAst] => binding
+    (binding.kind != 9 and binding.kind != 61) or binding.payloadToken < 0
+        or binding.payloadToken >= range.tokenCount or units.positionByAst[bindingAst] < 0
+        -> if { Error.InvalidSourceDomain -> Result<LastUse, Error>.Err -> return }
+    package.tokens[range.tokenStart + binding.payloadToken] => name
+    source -> slice(name.span.start, name.span.length) => ownerName
+    binding.flags % 2 == 1 => ownerMutable
+    units.frameByAst[bindingAst] => frame
+    units.scopeByAst[bindingAst] => scope
+    LastUse { astNode: bindingAst, position: units.positionByAst[bindingAst] } => selected!
+    units.units -> each unit {
+        unit.frameAst == frame and unit.scopeAst == scope and unit.position > selected!.position
+            -> if {
+                unit.astNode -> contains(ownerName, ownerMutable, frame, source, package, sourceModule, indexed) -> when {
+                    Err(error) { error -> Result<LastUse, Error>.Err -> return }
+                    Ok(found) { found -> if {
+                            LastUse { astNode: unit.astNode, position: unit.position } => selected!
+                    } }
+                }
+            }
+    }
+    selected! -> Result<LastUse, Error>.Ok
+}

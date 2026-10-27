@@ -1,0 +1,240 @@
+{
+  "schemaVersion": 1,
+  "scope": "source-frames",
+  "cases": [
+    {
+      "id": "oversized-fixed",
+      "source": "main {\n    [1; 1025] => values\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ]
+    },
+    {
+      "id": "sequential-slot-growth",
+      "source": "main {\n    [1, 2] => first\n    [3; 4] => second\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|alloc:ArrayRepeatExpression@3,0,16",
+        "main|end:BindingStatement@2,0,8",
+        "main|end:BindingStatement@3,0,16"
+      ]
+    },
+    {
+      "id": "source-lifetimes-consume-budget",
+      "source": "main {\n    [1; 512] => first\n    [2; 512] => second\n    [3; 1] => third\n    first[0] => firstValue\n    second[0] => secondValue\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:2048/8,2048/8",
+        "main|alloc:ArrayRepeatExpression@2,0,2048",
+        "main|alloc:ArrayRepeatExpression@3,1,2048",
+        "main|end:BindingStatement@5,0,2048",
+        "main|end:BindingStatement@6,1,2048"
+      ]
+    },
+    {
+      "id": "mutable-loop-owner-header",
+      "source": "main {\n    [Int; ~] => values!\n    1..3 -> each value {\n        values! -> push(value)\n    }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:24/8",
+        "main|alloc:BindingStatement@2,0,24"
+      ]
+    },
+    {
+      "id": "readonly-dynamic-capacity",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values[0] => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:BindingStatement@4,0,8"
+      ]
+    },
+    {
+      "id": "readonly-dictionary",
+      "source": "main {\n    { 1: 2 } => scores\n    scores[1] => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:56/8",
+        "main|alloc:DictionaryLiteralExpression@2,0,56",
+        "main|end:BindingStatement@3,0,56"
+      ]
+    },
+    {
+      "id": "owning-transform-rejects-promotion",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> append(3) => grown\n    grown -> capacity => allocated\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ]
+    },
+    {
+      "id": "nested-branch-slot-reuse",
+      "source": "main {\n    true -> if {\n        [1, 2] => first\n    } else {\n        [3; 4] => second\n    }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@3,0,8",
+        "main|alloc:ArrayRepeatExpression@5,0,16",
+        "main|end:BindingStatement@3,0,8",
+        "main|end:BindingStatement@5,0,16"
+      ]
+    },
+    {
+      "id": "ordinary-function-frame",
+      "source": "local: -> Int {\n    [1, 2] => values\n    values[0]\n}\nmain {\n    local() => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:local@1|slots:8/8",
+        "function:local@1|alloc:ArrayLiteralExpression@2,0,8",
+        "function:local@1|end:IndexExpression@3,0,8"
+      ]
+    },
+    {
+      "id": "owned-input-rejects-promotion",
+      "source": "take values: move [Int; ~] -> Int {\n    values -> len\n}\nmain {\n    [1, 2; ~] => values\n    values -> take => count\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:take@1|slots:"
+      ]
+    },
+    {
+      "id": "nested-function-frame-boundary",
+      "source": "outer: -> Int {\n    inner: -> Int {\n        [1, 2] => values\n        values[0]\n    }\n    [3; 3] => outerValues\n    inner() + outerValues[0]\n}\nmain {\n    outer() => result\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:inner@2|slots:8/8",
+        "function:inner@2|alloc:ArrayLiteralExpression@3,0,8",
+        "function:inner@2|end:IndexExpression@4,0,8",
+        "function:outer@1|slots:12/8",
+        "function:outer@1|alloc:ArrayRepeatExpression@6,0,12",
+        "function:outer@1|end:AddExpression@7,0,12"
+      ]
+    },
+    {
+      "id": "additional-argument-nested-scopes",
+      "source": "combine left: Int, right: Int -> Int => left + right\nmain {\n    1 -> combine(true -> if {\n        2 => first\n        first\n    } else {\n        3 => second\n        second\n    }) => answer\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:combine@1|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "inline-when-results",
+      "source": "main {\n    2 -> when {\n        == 1 => 10\n        else => 20\n    } => answer\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "fold-result-unit",
+      "source": "main {\n    1..3 -> fold 0 total, item {\n        total + item => next\n        next\n    } => answer\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "interpolation-if-result-units",
+      "source": "main {\n    \"value=$(true -> if { 2 } else { 3 })\" -> println\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 20,
+      "referenceCoordinateEnd": 47,
+      "coordinateReason": "CSharp interpolation syntax nodes retain fragment-relative Line/Column, while canonical SLG interpolation AST tokens use source offsets. Compare the same physical tokens after this explicit fragment-origin conversion."
+    },
+    {
+      "id": "frozen-result-block-pipeline-source",
+      "source": "# Result-producing block functions compose as ordinary pipeline stages.\nmap value: Int -> Int block item: Int -> Int {\n    value -> yield\n}\n\nfilter value: Int -> Int block item: Int -> Bool {\n    value -> yield => accepted\n    accepted -> if { value } else { 0 }\n}\n\ntap value: Int -> Int block item: Int {\n    value -> yield\n    value\n}\n\nmain {\n    5\n        -> map { it * 3 }\n        -> tap { \"tap=$it\" -> println }\n        -> filter { it > 10 }\n        => result\n\n    \"result=$result\" -> println\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "while-statement-and-reassignment",
+      "source": "main {\n    0 => counter!\n    counter! < 1 -> while {\n        counter! + 1 => counter!\n    }\n    counter! => answer\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "block-when-results",
+      "source": "main {\n    2 -> when {\n        == 1 {\n            10 => one\n            one\n        }\n        else {\n            20 => other\n            other\n        }\n    } => answer\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "block-pipeline-additional-argument",
+      "source": "plus value: Int, delta: Int -> Int => value + delta\nmap value: Int -> Int block item: Int -> Int {\n    value -> yield\n}\nmain {\n    5\n        -> plus(true -> if {\n            2 => increment\n            increment\n        } else { 3 })\n        -> map { it * 2 }\n        => result\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:plus@1|slots:"
+      ],
+      "referenceCoordinateOrigin": 0,
+      "referenceCoordinateEnd": 0
+    },
+    {
+      "id": "interpolated-owner-last-use",
+      "source": "main {\n    [1, 2] => values\n    \"$(values[0])\" -> println\n    [3; 4] => later\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|alloc:ArrayRepeatExpression@4,0,16",
+        "main|end:BindingStatement@4,0,16",
+        "main|end:ExpressionStatement@3,0,8"
+      ]
+    },
+    {
+      "id": "nested-owner-containing-unit",
+      "source": "main {\n    [1, 2] => values\n    true -> if {\n        values[0] -> println\n    } else {\n        0 -> println\n    }\n    [3; 4] => later\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|alloc:ArrayRepeatExpression@8,0,16",
+        "main|end:BindingStatement@8,0,16",
+        "main|end:ExpressionStatement@3,0,8"
+      ]
+    },
+    {
+      "id": "mutable-owner-write-last-use",
+      "source": "main {\n    [1, 2] => values!\n    3 => values![0]\n    [4; 4] => later\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:16/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|alloc:ArrayRepeatExpression@4,0,16",
+        "main|end:BindingStatement@4,0,16",
+        "main|end:IndexAssignmentStatement@3,0,8"
+      ]
+    }
+  ]
+}
