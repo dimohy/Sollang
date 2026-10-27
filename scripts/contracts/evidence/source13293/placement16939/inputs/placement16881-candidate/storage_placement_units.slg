@@ -1,0 +1,166 @@
+namespace sollang.compiler.semantic.storage_placement_units
+
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import syntax.generated.slg as grammar
+
+public enum Error { InvalidSourceDomain, DuplicateUnit }
+public struct SourceUnit {
+    public astNode: Int
+    public frameAst: Int
+    public scopeAst: Int
+    public position: Int
+    public isResult: Bool
+}
+public struct UnitPlan {
+    public units: [SourceUnit; ~]
+    public positionByAst: [Int; ~]
+    public scopeByAst: [Int; ~]
+    public frameByAst: [Int; ~]
+    public isResultByAst: [Bool; ~]
+    public frameUnitCounts: [Int; ~]
+}
+
+expressionKind kind: Int -> Bool {
+    kind == 10 or kind == 11 or kind == 13 or kind == 14 or kind == 15
+        or (kind >= 18 and kind <= 25) or (kind >= 36 and kind <= 39)
+        or kind == 41 or kind == 49 or kind == 55 or kind == 57
+        or kind == 63 or kind == 70 or kind == 71 or kind == 83 or kind == 84
+}
+
+statementKind kind: Int -> Bool {
+    kind == 9 or kind == 45 or kind == 46 or kind == 47 or kind == 48
+        or kind == 53 or kind == 54 or kind == 61 or kind == 62
+}
+
+resultScope scopeAst: Int, package: ref analysis.PackageAnalysis, sourceModule: Int -> Bool {
+    scopeAst < 0 -> if { false -> return }
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + scopeAst] => scope
+    scope.kind == 7 or scope.kind == 31 or scope.kind == 58
+        -> if { true -> return }
+    scope.kind == 43 -> if {
+        scope.parent >= 0 and package.nodes[range.astStart + scope.parent].kind == 44
+            -> if { false -> return }
+        true -> return
+    }
+    false
+}
+
+walk nodeIndex: Int, frameIndex: Int, scopeAst: Int, nextPosition: Int, package: ref analysis.PackageAnalysis, sourceModule: Int, indexed: ref sourceIndex.SourceIndex, units: mut [SourceUnit; ~], lastExecutable: ref [Int; ~] -> Result<Int, Error> {
+    indexed.frameOwner[nodeIndex] >= 0 -> if { indexed.frameOwner[nodeIndex] } else { 0 } => owner
+    owner != frameIndex -> if { nextPosition -> Result<Int, Error>.Ok -> return }
+    package.ranges[sourceModule] => range
+    package.nodes[range.astStart + nodeIndex] => node
+    scopeAst => childScope!
+    node.kind == 0 or node.kind == 7 or node.kind == 8 or node.kind == 31 or node.kind == 43 or node.kind == 58
+        -> if { nodeIndex => childScope! }
+    package -> semanticContext.blockCallbackStartOffset(sourceModule, nodeIndex) => callbackStart
+    nextPosition => position!
+    -1 => upstreamStage!
+    node.kind == 48 -> if {
+        indexed.firstChild[nodeIndex] => child!
+        child! >= 0 -> while {
+            package.nodes[range.astStart + child!] => candidate
+            candidate.kind == 48 and candidate.start < callbackStart
+                -> if { child! => upstreamStage! }
+            indexed.nextSibling[child!] => child!
+        }
+        upstreamStage! >= 0 -> if {
+            upstreamStage! -> walk(frameIndex, scopeAst, position!, package, sourceModule, indexed, units, lastExecutable) -> when {
+                Err(error) { error -> Result<Int, Error>.Err -> return }
+                Ok(next) { next => position! }
+            }
+        }
+    }
+    # Match the existing C# switch's opaque expression decisions explicitly.
+    node.cstRuleId != grammar.ruleIdTypeApplicationExpression() and node.kind != 84
+        -> if {
+            indexed.firstChild[nodeIndex] => child!
+            child! >= 0 -> while {
+                child! != upstreamStage! -> if {
+                    childScope! => selectedScope!
+                    node.kind == 48 and package.nodes[range.astStart + child!].start >= callbackStart
+                        -> if { nodeIndex => selectedScope! }
+                    child! -> walk(frameIndex, selectedScope!, position!, package, sourceModule, indexed, units, lastExecutable) -> when {
+                        Err(error) { error -> Result<Int, Error>.Err -> return }
+                        Ok(next) { next => position! }
+                    }
+                }
+                indexed.nextSibling[child!] => child!
+            }
+        }
+    false => isResult!
+    node.parent >= 0 and (node.kind -> expressionKind)
+        and lastExecutable[node.parent] == nodeIndex
+        and (node.parent -> resultScope(package, sourceModule))
+        -> if { true => isResult! }
+    false => syntheticStage!
+    node.kind == 48 and node.parent >= 0 -> if {
+        package.nodes[range.astStart + node.parent] => parent
+        parent.kind == 48
+            and node.start < (package -> semanticContext.blockCallbackStartOffset(sourceModule, node.parent))
+            -> if { true => syntheticStage! }
+    }
+    ((node.kind -> statementKind) or node.flags / 524288 % 2 == 1 or isResult!) and not syntheticStage!
+        -> if {
+            units -> push(SourceUnit { astNode: nodeIndex, frameAst: frameIndex, scopeAst: scopeAst, position: position!, isResult: isResult! })
+            position! + 1 => position!
+        }
+    position! -> Result<Int, Error>.Ok
+}
+
+public build package: ref analysis.PackageAnalysis, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<UnitPlan, Error> {
+    sourceModule < 0 or sourceModule >= (package.ranges -> len)
+        -> if { Error.InvalidSourceDomain -> Result<UnitPlan, Error>.Err -> return }
+    package.ranges[sourceModule] => range
+    range.astStart != indexed.astStart or range.astCount != indexed.astCount
+        -> if { Error.InvalidSourceDomain -> Result<UnitPlan, Error>.Err -> return }
+    [Int; ~] => positions!
+    [Int; ~] => scopes!
+    [Int; ~] => frames!
+    [Bool; ~] => results!
+    [Int; ~] => counts!
+    [Int; ~] => lastExecutable!
+    [SourceUnit; ~] => units!
+    0 => nodeIndex!
+    nodeIndex! < range.astCount -> while {
+        positions! -> push(-1)
+        scopes! -> push(-1)
+        indexed.frameOwner[nodeIndex!] >= 0 -> if { indexed.frameOwner[nodeIndex!] } else { 0 } => owner
+        frames! -> push(owner)
+        results! -> push(false)
+        counts! -> push(-1)
+        -1 => last!
+        indexed.firstChild[nodeIndex!] => child!
+        child! >= 0 -> while {
+            package.nodes[range.astStart + child!] => candidate
+            (candidate.kind -> expressionKind) or (candidate.kind -> statementKind) or candidate.kind == 43
+                -> if { child! => last! }
+            indexed.nextSibling[child!] => child!
+        }
+        lastExecutable! -> push(last!)
+        nodeIndex! + 1 => nodeIndex!
+    }
+    0 => nodeIndex!
+    nodeIndex! < range.astCount -> while {
+        package.nodes[range.astStart + nodeIndex!] => node
+        node.kind == 0 or node.kind == 7 or node.kind == 8 or node.kind == 31
+            -> if {
+                nodeIndex! -> walk(nodeIndex!, nodeIndex!, 0, package, sourceModule, indexed, units!, lastExecutable!) -> when {
+                    Err(error) { error -> Result<UnitPlan, Error>.Err -> return }
+                    Ok(count) { count => counts![nodeIndex!] }
+                }
+            }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    units! -> each unit {
+        positions![unit.astNode] >= 0 -> if { Error.DuplicateUnit -> Result<UnitPlan, Error>.Err -> return }
+        unit.position => positions![unit.astNode]
+        unit.scopeAst => scopes![unit.astNode]
+        unit.isResult => results![unit.astNode]
+    }
+    UnitPlan { units: units!, positionByAst: positions!, scopeByAst: scopes!, frameByAst: frames!, isResultByAst: results!, frameUnitCounts: counts! } -> Result<UnitPlan, Error>.Ok
+}
