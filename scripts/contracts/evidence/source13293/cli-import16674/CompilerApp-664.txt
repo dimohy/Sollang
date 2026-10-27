@@ -1,0 +1,47 @@
+664:             .Select(Path.GetFullPath)
+665:             .Where(path => !standardLibraryPaths.Contains(path))
+666:             .Distinct(SourcePathComparer)
+667:             .ToArray();
+668:         if (explicitPaths.Length == 0)
+669:         {
+670:             return [];
+671:         }
+672: 
+673:         var loadedByPath = new Dictionary<string, CompilationSource>(SourcePathComparer);
+674:         var modules = new Dictionary<string, CompilationSource>(StringComparer.Ordinal);
+675:         foreach (var sourcePath in explicitPaths)
+676:         {
+677:             AddSource(
+678:                 Path.GetFullPath(sourcePath),
+679:                 expectedModule: null,
+680:                 project?.RootPackage,
+681:                 isDependencyRoot: false,
+682:                 target,
+683:                 loadedByPath,
+684:                 modules);
+685:         }
+686: 
+687:         var roots = loadedByPath.Values.Where(static source => source.Program.Statements.Count > 0).ToArray();
+688:         if (roots.Length > 1)
+689:         {
+690:             throw new SollangException("multiple source files contain executable top-level statements; exactly one root file may define the program entry point");
+691:         }
+692: 
+693:         var root = roots.Length == 1
+694:             ? roots[0]
+695:             : loadedByPath[explicitPaths[0]];
+696:         var moduleRoot = Path.GetDirectoryName(root.Path)
+697:             ?? Directory.GetCurrentDirectory();
+698:         var packagesByName = project?.Packages.ToDictionary(
+699:             static package => package.Manifest.Name,
+700:             StringComparer.Ordinal)
+701:             ?? new Dictionary<string, ProjectPackage>(StringComparer.Ordinal);
+702:         var states = new Dictionary<string, ModuleVisitState>(SourcePathComparer);
+703:         VisitImports(root, moduleRoot, packagesByName, target, loadedByPath, modules, states, []);
+704:         foreach (var sourcePath in explicitPaths)
+705:         {
+706:             var explicitSource = loadedByPath[Path.GetFullPath(sourcePath)];
+707:             if (!ReferenceEquals(explicitSource, root))
+708:             {
+709:                 VisitImports(explicitSource, moduleRoot, packagesByName, target, loadedByPath, modules, states, []);
+710:             }

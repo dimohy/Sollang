@@ -1,0 +1,32 @@
+2097:         }
+2098:         projectInput.multiProduct -> if {
+2099:             projectOption! -> runNativeSelectedProduct(projectInput, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+2100:         } else {
+2101:             projectOption! -> runNativeProjectDirectory(projectInput, projectInput.sourceDirectory, true, locked!, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+2102:         } => projectCode
+2103:         projectCode -> return
+2104:     }
+2105:     (sources! -> len) == 0 -> if {
+2106:         "sollang: no source file, sollang.project, or sollang.workspace was found" -> println
+2107:         1 -> return
+2108:     }
+2109:     Arena(0) => outputStorage!
+2110:     (outputOption! -> len) > 0 -> if {
+2111:         outputOption! => output
+2112:         target! -> nativeCliTargetMode => emitterMode
+2113:         [Text; ~] => emitterArguments
+2114:         sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+2115:         buildCode != 0 -> if { buildCode -> return }
+2116:         runAfterBuild -> if {
+2117:             output -> executeNativeProgram(programArguments!)
+2118:         } else { 0 }
+2119:     } else {
+2120:         sources![0] -> defaultNativeOutput(target!, outputStorage!) => output
+2121:         target! -> nativeCliTargetMode => emitterMode
+2122:         [Text; ~] => emitterArguments
+2123:         sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, emitterMode, emitterArguments, true) => buildCode
+2124:         buildCode != 0 -> if { buildCode -> return }
+2125:         runAfterBuild -> if {
+2126:             output -> executeNativeProgram(programArguments!)
+2127:         } else { 0 }
+2128:     }

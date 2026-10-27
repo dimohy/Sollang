@@ -1,0 +1,26 @@
+420: public loadForTarget selectedRoot: Text, manifests: ref [path.Path; ~], names: ref [path.Path; ~], target: Text, style: path.Style, diagnosticStorage: mut Arena -> SourceSet uses File {
+421:     (manifests -> len) == 0 or (manifests -> len) != (names -> len)
+422:         -> if {
+423:             SourceSet { status: 8, diagnostic: "source package context is incomplete", sources: [path.Path; ~], owners: [Int; ~] } -> return
+424:         }
+425:     [PackageSource; ~] => packages!
+426:     0 => packageIndex!
+427:     packageIndex! < (manifests -> len) -> while {
+428:         manifests[packageIndex!] -> packageSource(names, packageIndex!, selectedRoot, style) -> when {
+429:             Ok(package) { packages! -> push(package) }
+430:             Err(error) {
+431:                 error -> packageSourceDiagnostic -> materialize(diagnosticStorage) => diagnostic
+432:                 SourceSet { status: 8, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+433:             }
+434:         }
+435:         packageIndex! + 1 => packageIndex!
+436:     }
+437:     [SourceUnit; ~] => units!
+438:     selectedRoot -> path.fromText(style) => root
+439:     root -> readSource(0, "", false, names, style, target) => rootUnit
+440:     rootUnit.status != 0 -> if {
+441:         rootUnit -> sourceDiagnostic("", names, target, diagnosticStorage) => diagnostic
+442:         SourceSet { status: rootUnit.status, diagnostic: diagnostic, sources: [path.Path; ~], owners: [Int; ~] } -> return
+443:     }
+444:     units! -> push(rootUnit)
+445:     [1,; ~] => states!
