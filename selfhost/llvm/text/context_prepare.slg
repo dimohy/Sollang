@@ -59,6 +59,11 @@ lowerPreparedIr prepared: semanticContext.SemanticSnapshot, recursiveTypes: ref 
     sequentialIr
 }
 
+struct FunctionDeclarationRejection {
+    prepared: semanticContext.SemanticSnapshot
+    diagnostic: semanticDiagnostics.ExpressionOperandDiagnostic
+}
+
 struct SignatureRejection {
     prepared: semanticContext.SemanticSnapshot
     diagnostic: semanticDiagnostics.SignatureTypeDiagnostic
@@ -72,6 +77,7 @@ struct InterpolationImportRejection {
 enum CheckedPreparation {
     Ready(emitterContext.EmitContext)
     Rejected(SignatureRejection)
+    DeclarationRejected(FunctionDeclarationRejection)
     ImportRejected(InterpolationImportRejection)
 }
 
@@ -87,6 +93,12 @@ prepareCheckedCachedSnapshot request: ref PrepareRequest, prepared: move semanti
         CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
     }
     prepared -> semanticDiagnostics.firstPreparedSignatureTypeDiagnostic => diagnostic
+    prepared -> semanticDiagnostics.firstTopLevelFunctionNameDiagnostic => declaration
+    prepared -> semanticDiagnostics.functionDeclarationPrecedesSignature(declaration, diagnostic)
+        -> if {
+            CheckedPreparation.DeclarationRejected(FunctionDeclarationRejection { prepared: prepared, diagnostic: declaration }) => checked
+            CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
+        }
     diagnostic.sourceModule >= 0 -> if {
         CheckedPreparation.Rejected(SignatureRejection { prepared: prepared, diagnostic: diagnostic }) => checked
         CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
@@ -118,6 +130,11 @@ prepareCheckedSnapshot request: ref PrepareRequest, prepared: move semanticConte
         CheckedPreparation.ImportRejected(InterpolationImportRejection { prepared: prepared, diagnostic: importDiagnostic }) -> return
     }
     prepared -> semanticDiagnostics.firstPreparedSignatureTypeDiagnostic => diagnostic
+    prepared -> semanticDiagnostics.firstTopLevelFunctionNameDiagnostic => declaration
+    prepared -> semanticDiagnostics.functionDeclarationPrecedesSignature(declaration, diagnostic)
+        -> if {
+            CheckedPreparation.DeclarationRejected(FunctionDeclarationRejection { prepared: prepared, diagnostic: declaration }) -> return
+        }
     diagnostic.sourceModule >= 0 -> if {
         CheckedPreparation.Rejected(SignatureRejection { prepared: prepared, diagnostic: diagnostic }) -> return
     }

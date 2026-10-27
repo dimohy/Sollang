@@ -1,0 +1,93 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.semantic_cache as semanticCache
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sollang.compiler.llvm.emitter.diagnostics as emitterDiagnostics
+import sollang.compiler.llvm.target as llvmTarget
+import sys.file as file
+import sys.path as path
+import sys.process as process
+
+# Arguments contain the standard library paths, --user, and the user paths.
+# Preserve real source paths so relative library metadata and privacy resolve
+# through the same checked production preparation as the compiler CLI.
+observeLibraryCalls: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    0 => stdlibCount!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] => argument
+        argument == "--user" -> if {
+            paths! -> len => stdlibCount!
+        } else {
+            paths! -> push(argument)
+        }
+        index! + 1 => index!
+    }
+    [file.SourceText; ~] => owners!
+    paths! -> each location {
+        location -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    owners! -> each owner {
+        owner -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+    }
+    sources! -> analysis.analyzeCheckedTextSources -> when {
+        Err(code) { "parse error = $code" -> println
+            return }
+        Ok(value) { value }
+    } => package
+    package -> semanticContext.prepareAnalyzedWithStandardLibrarySources(stdlibCount!) => prepared
+    llvmTarget.windowsX64() => target
+    PrepareRequest {
+        sources: sources!
+        standardLibrarySourceStart: 0
+        standardLibrarySourceCount: stdlibCount!
+        pointerBitWidth: target.pointerBitWidth
+        targetArchitecture: target.architecture
+        cpuDispatchPolicy: target.dispatchPolicy
+        requiredCpuFeatures: target.requiredFeatures
+        allowedCpuFeatures: target.allowedFeatures
+        forbiddenCpuFeatures: target.forbiddenFeatures
+        supportsComputePool: true
+        expectedPathStyle: 1
+    } => request
+    semanticCache.disabled() => cache
+    request -> prepareCheckedPreparedPathsCached(prepared, paths!, "windows-x64", path.nativeStyle(), cache) -> when {
+        Err(code) { "prepare error = $code" -> println }
+        Ok(value) {
+            value.checked -> when {
+                DeclarationRejected(rejection) {
+                    rejection -> emitFunctionDeclarationRejection(paths!)
+                    "diagnostics = 1" -> println
+                }
+                Rejected(rejection) {
+                    rejection -> emitSignatureRejection(paths!)
+                    "diagnostics = 1" -> println
+                }
+                ImportRejected(rejection) {
+                    rejection -> emitInterpolationImportRejection(paths!)
+                    "diagnostics = 1" -> println
+                }
+                Ready(context) {
+                    context -> emitterDiagnostics.blockingDiagnosticCount => count
+                    count > 0 -> if {
+                        context -> emitterDiagnostics.emitBlockingDiagnostics
+                        "diagnostics = $count" -> println
+                    } else {
+                        context -> irInvariantDiagnosticCount => invariants
+                        invariants > 0 -> if { context -> emitIrInvariantDiagnostics }
+                        "diagnostics = $invariants" -> println
+                    }
+                }
+            }
+        }
+    }
+}
+
+main { observeLibraryCalls() }

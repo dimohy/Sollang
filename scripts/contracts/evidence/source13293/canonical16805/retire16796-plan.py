@@ -1,0 +1,6 @@
+from pathlib import Path
+import sys,json
+root=Path.cwd();b=root/'artifacts/scratch/resume-20261006-owner-continuation22';sys.path.insert(0,str(root/'scripts'));from completed_artifact_plan import consumer_closure_record
+names=['cli16740-native8','cli16731-native9','epoch16734-native66','epoch16737-native100','llvm16772-roles'];paths=[b/x/'result.json' for x in names];out=b/'retire16796-plan';out.mkdir(exist_ok=False)
+result=consumer_closure_record(root,b/'v16730/compiler-build01',paths,b/'v16382/compiler-build01',legacy_terminal=True)
+(out/'proposed-closure.json').write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8');(out/'intent.json').write_text(json.dumps(dict(status='qualified-plan-only-not-retired',reason='Reuse exact retire16728 precedent: after the declaration candidate is qualified and integrated,16730 will be superseded; its current tests are terminal and future final tests require new source epoch. Keep16382 and formatter12432, build next product from unchanged managed seed. Never broaden blocked16382 consumer guard.',consumers=list(map(str,paths)),requiresCandidateCacheComplete=True,requiresSourceEpochChange=True,claimsRetired=False,claimsGoalComplete=False),indent=2)+'\n',encoding='utf-8');print('Qualified proposed retirement of superseded16730 through existing unchanged guard; no closure written and no file removed')

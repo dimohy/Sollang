@@ -5435,6 +5435,20 @@ emitExpressionOperandDiagnostics context: ref emitterContext.EmitContext -> Unit
             }
             return
         }
+    diagnostic.code == 73 -> if {
+        context.ranges[diagnostic.sourceModule] => range
+        context.nodes[range.astStart + diagnostic.astNode] => function
+        context.modules[diagnostic.sourceModule] => identity
+        context.sources[diagnostic.sourceModule] => source
+        [UInt8; ~] => bytes!
+        source -> semanticDiagnostics.appendFunctionDeclarationName(context.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, function.payloadToken, bytes!)
+        bytes! -> file.borrowBytes => nameView
+        nameView -> slice(UIntSize(0), nameView -> len) => name
+        source -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+        context -> emitExpressionSemanticPrefix(diagnostic, location)
+        "function '$name' already exists" -> println
+        return
+    }
     diagnostic.code == 49 -> if {
         context.sources[diagnostic.sourceModule] -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
         context -> emitExpressionSemanticPrefix(diagnostic, location)
@@ -8241,9 +8255,27 @@ globalFunctionAliasAdmissionDiagnostics context: ref emitterContext.EmitContext,
     1
 }
 
+# Declaration duplicates precede body binding, but retain an earlier
+# invalid signature. Compare source order and token locations, not IR order.
+duplicateFunctionPrecedesSignature context: ref emitterContext.EmitContext -> Bool {
+    context.expressionOperandDiagnostic => diagnostic
+    diagnostic.code != 73 -> if { false -> return }
+    context.signatureTypeDiagnostic => signature
+    signature.sourceModule < 0 -> if { true -> return }
+    diagnostic.sourceModule != signature.sourceModule
+        -> if {
+            diagnostic.sourceModule < signature.sourceModule -> return
+        }
+    context.ranges[signature.sourceModule] => range
+    context.tokens[range.tokenStart + signature.nameToken] => token
+    diagnostic.locationOffset <= token.span.start
+}
+
 public blockingDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
     context.libraries.diagnosticCount > 0
         -> if { context.libraries.diagnosticCount -> return }
+    context -> duplicateFunctionPrecedesSignature
+        -> if { 1 -> return }
     context.signatureTypeDiagnostic.sourceModule >= 0 or context.inferredInputConflict.sourceModule >= 0
         -> if { 1 -> return }
     context -> globalFunctionAliasAdmissionDiagnostics(false) => aliasFailures
@@ -8469,6 +8501,11 @@ public emitBlockingDiagnostics context: ref emitterContext.EmitContext -> Unit u
         context -> emitLibraryBindingDiagnostics
         return
     }
+    context -> duplicateFunctionPrecedesSignature
+        -> if {
+            context -> emitExpressionOperandDiagnostics
+            return
+        }
     context.signatureTypeDiagnostic.sourceModule >= 0
         and (context.signatureTypeDiagnostic.code < 6 or context.signatureTypeDiagnostic.code == 15
         or context.signatureTypeDiagnostic.code == 16)

@@ -1,0 +1,110 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.target as llvmTarget
+import sys.path as path
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sys.file as file
+import sys.process as process
+
+
+showType index: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+    index >= 0 and index < (context.types -> len)
+        -> if {
+            context.types[index] => type
+            "type=$(index) kind=$(type.kind) origin=$(type.origin) symbol=$(type.symbol) first=$(type.first) second=$(type.second) status=$(type.status) generic=$(type.containsParameter) size=$(context.typeSizes[index])" -> println
+            type.first >= 0 -> if {
+                context.types[type.first] => first
+                "first kind=$(first.kind) origin=$(first.origin) symbol=$(first.symbol) status=$(first.status)" -> println
+            }
+            type.second >= 0 -> if {
+                context.types[type.second] => second
+                "second kind=$(second.kind) origin=$(second.origin) symbol=$(second.symbol) status=$(second.status)" -> println
+            }
+        }
+}
+
+observe: -> Unit uses Console, File, Process {
+    process.arguments() => arguments
+    [Text; ~] => paths!
+    0 => userSourceStart!
+    UIntSize(1) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] == "--" -> if {
+            paths! -> len => userSourceStart!
+        } else {
+            paths! -> push(arguments[index!])
+        }
+        index! + 1 => index!
+    }
+    [file.SourceText; ~] => owners!
+    paths! -> each path {
+        path -> file.mapText => owner
+        owners! -> push(owner)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len)
+        -> while {
+            owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+            sources! -> push(source)
+            sourceIndex! + 1 => sourceIndex!
+        }
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart!, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => request
+    request -> prepareCheckedPaths(paths!, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths!)
+            process.exit(1)
+            return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(paths!)
+            process.exit(1)
+            return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(paths!)
+            process.exit(1)
+            return
+        }
+        Ready(context) { context }
+    } => context
+    context -> prepareScheduledCoreEmitterState => state
+    0 => observed!
+    0 => irIndex!
+    irIndex! < (context.ir -> len) -> while {
+        context.ir[irIndex!] => call
+        call.sourceModule >= userSourceStart! and call.kind == 6 and call.opcode == -209
+            -> if {
+                "call=$(irIndex!) outerType=$(call.typeId)" -> println
+                call.typeId -> showType(context)
+                context.ir[call.operand0] => input
+                "input=$(call.operand0) type=$(input.typeId) legacy=$(input.typeKind),$(input.typeOrigin),$(input.typeSymbol)" -> println
+                input.typeId -> showType(context)
+                input.operand0 >= 0 -> if {
+                    context.ir[input.operand0] => firstValue
+                    "firstValue=$(input.operand0) type=$(firstValue.typeId) legacy=$(firstValue.typeKind),$(firstValue.typeOrigin),$(firstValue.typeSymbol)" -> println
+                    firstValue.typeId -> showType(context)
+                }
+                input -> arrayElementTypeId(context, state) => elementType
+                elementType -> showType(context)
+                context.ir[call.operand1] => body
+                "body=$(call.operand1) type=$(body.typeId) target=$(body.targetModule),$(body.symbol)" -> println
+                body.typeId -> showType(context)
+                context -> emitterContext.genericFunctionForCall(irIndex!) => outerGeneric
+                context -> emitterContext.genericFunctionForCall(call.operand1) => bodyGeneric
+                CallEnvironmentRequest { callerIndex: -1, callIndex: irIndex!, targetModule: body.targetModule, targetSymbol: body.symbol, hasArgument: true } -> targetFunctionIndex(context, state) => targetFunction
+                "outerGeneric=$(outerGeneric) bodyGeneric=$(bodyGeneric) function=$(targetFunction)" -> println
+                irIndex! -> hasWorkerScalarArrayElement(context, state) => scalar
+                irIndex! -> parallelUsesComputePool(context, state) => pool
+                body.typeId -> workerTryParallelResultType(context, state) => transferable
+                "scalarOnResult=$(scalar) pool=$(pool) callbackTransferable=$(transferable)" -> println
+                observed! + 1 => observed!
+            }
+        irIndex! + 1 => irIndex!
+    }
+    "observed=$(observed!)" -> println
+}
+
+main { observe() }

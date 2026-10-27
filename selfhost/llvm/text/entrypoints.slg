@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.semantic.diagnostics as semanticDiagnostics
+
 import sollang.compiler.semantic.semantic_cache as semanticCache
 import sollang.compiler.ast as ast
 import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
@@ -416,6 +418,10 @@ public emitCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths
     cached.words => pendingWords
     cached.checked => checked
     checked -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(diagnosticPaths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(diagnosticPaths)
             1 -> return
@@ -498,6 +504,10 @@ public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnostic
     cached.words => pendingWords
     cached.checked => checked
     checked -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(diagnosticPaths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(diagnosticPaths)
             1 -> return
@@ -555,6 +565,10 @@ public emitWasmCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userS
     PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
     prepareRequest.sources -> semanticContext.prepareWithStandardLibrarySources(prepareRequest.standardLibrarySourceCount) => basePrepared
     prepareRequest -> prepareCheckedSnapshot(basePrepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~]) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(paths)
             1 -> return
@@ -677,6 +691,29 @@ emitInterpolationImportRejection rejection: ref InterpolationImportRejection, pa
     rejection.prepared.package.tokens[range.tokenStart + firstImport.aliasToken] => aliasToken
     source -> slice(aliasToken.span.start, aliasToken.span.length) => alias
     "; use a qualified name such as '$alias.$name' or an import alias for the module" -> println
+}
+
+emitFunctionDeclarationRejection rejection: ref FunctionDeclarationRejection, paths: [Text; ~] -> Unit uses Console {
+    rejection.diagnostic => diagnostic
+    rejection.prepared.package.ranges[diagnostic.sourceModule] => range
+    rejection.prepared.modules[diagnostic.sourceModule] => identity
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> slice(UIntSize(0), rejection.prepared.package.sources[diagnostic.sourceModule] -> len) => source
+    "<main>" => moduleName!
+    identity.pathLength > 0 -> if { source -> slice(identity.pathStart, identity.pathLength) => moduleName! }
+    source -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    diagnostic.code == 49 -> if { "the sys namespace is reserved for the standard library" -> println
+        return }
+    rejection.prepared.package.nodes[range.astStart + diagnostic.astNode] => function
+    [UInt8; ~] => bytes!
+    source -> semanticDiagnostics.appendFunctionDeclarationName(rejection.prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, function.payloadToken, bytes!)
+    bytes! -> file.borrowBytes => nameView
+    nameView -> slice(UIntSize(0), nameView -> len) => name
+    diagnostic.code == 73 -> if { "function '$name' already exists" -> println } else {
+        diagnostic.code == 46 -> if { "function name '$name' is reserved" -> println } else {
+            "unsupported function declaration diagnostic $(diagnostic.code)" -> println
+        }
+    }
 }
 
 emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Unit uses Console {
@@ -987,6 +1024,10 @@ public emitCheckedFilesWithStandardLibrarySources paths: move [Text; ~], standar
     sources! -> emitSourceStyleNotes
     PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardLibrarySourceCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
     prepareRequest -> prepareCheckedLibraryFiles(paths, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(paths)
             1 -> return
@@ -1045,6 +1086,13 @@ public validateCheckedFiles paths: move [Text; ~], profilePhase: Int -> Int uses
     sources! -> emitSourceStyleNotes
     PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
     prepareRequest -> prepareCheckedLibraryFiles(paths, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            profilePhase == 7 -> if {
+                "semantic diagnostics = 1" -> runtime.eprintln
+                "ir diagnostics = not run (semantic failure)" -> runtime.eprintln
+            }
+            1 -> return
+        }
         Rejected(rejection) {
             profilePhase == 7 -> if {
                 "semantic diagnostics = 1" -> runtime.eprintln
@@ -1151,6 +1199,10 @@ public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Pr
     sources! -> emitSourceStyleNotes
     PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
     prepareRequest -> prepareCheckedLibraryFiles(paths, "linux-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(paths)
             1 -> return
@@ -1222,6 +1274,10 @@ public emitCheckedTestFilesWithStandardLibrarySources paths: [Text; ~], harness:
     PrepareRequest { sources: sources!, standardLibrarySourceStart: standardLibrarySourceStart, standardLibrarySourceCount: standardLibrarySourceCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedStyle } => prepareRequest
     targetKind == 0 -> if { "windows-x64" } else { "linux-x64" } => targetName
     prepareRequest -> prepareTestLibraryFiles(paths, sourceIndices, symbolIndices, targetName, path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
         Rejected(rejection) {
             rejection -> emitSignatureRejection(paths)
             1 -> return
