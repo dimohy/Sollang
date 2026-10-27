@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement as placement
+import sys.process as process
+
+reject range: frameMerge.FrameRange, ends: [frameMerge.Ending] -> Unit uses Console, Process {
+    frameMerge.Frame { slots: [placement.Slot { size: 8, align: 8 }; ~], allocations: [frameMerge.Allocation; ~], ends: [frameMerge.Ending; ~] } => frame!
+    [placement.Slot { size: 8, align: 8 },] => slots
+    [frameMerge.Allocation; ~] => allocations
+    frame! -> frameMerge.mergeRange(slots, allocations, ends, range) -> when {
+        Ok(_) { process.exit(1) }
+        Err(error) {
+            error -> when {
+                InvalidRange { "range" -> println }
+                InvalidFrame { "frame" -> println }
+            }
+            ((frame!.slots -> len) == 1 and frame!.slots[0].size == 8
+                and (frame!.allocations -> len) == 0 and (frame!.ends -> len) == 0) -> println
+        }
+    }
+}
+
+main {
+    [frameMerge.Ending; ~] => ends
+    frameMerge.FrameRange { slotStart: -1, slotCount: 1, allocationStart: 0, allocationCount: 0, endStart: 0, endCount: 0 } -> reject(ends)
+    frameMerge.FrameRange { slotStart: 1, slotCount: 2147483647, allocationStart: 0, allocationCount: 0, endStart: 0, endCount: 0 } -> reject(ends)
+    frameMerge.FrameRange { slotStart: 0, slotCount: 1, allocationStart: -1, allocationCount: 0, endStart: 0, endCount: 0 } -> reject(ends)
+    frameMerge.FrameRange { slotStart: 0, slotCount: 1, allocationStart: 0, allocationCount: 0, endStart: 0, endCount: 2147483647 } -> reject(ends)
+    [frameMerge.Ending { sourceModule: 0, unitAst: 2, slot: 1, size: 8 },] => invalidEnds
+    frameMerge.FrameRange { slotStart: 0, slotCount: 1, allocationStart: 0, allocationCount: 0, endStart: 0, endCount: 1 } -> reject(invalidEnds)
+}

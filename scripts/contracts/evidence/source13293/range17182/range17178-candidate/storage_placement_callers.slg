@@ -1,0 +1,42 @@
+namespace sollang.compiler.semantic.storage_placement_callers
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_frames as sourceFrames
+import sollang.compiler.semantic.storage_placement_frame_merge as frameAdapter
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement_inline_frames as inlineFrames
+
+public enum Error { InvalidSourcePlan, InvalidAdapter, InvalidInlineRange }
+
+# Source plans and the verified inline pool converge here before LLVM emission.
+# Async functions retain their empty frame and never import inline storage.
+public build frameAst: Int, source: Text, prepared: ref semanticContext.SemanticSnapshot, facts: ref expressionTypes.ExpressionTypeIdSet, sourceModule: Int, indexed: ref sourceIndex.SourceIndex, units: ref sourceUnits.UnitPlan, pool: ref inlineFrames.Pool -> Result<frameMerge.Frame, Error> {
+    frameAst -> sourceFrames.build(source, prepared, facts, sourceModule, indexed, units) -> when {
+        Err(_) { Error.InvalidSourcePlan -> Result<frameMerge.Frame, Error>.Err -> return }
+        Ok(plan) { plan -> frameAdapter.fromPlan(sourceModule) -> when {
+                Err(_) { Error.InvalidAdapter -> Result<frameMerge.Frame, Error>.Err -> return }
+                Ok(converted) { converted }
+        } }
+    } => frame!
+    prepared.package.ranges[sourceModule] => sourceRange
+    prepared.package.nodes[sourceRange.astStart + frameAst] => owner
+    owner.kind != 8 and owner.flags / 8 % 2 == 1 -> unless {
+        pool.frames -> each inline {
+            inline.sourceModule < 0 or inline.sourceModule >= (prepared.package.ranges -> len)
+                -> if { Error.InvalidInlineRange -> Result<frameMerge.Frame, Error>.Err -> return }
+            inline.frameAst < 0 or inline.frameAst >= prepared.package.ranges[inline.sourceModule].astCount
+                -> if { Error.InvalidInlineRange -> Result<frameMerge.Frame, Error>.Err -> return }
+            frameMerge.FrameRange { slotStart: inline.slotStart, slotCount: inline.slotCount, allocationStart: inline.allocationStart, allocationCount: inline.allocationCount, endStart: inline.endStart, endCount: inline.endCount } => range
+            frame! -> frameMerge.mergeRange(pool.slots, pool.allocations, pool.ends, range) -> when {
+                Err(_) { Error.InvalidInlineRange -> Result<frameMerge.Frame, Error>.Err -> return }
+                # A valid frame that exceeds the remaining budget is skipped
+                # unchanged, exactly like production MergeFramePlans.
+                Ok(_) { }
+            }
+        }
+    }
+    frame! -> Result<frameMerge.Frame, Error>.Ok
+}
