@@ -1,0 +1,1763 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import syntax.generated.slg as grammar
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sys.process as process
+
+# Responsibility fragment extracted from emitCore. State is passed by readonly
+# reference, preserving the original direct-call and allocation behavior.
+
+emitFoldRoleValue valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[valueIndex] => value
+    context.ir[ownerIndex] => owner
+    value.sourceModule == owner.sourceModule -> if {
+        context.ranges[value.sourceModule] => range
+        value.symbol >= 0 and value.symbol < range.symbolCount
+            -> if {
+                context.symbols[range.symbolStart + value.symbol] => role
+                role.astNode == owner.astNode -> if {
+                    owner -> sourceNode(context, state) => foldAst
+                    role -> symbols.implicitFoldRole => implicitRole
+                    role.nameToken == foldAst.secondaryToken or implicitRole == 0
+                        -> if {
+                            "  %v$(valueIndex) = load i32, ptr %fold$(ownerIndex)_acc_slot, align 4" -> println
+                        }
+                    role.nameToken == foldAst.tertiaryToken or implicitRole == 1
+                        -> if {
+                            "  %v$(valueIndex) = freeze i32 %fold$(ownerIndex)_item" -> println
+                        }
+                }
+            }
+    }
+}
+
+emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[expressionIndex] => expression
+    context.ir[expression.operand0] => foldSource
+    foldSource -> typeQueries.isRange(context) => isRangeFold
+    foldSource -> effectiveTypeId(context, state) => foldStorageTypeId
+    context.types -> typeIds.materializedReadTypeId(foldStorageTypeId) => foldReadTypeId
+    "  %fold$(expressionIndex)_source = " -> print
+    (foldSource -> referenceValueTypeId(context, state)) >= 0
+        and not (expression.operand0 -> referenceParameterValueIsMaterialized(functionIndex, context, state))
+        -> if {
+            "load " -> print
+            foldReadTypeId -> writeAggregateFieldTypeId(context, state)
+            ", ptr " -> print
+            expression.operand0 -> writeValue(functionIndex, context, state)
+            ", align $(context.typeAligns[foldReadTypeId])" -> println
+        } else {
+            "freeze " -> print
+            expression.operand0 -> writeReadOperand(functionIndex, context, state)
+            "" -> println
+        }
+    "  %fold$(expressionIndex)_acc_slot = alloca i32, align 4" -> println
+    isRangeFold -> if {
+        "  %fold$(expressionIndex)_first = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 0" -> println
+        "  %fold$(expressionIndex)_last = extractvalue { i32, i32 } %fold$(expressionIndex)_source, 1" -> println
+        "  %fold$(expressionIndex)_item_slot = alloca i32, align 4" -> println
+        "  store i32 %fold$(expressionIndex)_first, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+    } else {
+        context.types[foldReadTypeId].kind == 2 or context.types[foldReadTypeId].kind == 4 => foldSourceIsView
+        "  %fold$(expressionIndex)_data = extractvalue " -> print
+        foldSourceIsView
+            -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
+        " %fold$(expressionIndex)_source, 0" -> println
+        "  %fold$(expressionIndex)_length = extractvalue " -> print
+        foldSourceIsView
+            -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
+        " %fold$(expressionIndex)_source, 1" -> println
+        "  %fold$(expressionIndex)_index_slot = alloca i64, align 8" -> println
+        "  store i64 0, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
+    }
+    "  store i32 " -> print
+    expression.operand1 -> writeValue(functionIndex, context, state)
+    ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    "  br label %fold$(expressionIndex)_header" -> println
+    "fold$(expressionIndex)_header:" -> println
+    isRangeFold -> if {
+        "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+        "  %fold$(expressionIndex)_done = icmp sgt i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
+    } else {
+        "  %fold$(expressionIndex)_index = load i64, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
+        "  %fold$(expressionIndex)_done = icmp eq i64 %fold$(expressionIndex)_index, %fold$(expressionIndex)_length" -> println
+    }
+    "  br i1 %fold$(expressionIndex)_done, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_body" -> println
+    "fold$(expressionIndex)_body:" -> println
+    "  %fold$(expressionIndex)_acc = load i32, ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    not isRangeFold -> if {
+        "  %fold$(expressionIndex)_item_ptr = getelementptr i32, ptr %fold$(expressionIndex)_data, i64 %fold$(expressionIndex)_index" -> println
+        "  %fold$(expressionIndex)_item = load i32, ptr %fold$(expressionIndex)_item_ptr, align 4" -> println
+    }
+    functionIndex + 1 => foldRoleUse!
+    foldRoleUse! < expressionEnd -> while {
+        context.ir[foldRoleUse!] => foldRoleNode
+        NodeAncestorRequest { nodeIndex: foldRoleUse!, ownerIndex: expressionIndex } => foldRoleAncestorRequest
+        foldRoleAncestorRequest -> irDescendsFrom(context, state) => foldRoleInside
+        foldRoleInside and foldRoleNode.kind == 5 and foldRoleNode.symbol >= 0
+            -> if {
+                foldRoleUse! -> emitFoldRoleValue(expressionIndex, context, state)
+            }
+        foldRoleUse! + 1 => foldRoleUse!
+    }
+    expression.nextOperand -> emitRegion(emissionOrder, context, state)
+    expression.nextOperand -> regionResultValueIndex(context, state) => foldBodyResult
+    "  store i32 " -> print
+    foldBodyResult -> writeValue(functionIndex, context, state)
+    ", ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+    isRangeFold -> if {
+        "  %fold$(expressionIndex)_at_last = icmp sge i32 %fold$(expressionIndex)_item, %fold$(expressionIndex)_last" -> println
+        "  br i1 %fold$(expressionIndex)_at_last, label %fold$(expressionIndex)_exit, label %fold$(expressionIndex)_advance" -> println
+        "fold$(expressionIndex)_advance:" -> println
+        "  %fold$(expressionIndex)_next = add i32 %fold$(expressionIndex)_item, 1" -> println
+        "  store i32 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_item_slot, align 4" -> println
+    } else {
+        "  %fold$(expressionIndex)_next = add i64 %fold$(expressionIndex)_index, 1" -> println
+        "  store i64 %fold$(expressionIndex)_next, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
+    }
+    "  br label %fold$(expressionIndex)_header" -> println
+    "fold$(expressionIndex)_exit:" -> println
+    "  %v$(expressionIndex) = load i32, ptr %fold$(expressionIndex)_acc_slot, align 4" -> println
+}
+
+emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+    context.ir[requestedFunctionIndex] => function
+    function.sourceModule >= 0 and function.symbol >= 0
+        and not (context -> emitterContext.isGenericInstance(requestedFunctionIndex))
+        -> if {
+            context.ranges[function.sourceModule] => range
+            context.symbols[range.symbolStart + function.symbol].blockTypeNode >= 0
+                -> if {
+                    requestedFunctionIndex -> functionEnd(context, state) -> return
+                }
+        }
+    function.flags / 8 % 2 == 1
+        -> if {
+            requestedFunctionIndex -> emitAsyncFunction(context, state)
+        } else {
+            context -> emitterContext.isGenericInstance(requestedFunctionIndex)
+                -> if { requestedFunctionIndex -> emitFunctionNamed("_g$(requestedFunctionIndex)", context, state) } else {
+                    requestedFunctionIndex -> emitFunctionNamed("", context, state)
+                }
+        }
+}
+
+alignedAsyncContextOffset offset: Int, alignment: Int -> Int {
+    alignment <= 1 -> if { offset -> return }
+    ((offset + alignment - 1) / alignment) * alignment
+}
+
+asyncContextValueSize nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[nodeIndex] -> isAsyncTaskValue(context)
+        -> if { 2 * context.pointerBitWidth / 8 -> return }
+    context.ir[nodeIndex] -> effectiveTypeId(context, state) => typeId
+    context.types[typeId].kind == 4 -> if { 2 * context.pointerBitWidth / 8 -> return }
+    context.typeSizes[typeId] => valueSize
+    valueSize > 0 -> if { valueSize } else { 1 }
+}
+
+asyncResultContextSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncContextValueSize(context, state)
+}
+
+asyncParameterContextOffset functionIndex: Int, targetParameterIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncResultContextSize(context, state) => offset!
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        offset! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => offset!
+        parameterIndex! == targetParameterIndex -> if { offset! -> return }
+        offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
+        -1 => parameterIndex!
+    }
+    function.nextOperand => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        offset! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => offset!
+        parameterIndex! == targetParameterIndex -> if { offset! -> return }
+        offset! + (parameterIndex! -> asyncContextValueSize(context, state)) => offset!
+        parameter.nextOperand => parameterIndex!
+    }
+    -1
+}
+
+asyncArgumentContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncResultContextSize(context, state) => size!
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
+        size! + (parameterIndex! -> asyncContextValueSize(context, state)) => size!
+        -1 => parameterIndex!
+    }
+    function.nextOperand => parameterIndex!
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        size! -> alignedAsyncContextOffset(parameter -> storageAlign(context, state)) => size!
+        size! + (parameterIndex! -> asyncContextValueSize(context, state)) => size!
+        parameter.nextOperand => parameterIndex!
+    }
+    size!
+}
+
+# Match the existing C# Arena spill boundary on actual continuation slots.
+# Keep this check before target headers rather than failing in LLVM lowering.
+asyncArenaFrameDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    state.coroutine.slots -> each slot {
+        slot.typeOrigin == 1 and slot.typeSymbol == 15
+            and state.frozenReachableFunctions[slot.functionIr]
+            -> if {
+                slot.symbol < 0 -> if {
+                    "sollang: temporary value of type Arena cannot cross async suspension" -> println
+                    1 -> return
+                }
+                context.ranges[slot.sourceModule] => range
+                context.symbols[range.symbolStart + slot.symbol] => binding
+                context.tokens[range.tokenStart + binding.nameToken] => name
+                "sollang: binding '" -> print
+                context.sources[slot.sourceModule] -> slice(name.span.start, name.span.length) -> print
+                name.span.start + name.span.length < (context.sources[slot.sourceModule] -> len)
+                    and (context.sources[slot.sourceModule] -> byte(name.span.start + name.span.length)) == 33
+                    -> if { "!" -> print }
+                "' of type Arena cannot cross async suspension" -> println
+                1 -> return
+            }
+    }
+    0
+}
+
+asyncFrameBindingRoot bindingIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex < 0 or context.ir[functionIndex].flags / 8 % 2 != 1
+        or bindingIndex < 0 or bindingIndex >= (context.ir -> len)
+        -> if { -1 -> return }
+    context.ir[bindingIndex] => binding
+    binding.kind != 17 and binding.kind != 29 -> if { -1 -> return }
+    false => planned!
+    state.coroutine.slots -> each slot {
+        slot.functionIr == functionIndex and slot.sourceModule == binding.sourceModule and slot.symbol == binding.symbol
+            -> if { true => planned! }
+    }
+    not planned! -> if { -1 -> return }
+    functionIndex + 1 => candidate!
+    functionIndex -> functionEnd(context, state) => end
+    candidate! < end -> while {
+        context.ir[candidate!] => node
+        (node.kind == 17 or node.kind == 29) and node.sourceModule == binding.sourceModule and node.symbol == binding.symbol
+            -> if { candidate! -> return }
+        candidate! + 1 => candidate!
+    }
+    -1
+}
+
+asyncPointHasBinding point: typedIr.CoroutineSuspendPoint, bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[bindingIndex] => binding
+    false => found!
+    state.coroutine.slots -> each slot {
+        slot.functionIr == point.functionIr and slot.state == point.state
+            and slot.sourceModule == binding.sourceModule and slot.symbol == binding.symbol
+            -> if { true => found! }
+    }
+    found! -> if {
+        context.nodes[context.ranges[point.sourceModule].astStart + point.awaitAst].start => suspensionStart
+        context.moves -> each transfer {
+            transfer.bindingIr == bindingIndex and transfer.memberIr < 0
+                and (context.ir[transfer.siteIr] -> sourceStart(context, state)) <= suspensionStart
+                and (transfer.regionIr -> ownershipRegionContainsEdge(point.awaitIr, context, state))
+                -> if { false => found! }
+        }
+        state.frozenEnumMatchConsumed -> ownershipEmitter.enumMatchConsumes(bindingIndex, binding.kind, binding.operand0)
+            -> if {
+                point.functionIr + 1 => matchIndex!
+                point.functionIr -> functionEnd(context, state) => end
+                matchIndex! < end -> while {
+                    context.ir[matchIndex!] => match
+                    match.kind == 27 and match.operand0 >= 0
+                        and context.ir[match.operand0].kind == 5
+                        and context.ir[match.operand0].operand0 == bindingIndex
+                        and (match -> sourceStart(context, state)) <= suspensionStart
+                        and (match.parent -> ownershipRegionContainsEdge(point.awaitIr, context, state))
+                        -> if { false => found! }
+                    matchIndex! + 1 => matchIndex!
+                }
+            }
+    }
+    found!
+}
+
+asyncHasFrame functionIndex: Int, state: ref CoreEmitterState -> Bool {
+    false => found!
+    state.coroutine.slots -> each slot { slot.functionIr == functionIndex -> if { true => found! } }
+    found!
+}
+
+asyncFrameContextOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    (functionIndex -> asyncArgumentContextStorageSize(context, state)) -> alignedAsyncContextOffset(context.pointerBitWidth / 8)
+}
+
+asyncHasAwait functionIndex: Int, state: ref CoreEmitterState -> Bool {
+    false => found!
+    state.coroutine.points -> each point {
+        point.functionIr == functionIndex and point.kind == 0
+            -> if { true => found! }
+    }
+    found!
+}
+
+asyncChildContextOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncFrameContextOffset(context, state) => base
+    functionIndex -> asyncHasFrame(state) -> if { base + context.pointerBitWidth / 8 } else { base }
+}
+
+asyncBaseContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncHasAwait(state) -> if {
+        (functionIndex -> asyncChildContextOffset(context, state)) + 2 * context.pointerBitWidth / 8
+    } else {
+        functionIndex -> asyncHasFrame(state) -> if {
+            (functionIndex -> asyncFrameContextOffset(context, state)) + context.pointerBitWidth / 8
+        } else { functionIndex -> asyncArgumentContextStorageSize(context, state) }
+    }
+}
+
+asyncDiagnosticHeaderOffset functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    (functionIndex -> asyncBaseContextStorageSize(context, state)) -> alignedAsyncContextOffset(8)
+}
+
+asyncNonIteratorContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context -> usesReachableAsyncDiagnostics(state)
+        -> if { (functionIndex -> asyncDiagnosticHeaderOffset(context, state)) + 48 -> return }
+    functionIndex -> asyncBaseContextStorageSize(context, state)
+}
+
+# Int iterators have no owned payload. Their hidden cursor and limit must live
+# with the Task when a body suspends, just like C# hidden Int64 spill locals.
+asyncIntIteratorIsPersistent eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[eachIndex] => loop
+    loop.kind != 6 or not (loop.opcode -> typedIr.isDirectIterationOpcode)
+        or loop.operand0 < 0 or loop.operand1 < 0 -> if { false -> return }
+    not (context.ir[loop.operand0] -> typeQueries.isRange(context))
+        and loop.opcode != typedIr.repeatOpcode() -> if { false -> return }
+    eachIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { false -> return }
+    false => found!
+    state.coroutine.points -> each point {
+        point.functionIr == owner! -> if {
+            NodeAncestorRequest { nodeIndex: point.awaitIr, ownerIndex: eachIndex }
+                -> irDescendsFrom(context, state) -> if { true => found! }
+        }
+    }
+    found!
+}
+
+asyncIntIteratorContextOffset eachIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    eachIndex -> asyncIntIteratorIsPersistent(context, state)
+        -> unless { -1 -> return }
+    eachIndex => owner!
+    context.ir[owner!].kind != 0 -> while { context.ir[owner!].parent => owner! }
+    (owner! -> asyncNonIteratorContextStorageSize(context, state)) -> alignedAsyncContextOffset(8) => offset!
+    owner! + 1 => index!
+    index! < eachIndex -> while {
+        index! -> asyncIntIteratorIsPersistent(context, state)
+            -> if { offset! + 16 => offset! }
+        index! + 1 => index!
+    }
+    offset!
+}
+
+asyncContextStorageSize functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    functionIndex -> asyncNonIteratorContextStorageSize(context, state) => base
+    base -> alignedAsyncContextOffset(8) => offset!
+    functionIndex + 1 => index!
+    functionIndex -> functionEnd(context, state) => end
+    false => hasIterator!
+    index! < end -> while {
+        index! -> asyncIntIteratorIsPersistent(context, state)
+            -> if {
+                true => hasIterator!
+                offset! + 16 => offset!
+            }
+        index! + 1 => index!
+    }
+    hasIterator! -> if { offset! } else { base }
+}
+
+asyncIntIteratorForRole useIndex: Int, sourceModule: Int, symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    useIndex < 0 or useIndex >= (context.ir -> len)
+        or sourceModule < 0 or sourceModule >= (context.ranges -> len) or symbol < 0
+        or symbol >= context.ranges[sourceModule].symbolCount
+        -> if { -1 -> return }
+    context.symbols[context.ranges[sourceModule].symbolStart + symbol] => role
+    sourceModule -> isDirectEachRoleSymbol(symbol, context)
+        -> unless { -1 -> return }
+    useIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { -1 -> return }
+    owner! + 1 => index!
+    owner! -> functionEnd(context, state) => end
+    index! < end -> while {
+        context.ir[index!] => loop
+        loop.sourceModule == sourceModule and loop.astNode == role.astNode
+            and (index! -> asyncIntIteratorIsPersistent(context, state))
+            -> if {
+                NodeAncestorRequest { nodeIndex: useIndex, ownerIndex: index! }
+                    -> irDescendsFrom(context, state) -> if { index! -> return }
+            }
+        index! + 1 => index!
+    }
+    -1
+}
+
+emitAsyncIntRoleReads nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[nodeIndex] => node
+    node.sourceModule < 0 -> if { return }
+    nodeIndex => owner!
+    owner! >= 0 and context.ir[owner!].kind != 0 and context.ir[owner!].kind != 11
+        -> while { context.ir[owner!].parent => owner! }
+    owner! < 0 or context.ir[owner!].kind != 0 or context.ir[owner!].flags / 8 % 2 != 1
+        -> if { return }
+    context.ranges[node.sourceModule] => range
+    0 => symbol!
+    symbol! < range.symbolCount -> while {
+        nodeIndex -> asyncIntIteratorForRole(node.sourceModule, symbol!, context, state) => iterator
+        iterator >= 0 -> if {
+            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor = load i64, ptr %each$(iterator)_index_slot, align 8" -> println
+            "  %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex) = trunc i64 %each_role_m$(node.sourceModule)_s$(symbol!)_at$(nodeIndex)_cursor to i32" -> println
+        }
+        symbol! + 1 => symbol!
+    }
+}
+
+writeAsyncLocalAddress bindingIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.ir[bindingIndex].flags == 1 -> if { "%slot$(bindingIndex)" -> print } else { "%async_local$(bindingIndex)" -> print }
+}
+
+emitAsyncLocalStorage functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    functionIndex -> asyncHasFrame(state) -> if {
+        functionIndex -> asyncFrameContextOffset(context, state) => offset
+        "  %async_frame_slot = getelementptr i8, ptr %async_context, i64 $(offset)" -> println
+    }
+    functionIndex + 1 => bindingIndex!
+    functionIndex -> functionEnd(context, state) => end
+    bindingIndex! < end -> while {
+        bindingIndex! -> asyncIntIteratorContextOffset(context, state) => iteratorOffset
+        iteratorOffset >= 0 -> if {
+            "  %each$(bindingIndex!)_index_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset)" -> println
+            "  %each$(bindingIndex!)_limit_slot = getelementptr i8, ptr %async_context, i64 $(iteratorOffset + 8)" -> println
+        }
+        (bindingIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) == bindingIndex!
+            -> if {
+                "  " -> print
+                bindingIndex! -> writeAsyncLocalAddress(context)
+                " = alloca " -> print
+                context.ir[bindingIndex!] -> writeIrType(context, state)
+                ", align " -> print
+                context.ir[bindingIndex!] -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+}
+
+emitAsyncLocalWrite bindingIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    bindingIndex -> asyncFrameBindingRoot(functionIndex, context, state) => root
+    root >= 0 and context.ir[bindingIndex].flags != 1 and context.ir[bindingIndex].operand0 >= 0
+        and not (context.ir[bindingIndex].operand0 -> isAwaitSourceNode(context))
+        -> if {
+            "  store " -> print
+            context.ir[root] -> writeIrType(context, state)
+            " " -> print
+            context.ir[bindingIndex].operand0 -> writeValue(functionIndex, context, state)
+            ", ptr " -> print
+            root -> writeAsyncLocalAddress(context)
+            ", align " -> print
+            context.ir[root] -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+        }
+}
+
+emitAsyncAwaitResultWrite nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    state.coroutine.points -> each point {
+        point.kind == 0 and point.awaitIr == nodeIndex
+            -> if {
+                point.functionIr + 1 => bindingIndex!
+                point.functionIr -> functionEnd(context, state) => end
+                bindingIndex! < end -> while {
+                    context.ir[bindingIndex!] => binding
+                    binding.kind == 17 and binding.operand0 == nodeIndex
+                        and (bindingIndex! -> asyncFrameBindingRoot(point.functionIr, context, state)) == bindingIndex!
+                        -> if {
+                            "  store " -> print
+                            binding -> writeIrType(context, state)
+                            " %v$(nodeIndex), ptr " -> print
+                            bindingIndex! -> writeAsyncLocalAddress(context)
+                            ", align " -> print
+                            binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                        }
+                    bindingIndex! + 1 => bindingIndex!
+                }
+            }
+    }
+}
+
+asyncFrameValueAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node -> isAsyncTaskValue(context) -> if { context.pointerBitWidth / 8 -> return }
+    node -> effectiveTypeId(context, state) => typeId
+    typeId >= 0 and context.types[typeId].kind == 4
+        -> if { context.pointerBitWidth / 8 -> return }
+    node -> storageAlign(context, state)
+}
+
+asyncPointFrameSize point: typedIr.CoroutineSuspendPoint, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => size!
+    point.functionIr + 1 => bindingIndex!
+    point.functionIr -> functionEnd(context, state) => end
+    bindingIndex! < end -> while {
+        (bindingIndex! -> asyncFrameBindingRoot(point.functionIr, context, state)) == bindingIndex!
+            and (point -> asyncPointHasBinding(bindingIndex!, context, state))
+            -> if {
+                size! -> alignedAsyncContextOffset(context.ir[bindingIndex!] -> asyncFrameValueAlign(context, state)) => size!
+                size! + (bindingIndex! -> asyncContextValueSize(context, state)) => size!
+                bindingIndex! -> asyncFrameHasOwnershipFlag(context, state)
+                    -> if { size! + 1 => size! }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+    size!
+}
+
+asyncFrameHasOwnershipFlag bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.ir[bindingIndex] -> typedIr.isAsyncExpressionBinding
+        -> if { false -> return }
+    (context.ir[bindingIndex].kind == 29
+        and (bindingIndex -> patternBindingNeedsOwnershipFlag(context, state)))
+        or (bindingIndex -> namedBindingNeedsOwnershipFlag(state))
+}
+
+emitBoundedAsyncFrameTransfer bindingIndex: Int, stateIndex: Int, typeId: Int, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    Arena(0) => prefixStorage!
+    "async_frame$(stateIndex)_$(bindingIndex)" -> materialize(prefixStorage!) => prefix
+    Arena(0) => valueStorage!
+    loading -> if { "%$(prefix)_loaded" } else { "%$(prefix)_stored" } -> materialize(valueStorage!) => valueName
+    loading -> if {
+        "  %$(prefix)_loaded = load " -> print
+        typeId -> writeValueAbiTypeId(context, state)
+        ", ptr %$(prefix)_load_address, align $(context.typeAligns[typeId])" -> println
+        "$(prefix)_handle" -> emitBoundedArrayHandle(valueName, typeId, context, state)
+        "  store %sollang.array.i32 %$(prefix)_handle, ptr " -> print
+        bindingIndex -> writeAsyncLocalAddress(context)
+        ", align 8" -> println
+    } else {
+        "  %$(prefix)_stored = load %sollang.array.i32, ptr " -> print
+        bindingIndex -> writeAsyncLocalAddress(context)
+        ", align 8" -> println
+        "$(prefix)_inline" -> emitBoundedArrayValueFromHandle(valueName, typeId, context, state)
+        "  store " -> print
+        typeId -> writeValueAbiTypeId(context, state)
+        " %$(prefix)_inline, ptr %$(prefix)_store_address, align $(context.typeAligns[typeId])" -> println
+    }
+}
+
+emitAsyncFrameTransfer point: typedIr.CoroutineSuspendPoint, loading: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    loading -> if {
+        "  %async_frame$(point.state)_load = load ptr, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+    }
+    0 => offset!
+    point.functionIr + 1 => bindingIndex!
+    point.functionIr -> functionEnd(context, state) => end
+    bindingIndex! < end -> while {
+        (bindingIndex! -> asyncFrameBindingRoot(point.functionIr, context, state)) == bindingIndex!
+            and (point -> asyncPointHasBinding(bindingIndex!, context, state))
+            -> if {
+                context.ir[bindingIndex!] => binding
+                offset! -> alignedAsyncContextOffset(binding -> asyncFrameValueAlign(context, state)) => offset!
+                "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
+                loading -> if { "load_address" -> print } else { "store_address" -> print }
+                " = getelementptr i8, ptr %async_frame$(point.state)_" -> print
+                loading -> if { "load" -> print } else { "store" -> print }
+                ", i64 $(offset!)" -> println
+                binding -> boundedArrayValueTypeId(context, state) => boundedFrameType
+                boundedFrameType >= 0 -> if {
+                    bindingIndex! -> emitBoundedAsyncFrameTransfer(point.state, boundedFrameType, loading, context, state)
+                } else {
+                    "  %async_frame$(point.state)_$(bindingIndex!)_" -> print
+                    loading -> if { "loaded" -> print } else { "stored" -> print }
+                    " = load " -> print
+                    binding -> writeIrType(context, state)
+                    ", ptr " -> print
+                    loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_load_address" -> print } else { bindingIndex! -> writeAsyncLocalAddress(context) }
+                    ", align " -> print
+                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                    "  store " -> print
+                    binding -> writeIrType(context, state)
+                    " %async_frame$(point.state)_$(bindingIndex!)_" -> print
+                    loading -> if { "loaded" -> print } else { "stored" -> print }
+                    ", ptr " -> print
+                    loading -> if { bindingIndex! -> writeAsyncLocalAddress(context) } else { "%async_frame$(point.state)_$(bindingIndex!)_store_address" -> print }
+                    ", align " -> print
+                    binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                }
+                offset! + (bindingIndex! -> asyncContextValueSize(context, state)) => offset!
+                bindingIndex! -> asyncFrameHasOwnershipFlag(context, state)
+                    -> if {
+                        "store" => phase!
+                        loading -> if { "load" => phase! }
+                        "  %async_frame$(point.state)_$(bindingIndex!)_$(phase!)_flag_address = getelementptr i8, ptr %async_frame$(point.state)_" -> print
+                        loading -> if { "load" -> print } else { "store" -> print }
+                        ", i64 $(offset!)" -> println
+                        "  %async_frame$(point.state)_$(bindingIndex!)_$(phase!)_flag = load i1, ptr " -> print
+                        loading -> if { "%async_frame$(point.state)_$(bindingIndex!)_$(phase!)_flag_address" -> print } else { "%v$(bindingIndex!)_owned" -> print }
+                        ", align 1" -> println
+                        "  store i1 %async_frame$(point.state)_$(bindingIndex!)_$(phase!)_flag, ptr " -> print
+                        loading -> if { "%v$(bindingIndex!)_owned" -> print } else { "%async_frame$(point.state)_$(bindingIndex!)_$(phase!)_flag_address" -> print }
+                        ", align 1" -> println
+                        offset! + 1 => offset!
+                    }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+    loading -> if {
+        "  call void @free(ptr %async_frame$(point.state)_load)" -> println
+        "  store ptr null, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+    }
+}
+
+emitAsyncWorkerEntry functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    "  %async_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
+    "  %async_context = load ptr, ptr %async_context_slot, align 8" -> println
+    functionIndex -> emitAsyncContextParameters(context, state)
+}
+
+emitAsyncContextParameters functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncPrimaryParameter
+        functionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncPrimaryOffset
+        "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncPrimaryOffset)" -> println
+        asyncPrimaryParameter -> boundedArrayValueTypeId(context, state) => asyncPrimaryBoundedType
+        "  %arg" -> print
+        asyncPrimaryBoundedType >= 0 -> if { "_bounded" -> print }
+        " = load " -> print
+        asyncPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        ", ptr %async_arg_address, align " -> print
+        asyncPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncPrimaryBoundedType >= 0 -> if {
+            "arg" -> emitBoundedArrayHandle("%arg_bounded", asyncPrimaryBoundedType, context, state)
+        }
+    }
+    function.nextOperand => asyncAdditionalParameterIndex!
+    1 => asyncAdditionalParameterOrdinal!
+    asyncAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncAdditionalParameterIndex!] => asyncAdditionalParameter
+        functionIndex -> asyncParameterContextOffset(asyncAdditionalParameterIndex!, context, state) => asyncAdditionalOffset
+        "  %async_arg$(asyncAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncAdditionalOffset)" -> println
+        asyncAdditionalParameter -> boundedArrayValueTypeId(context, state) => asyncAdditionalBoundedType
+        "  %arg$(asyncAdditionalParameterOrdinal!)" -> print
+        asyncAdditionalBoundedType >= 0 -> if { "_bounded" -> print }
+        " = load " -> print
+        asyncAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        ", ptr %async_arg$(asyncAdditionalParameterOrdinal!)_address, align " -> print
+        asyncAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncAdditionalBoundedType >= 0 -> if {
+            "arg$(asyncAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(asyncAdditionalParameterOrdinal!)_bounded", asyncAdditionalBoundedType, context, state)
+        }
+        asyncAdditionalParameter.nextOperand => asyncAdditionalParameterIndex!
+        asyncAdditionalParameterOrdinal! + 1 => asyncAdditionalParameterOrdinal!
+    }
+}
+
+emitAsyncResumeDispatch functionIndex: Int, state: ref CoreEmitterState -> Unit uses Console {
+    "  %async_resume_state_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 5" -> println
+    "  %async_resume_state = load i32, ptr %async_resume_state_slot, align 4" -> println
+    "  switch i32 %async_resume_state, label %async_state_invalid [ i32 0, label %async_state_start" -> print
+    state.coroutine.points -> each point {
+        point.functionIr == functionIndex
+            -> if {
+                " i32 $(point.state), label %async_resume$(point.state)" -> print
+            }
+    }
+    " ]" -> println
+    "async_state_invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "async_state_start:" -> println
+}
+
+emitAsyncSuspendPoint point: typedIr.CoroutineSuspendPoint, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    point.kind == 1 -> if { point -> emitAsyncDiagnosticSuspension(-1, context, state) }
+    point -> asyncPointFrameSize(context, state) => frameSize
+    frameSize > 0 -> if {
+        "  %async_frame$(point.state)_store = call ptr @malloc(i64 $(frameSize))" -> println
+        "  %async_frame$(point.state)_allocated = icmp ne ptr %async_frame$(point.state)_store, null" -> println
+        "  br i1 %async_frame$(point.state)_allocated, label %async_frame$(point.state)_ready, label %async_frame$(point.state)_failed" -> println
+        "async_frame$(point.state)_failed:" -> println
+        "  call void @llvm.trap()" -> println
+        "  unreachable" -> println
+        "async_frame$(point.state)_ready:" -> println
+        "  store ptr %async_frame$(point.state)_store, ptr %async_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+        point -> emitAsyncFrameTransfer(false, context, state)
+    }
+    "  store i32 $(point.state), ptr %async_resume_state_slot, align 4" -> println
+    "  ret i1 false" -> println
+    "async_resume$(point.state):" -> println
+    frameSize > 0 -> if { point -> emitAsyncFrameTransfer(true, context, state) }
+}
+
+emitAsyncYieldPoint nodeIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    state.coroutine.points -> each point {
+        point.functionIr == functionIndex and point.kind == 1 and point.awaitIr == nodeIndex
+            -> if { point -> emitAsyncSuspendPoint(context, state) }
+    }
+}
+
+emitAsyncAwaitPoint nodeIndex: Int, producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    false => suspended!
+    state.coroutine.points -> each point {
+        point.kind == 0 and point.awaitIr == nodeIndex
+            -> if {
+                point.functionIr -> asyncChildContextOffset(context, state) => offset
+                "  %v$(nodeIndex)_child_handle_slot = getelementptr i8, ptr %async_context, i64 $(offset)" -> println
+                "  %v$(nodeIndex)_child_context_slot = getelementptr i8, ptr %async_context, i64 $(offset + context.pointerBitWidth / 8)" -> println
+                -1 => restoredTaskBinding!
+                point.functionIr + 1 => taskBinding!
+                point.functionIr -> functionEnd(context, state) => taskEnd
+                taskBinding! < taskEnd -> while {
+                    context.ir[taskBinding!] => binding
+                    ((binding.kind == 17 and binding.operand0 == producerIndex)
+                        or (binding.kind == 29 and taskBinding! == producerIndex))
+                        and (taskBinding! -> asyncFrameBindingRoot(point.functionIr, context, state)) >= 0
+                        -> if { taskBinding! => restoredTaskBinding! }
+                    taskBinding! + 1 => taskBinding!
+                }
+                restoredTaskBinding! >= 0 -> if {
+                    "  %v$(nodeIndex)_pending_task = load %sollang.task, ptr " -> print
+                    restoredTaskBinding! -> writeAsyncLocalAddress(context)
+                    ", align $(context.pointerBitWidth / 8)" -> println
+                }
+                "  %v$(nodeIndex)_pending_handle = extractvalue %sollang.task " -> print
+                restoredTaskBinding! >= 0 -> if { "%v$(nodeIndex)_pending_task" -> print } else { "%v$(producerIndex)" -> print }
+                ", 0" -> println
+                "  %v$(nodeIndex)_pending_context = extractvalue %sollang.task " -> print
+                restoredTaskBinding! >= 0 -> if { "%v$(nodeIndex)_pending_task" -> print } else { "%v$(producerIndex)" -> print }
+                ", 1" -> println
+                "  store ptr %v$(nodeIndex)_pending_handle, ptr %v$(nodeIndex)_child_handle_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  store ptr %v$(nodeIndex)_pending_context, ptr %v$(nodeIndex)_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  %v$(nodeIndex)_pending_status_slot = getelementptr %sollang.task_control, ptr %v$(nodeIndex)_pending_handle, i32 0, i32 4" -> println
+                "  %v$(nodeIndex)_pending_status = load i32, ptr %v$(nodeIndex)_pending_status_slot, align 4" -> println
+                "  %v$(nodeIndex)_already_completed = icmp eq i32 %v$(nodeIndex)_pending_status, 2" -> println
+                "  br i1 %v$(nodeIndex)_already_completed, label %await$(nodeIndex)_ready, label %await$(nodeIndex)_suspend" -> println
+                "await$(nodeIndex)_suspend:" -> println
+                point -> emitAsyncDiagnosticSuspension(producerIndex, context, state)
+                "  call void @sollang_task_park_on(ptr %control, ptr %v$(nodeIndex)_pending_handle)" -> println
+                point -> emitAsyncSuspendPoint(context, state)
+                "  br label %await$(nodeIndex)_ready" -> println
+                "await$(nodeIndex)_ready:" -> println
+                # Resume enters from worker dispatch: recompute addresses here.
+                "  %v$(nodeIndex)_resumed_handle_slot = getelementptr i8, ptr %async_context, i64 $(offset)" -> println
+                "  %v$(nodeIndex)_resumed_context_slot = getelementptr i8, ptr %async_context, i64 $(offset + context.pointerBitWidth / 8)" -> println
+                "  %v$(nodeIndex)_task_handle = load ptr, ptr %v$(nodeIndex)_resumed_handle_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  %v$(nodeIndex)_task_context = load ptr, ptr %v$(nodeIndex)_resumed_context_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  store ptr null, ptr %v$(nodeIndex)_resumed_handle_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  store ptr null, ptr %v$(nodeIndex)_resumed_context_slot, align $(context.pointerBitWidth / 8)" -> println
+                true => suspended!
+            }
+    }
+    suspended!
+}
+
+# Source coordinates use the checked UTF-16 column conversion shared with
+# diagnostics; byte offsets and global text bytes stay in the original source.
+emitAsyncDiagnosticConstants context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    state.coroutine.points -> each point {
+        point.state == 1 -> if {
+            context.modules -> each module {
+                module.sourceIndex == point.sourceModule -> if {
+                    "@sollang_diagnostic_module$(point.functionIr) = private constant [$(module.pathLength) x i8] c" -> print
+                    """ " """ -> slice(1, 1) -> print
+                    UIntSize(0) => offset!
+                    offset! < module.pathLength -> while {
+                        context.sources[point.sourceModule] -> byte(module.pathStart + offset!) -> literalEmitEscapedByte
+                        offset! + 1 => offset!
+                    }
+                    """ " """ -> slice(1, 1) -> println
+                }
+            }
+            context.ranges[point.sourceModule] => range
+            context.symbols[range.symbolStart + context.ir[point.functionIr].symbol] => symbol
+            context.tokens[range.tokenStart + symbol.nameToken].span => name
+            "@sollang_diagnostic_symbol$(point.functionIr) = private constant [$(name.length) x i8] c" -> print
+            """ " """ -> slice(1, 1) -> print
+            UIntSize(0) => offset!
+            offset! < name.length -> while {
+                context.sources[point.sourceModule] -> byte(name.start + offset!) -> literalEmitEscapedByte
+                offset! + 1 => offset!
+            }
+            """ " """ -> slice(1, 1) -> println
+        }
+    }
+}
+
+emitAsyncDiagnosticSuspension point: typedIr.CoroutineSuspendPoint, producerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context -> usesReachableAsyncDiagnostics(state)
+        -> unless { return }
+    context.ranges[point.sourceModule] => range
+    context.nodes[range.astStart + point.awaitAst] => site
+    context.tokens[range.tokenStart + site.payloadToken].span.start => byteOffset
+    context.sources[point.sourceModule] -> syntaxDiagnostics.sourceLocation(byteOffset) => location
+    point.functionIr -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
+    "  %diagnostic_suspend$(point.state)_header = getelementptr i8, ptr %async_context, i64 $(headerOffset)" -> println
+    producerIndex >= 0 -> if {
+        "  %diagnostic_suspend$(point.state)_child_slot = getelementptr %sollang.diagnostic_task_control, ptr %v$(point.awaitIr)_pending_handle, i32 0, i32 1" -> println
+        "  %diagnostic_suspend$(point.state)_child = load ptr, ptr %diagnostic_suspend$(point.state)_child_slot, align 8" -> println
+    }
+    context.symbols[range.symbolStart + context.ir[point.functionIr].symbol] => symbol
+    context.tokens[range.tokenStart + symbol.nameToken].span.length => symbolLength
+    context.modules -> each module {
+        module.sourceIndex == point.sourceModule -> if {
+            "  call void @sollang_diagnostic_suspend(ptr %diagnostic_suspend$(point.state)_header, ptr " -> print
+            producerIndex >= 0 -> if { "%diagnostic_suspend$(point.state)_child" -> print } else { "null" -> print }
+            ", i32 $(point.state), ptr @sollang_diagnostic_module$(point.functionIr), i64 $(module.pathLength), ptr @sollang_diagnostic_symbol$(point.functionIr), i64 $(symbolLength), i64 $(byteOffset), i64 $(location.line), i64 $(location.column), i64 0)" -> println
+            producerIndex -> diagnosticSleepProducer(context, state) => producer
+            producer >= 0 and context.ir[producer].opcode == -113
+                -> if {
+                    producer -> diagnosticSleepProducerOffset(context) => producerOffset
+                    producerOffset < 0 -> if {
+                        "; sollang internal error: diagnostic sleep producer source site is unresolved" -> println
+                        process.exit(1)
+                    }
+                    context.sources[point.sourceModule] -> syntaxDiagnostics.sourceLocation(UIntSize(producerOffset)) => producerLocation
+                    "  %diagnostic_suspend$(point.state)_deadline_slot = getelementptr %sollang.task_control, ptr %v$(point.awaitIr)_pending_handle, i32 0, i32 8" -> println
+                    "  %diagnostic_suspend$(point.state)_deadline = load i64, ptr %diagnostic_suspend$(point.state)_deadline_slot, align 8" -> println
+                    "  call void @sollang_diagnostic_suspend(ptr %diagnostic_suspend$(point.state)_child, ptr null, i32 $(point.state), ptr @sollang_diagnostic_module$(point.functionIr), i64 $(module.pathLength), ptr @sollang_diagnostic_symbol$(point.functionIr), i64 $(symbolLength), i64 $(producerOffset), i64 $(producerLocation.line), i64 $(producerLocation.column), i64 %diagnostic_suspend$(point.state)_deadline)" -> println
+                }
+        }
+    }
+}
+
+emitAsyncDiagnosticCompletion functionIndex: Int, completionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context -> usesReachableAsyncDiagnostics(state)
+        -> unless { return }
+    functionIndex -> asyncDiagnosticHeaderOffset(context, state) => offset
+    "  %diagnostic_complete_header$(completionIndex) = getelementptr i8, ptr %async_context, i64 $(offset)" -> println
+    "  call void @sollang_diagnostic_mark_terminal(ptr %diagnostic_complete_header$(completionIndex), i32 2)" -> println
+}
+
+# A worker returns readiness, while its logical value belongs in the Task.
+# Unit has no stored value; every other completion supplies a materialized SSA.
+emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    function.typeOrigin == 1 and function.typeSymbol == 0
+        -> unless {
+            function -> boundedArrayValueTypeId(context, state) => boundedResultType
+            boundedResultType >= 0 -> if {
+                Arena(0) => prefixStorage!
+                "async_result$(completionIndex)" -> materialize(prefixStorage!) => prefix
+                prefix -> emitBoundedArrayValueFromHandle(valueName, boundedResultType, context, state)
+                "  store " -> print
+                boundedResultType -> writeValueAbiTypeId(context, state)
+                " %$(prefix), ptr %async_context, align $(context.typeAligns[boundedResultType])" -> println
+            } else {
+                "  store " -> print
+                function -> writeIrType(context, state)
+                " $valueName, ptr %async_context, align " -> print
+                function -> storageAlign(context, state) -> writeDecimalLine
+            }
+        }
+    functionIndex -> emitAsyncDiagnosticCompletion(completionIndex, context, state)
+    "  ret i1 true" -> println
+}
+
+emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    (point -> asyncPointFrameSize(context, state)) <= 0
+        -> if { return }
+    point.functionIr -> asyncFrameContextOffset(context, state) => frameOffset
+    "  %async_cancel_spill_slot$(point.state) = getelementptr i8, ptr %async_cancel_context, i64 $(frameOffset)" -> println
+    "  %async_cancel_spill_frame$(point.state) = load ptr, ptr %async_cancel_spill_slot$(point.state), align $(context.pointerBitWidth / 8)" -> println
+    0 => offset!
+    point.functionIr + 1 => bindingIndex!
+    point.functionIr -> functionEnd(context, state) => end
+    bindingIndex! < end -> while {
+        (bindingIndex! -> asyncFrameBindingRoot(point.functionIr, context, state)) == bindingIndex!
+            and (point -> asyncPointHasBinding(bindingIndex!, context, state))
+            -> if {
+                context.ir[bindingIndex!] => binding
+                offset! -> alignedAsyncContextOffset(binding -> asyncFrameValueAlign(context, state)) => offset!
+                binding -> isAsyncTaskValue(context) -> if {
+                    "  %async_cancel_spill_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
+                    "  %async_cancel_spill_task$(point.state)_$(bindingIndex!) = load %sollang.task, ptr %async_cancel_spill_address$(point.state)_$(bindingIndex!), align $(context.pointerBitWidth / 8)" -> println
+                    "  %async_cancel_spill_handle$(point.state)_$(bindingIndex!) = extractvalue %sollang.task %async_cancel_spill_task$(point.state)_$(bindingIndex!), 0" -> println
+                } else {
+                    binding.typeId >= 0 and (binding.typeId -> semanticTypeOwns(context, state))
+                        -> if {
+                            "  %async_cancel_owned_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
+                            "  %async_cancel_owned_value$(point.state)_$(bindingIndex!) = load " -> print
+                            binding -> writeFunctionValueAbiType(context, state)
+                            ", ptr %async_cancel_owned_address$(point.state)_$(bindingIndex!), align " -> print
+                            binding -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                        }
+                }
+                offset! + (bindingIndex! -> asyncContextValueSize(context, state)) => offset!
+                bindingIndex! -> asyncFrameHasOwnershipFlag(context, state)
+                    -> if {
+                        "  %async_cancel_owned_flag_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
+                        "  %async_cancel_owned_flag$(point.state)_$(bindingIndex!) = load i1, ptr %async_cancel_owned_flag_address$(point.state)_$(bindingIndex!), align 1" -> println
+                        offset! + 1 => offset!
+                    }
+            }
+        bindingIndex! + 1 => bindingIndex!
+    }
+    end - 1 => bindingIndex!
+    bindingIndex! > point.functionIr -> while {
+        (bindingIndex! -> asyncFrameBindingRoot(point.functionIr, context, state)) == bindingIndex!
+            and (point -> asyncPointHasBinding(bindingIndex!, context, state))
+            -> if {
+                context.ir[bindingIndex!] => cancelledBinding
+                bindingIndex! -> asyncFrameHasOwnershipFlag(context, state) => hasOwnershipFlag
+                hasOwnershipFlag -> if {
+                    "  br i1 %async_cancel_owned_flag$(point.state)_$(bindingIndex!), label %async_cancel_owned_run$(point.state)_$(bindingIndex!), label %async_cancel_owned_skip$(point.state)_$(bindingIndex!)" -> println
+                    "async_cancel_owned_run$(point.state)_$(bindingIndex!):" -> println
+                }
+                (cancelledBinding -> isAsyncTaskValue(context)) and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
+                    -> if {
+                        "  %async_cancel_spill_ok$(point.state)_$(bindingIndex!) = call i1 @sollang_task_cancel(ptr %async_cancel_spill_handle$(point.state)_$(bindingIndex!))" -> println
+                        "  br i1 %async_cancel_spill_ok$(point.state)_$(bindingIndex!), label %async_cancel_spill_done$(point.state)_$(bindingIndex!), label %async_cancel_invalid" -> println
+                        "async_cancel_spill_done$(point.state)_$(bindingIndex!):" -> println
+                    } else {
+                        cancelledBinding.typeId >= 0 and (cancelledBinding.typeId -> semanticTypeOwns(context, state))
+                            and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
+                            -> if {
+                                context.types[cancelledBinding.typeId].kind == 4
+                                    -> if {
+                                        "  %async_cancel_owned_data$(point.state)_$(bindingIndex!) = extractvalue { ptr, i64 } %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
+                                        "  %async_cancel_owned_inline$(point.state)_$(bindingIndex!) = load " -> print
+                                        cancelledBinding.typeId -> writeSemanticTypeId(context, state)
+                                        ", ptr %async_cancel_owned_data$(point.state)_$(bindingIndex!), align $(context.typeAligns[cancelledBinding.typeId])" -> println
+                                    }
+                                "  call void @sollang_drop_t$(cancelledBinding.typeId)(" -> print
+                                cancelledBinding.typeId -> writeSemanticTypeId(context, state)
+                                context.types[cancelledBinding.typeId].kind == 4
+                                    -> if { " %async_cancel_owned_inline$(point.state)_$(bindingIndex!))" -> println } else { " %async_cancel_owned_value$(point.state)_$(bindingIndex!))" -> println }
+                            }
+                    }
+                hasOwnershipFlag -> if {
+                    "  br label %async_cancel_owned_skip$(point.state)_$(bindingIndex!)" -> println
+                    "async_cancel_owned_skip$(point.state)_$(bindingIndex!):" -> println
+                }
+            }
+        bindingIndex! - 1 => bindingIndex!
+    }
+}
+
+emitAsyncCancelledInputs functionIndex: Int, beforeAst: Int, cancelState: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[functionIndex] => function
+    function.operand1 => parameterIndex!
+    parameterIndex! < 0 -> if { function.nextOperand => parameterIndex! }
+    parameterIndex! >= 0 -> while {
+        context.ir[parameterIndex!] => parameter
+        parameter.typeId >= 0 and parameter.flags % 2 == 1
+            and (parameter.typeId -> semanticTypeOwns(context, state))
+            -> if {
+                false => transferred!
+                beforeAst >= 0 -> if {
+                    context.nodes[context.ranges[function.sourceModule].astStart + beforeAst].start => suspendStart
+                    context.moves -> each ownershipMove {
+                        ownershipMove.memberIr < 0 and ownershipMove.sourceModule == parameter.sourceModule and ownershipMove.symbol == parameter.symbol
+                            and ownershipMove.regionIr == function.operand0
+                            and (context.ir[ownershipMove.siteIr] -> sourceStart(context, state)) < suspendStart
+                            -> if { true => transferred! }
+                    }
+                }
+                not transferred! -> if {
+                    parameterIndex! -> emitWholeParameterDrop(functionIndex, cancelState, context, state)
+                }
+            }
+        parameterIndex! == function.operand1 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
+    }
+}
+
+emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+    context.ir[requestedFunctionIndex] => function
+    Arena(0) => instanceNameStorage!
+    context -> emitterContext.isGenericInstance(requestedFunctionIndex)
+        -> if { "_g$(requestedFunctionIndex)" } else { "" } -> materialize(instanceNameStorage!) => instanceSuffix
+    context -> usesReachableAsyncDiagnostics(state) => diagnosticsEnabled
+    diagnosticsEnabled -> if {
+        requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => headerOffset
+        "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_destroy(ptr %context) {" -> println
+        "entry:" -> println
+        "  %header = getelementptr i8, ptr %context, i64 $(headerOffset)" -> println
+        "  call void @sollang_diagnostic_release_header(ptr %header, i32 2)" -> println
+        "  call void @free(ptr %context)" -> println
+        "  ret void" -> println
+        "}" -> println
+    }
+    requestedFunctionIndex -> emitFunctionNamed("$(instanceSuffix)_async_worker", context, state) => functionEnd
+
+    "define internal void @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_cancel(ptr %control) {" -> println
+    "entry:" -> println
+    "  %async_cancel_context_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 0" -> println
+    "  %async_cancel_context = load ptr, ptr %async_cancel_context_slot, align 8" -> println
+    "  %async_context = freeze ptr %async_cancel_context" -> println
+    requestedFunctionIndex -> emitAsyncContextParameters(context, state)
+    "  %async_cancel_status_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 4" -> println
+    "  %async_cancel_status = load i32, ptr %async_cancel_status_slot, align 4" -> println
+    "  %async_cancel_completed = icmp eq i32 %async_cancel_status, 2" -> println
+    "  br i1 %async_cancel_completed, label %async_cancel_result, label %async_cancel_pending" -> println
+    "async_cancel_result:" -> println
+    function.typeId >= 0 and (function.typeId -> semanticTypeOwns(context, state))
+        -> if {
+            "  %async_cancel_result_value = load " -> print
+            function -> writeFunctionValueAbiType(context, state)
+            ", ptr %async_cancel_context, align " -> print
+            function -> storageAlign(context, state) -> writeDecimalLine
+            context.types[function.typeId].kind == 4 -> if {
+                "  %async_cancel_result_data = extractvalue { ptr, i64 } %async_cancel_result_value, 0" -> println
+                "  %async_cancel_result_inline = load " -> print
+                function.typeId -> writeSemanticTypeId(context, state)
+                ", ptr %async_cancel_result_data, align $(context.typeAligns[function.typeId])" -> println
+            }
+            "  call void @sollang_drop_t$(function.typeId)(" -> print
+            function.typeId -> writeSemanticTypeId(context, state)
+            context.types[function.typeId].kind == 4
+                -> if { " %async_cancel_result_inline)" -> println } else { " %async_cancel_result_value)" -> println }
+        }
+    "  br label %async_cancel_cleanup" -> println
+    "async_cancel_pending:" -> println
+    "  %async_cancel_state_slot = getelementptr %sollang.task_control, ptr %control, i32 0, i32 5" -> println
+    "  %async_cancel_state = load i32, ptr %async_cancel_state_slot, align 4" -> println
+    "  switch i32 %async_cancel_state, label %async_cancel_invalid [ i32 0, label %async_cancel_initial" -> print
+    state.coroutine.points -> each point {
+        point.functionIr == requestedFunctionIndex -> if { " i32 $(point.state), label %async_cancel_state$(point.state)" -> print }
+    }
+    " ]" -> println
+    "async_cancel_initial:" -> println
+    requestedFunctionIndex -> emitAsyncCancelledInputs(-1, 0, context, state)
+    "  br label %async_cancel_cleanup" -> println
+    "async_cancel_invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    state.coroutine.points -> each point {
+        point.functionIr == requestedFunctionIndex -> if {
+            "async_cancel_state$(point.state):" -> println
+            requestedFunctionIndex -> emitAsyncCancelledInputs(point.awaitAst, point.state, context, state)
+            point.kind == 0 -> if {
+                requestedFunctionIndex -> asyncChildContextOffset(context, state) => cancelChildOffset
+                "  %async_cancel_child_slot$(point.state) = getelementptr i8, ptr %async_cancel_context, i64 $(cancelChildOffset)" -> println
+                "  %async_cancel_child$(point.state) = load ptr, ptr %async_cancel_child_slot$(point.state), align $(context.pointerBitWidth / 8)" -> println
+                "  %async_cancel_child_ok$(point.state) = call i1 @sollang_task_cancel(ptr %async_cancel_child$(point.state))" -> println
+                "  br i1 %async_cancel_child_ok$(point.state), label %async_cancel_child_done$(point.state), label %async_cancel_invalid" -> println
+                "async_cancel_child_done$(point.state):" -> println
+            }
+            point -> emitAsyncCancelledTaskSpills(context, state)
+            "  br label %async_cancel_cleanup" -> println
+        }
+    }
+    "async_cancel_cleanup:" -> println
+    requestedFunctionIndex -> asyncHasFrame(state)
+        -> if {
+            requestedFunctionIndex -> asyncFrameContextOffset(context, state) => cancelFrameOffset
+            "  %async_cancel_frame_slot = getelementptr i8, ptr %async_cancel_context, i64 $(cancelFrameOffset)" -> println
+            "  %async_cancel_frame = load ptr, ptr %async_cancel_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+            "  call void @free(ptr %async_cancel_frame)" -> println
+        }
+    diagnosticsEnabled -> if {
+        requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => cancelHeaderOffset
+        "  %async_cancel_header = getelementptr i8, ptr %async_cancel_context, i64 $(cancelHeaderOffset)" -> println
+        "  call void @sollang_diagnostic_release_header(ptr %async_cancel_header, i32 3)" -> println
+    }
+    "  call void @free(ptr %async_cancel_context)" -> println
+    "  ret void" -> println
+    "}" -> println
+
+    "define %sollang.task @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)(" -> print
+    diagnosticsEnabled -> if {
+        "ptr %diagnostic_parent" -> print
+        function.operand1 >= 0 or function.nextOperand >= 0
+            -> if { ", " -> print }
+    }
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncWrapperPrimaryParameter
+        asyncWrapperPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        " %arg" -> print
+        function.nextOperand >= 0 -> if { ", " -> print }
+    }
+    function.nextOperand => asyncWrapperAdditionalParameterIndex!
+    1 => asyncWrapperAdditionalParameterOrdinal!
+    asyncWrapperAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncWrapperAdditionalParameterIndex!] => asyncWrapperAdditionalParameter
+        asyncWrapperAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        " %arg$(asyncWrapperAdditionalParameterOrdinal!)" -> print
+        asyncWrapperAdditionalParameter.nextOperand >= 0
+            -> if { ", " -> print }
+        asyncWrapperAdditionalParameter.nextOperand => asyncWrapperAdditionalParameterIndex!
+        asyncWrapperAdditionalParameterOrdinal! + 1 => asyncWrapperAdditionalParameterOrdinal!
+    }
+    ") {" -> println
+    "entry:" -> println
+    requestedFunctionIndex -> asyncContextStorageSize(context, state) => asyncContextSize
+    "  %async_context = call ptr @malloc(i64 $(asyncContextSize))" -> println
+    "  %async_context_allocated = icmp ne ptr %async_context, null" -> println
+    "  br i1 %async_context_allocated, label %async_initialize, label %async_allocation_failed" -> println
+    "async_allocation_failed:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "async_initialize:" -> println
+    diagnosticsEnabled -> if {
+        requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => initialHeaderOffset
+        0 => headerField!
+        headerField! < 6 -> while {
+            "  %async_header_slot$(headerField!) = getelementptr i8, ptr %async_context, i64 $(initialHeaderOffset + headerField! * 8)" -> println
+            headerField! < 2 or headerField! >= 4 -> if {
+                "  store ptr null, ptr %async_header_slot$(headerField!), align 8" -> println
+            } else {
+                "  store i64 0, ptr %async_header_slot$(headerField!), align 8" -> println
+            }
+            headerField! + 1 => headerField!
+        }
+    }
+    requestedFunctionIndex -> asyncHasFrame(state)
+        -> if {
+            requestedFunctionIndex -> asyncFrameContextOffset(context, state) => initialFrameOffset
+            "  %async_initial_frame_slot = getelementptr i8, ptr %async_context, i64 $(initialFrameOffset)" -> println
+            "  store ptr null, ptr %async_initial_frame_slot, align $(context.pointerBitWidth / 8)" -> println
+        }
+    requestedFunctionIndex -> asyncHasAwait(state)
+        -> if {
+            requestedFunctionIndex -> asyncChildContextOffset(context, state) => initialChildOffset
+            "  %async_initial_child_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset)" -> println
+            "  %async_initial_child_context_slot = getelementptr i8, ptr %async_context, i64 $(initialChildOffset + context.pointerBitWidth / 8)" -> println
+            "  store ptr null, ptr %async_initial_child_slot, align $(context.pointerBitWidth / 8)" -> println
+            "  store ptr null, ptr %async_initial_child_context_slot, align $(context.pointerBitWidth / 8)" -> println
+        }
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => asyncStoredPrimaryParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(function.operand1, context, state) => asyncStoredPrimaryOffset
+        "  %async_arg_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredPrimaryOffset)" -> println
+        "  store " -> print
+        asyncStoredPrimaryParameter -> writeFunctionValueAbiType(context, state)
+        " %arg, ptr %async_arg_address, align " -> print
+        asyncStoredPrimaryParameter -> storageAlign(context, state) -> writeDecimalLine
+    }
+    function.nextOperand => asyncStoredAdditionalParameterIndex!
+    1 => asyncStoredAdditionalParameterOrdinal!
+    asyncStoredAdditionalParameterIndex! >= 0 -> while {
+        context.ir[asyncStoredAdditionalParameterIndex!] => asyncStoredAdditionalParameter
+        requestedFunctionIndex -> asyncParameterContextOffset(asyncStoredAdditionalParameterIndex!, context, state) => asyncStoredAdditionalOffset
+        "  %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address = getelementptr i8, ptr %async_context, i64 $(asyncStoredAdditionalOffset)" -> println
+        "  store " -> print
+        asyncStoredAdditionalParameter -> writeFunctionValueAbiType(context, state)
+        " %arg$(asyncStoredAdditionalParameterOrdinal!), ptr %async_arg$(asyncStoredAdditionalParameterOrdinal!)_address, align " -> print
+        asyncStoredAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+        asyncStoredAdditionalParameter.nextOperand => asyncStoredAdditionalParameterIndex!
+        asyncStoredAdditionalParameterOrdinal! + 1 => asyncStoredAdditionalParameterOrdinal!
+    }
+    "  %async_handle = call ptr @sollang_task_start(ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_worker, ptr " -> print
+    diagnosticsEnabled -> if {
+        "@sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_destroy" -> print
+    } else { "@free" -> print }
+    ", ptr @sollang_m$(function.sourceModule)_s$(function.symbol)$(instanceSuffix)_async_cancel, ptr %async_context)" -> println
+    "  %async_started = icmp ne ptr %async_handle, null" -> println
+    "  br i1 %async_started, label %async_ready, label %async_start_failed" -> println
+    "async_start_failed:" -> println
+    "  call void @free(ptr %async_context)" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "async_ready:" -> println
+    diagnosticsEnabled -> if {
+        requestedFunctionIndex -> asyncDiagnosticHeaderOffset(context, state) => inheritedHeaderOffset
+        "  %async_inherited_header = getelementptr i8, ptr %async_context, i64 $(inheritedHeaderOffset)" -> println
+        "async_created" -> emitTaskDiagnosticHeaderStore("%async_handle", "%async_inherited_header")
+        "  call void @sollang_diagnostic_inherit(ptr %async_inherited_header, ptr %async_handle, ptr %diagnostic_parent)" -> println
+    }
+    "  %async_task_handle = insertvalue %sollang.task poison, ptr %async_handle, 0" -> println
+    "  %async_task = insertvalue %sollang.task %async_task_handle, ptr %async_context, 1" -> println
+    "  ret %sollang.task %async_task" -> println
+    "}" -> println
+    functionEnd
+}
+
+# Return edges, not mere literal presence, select immutable static backing.
+# Each returned literal owns a distinct global across tail and explicit returns.
+staticReadonlyArrayReturnFunction valueIndex: Int, context: ref emitterContext.EmitContext -> Int {
+    valueIndex < 0 or valueIndex >= (context.ir -> len)
+        -> if { -1 -> return }
+    context.ir[valueIndex] => value
+    value.kind != 14 or value.astNode < 0 -> if { -1 -> return }
+    context.ranges[value.sourceModule] => range
+    not typeIds.staticReadonlyArrayLiteral(context.tokens, range.tokenStart, context.nodes[range.astStart + value.astNode])
+        -> if { -1 -> return }
+    valueIndex => functionIndex!
+    0 => depth!
+    functionIndex! >= 0 and depth! < (context.ir -> len) and context.ir[functionIndex!].kind != 0
+        -> while {
+            context.ir[functionIndex!].parent => functionIndex!
+            depth! + 1 => depth!
+        }
+    functionIndex! < 0 or depth! >= (context.ir -> len)
+        -> if { -1 -> return }
+    context.ir[functionIndex!] => function
+    not (function -> isSliceArrayType) -> if { -1 -> return }
+    function.operand0 => tail!
+    tail! >= 0 and context.ir[tail!].kind == 1 -> if { context.ir[tail!].operand0 => tail! }
+    tail! == valueIndex -> if { functionIndex! -> return }
+    functionIndex! + 1 => cursor!
+    cursor! < (context.ir -> len) and context.ir[cursor!].kind != 0 and context.ir[cursor!].kind != 11
+        -> while {
+            context.ir[cursor!].kind == 23 and context.ir[cursor!].operand0 == valueIndex
+                -> if { functionIndex! -> return }
+            cursor! + 1 => cursor!
+        }
+    -1
+}
+
+writeStaticReadonlyArraySymbol functionIndex: Int, literalIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
+    context.ir[functionIndex] => function
+    "@sollang_static_array_m$(function.sourceModule)_s$(function.symbol)_v$(literalIndex)" -> print
+}
+
+writeFunctionValueName operandIndex: Int, functionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[operandIndex] => operand
+    context.ir[functionIndex] => function
+    operand.kind == 5
+        and function.operand1 >= 0
+        and operand.symbol == context.ir[function.operand1].symbol
+        and (operand -> scalarReferenceValueTypeId(context, state)) < 0
+        -> if { "%arg" -> print } else { "%v$(operandIndex)" -> print }
+}
+
+emitStaticReadonlyNumericArray functionIndex: Int, literalIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    context.ir[literalIndex] => literal
+    0 => length!
+    literal.operand0 => countIndex!
+    countIndex! >= 0 -> while {
+        length! + 1 => length!
+        context.ir[countIndex!].nextOperand => countIndex!
+    }
+    functionIndex -> writeStaticReadonlyArraySymbol(literalIndex, context)
+    " = private unnamed_addr constant [$(length!) x " -> print
+    literal -> writeArrayElementType(context, state)
+    "] [" -> print
+    literal.operand0 => elementIndex!
+    0 => ordinal!
+    elementIndex! >= 0 -> while {
+        ordinal! > 0 -> if { ", " -> print }
+        literal -> writeArrayElementType(context, state)
+        " " -> print
+        context.ir[elementIndex!] => element
+        element.kind == 7 and element.operand0 >= 0 -> if {
+            "-" -> print
+            context.ir[element.operand0] -> writeIntegerLiteral(context, state)
+        } else { element -> writeIntegerLiteral(context, state) }
+        context.ir[elementIndex!].nextOperand => elementIndex!
+        ordinal! + 1 => ordinal!
+    }
+    "], align " -> print
+    literal -> arrayElementAlign(context, state) -> writeDecimalLine
+}
+
+emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
+    requestedFunctionIndex => functionIndex
+    context.ir[functionIndex] => function
+    functionIndex + 1 => functionEnd!
+    functionEnd! < (context.ir -> len) and context.ir[functionEnd!].kind != 0 and context.ir[functionEnd!].kind != 11
+        -> while {
+            functionEnd! + 1 => functionEnd!
+        }
+    functionIndex + 1 => staticCandidate!
+    staticCandidate! < functionEnd! -> while {
+        (staticCandidate! -> staticReadonlyArrayReturnFunction(context)) == functionIndex
+            -> if {
+                functionIndex -> emitStaticReadonlyNumericArray(staticCandidate!, context, state)
+            }
+        staticCandidate! + 1 => staticCandidate!
+    }
+    functionIndex -> functionCaptures(context, state) => currentFunctionCaptures
+    "define " -> print
+    function.flags / 8 % 2 == 1 -> if { "i1" -> print } else { function -> writeFunctionValueAbiType(context, state) }
+    " @sollang_m" -> print
+    function.sourceModule -> writeDecimal
+    "_s" -> print
+    function.symbol -> writeDecimal
+    symbolSuffix -> print
+    "(" -> print
+    function.flags / 8 % 2 == 1 -> if { "ptr %control" -> print } else {
+        0 => functionCaptureParameterIndex!
+        functionCaptureParameterIndex! < (currentFunctionCaptures -> len)
+            -> while {
+                context.ir[currentFunctionCaptures[functionCaptureParameterIndex!]] => functionCaptureParameter
+                functionCaptureParameter -> writeCaptureAbiType(context, state)
+                " %capture_$(functionCaptureParameterIndex!)" -> print
+                functionCaptureParameterIndex! + 1 < (currentFunctionCaptures -> len) or function.operand1 >= 0 or function.nextOperand >= 0
+                    -> if { ", " -> print }
+                functionCaptureParameterIndex! + 1 => functionCaptureParameterIndex!
+            }
+        function.operand1 >= 0 -> if {
+            context.ir[function.operand1] => parameter
+            parameter.flags / 2 % 2 == 1 -> if {
+                parameter -> mutableBorrowUsesStructPointer(context)
+                    -> if { "ptr %arg_mut_struct" -> print } else { "%sollang.mutable_container %arg_borrow" -> print }
+            } else {
+                parameter -> writeFunctionValueAbiType(context, state)
+                " %arg" -> print
+                (parameter -> boundedArrayValueTypeId(context, state)) >= 0
+                    -> if { "_bounded" -> print }
+            }
+            function.nextOperand >= 0 -> if { ", " -> print }
+        }
+        function.nextOperand => additionalSignatureParameterIndex!
+        1 => additionalSignatureParameterOrdinal!
+        additionalSignatureParameterIndex! >= 0 -> while {
+            context.ir[additionalSignatureParameterIndex!] => additionalSignatureParameter
+            additionalSignatureParameter.flags / 2 % 2 == 1
+                -> if {
+                    additionalSignatureParameter -> mutableBorrowUsesStructPointer(context)
+                        -> if {
+                            "ptr %arg$(additionalSignatureParameterOrdinal!)_mut_struct" -> print
+                        } else {
+                            "%sollang.mutable_container %arg$(additionalSignatureParameterOrdinal!)_borrow" -> print
+                        }
+                } else {
+                    additionalSignatureParameter -> writeFunctionValueAbiType(context, state)
+                    " %arg$(additionalSignatureParameterOrdinal!)" -> print
+                    (additionalSignatureParameter -> boundedArrayValueTypeId(context, state)) >= 0
+                        -> if { "_bounded" -> print }
+                }
+            additionalSignatureParameter.nextOperand >= 0
+                -> if { ", " -> print }
+            additionalSignatureParameter.nextOperand => additionalSignatureParameterIndex!
+            additionalSignatureParameterOrdinal! + 1 => additionalSignatureParameterOrdinal!
+        }
+    }
+    ") {" -> println
+    "entry:" -> println
+    function.flags / 8 % 2 == 1 -> if { functionIndex -> emitAsyncWorkerEntry(context, state) }
+    functionIndex -> emitHoistedControlAllocas(functionIndex + 1, functionEnd!, true, false, context, state)
+    functionIndex -> emitHoistedReferenceArgumentAllocas(functionIndex + 1, functionEnd!, context, state)
+    function.operand1 >= 0 -> if {
+        context.ir[function.operand1] => entryParameter
+        entryParameter -> boundedArrayValueTypeId(context, state) => boundedEntryParameterTypeId
+        boundedEntryParameterTypeId >= 0 and entryParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
+            -> if {
+                "arg" -> emitBoundedArrayHandle("%arg_bounded", boundedEntryParameterTypeId, context, state)
+            }
+        entryParameter.flags / 2 % 2 == 1 -> if {
+            entryParameter -> mutableBorrowUsesStructPointer(context)
+                -> if {
+                    entryParameter -> effectiveTypeId(context, state) => mutableEntryParameterTypeId
+                    mutableEntryParameterTypeId >= 0
+                        and context.types[mutableEntryParameterTypeId].kind == 4
+                        and context.types[mutableEntryParameterTypeId].length >= 0
+                        -> if {
+                            "  %arg_value0 = insertvalue { ptr, i64 } poison, ptr %arg_mut_struct, 0" -> println
+                            "  %arg = insertvalue { ptr, i64 } %arg_value0, i64 $(context.types[mutableEntryParameterTypeId].length), 1" -> println
+                        } else {
+                            "  %arg = load " -> print
+                            entryParameter -> writeIrType(context, state)
+                            ", ptr %arg_mut_struct, align " -> print
+                            entryParameter -> storageAlign(context, state) -> writeDecimalLine
+                        }
+                } else {
+                    "  %arg_mut_ptr_addr = extractvalue %sollang.mutable_container %arg_borrow, 0" -> println
+                    "  %arg_mut_len_addr = extractvalue %sollang.mutable_container %arg_borrow, 1" -> println
+                    "  %arg_mut_capacity_addr = extractvalue %sollang.mutable_container %arg_borrow, 2" -> println
+                    "  %arg_mut_ptr = load ptr, ptr %arg_mut_ptr_addr, align 8" -> println
+                    "  %arg_mut_len = load i64, ptr %arg_mut_len_addr, align 8" -> println
+                    "  %arg_mut_capacity = load i64, ptr %arg_mut_capacity_addr, align 8" -> println
+                    "  %arg_value0 = insertvalue " -> print
+                    entryParameter -> writeIrType(context, state)
+                    " poison, ptr %arg_mut_ptr, 0" -> println
+                    entryParameter -> effectiveTypeId(context, state) => entryParameterTypeId
+                    entryParameterTypeId >= 0 and context.types[entryParameterTypeId].kind == 4
+                        -> if {
+                            "  %arg = insertvalue " -> print
+                            entryParameter -> writeIrType(context, state)
+                            " %arg_value0, i64 %arg_mut_len, 1" -> println
+                        } else {
+                            "  %arg_value1 = insertvalue " -> print
+                            entryParameter -> writeIrType(context, state)
+                            " %arg_value0, i64 %arg_mut_len, 1" -> println
+                            "  %arg = insertvalue " -> print
+                            entryParameter -> writeIrType(context, state)
+                            " %arg_value1, i64 %arg_mut_capacity, 2" -> println
+                        }
+                }
+        }
+    }
+    function.nextOperand => entryAdditionalParameterIndex!
+    1 => entryAdditionalParameterOrdinal!
+    entryAdditionalParameterIndex! >= 0 -> while {
+        context.ir[entryAdditionalParameterIndex!] => entryAdditionalParameter
+        entryAdditionalParameter -> boundedArrayValueTypeId(context, state) => boundedAdditionalParameterTypeId
+        boundedAdditionalParameterTypeId >= 0 and entryAdditionalParameter.flags / 2 % 2 == 0 and function.flags / 8 % 2 == 0
+            -> if {
+                "arg$(entryAdditionalParameterOrdinal!)" -> emitBoundedArrayHandle("%arg$(entryAdditionalParameterOrdinal!)_bounded", boundedAdditionalParameterTypeId, context, state)
+            }
+        entryAdditionalParameter.flags / 2 % 2 == 1 -> if {
+            entryAdditionalParameter -> mutableBorrowUsesStructPointer(context)
+                -> if {
+                    entryAdditionalParameter -> effectiveTypeId(context, state) => mutableAdditionalParameterTypeId
+                    mutableAdditionalParameterTypeId >= 0
+                        and context.types[mutableAdditionalParameterTypeId].kind == 4
+                        and context.types[mutableAdditionalParameterTypeId].length >= 0
+                        -> if {
+                            "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue { ptr, i64 } poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, 0" -> println
+                            "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue { ptr, i64 } %arg$(entryAdditionalParameterOrdinal!)_value0, i64 $(context.types[mutableAdditionalParameterTypeId].length), 1" -> println
+                        } else {
+                            "  %arg$(entryAdditionalParameterOrdinal!) = load " -> print
+                            entryAdditionalParameter -> writeIrType(context, state)
+                            ", ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, align " -> print
+                            entryAdditionalParameter -> storageAlign(context, state) -> writeDecimalLine
+                        }
+                } else {
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 0" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 1" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr = extractvalue %sollang.mutable_container %arg$(entryAdditionalParameterOrdinal!)_borrow, 2" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_ptr = load ptr, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_len = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_len_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_mut_capacity = load i64, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_capacity_addr, align 8" -> println
+                    "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue " -> print
+                    entryAdditionalParameter -> writeIrType(context, state)
+                    " poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_ptr, 0" -> println
+                    entryAdditionalParameter -> effectiveTypeId(context, state) => entryAdditionalParameterTypeId
+                    entryAdditionalParameterTypeId >= 0 and context.types[entryAdditionalParameterTypeId].kind == 4
+                        -> if {
+                            "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue " -> print
+                            entryAdditionalParameter -> writeIrType(context, state)
+                            " %arg$(entryAdditionalParameterOrdinal!)_value0, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_len, 1" -> println
+                        } else {
+                            "  %arg$(entryAdditionalParameterOrdinal!)_value1 = insertvalue " -> print
+                            entryAdditionalParameter -> writeIrType(context, state)
+                            " %arg$(entryAdditionalParameterOrdinal!)_value0, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_len, 1" -> println
+                            "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue " -> print
+                            entryAdditionalParameter -> writeIrType(context, state)
+                            " %arg$(entryAdditionalParameterOrdinal!)_value1, i64 %arg$(entryAdditionalParameterOrdinal!)_mut_capacity, 2" -> println
+                        }
+                }
+        }
+        entryAdditionalParameter.nextOperand => entryAdditionalParameterIndex!
+        entryAdditionalParameterOrdinal! + 1 => entryAdditionalParameterOrdinal!
+    }
+    [Int; ~] => captureBorrowBindings!
+    functionIndex + 1 => captureBorrowCallIndex!
+    captureBorrowCallIndex! < functionEnd! -> while {
+        context.ir[captureBorrowCallIndex!] => captureBorrowCall
+        captureBorrowCall.kind == 6 and captureBorrowCall.targetModule >= 0 and captureBorrowCall.symbol >= 0
+            -> if {
+                -1 => captureBorrowTarget!
+                captureBorrowCall.targetModule < (context.ranges -> len)
+                    -> if {
+                        context.ranges[captureBorrowCall.targetModule].symbolStart + captureBorrowCall.symbol => captureBorrowGlobalSymbol
+                        captureBorrowGlobalSymbol >= 0 and captureBorrowGlobalSymbol < (state.frozenCaptureFunctionsBySymbol -> len)
+                            -> if {
+                                state.frozenCaptureFunctionsBySymbol[captureBorrowGlobalSymbol] => captureBorrowTarget!
+                            }
+                    }
+                captureBorrowTarget! >= 0 -> if {
+                    captureBorrowTarget! -> functionCaptures(context, state) => captureBorrowCallBindings
+                    0 => captureBorrowCallBindingIndex!
+                    captureBorrowCallBindingIndex! < (captureBorrowCallBindings -> len)
+                        -> while {
+                            captureBorrowCallBindings[captureBorrowCallBindingIndex!] => captureBorrowBindingIndex
+                            context.ir[captureBorrowBindingIndex] => captureBorrowBinding
+                            captureBorrowBindingIndex > functionIndex and captureBorrowBindingIndex < functionEnd! and (captureBorrowBinding -> ownsType) and (captureBorrowBinding -> boundedArrayValueTypeId(context, state)) < 0 and not (captureBorrowBinding.kind != 10 and captureBorrowBinding.flags == 1)
+                                -> if {
+                                    false => captureBorrowDuplicate!
+                                    0 => captureBorrowDuplicateIndex!
+                                    captureBorrowDuplicateIndex! < (captureBorrowBindings! -> len)
+                                        -> while {
+                                            captureBorrowBindings![captureBorrowDuplicateIndex!] == captureBorrowBindingIndex
+                                                -> if { true => captureBorrowDuplicate! }
+                                            captureBorrowDuplicateIndex! + 1 => captureBorrowDuplicateIndex!
+                                        }
+                                    not captureBorrowDuplicate! -> if { captureBorrowBindings! -> push(captureBorrowBindingIndex) }
+                                }
+                            captureBorrowCallBindingIndex! + 1 => captureBorrowCallBindingIndex!
+                        }
+                }
+            }
+        captureBorrowCallIndex! + 1 => captureBorrowCallIndex!
+    }
+    0 => captureBorrowBindingListIndex!
+    captureBorrowBindingListIndex! < (captureBorrowBindings! -> len)
+        -> while {
+            captureBorrowBindings![captureBorrowBindingListIndex!] => captureBorrowBindingIndex
+            context.ir[captureBorrowBindingIndex] => captureBorrowBinding
+            "  %capture_borrow_binding$(captureBorrowBindingIndex) = alloca " -> print
+            captureBorrowBinding -> writeIrType(context, state)
+            ", align " -> print
+            captureBorrowBinding -> storageAlign(context, state) -> writeDecimalLine
+            captureBorrowBindingListIndex! + 1 => captureBorrowBindingListIndex!
+        }
+    # Canonical capture values are dematerialized once in the receiving frame.
+    0 => boundedCaptureIndex!
+    boundedCaptureIndex! < (currentFunctionCaptures -> len) and function.flags / 8 % 2 == 0
+        -> while {
+            context.ir[currentFunctionCaptures[boundedCaptureIndex!]] => boundedCapture
+            boundedCapture -> boundedArrayValueTypeId(context, state) => boundedCaptureType
+            boundedCaptureType >= 0 -> if {
+                "  %capture_$(boundedCaptureIndex!)_bounded = " -> print
+                boundedCapture -> captureUsesBorrowAbi(context, state)
+                    -> if {
+                        "load " -> print
+                        boundedCaptureType -> writeValueAbiTypeId(context, state)
+                        ", ptr %capture_$(boundedCaptureIndex!), align $(context.typeAligns[boundedCaptureType])" -> println
+                    } else {
+                        "freeze " -> print
+                        boundedCaptureType -> writeValueAbiTypeId(context, state)
+                        " %capture_$(boundedCaptureIndex!)" -> println
+                    }
+                Arena(0) => capturePrefixStorage!
+                "capture_$(boundedCaptureIndex!)_runtime" -> materialize(capturePrefixStorage!) => capturePrefix
+                Arena(0) => captureValueStorage!
+                "%capture_$(boundedCaptureIndex!)_bounded" -> materialize(captureValueStorage!) => captureValue
+                capturePrefix -> emitBoundedArrayHandle(captureValue, boundedCaptureType, context, state)
+            }
+            boundedCaptureIndex! + 1 => boundedCaptureIndex!
+        }
+    function.operand0 + 1 => expressionStart
+    expressionStart => functionCaptureUseIndex!
+    functionCaptureUseIndex! < functionEnd! -> while {
+        context.ir[functionCaptureUseIndex!] => functionCaptureUse
+        functionCaptureUse.kind == 5 and functionCaptureUse.operand0 < 0
+            -> if {
+                0 => functionCaptureMatchIndex!
+                functionCaptureMatchIndex! < (currentFunctionCaptures -> len)
+                    -> while {
+                        context.ir[currentFunctionCaptures[functionCaptureMatchIndex!]].symbol == functionCaptureUse.symbol
+                            -> if {
+                                functionCaptureUse -> referenceValueTypeId(context, state) => captureReferenceType
+                                # emitNamedPlaceRead owns the canonical load and local
+                                # handle for this reference use; define its SSA once.
+                                captureReferenceType >= 0 and context.types[captureReferenceType].kind == 12
+                                    -> unless {
+                                        (functionCaptureUse -> boundedArrayValueTypeId(context, state)) >= 0
+                                            and function.flags / 8 % 2 == 0 -> if {
+                                                "  %v$(functionCaptureUseIndex!) = freeze %sollang.array.i32 %capture_$(functionCaptureMatchIndex!)_runtime" -> println
+                                            } else { functionCaptureUse -> ownsType -> if {
+                                                    "  %v$(functionCaptureUseIndex!) = load " -> print
+                                                    functionCaptureUse -> writeIrType(context, state)
+                                                    ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
+                                                    functionCaptureUse -> storageAlign(context, state) -> writeDecimalLine
+                                                } else {
+                                                    "  %v$(functionCaptureUseIndex!) = freeze " -> print
+                                                    functionCaptureUse -> writeIrType(context, state)
+                                                    " %capture_$(functionCaptureMatchIndex!)" -> println
+                                            } }
+                                    }
+                            }
+                        functionCaptureMatchIndex! + 1 => functionCaptureMatchIndex!
+                    }
+            }
+        functionCaptureUseIndex! + 1 => functionCaptureUseIndex!
+    }
+    function.flags / 8 % 2 == 1 -> if { functionIndex -> emitAsyncLocalStorage(context, state) }
+    # Every resume edge needs its invocation's stack slots before dispatch.
+    functionIndex -> emitScheduledMutableSlots(functionEnd!, context, state)
+    function.flags / 8 % 2 == 1 -> if { functionIndex -> emitAsyncResumeDispatch(state) }
+    false => hasPlannedStream!
+    context.streamPlan.pipelines -> each functionPipeline {
+        functionPipeline.terminalIr > functionIndex and functionPipeline.terminalIr < functionEnd!
+            -> if { true => hasPlannedStream! }
+    }
+    hasPlannedStream! -> if {
+        functionIndex -> bodyScheduleIndex(state) => streamScheduleIndex
+        state.bodySchedules[streamScheduleIndex] -> emitScheduledFunctionBody(functionIndex, functionEnd!, expressionStart, context, state)
+        "}" -> println
+        requestedFunctionIndex -> return
+    }
+    functionIndex -> prepareFunctionExpressionOrder(functionEnd!, expressionStart, context, state) => expressionOrder
+    [Bool; ~] => expressionEmitted!
+    expressionStart => expressionEmittedInit!
+    expressionEmittedInit! < functionEnd! -> while {
+        expressionEmitted! -> push(false)
+        expressionEmittedInit! + 1 => expressionEmittedInit!
+    }
+    [Int; ~] => activeEach!
+    0 => activeEachSize!
+    functionIndex -> functionNeedsStructuredBody(functionEnd!, context)
+        -> if {
+            function.operand0 -> emitRegionState(expressionOrder, context, state) => terminated
+            not terminated -> if {
+                expressionOrder -> each emittedIndex {
+                    emittedIndex >= expressionStart and emittedIndex < functionEnd!
+                        -> if { true => expressionEmitted![emittedIndex - expressionStart] }
+                }
+                functionIndex -> emitFunctionReturn(expressionStart, functionEnd!, expressionOrder, expressionEmitted!, context, state)
+            }
+            "}" -> println
+            requestedFunctionIndex -> return
+        }
+    0 => expressionOrderIndex!
+    expressionOrderIndex! < (expressionOrder -> len)
+        -> while {
+            expressionOrder[expressionOrderIndex!] => expressionIndex
+            state.frozenCanonicalInterpolationRootByIr[expressionIndex] < 0
+                -> if {
+                    true => expressionEmitted![expressionIndex - expressionStart]
+                    context.ir[expressionIndex] => expression
+                    expressionIndex -> emitNamedBindingOwnershipInitialization(state)
+                    expressionIndex -> emitFunctionIntrinsicExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> isDirectEachEmission(context, state)
+                        -> if {
+                            expressionIndex -> emitDirectEachStart(functionIndex, expressionStart, functionEnd!, context, state)
+                            activeEachSize! == (activeEach! -> len) -> if { activeEach! -> push(expressionIndex) } else { expressionIndex => activeEach![activeEachSize!] }
+                            activeEachSize! + 1 => activeEachSize!
+                        }
+                    expression.kind == 32 and expression.operand0 >= 0 and expression.operand1 >= 0 and expression.nextOperand >= 0
+                        -> if {
+                            expressionIndex -> emitFoldExpression(functionIndex, functionEnd!, expressionOrder, context, state)
+                        }
+                    expression.kind == 17 and expression.flags == 1
+                        -> if {
+                            expressionIndex -> mutableBindingRoot(context, state) => mutableRoot
+                            context.ir[mutableRoot] => mutableBinding
+                            context.ir[expression.operand0] => mutableValue
+                            expression.operand0 -> callResultPropagationBindingIndex(context, state) => mutablePropagationBinding
+                            mutableBinding -> integerNodeWidth(context, state) => mutableTargetWidth
+                            mutableValue -> integerNodeWidth(context, state) => mutableSourceWidth
+                            (mutableTargetWidth > 0 and mutableSourceWidth > 0 and mutableTargetWidth != mutableSourceWidth and mutableValue.kind != 3 and mutableValue.kind != 4) => castMutableValue
+                            castMutableValue -> if {
+                                "  %v$(expressionIndex)_mutable_cast = " -> print
+                                mutableTargetWidth < mutableSourceWidth -> if { "trunc " -> print } else { mutableValue -> integerNodeSigned(context, state)
+                                        -> if { "sext " -> print } else { "zext " -> print } }
+                                mutableValue -> writeIrType(context, state)
+                                " " -> print
+                                mutableValue.kind == 5 and function.operand1 >= 0 and mutableValue.symbol == context.ir[function.operand1].symbol
+                                    -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                                " to " -> print
+                                mutableBinding -> writeIrType(context, state)
+                                "" -> println
+                            }
+                            "  store " -> print
+                            mutableBinding -> writeIrType(context, state)
+                            " " -> print
+                            mutableValue.kind == 3 or mutableValue.kind == 4
+                                -> if {
+                                    mutableValue -> sourceToken(context, state) => mutableToken
+                                    mutableValue.kind == 3 -> if { mutableValue -> writeIntegerLiteral(context, state) } else {
+                                        (context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == 116
+                                            -> if { "1" -> print } else { "0" -> print }
+                                    }
+                                } else {
+                                    mutablePropagationBinding == expressionIndex
+                                        -> if {
+                                            "%v$(expressionIndex)" -> print
+                                        } else {
+                                            castMutableValue -> if { "%v$(expressionIndex)_mutable_cast" -> print } else {
+                                                expression.operand0 -> writeValue(functionIndex, context, state)
+                                            }
+                                        }
+                                }
+                            ", ptr " -> print
+                            mutableRoot -> writeMutableStoragePointer(functionIndex, context, state)
+                            ", align " -> print
+                            mutableBinding -> storageAlign(context, state) -> writeDecimalLine
+                        }
+                    expression.kind == 24 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitIndexAssignment(context, state)
+                    }
+                    expression.kind == 25 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitMemberAssignment(context, state)
+                    }
+                    expression.kind == 26 -> if {
+                        WhileValueRequest { whileIndex: expressionIndex, ownerIndex: functionIndex, nodeIndex: expressionIndex } -> emitEnumConstructor(context, state)
+                        expressionIndex -> emitCompletedPatternBindingTransferMarks(context, state)
+                    }
+                    expression.kind == 27 -> if { expressionIndex -> emitEnumMatch(expressionOrder, context, state) }
+                    expression.kind == 34 -> if { expressionIndex -> emitSubjectWhen(expressionOrder, context, state) }
+                    expression.kind == 30 and context.nodes[context.ranges[expression.sourceModule].astStart + expression.astNode].kind == 82
+                        -> if {
+                            expressionIndex -> emitResultPropagation(functionIndex, expressionOrder, context, state)
+                        }
+                    expression.kind == 2 -> if {
+                        expression -> sourceToken(context, state) => expressionToken
+                        TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength(context, state) => expressionLength
+                        "  %v$(expressionIndex)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(expressionIndex), 0" -> println
+                        "  %v$(expressionIndex) = insertvalue %sollang.text %v$(expressionIndex)_ptr, i64 $expressionLength, 1" -> println
+                        expressionIndex -> emitComparisonTextProducer(functionIndex, context, state)
+                    }
+                    expression.kind == 36 -> if {
+                        "  %v$(expressionIndex) = freeze " -> print
+                        expression -> writeIrType(context, state)
+                        " " -> print
+                        expression.operand0 -> writeValue(functionIndex, context, state)
+                        "" -> println
+                    }
+                    expression.kind == 37 -> if { expressionIndex -> emitSequentialBranchAggregate(functionIndex, context, state) }
+                    expression.kind == 39 -> if { expressionIndex -> emitSequentialBranchArmValue(functionIndex, context, state) }
+                    expressionIndex -> emitPlannedJunctionValue(functionIndex, context, state)
+                    expression.kind == 38 and context.supportsComputePool
+                        -> if { expressionIndex -> emitParallelBranchValue(functionIndex, context, state) }
+                    expressionIndex -> emitFunctionAggregateExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionLoopExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionArrayExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionEnumExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionMemberExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionOperatorExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionCalls(functionIndex, expressionStart, functionEnd!, expressionOrder, context, state)
+                    expressionIndex -> emitFunctionTerminalExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
+                    expressionIndex -> emitAsyncLocalWrite(functionIndex, context, state)
+                    not (expressionIndex -> isDirectEachEmission(context, state))
+                        and (expressionIndex -> plannedStreamStage(context, state)) < 0
+                        -> if {
+                            expression.kind == 23 or (expressionIndex -> terminatingControlReturns(context, state)) => completedTerminated
+                            expressionIndex -> emitStorageLifetimeEndsAfter(completedTerminated, context)
+                        }
+                    -1 => nextExpressionIndex!
+                    expressionOrderIndex! + 1 < (expressionOrder -> len)
+                        -> if { expressionOrder[expressionOrderIndex! + 1] => nextExpressionIndex! }
+                    true => closeEachProgress!
+                    activeEachSize! > 0 and closeEachProgress! -> while {
+                        activeEach![activeEachSize! - 1] => activeEachIndex
+                        false => nextInsideEach!
+                        nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> irDescendsFrom(context, state) => nextInsideEach! }
+                        nextInsideEach! -> if { false => closeEachProgress! } else {
+                            activeEachIndex -> emitDirectEachEnd(false, context)
+                            activeEachIndex -> emitStorageLifetimeEndsAfter(false, context)
+                            activeEachSize! - 1 => activeEachSize!
+                        }
+                    }
+                    expressionOrderIndex! + 1 => expressionOrderIndex!
+                    expression.kind == 23 -> if { Int(expressionOrder -> len) => expressionOrderIndex! }
+                } else { expressionOrderIndex! + 1 => expressionOrderIndex! }
+        }
+    functionIndex -> emitFunctionReturn(expressionStart, functionEnd!, expressionOrder, expressionEmitted!, context, state)
+    "}" -> println
+    requestedFunctionIndex
+}
+
+
+
+emitScheduledFunctionBody plan: ref BodySchedulePlan, functionIndex: Int, functionEnd: Int, expressionStart: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    false => terminated!
+    functionIndex -> functionNeedsStructuredBody(functionEnd, context)
+        -> if {
+            context.ir[functionIndex].operand0 -> emitRegionState(plan.order, context, state) => terminated!
+        } else {
+            plan -> emitScheduledStreamBody(functionIndex, functionEnd, context.pointerBitWidth / 8, context, state)
+        }
+    [Bool; ~] => emitted!
+    expressionStart => emissionIndex!
+    emissionIndex! < functionEnd -> while {
+        emitted! -> push(false)
+        emissionIndex! + 1 => emissionIndex!
+    }
+    plan.order -> each emittedIndex {
+        emittedIndex >= expressionStart and emittedIndex < functionEnd
+            -> if { true => emitted![emittedIndex - expressionStart] }
+    }
+    not terminated! -> if {
+        functionIndex -> emitFunctionReturn(expressionStart, functionEnd, plan.order, emitted!, context, state)
+    }
+}
