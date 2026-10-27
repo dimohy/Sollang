@@ -126,6 +126,25 @@ def file_hash(path):
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
 
+def normalize_phase_digest_fields(value, field=""):
+    """Compare typed SHA-256 metadata independently of hexadecimal casing.
+
+    Preserve paths, oracles and raw record bytes. Only digest fields and digest
+    maps are normalized; changed digest values still fail the file-backed checks.
+    """
+    if isinstance(value, dict):
+        if field.endswith(("Hashes", "HashesStart", "HashesEnd")):
+            return {key: item.upper() if isinstance(item, str)
+                    and re.fullmatch(r"[0-9a-fA-F]{64}", item) else item
+                    for key, item in value.items()}
+        return {key: normalize_phase_digest_fields(item, key) for key, item in value.items()}
+    if isinstance(value, list):
+        return [normalize_phase_digest_fields(item) for item in value]
+    if (field == "sha256" or field.endswith("Sha256")) and isinstance(value, str):
+        return value.upper() if re.fullmatch(r"[0-9a-fA-F]{64}", value) else value
+    return value
+
+
 def validate_decision_source_scope(named, sources):
     require(bool(named) and set(named) <= sources, "decision source outside scope")
 
@@ -227,7 +246,7 @@ def validate_phase_closure(detail, phases, root):
 
     def record(relative, phase, status="passed"):
         require(isinstance(relative, str) and bool(relative), "missing proof record")
-        value = json.loads(local_file(relative).read_text(encoding="utf-8-sig"))
+        value = normalize_phase_digest_fields(json.loads(local_file(relative).read_text(encoding="utf-8-sig")))
         require(value.get("status") == status and value.get("phase") == phase,
                 f"record status/phase mismatch: {relative}")
         return value
@@ -376,7 +395,7 @@ def validate_phase_closure(detail, phases, root):
                 require(file_hash(local_file(reference["path"])) == reference["sha256"],
                         "runner or contract changed")
                 execution_hashes[reference["path"]] = reference["sha256"]
-            execution_contract = json.loads(local_file(execution_inputs["contract"]["path"]).read_text(encoding="utf-8-sig"))
+            execution_contract = normalize_phase_digest_fields(json.loads(local_file(execution_inputs["contract"]["path"]).read_text(encoding="utf-8-sig")))
             require(execution_contract.get("schemaVersion") == 1 and execution_contract.get("phase") == phase
                     and execution_contract.get("decisionIds") == required_ids, "execution contract scope differs")
             contract_cases = execution_contract.get("cases")
@@ -414,7 +433,7 @@ def validate_phase_closure(detail, phases, root):
                         reference = stages[stage]
                         outcome_path = local_file(reference["path"])
                         require(file_hash(outcome_path) == reference["sha256"], "case execution record changed")
-                        outcome = json.loads(outcome_path.read_text(encoding="utf-8-sig"))
+                        outcome = normalize_phase_digest_fields(json.loads(outcome_path.read_text(encoding="utf-8-sig")))
                         expected_outcome = expected_stage_outcome(expected_stages, stage, side)
                         require(type(expected_outcome.get("exitCode")) is int
                                 and outcome.get("expectedExitCode") == expected_outcome["exitCode"],

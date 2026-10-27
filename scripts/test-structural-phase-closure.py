@@ -583,6 +583,37 @@ class PhaseClosureTests(unittest.TestCase):
         self.change_record("records/paired.json", sourceComparisonRecord={"path": "records/comparison.json", "sha256": "0" * 64})
         self.rejects("record linkage mismatch")
 
+    def test_lowercase_digest_metadata_preserves_phase_proof(self):
+        def lowercase(value, field=""):
+            if isinstance(value, dict):
+                if field.endswith(("Hashes", "HashesStart", "HashesEnd")):
+                    return {key: item.lower() for key, item in value.items()}
+                return {key: lowercase(item, key) for key, item in value.items()}
+            if isinstance(value, list):
+                return [lowercase(item) for item in value]
+            if (field == "sha256" or field.endswith("Sha256")) and isinstance(value, str):
+                return value.lower()
+            return value
+
+        paired = json.loads((self.root / "records/paired.json").read_text())
+        for case in paired["cases"]:
+            for stages in case["outcomes"].values():
+                for ref in stages.values():
+                    outcome = json.loads((self.root / ref["path"]).read_text())
+                    self.write_record(ref["path"], lowercase(outcome))
+        self.refresh_execution_links()
+        paired = json.loads((self.root / "records/paired.json").read_text())
+        self.write_record("records/paired.json", lowercase(paired))
+        self.assertEqual(self.validate(), 1)
+
+    def test_digest_normalization_preserves_oracle_text_and_paths(self):
+        digest = "ab" * 32
+        value = {"sha256": digest, "stdout": digest, "path": digest,
+                 "inputHashesStart": {"source": digest}}
+        self.assertEqual(MODULE.normalize_phase_digest_fields(value),
+                         {"sha256": digest.upper(), "stdout": digest, "path": digest,
+                          "inputHashesStart": {"source": digest.upper()}})
+
     def test_partial_inventory_does_not_promote(self):
         self.detail["phaseProgress"][0]["status"] = "partial"
         self.detail["phaseProgress"][0]["decisionInventory"]["status"] = "pending"
@@ -590,10 +621,11 @@ class PhaseClosureTests(unittest.TestCase):
         self.detail["phaseClosure"].update(completed=0, status="all-partial")
         self.assertEqual(self.validate(), 0)
 
-    def test_repository_keeps_all_seven_phases_partial(self):
+    def test_repository_declared_phase_closure_is_reproducible(self):
         detail = MODULE.read("scripts/contracts/structural-parity-detail.json")
         phases = MODULE.read(detail["phaseSource"])["phaseMapping"]
-        self.assertEqual(MODULE.validate_phase_closure(detail, phases, MODULE.ROOT), 0)
+        self.assertEqual(MODULE.validate_phase_closure(detail, phases, MODULE.ROOT),
+                         detail["phaseClosure"]["completed"])
 
     def test_cannot_drop_unfinished_phases(self):
         self.detail["phaseProgress"] = self.detail["phaseProgress"][:1]
@@ -811,7 +843,13 @@ class OwnershipSourceScopeTests(unittest.TestCase):
             MODULE.validate_decision_source_scope(["selfhost/llvm/text/platform_io.slg"], sources)
 
     def test_scope_addition_does_not_promote_partial_phases(self):
-        self.assertTrue(all(row["status"] == "partial" for row in self.detail["phaseProgress"]))
+        self.assertEqual(self.row["status"], "partial")
+        # Isolate this ownership rejection from already qualified phases. The
+        # repository's actual complete phases are checked by the dedicated test.
+        for row, phase in zip(self.detail["phaseProgress"], self.phases):
+            row["status"] = "partial"
+            phase["aligned"] = "partial-behavior"
+        self.detail["phaseClosure"].update(completed=0, status="all-partial")
         self.assertEqual(MODULE.validate_phase_closure(self.detail, self.phases, self.root), 0)
         self.row["status"] = "complete"
         next(row for row in self.phases if row["phase"] == "ownership")["aligned"] = "complete"
@@ -839,8 +877,8 @@ class GrammarSourceScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.PhaseClosureError, "outside scope"):
                 MODULE.validate_decision_source_scope(["selfhost/llvm/text/platform_io.slg"], sources)
         phases = MODULE.read(detail["phaseSource"])["phaseMapping"]
-        self.assertTrue(all(item["status"] == "partial" for item in detail["phaseProgress"]))
-        self.assertEqual(MODULE.validate_phase_closure(detail, phases, root), 0)
+        # This source-scope control need not replay the operational evidence;
+        # the repository closure test separately checks every complete phase.
         row["status"] = "complete"
         phases[0]["aligned"] = "complete"
         # This control is about rejecting an unreviewed inventory, independent

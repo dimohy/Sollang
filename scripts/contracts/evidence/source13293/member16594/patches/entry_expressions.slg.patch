@@ -1,0 +1,44 @@
+--- selfhost/llvm/text/entry_expressions.slg
++++ artifacts/scratch/resume-20261006-owner-continuation22/member16588-candidate/entry_expressions.slg
+@@ -64,6 +64,27 @@
+                         entryMutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
+                     }
+             }
++        entryMutableSlotIndex! -> whileInlineValueIndexTypeId(context, state) => inlineIndexType
++        inlineIndexType >= 0 -> if {
++            false => usedByWhileCondition!
++            functionIndex + 1 => inlineIndexLoopSearch!
++            inlineIndexLoopSearch! < entryEnd and not usedByWhileCondition!
++                -> while {
++                    context.ir[inlineIndexLoopSearch!] => inlineIndexLoop
++                    inlineIndexLoop.kind == 20 and inlineIndexLoop.operand0 >= 0
++                        -> if {
++                            inlineIndexLoop.operand0 == entryMutableSlotIndex!
++                                or (NodeAncestorRequest { nodeIndex: entryMutableSlotIndex!, ownerIndex: inlineIndexLoop.operand0 } -> nodeDescendsFrom(context, state))
++                                -> if { true => usedByWhileCondition! }
++                        }
++                    inlineIndexLoopSearch! + 1 => inlineIndexLoopSearch!
++                }
++            usedByWhileCondition! -> if {
++                "  %while_index$(entryMutableSlotIndex!)_storage = alloca " -> print
++                inlineIndexType -> writeValueAbiTypeId(context, state)
++                ", align $(context.typeAligns[inlineIndexType])" -> println
++            }
++        }
+         entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
+     }
+ }
+@@ -1532,7 +1553,12 @@
+                                             "_address = getelementptr inbounds " -> print
+                                             entryCanonicalMemberOwnerType! -> writeSemanticTypeId(context, state)
+                                             ", ptr " -> print
+-                                            entryCanonicalMemberOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal! - 1)" -> print }
++                                            entryCanonicalMemberOrdinal! == 0 -> if {
++                                                entryExpression.operand0 -> isLocalReadonlyReferenceName(functionIndex, context, state)
++                                                    -> if { functionIndex -> writeForwardedReferenceValue(entryExpression.operand0, context, state) } else {
++                                                        "%v$(entryExpression.operand0)" -> print
++                                                    }
++                                            } else { "%v$(entryExpressionIndex)_m$(entryCanonicalMemberOrdinal! - 1)" -> print }
+                                             ", i32 0, i32 $(entryCanonicalMemberField.ordinal)" -> println
+                                             "  " -> print
+                                             entryCanonicalMemberOrdinal! == entryCanonicalMemberCount! - 1
