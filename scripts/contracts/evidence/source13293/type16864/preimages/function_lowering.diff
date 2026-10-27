@@ -1,0 +1,320 @@
+--- b17a01051743c32c58bd5aeeebd7269067bf83d9/selfhost/ir/typed/function_lowering.slg
++++ selfhost/ir/typed/function_lowering.slg
+@@ -1,6 +1,8 @@
+ namespace sollang.compiler.ir.typed
+ 
+ import sollang.compiler.semantic.context as semanticContext
++import sollang.compiler.semantic.analysis as analysis
++import sollang.compiler.semantic.symbols as symbols
+ import sollang.compiler.semantic.calls as calls
+ import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+ import sollang.compiler.semantic.resolve as resolution
+@@ -14,6 +16,23 @@
+ struct FunctionLowerRequest {
+     sourceIndex: Int
+     symbolIndex: Int
++}
++
++# Type parameters can be used only in the body, or deliberately unused. The
++# declaration remains a template even when its entire signature is concrete.
++public functionDeclaresGenericParameters function: TypedIrNode, ranges: ref [analysis.SourceAnalysisRange; ~], declarations: ref [symbols.Symbol; ~] -> Bool {
++    function.kind != 0 or function.sourceModule < 0 or function.sourceModule >= (ranges -> len)
++        or function.symbol < 0 -> if { false -> return }
++    ranges[function.sourceModule] => range
++    function.symbol >= range.symbolCount -> if { false -> return }
++    0 => index!
++    index! < range.symbolCount -> while {
++        declarations[range.symbolStart + index!] => candidate
++        candidate.kind == 32 and candidate.parent == function.symbol
++            -> if { true -> return }
++        index! + 1 => index!
++    }
++    false
+ }
+ 
+ # The same signature identifies retained templates for materialization and
+@@ -285,7 +304,7 @@
+         false => progress!
+         (processed! -> len) < (nodes -> len) -> while { processed! -> push(false) }
+         nodes -> functionTemplatesBySymbol(prepared) => functionsBySymbol
+-        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, functionsBySymbol) => plans!
++        nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functionsBySymbol) => plans!
+         nodes -> appendInterpolationGenericCalls(prepared, resolved, plans!, functionsBySymbol)
+         # A helper's result parameter belongs to its caller after substitution,
+         # even while that caller is still a generic template.
+@@ -720,10 +739,15 @@
+ 
+ public planGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~] -> [GenericCallPlan; ~] {
+     nodes -> functionTemplatesBySymbol(prepared) => functions
+-    nodes -> planGenericCallsWithTemplates(prepared, types, functions)
+-}
+-
+-planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
++    nodes -> planGenericCallsWithTemplates(prepared, types, prepared.semantic.references, functions)
++}
++
++public planResolvedGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, resolved: mut expressionTypeIds.ExpressionTypeIdSet -> [GenericCallPlan; ~] {
++    nodes -> functionTemplatesBySymbol(prepared) => functions
++    nodes -> planGenericCallsWithTemplates(prepared, resolved.types, resolved.references, functions)
++}
++
++planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, types: mut [typeIds.SemanticType; ~], references: ref [typeIds.TypeReference; ~], functions: ref [Int; ~] -> [GenericCallPlan; ~] {
+     [GenericCallPlan; ~] => plans!
+     0 => callIndex!
+     callIndex! < (nodes -> len) -> while {
+@@ -739,10 +763,68 @@
+             }
+         target! >= 0 -> if {
+             nodes[target!] => function
+-            nodes -> functionSignatureContainsParameter(types, target!)
++            (nodes -> functionSignatureContainsParameter(types, target!))
++                or (function -> functionDeclaresGenericParameters(prepared.package.ranges, prepared.package.symbols))
+                 -> if {
+                     [Int; ~] => templates!
+                     [Int; ~] => actuals!
++                    # Explicit applications bind declaration parameters even if
++                    # no value input or result mentions them. Use canonical type
++                    # references; runtime code must never parse source spellings.
++                    call.sourceModule >= 0 and call.sourceModule < (prepared.package.ranges -> len)
++                        and call.astNode >= 0 -> if {
++                            prepared.package.ranges[call.sourceModule] => callRange
++                            call.astNode < callRange.astCount -> if {
++                                prepared.package.nodes[callRange.astStart + call.astNode] => callAst
++                                callAst.cstRuleId == grammar.ruleIdTypeApplicationExpression()
++                                    -> if {
++                                        prepared.package.ranges[function.sourceModule] => targetRange
++                                        [Int; ~] => explicitTypes!
++                                        0 => childIndex!
++                                        childIndex! < callRange.astCount -> while {
++                                            prepared.package.nodes[callRange.astStart + childIndex!] => child
++                                            child.parent == call.astNode and child.kind == 12
++                                                -> if {
++                                                    -1 => actualType!
++                                                    references -> each reference {
++                                                        reference.sourceModule == call.sourceModule and reference.typeAst == childIndex!
++                                                            and reference.status == 0 -> if { reference.typeId => actualType! }
++                                                    }
++                                                    explicitTypes! -> push(actualType!)
++                                                }
++                                            childIndex! + 1 => childIndex!
++                                        }
++                                        0 => genericIndex!
++                                        0 => explicitIndex!
++                                        genericIndex! < targetRange.symbolCount -> while {
++                                            prepared.package.symbols[targetRange.symbolStart + genericIndex!] => parameter
++                                            parameter.kind == 32 and parameter.parent == function.symbol
++                                                -> if {
++                                                    explicitIndex! < (explicitTypes! -> len) -> if {
++                                                        -1 => parameterType!
++                                                        0 => typeIndex!
++                                                        typeIndex! < (types -> len) and parameterType! < 0
++                                                            -> while {
++                                                                types[typeIndex!] => candidate
++                                                                candidate.kind == 1 and candidate.origin == 3
++                                                                    and candidate.module == function.sourceModule and candidate.symbol == genericIndex!
++                                                                    -> if { typeIndex! => parameterType! }
++                                                                typeIndex! + 1 => typeIndex!
++                                                            }
++                                                        parameterType! < 0 -> if {
++                                                            types -> len => parameterType!
++                                                            types -> push(typeIds.SemanticType { kind: 1, origin: 3, module: function.sourceModule, symbol: genericIndex!, first: -1, second: -1, length: -1, lengthHash: 0, containsParameter: true, status: 0 })
++                                                        }
++                                                        templates! -> push(parameterType!)
++                                                        actuals! -> push(explicitTypes![explicitIndex!])
++                                                    }
++                                                    explicitIndex! + 1 => explicitIndex!
++                                                }
++                                            genericIndex! + 1 => genericIndex!
++                                        }
++                                    }
++                            }
++                        }
+                     function.operand1 => templateIndex!
+                     0 => templateOrdinal!
+                     templateIndex! >= 0 and templateIndex! < (nodes -> len)
+@@ -3438,6 +3520,7 @@
+ 
+ # Late await repair can append a value after the function arena has been joined.
+ typedNodeIsAwaitSource node: ref TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
++    node -> isAsyncExpressionRead -> if { false -> return }
+     node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len) and node.astNode >= 0
+         -> if {
+             prepared.package.ranges[node.sourceModule] => range
+@@ -5488,3 +5571,177 @@
+     nodes[resolved!].kind == 2
+         -> if { resolved! } else { sourceIndex }
+ }
++
++
++# Compiler-only aliases keep already evaluated operands in the ordinary typed
++# coroutine frame. Negative identities are local to the containing function;
++# they never index the source symbol table or create source declarations.
++public isAsyncExpressionBinding node: TypedIrNode -> Bool {
++    node.kind == 17 and node.symbol < -1 and node.flags / 268435456 % 2 == 1
++}
++
++public isAsyncExpressionRead node: TypedIrNode -> Bool {
++    node.kind == 5 and node.symbol < -1 and node.flags / 268435456 % 2 == 1
++}
++
++public isBorrowedAsyncExpressionBinding node: TypedIrNode -> Bool {
++    (node -> isAsyncExpressionBinding) and node.flags / 134217728 % 2 == 1
++}
++
++struct AsyncExpressionValuePlan {
++    value: Int
++    owner: Int
++    afterIr: Int
++    state: Int
++    symbol: Int
++}
++
++strictAsyncExpressionConsumer node: TypedIrNode -> Bool {
++    node.kind == 6 or node.kind == 9 or node.kind == 12 or node.kind == 14
++        or node.kind == 15 or node.kind == 16 or node.kind == 26
++        or node.kind == 31 or node.kind == 35
++        or (node.kind == 8 and node.opcode != -24 and node.opcode != -25)
++}
++
++asyncExpressionControlBoundary node: TypedIrNode -> Bool {
++    node.kind == 18 or node.kind == 19 or node.kind == 20 or node.kind == 27
++        or node.kind == 33 or node.kind == 34 or node.kind == 36
++        or node.kind == 37 or node.kind == 38 or node.kind >= 40
++        or (node.kind == 8 and (node.opcode == -24 or node.opcode == -25))
++}
++
++# All four IR edges use the same insertion map, including generic instances.
++# Reads depend on the last relevant suspension, while their carrier stores
++# remain ordered immediately after the original producer. No source is rerun.
++public sealAsyncExpressionValues nodes: mut [TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot -> [Int; ~] {
++    [Int; ~] => relocation!
++    prepared -> coroutineTablesForIr(nodes) => coroutine
++    (coroutine.points -> len) == 0 -> if { relocation! -> return }
++    nodes -> len => count
++    [Int; ~] => plansByValue!
++    0..<count -> each { plansByValue! -> push(-1) }
++    [AsyncExpressionValuePlan; ~] => plans!
++    -2 => nextSymbol!
++    nodes -> each node {
++        (node -> isAsyncExpressionBinding) and node.symbol <= nextSymbol!
++            -> if { node.symbol - 1 => nextSymbol! }
++    }
++    coroutine.points -> each point {
++        point.awaitIr => ancestor!
++        false => boundary!
++        ancestor! >= 0 and ancestor! < count and not boundary!
++            -> while {
++                nodes[ancestor!].parent => parent
++                parent < 0 or parent >= count or nodes[parent].kind == 0 or nodes[parent].kind == 11
++                    -> if { true => boundary! } else {
++                        nodes[parent] => consumer
++                        consumer -> asyncExpressionControlBoundary -> if { true => boundary! } else {
++                            consumer -> strictAsyncExpressionConsumer -> if {
++                                consumer.operand0 >= 0 -> if { consumer.operand0 } else { consumer.operand1 } => first
++                                first => probe!
++                                false => found!
++                                0 => walked!
++                                probe! >= 0 and probe! < count and walked! < count and not found!
++                                    -> while {
++                                        probe! == ancestor! -> if { true => found! } else {
++                                            nodes[probe!].parent != parent -> if { -1 => probe! } else { nodes[probe!].nextOperand => probe! }
++                                        }
++                                        walked! + 1 => walked!
++                                    }
++                                found! -> if {
++                                    first => value!
++                                    value! >= 0 and value! != ancestor! -> while {
++                                        nodes[value!] => candidate
++                                        candidate.kind != 2 and candidate.kind != 3 and candidate.kind != 4
++                                            and candidate.kind != 17 and candidate.kind != 29
++                                            and not (candidate -> isAsyncExpressionRead)
++                                            and not (candidate.typeOrigin == 1 and candidate.typeSymbol == 0)
++                                            -> if {
++                                                plansByValue![value!] => existing
++                                                existing < 0 -> if {
++                                                    plans! -> len => plansByValue![value!]
++                                                    plans! -> push(AsyncExpressionValuePlan { value: value!, owner: parent, afterIr: point.awaitIr, state: point.state, symbol: nextSymbol! })
++                                                    nextSymbol! - 1 => nextSymbol!
++                                                } else {
++                                                    plans![existing] => plan!
++                                                    point.state > plan!.state -> if {
++                                                        point.awaitIr => plan!.afterIr
++                                                        point.state => plan!.state
++                                                        plan! => plans![existing]
++                                                    }
++                                                }
++                                            }
++                                        candidate.nextOperand => value!
++                                    }
++                                }
++                            }
++                            parent => ancestor!
++                        }
++                    }
++            }
++    }
++    (plans! -> len) == 0 -> if { relocation! -> return }
++    0 => added!
++    0..<count -> each index {
++        relocation! -> push(index + added!)
++        plansByValue![index] >= 0 -> if { added! + 2 => added! }
++    }
++    [TypedIrNode; ~] => ordered!
++    0..<count -> each index {
++        nodes[index] => node!
++        node!.parent -> relocateAwaitEdge(relocation!) => node!.parent
++        node!.operand0 -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.operand0
++        node!.operand1 -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.operand1
++        node!.nextOperand -> asyncExpressionMappedValue(relocation!, plansByValue!) => node!.nextOperand
++        plansByValue![index] => planIndex
++        planIndex >= 0 -> if {
++            plans![planIndex] => plan
++            relocation![index] + 1 => node!.parent
++            -1 => node!.nextOperand
++            ordered! -> push(node!)
++            nodes[index] => binding!
++            17 => binding!.kind
++            relocation![plan.owner] => binding!.parent
++            plan.symbol => binding!.symbol
++            -1 => binding!.targetModule
++            -1 => binding!.payloadToken
++            -1 => binding!.opcode
++            relocation![index] => binding!.operand0
++            -1 => binding!.operand1
++            -1 => binding!.nextOperand
++            268435456 => binding!.flags
++            false => awaitedValue!
++            coroutine.points -> each earlier {
++                earlier.functionIr == asyncExpressionFunctionOwner(index, nodes) and earlier.awaitIr == index
++                    -> if { true => awaitedValue! }
++            }
++            (nodes[index].kind == 5 or nodes[index].kind == 13 or nodes[index].kind == 15) and not awaitedValue!
++                -> if { binding!.flags + 134217728 => binding!.flags }
++            ordered! -> push(binding!)
++            binding! => read!
++            5 => read!.kind
++            relocation![index] + 1 => read!.operand0
++            relocation![plan.afterIr] => read!.operand1
++            nodes[index].nextOperand -> asyncExpressionMappedValue(relocation!, plansByValue!) => read!.nextOperand
++            268435456 => read!.flags
++            ordered! -> push(read!)
++        } else { ordered! -> push(node!) }
++    }
++    0..<Int(ordered! -> len) -> each index {
++        index < count -> if { ordered![index] => nodes[index] } else { nodes -> push(ordered![index]) }
++    }
++    relocation!
++}
++
++asyncExpressionMappedValue edge: Int, relocation: ref [Int; ~], plansByValue: ref [Int; ~] -> Int {
++    edge >= 0 and edge < (relocation -> len) -> if {
++        relocation[edge] + (plansByValue[edge] >= 0 -> if { 2 } else { 0 })
++    } else { edge }
++}
++
++asyncExpressionFunctionOwner value: Int, nodes: ref [TypedIrNode; ~] -> Int {
++    value => owner!
++    owner! >= 0 and nodes[owner!].kind != 0 and nodes[owner!].kind != 11
++        -> while { nodes[owner!].parent => owner! }
++    owner!
++}

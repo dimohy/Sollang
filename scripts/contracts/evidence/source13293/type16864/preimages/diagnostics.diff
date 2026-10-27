@@ -1,0 +1,146 @@
+--- a1e47bd6/selfhost/semantic/diagnostics.slg
++++ selfhost/semantic/diagnostics.slg
+@@ -5207,14 +5207,68 @@
+     reservedModule and not local
+ }
+ 
+-firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex -> ExpressionOperandDiagnostic {
++# Canonical declaration spelling ignores namespace/name trivia, preserves case,
++# and includes the full dotted function path. The same builder renders errors.
++public appendFunctionDeclarationName source: Text, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int, namespaceStart: UIntSize, namespaceLength: UIntSize, nameToken: Int, bytes: mut [UInt8; ~] -> Unit {
++    namespaceLength > 0 -> if {
++        tokenStart => index!
++        index! < tokenStart + tokenCount -> while {
++            tokens[index!] => token
++            token.span.start >= namespaceStart + namespaceLength
++                -> if { break }
++            token.span.start >= namespaceStart and token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++                -> if {
++                    UIntSize(0) => byteIndex!
++                    byteIndex! < token.span.length -> while {
++                        bytes -> push(source -> byte(token.span.start + byteIndex!))
++                        byteIndex! + 1 => byteIndex!
++                    }
++                }
++            index! + 1 => index!
++        }
++        bytes -> push(46)
++    }
++    nameToken => index!
++    true => identifier!
++    index! < tokenCount -> while {
++        tokens[tokenStart + index!] => token
++        token.kind != grammar.triviaIdWhitespace() and token.kind != grammar.triviaIdComment()
++            -> if {
++                identifier! -> if {
++                    token.kind != grammar.tokenIdIdentifier() -> if { break }
++                    UIntSize(0) => byteIndex!
++                    byteIndex! < token.span.length -> while {
++                        bytes -> push(source -> byte(token.span.start + byteIndex!))
++                        byteIndex! + 1 => byteIndex!
++                    }
++                } else {
++                    token.kind != grammar.tokenIdDot() -> if { break }
++                    bytes -> push(46)
++                }
++                not identifier! => identifier!
++            }
++        index! + 1 => index!
++    }
++}
++
++functionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex, includeLocal: Bool -> ExpressionOperandDiagnostic {
+     ExpressionOperandDiagnostic { code: 0, sourceModule: -1, astNode: -1, operandAst: -1, operatorKind: -1, locationOffset: 0, operandTypeSymbol: -1, operandTypeId: -1, firstTypeId: -1 } => valid
++    [UInt8; ~] => declarationNames!
++    [Int; ~] => declarationStarts!
++    [Int; ~] => declarationLengths!
++    [Int; ~] => declarationSlots!
++    (prepared.package.symbols -> len) * 2 + 1 => capacity
++    0 => slotIndex!
++    slotIndex! < capacity -> while {
++        declarationSlots! -> push(-1)
++        slotIndex! + 1 => slotIndex!
++    }
+     prepared.package.ranges -> each range {
+         prepared.modules[range.sourceModule].pathLength > 0 => namespaced
+         0 => symbolIndex!
+         symbolIndex! < range.symbolCount -> while {
+             prepared.package.symbols[range.symbolStart + symbolIndex!] => symbol
+-            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0 and symbol.nameToken >= 0
++            (symbol.kind == 7 or symbol.kind == 31) and symbol.astNode >= 0 and symbol.nameToken >= 0 and (includeLocal or symbol.parent < 0)
+                 -> if {
+                     range.astStart + symbol.astNode => globalAst
+                     prepared.package.nodes[globalAst] => node
+@@ -5233,6 +5287,43 @@
+                         }
+                     code! == 0 and (prepared -> functionUsesReservedSysPath(range, symbol, qualified, local!))
+                         -> if { 49 => code! }
++                    code! == 0 and symbol.parent < 0 and not local!
++                        -> if {
++                            declarationNames! -> len => nameStart
++                            prepared.modules[range.sourceModule] => identity
++                            prepared.package.sources[range.sourceModule] -> slice(UIntSize(0), prepared.package.sources[range.sourceModule] -> len) => declarationSource
++                            declarationSource -> appendFunctionDeclarationName(prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, symbol.nameToken, declarationNames!)
++                            (declarationNames! -> len) - nameStart => nameLength
++                            UInt64(0) => hash!
++                            nameStart => byteIndex!
++                            byteIndex! < nameStart + nameLength -> while {
++                                (hash! * 257 + UInt64(declarationNames![byteIndex!])) % 4294967291 => hash!
++                                byteIndex! + 1 => byteIndex!
++                            }
++                            Int(hash! % UInt64(capacity)) => slot!
++                            true => searching!
++                            searching! -> while {
++                                declarationSlots![slot!] => previous
++                                previous < 0 -> if {
++                                    declarationStarts! -> len => declarationSlots![slot!]
++                                    declarationStarts! -> push(nameStart)
++                                    declarationLengths! -> push(nameLength)
++                                    false => searching!
++                                } else {
++                                    declarationLengths![previous] == nameLength => same!
++                                    0 => character!
++                                    same! and character! < nameLength -> while {
++                                        declarationNames![declarationStarts![previous] + character!] != declarationNames![nameStart + character!]
++                                            -> if { false => same! }
++                                        character! + 1 => character!
++                                    }
++                                    same! -> if {
++                                        73 => code!
++                                        false => searching!
++                                    } else { (slot! + 1) % capacity => slot! }
++                                }
++                            }
++                        }
+                     code! > 0 -> if {
+                         ExpressionOperandDiagnostic {
+                             code: code!
+@@ -5252,6 +5343,28 @@
+     }
+     valid
+ }
++
++firstFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot, declaredEffects: ref effects.DeclaredEffectIndex -> ExpressionOperandDiagnostic {
++    prepared -> functionNameDiagnostic(declaredEffects, true)
++}
++
++public firstTopLevelFunctionNameDiagnostic prepared: ref semanticContext.SemanticSnapshot -> ExpressionOperandDiagnostic {
++    prepared -> effects.indexDeclaredEffects => declaredEffects
++    prepared -> functionNameDiagnostic(declaredEffects, false)
++}
++
++public functionDeclarationPrecedesSignature prepared: ref semanticContext.SemanticSnapshot, declaration: ExpressionOperandDiagnostic, signature: SignatureTypeDiagnostic -> Bool {
++    declaration.code <= 0 -> if { false -> return }
++    signature.sourceModule < 0 -> if { true -> return }
++    declaration.sourceModule != signature.sourceModule
++        -> if {
++            declaration.sourceModule < signature.sourceModule -> return
++        }
++    prepared.package.ranges[signature.sourceModule] => range
++    prepared.package.tokens[range.tokenStart + signature.nameToken] => token
++    declaration.locationOffset <= token.span.start
++}
++
+ 
+ # Repeat owns an Int role and a Unit result. Validate its declaration boundary
+ # before the body, in the same order as C# BindRepeatBlockFunctionCall.
