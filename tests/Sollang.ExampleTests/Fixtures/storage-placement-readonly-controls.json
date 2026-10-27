@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 1,
+  "scope": "source-frames",
+  "cases": [
+    {
+      "id": "readonly-view-primary",
+      "source": "readFirst values: [Int] -> Int => values[0]\n\nmain {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values -> readFirst => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@4,0,8",
+        "main|end:BindingStatement@6,0,8",
+        "function:readFirst@1|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "readonly-view-prefix",
+      "source": "readFirst values: [Int] -> Int => values[0]\n\nmain {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    readFirst(values) => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@4,0,8",
+        "main|end:BindingStatement@6,0,8",
+        "function:readFirst@1|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "owning-input-rejects-payload",
+      "source": "readOwnedFirst values: [Int; ~] -> Int => values[0]\n\nmain {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values -> readOwnedFirst => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:readOwnedFirst@1|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "additional-view-conservative-rejection",
+      "source": "withFallback fallback: Int, values: [Int] -> Int => fallback + values[0]\n\nmain {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    0 -> withFallback(values) => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:",
+        "function:withFallback@1|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "readonly-fold-input",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values -> fold 0 total, item { total + item } => sum\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:BindingStatement@4,0,8"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "readonly-each-input",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values -> each item { item -> println }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:BlockFunctionCallStatement@4,0,8"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "later-escape-rejects-all-uses",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    values[0] => first\n    values -> append(3) => grown\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "diagnostic-unused-growable-payload",
+      "source": "main {\n    [1, 2; ~] => values\n}\n",
+      "warnings": [
+        "S003@2"
+      ],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:BindingStatement@2,0,8"
+      ],
+      "purpose": "Exact documented S003 diagnostic control; not warning-free program acceptance."
+    },
+    {
+      "id": "mutable-owner-header-only",
+      "source": "main {\n    [1, 2; ~] => values!\n    values! -> capacity => allocated\n    values! -> push(3)\n    values![0] => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:24/8",
+        "main|alloc:BindingStatement@2,0,24"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "readonly-dictionary-function",
+      "source": "readScore scores: {Int: Int} -> Int => scores[1]\n\nmain {\n    { 1: 2 } => scores\n    scores -> readScore => first\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:56/8",
+        "main|alloc:DictionaryLiteralExpression@4,0,56",
+        "main|end:BindingStatement@5,0,56",
+        "function:readScore@1|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "dictionary-transform-rejects-payload",
+      "source": "main {\n    { 1: 2 } => scores\n    scores -> updated(1, 3) => changed\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "nested-readonly-use",
+      "source": "main {\n    [1, 2; ~] => values\n    values -> capacity => allocated\n    true -> if {\n        values[0] -> println\n    } else {\n        0 -> println\n    }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:8/8",
+        "main|alloc:ArrayLiteralExpression@2,0,8",
+        "main|end:ExpressionStatement@4,0,8"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    },
+    {
+      "id": "loop-transfer-conservative-rejection",
+      "source": "main {\n    true -> while {\n        [1, 2; ~] => values\n        values -> capacity => allocated\n        values[0] => first\n        break\n    }\n}\n",
+      "warnings": [],
+      "expected": [
+        "main|slots:"
+      ],
+      "purpose": "Growable storage is intentional because its capacity is observed; readonly admission decision remains under test."
+    }
+  ]
+}

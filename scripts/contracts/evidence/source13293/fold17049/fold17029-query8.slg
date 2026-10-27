@@ -1,0 +1,90 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sys.process as process
+
+inspect name: Text, source: Text -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => facts
+    prepared -> typedIr.lowerResolvedContext(facts) => ir
+    false => found!
+    prepared.interpolations -> each fragment {
+        fragment.kind == 17 -> if {
+            0 -> typedIr.sourceExpressionValueIndex(fragment.valueAst, 0, Int(ir -> len), prepared.package.ranges, prepared.package.nodes, ir) => selected
+            selected < 0 -> if { process.exit(1) }
+            ir[selected].typeId < 0 or ir[selected].typeId >= (facts.types -> len)
+                -> if { process.exit(2) }
+            "$name|$(facts.types[ir[selected].typeId].symbol)" -> println
+            true => found!
+        }
+    }
+    not found! -> if { "$name|none" -> println }
+}
+
+main {
+    """
+    main {
+        "value=$(true -> if { 2 } else { 3 })" -> println
+    }
+    
+    """ => source0
+    "if-true" -> inspect(source0)
+    """
+    main {
+        "value=$(false -> if { 2 } else { 3 })" -> println
+    }
+    
+    """ => source1
+    "if-false" -> inspect(source1)
+    """
+    main {
+        "value=$(true -> if { false -> if { 2 } else { 3 } } else { 4 })" -> println
+    }
+    
+    """ => source2
+    "if-nested" -> inspect(source2)
+    """
+    mark value: Int -> Int uses Console {
+        value -> println
+        value
+    }
+    
+    main {
+        "$(true -> if { 2 -> mark } else { 3 -> mark })" -> println
+    }
+    
+    """ => source3
+    "if-lazy-effect" -> inspect(source3)
+    """
+    main {
+        "value=$(2 -> when { == 1 { 10 } else { 20 } })" -> println
+    }
+    
+    """ => source4
+    "when-result" -> inspect(source4)
+    """
+    main {
+        "value=$(1..3 -> fold 0 total, item { total + item })" -> println
+    }
+    
+    """ => source5
+    "fold-result" -> inspect(source5)
+    """
+    main {
+        true -> if { 2 -> println } else { 3 -> println }
+    }
+    
+    """ => source6
+    "direct-if-control" -> inspect(source6)
+    """
+    show: -> Unit uses Console {
+        "value=$(true -> if { 2 } else { 3 })" -> println
+    }
+    
+    main {
+        show()
+    }
+    
+    """ => source7
+    "function-if" -> inspect(source7)
+}

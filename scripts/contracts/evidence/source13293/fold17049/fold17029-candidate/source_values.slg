@@ -1,0 +1,76 @@
+namespace sollang.compiler.ir.typed
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.ast as ast
+
+# Ownership stays on the complete source expression. Its value, however, is
+# the terminal control result even when lowering elides the flow wrapper.
+# The source operand is not an alternative result at the same AST depth.
+public sourceExpressionValueIndex sourceModule: Int, rootAst: Int, firstIr: Int, endIr: Int, ranges: ref [analysis.SourceAnalysisRange; ~], nodes: ref [ast.AstNode; ~], ir: ref [TypedIrNode; ~] -> Int {
+    sourceModule < 0 or sourceModule >= (ranges -> len)
+        or firstIr < 0 or endIr < firstIr or endIr > (ir -> len)
+        -> if { -1 -> return }
+    ranges[sourceModule] => range
+    range.astStart < 0 or range.astCount < 0 or range.astStart > Int(nodes -> len) - range.astCount
+        -> if { -1 -> return }
+    rootAst < 0 or rootAst >= range.astCount -> if { -1 -> return }
+    nodes[range.astStart + rootAst] => root
+    -1 => lastTarget!
+    root.kind == 10 -> if {
+        0 => childIndex!
+        childIndex! < range.astCount -> while {
+            nodes[range.astStart + childIndex!] => child
+            child.parent == rootAst and (child.kind == 16 or child.kind == 42
+                or child.kind == 44 or child.kind == 56 or child.kind == 57 or child.kind == 64)
+                -> if {
+                    lastTarget! < 0 -> if { childIndex! => lastTarget! } else {
+                        child.start > nodes[range.astStart + lastTarget!].start
+                            -> if { childIndex! => lastTarget! }
+                    }
+                }
+            childIndex! + 1 => childIndex!
+        }
+    }
+    rootAst => valueAst!
+    -1 => controlKind!
+    lastTarget! >= 0 -> if {
+        nodes[range.astStart + lastTarget!].kind => targetKind
+        targetKind == 42 or targetKind == 44 or targetKind == 56 or targetKind == 57 or targetKind == 64
+            -> if {
+                lastTarget! => valueAst!
+                targetKind => controlKind!
+            }
+    }
+    -1 => selected!
+    range.astCount + 1 => selectedDepth!
+    firstIr => index!
+    index! < endIr -> while {
+        ir[index!] => candidate
+        candidate.sourceModule == sourceModule and candidate.astNode >= 0
+            and candidate.astNode < range.astCount and candidate.kind != 0
+            and candidate.kind != 1 and candidate.kind != 11
+            -> if {
+                controlKind! < 0
+                    or (controlKind! == 42 and candidate.kind == 18)
+                    or (controlKind! == 44 and candidate.kind == 20)
+                    or ((controlKind! == 56 or controlKind! == 57)
+                    and (candidate.kind == 27 or candidate.kind == 33 or candidate.kind == 34))
+                    or (controlKind! == 64 and candidate.kind == 32) => matchesKind
+                candidate.astNode => ancestor!
+                0 => depth!
+                ancestor! >= 0 and ancestor! < range.astCount and ancestor! != valueAst!
+                    and depth! < range.astCount -> while {
+                        nodes[range.astStart + ancestor!].parent => ancestor!
+                        depth! + 1 => depth!
+                    }
+                matchesKind and ancestor! == valueAst! and depth! < selectedDepth!
+                    and (controlKind! < 0 or depth! == 0)
+                    -> if {
+                        index! => selected!
+                        depth! => selectedDepth!
+                    }
+            }
+        index! + 1 => index!
+    }
+    selected!
+}

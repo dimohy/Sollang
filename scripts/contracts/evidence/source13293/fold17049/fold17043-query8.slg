@@ -1,0 +1,179 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as types
+import sollang.compiler.semantic.constant_collection_lowering as constantLowering
+import sollang.compiler.ir.interpolation as interpolation
+import sys.file as file
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ir.typed as typedIr
+import sys.process as process
+
+
+checkIdentity source: Text -> Unit uses Process {
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> symbols.collectPrepared => original
+    source -> analysis.completeSourceInterpolations(nodes, tokens, original) => completed
+    0 => i!
+    i! < (original -> len) -> while {
+        original[i!] => a
+        completed.symbols[i!] => b
+        a.kind != b.kind or a.parent != b.parent or a.astNode != b.astNode or a.nameToken != b.nameToken or a.typeNode != b.typeNode or a.secondaryTypeNode != b.secondaryTypeNode or a.blockNameToken != b.blockNameToken or a.blockTypeNode != b.blockTypeNode or a.blockResultTypeNode != b.blockResultTypeNode or a.flags != b.flags
+            -> if { process.exit(10) }
+        i! + 1 => i!
+    }
+    source -> resolution.resolvePrepared(nodes, original, tokens) => names
+    [file.SourceText; ~] => sources!
+    [ast.AstNode; ~] => flatNodes!
+    [syntax.SyntaxToken; ~] => flatTokens!
+    [symbols.Symbol; ~] => flatSymbols!
+    [resolution.ResolvedName; ~] => flatNames!
+    [analysis.SourceAnalysisRange; ~] => ranges!
+    0 => module!
+    module! < 2 -> while {
+        sources! -> push(source -> file.borrowText)
+        ranges! -> push(analysis.SourceAnalysisRange {
+            sourceModule: module!, astStart: flatNodes! -> len, astCount: nodes -> len,
+            tokenStart: flatTokens! -> len, tokenCount: tokens -> len,
+            symbolStart: flatSymbols! -> len, symbolCount: original -> len,
+            nameStart: flatNames! -> len, nameCount: names -> len,
+            termStart: 0, termCount: 0, typeStart: 0, typeCount: 0,
+            literalStart: 0, literalCount: 0, constantFailureStart: 0, constantFailureCount: 0
+        })
+        nodes -> each node { flatNodes! -> push(node) }
+        tokens -> each token { flatTokens! -> push(token) }
+        original -> each symbol { flatSymbols! -> push(symbol) }
+        names -> each name { flatNames! -> push(name) }
+        module! + 1 => module!
+    }
+    analysis.PackageAnalysis {
+        sources: sources!, entrySourceModule: -1,
+        interpolationRanges: [interpolation.InterpolationSourceRange; ~],
+        interpolations: [interpolation.InterpolationNode; ~], ranges: ranges!,
+        nodes: flatNodes!, tokens: flatTokens!, symbols: flatSymbols!, names: flatNames!,
+        terms: [typeTerms.TypeTerm; ~], typeUses: [types.TypeUse; ~],
+        constantLiterals: [constantLowering.Literal; ~], constantFailures: [constantLowering.Failure; ~]
+    } -> analysis.completePackageInterpolations => legacy
+    source -> resolution.resolvePrepared(completed.nodes, completed.symbols, completed.tokens) => freshNames
+    0 => rangeIndex!
+    legacy.ranges -> each range {
+        range.symbolStart != rangeIndex! * (completed.symbols -> len)
+            or range.symbolCount != (completed.symbols -> len)
+            or range.nameCount != (freshNames -> len) -> if { process.exit(11) }
+        0 => j!
+        j! < range.symbolCount -> while {
+            completed.symbols[j!] => a
+            legacy.symbols[range.symbolStart + j!] => b
+            a.kind != b.kind or a.parent != b.parent or a.astNode != b.astNode or a.nameToken != b.nameToken or a.typeNode != b.typeNode or a.secondaryTypeNode != b.secondaryTypeNode or a.blockNameToken != b.blockNameToken or a.blockTypeNode != b.blockTypeNode or a.blockResultTypeNode != b.blockResultTypeNode or a.flags != b.flags
+                -> if { process.exit(12) }
+            j! + 1 => j!
+        }
+        0 => j!
+        j! < range.nameCount -> while {
+            freshNames[j!] => a
+            legacy.names[range.nameStart + j!] => b
+            a.astNode != b.astNode or a.symbol != b.symbol or a.nameToken != b.nameToken
+                -> if { process.exit(13) }
+            j! + 1 => j!
+        }
+        rangeIndex! + 1 => rangeIndex!
+    }
+}
+
+
+inspect name: Text, source: Text -> Unit uses Console, Process {
+    source -> checkIdentity
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypeIds.resolveContext => facts
+    prepared -> typedIr.lowerResolvedContext(facts) => ir
+    ir -> each value {
+        value.kind == 8 and (value.operand0 < 0 or value.operand1 < 0)
+            -> if { process.exit(3) }
+    }
+    false => found!
+    prepared.interpolations -> each fragment {
+        fragment.kind == 17 -> if {
+            0 -> typedIr.sourceExpressionValueIndex(fragment.valueAst, 0, Int(ir -> len), prepared.package.ranges, prepared.package.nodes, ir) => selected
+            selected < 0 -> if { process.exit(1) }
+            ir[selected].typeId < 0 or ir[selected].typeId >= (facts.types -> len)
+                -> if { process.exit(2) }
+            "$name|$(facts.types[ir[selected].typeId].symbol)" -> println
+            true => found!
+        }
+    }
+    not found! -> if { "$name|none" -> println }
+}
+
+main {
+    """
+    main {
+        "value=$(true -> if { 2 } else { 3 })" -> println
+    }
+    
+    """ => source0
+    "if-true" -> inspect(source0)
+    """
+    main {
+        "value=$(false -> if { 2 } else { 3 })" -> println
+    }
+    
+    """ => source1
+    "if-false" -> inspect(source1)
+    """
+    main {
+        "value=$(true -> if { false -> if { 2 } else { 3 } } else { 4 })" -> println
+    }
+    
+    """ => source2
+    "if-nested" -> inspect(source2)
+    """
+    mark value: Int -> Int uses Console {
+        value -> println
+        value
+    }
+    
+    main {
+        "$(true -> if { 2 -> mark } else { 3 -> mark })" -> println
+    }
+    
+    """ => source3
+    "if-lazy-effect" -> inspect(source3)
+    """
+    main {
+        "value=$(2 -> when { == 1 { 10 } else { 20 } })" -> println
+    }
+    
+    """ => source4
+    "when-result" -> inspect(source4)
+    """
+    main {
+        "value=$(1..3 -> fold 0 total, item { total + item })" -> println
+    }
+    
+    """ => source5
+    "fold-result" -> inspect(source5)
+    """
+    main {
+        true -> if { 2 -> println } else { 3 -> println }
+    }
+    
+    """ => source6
+    "direct-if-control" -> inspect(source6)
+    """
+    show: -> Unit uses Console {
+        "value=$(true -> if { 2 } else { 3 })" -> println
+    }
+    
+    main {
+        show()
+    }
+    
+    """ => source7
+    "function-if" -> inspect(source7)
+}

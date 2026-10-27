@@ -1,0 +1,730 @@
+namespace sollang.compiler.semantic.symbols
+
+import sollang.compiler.ast as ast
+import sollang.compiler.syntax as syntax
+import sys.file as file
+import syntax.generated.slg as grammar
+
+# Symbol and AST indexes are stable offsets into owned arrays. This keeps the
+# semantic graph relocatable and avoids one heap allocation per declaration.
+public struct Symbol {
+    public kind: Int
+    public parent: Int
+    public astNode: Int
+    public nameToken: Int
+    public typeNode: Int
+    public secondaryTypeNode: Int
+    public blockNameToken: Int
+    public blockTypeNode: Int
+    public blockResultTypeNode: Int
+    public flags: Int
+}
+
+# A dotted function declaration owns its complete path, not a value named by
+# the first segment. Shared by lexical and qualified call resolution.
+public hasQualifiedFunctionName symbol: Symbol, tokens: ref [syntax.SyntaxToken; ~], tokenStart: Int, tokenCount: Int -> Bool {
+    symbol.kind != 7 or symbol.nameToken < 0 -> if { false -> return }
+    symbol.nameToken + 1 => index!
+    index! < tokenCount -> while {
+        tokens[tokenStart + index!].kind => kind
+        kind != grammar.triviaIdWhitespace() and kind != grammar.triviaIdComment()
+            -> if {
+                kind == grammar.tokenIdDot() -> return
+            }
+        index! + 1 => index!
+    }
+    false
+}
+
+public reservedBindingName name: Text -> Bool {
+    name == "main"
+        or name == "sys"
+        or name == "print"
+        or name == "println"
+        or name == "readInt"
+        or name == "seedRandom"
+        or name == "randomBelow"
+        or name == "openIntWriter"
+        or name == "writeInt"
+        or name == "closeIntWriter"
+        or name == "openIntReader"
+        or name == "closestInt"
+        or name == "closeIntReader"
+        or name == "nowMillis"
+        or name == "each"
+        or name == "fold"
+        or name == "if"
+        or name == "else"
+        or name == "when"
+        or name == "and"
+        or name == "or"
+        or name == "not"
+        or name == "true"
+        or name == "false"
+        or name == "in"
+        or name == "it"
+        or name == "repeat"
+        or name == "block"
+        or name == "yield"
+        or name == "stream"
+        or name == "namespace"
+        or name == "import"
+        or name == "public"
+        or name == "opaque"
+        or name == "struct"
+        or name == "enum"
+        or name == "trait"
+        or name == "impl"
+        or name == "com"
+        or name == "class"
+        or name == "interface"
+        or name == "sta"
+        or name == "mta"
+        or name == "for"
+        or name == "self"
+        or name == "as"
+        or name == "move"
+        or name == "mut"
+}
+
+# Synthetic role names retain a real source token for provenance.
+# 262144 contextual it; 524288 fold accumulator; 1048576 fold item.
+public contextualName symbol: Symbol -> Text {
+    symbol.flags / 524288 % 2 == 1 -> if { "acc" -> return }
+    symbol.flags / 262144 % 2 == 1 -> if { "it" -> return }
+    ""
+}
+
+public implicitFoldRole symbol: Symbol -> Int {
+    symbol.flags / 524288 % 2 == 1 -> if { 0 -> return }
+    symbol.flags / 1048576 % 2 == 1 -> if { 1 -> return }
+    -1
+}
+
+public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
+    nodes -> extendPrepared(0, [Symbol; ~])
+}
+
+# Existing source-local symbol identities remain a stable prefix. Only appended
+# AST nodes contribute declarations and synthetic lexical roles.
+public extendPrepared nodes: ref [ast.AstNode; ~], firstAst: Int, existing: move [Symbol; ~] -> [Symbol; ~] {
+    existing => symbols!
+    symbols! -> len => firstSymbol
+    [Int; ~] => astToSymbol!
+    nodes -> len => astCount
+    0 => astMapIndex!
+    astMapIndex! < astCount -> while {
+        astToSymbol! -> push(-1)
+        astMapIndex! + 1 => astMapIndex!
+    }
+    0 => prefixIndex!
+    prefixIndex! < firstSymbol -> while {
+        symbols![prefixIndex!] => prefix
+        prefix.astNode >= 0 and prefix.astNode < firstAst
+            and prefix.kind != 36
+            and (prefix.kind != 35 or nodes[prefix.astNode].kind == 60)
+            -> if {
+                astToSymbol![prefix.astNode] < 0 -> if { prefixIndex! => astToSymbol![prefix.astNode] }
+            }
+        prefixIndex! + 1 => prefixIndex!
+    }
+    firstAst => astIndex!
+
+    astIndex! < astCount -> while {
+        nodes[astIndex!] => node
+        false => isSymbol!
+        node.kind >= 3 -> if {
+            node.kind <= 7 -> if { true => isSymbol! }
+        }
+        node.kind == 9 -> if { true => isSymbol! }
+        node.kind == 61 -> if { true => isSymbol! }
+        node.kind == 48 -> if { true => isSymbol! }
+        node.kind == 64 -> if { true => isSymbol! }
+        node.kind == 50 or node.kind == 51 -> if { true => isSymbol! }
+        node.kind == 58 -> if { true => isSymbol! }
+        node.kind == 60 -> if { true => isSymbol! }
+        node.kind == 67 -> if { true => isSymbol! }
+        node.kind == 68 -> if { true => isSymbol! }
+        node.kind >= 26 -> if {
+            node.kind <= 34 -> if { true => isSymbol! }
+        }
+        isSymbol! -> if {
+            -1 => parentSymbol!
+            node.parent => parentAst!
+            parentAst! >= 0 and parentSymbol! < 0 -> while {
+                astToSymbol![parentAst!] => mappedParent
+                mappedParent >= 0 -> if {
+                    mappedParent => parentSymbol!
+                } else {
+                    nodes[parentAst!].parent => parentAst!
+                }
+            }
+            Symbol {
+                kind: node.kind == 67 or node.kind == 68 -> if { 3 } else { node.kind == 60
+                        -> if { 35 } else { node.kind } }
+                parent: parentSymbol!
+                astNode: astIndex!
+                nameToken: node.payloadToken
+                typeNode: -1
+                secondaryTypeNode: -1
+                blockNameToken: node.tertiaryToken
+                blockTypeNode: -1
+                blockResultTypeNode: -1
+                flags: node.flags
+            } => symbol
+            symbols! -> len => symbolIndex
+            symbols! -> push(symbol)
+            symbolIndex => astToSymbol![astIndex!]
+        }
+        astIndex! + 1 => astIndex!
+    }
+
+    # Stream pipeline expansion appends its synthetic nested call scopes after
+    # the original callback body nodes. During the first forward pass those
+    # later scopes are not mapped yet, so callback bindings can be attached to
+    # the outer terminal call. Recompute lexical parents once the complete
+    # AST-to-symbol map exists.
+    firstSymbol => reparentSymbolIndex!
+    reparentSymbolIndex! < (symbols! -> len) -> while {
+        symbols![reparentSymbolIndex!] => reparentSymbol!
+        nodes[reparentSymbol!.astNode].parent => reparentAst!
+        -1 => nearestParentSymbol!
+        reparentAst! >= 0 and nearestParentSymbol! < 0
+            -> while {
+                astToSymbol![reparentAst!] => reparentCandidate
+                reparentCandidate >= 0 -> if {
+                    reparentCandidate => nearestParentSymbol!
+                } else {
+                    nodes[reparentAst!].parent => reparentAst!
+                }
+            }
+        nearestParentSymbol! >= 0 and symbols![nearestParentSymbol!].kind == 48
+            -> if {
+                nearestParentSymbol! => reparentSymbol!.parent
+                reparentSymbol! => symbols![reparentSymbolIndex!]
+            }
+        reparentSymbolIndex! + 1 => reparentSymbolIndex!
+    }
+
+    # Attach each type node to its nearest symbol ancestor. The nearest rule
+    # prevents a field or method type from being mistaken for its owner type.
+    firstAst => typeAstIndex!
+    typeAstIndex! < astCount -> while {
+        nodes[typeAstIndex!] => typeAst
+        typeAst.kind == 12 and (typeAst.parent < 0 or nodes[typeAst.parent].kind != 12)
+            -> if {
+                typeAst.parent => typeParentAst!
+                -1 => typeOwnerSymbol!
+                typeParentAst! >= 0 and typeOwnerSymbol! < 0
+                    -> while {
+                        astToSymbol![typeParentAst!] => mappedOwner
+                        mappedOwner >= 0 -> if {
+                            mappedOwner => typeOwnerSymbol!
+                        } else {
+                            nodes[typeParentAst!].parent => typeParentAst!
+                        }
+                    }
+                typeOwnerSymbol! >= 0 -> if {
+                    symbols![typeOwnerSymbol!] => owner!
+                    nodes[owner!.astNode] => ownerAst
+                    true => ownerTypeAllowed!
+                    owner!.kind == 7 or owner!.kind == 31 -> if {
+                        false => ownerTypeAllowed!
+                        # Method return annotations can be direct children of the
+                        # declaration even when the method has no caller-supplied
+                        # block parameter. Direct ownership is structural and
+                        # must not depend on blockNameToken being present.
+                        typeAst.parent == owner!.astNode -> if { true => ownerTypeAllowed! }
+                        typeAst.parent => ownerTypeAncestor!
+                        ownerTypeAncestor! >= 0 and ownerTypeAncestor! != owner!.astNode and not ownerTypeAllowed!
+                            -> while {
+                                nodes[ownerTypeAncestor!].kind == 17 or nodes[ownerTypeAncestor!].kind == 60
+                                    -> if {
+                                        true => ownerTypeAllowed!
+                                    } else {
+                                        nodes[ownerTypeAncestor!].parent => ownerTypeAncestor!
+                                    }
+                            }
+                    }
+                    ownerTypeAllowed! -> if {
+                        owner!.kind == 7 and ownerAst.tertiaryToken >= 0
+                            -> if {
+                                owner!.typeNode < 0 -> if {
+                                    typeAstIndex! => owner!.typeNode
+                                } else {
+                                    ownerAst.secondaryToken >= 0 -> if {
+                                        owner!.secondaryTypeNode < 0 -> if {
+                                            # The compact AST is not required to store
+                                            # signature type nodes in lexical order. The
+                                            # first source type is the named input and the
+                                            # second is the declared result, so establish
+                                            # that order from spans instead of visit order.
+                                            nodes[typeAstIndex!].start < nodes[owner!.typeNode].start
+                                                -> if {
+                                                    owner!.typeNode => owner!.secondaryTypeNode
+                                                    typeAstIndex! => owner!.typeNode
+                                                } else {
+                                                    typeAstIndex! => owner!.secondaryTypeNode
+                                                }
+                                        } else {
+                                            owner!.blockTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.blockTypeNode
+                                            } else {
+                                                typeAst.operatorKind == grammar.tokenIdArrow()
+                                                    -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                            }
+                                        }
+                                    } else {
+                                        owner!.blockTypeNode < 0 -> if {
+                                            typeAstIndex! => owner!.blockTypeNode
+                                        } else {
+                                            typeAst.operatorKind == grammar.tokenIdArrow()
+                                                -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                        }
+                                    }
+                                }
+                            } else {
+                                owner!.kind == 31 and ownerAst.tertiaryToken >= 0
+                                    -> if {
+                                        owner!.typeNode < 0 -> if {
+                                            typeAstIndex! => owner!.typeNode
+                                        } else {
+                                            owner!.blockTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.blockTypeNode
+                                            } else {
+                                                typeAst.operatorKind == grammar.tokenIdArrow()
+                                                    -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                            }
+                                        }
+                                    } else {
+                                        owner!.typeNode < 0 -> if {
+                                            typeAstIndex! => owner!.typeNode
+                                        } else {
+                                            owner!.secondaryTypeNode < 0 -> if {
+                                                typeAstIndex! => owner!.secondaryTypeNode
+                                            }
+                                        }
+                                    }
+                            }
+                        owner! => symbols![typeOwnerSymbol!]
+                    }
+                }
+            }
+        typeAstIndex! + 1 => typeAstIndex!
+    }
+
+    # A multi-name generic clause has one AST node but one lexical symbol per
+    # parameter. The compact bootstrap AST currently stores up to three names.
+    symbols! -> len => beforeSecondaryGenerics
+    firstSymbol => genericSymbolIndex!
+    genericSymbolIndex! < beforeSecondaryGenerics
+        -> while {
+            symbols![genericSymbolIndex!] => genericSymbol
+            genericSymbol.kind == 32 -> if {
+                nodes[genericSymbol.astNode].secondaryToken >= 0
+                    -> if {
+                        symbols! -> push(Symbol {
+                            kind: 32
+                            parent: genericSymbol.parent
+                            astNode: genericSymbol.astNode
+                            nameToken: nodes[genericSymbol.astNode].secondaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
+                nodes[genericSymbol.astNode].tertiaryToken >= 0
+                    -> if {
+                        symbols! -> push(Symbol {
+                            kind: 32
+                            parent: genericSymbol.parent
+                            astNode: genericSymbol.astNode
+                            nameToken: nodes[genericSymbol.astNode].tertiaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
+            }
+            genericSymbolIndex! + 1 => genericSymbolIndex!
+        }
+
+    # COM activation, cloning, and checked interface queries are source-level generated functions, but the
+    # self-host compiler keeps them as flat symbols. No wrapper object or
+    # metadata dictionary is allocated. The class AST uniquely identifies its
+    # activation function and the interface AST uniquely identifies clone.
+    symbols! -> len => beforeComFunctions
+    firstSymbol => comInterfaceSymbolIndex!
+    comInterfaceSymbolIndex! < beforeComFunctions
+        -> while {
+            symbols![comInterfaceSymbolIndex!] => comInterfaceSymbol
+            comInterfaceSymbol.kind == 3 and comInterfaceSymbol.flags / 512 % 2 == 1
+                -> if {
+                    nodes[comInterfaceSymbol.astNode] => comInterfaceAst
+                    false => earlierComInterface!
+                    0 => comEarlierSearch!
+                    comEarlierSearch! < comInterfaceSymbolIndex!
+                        -> while {
+                            symbols![comEarlierSearch!] => comEarlierSymbol
+                            comEarlierSymbol.kind == 3 and comEarlierSymbol.flags / 512 % 2 == 1
+                                -> if {
+                                    nodes[comEarlierSymbol.astNode].parent == comInterfaceAst.parent
+                                        -> if { true => earlierComInterface! }
+                                }
+                            comEarlierSearch! + 1 => comEarlierSearch!
+                        }
+                    not earlierComInterface! -> if {
+                        symbols! -> push(Symbol {
+                            kind: 36
+                            parent: comInterfaceSymbolIndex!
+                            astNode: comInterfaceAst.parent
+                            nameToken: nodes[comInterfaceAst.parent].payloadToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 512 + 4096
+                        })
+                    }
+                    symbols! -> push(Symbol {
+                        kind: 36
+                        parent: comInterfaceSymbolIndex!
+                        astNode: comInterfaceSymbol.astNode
+                        nameToken: comInterfaceSymbol.nameToken
+                        typeNode: -1
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 512 + 8192
+                    })
+                    0 => comQueryTargetIndex!
+                    comQueryTargetIndex! < beforeComFunctions -> while {
+                        symbols![comQueryTargetIndex!] => comQueryTarget
+                        comQueryTargetIndex! != comInterfaceSymbolIndex!
+                            and comQueryTarget.kind == 3
+                            and comQueryTarget.flags / 512 % 2 == 1
+                            and nodes[comQueryTarget.astNode].parent == comInterfaceAst.parent
+                            -> if {
+                                symbols! -> push(Symbol {
+                                    kind: 36
+                                    parent: comInterfaceSymbolIndex!
+                                    astNode: comQueryTarget.astNode
+                                    nameToken: comQueryTarget.nameToken
+                                    typeNode: -1
+                                    secondaryTypeNode: comQueryTargetIndex!
+                                    blockNameToken: -1
+                                    blockTypeNode: -1
+                                    blockResultTypeNode: -1
+                                    flags: 512 + 131072
+                                })
+                            }
+                        comQueryTargetIndex! + 1 => comQueryTargetIndex!
+                    }
+                }
+            comInterfaceSymbolIndex! + 1 => comInterfaceSymbolIndex!
+        }
+
+    # Parameters and method self values are synthetic lexical symbols owned by
+    # their declaration symbol; they reuse the declaration AST index.
+    symbols! -> len => declaredSymbolCount
+    firstSymbol => declarationSymbolIndex!
+    declarationSymbolIndex! < declaredSymbolCount
+        -> while {
+            symbols![declarationSymbolIndex!] => declarationSymbol
+            nodes[declarationSymbol.astNode] => declarationAst
+            declarationAst.secondaryToken >= 0 -> if {
+                (declarationSymbol.kind == 7 and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 16 % 2 == 1 or (declarationSymbol.flags / 32 % 2 == 1 and declarationSymbol.typeNode >= 0))) or declarationSymbol.kind == 29 or declarationSymbol.kind == 31
+                    -> if {
+                        -1 => parameterTypeNode!
+                        declarationSymbol.kind == 7 -> if {
+                            declarationSymbol.flags / 16 % 2 == 0 -> if { declarationSymbol.typeNode => parameterTypeNode! }
+                        }
+                        declarationSymbol.kind == 31 and declarationSymbol.parent >= 0
+                            -> if {
+                                symbols![declarationSymbol.parent].typeNode => parameterTypeNode!
+                            }
+                        Symbol {
+                            kind: 35
+                            parent: declarationSymbolIndex!
+                            astNode: declarationSymbol.flags / 512 % 2 == 1
+                                -> if { parameterTypeNode! } else { declarationSymbol.astNode }
+                            nameToken: declarationAst.secondaryToken
+                            typeNode: parameterTypeNode!
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: declarationSymbol.flags
+                        } => parameterSymbol
+                        symbols! -> push(parameterSymbol)
+                    }
+            }
+            (declarationSymbol.kind == 7 or declarationSymbol.kind == 31)
+                and declarationAst.secondaryToken < 0
+                and declarationSymbol.typeNode >= 0
+                and (declarationSymbol.secondaryTypeNode >= 0 or declarationSymbol.flags / 32 % 2 == 1)
+                -> if {
+                    # An unnamed primary input is referenced as `it`. The synthetic
+                    # flag lets typed IR compare that contextual name without
+                    # manufacturing a source token.
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: declarationSymbolIndex!
+                        astNode: declarationSymbol.astNode
+                        nameToken: declarationSymbol.nameToken
+                        typeNode: declarationSymbol.typeNode
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: declarationSymbol.flags + 262144
+                    })
+                }
+            (declarationSymbol.kind == 7 or declarationSymbol.kind == 31) and declarationSymbol.blockNameToken >= 0 and declarationSymbol.blockTypeNode >= 0
+                -> if {
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: declarationSymbolIndex!
+                        astNode: declarationSymbol.astNode
+                        nameToken: declarationSymbol.blockNameToken
+                        typeNode: declarationSymbol.blockTypeNode
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 0
+                    })
+                }
+            declarationSymbolIndex! + 1 => declarationSymbolIndex!
+        }
+
+    # Source syntax places the first declared input on the method node and
+    # later inputs on AdditionalFunctionInput nodes. A COM receiver becomes the
+    # primary parameter, so rotate the declared inputs into their source order
+    # before appending that receiver: first input, then later inputs.
+    firstSymbol => comParameterFunctionIndex!
+    comParameterFunctionIndex! < declaredSymbolCount
+        -> while {
+            symbols![comParameterFunctionIndex!] => comParameterFunction
+            comParameterFunction.kind == 7
+                and comParameterFunction.flags / 512 % 2 == 1
+                and comParameterFunction.flags / 4096 % 2 == 0
+                and comParameterFunction.flags / 8192 % 2 == 0
+                -> if {
+                    [Int; ~] => comParameterIndexes!
+                    -1 => comFirstInputIndex!
+                    0 => comParameterSearch!
+                    comParameterSearch! < (symbols! -> len) -> while {
+                        symbols![comParameterSearch!] => comParameterCandidate
+                        comParameterCandidate.kind == 35 and comParameterCandidate.parent == comParameterFunctionIndex!
+                            -> if {
+                                comParameterIndexes! -> push(comParameterSearch!)
+                                comParameterCandidate.flags / 512 % 2 == 1 -> if { comParameterSearch! => comFirstInputIndex! }
+                            }
+                        comParameterSearch! + 1 => comParameterSearch!
+                    }
+                    (comParameterIndexes! -> len) > 1 and comFirstInputIndex! >= 0 and comParameterIndexes![0] != comFirstInputIndex!
+                        -> if {
+                            symbols![comFirstInputIndex!] => comFirstInput
+                            (comParameterIndexes! -> len) - 1 => comShiftIndex!
+                            comShiftIndex! > 0 -> while {
+                                comParameterIndexes![comShiftIndex!] => comShiftTarget
+                                comParameterIndexes![comShiftIndex! - 1] => comShiftSource
+                                symbols![comShiftSource] => comShiftedParameter
+                                comShiftedParameter => symbols![comShiftTarget]
+                                comShiftedParameter.astNode >= 0 and comShiftedParameter.astNode < astCount
+                                    -> if {
+                                        comShiftTarget => astToSymbol![comShiftedParameter.astNode]
+                                    }
+                                comShiftIndex! - 1 => comShiftIndex!
+                            }
+                            comParameterIndexes![0] => comFirstTarget
+                            comFirstInput => symbols![comFirstTarget]
+                            comFirstInput.astNode >= 0 and comFirstInput.astNode < astCount
+                                -> if {
+                                    comFirstTarget => astToSymbol![comFirstInput.astNode]
+                                }
+                        }
+                }
+            comParameterFunctionIndex! + 1 => comParameterFunctionIndex!
+        }
+
+    # Every COM method and clone has one implicit readonly interface receiver.
+    # Its type is derived from the parent nominal interface symbol in the type
+    # arena, so no source TypeAnnotation node or hidden source text is needed.
+    symbols! -> len => beforeComReceivers
+    firstSymbol => comReceiverFunctionIndex!
+    comReceiverFunctionIndex! < beforeComReceivers
+        -> while {
+            symbols![comReceiverFunctionIndex!] => comReceiverFunction
+            comReceiverFunction.kind == 7
+                and comReceiverFunction.flags / 512 % 2 == 1
+                and comReceiverFunction.flags / 4096 % 2 == 0
+                and comReceiverFunction.parent >= 0 -> if {
+                    symbols![comReceiverFunction.parent] => comReceiverInterface
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: comReceiverFunctionIndex!
+                        astNode: comReceiverFunction.astNode
+                        nameToken: comReceiverInterface.nameToken
+                        typeNode: -1
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 512 + 16384
+                    })
+                }
+            comReceiverFunctionIndex! + 1 => comReceiverFunctionIndex!
+        }
+
+    # Each enum arm is a lexical scope. A payload name belongs only to that
+    # arm and is synthesized from the pattern's secondary token.
+    symbols! -> len => enumArmScopeCount
+    firstSymbol => enumArmScopeIndex!
+    enumArmScopeIndex! < enumArmScopeCount -> while {
+        symbols![enumArmScopeIndex!] => enumArmScope
+        enumArmScope.kind == 58 -> if {
+            0 => enumPatternAstIndex!
+            enumPatternAstIndex! < astCount -> while {
+                nodes[enumPatternAstIndex!] => enumPatternAst
+                enumPatternAst.parent => enumPatternOwnerAst!
+                enumPatternOwnerAst! >= 0 and nodes[enumPatternOwnerAst!].kind == 70
+                    -> if {
+                        nodes[enumPatternOwnerAst!].parent => enumPatternOwnerAst!
+                    }
+                enumPatternAst.kind == 59 and enumPatternOwnerAst! == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0
+                    -> if {
+                        symbols! -> push(Symbol {
+                            kind: 35
+                            parent: enumArmScopeIndex!
+                            astNode: enumPatternAstIndex!
+                            nameToken: enumPatternAst.secondaryToken
+                            typeNode: -1
+                            secondaryTypeNode: -1
+                            blockNameToken: -1
+                            blockTypeNode: -1
+                            blockResultTypeNode: -1
+                            flags: 0
+                        })
+                    }
+                enumPatternAstIndex! + 1 => enumPatternAstIndex!
+            }
+        }
+        enumArmScopeIndex! + 1 => enumArmScopeIndex!
+    }
+
+    # A role call is a lexical scope. Its block item is visible only inside the
+    # caller body, while the trailing result binding belongs to the outer scope.
+    symbols! -> len => roleScopeCount
+    firstSymbol => roleScopeIndex!
+    roleScopeIndex! < roleScopeCount -> while {
+        symbols![roleScopeIndex!] => roleScope
+        roleScope.kind == 48 -> if {
+            nodes[roleScope.astNode] => roleAst
+            roleAst.secondaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 9
+                    parent: roleScope.parent
+                    astNode: roleScope.astNode
+                    nameToken: roleAst.secondaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: roleAst.flags
+                })
+            }
+            roleAst.tertiaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: roleScopeIndex!
+                    astNode: roleScope.astNode
+                    nameToken: roleAst.tertiaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 0
+                })
+            } else {
+                # An unnamed block item is referenced as `it`. Keep the role
+                # call's source token for stable provenance and mark the
+                # synthetic symbol so name resolution uses the contextual
+                # spelling instead of the call name.
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: roleScopeIndex!
+                    astNode: roleScope.astNode
+                    nameToken: roleAst.payloadToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 262144
+                })
+            }
+        }
+        roleScopeIndex! + 1 => roleScopeIndex!
+    }
+
+    # Fold owns two Int roles: the running accumulator and current item.
+    symbols! -> len => foldScopeCount
+    firstSymbol => foldScopeIndex!
+    foldScopeIndex! < foldScopeCount -> while {
+        symbols![foldScopeIndex!] => foldScope
+        foldScope.kind == 64 -> if {
+            nodes[foldScope.astNode] => foldAst
+            [foldAst.secondaryToken, foldAst.tertiaryToken] => roleTokens
+            [524288, 262144 + 1048576] => defaultFlags
+            0 => role!
+            role! < 2 -> while {
+                roleTokens[role!] => nameToken!
+                0 => flags!
+                nameToken! < 0 -> if {
+                    foldAst.payloadToken => nameToken!
+                    defaultFlags[role!] => flags!
+                }
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: foldScopeIndex!
+                    astNode: foldScope.astNode
+                    nameToken: nameToken!
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: flags!
+                })
+                role! + 1 => role!
+            }
+        }
+        foldScopeIndex! + 1 => foldScopeIndex!
+    }
+
+    symbols!
+}
+
+public collect source: Text -> [Symbol; ~] {
+    source -> ast.lower => nodes
+    nodes -> collectPrepared => symbols
+    symbols
+}
+
+public collectSource source: file.SourceText -> [Symbol; ~] {
+    source -> ast.lowerSource => nodes
+    nodes -> collectPrepared => symbols
+    symbols
+}
