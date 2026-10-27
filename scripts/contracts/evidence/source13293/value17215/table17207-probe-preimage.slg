@@ -1,0 +1,245 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_inline_frames as inlineFrames
+import sollang.compiler.semantic.storage_placement_package as framePackage
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.diagnostics as diagnostics
+import sys.process as process
+
+struct Query { label: Text, name: Text, line: Int }
+
+location nodeIndex: Int, source: Text, prepared: ref semanticContext.SemanticSnapshot, indexed: ref sourceIndex.SourceIndex, units: ref sourceUnits.UnitPlan -> diagnostics.SourceLocation {
+    prepared.package.ranges[0] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    node.start => offset!
+    node.kind == 9 -> if {
+        prepared.package.tokens[range.tokenStart + node.payloadToken].span.start => offset!
+    }
+    units.units -> each unit { unit.astNode == nodeIndex -> if {
+            prepared.package.tokens[range.tokenStart + unit.locationToken].span.start => offset!
+    } }
+    source -> diagnostics.sourceLocation(offset!)
+}
+
+kindCode nodeIndex: Int, prepared: ref semanticContext.SemanticSnapshot -> Int {
+    prepared.package.ranges[0] => range
+    prepared.package.nodes[range.astStart + nodeIndex] => node
+    node.kind == 9 -> if { 2 -> return }
+    node.kind == 38 -> if { 3 -> return }
+    prepared.package -> typeIds.arrayStorageSyntax(0, nodeIndex) => storage
+    storage.isRepeat -> if { 1 } else { 0 }
+}
+
+inspect source: Text, queries: [Query] -> Unit uses Console, Process {
+    [source,; ~] -> semanticContext.prepare => prepared
+    prepared -> expressionTypes.resolveContext => facts!
+    prepared -> typedIr.lowerResolvedContext(facts!) => ir!
+    ir! -> typedIr.materializeGenericClosure(prepared, facts!) => instances
+    [Bool; ~] => seen!
+    ir! -> each { seen! -> push(false) }
+    0 => bodies!
+    instances -> each instance {
+        instance.status != 0 -> if { "instance-error:$(instance.status)" -> println
+            process.exit(1) }
+        not seen![instance.functionNode] -> if { true => seen![instance.functionNode]
+            bodies! + 1 => bodies! }
+    }
+    "instances:$(bodies!)" -> println
+    prepared -> inlineFrames.build(facts!) -> when {
+        Err(_) { process.exit(2) }
+        Ok(pool) { prepared -> framePackage.build(facts!, ir!, pool) -> when {
+                Err(error) { "table-error" -> println
+                    process.exit(3) }
+                Ok(table) {
+                    0 => ordinal!
+                    table.frames -> each frame {
+                        table.frameByFunction[frame.functionIr] != ordinal!
+                            or ir![frame.functionIr].sourceModule != frame.sourceModule
+                            or ir![frame.functionIr].astNode != frame.frameAst
+                            -> if { process.exit(4) }
+                        ordinal! + 1 => ordinal!
+                    }
+                    0 => nodeIndex!
+                    nodeIndex! < (ir! -> len) -> while {
+                        nodeIndex! -> framePackage.frameForNode(ir!, table) -> when {
+                            Err(_) { process.exit(5) }
+                            Ok(owner) { owner -> when {
+                                    None { }
+                                    Some(frame) { table.frameByFunction[table.frames[frame].functionIr] != frame
+                                            -> if { process.exit(6) } }
+                            } }
+                        }
+                        nodeIndex! + 1 => nodeIndex!
+                    }
+                    -1 -> framePackage.frameForNode(ir!, table) -> when {
+                        Ok(_) { process.exit(7) }
+                        Err(_) { }
+                    }
+                    prepared.package.ranges[0] => range
+                    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+                        Err(_) { process.exit(8) }
+                        Ok(indexed) { prepared.package -> sourceUnits.build(0, indexed) -> when {
+                                Err(_) { process.exit(9) }
+                                Ok(units) {
+                                    queries -> each query {
+                                        0 => copies!
+                                        table.frames -> each frame {
+                                            ir![frame.functionIr] => function
+                                            prepared.package.nodes[range.astStart + frame.frameAst] => node
+                                            query.line == 0 and function.kind == 11 -> if { true } else {
+                                                function.kind != 0 -> if { false } else {
+                                                    source -> diagnostics.sourceLocation(node.start) => location
+                                                    prepared.package.tokens[range.tokenStart + node.payloadToken] => name
+                                                    location.line == query.line and (source -> slice(name.span.start, name.span.length)) == query.name
+                                                }
+                                            } => matches
+                                            matches -> if {
+                                                copies! + 1 => copies!
+                                                "$(query.label)|slots:$(frame.range.slotCount)" -> println
+                                                0 => i!
+                                                i! < frame.range.slotCount -> while {
+                                                    table.slots[frame.range.slotStart + i!] => slot
+                                                    "s|$(slot.size):$(slot.align)" -> println
+                                                    i! + 1 => i!
+                                                }
+                                                0 => i!
+                                                i! < frame.range.allocationCount -> while {
+                                                    table.allocations[frame.range.allocationStart + i!] => allocation
+                                                    allocation.sourceAst -> kindCode(prepared) => kind
+                                                    allocation.sourceAst -> location(source, prepared, indexed, units) => location
+                                                    "a|$kind:$(location.line):$(location.column):$(allocation.slot):$(allocation.size)" -> println
+                                                    i! + 1 => i!
+                                                }
+                                                0 => i!
+                                                i! < frame.range.endCount -> while {
+                                                    table.ends[frame.range.endStart + i!] => ending
+                                                    ending.unitAst -> location(source, prepared, indexed, units) => location
+                                                    "e|$(location.line):$(location.column):$(ending.slot):$(ending.size)" -> println
+                                                    i! + 1 => i!
+                                                }
+                                            }
+                                        }
+                                        "copies:$(query.label):$(copies!)" -> println
+                                    }
+                                }
+                        } }
+                    }
+                    "owner-map:ok" -> println
+                }
+        } }
+    }
+}
+
+main {
+    "case:type-specialization-frame-identities" -> println
+    """
+    work<T> value: T -> Int {
+        [1, 2] => values
+        values[0]
+    }
+    main {
+        1 -> work => first
+        "text" -> work => second
+    }
+    """ => source0
+    source0 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:value-repeat-remains-syntax-conservative" -> println
+    """
+    work<N> value: Int -> Int where N: Int {
+        [1; N] => values
+        values -> len
+    }
+    main {
+        1 -> work<3> => small
+        1 -> work<1025> => large
+    }
+    """ => source1
+    source1 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:work@1", name: "work", line: 1 }])
+    "case:generic-heap-call-source-contract" -> println
+    """
+    make<T> value: T -> [T; ~] { [value,; ~] }
+    main {
+        make(1) => values!
+        values! -> push(2)
+        values! -> len => count
+    }
+    """ => source2
+    source2 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:make@1", name: "make", line: 1 }])
+    "case:ordinary-heap-call-control" -> println
+    """
+    make value: Int -> [Int; ~] { [value,; ~] }
+    main {
+        make(1) => values!
+        values! -> push(2)
+        values! -> len => count
+    }
+    """ => source3
+    source3 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:make@1", name: "make", line: 1 }])
+    "case:generic-concrete-return-control" -> println
+    """
+    make<T> value: T -> [Int; ~] { [1, 2; ~] }
+    main {
+        make("text") => values!
+        values! -> push(2)
+        values! -> len => count
+    }
+    """ => source4
+    source4 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:make@1", name: "make", line: 1 }])
+    "case:inferred-return-control" -> println
+    """
+    make value: Int -> { [value,; ~] }
+    main {
+        make(1) => values!
+        values! -> push(2)
+        values! -> len => count
+    }
+    """ => source5
+    source5 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:make@1", name: "make", line: 1 }])
+    "case:implicit-fixed-overlap" -> println
+    """
+    [1; 512] => first
+    [2; 512] => second
+    first[0] => firstValue
+    second[0] => secondValue
+    """ => source6
+    source6 -> inspect([Query { label: "main", name: "", line: 0 }])
+    "case:implicit-readonly-dynamic" -> println
+    """
+    [1, 2; ~] => values
+    values[0] => first
+    """ => source7
+    source7 -> inspect([Query { label: "main", name: "", line: 0 }])
+    "case:implicit-owner-header" -> println
+    """
+    [Int; ~] => values!
+    values! -> push(1)
+    """ => source8
+    source8 -> inspect([Query { label: "main", name: "", line: 0 }])
+    "case:nested-function-frame-boundary" -> println
+    """
+    outer: -> Int {
+        inner: -> Int {
+            [1, 2] => values
+            values[0]
+        }
+        [3; 3] => outerValues
+        inner() + outerValues[0]
+    }
+    main {
+        outer() => result
+    }
+    """ => source9
+    source9 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:inner@2", name: "inner", line: 2 }, Query { label: "function:outer@1", name: "outer", line: 1 }])
+    "case:async-excludes-frame" -> println
+    """
+    work: -> async Int {
+        [1, 2] => values
+        values[0]
+    }
+    main {}
+    """ => source10
+    source10 -> inspect([Query { label: "main", name: "", line: 0 }, Query { label: "function:work@1", name: "work", line: 1 }])
+}

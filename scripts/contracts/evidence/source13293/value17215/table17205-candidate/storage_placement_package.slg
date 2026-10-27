@@ -1,0 +1,141 @@
+namespace sollang.compiler.semantic.storage_placement_package
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.storage_placement as placement
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_inline_frames as inlineFrames
+import sollang.compiler.semantic.storage_placement_callers as callers
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+
+public struct Frame {
+    public functionIr: Int
+    public sourceModule: Int
+    public frameAst: Int
+    public range: frameMerge.FrameRange
+}
+
+public struct Table {
+    public frameByFunction: [Int; ~]
+    public frames: [Frame; ~]
+    public slots: [placement.Slot; ~]
+    public allocations: [frameMerge.Allocation; ~]
+    public ends: [frameMerge.Ending; ~]
+}
+
+public enum Error {
+    InvalidOwner(Int)
+    InvalidSourceIndex(Int)
+    InvalidUnits(Int)
+    InvalidCaller(Int)
+    InvalidLookup
+}
+
+# Concrete IR function indexes are the owner keys. Several concrete functions
+# may retain the same source AST; they still receive distinct frame records.
+public build prepared: ref semanticContext.SemanticSnapshot, facts: ref expressionTypes.ExpressionTypeIdSet, ir: ref [typedIr.TypedIrNode; ~], pool: ref inlineFrames.Pool -> Result<Table, Error> {
+    [Int; ~] => byFunction!
+    [Int; ~] => next!
+    [Int; ~] => first!
+    [Int; ~] => last!
+    prepared.package.ranges -> each range {
+        first! -> push(-1)
+        last! -> push(-1)
+    }
+    [Frame; ~] => frames!
+    [placement.Slot; ~] => slots!
+    [frameMerge.Allocation; ~] => allocations!
+    [frameMerge.Ending; ~] => ends!
+    ir -> each node {
+        byFunction! -> push(-1)
+        next! -> push(-1)
+    }
+    0 => owner!
+    owner! < (ir -> len) -> while {
+        ir[owner!] => function
+        (function.kind == 0 or function.kind == 11) and function.flags / 128 % 2 == 0 and function.flags / 512 % 2 == 0
+            -> if {
+                function.sourceModule < 0 or function.sourceModule >= (prepared.package.ranges -> len)
+                    -> if { Error.InvalidOwner(owner!) -> Result<Table, Error>.Err -> return }
+                prepared -> semanticContext.isStandardLibrarySource(function.sourceModule)
+                    -> unless {
+                        prepared.package.ranges[function.sourceModule] => range
+                        function.astNode < 0 or function.astNode >= range.astCount
+                            -> if { Error.InvalidOwner(owner!) -> Result<Table, Error>.Err -> return }
+                        prepared.package.nodes[range.astStart + function.astNode] => sourceFrame
+                        (function.kind == 11 and sourceFrame.kind != 0 and sourceFrame.kind != 8)
+                            or (function.kind == 0 and sourceFrame.kind != 7 and sourceFrame.kind != 31)
+                            -> if { Error.InvalidOwner(owner!) -> Result<Table, Error>.Err -> return }
+                        function.kind == 0 and sourceFrame.tertiaryToken >= 0
+                            -> unless {
+                                last![function.sourceModule] < 0 -> if { owner! => first![function.sourceModule] } else {
+                                    owner! => next![last![function.sourceModule]]
+                                }
+                                owner! => last![function.sourceModule]
+                            }
+                    }
+            }
+        owner! + 1 => owner!
+    }
+    0 => sourceModule!
+    sourceModule! < (prepared.package.ranges -> len)
+        -> while {
+            first![sourceModule!] >= 0 -> if {
+                prepared.package.ranges[sourceModule!] => range
+                prepared.package.sources[sourceModule!] -> len => length
+                prepared.package.sources[sourceModule!] -> slice(UIntSize(0), length) => source
+                range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+                    Err(_) { Error.InvalidSourceIndex(sourceModule!) -> Result<Table, Error>.Err -> return }
+                    Ok(indexed) { prepared.package -> sourceUnits.build(sourceModule!, indexed) -> when {
+                            Err(_) { Error.InvalidUnits(sourceModule!) -> Result<Table, Error>.Err -> return }
+                            Ok(units) {
+                                first![sourceModule!] => function!
+                                function! >= 0 -> while {
+                                    ir[function!].astNode -> callers.build(source, prepared, facts, sourceModule!, indexed, units, pool) -> when {
+                                        Err(_) { Error.InvalidCaller(function!) -> Result<Table, Error>.Err -> return }
+                                        Ok(plan) {
+                                            frames! -> len => byFunction![function!]
+                                            frameMerge.FrameRange { slotStart: slots! -> len, slotCount: plan.slots -> len, allocationStart: allocations! -> len, allocationCount: plan.allocations -> len, endStart: ends! -> len, endCount: plan.ends -> len } => frameRange
+                                            frames! -> push(Frame { functionIr: function!, sourceModule: sourceModule!, frameAst: ir[function!].astNode, range: frameRange })
+                                            plan.slots -> each slot { slots! -> push(slot) }
+                                            plan.allocations -> each allocation { allocations! -> push(allocation) }
+                                            plan.ends -> each ending { ends! -> push(ending) }
+                                        }
+                                    }
+                                    next![function!] => function!
+                                }
+                            }
+                    } }
+                }
+            }
+            sourceModule! + 1 => sourceModule!
+        }
+    Table { frameByFunction: byFunction!, frames: frames!, slots: slots!, allocations: allocations!, ends: ends! } -> Result<Table, Error>.Ok
+}
+
+# Stop at the first real function boundary, including an intentionally unplanned
+# standard/native/block function. Never interpret its -1 parent as an index.
+public frameForNode nodeIndex: Int, ir: ref [typedIr.TypedIrNode; ~], table: ref Table -> Result<Option<Int>, Error> {
+    nodeIndex < 0 or nodeIndex >= (ir -> len) or (table.frameByFunction -> len) != (ir -> len)
+        -> if { Error.InvalidLookup -> Result<Option<Int>, Error>.Err -> return }
+    nodeIndex => owner!
+    0 => steps!
+    owner! >= 0 -> while {
+        owner! >= (ir -> len) or steps! >= (ir -> len)
+            -> if { Error.InvalidLookup -> Result<Option<Int>, Error>.Err -> return }
+        ir[owner!] => node
+        node.kind == 0 or node.kind == 11 -> if {
+            table.frameByFunction[owner!] => frame
+            frame < 0 -> if { Option<Int>.None -> Result<Option<Int>, Error>.Ok -> return }
+            frame >= (table.frames -> len) or table.frames[frame].functionIr != owner!
+                -> if { Error.InvalidLookup -> Result<Option<Int>, Error>.Err -> return }
+            frame -> Option<Int>.Some -> Result<Option<Int>, Error>.Ok -> return
+        }
+        node.parent < -1 -> if { Error.InvalidLookup -> Result<Option<Int>, Error>.Err -> return }
+        node.parent => owner!
+        steps! + 1 => steps!
+    }
+    Option<Int>.None -> Result<Option<Int>, Error>.Ok
+}
