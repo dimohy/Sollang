@@ -1,0 +1,30 @@
+--- a/selfhost/llvm/text/entry_expressions.slg
++++ b/selfhost/llvm/text/entry_expressions.slg
+@@ -64,6 +64,27 @@
+                         entryMutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
+                     }
+             }
++        entryMutableSlotIndex! -> whileInlineValueIndexTypeId(context, state) => inlineIndexType
++        inlineIndexType >= 0 -> if {
++            false => usedByWhileCondition!
++            functionIndex + 1 => inlineIndexLoopSearch!
++            inlineIndexLoopSearch! < entryEnd and not usedByWhileCondition!
++                -> while {
++                    context.ir[inlineIndexLoopSearch!] => inlineIndexLoop
++                    inlineIndexLoop.kind == 20 and inlineIndexLoop.operand0 >= 0
++                        -> if {
++                            inlineIndexLoop.operand0 == entryMutableSlotIndex!
++                                or (NodeAncestorRequest { nodeIndex: entryMutableSlotIndex!, ownerIndex: inlineIndexLoop.operand0 } -> nodeDescendsFrom(context, state))
++                                -> if { true => usedByWhileCondition! }
++                        }
++                    inlineIndexLoopSearch! + 1 => inlineIndexLoopSearch!
++                }
++            usedByWhileCondition! -> if {
++                "  %while_index$(entryMutableSlotIndex!)_storage = alloca " -> print
++                inlineIndexType -> writeValueAbiTypeId(context, state)
++                ", align $(context.typeAligns[inlineIndexType])" -> println
++            }
++        }
+         entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
+     }
+ }
