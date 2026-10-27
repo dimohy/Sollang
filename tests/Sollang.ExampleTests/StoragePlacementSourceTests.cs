@@ -6,6 +6,8 @@ using static StoragePlacementTests;
 
 internal static class StoragePlacementSourceTests
 {
+    private sealed record StandardFunctionReference(int Ordinal, string Name, string? DeclarationName,
+        string ModuleName, string SourcePath, int Line, int Column, string Kind, bool RequiresStandalone, bool SelectedInline);
     private sealed record UnitReference(string Frame, string Kind, int Line, int Column, int Position);
     private sealed record CandidateReference(string Frame, string Kind, int Line, int Column,
         int Size, int StartPosition, int EndPosition, string EndKind, int EndLine, int EndColumn,
@@ -100,6 +102,7 @@ internal static class StoragePlacementSourceTests
             var observed = new List<string>();
             var unitReferences = new List<UnitReference>();
             var candidateReferences = new List<CandidateReference>();
+            var standardFunctionReferences = new List<StandardFunctionReference>();
             var warnings = Array.Empty<string>();
             string? failure = null;
             try
@@ -121,6 +124,41 @@ internal static class StoragePlacementSourceTests
                 var program = Property(loaded, "Program");
                 var semantic = Activator.CreateInstance(semanticType, [program, 64])!;
                 var bound = semanticType.GetMethod("Compile")!.Invoke(semantic, [null])!;
+                if (root.TryGetProperty("captureStandardFunctions", out var capture) && capture.GetBoolean())
+                {
+                    var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+                    foreach (var pair in Entries(Property(bound, "Functions")))
+                    {
+                        var function = pair.Value!;
+                        if (!(bool)Property(function, "IsStandardLibrary") || !seen.Add(function)) continue;
+                        var kind = Property(function, "Kind").ToString()!;
+                        var standalone = (bool)controlType.GetMethod("RequiresStandaloneStandardLibraryEmission")!
+                            .Invoke(null, [function])!;
+                        var declarationName = Property(function, "DeclarationName") as string
+                            ?? (string)Property(function, "Name");
+                        var sourceMatches = ((IEnumerable)Property(loaded, "Sources")).Cast<object>()
+                            .Where(source => (bool)Property(source, "IsStandardLibrary")
+                                && (string)Property(source, "ModuleName") == (string)Property(function, "ModuleName"))
+                            .Where(source => ((IEnumerable)Property(Property(source, "Program"), "Functions"))
+                                .Cast<object>().Any(declaration =>
+                                    (int)Property(declaration, "Line") == (int)Property(function, "Line")
+                                    && (int)Property(declaration, "Column") == (int)Property(function, "Column")
+                                    && ((string)Property(declaration, "Name") == declarationName
+                                        || (string)Property(source, "ModuleName") + "."
+                                            + (string)Property(declaration, "Name") == declarationName)))
+                            .ToArray();
+                        if (sourceMatches.Length != 1)
+                            throw new InvalidDataException("Standard function requires one exact declaration source: "
+                                + declarationName + " (matches=" + sourceMatches.Length + ")");
+                        standardFunctionReferences.Add(new StandardFunctionReference(
+                            standardFunctionReferences.Count, (string)Property(function, "Name"),
+                            Property(function, "DeclarationName") as string,
+                            (string)Property(function, "ModuleName"),
+                            (string)Property(sourceMatches[0], "Path"),
+                            (int)Property(function, "Line"), (int)Property(function, "Column"),
+                            kind, standalone, kind == "User" && !standalone));
+                    }
+                }
                 warnings = ((IEnumerable)Property(bound, "Warnings")).Cast<object>()
                     .Select(warning => Property(warning, "Code") + "@" + Property(warning, "Line")).ToArray();
                 if (!controlFacts)
@@ -162,7 +200,7 @@ internal static class StoragePlacementSourceTests
             cases.Add(new { id, status = passed ? "passed" : "failed", passed, source, expected,
                 actual = observed,
                 observedUnitPositions = unitReferences.Select(unit => unit.Frame + "|unit:" + unit.Kind + "@" + unit.Line + "," + unit.Position),
-                unitReferences, candidateReferences, expectedWarnings, warnings, failure });
+                unitReferences, candidateReferences, standardFunctionReferences, expectedWarnings, warnings, failure });
         }
         if (cases.Count == 0) throw new InvalidDataException("At least one source frame fixture is required.");
         string Hash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
