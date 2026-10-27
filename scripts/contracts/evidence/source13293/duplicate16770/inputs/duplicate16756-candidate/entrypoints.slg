@@ -1,0 +1,1333 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.semantic.semantic_cache as semanticCache
+import sollang.compiler.ast as ast
+import sollang.compiler.syntax.unicode_identifier as unicodeIdentifier
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.environment_runtime as environmentRuntime
+import sollang.compiler.llvm.emitter.socket_runtime as socketRuntime
+import sollang.compiler.llvm.emitter.dns_runtime as dnsRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.analysis as semanticAnalysis
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.interpolation_inference as interpolationInference
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import sollang.compiler.diagnostics as syntaxDiagnostics
+import sollang.compiler.syntax.source_decoding as sourceDecoding
+import sollang.compiler.source_style as sourceStyle
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+import sys.runtime as runtime
+
+
+syntaxDiagnosticCount sources: [Text; ~] -> Int {
+    0 => count!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) and count! == 0
+        -> while {
+            sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics
+            (sourceDiagnostics -> len) > 0 -> if { 1 => count! }
+            sourceIndex! + 1 => sourceIndex!
+        }
+    count!
+}
+
+# Checked emission writes frontend failures to its diagnostic-only stdout stage.
+# The native CLI owns relaying that stage to stderr and removing claimed files.
+emitSyntaxDiagnostic source: Text, diagnostic: syntaxDiagnostics.SyntaxDiagnostic, path: Text -> Unit uses Console {
+    Arena(0) => storage!
+    source -> syntaxDiagnostics.formatForFile(diagnostic, path, storage!) => message
+    "sollang: $message" -> println
+}
+
+emitSyntaxDiagnostics sources: [Text; ~] -> Unit uses Console {
+    0 => sourceIndex!
+    false => emitted!
+    sourceIndex! < (sources -> len) and not emitted!
+        -> while {
+            sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics
+            (sourceDiagnostics -> len) > 0 -> if {
+                sources[sourceIndex!] -> emitSyntaxDiagnostic(sourceDiagnostics[0], "")
+                true => emitted!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+}
+
+emitFileSyntaxDiagnostics sources: [Text; ~], paths: [Text; ~] -> Unit uses Console {
+    0 => sourceIndex!
+    false => emitted!
+    sourceIndex! < (sources -> len) and not emitted!
+        -> while {
+            sources[sourceIndex!] -> syntaxDiagnostics.analyze => sourceDiagnostics
+            (sourceDiagnostics -> len) > 0 -> if {
+                sourceIndex! < (paths -> len) -> if {
+                    sources[sourceIndex!] -> emitSyntaxDiagnostic(sourceDiagnostics[0], paths[sourceIndex!])
+                } else {
+                    sources[sourceIndex!] -> emitSyntaxDiagnostic(sourceDiagnostics[0], "")
+                }
+                true => emitted!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+}
+
+emitInvalidSourceEncoding sources: [Text; ~] -> Bool uses Console {
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> sourceDecoding.firstInvalidUtf8Offset -> when {
+            Some(offset) {
+                syntaxDiagnostics.SyntaxDiagnostic {
+                    code: 1
+                    span: syntax.SourceSpan { fileId: 0, start: offset, length: 1 }
+                    foundKind: grammar.tokenIdInvalid()
+                    tokenIndex: 0
+                } => diagnostic
+                source -> emitSyntaxDiagnostic(diagnostic, "")
+                true -> return
+            }
+            None {}
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    false
+}
+
+public emit sources: move [Text; ~] -> Unit uses Console, Process {
+    sources -> emitInvalidSourceEncoding -> if { return }
+    llvmTarget.windowsX64() => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareNative => context
+    context -> emitWindowsContext
+}
+
+public emitLinux sources: move [Text; ~] -> Unit uses Console, Process {
+    sources -> emitInvalidSourceEncoding -> if { return }
+    llvmTarget.linuxX64() => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepareNative => context
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+}
+
+public emitWasm sources: move [Text; ~] -> Unit uses Console, Process {
+    sources -> emitInvalidSourceEncoding -> if { return }
+    llvmTarget.wasm32Browser() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepare => context
+    context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    context.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins
+    context -> diagnostics.usesParallelBranches => usesUnsupportedParallel
+    nativeInteropCount == 0 and comInteropCount == 0 and not usesUnsupportedConcurrentStreamJoins and not usesUnsupportedParallel
+        -> if {
+            target.dataLayoutLine -> println
+            target.tripleLine -> println
+            context -> emitWasmContext
+        } else {
+            nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic() }
+            comInteropCount > 0 -> if { "wasm32-browser" -> diagnostics.emitComTargetDiagnostic }
+            usesUnsupportedConcurrentStreamJoins -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+            usesUnsupportedParallel -> if { diagnostics.emitWasmParallelDiagnostic() }
+        }
+}
+
+
+emitSourceStyleNotes sources: ref [Text; ~] -> Unit uses Console {
+    Arena(0) => nameStorage!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> sourceStyle.moduleName(nameStorage!) => moduleName
+        sources[sourceIndex!] -> sourceStyle.analyze => styleNotes
+        0 => noteIndex!
+        noteIndex! < (styleNotes -> len) -> while {
+            styleNotes[noteIndex!] => note
+            note.code == 1 -> if {
+                note.role -> when {
+                    == 1 { "unless" }
+                    == 2 { "while" }
+                    else { "if" }
+                } => role
+                "note N001 in module '$moduleName' at $(note.line):$(note.column): control condition is $(note.conditionLength) characters; keep conditions under 45 on the same line as '$role', or put the condition on its own line and then write '-> $role {' on the next line"
+                    -> runtime.eprintln
+            }
+            note.code == 2 -> if {
+                "note N002 in module '$moduleName' at $(note.line):$(note.column): whole control conditions do not need parentheses; remove the outer '(' and ')'"
+                    -> runtime.eprintln
+            }
+            noteIndex! + 1 => noteIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+}
+
+emitInterpolationSemanticWarnings context: ref emitterContext.EmitContext -> Unit uses Console {
+    [Int; ~] => expectedSymbols!
+    context.interpolationNumericWarningByNode -> each symbol { expectedSymbols! -> push(symbol) }
+    0 => binaryIndex!
+    binaryIndex! < (context.interpolations -> len)
+        -> while {
+            context.interpolations -> interpolationInference.redundantNumericBinaryConversion(
+            context.types, context.binaryArithmeticDiagnosticByNode,
+            context.binaryComparisonDiagnosticByNode, binaryIndex!) => conversionIndex
+            conversionIndex >= 0 -> if {
+                context.interpolations[conversionIndex].typeSymbol -> typeIds.canonicalBuiltinSymbol
+                    => expectedSymbols![conversionIndex]
+            }
+            binaryIndex! + 1 => binaryIndex!
+        }
+    [WarningDisplayOrder; ~] => order!
+    0 => conversionIndex!
+    conversionIndex! < (expectedSymbols! -> len) -> while {
+        expectedSymbols![conversionIndex!] >= 0 -> if {
+            context -> diagnostics.interpolationSourceModule(conversionIndex!) => sourceModule
+            sourceModule >= 0 -> if {
+                context.interpolations[conversionIndex!] => conversion
+                conversionIndex! => rootIndex!
+                context.interpolations[rootIndex!].parent >= 0
+                    -> while {
+                        context.interpolations[rootIndex!].parent => rootIndex!
+                    }
+                context.sources[sourceModule] => source
+                context.interpolations[rootIndex!].payloadStart => position!
+                1 => line!
+                position! => lineStart!
+                position! < conversion.payloadStart -> while {
+                    (source -> byte(position!)) == 10 -> if {
+                        line! + 1 => line!
+                        position! + 1 => lineStart!
+                    }
+                    position! + 1 => position!
+                }
+                source -> unicodeIdentifier.utf16Length(UIntSize(lineStart!), UIntSize(conversion.payloadStart)) => columnWidth
+                columnWidth + 1 => column
+                order! -> appendWarningOrder(WarningDisplayOrder { line: line!, column: column, code: 1, index: conversionIndex! })
+            }
+        }
+        conversionIndex! + 1 => conversionIndex!
+    }
+    order! -> each warning {
+        context -> diagnostics.interpolationSourceModule(warning.index) => sourceModule
+        context.sources[sourceModule] => source
+        context.interpolations[warning.index] => conversion
+        context.interpolations[conversion.operand0] => literal
+        source -> slice(literal.payloadStart, literal.payloadLength) => literalText
+        source -> slice(conversion.callNameStart, conversion.callNameLength) => conversionName
+        expectedSymbols![warning.index] -> typeIds.builtinTypeName => typeName
+        "warning S001 in module '' at $(warning.line):$(warning.column): type '$typeName' is inferred here; replace '$conversionName($literalText)' with '$literalText'"
+            -> runtime.eprintln
+    }
+}
+
+struct WarningDisplayOrder {
+    line: Int
+    column: Int
+    code: Int
+    index: Int
+}
+
+appendWarningOrder warnings: mut [WarningDisplayOrder; ~], warning: WarningDisplayOrder -> Unit {
+    warnings -> push(warning)
+    (warnings -> len) - 1 => position!
+    position! > 0 -> while {
+        warnings[position! - 1] => previous
+        previous.line < warning.line or (previous.line == warning.line and previous.column < warning.column)
+            or (previous.line == warning.line and previous.column == warning.column and previous.code <= warning.code)
+            -> if { break }
+        previous => warnings[position!]
+        warning => warnings[position! - 1]
+        position! - 1 => position!
+    }
+}
+
+emitOrdinaryNumericWarnings context: ref emitterContext.EmitContext, userSourceStart: Int -> Unit uses Console {
+    Arena(0) => nameStorage!
+    [WarningDisplayOrder; ~] => order!
+    0 => warningIndex!
+    warningIndex! < (context.fixedLengthArrayWarnings -> len)
+        -> while {
+            context.fixedLengthArrayWarnings[warningIndex!] => warning
+            warning.sourceModule >= userSourceStart -> if {
+                context.ranges[warning.sourceModule] => range
+                context.symbols[range.symbolStart + warning.bindingSymbol] => binding
+                context.tokens[range.tokenStart + binding.nameToken] => nameToken
+                context.sources[warning.sourceModule] -> syntaxDiagnostics.sourceLocation(nameToken.span.start) => location
+                order! -> appendWarningOrder(WarningDisplayOrder { line: location.line, column: location.column, code: 3, index: warningIndex! })
+            }
+            warningIndex! + 1 => warningIndex!
+        }
+    0 => warningIndex!
+    warningIndex! < (context.redundantNumericConversions -> len)
+        -> while {
+            context.redundantNumericConversions[warningIndex!] => warning
+            warning.sourceModule >= userSourceStart -> if {
+                context.ranges[warning.sourceModule] => range
+                context.nodes[range.astStart + warning.conversionAst] => conversion
+                context.sources[warning.sourceModule] -> syntaxDiagnostics.sourceLocation(conversion.start) => location
+                order! -> appendWarningOrder(WarningDisplayOrder { line: location.line, column: location.column, code: 1, index: warningIndex! })
+            }
+            warningIndex! + 1 => warningIndex!
+        }
+    0 => warningIndex!
+    warningIndex! < (context.unusedMutableBindingWarnings -> len)
+        -> while {
+            context.unusedMutableBindingWarnings[warningIndex!] => warning
+            warning.sourceModule >= userSourceStart -> if {
+                context.sources[warning.sourceModule] -> syntaxDiagnostics.sourceLocation(warning.offset) => location
+                order! -> appendWarningOrder(WarningDisplayOrder { line: location.line, column: location.column, code: warning.code, index: warningIndex! })
+            }
+            warningIndex! + 1 => warningIndex!
+        }
+    order! -> each display {
+        display.code == 2 or display.code == 5 -> if {
+            context.unusedMutableBindingWarnings[display.index] => warning
+            context.ranges[warning.sourceModule] => range
+            context.symbols[range.symbolStart + warning.bindingSymbol] => binding
+            context.tokens[range.tokenStart + binding.nameToken] => nameToken
+            context.sources[warning.sourceModule] => source
+            source -> syntaxDiagnostics.sourceLocation(warning.offset) => location
+            source -> sourceStyle.moduleName(nameStorage!) => moduleName
+            source -> slice(nameToken.span.start, nameToken.span.length) => name
+            display.code == 5 -> if {
+                "warning S005 in module '$moduleName' at $(location.line):$(location.column): binding '$name!' is never mutated, but '$name' is reserved; rename it to a non-reserved immutable binding" -> runtime.eprintln
+            } else {
+                "warning S002 in module '$moduleName' at $(location.line):$(location.column): binding '$name!' is never mutated; remove '!' to make it immutable" -> runtime.eprintln
+            }
+        } else { display.code == 3 -> if {
+                context.fixedLengthArrayWarnings[display.index] => warning
+                context.ranges[warning.sourceModule] => range
+                context.symbols[range.symbolStart + warning.bindingSymbol] => binding
+                context.nodes[range.astStart + binding.astNode] => bindingAst
+                context.tokens[range.tokenStart + binding.nameToken] => nameToken
+                context.sources[warning.sourceModule] => source
+                source -> syntaxDiagnostics.sourceLocation(nameToken.span.start) => location
+                source -> sourceStyle.moduleName(nameStorage!) => moduleName
+                source -> slice(nameToken.span.start, nameToken.span.length) => name
+                bindingAst.flags % 2 == 1 -> if {
+                    "warning S003 in module '$moduleName' at $(location.line):$(location.column): growable array '$name!' has a fixed length of $(warning.length); use a fixed array value" -> runtime.eprintln
+                } else {
+                    "warning S003 in module '$moduleName' at $(location.line):$(location.column): growable array '$name' has a fixed length of $(warning.length); use a fixed array value" -> runtime.eprintln
+                }
+            } else {
+                context.redundantNumericConversions[display.index] => warning
+                context.ranges[warning.sourceModule] => range
+                context.nodes[range.astStart + warning.conversionAst] => conversion
+                context.nodes[range.astStart + warning.literalAst] => literal
+                context.sources[warning.sourceModule] => source
+                source -> syntaxDiagnostics.sourceLocation(conversion.start) => location
+                source -> sourceStyle.moduleName(nameStorage!) => moduleName
+                context.tokens[range.tokenStart + conversion.firstToken] => nameToken
+                source -> slice(nameToken.span.start, nameToken.span.length) => conversionName
+                source -> slice(literal.start, literal.length) => literalText
+                warning.typeSymbol -> typeIds.builtinTypeName => typeName
+                "warning S001 in module '$moduleName' at $(location.line):$(location.column): type '$typeName' is inferred here; replace '$conversionName($literalText)' with '$literalText'"
+                    -> runtime.eprintln
+            }
+        }
+    }
+}
+
+# A semantic failure owns the diagnostic. IR invariants validate the next
+# phase only after semantic analysis succeeds, as in the C# frontend.
+checkedContextDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
+    context -> diagnostics.blockingDiagnosticCount => semanticCount
+    semanticCount > 0 -> if { semanticCount -> return }
+    context -> irInvariantDiagnosticCount
+}
+
+public emitChecked sources: move [Text; ~] -> Int uses Console, File, Process {
+    [Text; ~] => paths
+    sources -> emitCheckedWithPaths(paths, 0)
+}
+
+public emitCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, File, Process {
+    semanticCache.disabled() => cache
+    sources -> emitCheckedWithPathsCached(paths, userSourceStart, cache)
+}
+
+public emitCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    sources -> emitCheckedWithSourcePathsCached(paths, paths, userSourceStart, cache)
+}
+
+public emitCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    userSourceStart < 0 or userSourceStart > (sources -> len)
+        -> if {
+            "; sollang source root error: invalid standard-library source prefix" -> println
+            1 -> return
+        }
+    sources -> checkedPathCacheAdmissionStatus(paths, cache) => cacheAdmission
+    cacheAdmission != 0 -> if {
+        sources -> syntaxDiagnosticCount => syntaxCount
+        syntaxCount > 0 -> if {
+            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
+            syntaxCount -> return
+        }
+        sources -> emitSourceStyleNotes
+        "; sollang semantic cache preparation error E$cacheAdmission" -> println
+        1 -> return
+    }
+    sources -> semanticAnalysis.analyzeCheckedTextSources -> when {
+        Err(code) {
+            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
+            code -> return
+        }
+        Ok(value) { value }
+    } => parsedPackage
+    sources -> emitSourceStyleNotes
+    llvmTarget.windowsX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
+    prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, "windows-x64", path.nativeStyle(), cache) -> when {
+        Err(code) { "; sollang semantic cache preparation error E$code" -> println
+            1 -> return }
+        Ok(value) { value }
+    } => cached
+    cached.words => pendingWords
+    cached.checked => checked
+    checked -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(diagnosticPaths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(diagnosticPaths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(diagnosticPaths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        context -> emitInterpolationSemanticWarnings
+        context -> emitOrdinaryNumericWarnings(userSourceStart)
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        pendingWords -> stagePreparedSemanticCache(cache)
+            -> unless { 1 -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedWindowsContext(scheduledState)
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+    }
+    diagnosticCount
+}
+
+public emitLinuxChecked sources: move [Text; ~] -> Int uses Console, File, Process {
+    [Text; ~] => paths
+    sources -> emitLinuxCheckedWithPaths(paths, 0)
+}
+
+public emitLinuxCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, File, Process {
+    semanticCache.disabled() => cache
+    sources -> emitLinuxCheckedWithPathsCached(paths, userSourceStart, cache)
+}
+
+public emitLinuxCheckedWithPathsCached sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    sources -> emitLinuxCheckedWithSourcePathsCached(paths, paths, userSourceStart, cache)
+}
+
+public emitLinuxCheckedWithSourcePathsCached sources: move [Text; ~], diagnosticPaths: [Text; ~], paths: [Text; ~], userSourceStart: Int, cache: ref semanticCache.Request -> Int uses Console, File, Process {
+    userSourceStart < 0 or userSourceStart > (sources -> len)
+        -> if {
+            "; sollang source root error: invalid standard-library source prefix" -> println
+            1 -> return
+        }
+    sources -> checkedPathCacheAdmissionStatus(paths, cache) => cacheAdmission
+    cacheAdmission != 0 -> if {
+        sources -> syntaxDiagnosticCount => syntaxCount
+        syntaxCount > 0 -> if {
+            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
+            syntaxCount -> return
+        }
+        sources -> emitSourceStyleNotes
+        "; sollang semantic cache preparation error E$cacheAdmission" -> println
+        1 -> return
+    }
+    sources -> semanticAnalysis.analyzeCheckedTextSources -> when {
+        Err(code) {
+            sources -> emitFileSyntaxDiagnostics(diagnosticPaths)
+            code -> return
+        }
+        Ok(value) { value }
+    } => parsedPackage
+    sources -> emitSourceStyleNotes
+    llvmTarget.linuxX64() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    parsedPackage -> semanticContext.prepareAnalyzedWithStandardLibrarySources(userSourceStart) => prepared
+    prepareRequest -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, diagnosticPaths, "linux-x64", path.nativeStyle(), cache) -> when {
+        Err(code) { "; sollang semantic cache preparation error E$code" -> println
+            1 -> return }
+        Ok(value) { value }
+    } => cached
+    cached.words => pendingWords
+    cached.checked => checked
+    checked -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(diagnosticPaths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(diagnosticPaths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(diagnosticPaths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount!
+    0 => comInteropCount!
+    context -> diagnostics.comInteropFunctionCount => comInteropCount!
+    comInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        context -> emitInterpolationSemanticWarnings
+        context -> emitOrdinaryNumericWarnings(userSourceStart)
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        pendingWords -> stagePreparedSemanticCache(cache)
+            -> unless { 1 -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedLinuxContext(scheduledState)
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+        comInteropCount! > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    }
+    diagnosticCount!
+}
+
+public emitWasmChecked sources: move [Text; ~] -> Int uses Console, Process {
+    [Text; ~] => paths
+    sources -> emitWasmCheckedWithPaths(paths, 0)
+}
+
+public emitWasmCheckedWithPaths sources: move [Text; ~], paths: [Text; ~], userSourceStart: Int -> Int uses Console, Process {
+    userSourceStart < 0 or userSourceStart > (sources -> len)
+        -> if {
+            "; sollang source root error: invalid standard-library source prefix" -> println
+            1 -> return
+        }
+    sources -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources -> emitFileSyntaxDiagnostics(paths)
+        syntaxCount -> return
+    }
+    sources -> emitSourceStyleNotes
+    llvmTarget.wasm32Browser() => target
+    PrepareRequest { sources: sources, standardLibrarySourceStart: 0, standardLibrarySourceCount: userSourceStart, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest.sources -> semanticContext.prepareWithStandardLibrarySources(prepareRequest.standardLibrarySourceCount) => basePrepared
+    prepareRequest -> prepareCheckedSnapshot(basePrepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~]) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(paths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(paths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount!
+    false => usesUnsupportedMouseEvents!
+    false => usesUnsupportedConcurrentStreamJoins!
+    false => usesUnsupportedParallel!
+    false => usesUnsupportedSockets!
+    false => usesUnsupportedDns!
+    0 => unsupportedNativeInteropCount!
+    0 => unsupportedComInteropCount!
+    context -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents!
+    usesUnsupportedMouseEvents! -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context.usesConcurrentStreamJoins => usesUnsupportedConcurrentStreamJoins!
+    usesUnsupportedConcurrentStreamJoins! -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context -> diagnostics.usesParallelBranches => usesUnsupportedParallel!
+    usesUnsupportedParallel! -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context -> diagnostics.usesDnsRuntime => usesUnsupportedDns!
+    context -> diagnostics.usesSocketRuntime => usesUnsupportedSockets!
+    usesUnsupportedDns! -> if { false => usesUnsupportedSockets! }
+    usesUnsupportedSockets! -> if { diagnosticCount! + 1 => diagnosticCount! }
+    usesUnsupportedDns! -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount!
+    unsupportedNativeInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount!
+    unsupportedComInteropCount! > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        context -> emitInterpolationSemanticWarnings
+        context -> emitOrdinaryNumericWarnings(userSourceStart)
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        context -> emitWasmRuntimeTargetDiagnostics(scheduledState) => asyncDiagnostics
+        asyncDiagnostics > 0 -> if { asyncDiagnostics -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedWasmContext(scheduledState)
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+        usesUnsupportedMouseEvents! -> if {
+            "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
+        }
+        usesUnsupportedConcurrentStreamJoins! -> if { diagnostics.emitWasmConcurrentStreamJoinDiagnostic() }
+        usesUnsupportedParallel! -> if { diagnostics.emitWasmParallelDiagnostic() }
+        usesUnsupportedSockets! -> if { "; sollang semantic error: network sockets are unavailable on wasm32-browser; use a host-provided networking adapter" -> println }
+        usesUnsupportedDns! -> if { "; sollang semantic error: system name resolution is unavailable on wasm32-browser; use an explicit host-provided resolver" -> println }
+        unsupportedNativeInteropCount! > 0 -> if {
+            diagnostics.emitWasmNativeInteropDiagnostic()
+        }
+        unsupportedComInteropCount! > 0 -> if {
+            "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
+        }
+    }
+    diagnosticCount!
+}
+
+emitImportFunctionChoice prepared: ref semanticContext.SemanticSnapshot, candidate: calls.SourceFunctionCandidate -> Unit uses Console {
+    prepared.package.ranges[candidate.sourceModule] => range
+    prepared.modules[candidate.sourceModule] => identity
+    false => printed!
+    0 => tokenIndex!
+    tokenIndex! < range.tokenCount -> while {
+        prepared.package.tokens[range.tokenStart + tokenIndex!] => token
+        token.kind == grammar.tokenIdIdentifier() and token.span.start >= identity.pathStart
+            and token.span.start < identity.pathStart + identity.pathLength
+            -> if {
+                printed! -> if { "." -> print }
+                prepared.package.sources[candidate.sourceModule] -> slice(token.span.start, token.span.length) -> print
+                true => printed!
+            }
+        tokenIndex! + 1 => tokenIndex!
+    }
+    printed! -> if { "." -> print }
+    prepared.package.symbols[range.symbolStart + candidate.symbol] => declaration
+    prepared.package.tokens[range.tokenStart + declaration.nameToken] => name
+    prepared.package.sources[candidate.sourceModule] -> slice(name.span.start, name.span.length) -> print
+}
+
+emitInterpolationImportRejection rejection: ref InterpolationImportRejection, paths: [Text; ~] -> Unit uses Console {
+    rejection.diagnostic => diagnostic
+    rejection.prepared.package.ranges[diagnostic.sourceModule] => range
+    rejection.prepared.interpolations[diagnostic.nodeIndex] => call
+    rejection.prepared.package.tokens[range.tokenStart + call.sourceToken] => token
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> len => sourceLength
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+    source -> syntaxDiagnostics.sourceLocation(token.span.start) => location
+    diagnostic.nodeIndex => rootIndex!
+    rejection.prepared.interpolations[rootIndex!].parent >= 0
+        -> while {
+            rejection.prepared.interpolations[rootIndex!].parent => rootIndex!
+        }
+    rejection.prepared.interpolations[rootIndex!] => root
+    source -> slice(call.callNameStart, call.callNameLength) => name
+    rejection.prepared.package -> calls.sourceFunctionCandidates(rejection.prepared.modules, rejection.prepared.resolvedImports, diagnostic.sourceModule, name) => candidates
+    "sollang: $(paths[diagnostic.sourceModule]): parse error at $(location.line):$(location.column): invalid interpolation expression '" -> print
+    "$" -> print
+    "(" -> print
+    source -> slice(root.payloadStart, root.payloadLength) -> print
+    ")': imported symbol '$name' is ambiguous between " -> print
+    0 => candidateIndex!
+    candidateIndex! < (candidates -> len) -> while {
+        candidateIndex! > 0 -> if { ", " -> print }
+        "'" -> print
+        rejection.prepared -> emitImportFunctionChoice(candidates[candidateIndex!])
+        "'" -> print
+        candidateIndex! + 1 => candidateIndex!
+    }
+    rejection.prepared.imports[candidates[0].importEdge] => firstImport
+    rejection.prepared.package.tokens[range.tokenStart + firstImport.aliasToken] => aliasToken
+    source -> slice(aliasToken.span.start, aliasToken.span.length) => alias
+    "; use a qualified name such as '$alias.$name' or an import alias for the module" -> println
+}
+
+emitFunctionDeclarationRejection rejection: ref FunctionDeclarationRejection, paths: [Text; ~] -> Unit uses Console {
+    rejection.diagnostic => diagnostic
+    rejection.prepared.package.ranges[diagnostic.sourceModule] => range
+    rejection.prepared.modules[diagnostic.sourceModule] => identity
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> slice(UIntSize(0), rejection.prepared.package.sources[diagnostic.sourceModule] -> len) => source
+    "<main>" => moduleName!
+    identity.pathLength > 0 -> if { source -> slice(identity.pathStart, identity.pathLength) => moduleName! }
+    source -> syntaxDiagnostics.sourceLocation(diagnostic.locationOffset) => location
+    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+    diagnostic.code == 49 -> if { "the sys namespace is reserved for the standard library" -> println
+        return }
+    rejection.prepared.package.nodes[range.astStart + diagnostic.astNode] => function
+    [UInt8; ~] => bytes!
+    source -> semanticDiagnostics.appendFunctionDeclarationName(rejection.prepared.package.tokens, range.tokenStart, range.tokenCount, identity.pathStart, identity.pathLength, function.payloadToken, bytes!)
+    bytes! -> file.borrowBytes => nameView
+    nameView -> slice(UIntSize(0), nameView -> len) => name
+    diagnostic.code == 73 -> if { "function '$name' already exists" -> println } else {
+        diagnostic.code == 46 -> if { "function name '$name' is reserved" -> println } else {
+            "unsupported function declaration diagnostic $(diagnostic.code)" -> println
+        }
+    }
+}
+
+emitSignatureRejection rejection: ref SignatureRejection, paths: [Text; ~] -> Unit uses Console {
+    rejection.diagnostic => diagnostic
+    rejection.prepared.package.ranges[diagnostic.sourceModule] => range
+    rejection.prepared.package.tokens[range.tokenStart + diagnostic.nameToken] => name
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> len => sourceLength
+    rejection.prepared.package.sources[diagnostic.sourceModule] -> slice(UIntSize(0), sourceLength) => source
+    rejection.prepared.modules[diagnostic.sourceModule] => identity
+    "<main>" => moduleName!
+    identity.pathLength > 0 -> if {
+        source -> slice(identity.pathStart, identity.pathLength) => moduleName!
+    }
+    diagnostic.code == 21 -> if {
+        source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown type '" -> print
+        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+        source -> diagnostics.emitDeclaredTypeSpelling(rejection.prepared.package.tokens, range.tokenStart, annotation)
+        "'" -> println
+        return
+    }
+    diagnostic.code == 14 -> if {
+        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+        source -> syntaxDiagnostics.sourceLocation(annotation.start) => location
+        rejection.prepared.qualified -> each candidate {
+            candidate.sourceModule == diagnostic.sourceModule and candidate.pathAst == diagnostic.typeAst
+                and candidate.status == 3
+                -> if {
+                    rejection.prepared.modules[candidate.targetModule] => owner
+                    rejection.prepared.package.ranges[owner.sourceIndex] => ownerRange
+                    rejection.prepared.package.symbols[ownerRange.symbolStart + candidate.targetSymbol] => declaration
+                    rejection.prepared.package.tokens[ownerRange.tokenStart + declaration.nameToken] => typeToken
+                    rejection.prepared.package.sources[owner.sourceIndex] -> slice(typeToken.span.start, typeToken.span.length) => typeName
+                    rejection.prepared.package.sources[owner.sourceIndex] -> slice(owner.pathStart, owner.pathLength) => ownerName
+                    "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] type '" -> print
+                    owner.pathLength > 0 -> if { "$ownerName." -> print }
+                    "$typeName' is internal to module '$ownerName'" -> println
+                    return
+                }
+        }
+        "; sollang compiler invariant QUALIFIED_PRIVATE_TYPE_DIAGNOSTIC_IDENTITY_MISSING" -> println
+        return
+    }
+    diagnostic.code == 13 -> if {
+        rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => declaration
+        source -> syntaxDiagnostics.sourceLocation(declaration.start) => location
+        "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] type '" -> print
+        diagnostic.genericToken < 0 -> if {
+            source -> slice(name.span.start, name.span.length) -> print
+        } else {
+            rejection.prepared.package.nodes[range.astStart + diagnostic.genericToken] => annotation
+            source -> slice(annotation.start, annotation.length) -> print
+        }
+        "' recursively contains itself; recursive values require an explicit heap reference type" -> println
+        return
+    }
+    diagnostic.code >= 10 and diagnostic.code <= 12
+        -> if {
+            source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
+            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] " -> print
+            diagnostic.code == 12 -> if {
+                rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+                rejection.prepared.package -> typeIds.resolveDynTrait(rejection.prepared.modules, diagnostic.sourceModule, diagnostic.genericToken, annotation.firstToken + annotation.tokenCount) => resolvedTrait
+                rejection.prepared.package.ranges[resolvedTrait.targetSource] => traitRange
+                rejection.prepared.package.symbols[traitRange.symbolStart + resolvedTrait.targetSymbol] => declaration
+                rejection.prepared.package.tokens[traitRange.tokenStart + declaration.nameToken] => traitName
+                rejection.prepared.package.sources[resolvedTrait.targetSource] -> slice(traitName.span.start, traitName.span.length) => spelling
+                rejection.prepared.modules[resolvedTrait.targetSource] => traitIdentity
+                rejection.prepared.package.sources[resolvedTrait.targetSource] -> slice(traitIdentity.pathStart, traitIdentity.pathLength) => ownerModule
+                "trait '$spelling' is internal to module '$ownerModule'" -> println
+            } else {
+                diagnostic.code == 10 -> if { "unknown trait '" -> print } else { "ambiguous trait '" -> print }
+                rejection.prepared.package.nodes[range.astStart + diagnostic.typeAst] => annotation
+                diagnostic.genericToken => pathToken!
+                pathToken! < annotation.firstToken + annotation.tokenCount
+                    -> while {
+                        rejection.prepared.package.tokens[range.tokenStart + pathToken!] => token
+                        token.kind == grammar.tokenIdIdentifier() or token.kind == grammar.tokenIdDot()
+                            -> if {
+                                source -> slice(token.span.start, token.span.length) -> print
+                            }
+                        pathToken! + 1 => pathToken!
+                    }
+                diagnostic.code == 10 -> if { "'" -> println } else { "'; use its qualified name" -> println }
+            }
+            return
+        }
+    diagnostic.code == 8 or diagnostic.code == 9 -> if {
+        rejection.prepared.package.tokens[range.tokenStart + diagnostic.genericToken] => typeToken
+        source -> slice(typeToken.span.start, typeToken.span.length) => typeName
+        diagnostic.code == 8 -> if {
+            source -> syntaxDiagnostics.sourceLocation(name.span.start) => location
+            "sollang: semantic error at $(location.line):$(location.column): [module '$(moduleName!)'] unknown type '" -> print
+            moduleName! != "<main>" -> if { "$(moduleName!)." -> print }
+            "$typeName'" -> println
+            return
+        }
+        rejection.prepared.package -> typeIds.openNominalTypeCandidates(rejection.prepared.modules, rejection.prepared.imports, rejection.prepared.resolvedImports, diagnostic.sourceModule, diagnostic.genericToken) => candidates
+        "sollang: " -> print
+        diagnostic.sourceModule < (paths -> len) -> if { "$(paths[diagnostic.sourceModule]): " -> print }
+        "imported symbol '$typeName' is ambiguous between " -> print
+        0 => candidateIndex!
+        candidateIndex! < (candidates -> len) -> while {
+            candidates[candidateIndex!] => candidate
+            rejection.prepared.modules[candidate.targetModule] => candidateModule
+            rejection.prepared.package.sources[candidateModule.sourceIndex] -> slice(candidateModule.pathStart, candidateModule.pathLength) => candidatePath
+            candidateIndex! > 0 -> if { ", " -> print }
+            "'$candidatePath.$typeName'" -> print
+            candidateIndex! + 1 => candidateIndex!
+        }
+        rejection.prepared.package.tokens[range.tokenStart + candidates[0].aliasToken] => alias
+        source -> slice(alias.span.start, alias.span.length) => aliasName
+        "; use a qualified name such as '$aliasName.$typeName' or an import alias for the module" -> println
+        return
+    }
+    "" => genericName!
+    diagnostic.code == 2 -> if {
+        rejection.prepared.package.tokens[range.tokenStart + diagnostic.genericToken] => generic
+        source -> slice(generic.span.start, generic.span.length) => genericName!
+    }
+    source -> diagnostics.emitSignatureTypeDiagnosticForSource(moduleName!, name, genericName!, diagnostic.code)
+}
+
+prepareCheckedPaths request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> CheckedPreparation uses File {
+    # Library admission keeps its existing order before signature rejection.
+    (paths -> len) == 0 -> if {
+        request.sources -> semanticContext.prepareParallelWithStandardLibrarySources(request.standardLibrarySourceCount) => prepared
+        request -> prepareCheckedSnapshot(prepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
+    } else {
+        request -> prepareCheckedLibraryFiles(paths, targetName, style)
+    }
+}
+
+prepareCheckedPathsCached request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style, cache: ref semanticCache.Request -> Result<CachedCheckedPreparation, Int> uses File {
+    not cache.enabled -> if {
+        request -> prepareCheckedPaths(paths, targetName, style) => checked
+        CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
+    }
+    not (cache -> semanticCache.validRequest) -> if { 19 -> Result<CachedCheckedPreparation, Int>.Err -> return }
+    (paths -> len) != (request.sources -> len) or (paths -> len) == 0
+        -> if { 18 -> Result<CachedCheckedPreparation, Int>.Err -> return }
+    request.sources -> semanticContext.prepareParallelWithStandardLibrarySources(request.standardLibrarySourceCount) => prepared
+    request -> prepareCheckedPreparedPathsCached(prepared, paths, targetName, style, cache)
+}
+
+checkedPathCacheAdmissionStatus sources: ref [Text; ~], paths: [Text; ~], cache: ref semanticCache.Request -> Int {
+    not cache.enabled -> if { 0 -> return }
+    not (cache -> semanticCache.validRequest) -> if { 19 -> return }
+    (paths -> len) != (sources -> len) or (paths -> len) == 0
+        -> if { 18 -> return }
+    0
+}
+
+prepareCheckedPreparedPathsCached request: ref PrepareRequest, prepared: move semanticContext.SemanticSnapshot, paths: [Text; ~], targetName: Text, style: path.Style, cache: ref semanticCache.Request -> Result<CachedCheckedPreparation, Int> uses File {
+    request -> prepareCheckedPreparedPathsCachedWithLibraryPaths(prepared, paths, paths, targetName, style, cache)
+}
+
+# Cache identity may use a trusted runtime-canonical spelling. Library imports
+# resolve from the original absolute source anchor, with normal lexical rules.
+prepareCheckedPreparedPathsCachedWithLibraryPaths request: ref PrepareRequest, prepared: move semanticContext.SemanticSnapshot, paths: [Text; ~], librarySourcePaths: [Text; ~], targetName: Text, style: path.Style, cache: ref semanticCache.Request -> Result<CachedCheckedPreparation, Int> uses File {
+    not cache.enabled and (paths -> len) == 0 -> if {
+        request -> prepareCheckedSnapshot(prepared, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~]) => checked
+        CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
+    }
+    (librarySourcePaths -> len) != (prepared.package.sources -> len)
+        -> if { 18 -> Result<CachedCheckedPreparation, Int>.Err -> return }
+    prepared.package -> libraryImports.load(librarySourcePaths, targetName, style) => libraries
+    prepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    not cache.enabled -> if {
+        request -> prepareCheckedSnapshot(prepared, libraries, libraryCalls) => checked
+        CachedCheckedPreparation { checked: checked, words: [UInt64; ~] } -> Result<CachedCheckedPreparation, Int>.Ok -> return
+    }
+    request -> prepareCheckedCachedSnapshot(prepared, libraries, libraryCalls, paths, cache)
+}
+
+stagePreparedSemanticCache words: ref [UInt64; ~], cache: ref semanticCache.Request -> Bool uses Console, File {
+    not cache.enabled -> if { true -> return }
+    words -> semanticCache.stageExclusive(cache.staged) => status
+    status != 0 -> if {
+        "; sollang semantic cache staging error E$status" -> println
+        false -> return
+    }
+    true
+}
+
+prepareCheckedLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> CheckedPreparation uses File {
+    request.sources -> semanticContext.prepareParallelWithStandardLibrarySources(request.standardLibrarySourceCount) => basePrepared
+    basePrepared.package -> libraryImports.load(paths, targetName, style) => libraries
+    basePrepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    request -> prepareCheckedSnapshot(basePrepared, libraries, libraryCalls)
+}
+
+prepareLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
+    request.sources -> semanticContext.prepareParallelWithStandardLibrarySources(request.standardLibrarySourceCount) => basePrepared
+    basePrepared.package -> libraryImports.load(paths, targetName, style) => libraries
+    basePrepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    request -> prepareSnapshot(basePrepared, libraries, libraryCalls)
+}
+
+prepareTestLibraryFiles request: ref PrepareRequest, paths: [Text; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetName: Text, style: path.Style -> CheckedPreparation uses File {
+    request.sources -> semanticContext.prepareTestsWithStandardLibrarySources(sourceIndices, symbolIndices, request.standardLibrarySourceStart, request.standardLibrarySourceCount) => basePrepared
+    basePrepared.package -> libraryImports.load(paths, targetName, style) => libraries
+    basePrepared.package -> libraryImports.resolveQualified(libraries) => libraryCalls
+    request -> prepareCheckedSnapshot(basePrepared, libraries, libraryCalls)
+}
+
+public emitFiles paths: [Text; ~] -> Unit uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64() => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context
+    context -> emitWindowsContext
+    owners! -> len => ownerCount
+}
+
+public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.linuxX64() => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    owners! -> len => ownerCount
+}
+
+public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitWasm
+    owners! -> len => ownerCount
+}
+
+public emitCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Process {
+    paths -> emitCheckedFilesWithStandardLibrarySources(0)
+}
+
+public emitCheckedFilesWithStandardLibrarySources paths: move [Text; ~], standardLibrarySourceCount: Int -> Int uses Console, File, Process {
+    standardLibrarySourceCount < 0 or standardLibrarySourceCount > (paths -> len)
+        -> if {
+            "; sollang source root error: invalid standard-library source prefix" -> println
+            1 -> return
+        }
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64() => target
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitFileSyntaxDiagnostics(paths)
+        syntaxCount -> return
+    }
+    sources! -> emitSourceStyleNotes
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: standardLibrarySourceCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareCheckedLibraryFiles(paths, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(paths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(paths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        context -> emitInterpolationSemanticWarnings
+        context -> emitOrdinaryNumericWarnings(standardLibrarySourceCount)
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedWindowsContext(scheduledState)
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+    }
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+# Diagnostic-only phase boundary used by compiler performance profiles. It
+# builds the same checked context as emitCheckedFiles but deliberately stops
+# before target headers, runtime declarations, and LLVM body emission.
+public validateCheckedFiles paths: move [Text; ~], profilePhase: Int -> Int uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64() => target
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        owners! -> len => invalidOwnerCount
+        syntaxCount -> return
+    }
+    sources! -> emitSourceStyleNotes
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest
+    prepareRequest -> prepareCheckedLibraryFiles(paths, "windows-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            profilePhase == 7 -> if {
+                "semantic diagnostics = 1" -> runtime.eprintln
+                "ir diagnostics = not run (semantic failure)" -> runtime.eprintln
+            }
+            1 -> return
+        }
+        Rejected(rejection) {
+            profilePhase == 7 -> if {
+                "semantic diagnostics = 1" -> runtime.eprintln
+                "ir diagnostics = not run (semantic failure)" -> runtime.eprintln
+            }
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            profilePhase == 7 -> if {
+                "semantic diagnostics = 1" -> runtime.eprintln
+                "ir diagnostics = not run (semantic failure)" -> runtime.eprintln
+            }
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> diagnostics.blockingDiagnosticCount => semanticDiagnosticCount
+    semanticDiagnosticCount > 0 -> if {
+        profilePhase == 7 -> if {
+            "semantic diagnostics = $semanticDiagnosticCount" -> runtime.eprintln
+            "ir diagnostics = not run (semantic failure)" -> runtime.eprintln
+        }
+        semanticDiagnosticCount -> return
+    }
+    context -> irInvariantDiagnosticCount => irDiagnosticCount
+    profilePhase == 7 -> if {
+        "semantic diagnostics = $semanticDiagnosticCount" -> runtime.eprintln
+        "ir diagnostics = $irDiagnosticCount" -> runtime.eprintln
+    }
+    profilePhase >= 1 and profilePhase <= 6 -> if {
+        context -> prepareCoreEmitterState => emitterState
+        emitterState.frozenFunctionEnds -> len => preparedIrCount
+        profilePhase == 3 -> if {
+            context -> emitCorePreambleFeatures(true, emitterState) => profilePreamble
+            profilePreamble.usesArguments -> if { "preamble uses arguments" -> runtime.eprintln }
+        }
+        profilePhase == 2 or profilePhase == 4 or profilePhase == 5 or profilePhase == 6
+            -> if {
+                0 => scheduleFunctionIndex!
+                scheduleFunctionIndex! < (context.ir -> len) -> while {
+                    context.ir[scheduleFunctionIndex!] => scheduleFunction
+                    scheduleFunction.kind == 0
+                        and (scheduleFunctionIndex! -> nativeFunctionReachable(emitterState))
+                        and not (scheduleFunction -> isIntrinsicDeclaration)
+                        and not (scheduleFunction -> isComFunction(context, emitterState))
+                        and not (scheduleFunctionIndex! -> isStreamFunctionIr(context, emitterState))
+                        and (profilePhase < 5
+                        or emitterState.frozenFunctionEnds[scheduleFunctionIndex!] - scheduleFunction.operand0 - 1 >= 1000)
+                        -> if {
+                            emitterState.frozenFunctionEnds[scheduleFunctionIndex!] => scheduleFunctionEnd
+                            scheduleFunction.operand0 + 1 => scheduleExpressionStart
+                            profilePhase -> when {
+                                == 2 {
+                                    "schedule function $(scheduleFunctionIndex!) nodes $(scheduleFunctionEnd - scheduleExpressionStart)" -> runtime.eprintln
+                                    scheduleFunctionIndex! -> prepareFunctionExpressionOrder(scheduleFunctionEnd, scheduleExpressionStart, context, emitterState) => scheduleOrder
+                                    "scheduled function $(scheduleFunctionIndex!) order $(scheduleOrder -> len)" -> runtime.eprintln
+                                }
+                                == 4 {
+                                    "emit function $(scheduleFunctionIndex!) nodes $(scheduleFunctionEnd - scheduleExpressionStart)" -> runtime.eprintln
+                                    scheduleFunctionIndex! -> emitFunction(context, emitterState) => emittedFunctionEnd
+                                    "emitted function $(scheduleFunctionIndex!) end $emittedFunctionEnd" -> runtime.eprintln
+                                }
+                                == 5 {
+                                    "control allocas function $(scheduleFunctionIndex!) nodes $(scheduleFunctionEnd - scheduleExpressionStart)" -> runtime.eprintln
+                                    scheduleFunctionIndex! -> emitHoistedControlAllocas(scheduleExpressionStart, scheduleFunctionEnd, true, true, context, emitterState)
+                                    "control allocas function $(scheduleFunctionIndex!) complete" -> runtime.eprintln
+                                }
+                                else {
+                                    "reference allocas function $(scheduleFunctionIndex!) nodes $(scheduleFunctionEnd - scheduleExpressionStart)" -> runtime.eprintln
+                                    scheduleFunctionIndex! -> emitHoistedReferenceArgumentAllocas(scheduleExpressionStart, scheduleFunctionEnd, context, emitterState)
+                                    "reference allocas function $(scheduleFunctionIndex!) complete" -> runtime.eprintln
+                                }
+                            }
+                        }
+                    scheduleFunctionIndex! + 1 => scheduleFunctionIndex!
+                }
+            }
+    }
+    owners! -> len => ownerCount
+    semanticDiagnosticCount + irDiagnosticCount
+}
+
+public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.linuxX64() => target
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitFileSyntaxDiagnostics(paths)
+        syntaxCount -> return
+    }
+    sources! -> emitSourceStyleNotes
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: 0, standardLibrarySourceCount: 0, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest
+    prepareRequest -> prepareCheckedLibraryFiles(paths, "linux-x64", path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(paths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(paths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount!
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context -> emitPreparedLinuxContext(scheduledState)
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    }
+    owners! -> len => ownerCount
+    diagnosticCount!
+}
+
+public emitCheckedTestFiles paths: [Text; ~], harness: ref [UInt8; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetKind: Int -> Int uses Console, File, Process {
+    paths -> emitCheckedTestFilesWithStandardLibrarySources(harness, sourceIndices, symbolIndices, targetKind, 0, 0)
+}
+
+public emitCheckedTestFilesWithStandardLibrarySources paths: [Text; ~], harness: ref [UInt8; ~], sourceIndices: [Int; ~], symbolIndices: [Int; ~], targetKind: Int, standardLibrarySourceStart: Int, standardLibrarySourceCount: Int -> Int uses Console, File, Process {
+    standardLibrarySourceStart < 0 or standardLibrarySourceCount < 0
+        or standardLibrarySourceStart > (paths -> len)
+        or standardLibrarySourceCount > (paths -> len) - standardLibrarySourceStart
+        -> if {
+            "; sollang source root error: invalid standard-library source range" -> println
+            1 -> return
+        }
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    harness -> file.borrowBytes => harnessOwner
+    owners! -> push(harnessOwner)
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitFileSyntaxDiagnostics(paths)
+        syntaxCount -> return
+    }
+    sources! -> emitSourceStyleNotes
+    targetKind == 0 -> if { llvmTarget.windowsX64() } else { llvmTarget.linuxX64() } => target
+    targetKind == 0 -> if { 1 } else { 0 } => expectedStyle
+    PrepareRequest { sources: sources!, standardLibrarySourceStart: standardLibrarySourceStart, standardLibrarySourceCount: standardLibrarySourceCount, pointerBitWidth: target.pointerBitWidth, targetArchitecture: target.architecture, cpuDispatchPolicy: target.dispatchPolicy, requiredCpuFeatures: target.requiredFeatures, allowedCpuFeatures: target.allowedFeatures, forbiddenCpuFeatures: target.forbiddenFeatures, supportsComputePool: true, expectedPathStyle: expectedStyle } => prepareRequest
+    targetKind == 0 -> if { "windows-x64" } else { "linux-x64" } => targetName
+    prepareRequest -> prepareTestLibraryFiles(paths, sourceIndices, symbolIndices, targetName, path.nativeStyle()) -> when {
+        DeclarationRejected(rejection) {
+            rejection -> emitFunctionDeclarationRejection(paths)
+            1 -> return
+        }
+        Rejected(rejection) {
+            rejection -> emitSignatureRejection(paths)
+            1 -> return
+        }
+        ImportRejected(rejection) {
+            rejection -> emitInterpolationImportRejection(paths)
+            1 -> return
+        }
+        Ready(context) { context }
+    } => context
+    context -> checkedContextDiagnosticCount => diagnosticCount!
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        context -> prepareScheduledCoreEmitterState => scheduledState
+        context -> preparedEmitterDiagnosticCount(scheduledState) => preparedDiagnosticCount
+        preparedDiagnosticCount > 0 -> if { preparedDiagnosticCount -> return }
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        targetKind == 0 -> if { context -> emitPreparedWindowsContext(scheduledState) } else { context -> emitPreparedLinuxContext(scheduledState) }
+    } else {
+        context -> diagnostics.emitBlockingDiagnostics
+        context -> diagnostics.blockingDiagnosticCount => emittedSemanticCount
+        emittedSemanticCount == 0 -> if {
+            context -> emitIrInvariantDiagnostics
+        }
+    }
+    owners! -> len => ownerCount
+    diagnosticCount!
+}
+
+public emitWasmCheckedFiles paths: move [Text; ~] -> Int uses Console, File, Process {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner
+        owners! -> push(owner)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> sourceDecoding.utf8Text => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> syntaxDiagnosticCount => syntaxCount
+    syntaxCount > 0 -> if {
+        sources! -> emitFileSyntaxDiagnostics(paths)
+        syntaxCount -> return
+    }
+    sources! -> emitWasmChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}

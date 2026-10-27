@@ -3,13 +3,15 @@ using System.Text.RegularExpressions;
 
 internal static class LlvmAssertionTests
 {
-    internal static int Run(string inputPath, string resultPath)
+    internal static int Run(string inputPath, string resultPath,
+        string name = "51-fixed-array-value-generics")
     {
+        if (name is not ("51-fixed-array-value-generics" or "52-multi-file-modules"))
+            throw new ArgumentException("Unsupported LLVM assertion fixture.", nameof(name));
         if (File.Exists(resultPath)) throw new IOException("Test result already exists.");
         var directory = Path.GetDirectoryName(Path.GetFullPath(resultPath))!;
         Directory.CreateDirectory(directory);
         var expectedDirectory = Path.Combine("examples", "regression", "expected");
-        const string name = "51-fixed-array-value-generics";
         var paths = LlvmAssertions.SelectPaths(expectedDirectory, name, "windows-x64", false);
         var original = File.ReadAllText(inputPath);
         var cases = new List<object>();
@@ -42,22 +44,33 @@ internal static class LlvmAssertionTests
             catch (InvalidDataException) { emptyRejected = true; }
             Check("empty-override-rejected", emptyRejected);
             Verify("valid-slg", original, true);
-            Verify("missing-specialization", ReplaceFirst(@"(?ms)^define i32 @sollang_m144_s5_g\d+\([^\r\n]+\r?\n.*?^\}\r?\n", ""), false);
-            var calls = Regex.Matches(original, @"call i32 (?<target>@sollang_m144_s5_g\d+)\(\{ ptr, i64 \} (?<argument>%v\d+)\)");
-            if (calls.Count != 5) throw new InvalidOperationException("Expected five pinned specialization calls.");
-            var second = calls[1].Groups["target"];
-            Verify("duplicate-target", original[..second.Index] + calls[0].Groups["target"].Value + original[(second.Index + second.Length)..], false);
-            var firstArgument = calls[0].Groups["argument"];
-            Verify("wrong-type-binding", original[..firstArgument.Index] + calls[2].Groups["argument"].Value + original[(firstArgument.Index + firstArgument.Length)..], false);
-            Verify("unspecialized-template", original + "\ndeclare i32 @sollang_m144_s5({ ptr, i64 })\n", false);
-            Verify("wrong-first-load", ReplaceFirst(@"(?s)(define %sollang\.text @sollang_m144_s9_g\d+\([^\n]+\n(?:(?!\n\}).)*?load )%sollang\.text", "${1}i32"), false);
-            Verify("wrong-length-binding", ReplaceFirst(@"(= insertvalue \{ ptr, i64 \} %v\d+_0, i64 )3(, 1)", "${1}4${2}"), false);
-            Verify("wrong-fixed-length-result", ReplaceFirst(@"(?s)(define i32 @sollang_m144_s5_g\d+\([^}]+\} %arg\) \{.*?ret i32 )%v\d+", "${1}999"), false);
+            if (name == "52-multi-file-modules")
+            {
+                Verify("wrong-multiplier", ReplaceFirst(@"(= mul i32 %arg, )2(\r?\n)", "${1}3${2}"), false);
+                Verify("wrong-call-argument", ReplaceFirst(@"(call i32 @sollang_m\d+_s0\(i32 )21(\))", "${1}22${2}"), false);
+                Verify("wrong-return-value", ReplaceFirst(@"(?ms)(^define i32 @sollang_m\d+_s0\(i32 %arg\) \{\r?\nentry:\r?\n  %v\d+ = mul i32 %arg, 2\r?\n  ret i32 )%v\d+", "${1}%arg"), false);
+                Verify("missing-function", ReplaceFirst(@"(?ms)^define i32 @sollang_m\d+_s0\(i32 %arg\) \{\r?\nentry:\r?\n  %v\d+ = mul i32 %arg, 2\r?\n  ret i32 %v\d+\r?\n\}\r?\n", ""), false);
+            }
+            else
+            {
+                Verify("missing-specialization", ReplaceFirst(@"(?ms)^define i32 @sollang_m144_s5_g\d+\([^\r\n]+\r?\n.*?^\}\r?\n", ""), false);
+                var calls = Regex.Matches(original, @"call i32 (?<target>@sollang_m144_s5_g\d+)\(\{ ptr, i64 \} (?<argument>%v\d+)\)");
+                if (calls.Count != 5) throw new InvalidOperationException("Expected five pinned specialization calls.");
+                var second = calls[1].Groups["target"];
+                Verify("duplicate-target", original[..second.Index] + calls[0].Groups["target"].Value + original[(second.Index + second.Length)..], false);
+                var firstArgument = calls[0].Groups["argument"];
+                Verify("wrong-type-binding", original[..firstArgument.Index] + calls[2].Groups["argument"].Value + original[(firstArgument.Index + firstArgument.Length)..], false);
+                Verify("unspecialized-template", original + "\ndeclare i32 @sollang_m144_s5({ ptr, i64 })\n", false);
+                Verify("wrong-first-load", ReplaceFirst(@"(?s)(define %sollang\.text @sollang_m144_s9_g\d+\([^\n]+\n(?:(?!\n\}).)*?load )%sollang\.text", "${1}i32"), false);
+                Verify("wrong-length-binding", ReplaceFirst(@"(= insertvalue \{ ptr, i64 \} %v\d+_0, i64 )3(, 1)", "${1}4${2}"), false);
+                Verify("wrong-fixed-length-result", ReplaceFirst(@"(?s)(define i32 @sollang_m144_s5_g\d+\([^}]+\} %arg\) \{.*?ret i32 )%v\d+", "${1}999"), false);
+            }
         }
         catch (Exception error) { failure = error.ToString(); }
         AtomicResultFile.Write(resultPath, JsonSerializer.Serialize(new
         {
-            status = failure is null ? "passed" : "failed", completed = cases.Count, total = 12,
+            status = failure is null ? "passed" : "failed", completed = cases.Count,
+            total = name == "52-multi-file-modules" ? 9 : 12,
             cases, failure
         }, new JsonSerializerOptions { WriteIndented = true }));
         return failure is null ? 0 : 1;

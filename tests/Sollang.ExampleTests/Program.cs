@@ -14,8 +14,9 @@ if (args.Length > 0 && args[0] == "--selfhost-product-tests")
 
 if (args.Length > 0 && args[0] == "--llvm-assertion-tests")
 {
-    if (args.Length != 3) throw new ArgumentException("Expected LLVM input and new result path.");
-    return LlvmAssertionTests.Run(args[1], args[2]);
+    if (args.Length is not (3 or 4)) throw new ArgumentException("Expected LLVM input, new result path, and optional fixture name.");
+    return LlvmAssertionTests.Run(args[1], args[2],
+        args.Length == 4 ? args[3] : "51-fixed-array-value-generics");
 }
 
 // Compiler and native fixture streams use UTF-8 regardless of the host console code page.
