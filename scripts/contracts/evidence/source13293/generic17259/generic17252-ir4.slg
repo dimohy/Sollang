@@ -1,0 +1,83 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.ir.typed as typedIr
+import sys.process as process
+
+inspect label: Text, source: Text, names: [Text] -> Unit uses Console, Process {
+    "case:$label" -> println
+    [source,; ~] -> semanticContext.prepare => prepared
+    -1 => function!
+    0 => index!
+    prepared.package.symbols -> each symbol {
+        symbol.kind == 7 and symbol.parent < 0 -> if { index! => function! }
+        index! + 1 => index!
+    }
+    function! < 0 -> if { process.exit(1) }
+    0 => count!
+    prepared.package.symbols -> each symbol {
+        symbol.kind == 32 and symbol.parent == function!
+            -> if {
+                prepared.package.tokens[symbol.nameToken] => token
+                source -> slice(token.span.start, token.span.length) => name
+                count! >= (names -> len) or name != names[count!]
+                    -> if { process.exit(2) }
+                "name:$name" -> println
+                count! + 1 => count!
+            }
+    }
+    count! != (names -> len) -> if { process.exit(3) }
+    prepared -> expressionTypes.resolveContext => facts!
+    prepared -> typedIr.lowerResolvedContext(facts!) => ir!
+    ir! -> typedIr.materializeGenericClosure(prepared, facts!) => instances
+    (instances -> len) != 1 -> if { process.exit(4) }
+    instances[0] => instance
+    instance.status != 0 -> if { process.exit(5) }
+    facts!.types[ir![instance.functionNode].typeId] => result
+    result.kind != 1 or result.origin != 1 or (result.symbol -> typeIds.canonicalBuiltinSymbol) != 2
+        -> if { process.exit(6) }
+    "body:Int" -> println
+}
+
+main {
+    """
+    # Arbitrary generic parameters are inferred from every ordinary argument.
+    chooseFourth<A, B, C, D> first: A, second: B, third: C, fourth: D -> D {
+        fourth
+    }
+    
+    main {
+        chooseFourth(1, true, 3, 44) => selected
+        "$selected" -> println
+    }
+    """ => source0
+    "four" -> inspect(source0, ["A", "B", "C", "D"])
+    """
+    chooseFifth<A, B, C, D, E> first: A, second: B, third: C, fourth: D, fifth: E -> E {
+        fifth
+    }
+    
+    main {
+        chooseFifth(1, true, "third", 4, 55) -> println
+    }
+    """ => source1
+    "five" -> inspect(source1, ["A", "B", "C", "D", "E"])
+    """
+    chooseThird<A, B, C> first: A, second: B, third: C -> C { third }
+    
+    main {
+        chooseThird(1, true, 33) -> println
+    }
+    """ => source2
+    "three" -> inspect(source2, ["A", "B", "C"])
+    """
+    chooseFifth<A, B, C, D, E> first: A, second: B, third: C, fourth: D, fifth: E -> E {
+        fifth
+    }
+    
+    main {
+        1 -> chooseFifth<Int>(true, "third", 4, 55) -> println
+    }
+    """ => source3
+    "five-explicit" -> inspect(source3, ["A", "B", "C", "D", "E"])
+}

@@ -1,0 +1,213 @@
+namespace sollang.compiler.semantic.resolve
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+
+public struct ResolvedName {
+    public astNode: Int
+    public symbol: Int
+    public nameToken: Int
+}
+
+public resolvePrepared source: Text, nodes: ref [ast.AstNode; ~], symbolTable: ref [symbols.Symbol; ~], tokens: ref [syntax.SyntaxToken; ~] -> [ResolvedName; ~] {
+    [ResolvedName; ~] => resolved!
+    nodes -> len => astCount
+    symbolTable -> len => symbolCount
+    0 => nameAstIndex!
+
+    nameAstIndex! < astCount -> while {
+        nodes[nameAstIndex!] => nameAst
+        nameAst.payloadToken => referenceNameToken!
+        false => dottedDirectCallRoot!
+        nameAst.kind == 16
+            and nameAst.parent >= 0
+            and nodes[nameAst.parent].kind == 11
+            and nameAst.tokenCount >= 3
+            and tokens[nameAst.firstToken].kind == grammar.tokenIdIdentifier()
+            and tokens[nameAst.firstToken + 1].kind == grammar.tokenIdDot()
+            -> if {
+                nameAst.firstToken => referenceNameToken!
+                true => dottedDirectCallRoot!
+            }
+        nameAst.kind == 15 or dottedDirectCallRoot! -> if {
+            # `!` is part of a mutable local's semantic name even though the
+            # compact AST stores only the identifier token as its payload.
+            # Recover the suffix from this exact name-expression span so a
+            # nearby immutable binding with the same base spelling cannot win.
+            false => referenceMutableSuffix!
+            referenceNameToken! + 1 => referenceSuffixToken!
+            nameAst.firstToken + nameAst.tokenCount => referenceEndToken
+            nameAst.kind == 15
+                and referenceSuffixToken! < referenceEndToken
+                and not referenceMutableSuffix!
+                -> while {
+                    tokens[referenceSuffixToken!] => referenceSuffix
+                    referenceSuffix.span.length == 1
+                        and (source -> byte(referenceSuffix.span.start)) == 33
+                        -> if { true => referenceMutableSuffix! }
+                    referenceSuffixToken! + 1 => referenceSuffixToken!
+                }
+
+            -1 => lexicalScope!
+            nameAst.parent => ownerAst!
+            ownerAst! >= 0 and lexicalScope! < 0 -> while {
+                0 => ownerSymbolIndex!
+                ownerSymbolIndex! < symbolCount -> while {
+                    symbolTable[ownerSymbolIndex!] => ownerCandidate
+                    ownerCandidate.kind != 35 and ownerCandidate.astNode == ownerAst!
+                        -> if {
+                            ownerSymbolIndex! => lexicalScope!
+                            symbolCount => ownerSymbolIndex!
+                        } else {
+                            ownerSymbolIndex! + 1 => ownerSymbolIndex!
+                        }
+                }
+                lexicalScope! < 0 -> if {
+                    nodes[ownerAst!].parent => ownerAst!
+                }
+            }
+
+            -1 => resolvedSymbol!
+            lexicalScope! => searchScope!
+            false => scopesDone!
+            resolvedSymbol! < 0 and not scopesDone! -> while {
+                -1 => nearestSymbol!
+                UIntSize(0) => nearestStart!
+                -1 => bindingOwnerAst!
+                nameAst.parent => referenceOwnerAst!
+                referenceOwnerAst! >= 0 and bindingOwnerAst! < 0
+                    -> while {
+                        nodes[referenceOwnerAst!].kind == 9 or nodes[referenceOwnerAst!].kind == 61
+                            -> if {
+                                referenceOwnerAst! => bindingOwnerAst!
+                            } else {
+                                nodes[referenceOwnerAst!].parent => referenceOwnerAst!
+                            }
+                    }
+                0 => candidateSymbolIndex!
+                candidateSymbolIndex! < symbolCount -> while {
+                    symbolTable[candidateSymbolIndex!] => candidate
+                    candidate.kind != 48 and candidate.kind != 58 and candidate.parent == searchScope!
+                        and not (candidate -> symbols.hasQualifiedFunctionName(tokens, 0, tokens -> len))
+                        -> if {
+                            tokens[referenceNameToken!] => referenceName
+                            tokens[candidate.nameToken] => candidateName
+                            referenceName.span.length == candidateName.span.length => namesEqual!
+                            UIntSize(0) => nameByte!
+                            namesEqual! and nameByte! < referenceName.span.length
+                                -> while {
+                                    source -> byte(referenceName.span.start + nameByte!) => referenceByte
+                                    source -> byte(candidateName.span.start + nameByte!) => candidateByte
+                                    referenceByte != candidateByte -> if { false => namesEqual! }
+                                    nameByte! + 1 => nameByte!
+                                }
+                            candidate -> symbols.contextualName => contextualName
+                            (contextualName -> len) > 0 -> if {
+                                (source -> slice(referenceName.span.start, referenceName.span.length)) == contextualName => namesEqual!
+                            }
+                            (candidate.kind == 9 or candidate.kind == 61)
+                                and candidate.flags % 2 == 1
+                                => candidateMutableSuffix
+                            referenceMutableSuffix! and not candidateMutableSuffix
+                                or candidateMutableSuffix and not referenceMutableSuffix!
+                                => mutableSuffixMismatch
+                            mutableSuffixMismatch -> if { false => namesEqual! }
+                            namesEqual! -> if {
+                                nodes[candidate.astNode].start => candidateStart
+                                candidate.kind == 35 => candidateVisible!
+                                candidate.kind != 35 -> if {
+                                    -1 => candidateBlockAst!
+                                    candidate.astNode => candidateOwnerAst!
+                                    candidateOwnerAst! >= 0 and candidateBlockAst! < 0
+                                        -> while {
+                                            nodes[candidateOwnerAst!].kind == 43
+                                                -> if {
+                                                    candidateOwnerAst! => candidateBlockAst!
+                                                } else {
+                                                    nodes[candidateOwnerAst!].parent => candidateOwnerAst!
+                                                }
+                                        }
+                                    candidateBlockAst! < 0 => candidateVisible!
+                                    nameAst.parent => referenceBlockSearch!
+                                    referenceBlockSearch! >= 0 -> while {
+                                        referenceBlockSearch! == candidateBlockAst! -> if { true => candidateVisible! }
+                                        nodes[referenceBlockSearch!].parent => referenceBlockSearch!
+                                    }
+                                }
+                                # A nested function is declared before the enclosing
+                                # function's executable bindings, but runs only after
+                                # those bindings have initialized its closure slots.
+                                # Permit that outer-function capture without making
+                                # ordinary same-scope forward references visible.
+                                false => forwardFunctionCapture!
+                                (candidate.kind == 9 or candidate.kind == 61) and lexicalScope! >= 0 and searchScope! >= 0 and lexicalScope! != searchScope!
+                                    -> if {
+                                        lexicalScope! => referenceFunctionScope!
+                                        false => referenceFunctionFound!
+                                        referenceFunctionScope! >= 0 and not referenceFunctionFound!
+                                            -> while {
+                                                symbolTable[referenceFunctionScope!] => referenceOwnerCandidate
+                                                nodes[referenceOwnerCandidate.astNode] => referenceOwnerAst
+                                                referenceOwnerAst.kind == 7 or referenceOwnerAst.kind == 29 or referenceOwnerAst.kind == 31
+                                                    -> if {
+                                                        true => referenceFunctionFound!
+                                                    } else {
+                                                        referenceOwnerCandidate.parent => referenceFunctionScope!
+                                                    }
+                                            }
+                                        symbolTable[searchScope!] => candidateOwner
+                                        nodes[candidateOwner.astNode] => candidateOwnerAst
+                                        referenceFunctionFound! and referenceFunctionScope! != searchScope! and (candidateOwnerAst.kind == 7 or candidateOwnerAst.kind == 29 or candidateOwnerAst.kind == 31)
+                                            -> if {
+                                                true => forwardFunctionCapture!
+                                            }
+                                    }
+                                (candidateVisible! or forwardFunctionCapture!) and (candidate.kind == 35 or candidateStart < nameAst.start or forwardFunctionCapture!) and candidate.astNode != bindingOwnerAst!
+                                    -> if {
+                                        nearestSymbol! < 0 or candidateStart >= nearestStart!
+                                            -> if {
+                                                candidateSymbolIndex! => nearestSymbol!
+                                                candidateStart => nearestStart!
+                                            }
+                                    }
+                            }
+                        }
+                    candidateSymbolIndex! + 1 => candidateSymbolIndex!
+                }
+                nearestSymbol! >= 0 -> if {
+                    nearestSymbol! => resolvedSymbol!
+                }
+                resolvedSymbol! < 0 -> if {
+                    searchScope! >= 0 -> if {
+                        symbolTable[searchScope!].parent => searchScope!
+                    } else {
+                        true => scopesDone!
+                    }
+                }
+            }
+
+            resolvedSymbol! >= 0 -> if {
+                ResolvedName {
+                    astNode: nameAstIndex!
+                    symbol: resolvedSymbol!
+                    nameToken: referenceNameToken!
+                } => resolution
+                resolved! -> push(resolution)
+            }
+        }
+        nameAstIndex! + 1 => nameAstIndex!
+    }
+
+    resolved!
+}
+
+public resolve source: Text -> [ResolvedName; ~] {
+    source -> ast.lower => nodes
+    source -> lexer.lex => tokens
+    nodes -> symbols.collectPrepared(tokens) => table
+    source -> resolvePrepared(nodes, table, tokens) => resolved
+    resolved
+}
