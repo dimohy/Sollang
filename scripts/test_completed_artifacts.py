@@ -2001,6 +2001,61 @@ class CompilerConsumerClosureTests(unittest.TestCase):
         self.assertEqual(2, run.returncode)
         self.assertIn('requires --close-consumers', run.stderr)
         self.assertTrue((old / 'compiler.exe').exists())
+    def phase_supervisor_fixture(self):
+        old, replacement, consumer = self.products()
+        record = json.loads(consumer.read_text())
+        contract = consumer.parent / 'phase-contract.json'
+        contract.write_text('{"phase":"parsing"}')
+        batch = consumer.parent / 'batch'
+        batch.mkdir()
+        report = batch / 'selfhost-batch-results.json'
+        report.write_text(json.dumps(dict(state='passed', label='selfhost',
+            compilerSha256=record['inputHashes'][str(old / 'compiler.exe')],
+            completed=1, passed=1, total=1, failed=0, missing=0,
+            phaseFixturePlan=['first'], results=[dict(Fixture='first', Success=True, Error='')])))
+        record.update(schemaVersion=1, cases=[], phase='parsing', compilerSide='selfhost',
+            phaseContract=str(contract), batchReport=str(report),
+            scope='phase supervisor fixture', claimsGoalComplete=False)
+        record['inputHashes'][str(contract)] = hashlib.sha256(contract.read_bytes()).hexdigest()
+        record['processes'][0].update(command=['pwsh', '-File', 'phase.ps1',
+            '-Compiler', str(old / 'compiler.exe'), '-OutputDirectory', str(batch),
+            '-PhaseExecutionContract', str(contract), '-CompilerSide', 'selfhost', '-Label', 'selfhost'],
+            shutdownConfirmed=True, shutdownScope='owned-windows-job',
+            naturalShutdownObservation=dict(rootPid=123, outcome='drained', samples=[dict(activeProcesses=0, ownedPids=[])]))
+        consumer.write_text(json.dumps(record))
+        return old, replacement, consumer, record, report
+
+    def test_phase_supervisor_retires_product_without_promoting_report_counts(self):
+        old, replacement, consumer, record, report = self.phase_supervisor_fixture()
+        originals = consumer.read_bytes(), report.read_bytes()
+        audit = policy.consumer_closure_record(self.repo, old, [consumer], replacement, legacy_terminal=True)
+        row = audit['consumers'][0]
+        self.assertEqual('terminal-phase-supervisor-observation', row['disposition'])
+        self.assertEqual(0, row['completed'])
+        self.assertEqual(1, row['observedCompleted'])
+        self.assertEqual(originals, (consumer.read_bytes(), report.read_bytes()))
+
+    def test_phase_supervisor_rejects_changed_report_contract_owner_or_live_job(self):
+        old, replacement, consumer, original, report = self.phase_supervisor_fixture()
+        original_report = report.read_bytes()
+        for kind in ('contract', 'compiler', 'missing', 'duplicate', 'verdict', 'owner', 'live', 'root', 'claim'):
+            record = copy.deepcopy(original)
+            report.write_bytes(original_report)
+            data = json.loads(original_report)
+            if kind == 'contract': record['inputHashes'][record['phaseContract']] = '0' * 64
+            elif kind == 'compiler': data['compilerSha256'] = '0' * 64
+            elif kind == 'missing': data['results'] = []
+            elif kind == 'duplicate': data['phaseFixturePlan'] = ['first', 'first']
+            elif kind == 'verdict': data['results'][0]['Success'] = False
+            elif kind == 'owner': record['processes'][0]['command'][6] = str(self.root / 'different-output')
+            elif kind == 'live': record['processes'][0]['naturalShutdownObservation']['samples'][-1]['activeProcesses'] = 1
+            elif kind == 'root': record['processes'][0]['naturalShutdownObservation']['rootPid'] = 999991
+            elif kind == 'claim': record['claimsGoalComplete'] = True
+            report.write_text(json.dumps(data))
+            consumer.write_text(json.dumps(record))
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                policy.consumer_closure_record(self.repo, old, [consumer], replacement, legacy_terminal=True)
+
     def attempted_runner_fixture(self):
         old, replacement, consumer = self.products(True)
         record = json.loads(consumer.read_text())

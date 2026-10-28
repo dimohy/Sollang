@@ -1469,6 +1469,77 @@ def partial_comparison_shutdown(repo: Path, path: Path, record: dict, product: P
             'claimsTestPassed': False, 'observedCompleted': done}
 
 
+def stopped_phase_supervisor(repo: Path, path: Path, record: dict, product: Path) -> dict | None:
+    """Read a sealed batch supervisor for retirement without granting case credit."""
+    if (record.get('schemaVersion') != 1 or record.get('status') != 'passed'
+            or record.get('cases') != [] or type(record.get('total')) is not int
+            or record['total'] <= 0 or record.get('completed') != record['total']
+            or record.get('compilerSide') != 'selfhost' or record.get('claimsGoalComplete') is not False
+            or record.get('claimsAcceptancePassed') is True
+            or not isinstance(record.get('scope'), str) or not record['scope']
+            or not isinstance(record.get('phase'), str) or not record['phase']
+            or not isinstance(record.get('phaseContract'), str)
+            or not isinstance(record.get('batchReport'), str)
+            or not isinstance(record.get('processes'), list) or len(record['processes']) != 1):
+        return None
+    process = record['processes'][0]
+    if not isinstance(process, dict):
+        return None
+    command = process.get('command')
+    observation = process.get('naturalShutdownObservation', {})
+    samples = observation.get('samples') if isinstance(observation, dict) else None
+    if (type(process.get('exit')) is not int or process['exit'] != 0
+            or process.get('shutdownConfirmed') is not True
+            or process.get('shutdownScope') != 'owned-windows-job'
+            or not isinstance(observation, dict) or observation.get('outcome') != 'drained'
+            or observation.get('rootPid') != process.get('pid')
+            or not isinstance(samples, list) or not samples
+            or not isinstance(samples[-1], dict) or type(samples[-1].get('activeProcesses')) is not int
+            or samples[-1]['activeProcesses'] != 0
+            or samples[-1].get('ownedPids') != []
+            or not isinstance(command, list) or not all(isinstance(item, str) for item in command)):
+        return None
+    options = {}
+    for flag in ('-Compiler', '-OutputDirectory', '-PhaseExecutionContract', '-CompilerSide', '-Label'):
+        if command.count(flag) != 1 or command.index(flag) + 1 >= len(command):
+            return None
+        options[flag] = command[command.index(flag) + 1]
+    try:
+        contract = assert_artifact_path(repo, Path(record['phaseContract']))
+        report_path = assert_artifact_path(repo, Path(record['batchReport']))
+        batch = assert_artifact_path(repo, Path(options['-OutputDirectory']))
+        if (Path(options['-Compiler']) != product or Path(options['-PhaseExecutionContract']) != contract
+                or options['-CompilerSide'] != 'selfhost' or options['-Label'] != 'selfhost'
+                or report_path != batch / 'selfhost-batch-results.json'
+                or record.get('inputHashes', {}).get(str(contract), '').casefold()
+                    != hashlib.sha256(contract.read_bytes()).hexdigest().casefold()):
+            return None
+        raw = report_path.read_bytes()
+        report = json.loads(raw.decode('utf-8-sig'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(report, dict) or not isinstance(report.get('compilerSha256'), str):
+        return None
+    results, planned = report.get('results'), report.get('phaseFixturePlan')
+    if (report.get('state') != 'passed' or report.get('label') != 'selfhost'
+            or report.get('compilerSha256', '').casefold() != hashlib.sha256(product.read_bytes()).hexdigest().casefold()
+            or any(type(report.get(key)) is not int or report[key] != record['total'] for key in ('completed', 'passed', 'total'))
+            or any(type(report.get(key)) is not int or report[key] != 0 for key in ('failed', 'missing'))
+            or not isinstance(results, list) or len(results) != record['total']
+            or not isinstance(planned, list) or len(planned) != record['total']
+            or any(not isinstance(item, str) or not item for item in planned)
+            or len(set(planned)) != len(planned)
+            or any(not isinstance(row, dict) or not isinstance(row.get('Fixture'), str)
+                   or row.get('Success') is not True or row.get('Error') != '' for row in results)
+            or {row['Fixture'] for row in results} != set(planned)
+            or not terminal_consumer_process(repo, path.parent, process)):
+        return None
+    assert_output_shutdown(repo, batch)
+    return {'contractPath': str(contract), 'contractSha256': hashlib.sha256(contract.read_bytes()).hexdigest(),
+            'reportPath': str(report_path), 'reportSha256': hashlib.sha256(raw).hexdigest(),
+            'observedCompleted': record['completed'], 'claimsAcceptancePassed': False}
+
+
 def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], replacement: Path,
                             *, allow_missing_product: bool = False, legacy_terminal: bool = False,
                             retired_replacement_chain: frozenset[Path] | None = None) -> dict:
@@ -1560,6 +1631,18 @@ def consumer_closure_record(repo: Path, output: Path, consumers: list[Path], rep
         producer_pinned = isinstance(pins, dict) and str(pins.get(producer['path'], '')).casefold() == producer['sha256'].casefold()
         if not binary_pinned or not (producer_pinned or legacy_terminal and missing_producer_pin):
             raise ValueError('ARTIFACT_CONSUMER_BUILD_LINK_INVALID')
+        phase_supervisor = stopped_phase_supervisor(repo, path, record, Path(producer['compilerPath'])) if legacy_terminal else None
+        if phase_supervisor is not None:
+            assert_output_shutdown(repo, path.parent)
+            rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                         'status': record['status'], 'completed': 0, 'total': record['total'],
+                         'executed': None, 'failed': None, 'unexecuted': None,
+                         'observedCompleted': record['completed'],
+                         'disposition': 'terminal-phase-supervisor-observation',
+                         'phaseEvidence': phase_supervisor, 'producerRecordPinMissing': missing_producer_pin,
+                         'unprovenReasons': ['case-oracles-not-promoted'] +
+                            (['producer-record-unpinned'] if missing_producer_pin else [])})
+            continue
         if diagnostic_observation:
             assert_output_shutdown(repo, path.parent)
             rows.append({'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
