@@ -2852,7 +2852,13 @@ public emitLinuxOwnedFileDuplicate: -> Unit uses Console {
     """ -> println
 }
 
-public emitGlobalBinaryFileRuntime: -> Unit uses Console {
+public emitGlobalBinaryFileRuntime windows: Bool, flushOutput: Bool -> Unit uses Console {
+    "define internal void @sollang_binary_failure() noreturn {" -> println
+    "entry:" -> println
+    flushOutput -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
+    windows -> if { "  call void @ExitProcess(i32 1)" -> println } else { "  call void @exit(i32 1)" -> println }
+    "  unreachable" -> println
+    "}" -> println
     """
     @sollang_binary_writer_handle = internal global i64 -1
     @sollang_binary_writer_offset = internal global i64 0
@@ -2874,7 +2880,7 @@ public emitGlobalBinaryFileRuntime: -> Unit uses Console {
       store i64 0, ptr @sollang_binary_writer_offset, align 8
       ret void
     failure:
-      call void @llvm.trap()
+      call void @sollang_binary_failure()
       unreachable
     }
 
@@ -2897,7 +2903,7 @@ public emitGlobalBinaryFileRuntime: -> Unit uses Console {
       store i64 %next, ptr @sollang_binary_writer_offset, align 8
       ret void
     failure:
-      call void @llvm.trap()
+      call void @sollang_binary_failure()
       unreachable
     }
 
@@ -2914,7 +2920,7 @@ public emitGlobalBinaryFileRuntime: -> Unit uses Console {
       %ok = icmp ne i32 %status, 0
       br i1 %ok, label %done, label %failure
     failure:
-      call void @llvm.trap()
+      call void @sollang_binary_failure()
       unreachable
     done:
       ret void
@@ -2935,7 +2941,7 @@ public emitGlobalBinaryFileRuntime: -> Unit uses Console {
       store i64 0, ptr @sollang_binary_reader_offset, align 8
       ret void
     failure:
-      call void @llvm.trap()
+      call void @sollang_binary_failure()
       unreachable
     }
 

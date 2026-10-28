@@ -1,0 +1,73 @@
+namespace sollang.compiler.semantic.storage_placement_source_index
+
+import sollang.compiler.ast as ast
+
+public enum Error { InvalidRange, InvalidParent, CyclicParents }
+public struct SourceIndex {
+    public astStart: Int
+    public astCount: Int
+    public firstChild: [Int; ~]
+    public nextSibling: [Int; ~]
+    public frameOwner: [Int; ~]
+}
+
+frameOwner nodeIndex: Int, astStart: Int, nodes: ref [ast.AstNode; ~], owners: mut [Int; ~], visiting: mut [Bool; ~] -> Result<Int, Error> {
+    owners[nodeIndex] != -2 -> if { owners[nodeIndex] -> Result<Int, Error>.Ok -> return }
+    visiting[nodeIndex] -> if { Error.CyclicParents -> Result<Int, Error>.Err -> return }
+    true => visiting[nodeIndex]
+    nodes[astStart + nodeIndex] => node
+    -1 => owner!
+    node.parent >= 0 -> if {
+        node.parent -> frameOwner(astStart, nodes, owners, visiting) -> when {
+            Err(error) { error -> Result<Int, Error>.Err -> return }
+            Ok(parentOwner) { parentOwner => owner! }
+        }
+    }
+    node.kind == 7 or node.kind == 8 or node.kind == 31
+        -> if { nodeIndex => owner! }
+    false => visiting[nodeIndex]
+    owner! => owners[nodeIndex]
+    owner! -> Result<Int, Error>.Ok
+}
+
+# Child links retain AST order. A later C#-equivalent evaluation walk owns
+# source-unit positions; neither these links nor source spans replace it.
+public build astStart: Int, astCount: Int, nodes: ref [ast.AstNode; ~] -> Result<SourceIndex, Error> {
+    astStart < 0 or astCount < 0 or astStart > Int(nodes -> len) - astCount
+        -> if { Error.InvalidRange -> Result<SourceIndex, Error>.Err -> return }
+    [Int; ~] => first!
+    [Int; ~] => last!
+    [Int; ~] => next!
+    [Int; ~] => owners!
+    [Bool; ~] => visiting!
+    0 => nodeIndex!
+    nodeIndex! < astCount -> while {
+        nodes[astStart + nodeIndex!].parent => parent
+        parent < -1 or parent >= astCount
+            -> if { Error.InvalidParent -> Result<SourceIndex, Error>.Err -> return }
+        first! -> push(-1)
+        last! -> push(-1)
+        next! -> push(-1)
+        owners! -> push(-2)
+        visiting! -> push(false)
+        nodeIndex! + 1 => nodeIndex!
+    }
+    0 => nodeIndex!
+    nodeIndex! < astCount -> while {
+        nodes[astStart + nodeIndex!].parent => parent
+        parent >= 0 -> if {
+            last![parent] >= 0 -> if { nodeIndex! => next![last![parent]] } else { nodeIndex! => first![parent] }
+            nodeIndex! => last![parent]
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    0 => nodeIndex!
+    nodeIndex! < astCount -> while {
+        nodeIndex! -> frameOwner(astStart, nodes, owners!, visiting!) -> when {
+            Err(error) { error -> Result<SourceIndex, Error>.Err -> return }
+            Ok(_) { }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    SourceIndex { astStart: astStart, astCount: astCount, firstChild: first!, nextSibling: next!, frameOwner: owners! } -> Result<SourceIndex, Error>.Ok
+}

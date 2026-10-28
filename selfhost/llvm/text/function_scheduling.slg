@@ -275,7 +275,20 @@ isSchedulingComparisonTextProducer node: typedIr.TypedIrNode, context: ref emitt
     false
 }
 
+isSourceBindingCapture node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    node.kind != 17 or node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
+        -> if { false -> return }
+    context.ranges[node.sourceModule] => range
+    node.astNode < 0 or node.astNode >= range.astCount
+        -> if { false -> return }
+    context.nodes[range.astStart + node.astNode].kind == 9
+}
+
 isSchedulingValueCapture node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    # A source binding snapshots its initializer before the next source unit.
+    # This also orders a reused frame slot's last read before later writes.
+    # Synthetic role/producer aliases retain their separate scheduling rules.
+    node -> isSourceBindingCapture(context) -> if { true -> return }
     # A restored frame read belongs to its lexical continuation. Hoisting it
     # before an await creates an SSA value unavailable on the resume edge.
     node.kind == 5 and node.operand0 >= 0 -> if {

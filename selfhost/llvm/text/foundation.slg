@@ -215,7 +215,8 @@ isDirectEachEmission nodeIndex: Int, context: ref emitterContext.EmitContext, st
 # LLVM allocas execute each time control reaches them. Fixed-size result and
 # scratch slots therefore belong to the owning function entry, never to a loop
 # or branch body.
-emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, includeParameters: Bool, profile: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, includeParameters: Bool, profile: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    ownerIndex -> emitStorageFrameAllocations(context)
     includeParameters -> if {
         0 => pathOwnedParameterOrdinal!
         context -> parameterIndexAtOrdinal(ownerIndex, pathOwnedParameterOrdinal!) => pathOwnedParameterIndex!
@@ -268,9 +269,19 @@ emitHoistedControlAllocas ownerIndex: Int, startIndex: Int, endIndex: Int, inclu
                     and context.types[node.typeId].length >= 0
                     -> if { context.types[node.typeId].length => fixedArrayLength! }
                 fixedArrayLength! * (node -> arrayElementSize(context, state)) => fixedArrayByteLength
-                "  %v$(nodeIndex!)_data = alloca [$fixedArrayByteLength x i8], align " -> print
-                node -> arrayElementAlign(context, state) -> writeDecimalLine
+                nodeIndex! -> isDirectFixedIntStorage(context, state)
+                    -> if {
+                        nodeIndex! -> checkedStorageAllocation(context) -> when {
+                            None { }
+                            Some(allocation) { "  %v$(nodeIndex!)_data = getelementptr i8, ptr %stack_slot$(allocation.slot), i64 0" -> println }
+                        }
+                    } else {
+                        "  %v$(nodeIndex!)_data = alloca [$fixedArrayByteLength x i8], align " -> print
+                        node -> arrayElementAlign(context, state) -> writeDecimalLine
+                    }
             }
+        node.kind == 14 and (nodeIndex! -> isPlannedDynamicIntPayload(context, state))
+            -> if { nodeIndex! -> emitDynamicIntStorageAlias(context, state) }
         node.kind == 18 -> if {
             false => valueUsed!
             nodeIndex! -> controlValueUsed(ownerIndex, context, state) => valueUsed!
@@ -1842,32 +1853,9 @@ writeParallelRoleValue node: interpolation.InterpolationNode, sourceModule: Int,
 }
 
 canonicalInterpolationValueIndex node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
-    context.ranges[sourceModule] => range
-    -1 => selected!
-    (context.nodes -> len) + 1 => selectedDepth!
-    ownerIndex + 1 => candidateIndex!
     ownerIndex -> functionEnd(context, state) => end
-    candidateIndex! < end -> while {
-        context.ir[candidateIndex!] => candidate
-        candidate.sourceModule == sourceModule and candidate.astNode >= 0
-            and state.frozenCanonicalInterpolationRootByIr[candidateIndex!] == node.valueAst
-            -> if {
-                candidate.astNode => ancestor!
-                0 => depth!
-                ancestor! >= 0 and ancestor! != node.valueAst
-                    -> while {
-                        context.nodes[range.astStart + ancestor!].parent => ancestor!
-                        depth! + 1 => depth!
-                    }
-                ancestor! == node.valueAst and depth! < selectedDepth!
-                    -> if {
-                        candidateIndex! => selected!
-                        depth! => selectedDepth!
-                    }
-            }
-        candidateIndex! + 1 => candidateIndex!
-    }
-    selected!
+    sourceModule -> typedIr.sourceExpressionValueIndex(node.valueAst, ownerIndex + 1, end, context.ranges, context.nodes, context.ir) => selected
+    selected -> aggregateValueIndex(context, state)
 }
 
 emitCanonicalInterpolation node: interpolation.InterpolationNode, sourceModule: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
@@ -1878,6 +1866,12 @@ emitCanonicalInterpolation node: interpolation.InterpolationNode, sourceModule: 
             and state.frozenCanonicalInterpolationRootByIr[valueIndex] == node.valueAst
             -> if {
                 valueIndex -> emitRegionValueRoot(order, context, state)
+                context.ir[valueIndex].kind == 18 -> if {
+                    valueIndex -> emitConditionalValue(ownerIndex, order, context, state)
+                }
+                context.ir[valueIndex].kind == 32 and context.ir[valueIndex].operand0 >= 0
+                    and context.ir[valueIndex].operand1 >= 0 and context.ir[valueIndex].nextOperand >= 0
+                    -> if { valueIndex -> emitFoldExpression(ownerIndex, end, order, context, state) }
                 valueIndex -> emitAsyncLocalWrite(ownerIndex, context, state)
             }
     }
@@ -4804,7 +4798,17 @@ isFixedArrayType node: typedIr.TypedIrNode -> Bool {
 
 # C# promotes a direct binding literal only when its element layout is known
 # by the syntax-only placement analysis. Call arguments need independent storage.
-fixedArrayLiteralNeedsHeap nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+fixedArrayLiteralNeedsHeap nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    nodeIndex -> isDirectFixedIntStorage(context, state)
+        -> if {
+            nodeIndex -> checkedStorageAllocation(context) -> when {
+                None { true -> return }
+                Some(_) { false -> return }
+            }
+        }
+    nodeIndex >= 0 and nodeIndex < (context.ir -> len)
+        and (context.ir[nodeIndex] -> arrayRepeatHasValueCount(context))
+        -> if { true -> return }
     false => needsHeap!
     nodeIndex >= 0 and nodeIndex < (context.ir -> len)
         -> if {
@@ -5291,4 +5295,102 @@ invalidInterpolationFlowTargetNode context: ref emitterContext.EmitContext -> In
             irIndex! + 1 => irIndex!
         }
     invalid!
+}
+
+# Symbolic repeat cardinality comes from the owning value-generic ABI slot.
+# Keep one source body while producing the same backing, fill and logical
+# length as the managed compiler's concrete value specialization.
+emitValueGenericArrayRepeat nodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    context.ir[nodeIndex] => node
+    node.kind != 14 or node.sourceModule < 0 -> if { false -> return }
+    context.ranges[node.sourceModule] => range
+    context.nodes[range.astStart + node.astNode] => literal
+    context.sources[node.sourceModule] -> typeIds.arrayStorageSyntaxFromTokens(context.tokens, range.tokenStart, literal) => storage
+    not storage.isRepeat or storage.length >= 0 -> if { false -> return }
+    -1 => countToken!
+    false => afterSemicolon!
+    0 => depth!
+    literal.firstToken => tokenIndex!
+    tokenIndex! < literal.firstToken + literal.tokenCount
+        -> while {
+            context.tokens[range.tokenStart + tokenIndex!] => token
+            token.kind == grammar.tokenIdLeftBracket() or token.kind == grammar.tokenIdLeftBrace() or token.kind == grammar.tokenIdLeftParen()
+                -> if { depth! + 1 => depth! }
+            token.kind == grammar.tokenIdRightBracket() or token.kind == grammar.tokenIdRightBrace() or token.kind == grammar.tokenIdRightParen()
+                -> if { depth! - 1 => depth! }
+            depth! == 1 -> if {
+                token.kind == grammar.tokenIdSemicolon() -> if { true => afterSemicolon! }
+                afterSemicolon! and token.kind == grammar.tokenIdIdentifier()
+                    -> if { tokenIndex! => countToken! }
+            }
+            tokenIndex! + 1 => tokenIndex!
+        }
+    -1 => countParameter!
+    countToken! >= 0 and ownerIndex >= 0 -> if {
+        context.tokens[range.tokenStart + countToken!] => countName
+        context.sources[node.sourceModule] -> slice(countName.span.start, countName.span.length) => spelling
+        context.ir[ownerIndex] => owner
+        owner.operand1 => parameterIndex!
+        0 => ordinal!
+        parameterIndex! >= 0 -> while {
+            context.ir[parameterIndex!] => parameter
+            parameter.kind == 10 and parameter.sourceModule == node.sourceModule and parameter.symbol >= 0
+                -> if {
+                    context.symbols[range.symbolStart + parameter.symbol] => symbol
+                    symbol.kind == 32 -> if {
+                        context.tokens[range.tokenStart + symbol.nameToken] => name
+                        (context.sources[node.sourceModule] -> slice(name.span.start, name.span.length)) == spelling
+                            -> if { parameterIndex! => countParameter! }
+                    }
+                }
+            ordinal! == 0 -> if { owner.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
+            ordinal! + 1 => ordinal!
+        }
+    }
+    countParameter! < 0 or node.operand0 < 0 -> if {
+        "; sollang compiler error: symbolic array repeat has no owning value parameter at ir $nodeIndex" -> println
+        process.exit(1)
+    }
+    "  %v$(nodeIndex)_repeat_length = sext i32 " -> print
+    context -> writeParameterReference(ownerIndex, context.ir[countParameter!].symbol) => countWritten
+    " to i64" -> println
+    "  %v$(nodeIndex)_repeat_nonempty = icmp sgt i64 %v$(nodeIndex)_repeat_length, 0" -> println
+    "  %v$(nodeIndex)_repeat_capacity = select i1 %v$(nodeIndex)_repeat_nonempty, i64 %v$(nodeIndex)_repeat_length, i64 1" -> println
+    "  %v$(nodeIndex)_repeat_bytes = mul i64 %v$(nodeIndex)_repeat_capacity, $(node -> arrayElementSize(context, state))" -> println
+    "  %v$(nodeIndex)_data = call ptr @malloc(i64 %v$(nodeIndex)_repeat_bytes)" -> println
+    "  %v$(nodeIndex)_repeat_slot = alloca i64, align 8" -> println
+    "  store i64 0, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
+    "  br label %repeat$(nodeIndex)_header" -> println
+    "repeat$(nodeIndex)_header:" -> println
+    "  %v$(nodeIndex)_repeat_index = load i64, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
+    "  %v$(nodeIndex)_repeat_done = icmp eq i64 %v$(nodeIndex)_repeat_index, %v$(nodeIndex)_repeat_length" -> println
+    "  br i1 %v$(nodeIndex)_repeat_done, label %repeat$(nodeIndex)_end, label %repeat$(nodeIndex)_body" -> println
+    "repeat$(nodeIndex)_body:" -> println
+    "  %v$(nodeIndex)_repeat_ptr = getelementptr " -> print
+    node -> writeArrayElementType(context, state)
+    ", ptr %v$(nodeIndex)_data, i64 %v$(nodeIndex)_repeat_index" -> println
+    "  store " -> print
+    node -> writeArrayElementType(context, state)
+    " " -> print
+    node.operand0 -> writeValue(ownerIndex, context, state)
+    ", ptr %v$(nodeIndex)_repeat_ptr, align $(node -> arrayElementAlign(context, state))" -> println
+    "  %v$(nodeIndex)_repeat_next = add i64 %v$(nodeIndex)_repeat_index, 1" -> println
+    "  store i64 %v$(nodeIndex)_repeat_next, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
+    "  br label %repeat$(nodeIndex)_header" -> println
+    "repeat$(nodeIndex)_end:" -> println
+    "  %v$(nodeIndex)_0 = insertvalue { ptr, i64 } poison, ptr %v$(nodeIndex)_data, 0" -> println
+    "  %v$(nodeIndex) = insertvalue { ptr, i64 } %v$(nodeIndex)_0, i64 %v$(nodeIndex)_repeat_length, 1" -> println
+    true
+}
+
+# A symbolic count has no constant backing size, even if its seed is literal.
+arrayRepeatHasValueCount node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext -> Bool {
+    node.kind != 14 or node.sourceModule < 0 or node.sourceModule >= (context.ranges -> len)
+        -> if { false -> return }
+    context.ranges[node.sourceModule] => range
+    node.astNode < 0 or node.astNode >= range.astCount
+        -> if { false -> return }
+    context.nodes[range.astStart + node.astNode] => literal
+    context.sources[node.sourceModule] -> typeIds.arrayStorageSyntaxFromTokens(context.tokens, range.tokenStart, literal) => storage
+    storage.isRepeat and storage.length < 0
 }

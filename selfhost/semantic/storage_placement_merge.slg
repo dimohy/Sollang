@@ -1,0 +1,158 @@
+namespace sollang.compiler.semantic.storage_placement_merge
+
+import sollang.compiler.semantic.storage_placement as placement
+
+# Source identities remain distinct across modules when plans are inlined.
+public struct Allocation {
+    public sourceModule: Int
+    public sourceAst: Int
+    public slot: Int
+    public size: Int
+}
+
+public struct Ending {
+    public sourceModule: Int
+    public unitAst: Int
+    public slot: Int
+    public size: Int
+}
+
+public struct Frame {
+    public slots: [placement.Slot; ~]
+    public allocations: [Allocation; ~]
+    public ends: [Ending; ~]
+}
+
+public enum Error { InvalidFrame, InvalidRange }
+
+public struct FrameRange {
+    public slotStart: Int
+    public slotCount: Int
+    public allocationStart: Int
+    public allocationCount: Int
+    public endStart: Int
+    public endCount: Int
+}
+
+within start: Int, count: Int, total: Int -> Bool {
+    start >= 0 and count >= 0 and start <= total and count <= total - start
+}
+
+valid frame: ref Frame -> Bool {
+    0 => bytes!
+    frame.slots -> each slot {
+        slot.size < 0 or slot.size > placement.frameBudgetBytes() - bytes! or slot.align != 8
+            -> if { false -> return }
+        bytes! + slot.size => bytes!
+    }
+    frame.allocations -> each allocation {
+        allocation.sourceModule < 0 or allocation.sourceAst < 0
+            or allocation.slot < 0 or allocation.slot >= (frame.slots -> len) or allocation.size < 0
+            -> if { false -> return }
+        allocation.size > frame.slots[allocation.slot].size
+            -> if { false -> return }
+    }
+    frame.ends -> each ending {
+        ending.sourceModule < 0 or ending.unitAst < 0 or ending.slot < 0
+            or ending.slot >= (frame.slots -> len) or ending.size < 0
+            -> if { false -> return }
+        ending.size > frame.slots[ending.slot].size -> if { false -> return }
+    }
+    true
+}
+
+# Pool entries keep slot indexes local to each frame range. Validate every
+# range and allocation before mutating the caller; unrelated pool rows are not
+# part of this inline frame and do not consume its 4096-byte budget.
+rangeBytes slots: [placement.Slot], allocations: [Allocation], ends: [Ending], range: FrameRange -> Result<Int, Error> {
+    not (range.slotStart -> within(range.slotCount, slots -> len))
+        or not (range.allocationStart -> within(range.allocationCount, allocations -> len))
+        or not (range.endStart -> within(range.endCount, ends -> len))
+        -> if { Error.InvalidRange -> Result<Int, Error>.Err -> return }
+    0 => bytes!
+    0 => i!
+    i! < range.slotCount -> while {
+        slots[range.slotStart + i!] => slot
+        slot.size < 0 or slot.size > placement.frameBudgetBytes() - bytes! or slot.align != 8
+            -> if { Error.InvalidFrame -> Result<Int, Error>.Err -> return }
+        bytes! + slot.size => bytes!
+        i! + 1 => i!
+    }
+    0 => i!
+    i! < range.allocationCount -> while {
+        allocations[range.allocationStart + i!] => allocation
+        allocation.sourceModule < 0 or allocation.sourceAst < 0 or allocation.slot < 0
+            or allocation.slot >= range.slotCount or allocation.size < 0
+            -> if { Error.InvalidFrame -> Result<Int, Error>.Err -> return }
+        allocation.size > slots[range.slotStart + allocation.slot].size
+            -> if { Error.InvalidFrame -> Result<Int, Error>.Err -> return }
+        i! + 1 => i!
+    }
+    0 => i!
+    i! < range.endCount -> while {
+        ends[range.endStart + i!] => ending
+        ending.sourceModule < 0 or ending.unitAst < 0 or ending.slot < 0
+            or ending.slot >= range.slotCount or ending.size < 0
+            -> if { Error.InvalidFrame -> Result<Int, Error>.Err -> return }
+        ending.size > slots[range.slotStart + ending.slot].size
+            -> if { Error.InvalidFrame -> Result<Int, Error>.Err -> return }
+        i! + 1 => i!
+    }
+    bytes! -> Result<Int, Error>.Ok
+}
+
+# Match production MergeFramePlans: whole-frame admission, slot offsets and
+# first allocation/whole ending-group identity wins. All consumers use this path.
+public mergeRange frame: mut Frame, slots: [placement.Slot], allocations: [Allocation], ends: [Ending], range: FrameRange -> Result<Bool, Error> {
+    not (frame -> valid) -> if { Error.InvalidFrame -> Result<Bool, Error>.Err -> return }
+    slots -> rangeBytes(allocations, ends, range) -> when {
+        Err(error) { error -> Result<Bool, Error>.Err -> return }
+        Ok(bytes) { bytes }
+    } => inlineBytes
+    0 => bytes!
+    frame.slots -> each slot { bytes! + slot.size => bytes! }
+    inlineBytes > placement.frameBudgetBytes() - bytes!
+        -> if { false -> Result<Bool, Error>.Ok -> return }
+    frame.slots -> len => offset
+    frame.ends -> len => previousEnds
+    0 => i!
+    i! < range.slotCount -> while {
+        frame.slots -> push(slots[range.slotStart + i!])
+        i! + 1 => i!
+    }
+    0 => i!
+    i! < range.allocationCount -> while {
+        allocations[range.allocationStart + i!] => allocation
+        false => present!
+        frame.allocations -> each existing {
+            existing.sourceModule == allocation.sourceModule and existing.sourceAst == allocation.sourceAst
+                -> if { true => present! }
+        }
+        not present! -> if {
+            frame.allocations -> push(Allocation { sourceModule: allocation.sourceModule, sourceAst: allocation.sourceAst, slot: allocation.slot + offset, size: allocation.size })
+        }
+        i! + 1 => i!
+    }
+    0 => i!
+    i! < range.endCount -> while {
+        ends[range.endStart + i!] => ending
+        false => present!
+        0 => prior!
+        prior! < previousEnds -> while {
+            frame.ends[prior!] => existing
+            existing.sourceModule == ending.sourceModule and existing.unitAst == ending.unitAst
+                -> if { true => present! }
+            prior! + 1 => prior!
+        }
+        not present! -> if {
+            frame.ends -> push(Ending { sourceModule: ending.sourceModule, unitAst: ending.unitAst, slot: ending.slot + offset, size: ending.size })
+        }
+        i! + 1 => i!
+    }
+    true -> Result<Bool, Error>.Ok
+}
+
+public mergeInline frame: mut Frame, inline: ref Frame -> Result<Bool, Error> {
+    FrameRange { slotStart: 0, slotCount: inline.slots -> len, allocationStart: 0, allocationCount: inline.allocations -> len, endStart: 0, endCount: inline.ends -> len } => range
+    frame -> mergeRange(inline.slots, inline.allocations, inline.ends, range)
+}

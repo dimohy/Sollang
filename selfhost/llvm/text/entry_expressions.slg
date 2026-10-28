@@ -48,7 +48,7 @@ isEntrySchedulingControl node: typedIr.TypedIrNode -> Bool {
     (node -> isSchedulingControlEffect) or node.kind == 33
 }
 
-emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     functionIndex + 1 => entryMutableSlotIndex!
     entryMutableSlotIndex! < entryEnd -> while {
         context.ir[entryMutableSlotIndex!] => entryMutableSlotCandidate
@@ -58,10 +58,7 @@ emitScheduledMutableSlots functionIndex: Int, entryEnd: Int, context: ref emitte
                 entryMutableSlotRoot == entryMutableSlotIndex!
                     and (entryMutableSlotIndex! -> asyncFrameBindingRoot(functionIndex, context, state)) < 0
                     -> if {
-                        "  %slot$(entryMutableSlotRoot) = alloca " -> print
-                        entryMutableSlotCandidate -> writeIrType(context, state)
-                        ", align " -> print
-                        entryMutableSlotCandidate -> storageAlign(context, state) -> writeDecimalLine
+                        entryMutableSlotRoot -> emitMutableStorageSlot(context, state)
                     }
             }
         entryMutableSlotIndex! -> whileInlineValueIndexTypeId(context, state) => inlineIndexType
@@ -1942,7 +1939,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
         -> if {
             DirectoryCallRequest { callIndex: entryExpressionIndex, ownerIndex: functionIndex } -> emitCreateDirectoryCall(context, state)
         }
-    entryExpression.kind == 14 and ((entryExpression -> isDynamicArrayType) or (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
+    entryExpression.kind == 14 and not (entryExpressionIndex -> emitValueGenericArrayRepeat(functionIndex, context, state)) and ((entryExpression -> isDynamicArrayType) or (entryExpression -> isFixedArrayType) or (entryExpression -> isSliceArrayType))
         -> if {
             0 => entryArrayLength!
             entryExpression.operand0 => entryArrayCountIndex!
@@ -1954,7 +1951,10 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
             entryExpression -> arrayLiteralLength(entryArrayOperandCount, context) => entryArrayLength!
             entryExpression -> arrayLiteralCapacity(entryArrayLength!, context) => entryArrayCapacity
             entryArrayCapacity * (entryExpression -> arrayElementSize(context, state)) => entryArrayByteLength
-            (not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))
+            entryExpressionIndex -> emitFixedStorageLifetimeStart(context, state)
+            entryExpressionIndex -> isPlannedDynamicIntPayload(context, state) => plannedDynamicPayload
+            plannedDynamicPayload -> if { entryExpressionIndex -> emitDynamicIntStorageStart(context) }
+            ((not (entryExpression -> isFixedArrayType)) or (entryExpressionIndex -> fixedArrayLiteralNeedsHeap(context, state))) and not plannedDynamicPayload
                 -> if {
                     entryExpression.typeId >= 0 and context.types[entryExpression.typeId].kind == 12
                         -> if {
@@ -2043,7 +2043,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
                 "  %v$(entryExpressionIndex)_storage = getelementptr i8, ptr null, i64 0" -> println
                 "v$(entryExpressionIndex)" -> emitGrowableDictionaryPointers("%v$(entryExpressionIndex)_storage", "0", entryDictionaryEntryLayout)
             } else {
-                "v$(entryExpressionIndex)" -> emitGrowableDictionaryAllocation("$(entryDictionaryCapacity)", entryDictionaryEntryLayout)
+                entryExpressionIndex -> emitDictionaryLiteralStorage(entryDictionaryCapacity, entryDictionaryEntryLayout, context, state)
             }
             entryDictionaryItemStart => entryDictionaryItemIndex!
             0 => entryDictionaryItemPosition!
@@ -2116,6 +2116,7 @@ emitEntryValueExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd
         -> if {
             entryExpressionIndex -> mutableBindingRoot(context, state) => entryMutableRoot
             context.ir[entryMutableRoot] => entryMutableBinding
+            entryExpressionIndex -> emitMutableHeaderStart(context)
             context.ir[entryExpression.operand0] => entryMutableValue
             entryMutableBinding -> integerNodeWidth(context, state) => entryMutableTargetWidth
             entryMutableValue -> integerNodeWidth(context, state) => entryMutableSourceWidth
@@ -3308,53 +3309,7 @@ emitEntryOperationExpression entryExpressionIndex: Int, functionIndex: Int, entr
 emitEntryTerminalExpression entryExpressionIndex: Int, functionIndex: Int, entryEnd: Int, entryOrder: ref [Int; ~], entryActiveStreams: mut [Int; ~], entryStreamCurrentValues: mut [Int; ~], entryStreamStops: mut [Int; ~], activeStreamSize: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console, Process {
     context.ir[entryExpressionIndex] => entryExpression
     entryExpression.kind == 18 -> if {
-        entryExpression.operand0 -> aggregateValueIndex(context, state) => entryIfConditionIndex
-        context.ir[entryIfConditionIndex] => entryIfCondition
-        entryExpressionIndex -> irValueUsed(functionIndex, context, state) => entryIfValueUsed
-        (entryIfCondition.kind == 8 and (entryIfCondition.opcode == -25 or entryIfCondition.opcode == -24) or (entryIfCondition.kind == 7 and entryIfCondition.opcode == -26)) => entryIfShortCircuit
-        entryIfShortCircuit -> if {
-            WhileBranchRequest { whileIndex: entryExpressionIndex, ownerIndex: functionIndex, conditionIndex: entryIfConditionIndex } -> emitWhileBranch(entryOrder, context, state)
-            "while$(entryExpressionIndex)_body:" -> println
-            entryExpression -> writeIfShortCircuitBodyTarget(entryExpressionIndex)
-            "while$(entryExpressionIndex)_exit:" -> println
-            entryExpression -> writeIfShortCircuitExitTarget(entryExpressionIndex)
-        } else {
-            "  br i1 " -> print
-            entryIfCondition.kind == 4 -> if {
-                entryIfCondition -> sourceToken(context, state) => entryIfConditionToken
-                (context.sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == 116
-                    -> if { "1" -> print } else { "0" -> print }
-            } else { "%v$entryIfConditionIndex" -> print }
-            entryExpression -> writeIfDirectBranchTargets(entryExpressionIndex)
-        }
-        "if$(entryExpressionIndex)_then:" -> println
-        entryExpression.operand1 -> emitRegion(entryOrder, context, state)
-        entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0
-            -> if {
-                entryExpression.operand1 -> regionResultValueIndex(context, state) => entryThenStoreIndex
-                entryExpression -> emitIfResultStore(entryThenStoreIndex, functionIndex, entryExpressionIndex, 0, context, state)
-            }
-        OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-        "  br label %if$(entryExpressionIndex)_merge" -> println
-        entryExpression.nextOperand >= 0 -> if {
-            "if$(entryExpressionIndex)_else:" -> println
-            entryExpression.nextOperand -> emitRegion(entryOrder, context, state)
-            entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0)
-                -> if {
-                    entryExpression.nextOperand -> regionResultValueIndex(context, state) => entryElseStoreIndex
-                    entryExpression -> emitIfResultStore(entryElseStoreIndex, functionIndex, entryExpressionIndex, 1, context, state)
-                }
-            OwnedDropRequest { regionIndex: entryExpression.nextOperand, beforeAst: -1, edgeIndex: entryExpressionIndex * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
-            "  br label %if$(entryExpressionIndex)_merge" -> println
-        }
-        "if$(entryExpressionIndex)_merge:" -> println
-        entryIfValueUsed and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0
-            -> if {
-                "  %v$(entryExpressionIndex) = load " -> print
-                entryExpression -> writeIrType(context, state)
-                ", ptr %if$(entryExpressionIndex)_result, align " -> print
-                entryExpression -> storageAlign(context, state) -> writeDecimalLine
-            }
+        entryExpressionIndex -> emitConditionalValue(functionIndex, entryOrder, context, state)
     }
     entryExpression.kind == 33 -> if { entryExpressionIndex -> emitBooleanWhen(entryOrder, context, state) }
     entryExpression.kind == 20 -> if {
@@ -3707,6 +3662,12 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                 entryExpressionIndex -> emitEntryValueExpression(functionIndex, entryEnd, entryPointerAlignment, plan.order, entryActiveEach!, entryActiveEachSize!, context, state) => entryActiveEachSize!
                 entryExpressionIndex -> emitEntryOperationExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
                 entryExpressionIndex -> emitEntryTerminalExpression(functionIndex, entryEnd, plan.order, entryActiveStreams!, entryStreamCurrentValues!, entryStreamStops!, entryActiveStreamSize!, context, state) => entryActiveStreamSize!
+                not (entryExpressionIndex -> isDirectEachEmission(context, state))
+                    and (entryExpressionIndex -> plannedStreamStage(context, state)) < 0
+                    -> if {
+                        entryExpression.kind == 23 or (entryExpressionIndex -> terminatingControlReturns(context, state)) => completedTerminated
+                        entryExpressionIndex -> emitStorageLifetimeEndsAfter(completedTerminated, context)
+                    }
                 -1 => entryNextExpressionIndex!
                 entryOrderIndex! + 1 < (plan.order -> len) -> if { plan.order[entryOrderIndex! + 1] => entryNextExpressionIndex! }
                 true => entryCloseEachProgress!
@@ -3720,6 +3681,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                         }
                         entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
                             entryCloseEachIndex -> emitDirectEachEnd(false, context)
+                            entryCloseEachIndex -> emitStorageLifetimeEndsAfter(false, context)
                             entryActiveEachSize! - 1 => entryActiveEachSize!
                         }
                     }
@@ -3847,6 +3809,7 @@ emitScheduledStreamOrder plan: ref BodySchedulePlan, functionIndex: Int, entryEn
                                         "stream$(entryCloseStreamPipeline.terminalIr)_drop_done:" -> println
                                     }
                             }
+                            entryCloseStreamPipeline.terminalIr -> emitStorageLifetimeEndsAfter(false, context)
                             entryActiveStreamSize! - 1 => entryActiveStreamSize!
                         }
                     }

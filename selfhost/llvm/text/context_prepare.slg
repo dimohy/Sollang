@@ -1,5 +1,7 @@
 namespace sollang.compiler.llvm.text
 
+import sollang.compiler.semantic.storage_placement_package as storagePackage
+
 import sollang.compiler.semantic.fixed_length_arrays as fixedLengthArrays
 import sollang.compiler.semantic.mutable_binding_warnings as mutableBindingWarnings
 
@@ -922,7 +924,9 @@ prepareResolvedSnapshot request: ref PrepareRequest, resolvedCallContext: move e
     prepared.package -> semanticDiagnostics.contextualRecordDiagnosticOwner(recursiveTypes!, expressionOperandDiagnostic) => contextualOwnerAst
     prepared.package -> semanticDiagnostics.firstDeclarationRootDiagnosticWithOwnedBinding(bindingDeclarationDiagnostic, numericCallLiteralDiagnostic!, numericCallArgumentDiagnostic, nominalFieldMismatch, callOwnershipDiagnostic, dictionaryKeyDiagnostic, ownedIndexReadDiagnostic, callArityDiagnostic, ownedBindingSource!, ownedBindingAst!, ownedBindingCode!, expressionOperandDiagnostic.sourceModule, expressionOperandDiagnostic.astNode, expressionOperandDiagnostic.code, contextualOwnerAst) => checkedDeclarationRoot!
     firstOwnedBindingDiagnostic == -2 -> if { 10 => checkedDeclarationRoot! }
+    prepared -> storagePackage.buildWithInlineFrames(recursiveTypes!, ir!) => storagePlacement
     emitterContext.EmitContext {
+        storagePlacement: storagePlacement
         globalFunctionAliasDiagnostic: calls.noGlobalFunctionAliasDiagnostic()
         initializerDiagnostics: [emitterContext.InitializerDiagnostic; ~]
         missingEnumVariants: missingEnumVariants
@@ -1259,7 +1263,7 @@ emitPreparedWindowsContext context: emitterContext.EmitContext, state: ref CoreE
     needsOwnedFileRuntime -> if {
         llvmRuntime.emitWindowsOwnedFile()
         needsAsyncFileRuntime -> if { llvmRuntime.emitWindowsOwnedFileDuplicate() }
-        llvmRuntime.emitGlobalBinaryFileRuntime()
+        llvmRuntime.emitGlobalBinaryFileRuntime(true, context -> diagnostics.usesTextRuntime)
     }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
@@ -1379,7 +1383,7 @@ emitPreparedLinuxContext context: emitterContext.EmitContext, state: ref CoreEmi
     needsOwnedFileRuntime -> if {
         not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile
         needsAsyncFileRuntime -> if { llvmRuntime.emitLinuxOwnedFileDuplicate() }
-        llvmRuntime.emitGlobalBinaryFileRuntime()
+        llvmRuntime.emitGlobalBinaryFileRuntime(false, context -> diagnostics.usesTextRuntime)
     }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols

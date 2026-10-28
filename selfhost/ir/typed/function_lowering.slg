@@ -830,7 +830,8 @@ planGenericCallsWithTemplates nodes: ref [TypedIrNode; ~], prepared: ref semanti
                     templateIndex! >= 0 and templateIndex! < (nodes -> len)
                         and templateOrdinal! < (nodes -> len) -> while {
                             nodes[templateIndex!] => parameter
-                            templates! -> push(parameter.typeId)
+                            not (parameter -> isHiddenValueInput(prepared))
+                                -> if { templates! -> push(parameter.typeId) }
                             templateOrdinal! == 0 -> if {
                                 function.nextOperand => templateIndex!
                             } else { parameter.nextOperand => templateIndex! }
@@ -918,7 +919,7 @@ appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared:
         }
     templateOwner! < 0 -> if { return }
     [Int; ~] => ownerTemplates!
-    nodes -> appendGenericInputTypes(templateOwner!, ownerTemplates!)
+    nodes -> appendGenericInputTypes(templateOwner!, ownerTemplates!, prepared)
     0 => ownerIndex!
     ownerIndex! < (nodes -> len) -> while {
         nodes[ownerIndex!] => owner
@@ -926,7 +927,7 @@ appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared:
             and owner.sourceModule == sourceModule and owner.astNode == ownerAst!
             -> if {
                 [Int; ~] => ownerActuals!
-                nodes -> appendGenericInputTypes(ownerIndex!, ownerActuals!)
+                nodes -> appendGenericInputTypes(ownerIndex!, ownerActuals!, prepared)
                 (ownerTemplates! -> len) == (ownerActuals! -> len) => concrete!
                 ownerActuals! -> each actual {
                     actual < 0 -> if { false => concrete! } else {
@@ -964,13 +965,14 @@ appendContextualInterpolationGenericPlans nodes: ref [TypedIrNode; ~], prepared:
     }
 }
 
-appendGenericInputTypes nodes: ref [TypedIrNode; ~], functionIndex: Int, destination: mut [Int; ~] -> Unit {
+appendGenericInputTypes nodes: ref [TypedIrNode; ~], functionIndex: Int, destination: mut [Int; ~], prepared: ref semanticContext.SemanticSnapshot -> Unit {
     nodes[functionIndex] => function
     function.operand1 => parameterIndex!
     0 => ordinal!
     parameterIndex! >= 0 -> while {
         nodes[parameterIndex!] => parameter
-        destination -> push(parameter.typeId)
+        not (parameter -> isHiddenValueInput(prepared))
+            -> if { destination -> push(parameter.typeId) }
         ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
         ordinal! + 1 => ordinal!
     }
@@ -1009,7 +1011,8 @@ appendInterpolationGenericCalls nodes: ref [TypedIrNode; ~], prepared: ref seman
                                 0 => ordinal!
                                 parameterIndex! >= 0 -> while {
                                     nodes[parameterIndex!] => parameter
-                                    templates! -> push(parameter.typeId)
+                                    not (parameter -> isHiddenValueInput(prepared))
+                                        -> if { templates! -> push(parameter.typeId) }
                                     ordinal! == 0 -> if { function.nextOperand => parameterIndex! } else { parameter.nextOperand => parameterIndex! }
                                     ordinal! + 1 => ordinal!
                                 }
@@ -3407,7 +3410,8 @@ directAwaitCallSource call: ref TypedIrNode, prepared: ref semanticContext.Seman
     call.astNode < 0 or call.astNode >= sourceRange.astCount
         -> if { false -> return }
     prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
-    callAst.kind != 10 or callAst.parent < 0 or callAst.parent >= sourceRange.astCount
+    (callAst.kind != 10 and callAst.kind != 11)
+        or callAst.parent < 0 or callAst.parent >= sourceRange.astCount
         -> if { false -> return }
     prepared.package.nodes[sourceRange.astStart + callAst.parent] => awaitFlowAst
     awaitFlowAst.kind != 10
@@ -5744,4 +5748,13 @@ asyncExpressionFunctionOwner value: Int, nodes: ref [TypedIrNode; ~] -> Int {
     owner! >= 0 and nodes[owner!].kind != 0 and nodes[owner!].kind != 11
         -> while { nodes[owner!].parent => owner! }
     owner!
+}
+
+
+# Hidden numeric ABI parameters have no source-level runtime argument.
+isHiddenValueInput parameter: TypedIrNode, prepared: ref semanticContext.SemanticSnapshot -> Bool {
+    parameter.kind != 10 or parameter.sourceModule < 0 or parameter.symbol < 0
+        -> if { false -> return }
+    prepared.package.ranges[parameter.sourceModule] => range
+    parameter.symbol < range.symbolCount and prepared.package.symbols[range.symbolStart + parameter.symbol].kind == 32
 }

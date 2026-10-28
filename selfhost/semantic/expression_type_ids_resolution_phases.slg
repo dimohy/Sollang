@@ -2686,11 +2686,13 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
                                 false => boundedComposite!
                                 -1 => boundedCompositeCapacity!
                                 -1 => fixedRepeatLength!
+                                false => symbolicRepeat!
                                 compositeNode.kind == 37 -> if {
                                     prepared.package -> typeIds.arrayStorageSyntax(compositeSourceIndex!, compositeAstIndex!) => compositeStorage
                                     compositeStorage.dynamic => dynamicArray!
                                     compositeStorage.bounded => boundedComposite!
                                     compositeStorage.length => boundedCompositeCapacity!
+                                    compositeStorage.isRepeat and compositeStorage.length < 0 => symbolicRepeat!
                                     not compositeStorage.bounded -> if { compositeStorage.length => fixedRepeatLength! }
                                 }
                                 compositeNode.kind == 38 -> if {
@@ -2739,7 +2741,9 @@ resolveCompositeLiteralTypes prepared: ref semanticContext.SemanticSnapshot, typ
                                 canBuildComposite! -> if {
                                     -1 => compositeLength!
                                     compositeKind! == 4 -> if {
-                                        fixedRepeatLength! >= 0 -> if { fixedRepeatLength! } else { childPosition } => compositeLength!
+                                        not symbolicRepeat! -> if {
+                                            fixedRepeatLength! >= 0 -> if { fixedRepeatLength! } else { childPosition } => compositeLength!
+                                        }
                                     }
                                     compositeKind! == 12 or compositeKind! == 13
                                         -> if { boundedCompositeCapacity! => compositeLength! }

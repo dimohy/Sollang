@@ -1756,7 +1756,7 @@ interpolationTransferMatchesDropPath transfer: typedIr.InterpolationPayloadTrans
     matches! and depth! == transfer.fieldDepth
 }
 
-emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     request => rootRequest!
     context.interpolationPayloadTransfers -> each transfer {
         transfer.bindingIr == request.bindingIndex and transfer.fieldDepth > 0
@@ -1923,7 +1923,8 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
             dropTask -> emitDropPathName(context, state)
             "_fixed_data)" -> println
         }
-        not dropTaskMoved! and not dropTaskIsFixedField and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state)) and not (dropTask -> knownBorrowedSourceTextDrop(context))
+        not (dropTask.valueIndex -> isPlannedContainerPayload(context, state))
+            and not dropTaskMoved! and not dropTaskIsFixedField and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state)) and not (dropTask -> knownBorrowedSourceTextDrop(context))
             -> if {
                 false => dropTaskNeedsFixedReload!
                 false => dropTaskHasInlineArrayAbi!
@@ -1973,7 +1974,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                         "  call void @free(ptr %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data)" -> println
                     }
             } else {
-                not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)
+                not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14) and not (dropTask.valueIndex -> isPlannedContainerPayload(context, state))
                     -> if {
                         "  " -> print
                         dropTask -> emitDropPathName(context, state)
@@ -1984,7 +1985,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                         dropTask -> emitDropPathName(context, state)
                         "_data)" -> println
                     } else {
-                        not dropTaskMoved! and dropTask.typeOrigin == 15
+                        not dropTaskMoved! and dropTask.typeOrigin == 15 and not (dropTask.valueIndex -> isPlannedContainerPayload(context, state))
                             and (dropTask.typeId < 0 or context.types[dropTask.typeId].kind == 5)
                             -> if {
                                 "  " -> print
@@ -2303,7 +2304,7 @@ patternBindingNeedsOwnershipFlag bindingIndex: Int, context: ref emitterContext.
 
 # Match payloads carry their own fixed-array backing independently of whether
 # their elements need a drop. Borrowed subjects are excluded by the caller.
-emitPatternBindingDrop bindingIndex: Int, regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitPatternBindingDrop bindingIndex: Int, regionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.ir[bindingIndex].typeId => typeId
     bindingIndex => functionOwner!
     functionOwner! >= 0 and context.ir[functionOwner!].kind != 0 and context.ir[functionOwner!].kind != 11
@@ -2979,7 +2980,7 @@ emitStoredEnumPayloadDrop typeId: Int, name: Text, context: ref emitterContext.E
     }
 }
 
-emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.types[request.payloadTypeId] => payloadType
     payloadType.kind == 3 or payloadType.kind == 5 or payloadType.kind == 6
         -> if {

@@ -1,0 +1,44 @@
+namespace sollang.compiler.semantic.storage_placement_function_selection
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_function_facts as functionFacts
+
+public struct Decision {
+    public user: Bool
+    public standalone: Bool
+    public inline: Bool
+}
+
+public enum Error { InvalidFunctionFacts }
+
+# The AST already records native/intrinsic bodies in flag 128 and callback
+# signatures in tertiaryToken. Reuse those parser decisions instead of names.
+public decide frameAst: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int, indexed: ref sourceIndex.SourceIndex -> Result<Decision, Error> {
+    frameAst -> functionFacts.requiresStandalone(prepared, sourceModule, indexed) -> when {
+        Err(_) { Error.InvalidFunctionFacts -> Result<Decision, Error>.Err -> return }
+        Ok(standalone) {
+            prepared.package.ranges[sourceModule] => range
+            prepared.package.nodes[range.astStart + frameAst] => frame
+            frame.flags / 128 % 2 == 0 and frame.tertiaryToken < 0 => user
+            prepared -> semanticContext.isStandardLibrarySource(sourceModule) => standard
+            Decision { user: user, standalone: standalone, inline: user and standard and not standalone } -> Result<Decision, Error>.Ok
+        }
+    }
+}
+
+public topLevelFunction frameAst: Int, prepared: ref semanticContext.SemanticSnapshot, sourceModule: Int -> Bool {
+    sourceModule < 0 or sourceModule >= (prepared.package.ranges -> len)
+        -> if { false -> return }
+    prepared.package.ranges[sourceModule] => range
+    frameAst < 0 or frameAst >= range.astCount -> if { false -> return }
+    prepared.package.nodes[range.astStart + frameAst] => frame
+    frame.kind != 7 and frame.kind != 31 -> if { false -> return }
+    frame.parent => parent!
+    parent! >= 0 -> while {
+        prepared.package.nodes[range.astStart + parent!] => node
+        node.kind == 7 or node.kind == 31 -> if { false -> return }
+        node.parent => parent!
+    }
+    true
+}

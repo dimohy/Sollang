@@ -3,6 +3,8 @@ namespace sollang.compiler.semantic.symbols
 import sollang.compiler.ast as ast
 import sollang.compiler.syntax as syntax
 import sys.file as file
+import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
 import syntax.generated.slg as grammar
 
 # Symbol and AST indexes are stable offsets into owned arrays. This keeps the
@@ -101,8 +103,25 @@ public implicitFoldRole symbol: Symbol -> Int {
     -1
 }
 
+# Retain the AST-only public API used by frozen regression sources. Its
+# input exposes the historical first-three name metadata. Compiler source
+# preparation uses the complete-token API below; it never falls back here.
 public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
-    [Symbol; ~] => symbols!
+    [syntax.SyntaxToken; ~] => absentTokens
+    nodes -> extendPreparedCore(0, [Symbol; ~], absentTokens, false)
+}
+
+public collectPreparedWithTokens nodes: [ast.AstNode; ~], tokens: ref [syntax.SyntaxToken; ~] -> [Symbol; ~] {
+    nodes -> extendPreparedCore(0, [Symbol; ~], tokens, true)
+}
+
+public extendPreparedWithTokens nodes: ref [ast.AstNode; ~], firstAst: Int, existing: move [Symbol; ~], tokens: ref [syntax.SyntaxToken; ~] -> [Symbol; ~] {
+    nodes -> extendPreparedCore(firstAst, existing, tokens, true)
+}
+
+extendPreparedCore nodes: ref [ast.AstNode; ~], firstAst: Int, existing: move [Symbol; ~], tokens: ref [syntax.SyntaxToken; ~], completeTokens: Bool -> [Symbol; ~] {
+    existing => symbols!
+    symbols! -> len => firstSymbol
     [Int; ~] => astToSymbol!
     nodes -> len => astCount
     0 => astMapIndex!
@@ -110,7 +129,18 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         astToSymbol! -> push(-1)
         astMapIndex! + 1 => astMapIndex!
     }
-    0 => astIndex!
+    0 => prefixIndex!
+    prefixIndex! < firstSymbol -> while {
+        symbols![prefixIndex!] => prefix
+        prefix.astNode >= 0 and prefix.astNode < firstAst
+            and prefix.kind != 36
+            and (prefix.kind != 35 or nodes[prefix.astNode].kind == 60)
+            -> if {
+                astToSymbol![prefix.astNode] < 0 -> if { prefixIndex! => astToSymbol![prefix.astNode] }
+            }
+        prefixIndex! + 1 => prefixIndex!
+    }
+    firstAst => astIndex!
 
     astIndex! < astCount -> while {
         nodes[astIndex!] => node
@@ -166,7 +196,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # later scopes are not mapped yet, so callback bindings can be attached to
     # the outer terminal call. Recompute lexical parents once the complete
     # AST-to-symbol map exists.
-    0 => reparentSymbolIndex!
+    firstSymbol => reparentSymbolIndex!
     reparentSymbolIndex! < (symbols! -> len) -> while {
         symbols![reparentSymbolIndex!] => reparentSymbol!
         nodes[reparentSymbol!.astNode].parent => reparentAst!
@@ -190,7 +220,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
 
     # Attach each type node to its nearest symbol ancestor. The nearest rule
     # prevents a field or method type from being mistaken for its owner type.
-    0 => typeAstIndex!
+    firstAst => typeAstIndex!
     typeAstIndex! < astCount -> while {
         nodes[typeAstIndex!] => typeAst
         typeAst.kind == 12 and (typeAst.parent < 0 or nodes[typeAst.parent].kind != 12)
@@ -295,44 +325,28 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         typeAstIndex! + 1 => typeAstIndex!
     }
 
-    # A multi-name generic clause has one AST node but one lexical symbol per
-    # parameter. The compact bootstrap AST currently stores up to three names.
-    symbols! -> len => beforeSecondaryGenerics
-    0 => genericSymbolIndex!
-    genericSymbolIndex! < beforeSecondaryGenerics
+    # The clause's complete token range owns the ordered name list. The
+    # AST's first-three token fields are compatibility metadata, not an arity
+    # limit. Borrow the existing token arena instead of copying name arrays.
+    symbols! -> len => beforeAdditionalGenerics
+    firstSymbol => genericSymbolIndex!
+    genericSymbolIndex! < beforeAdditionalGenerics
         -> while {
             symbols![genericSymbolIndex!] => genericSymbol
             genericSymbol.kind == 32 -> if {
-                nodes[genericSymbol.astNode].secondaryToken >= 0
-                    -> if {
-                        symbols! -> push(Symbol {
-                            kind: 32
-                            parent: genericSymbol.parent
-                            astNode: genericSymbol.astNode
-                            nameToken: nodes[genericSymbol.astNode].secondaryToken
-                            typeNode: -1
-                            secondaryTypeNode: -1
-                            blockNameToken: -1
-                            blockTypeNode: -1
-                            blockResultTypeNode: -1
-                            flags: 0
-                        })
-                    }
-                nodes[genericSymbol.astNode].tertiaryToken >= 0
-                    -> if {
-                        symbols! -> push(Symbol {
-                            kind: 32
-                            parent: genericSymbol.parent
-                            astNode: genericSymbol.astNode
-                            nameToken: nodes[genericSymbol.astNode].tertiaryToken
-                            typeNode: -1
-                            secondaryTypeNode: -1
-                            blockNameToken: -1
-                            blockTypeNode: -1
-                            blockResultTypeNode: -1
-                            flags: 0
-                        })
-                    }
+                nodes[genericSymbol.astNode] => clause
+                completeTokens -> if {
+                    clause.firstToken => tokenIndex!
+                    tokenIndex! < clause.firstToken + clause.tokenCount
+                        -> while {
+                            tokens[tokenIndex!].kind == grammar.tokenIdIdentifier() and tokenIndex! != genericSymbol.nameToken
+                                -> if { symbols! -> push(genericSymbol -> additionalGenericSymbol(tokenIndex!)) }
+                            tokenIndex! + 1 => tokenIndex!
+                        }
+                } else {
+                    clause.secondaryToken >= 0 -> if { symbols! -> push(genericSymbol -> additionalGenericSymbol(clause.secondaryToken)) }
+                    clause.tertiaryToken >= 0 -> if { symbols! -> push(genericSymbol -> additionalGenericSymbol(clause.tertiaryToken)) }
+                }
             }
             genericSymbolIndex! + 1 => genericSymbolIndex!
         }
@@ -342,7 +356,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # metadata dictionary is allocated. The class AST uniquely identifies its
     # activation function and the interface AST uniquely identifies clone.
     symbols! -> len => beforeComFunctions
-    0 => comInterfaceSymbolIndex!
+    firstSymbol => comInterfaceSymbolIndex!
     comInterfaceSymbolIndex! < beforeComFunctions
         -> while {
             symbols![comInterfaceSymbolIndex!] => comInterfaceSymbol
@@ -417,7 +431,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # Parameters and method self values are synthetic lexical symbols owned by
     # their declaration symbol; they reuse the declaration AST index.
     symbols! -> len => declaredSymbolCount
-    0 => declarationSymbolIndex!
+    firstSymbol => declarationSymbolIndex!
     declarationSymbolIndex! < declaredSymbolCount
         -> while {
             symbols![declarationSymbolIndex!] => declarationSymbol
@@ -492,7 +506,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # later inputs on AdditionalFunctionInput nodes. A COM receiver becomes the
     # primary parameter, so rotate the declared inputs into their source order
     # before appending that receiver: first input, then later inputs.
-    0 => comParameterFunctionIndex!
+    firstSymbol => comParameterFunctionIndex!
     comParameterFunctionIndex! < declaredSymbolCount
         -> while {
             symbols![comParameterFunctionIndex!] => comParameterFunction
@@ -543,7 +557,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # Its type is derived from the parent nominal interface symbol in the type
     # arena, so no source TypeAnnotation node or hidden source text is needed.
     symbols! -> len => beforeComReceivers
-    0 => comReceiverFunctionIndex!
+    firstSymbol => comReceiverFunctionIndex!
     comReceiverFunctionIndex! < beforeComReceivers
         -> while {
             symbols![comReceiverFunctionIndex!] => comReceiverFunction
@@ -571,7 +585,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # Each enum arm is a lexical scope. A payload name belongs only to that
     # arm and is synthesized from the pattern's secondary token.
     symbols! -> len => enumArmScopeCount
-    0 => enumArmScopeIndex!
+    firstSymbol => enumArmScopeIndex!
     enumArmScopeIndex! < enumArmScopeCount -> while {
         symbols![enumArmScopeIndex!] => enumArmScope
         enumArmScope.kind == 58 -> if {
@@ -607,7 +621,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     # A role call is a lexical scope. Its block item is visible only inside the
     # caller body, while the trailing result binding belongs to the outer scope.
     symbols! -> len => roleScopeCount
-    0 => roleScopeIndex!
+    firstSymbol => roleScopeIndex!
     roleScopeIndex! < roleScopeCount -> while {
         symbols![roleScopeIndex!] => roleScope
         roleScope.kind == 48 -> if {
@@ -663,7 +677,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
 
     # Fold owns two Int roles: the running accumulator and current item.
     symbols! -> len => foldScopeCount
-    0 => foldScopeIndex!
+    firstSymbol => foldScopeIndex!
     foldScopeIndex! < foldScopeCount -> while {
         symbols![foldScopeIndex!] => foldScope
         foldScope.kind == 64 -> if {
@@ -700,13 +714,29 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
 }
 
 public collect source: Text -> [Symbol; ~] {
-    source -> ast.lower => nodes
-    nodes -> collectPrepared => symbols
-    symbols
+    source -> lexer.lex => tokens
+    grammar.startRule() => startRule
+    parser.ParseRequest { source: source, startRule: startRule } -> parser.parsePreparedRuleEvents(tokens) => events
+    source -> ast.lowerPreparedRule(startRule, tokens, events) => nodes
+    nodes -> collectPreparedWithTokens(tokens)
 }
 
 public collectSource source: file.SourceText -> [Symbol; ~] {
-    source -> ast.lowerSource => nodes
-    nodes -> collectPrepared => symbols
-    symbols
+    source -> len => length
+    source -> slice(UIntSize(0), length) -> collect
+}
+
+additionalGenericSymbol declaration: Symbol, nameToken: Int -> Symbol {
+    Symbol {
+        kind: 32
+        parent: declaration.parent
+        astNode: declaration.astNode
+        nameToken: nameToken
+        typeNode: -1
+        secondaryTypeNode: -1
+        blockNameToken: -1
+        blockTypeNode: -1
+        blockResultTypeNode: -1
+        flags: 0
+    }
 }

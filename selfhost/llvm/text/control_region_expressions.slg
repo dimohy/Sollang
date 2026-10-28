@@ -249,6 +249,7 @@ emitRegionBindingExpressions regionNodeIndex: Int, ownerIndex: Int, emissionOrde
         -> if {
             regionNodeIndex -> mutableBindingRoot(context, state) => mutableRegionRoot
             context.ir[mutableRegionRoot] => mutableRegionBinding
+            regionNodeIndex -> emitMutableHeaderStart(context)
             context.ir[regionNode.operand0] => mutableRegionValue
             regionNode.operand0 -> callResultPropagationBindingIndex(context, state) => mutableRegionPropagationBinding
             mutableRegionBinding -> integerNodeWidth(context, state) => mutableRegionTargetWidth
@@ -1049,6 +1050,10 @@ emitRegionIntrinsicExpressions regionNodeIndex: Int, ownerIndex: Int, regionPoin
 }
 
 emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    regionNodeIndex -> emitValueGenericArrayRepeat(ownerIndex, context, state)
+        -> if {
+            return
+        }
     context.ir[regionNodeIndex] => regionNode
     regionNodeIndex -> emptyArrayCallParameter(context, state) => regionEmptyArrayParameter
     false => regionContextualSlice!
@@ -1076,7 +1081,10 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 staticFunction -> writeStaticReadonlyArraySymbol(regionNodeIndex, context)
                 ", i64 0, i64 0" -> println
             } else {
-                (not (regionNode -> isFixedArrayType)) or (regionNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                regionNodeIndex -> emitFixedStorageLifetimeStart(context, state)
+                regionNodeIndex -> isPlannedDynamicIntPayload(context, state) => plannedDynamicPayload
+                plannedDynamicPayload -> if { regionNodeIndex -> emitDynamicIntStorageStart(context) }
+                ((not (regionNode -> isFixedArrayType)) or (regionNodeIndex -> fixedArrayLiteralNeedsHeap(context, state))) and not plannedDynamicPayload
                     -> if {
                         regionNode.typeId >= 0 and context.types[regionNode.typeId].kind == 12
                             -> if {
@@ -1191,7 +1199,7 @@ emitRegionArrayExpressions regionNodeIndex: Int, ownerIndex: Int, context: ref e
                 "  %v$(regionNodeIndex)_storage = getelementptr i8, ptr null, i64 0" -> println
                 "v$(regionNodeIndex)" -> emitGrowableDictionaryPointers("%v$(regionNodeIndex)_storage", "0", regionDictionaryEntryLayout)
             } else {
-                "v$(regionNodeIndex)" -> emitGrowableDictionaryAllocation("$(regionDictionaryCapacity)", regionDictionaryEntryLayout)
+                regionNodeIndex -> emitDictionaryLiteralStorage(regionDictionaryCapacity, regionDictionaryEntryLayout, context, state)
             }
             regionDictionaryItemStart => regionDictionaryItemIndex!
             0 => regionDictionaryItemPosition!

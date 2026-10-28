@@ -1691,6 +1691,8 @@ emitBodyScheduleDiagnostics state: ref CoreEmitterState -> Unit uses Console {
 
 # Keep prepared-emitter failures ahead of target headers and LLVM output.
 preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
+    context -> placementPreparationDiagnosticCount => placementCount
+    placementCount > 0 -> if { placementCount -> return }
     context -> asyncArenaFrameDiagnosticCount(state) => arenaCount
     arenaCount > 0 -> if { arenaCount -> return }
     context -> deferredTextCaptureDiagnosticCount(state) => captureCount
@@ -1701,4 +1703,23 @@ preparedEmitterDiagnosticCount context: ref emitterContext.EmitContext, state: r
         scheduleCount -> return
     }
     context -> consumedEnumSubjectReadDiagnostics(state)
+}
+
+# Checked source diagnostics have already won before this prepared-emitter
+# gate is called. A failed plan blocks LLVM output as a compiler integrity error.
+placementPreparationDiagnosticCount context: ref emitterContext.EmitContext -> Int uses Console {
+    context.storagePlacement -> when {
+        Ok(_) { 0 }
+        Err(failure) {
+            failure -> when {
+                InvalidOwner(owner) { "; sollang compiler error S052: PLACEMENT_INVALID_OWNER $owner" -> println }
+                InvalidSourceIndex(source) { "; sollang compiler error S052: PLACEMENT_INVALID_SOURCE_INDEX $source" -> println }
+                InvalidUnits(source) { "; sollang compiler error S052: PLACEMENT_INVALID_UNITS $source" -> println }
+                InvalidCaller(owner) { "; sollang compiler error S052: PLACEMENT_INVALID_CALLER $owner" -> println }
+                InvalidLookup { "; sollang compiler error S052: PLACEMENT_INVALID_LOOKUP" -> println }
+                InvalidInlinePool { "; sollang compiler error S052: PLACEMENT_INVALID_INLINE_POOL" -> println }
+            }
+            1
+        }
+    }
 }

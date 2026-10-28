@@ -878,7 +878,7 @@ emitAsyncFunctionCompletion functionIndex: Int, completionIndex: Int, valueName:
     "  ret i1 true" -> println
 }
 
-emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     (point -> asyncPointFrameSize(context, state)) <= 0
         -> if { return }
     point.functionIr -> asyncFrameContextOffset(context, state) => frameOffset
@@ -898,7 +898,8 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                     "  %async_cancel_spill_task$(point.state)_$(bindingIndex!) = load %sollang.task, ptr %async_cancel_spill_address$(point.state)_$(bindingIndex!), align $(context.pointerBitWidth / 8)" -> println
                     "  %async_cancel_spill_handle$(point.state)_$(bindingIndex!) = extractvalue %sollang.task %async_cancel_spill_task$(point.state)_$(bindingIndex!), 0" -> println
                 } else {
-                    binding.typeId >= 0 and (binding.typeId -> semanticTypeOwns(context, state))
+                    binding.typeId >= 0 and ((binding.typeId -> semanticTypeOwns(context, state))
+                        or (bindingIndex! -> fixedLiteralBindingOwnsBacking(context, state)))
                         -> if {
                             "  %async_cancel_owned_address$(point.state)_$(bindingIndex!) = getelementptr i8, ptr %async_cancel_spill_frame$(point.state), i64 $(offset!)" -> println
                             "  %async_cancel_owned_value$(point.state)_$(bindingIndex!) = load " -> print
@@ -949,6 +950,12 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                                 context.types[cancelledBinding.typeId].kind == 4
                                     -> if { " %async_cancel_owned_inline$(point.state)_$(bindingIndex!))" -> println } else { " %async_cancel_owned_value$(point.state)_$(bindingIndex!))" -> println }
                             }
+                    }
+                (bindingIndex! -> fixedLiteralBindingOwnsBacking(context, state))
+                    and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
+                    -> if {
+                        "  %async_cancel_fixed_data$(point.state)_$(bindingIndex!) = extractvalue { ptr, i64 } %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
+                        "  call void @free(ptr %async_cancel_fixed_data$(point.state)_$(bindingIndex!))" -> println
                     }
                 hasOwnershipFlag -> if {
                     "  br label %async_cancel_owned_skip$(point.state)_$(bindingIndex!)" -> println
@@ -1622,6 +1629,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         -> if {
                             expressionIndex -> mutableBindingRoot(context, state) => mutableRoot
                             context.ir[mutableRoot] => mutableBinding
+                            expressionIndex -> emitMutableHeaderStart(context)
                             context.ir[expression.operand0] => mutableValue
                             expression.operand0 -> callResultPropagationBindingIndex(context, state) => mutablePropagationBinding
                             mutableBinding -> integerNodeWidth(context, state) => mutableTargetWidth
@@ -1708,6 +1716,12 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                     expressionIndex -> emitFunctionCalls(functionIndex, expressionStart, functionEnd!, expressionOrder, context, state)
                     expressionIndex -> emitFunctionTerminalExpressions(functionIndex, functionEnd!, expressionStart, expressionOrder, context, state)
                     expressionIndex -> emitAsyncLocalWrite(functionIndex, context, state)
+                    not (expressionIndex -> isDirectEachEmission(context, state))
+                        and (expressionIndex -> plannedStreamStage(context, state)) < 0
+                        -> if {
+                            expression.kind == 23 or (expressionIndex -> terminatingControlReturns(context, state)) => completedTerminated
+                            expressionIndex -> emitStorageLifetimeEndsAfter(completedTerminated, context)
+                        }
                     -1 => nextExpressionIndex!
                     expressionOrderIndex! + 1 < (expressionOrder -> len)
                         -> if { expressionOrder[expressionOrderIndex! + 1] => nextExpressionIndex! }
@@ -1718,6 +1732,7 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> irDescendsFrom(context, state) => nextInsideEach! }
                         nextInsideEach! -> if { false => closeEachProgress! } else {
                             activeEachIndex -> emitDirectEachEnd(false, context)
+                            activeEachIndex -> emitStorageLifetimeEndsAfter(false, context)
                             activeEachSize! - 1 => activeEachSize!
                         }
                     }
@@ -1753,4 +1768,18 @@ emitScheduledFunctionBody plan: ref BodySchedulePlan, functionIndex: Int, functi
     not terminated! -> if {
         functionIndex -> emitFunctionReturn(expressionStart, functionEnd, plan.order, emitted!, context, state)
     }
+}
+
+# Literal heap backing ownership is independent of element ownership.
+# Completion and cancellation share this storage predicate; element drop
+# remains responsible for the separate inline values.
+fixedLiteralBindingOwnsBacking bindingIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
+    bindingIndex < 0 or bindingIndex >= (context.ir -> len)
+        -> if { false -> return }
+    context.ir[bindingIndex] => binding
+    binding.kind != 17 or binding.typeId < 0
+        or context.types[binding.typeId].kind != 4
+        or binding.operand0 < 0 or binding.operand0 >= (context.ir -> len)
+        or context.ir[binding.operand0].kind != 14 -> if { false -> return }
+    binding.operand0 -> fixedArrayLiteralNeedsHeap(context, state)
 }

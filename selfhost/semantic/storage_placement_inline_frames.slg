@@ -1,0 +1,86 @@
+namespace sollang.compiler.semantic.storage_placement_inline_frames
+
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypes
+import sollang.compiler.semantic.storage_placement as placement
+import sollang.compiler.semantic.storage_placement_source_index as sourceIndex
+import sollang.compiler.semantic.storage_placement_units as sourceUnits
+import sollang.compiler.semantic.storage_placement_frames as sourceFrames
+import sollang.compiler.semantic.storage_placement_frame_merge as frameAdapter
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+import sollang.compiler.semantic.storage_placement_function_selection as functionSelection
+
+public struct FrameRange {
+    public sourceModule: Int
+    public frameAst: Int
+    public slotStart: Int
+    public slotCount: Int
+    public allocationStart: Int
+    public allocationCount: Int
+    public endStart: Int
+    public endCount: Int
+}
+
+public struct Pool {
+    public frames: [FrameRange; ~]
+    public slots: [placement.Slot; ~]
+    public allocations: [frameMerge.Allocation; ~]
+    public ends: [frameMerge.Ending; ~]
+}
+
+public enum Error { InvalidSourceIndex(Int), InvalidUnits(Int), InvalidSelection(Int), InvalidFrame(Int), InvalidAdapter(Int) }
+
+# Preserve production source order and one owned flat pool. Later caller merges
+# borrow these ranges; no source frame or owned subarray escapes its scope.
+public build prepared: ref semanticContext.SemanticSnapshot, facts: ref expressionTypes.ExpressionTypeIdSet -> Result<Pool, Error> {
+    [FrameRange; ~] => frames!
+    [placement.Slot; ~] => slots!
+    [frameMerge.Allocation; ~] => allocations!
+    [frameMerge.Ending; ~] => ends!
+    0 => sourceModule!
+    sourceModule! < (prepared.package.ranges -> len)
+        -> while {
+            prepared -> semanticContext.isStandardLibrarySource(sourceModule!)
+                -> if {
+                    prepared.package.ranges[sourceModule!] => range
+                    prepared.package.sources[sourceModule!] -> len => length
+                    prepared.package.sources[sourceModule!] -> slice(UIntSize(0), length) => source
+                    range.astStart -> sourceIndex.build(range.astCount, prepared.package.nodes) -> when {
+                        Err(_) { Error.InvalidSourceIndex(sourceModule!) -> Result<Pool, Error>.Err -> return }
+                        Ok(indexed) {
+                            prepared.package -> sourceUnits.build(sourceModule!, indexed) -> when {
+                                Err(_) { Error.InvalidUnits(sourceModule!) -> Result<Pool, Error>.Err -> return }
+                                Ok(units) {
+                                    0 => frame!
+                                    frame! < range.astCount -> while {
+                                        frame! -> functionSelection.topLevelFunction(prepared, sourceModule!)
+                                            -> if {
+                                                frame! -> functionSelection.decide(prepared, sourceModule!, indexed) -> when {
+                                                    Err(_) { Error.InvalidSelection(sourceModule!) -> Result<Pool, Error>.Err -> return }
+                                                    Ok(decision) { decision.inline -> if {
+                                                            frame! -> sourceFrames.build(source, prepared, facts, sourceModule!, indexed, units) -> when {
+                                                                Err(_) { Error.InvalidFrame(sourceModule!) -> Result<Pool, Error>.Err -> return }
+                                                                Ok(plan) { plan -> frameAdapter.fromPlan(sourceModule!) -> when {
+                                                                        Err(_) { Error.InvalidAdapter(sourceModule!) -> Result<Pool, Error>.Err -> return }
+                                                                        Ok(converted) {
+                                                                            frames! -> push(FrameRange { sourceModule: sourceModule!, frameAst: frame!, slotStart: slots! -> len, slotCount: converted.slots -> len, allocationStart: allocations! -> len, allocationCount: converted.allocations -> len, endStart: ends! -> len, endCount: converted.ends -> len })
+                                                                            converted.slots -> each slot { slots! -> push(slot) }
+                                                                            converted.allocations -> each allocation { allocations! -> push(allocation) }
+                                                                            converted.ends -> each ending { ends! -> push(ending) }
+                                                                        }
+                                                                } }
+                                                            }
+                                                    } }
+                                                }
+                                            }
+                                        frame! + 1 => frame!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            sourceModule! + 1 => sourceModule!
+        }
+    Pool { frames: frames!, slots: slots!, allocations: allocations!, ends: ends! } -> Result<Pool, Error>.Ok
+}

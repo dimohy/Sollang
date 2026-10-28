@@ -1,0 +1,35 @@
+namespace sollang.compiler.semantic.storage_placement_frame_merge
+
+import sollang.compiler.semantic.storage_placement as placement
+import sollang.compiler.semantic.storage_placement_frames as frames
+import sollang.compiler.semantic.storage_placement_merge as frameMerge
+
+public enum Error { InvalidSourceModule, InvalidPlan }
+
+# Convert the actual source plan once, retaining accepted source identities and
+# original allocation sizes; rejected candidates never enter the consumer map.
+public fromPlan plan: ref frames.FramePlan, sourceModule: Int -> Result<frameMerge.Frame, Error> {
+    sourceModule < 0 -> if { Error.InvalidSourceModule -> Result<frameMerge.Frame, Error>.Err -> return }
+    (plan.candidates -> len) != (plan.slotsByCandidate -> len)
+        -> if { Error.InvalidPlan -> Result<frameMerge.Frame, Error>.Err -> return }
+    [placement.Slot; ~] => slots!
+    plan.slots -> each slot { slots! -> push(slot) }
+    [frameMerge.Allocation; ~] => allocations!
+    0 => i!
+    plan.candidates -> each candidate {
+        plan.slotsByCandidate[i!] => slot
+        slot < -1 or slot >= (plan.slots -> len) or candidate.source < 0
+            -> if { Error.InvalidPlan -> Result<frameMerge.Frame, Error>.Err -> return }
+        slot >= 0 -> if {
+            allocations! -> push(frameMerge.Allocation { sourceModule: sourceModule, sourceAst: candidate.source, slot: slot, size: candidate.size })
+        }
+        i! + 1 => i!
+    }
+    [frameMerge.Ending; ~] => ends!
+    plan.ends -> each ending {
+        ending.unit < 0 or ending.slot < 0 or ending.slot >= (plan.slots -> len)
+            -> if { Error.InvalidPlan -> Result<frameMerge.Frame, Error>.Err -> return }
+        ends! -> push(frameMerge.Ending { sourceModule: sourceModule, unitAst: ending.unit, slot: ending.slot, size: ending.size })
+    }
+    frameMerge.Frame { slots: slots!, allocations: allocations!, ends: ends! } -> Result<frameMerge.Frame, Error>.Ok
+}

@@ -9,7 +9,7 @@ import syntax.generated.slg as grammar
 # Returned inline storage must outlive the callee. Existing promoted result
 # owners and heap literals transfer directly. Stack storage and parameter
 # views require promotion, including parameters whose elements are moved.
-fixedArrayReturnNeedsPromotion valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+fixedArrayReturnNeedsPromotion valueIndex: Int, ownerIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
     sourceIndex -> promotedFixedArrayCall(context, state) => backingCall
     backingCall >= 0 -> if { false -> return }
@@ -327,7 +327,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             putMoveIndex! + 1 => putMoveIndex!
                         }
                 }
-            (dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not dropCandidateMoved!
+            (dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26 or dropCandidate.kind == 35) and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not dropCandidateMoved! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     false => dropCandidateNeedsInlineArrayReload!
                     false => dropCandidateHasInlineArrayAbi!
@@ -362,17 +362,17 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     } }
                     ")" -> println
                 }
-            dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+            dropCandidate.typeId < 0 and dropCandidate.kind == 14 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     "  %drop$(dropIndex!) = extractvalue %sollang.array.i32 %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-            dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+            dropCandidate.typeId < 0 and dropCandidate.kind == 16 and expressionEmitted[dropIndex! - expressionStart] and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sollang.dict %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
                 }
-            dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex
+            dropCandidate.typeId < 0 and dropCandidate.kind == 12 and expressionEmitted[dropIndex! - expressionStart] and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     DropGlueRequest {
                         typeId: dropCandidate.typeId
@@ -418,16 +418,24 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 "localreturn$(functionIndex)_b$(dropIndex!)_drop:" -> println
             }
             dropCandidate.operand0 => dropCandidateDropValueIndex
-            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot!
-                and dropCandidate.typeId >= 0 and context.types[dropCandidate.typeId].kind == 4
-                and not (dropCandidate.typeId -> semanticTypeOwns(context, state))
+            dropCandidateInitialized! and dropCandidateIsRoot!
                 and dropCandidate.parent == function.operand0
                 and not dropCandidateMoved! and not dropCandidateReturned!
-                and dropCandidateDropValueIndex >= 0
-                and context.ir[dropCandidateDropValueIndex].kind == 14
-                and (dropCandidateDropValueIndex -> fixedArrayLiteralNeedsHeap(context, state))
+                and (dropIndex! -> fixedLiteralBindingOwnsBacking(context, state))
+                and not (dropCandidate.typeId -> semanticTypeOwns(context, state))
                 -> if {
-                    "  %dropfixedliteral$(dropIndex!) = extractvalue { ptr, i64 } %v$(dropCandidateDropValueIndex), 0" -> println
+                    dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => fixedBackingAsyncRoot
+                    fixedBackingAsyncRoot >= 0 -> if {
+                        "  %dropfixedliteral$(dropIndex!)_restored = load { ptr, i64 }, ptr " -> print
+                        fixedBackingAsyncRoot -> writeAsyncLocalAddress(context)
+                        ", align " -> print
+                        dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
+                    }
+                    "  %dropfixedliteral$(dropIndex!) = extractvalue { ptr, i64 } " -> print
+                    fixedBackingAsyncRoot >= 0 -> if {
+                        "%dropfixedliteral$(dropIndex!)_restored" -> print
+                    } else { "%v$(dropCandidateDropValueIndex)" -> print }
+                    ", 0" -> println
                     "  call void @free(ptr %dropfixedliteral$(dropIndex!))" -> println
                 }
             -1 => dropCandidateParameterIndex!
@@ -440,7 +448,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                             => dropCandidateParameterIndex!
                     }
                 }
-            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not dropCandidateHasPartialMoves!
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns(context, state)) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not dropCandidateHasPartialMoves! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => dropAsyncRoot
                     dropAsyncRoot >= 0 -> if {
@@ -462,7 +470,11 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         and (context.ir[dropCandidateDropValueIndex].kind == 14 or (dropCandidateDropValueIndex -> promotedFixedArrayCall(context, state)) >= 0)
                         -> if {
                             true => dropBindingNeedsInlineArrayReload!
-                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue { ptr, i64 } %v$(dropCandidateDropValueIndex), 0" -> println
+                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue { ptr, i64 } " -> print
+                            dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                                "%v$(dropCandidateDropValueIndex)" -> print
+                            }
+                            ", 0" -> println
                             "  %dropfixedbinding$(dropIndex!) = load " -> print
                             dropCandidate.typeId -> writeSemanticTypeId(context, state)
                             ", ptr %dropfixedbinding$(dropIndex!)_data, align " -> print
@@ -498,15 +510,13 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     " " -> print
                     dropBindingNeedsBoundedValue -> if {
                         "%dropboundedbinding$(dropIndex!)" -> print
-                    } else { dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
-                            dropCandidate.flags == 1 and not dropBindingNeedsInlineArrayReload!
-                                -> if { "%drop$(dropIndex!)_current" -> print } else {
-                                    dropBindingNeedsInlineArrayReload! -> if {
-                                        "%dropfixedbinding$(dropIndex!)" -> print
-                                    } else {
-                                        dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
-                                    }
+                    } else { dropBindingNeedsInlineArrayReload! -> if {
+                            "%dropfixedbinding$(dropIndex!)" -> print
+                        } else { dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
+                                dropCandidate.flags == 1 -> if { "%drop$(dropIndex!)_current" -> print } else {
+                                    dropCandidateValueIndex! -> writeCleanupValueName(dropCandidateParameterIndex!, functionIndex, context, state)
                                 }
+                            }
                         }
                     }
                     ")" -> println
@@ -532,7 +542,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     }
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not (dropIndex! -> isPlannedContainerPayload(context, state))
                 -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %drop$(dropIndex!)_current = load %sollang.dict, ptr %slot$(dropCandidateRoot!), align " -> print
@@ -603,6 +613,9 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 "  br label %localreturn$(functionIndex)_b$(dropIndex!)_done" -> println
                 "localreturn$(functionIndex)_b$(dropIndex!)_done:" -> println
             }
+            dropCandidate.kind == 17 and dropCandidateInitialized! and dropCandidateIsRoot!
+                and dropCandidate.parent == function.operand0
+                -> if { dropIndex! -> emitMutableHeaderEnd(context) }
             dropIndex! + 1 => dropIndex!
         }
         # Call targets can become exact only during final Typed IR convergence.

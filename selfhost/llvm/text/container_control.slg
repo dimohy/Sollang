@@ -1895,11 +1895,11 @@ bindingValueDominatesEdge valueIndex: Int, bindingRegion: Int, edgeNodeIndex: In
         }
     dominates!
 }
-emitCompletedParallelCallbackDrops expressionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitCompletedParallelCallbackDrops expressionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     OwnedDropRequest { regionIndex: expressionIndex, beforeAst: -1, edgeIndex: expressionIndex * 10 + 7, transferredSymbol: -1 } -> emitOwnedDrops([Int; ~], context, state)
 }
 
-emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
     context.pointerBitWidth / 8 => ownedPointerAlignment
     context.ir[request.regionIndex] => dropRegion
     UIntSize(0) => dropBeforeEnd!
@@ -2148,7 +2148,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 ownedDropIndex! -> emitScopedTaskDrop(ownedDropOwner!, request.regionIndex, request.beforeAst, request.edgeIndex, context, state)
                 true => ownedDropMoved!
             }
-        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns(context, state)) and ownedDropCandidate.symbol != ownedTransferredSymbol!
+        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns(context, state)) and ownedDropCandidate.symbol != ownedTransferredSymbol! and not (ownedDropValueIndex! -> isPlannedContainerPayload(context, state))
             -> if {
                 false => ownedDropNeedsInlineArrayReload!
                 context.types[ownedDropCandidate.typeId].kind == 4 => ownedDropHasInlineArrayAbi
@@ -2248,7 +2248,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                     true => ownedFixedBackingReleased!
                 }
             }
-        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != ownedTransferredSymbol!
+        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != ownedTransferredSymbol! and not (ownedDropValueIndex! -> isPlannedContainerPayload(context, state))
             -> if {
                 ownedDropCandidate.flags == 1 -> if {
                     "  " -> print
@@ -2271,7 +2271,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                 request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                 ")" -> println
             }
-        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != ownedTransferredSymbol!
+        ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidateIsBinding and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != ownedTransferredSymbol! and not (ownedDropValueIndex! -> isPlannedContainerPayload(context, state))
             -> if {
                 ownedDropCandidate.flags == 1 -> if {
                     "  " -> print
@@ -2434,5 +2434,8 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             "  br label %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done" -> println
             "patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_done:" -> println
         }
+        ownedDropBeforeEdge! and ownedDropIsRoot! and ownedDropCandidateIsBinding
+            and ownedDropCandidate.parent == request.regionIndex
+            -> if { ownedDropIndex! -> emitMutableHeaderEnd(context) }
     }
 }

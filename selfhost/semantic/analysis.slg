@@ -101,6 +101,7 @@ failedSource failure: constantLowering.Failure -> SourceAnalysis {
 }
 
 public struct CompletedSourceInterpolations {
+    public symbols: [symbols.Symbol; ~]
     public nodes: [ast.AstNode; ~]
     public tokens: [syntax.SyntaxToken; ~]
     public interpolations: [interpolation.InterpolationNode; ~]
@@ -162,7 +163,10 @@ public completeSourceInterpolations source: Text, nodes: ref [ast.AstNode; ~], t
             node! => sourceInterpolations![interpolationIndex!]
             interpolationIndex! + 1 => interpolationIndex!
         }
-    CompletedSourceInterpolations { nodes: sourceNodes!, tokens: sourceTokens!, interpolations: sourceInterpolations! }
+    [symbols.Symbol; ~] => completedPrefix!
+    sourceSymbols -> each symbol { completedPrefix! -> push(symbol) }
+    sourceNodes! -> symbols.extendPreparedWithTokens(typeNodeStart, completedPrefix!, sourceTokens!) => completedSymbols
+    CompletedSourceInterpolations { symbols: completedSymbols, nodes: sourceNodes!, tokens: sourceTokens!, interpolations: sourceInterpolations! }
 }
 
 # Complete legacy prepared packages before building global AST indexes.
@@ -176,6 +180,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
     [typeTerms.TypeTerm; ~] => terms!
     [types.TypeUse; ~] => typeUses!
     [resolution.ResolvedName; ~] => names!
+    [symbols.Symbol; ~] => completedSymbolTable!
     [interpolation.InterpolationSourceRange; ~] => interpolationRanges!
     [interpolation.InterpolationNode; ~] => interpolations!
     0 => sourceIndex!
@@ -211,12 +216,15 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
         }
         (completed.nodes -> len) > originalRange.astCount
             -> if {
-                source -> resolution.resolvePrepared(completed.nodes, sourceSymbols!, completed.tokens) => completedNames
+                source -> resolution.resolvePrepared(completed.nodes, completed.symbols, completed.tokens) => completedNames
                 completedNames -> each name {
                     name.astNode >= originalRange.astCount -> if { names! -> push(name) }
                 }
             }
         originalRange => range!
+        completedSymbolTable! -> len => range!.symbolStart
+        completed.symbols -> len => range!.symbolCount
+        completed.symbols -> each symbol { completedSymbolTable! -> push(symbol) }
         sourceNameStart => range!.nameStart
         (names! -> len) - sourceNameStart => range!.nameCount
         nodes! -> len => range!.astStart
@@ -249,7 +257,7 @@ public completePackageInterpolations package: move PackageAnalysis -> PackageAna
     PackageAnalysis {
         sources: package.sources, entrySourceModule: package.entrySourceModule,
         interpolationRanges: interpolationRanges!, ranges: ranges!, nodes: nodes!, tokens: tokens!,
-        symbols: package.symbols, names: names!, terms: terms!, typeUses: typeUses!,
+        symbols: completedSymbolTable!, names: names!, terms: terms!, typeUses: typeUses!,
         constantLiterals: package.constantLiterals, constantFailures: package.constantFailures,
         interpolations: interpolations!
     }
@@ -281,8 +289,9 @@ analyzePreparedSource sourceText: file.SourceText, parsed: move syntaxDiagnostic
 analyzeLoweredSource sourceText: file.SourceText, lowered: move constantLowering.Lowering, originalTokens: ref [syntax.SyntaxToken; ~] -> SourceAnalysis {
     sourceText -> len => sourceLength
     sourceText -> slice(UIntSize(0), sourceLength) => source
-    lowered.nodes -> symbols.collectPrepared => sourceSymbols
-    source -> completeSourceInterpolations(lowered.nodes, originalTokens, sourceSymbols) => completed
+    lowered.nodes -> symbols.collectPreparedWithTokens(originalTokens) => originalSymbols
+    source -> completeSourceInterpolations(lowered.nodes, originalTokens, originalSymbols) => completed
+    completed.symbols => sourceSymbols
     completed.nodes => sourceNodes
     completed.tokens => sourceTokens
     completed.interpolations => sourceInterpolations
