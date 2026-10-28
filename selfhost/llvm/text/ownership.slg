@@ -620,7 +620,7 @@ emitWholeParameterDrop parameterIndex: Int, functionIndex: Int, edgeIndex: Int, 
     context.ir[parameterIndex] => parameter
     context.types[parameter.typeId].kind == 4 => inlineArray
     inlineArray -> if {
-        "  %drop_parameter$(parameterIndex)_edge$(edgeIndex)_data = extractvalue { ptr, i64 } " -> print
+        "  %drop_parameter$(parameterIndex)_edge$(edgeIndex)_data = extractvalue %sollang.int_slice " -> print
         context -> writeParameterReference(functionIndex, parameter.symbol) => parameterWritten
         ", 0" -> println
         "  %drop_parameter$(parameterIndex)_edge$(edgeIndex)_value = load " -> print
@@ -1476,7 +1476,7 @@ fixedBranchTransferredBacking valueIndex: Int, regionIndex: Int, context: ref em
     transferred!
 }
 emitPromotedFixedBackingDrop callIndex: Int, edgeIndex: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
-    "  %fixedbacking$(edgeIndex)_$(callIndex) = extractvalue { ptr, i64 } " -> print
+    "  %fixedbacking$(edgeIndex)_$(callIndex) = extractvalue %sollang.int_slice " -> print
     (callIndex -> bindingFixedStorageCopyTypeId(context)) >= 0
         -> if { "%v$(callIndex)_binding_copy" -> print } else { "%v$(callIndex)" -> print }
     ", 0" -> println
@@ -1541,15 +1541,15 @@ directCopyableFixedStructType typeId: Int, context: ref emitterContext.EmitConte
 
 # Fixed arrays and aggregate fields share one backing-copy implementation.
 emitCopyableFixedArrayValue prefix: Text, sourceName: Text, typeId: Int, context: ref emitterContext.EmitContext -> Unit uses Console {
-    "  $(prefix)_data = extractvalue { ptr, i64 } $(sourceName), 0" -> println
-    "  $(prefix)_length = extractvalue { ptr, i64 } $(sourceName), 1" -> println
+    "  $(prefix)_data = extractvalue %sollang.int_slice $(sourceName), 0" -> println
+    "  $(prefix)_length = extractvalue %sollang.int_slice $(sourceName), 1" -> println
     context.typeSizes[typeId] => allocationBytes!
     allocationBytes! == 0 and context.types[typeId].first >= 0
         -> if { context.typeSizes[context.types[typeId].first] => allocationBytes! }
     "  $(prefix)_owned = call ptr @malloc(i64 $(allocationBytes!))" -> println
     "  call void @llvm.memcpy.p0.p0.i64(ptr $(prefix)_owned, ptr $(prefix)_data, i64 $(context.typeSizes[typeId]), i1 false)" -> println
-    "  $(prefix)_slice0 = insertvalue { ptr, i64 } poison, ptr $(prefix)_owned, 0" -> println
-    "  $(prefix) = insertvalue { ptr, i64 } $(prefix)_slice0, i64 $(prefix)_length, 1" -> println
+    "  $(prefix)_slice0 = insertvalue %sollang.int_slice poison, ptr $(prefix)_owned, 0" -> println
+    "  $(prefix) = insertvalue %sollang.int_slice $(prefix)_slice0, i64 $(prefix)_length, 1" -> println
 }
 
 emitCopyableFixedStorageValue prefix: Text, sourceName: Text, typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
@@ -1579,7 +1579,7 @@ emitCopyableFixedStructValue prefix: Text, sourceName: Text, typeId: Int, contex
                     previousCopiedField! < 0 -> if {
                         " $(sourceName)" -> print
                     } else { " $(prefix)_copy_aggregate_$(previousCopiedField!)" -> print }
-                    ", { ptr, i64 } $(prefix)_copy_slice_$(field.ordinal), $(field.ordinal)" -> println
+                    ", %sollang.int_slice $(prefix)_copy_slice_$(field.ordinal), $(field.ordinal)" -> println
                 } else {
                     "$(prefix)_copy_nested$(field.ordinal)" -> emitCopyableFixedStructValue("$(prefix)_copy_field$(field.ordinal)", field.fieldType, context, state)
                     "  $(prefix)_copy_aggregate_$(field.ordinal) = insertvalue " -> print
@@ -1900,7 +1900,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
         not dropTaskMoved! and dropTaskIsFixedField -> if {
             "  " -> print
             dropTask -> emitDropPathName(context, state)
-            "_fixed_data = extractvalue { ptr, i64 } " -> print
+            "_fixed_data = extractvalue %sollang.int_slice " -> print
             dropTask -> emitDropValueName(context, state)
             ", 0" -> println
             dropTask.typeId -> semanticTypeOwns(context, state)
@@ -1937,7 +1937,7 @@ emitDropGlue request: DropGlueRequest, edgeNodeIndex: Int, context: ref emitterC
                     and (context.ir[dropTask.valueIndex].kind == 14 or (dropTask.valueIndex -> promotedFixedArrayCall(context, state)) >= 0)
                     -> if {
                         true => dropTaskNeedsFixedReload!
-                        "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data = extractvalue { ptr, i64 } %v$(dropTask.valueIndex), 0" -> println
+                        "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data = extractvalue %sollang.int_slice %v$(dropTask.valueIndex), 0" -> println
                         "  %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!) = load " -> print
                         dropTask.typeId -> writeSemanticTypeId(context, state)
                         ", ptr %dropfixed$(edgeNodeIndex)_$(dropTaskIndex!)_data, align " -> print
@@ -2340,7 +2340,7 @@ emitPatternBindingDrop bindingIndex: Int, regionIndex: Int, context: ref emitter
         return
     }
     context.types[typeId].kind == 4 -> if {
-        "  %patternfixed$(bindingIndex)_data = extractvalue { ptr, i64 } " -> print
+        "  %patternfixed$(bindingIndex)_data = extractvalue %sollang.int_slice " -> print
         frameRoot >= 0 -> if { "%dropg$(bindingIndex)_p0" -> print } else { "%v$(bindingIndex)" -> print }
         ", 0" -> println
         typeId -> semanticTypeOwns(context, state) -> if {
@@ -2842,7 +2842,7 @@ emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContex
                                                             " %value, $(dropField.ordinal)" -> println
                                                             context.types[dropField.fieldType].kind == 4
                                                                 -> if {
-                                                                    "  %field_data$(dropField.ordinal) = extractvalue { ptr, i64 } %field$(dropField.ordinal), 0" -> println
+                                                                    "  %field_data$(dropField.ordinal) = extractvalue %sollang.int_slice %field$(dropField.ordinal), 0" -> println
                                                                     dropField.fieldType -> semanticTypeOwns(context, state)
                                                                         -> if {
                                                                             "  %field_elements$(dropField.ordinal) = load " -> print
@@ -2954,8 +2954,8 @@ emitStoredEnumPayloadDrop typeId: Int, name: Text, context: ref emitterContext.E
     typeId >= 0 -> if {
         context.types[typeId] => payloadType
         payloadType.kind == 4 -> if {
-            "  %$(name) = load { ptr, i64 }, ptr %payload, align 8" -> println
-            "  %$(name)_data = extractvalue { ptr, i64 } %$(name), 0" -> println
+            "  %$(name) = load %sollang.int_slice, ptr %payload, align 8" -> println
+            "  %$(name)_data = extractvalue %sollang.int_slice %$(name), 0" -> println
             context.typeTraits[typeId] % 2 == 1 -> if {
                 "  %$(name)_elements = load " -> print
                 typeId -> writeSemanticTypeId(context, state)
@@ -3273,7 +3273,7 @@ writeMemberStorageValueName nodeIndex: Int, context: ref emitterContext.EmitCont
 }
 
 writeAggregateFieldTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    context.types[typeId].kind == 4 -> if { "{ ptr, i64 }" -> print } else { typeId -> writeSemanticTypeId(context, state) }
+    context.types[typeId].kind == 4 -> if { "%sollang.int_slice" -> print } else { typeId -> writeSemanticTypeId(context, state) }
 }
 writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     [typeId,; ~] => typeTasks!
@@ -3283,7 +3283,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
         typeTasks![typeTaskSize!] => typeTask
         typeTask < 0 -> if { "]" -> print } else {
             context.types[typeTask] => current
-            current.kind == 2 -> if { "{ ptr, i64 }" -> print }
+            current.kind == 2 -> if { "%sollang.int_slice" -> print }
             current.kind == 3 -> if { "%sollang.array.i32" -> print }
             current.kind == 12 -> if { "%sollang.bounded_array.t$(typeTask)" -> print }
             current.kind == 5 -> if { "%sollang.int_dictionary" -> print }
@@ -3422,7 +3422,7 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
                                 # Fixed-array expression values use the documented borrowed
                                 # pointer/length ABI. Their canonical storage type remains inline
                                 # and is still written by writeSemanticTypeId for owner layouts.
-                                "{ ptr, i64 }" -> print
+                                "%sollang.int_slice" -> print
                             } else {
                                 typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
                             }

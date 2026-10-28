@@ -68,11 +68,11 @@ emitFoldExpression expressionIndex: Int, functionIndex: Int, expressionEnd: Int,
         context.types[foldReadTypeId].kind == 2 or context.types[foldReadTypeId].kind == 4 => foldSourceIsView
         "  %fold$(expressionIndex)_data = extractvalue " -> print
         foldSourceIsView
-            -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
+            -> if { "%sollang.int_slice" -> print } else { "%sollang.array.i32" -> print }
         " %fold$(expressionIndex)_source, 0" -> println
         "  %fold$(expressionIndex)_length = extractvalue " -> print
         foldSourceIsView
-            -> if { "{ ptr, i64 }" -> print } else { "%sollang.array.i32" -> print }
+            -> if { "%sollang.int_slice" -> print } else { "%sollang.array.i32" -> print }
         " %fold$(expressionIndex)_source, 1" -> println
         "  %fold$(expressionIndex)_index_slot = alloca i64, align 8" -> println
         "  store i64 0, ptr %fold$(expressionIndex)_index_slot, align 8" -> println
@@ -940,7 +940,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                             -> if {
                                 context.types[cancelledBinding.typeId].kind == 4
                                     -> if {
-                                        "  %async_cancel_owned_data$(point.state)_$(bindingIndex!) = extractvalue { ptr, i64 } %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
+                                        "  %async_cancel_owned_data$(point.state)_$(bindingIndex!) = extractvalue %sollang.int_slice %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
                                         "  %async_cancel_owned_inline$(point.state)_$(bindingIndex!) = load " -> print
                                         cancelledBinding.typeId -> writeSemanticTypeId(context, state)
                                         ", ptr %async_cancel_owned_data$(point.state)_$(bindingIndex!), align $(context.typeAligns[cancelledBinding.typeId])" -> println
@@ -954,7 +954,7 @@ emitAsyncCancelledTaskSpills point: typedIr.CoroutineSuspendPoint, context: ref 
                 (bindingIndex! -> fixedLiteralBindingOwnsBacking(context, state))
                     and not (cancelledBinding -> typedIr.isBorrowedAsyncExpressionBinding)
                     -> if {
-                        "  %async_cancel_fixed_data$(point.state)_$(bindingIndex!) = extractvalue { ptr, i64 } %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
+                        "  %async_cancel_fixed_data$(point.state)_$(bindingIndex!) = extractvalue %sollang.int_slice %async_cancel_owned_value$(point.state)_$(bindingIndex!), 0" -> println
                         "  call void @free(ptr %async_cancel_fixed_data$(point.state)_$(bindingIndex!))" -> println
                     }
                 hasOwnershipFlag -> if {
@@ -1029,7 +1029,7 @@ emitAsyncFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitC
             ", ptr %async_cancel_context, align " -> print
             function -> storageAlign(context, state) -> writeDecimalLine
             context.types[function.typeId].kind == 4 -> if {
-                "  %async_cancel_result_data = extractvalue { ptr, i64 } %async_cancel_result_value, 0" -> println
+                "  %async_cancel_result_data = extractvalue %sollang.int_slice %async_cancel_result_value, 0" -> println
                 "  %async_cancel_result_inline = load " -> print
                 function.typeId -> writeSemanticTypeId(context, state)
                 ", ptr %async_cancel_result_data, align $(context.typeAligns[function.typeId])" -> println
@@ -1366,8 +1366,8 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         and context.types[mutableEntryParameterTypeId].kind == 4
                         and context.types[mutableEntryParameterTypeId].length >= 0
                         -> if {
-                            "  %arg_value0 = insertvalue { ptr, i64 } poison, ptr %arg_mut_struct, 0" -> println
-                            "  %arg = insertvalue { ptr, i64 } %arg_value0, i64 $(context.types[mutableEntryParameterTypeId].length), 1" -> println
+                            "  %arg_value0 = insertvalue %sollang.int_slice poison, ptr %arg_mut_struct, 0" -> println
+                            "  %arg = insertvalue %sollang.int_slice %arg_value0, i64 $(context.types[mutableEntryParameterTypeId].length), 1" -> println
                         } else {
                             "  %arg = load " -> print
                             entryParameter -> writeIrType(context, state)
@@ -1418,8 +1418,8 @@ emitFunctionNamed requestedFunctionIndex: Int, symbolSuffix: Text, context: ref 
                         and context.types[mutableAdditionalParameterTypeId].kind == 4
                         and context.types[mutableAdditionalParameterTypeId].length >= 0
                         -> if {
-                            "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue { ptr, i64 } poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, 0" -> println
-                            "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue { ptr, i64 } %arg$(entryAdditionalParameterOrdinal!)_value0, i64 $(context.types[mutableAdditionalParameterTypeId].length), 1" -> println
+                            "  %arg$(entryAdditionalParameterOrdinal!)_value0 = insertvalue %sollang.int_slice poison, ptr %arg$(entryAdditionalParameterOrdinal!)_mut_struct, 0" -> println
+                            "  %arg$(entryAdditionalParameterOrdinal!) = insertvalue %sollang.int_slice %arg$(entryAdditionalParameterOrdinal!)_value0, i64 $(context.types[mutableAdditionalParameterTypeId].length), 1" -> println
                         } else {
                             "  %arg$(entryAdditionalParameterOrdinal!) = load " -> print
                             entryAdditionalParameter -> writeIrType(context, state)

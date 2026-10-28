@@ -374,3 +374,21 @@ emitDictionaryLiteralOwner nodeIndex: Int, length: Int, capacity: Int64, context
             "v$(nodeIndex)" -> emitGrowableDictionaryOwner("%v$(nodeIndex)_storage", "$(length)", "$(capacity)")
         }
 }
+
+# A readonly call view reuses the selected owner's physical storage. Only an
+# admitted literal has a placement slot; every other owner keeps its actual
+# extracted pointer, including heap-backed and mutable values.
+writeCallSliceDataPointer valueIndex: Int, extractedPointer: Text, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console, Process {
+    valueIndex -> isPlannedDynamicIntPayload(context, state)
+        -> if {
+            valueIndex -> ownedValueSourceIndex(context, state) => sourceIndex
+            sourceIndex -> checkedStorageAllocation(context) -> when {
+                None {
+                    "; sollang compiler error S052: PLACEMENT_MISSING_ALLOCATION $sourceIndex" -> println
+                    process.exit(1)
+                    return
+                }
+                Some(allocation) { "%stack_slot$(allocation.slot)" -> print }
+            }
+        } else { extractedPointer -> print }
+}

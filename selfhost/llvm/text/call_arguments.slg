@@ -404,10 +404,10 @@ emitMutableReferenceIndexPlace placeIndex: Int, rootBinding: Int, callIndex: Int
         } else {
             referenceRootIsSliceParameter and indexedBaseProjectionDepth! == 0
                 -> if {
-                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue { ptr, i64 } " -> print
+                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_data = extractvalue %sollang.int_slice " -> print
                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
                     ", 0" -> println
-                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue { ptr, i64 } " -> print
+                    "  %callref$(referenceCallIndex)_arg$(referenceArgumentOrdinal)_length = extractvalue %sollang.int_slice " -> print
                     rootBinding -> writeReferenceRootParameterValue(referenceOwnerIndex, context, state)
                     ", 1" -> println
                 } else {
@@ -856,8 +856,8 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
                         " " -> print
                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
                         ", ptr %call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[sliceValueTypeId])" -> println
-                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
-                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[sliceValueTypeId].length), 1" -> println
                     } else {
                         "  %call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
@@ -865,8 +865,10 @@ emitCallIntegerArgumentPromotions argumentIndex: Int, callIndex: Int, ownerIndex
                         "  %call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
                         sliceValueIndex -> writeCallSliceProjectionValue(ownerIndex, context, state)
                         ", 1" -> println
-                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
-                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
+                        sliceValueIndex -> writeCallSliceDataPointer("%call$(callIndex)_arg$(ordinal)_slice_data", context, state)
+                        ", 0" -> println
+                        "  %call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %call$(callIndex)_arg$(ordinal)_slice0, i64 %call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
                     }
                 }
             context.ir[argumentIndex].nextOperand -> emitCallIntegerArgumentPromotions(callIndex, ownerIndex, ordinal + 1, context, state)
@@ -1830,7 +1832,7 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
                 droppedOwners -> each droppedOwner {
                     droppedOwner == namedBindingIndex -> if { return }
                 }
-                "  %named_fixed_call$(callIndex)_$(ordinal) = extractvalue { ptr, i64 } " -> print
+                "  %named_fixed_call$(callIndex)_$(ordinal) = extractvalue %sollang.int_slice " -> print
                 whileIndex >= 0 -> if {
                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentIndex } -> writeWhileValue(context, state)
                 } else { argumentIndex -> writeValue(ownerIndex, context, state) }
@@ -1894,7 +1896,7 @@ emitCallTemporaryDrop argumentIndex: Int, callIndex: Int, ordinal: Int, whileInd
         "%call$(callIndex)_temporary$(ordinal)" -> materialize(temporaryStorage!) => temporaryName!
     }
     dropFixedBacking! -> if {
-        "  $(temporaryName!) = extractvalue { ptr, i64 } " -> print
+        "  $(temporaryName!) = extractvalue %sollang.int_slice " -> print
         whileIndex >= 0
             -> if {
                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueIndex } -> writeWhileValue(context, state)

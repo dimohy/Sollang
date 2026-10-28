@@ -28,13 +28,13 @@ fixedArrayReturnNeedsPromotion valueIndex: Int, ownerIndex: Int, context: ref em
 emitFixedArrayReturnPromotion valueIndex: Int, ownerIndex: Int, typeId: Int, nameRoot: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool uses Console, Process {
     valueIndex -> fixedArrayReturnNeedsPromotion(ownerIndex, context, state)
         -> unless { false -> return }
-    "  %return_fixed$(nameRoot)_source = extractvalue { ptr, i64 } " -> print
+    "  %return_fixed$(nameRoot)_source = extractvalue %sollang.int_slice " -> print
     valueIndex -> writeValue(ownerIndex, context, state)
     ", 0" -> println
     "  %return_fixed$(nameRoot)_data = call ptr @malloc(i64 $(context.typeSizes[typeId]))" -> println
     "  call void @llvm.memcpy.p0.p0.i64(ptr %return_fixed$(nameRoot)_data, ptr %return_fixed$(nameRoot)_source, i64 $(context.typeSizes[typeId]), i1 false)" -> println
-    "  %return_fixed$(nameRoot)_0 = insertvalue { ptr, i64 } poison, ptr %return_fixed$(nameRoot)_data, 0" -> println
-    "  %return_fixed$(nameRoot) = insertvalue { ptr, i64 } %return_fixed$(nameRoot)_0, i64 $(context.types[typeId].length), 1" -> println
+    "  %return_fixed$(nameRoot)_0 = insertvalue %sollang.int_slice poison, ptr %return_fixed$(nameRoot)_data, 0" -> println
+    "  %return_fixed$(nameRoot) = insertvalue %sollang.int_slice %return_fixed$(nameRoot)_0, i64 $(context.types[typeId].length), 1" -> println
     true
 }
 
@@ -336,7 +336,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                     dropCandidate.kind == 14 and dropCandidateHasInlineArrayAbi!
                         -> if {
                             true => dropCandidateNeedsInlineArrayReload!
-                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue { ptr, i64 } %v$(dropIndex!), 0" -> println
+                            "  %dropfixedreturn$(dropIndex!)_data = extractvalue %sollang.int_slice %v$(dropIndex!), 0" -> println
                             "  %dropfixedreturn$(dropIndex!) = load " -> print
                             dropCandidate.typeId -> writeSemanticTypeId(context, state)
                             ", ptr %dropfixedreturn$(dropIndex!)_data, align " -> print
@@ -426,12 +426,12 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                 -> if {
                     dropIndex! -> asyncFrameBindingRoot(functionIndex, context, state) => fixedBackingAsyncRoot
                     fixedBackingAsyncRoot >= 0 -> if {
-                        "  %dropfixedliteral$(dropIndex!)_restored = load { ptr, i64 }, ptr " -> print
+                        "  %dropfixedliteral$(dropIndex!)_restored = load %sollang.int_slice, ptr " -> print
                         fixedBackingAsyncRoot -> writeAsyncLocalAddress(context)
                         ", align " -> print
                         dropCandidate -> asyncFrameValueAlign(context, state) -> writeDecimalLine
                     }
-                    "  %dropfixedliteral$(dropIndex!) = extractvalue { ptr, i64 } " -> print
+                    "  %dropfixedliteral$(dropIndex!) = extractvalue %sollang.int_slice " -> print
                     fixedBackingAsyncRoot >= 0 -> if {
                         "%dropfixedliteral$(dropIndex!)_restored" -> print
                     } else { "%v$(dropCandidateDropValueIndex)" -> print }
@@ -470,7 +470,7 @@ emitFunctionReturn functionIndex: Int, expressionStart: Int, functionEnd: Int, e
                         and (context.ir[dropCandidateDropValueIndex].kind == 14 or (dropCandidateDropValueIndex -> promotedFixedArrayCall(context, state)) >= 0)
                         -> if {
                             true => dropBindingNeedsInlineArrayReload!
-                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue { ptr, i64 } " -> print
+                            "  %dropfixedbinding$(dropIndex!)_data = extractvalue %sollang.int_slice " -> print
                             dropAsyncRoot >= 0 -> if { "%drop$(dropIndex!)_restored" -> print } else {
                                 "%v$(dropCandidateDropValueIndex)" -> print
                             }

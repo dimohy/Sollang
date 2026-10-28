@@ -856,10 +856,10 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                     and (emittedFieldValue.kind == 5 or copyProjectedFixedField)
                     -> if {
                         true => copyNamedFixedField!
-                        "  %v$(expressionIndex)_field$(fieldPosition!)_source = extractvalue { ptr, i64 } " -> print
+                        "  %v$(expressionIndex)_field$(fieldPosition!)_source = extractvalue %sollang.int_slice " -> print
                         emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
                         ", 0" -> println
-                        "  %v$(expressionIndex)_field$(fieldPosition!)_length = extractvalue { ptr, i64 } " -> print
+                        "  %v$(expressionIndex)_field$(fieldPosition!)_length = extractvalue %sollang.int_slice " -> print
                         emittedFieldIndex -> writeAggregateOperand(functionIndex, whileIndex, context, state)
                         ", 1" -> println
                         context.typeSizes[targetFieldTypeId!] => fieldAllocationBytes!
@@ -867,8 +867,8 @@ emitAggregateExpressions expressionIndex: Int, functionIndex: Int, whileIndex: I
                             -> if { context.typeSizes[context.types[targetFieldTypeId!].first] => fieldAllocationBytes! }
                         "  %v$(expressionIndex)_field$(fieldPosition!)_owned = call ptr @malloc(i64 $(fieldAllocationBytes!))" -> println
                         "  call void @llvm.memcpy.p0.p0.i64(ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, ptr %v$(expressionIndex)_field$(fieldPosition!)_source, i64 $(context.typeSizes[targetFieldTypeId!]), i1 false)" -> println
-                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy0 = insertvalue { ptr, i64 } poison, ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, 0" -> println
-                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy = insertvalue { ptr, i64 } %v$(expressionIndex)_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex)_field$(fieldPosition!)_length, 1" -> println
+                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy0 = insertvalue %sollang.int_slice poison, ptr %v$(expressionIndex)_field$(fieldPosition!)_owned, 0" -> println
+                        "  %v$(expressionIndex)_field$(fieldPosition!)_copy = insertvalue %sollang.int_slice %v$(expressionIndex)_field$(fieldPosition!)_copy0, i64 %v$(expressionIndex)_field$(fieldPosition!)_length, 1" -> println
                     }
                 targetFieldTypeId! >= 0 and context.types[targetFieldTypeId!].kind == 12 => boundedField
                 boundedField -> if {
@@ -1015,7 +1015,7 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
                                             canonicalMemberOrdinal! == canonicalMemberCount! - 1
                                                 -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(canonicalMemberOrdinal!)" -> print }
                                             " = load " -> print
-                                            canonicalMemberFieldType.kind == 4 -> if { "{ ptr, i64 }" -> print } else {
+                                            canonicalMemberFieldType.kind == 4 -> if { "%sollang.int_slice" -> print } else {
                                                 canonicalMemberField.fieldType -> writeSemanticTypeId(context, state)
                                             }
                                             ", ptr " -> print
@@ -1252,14 +1252,14 @@ emitFunctionLoopExpressions expressionIndex: Int, functionIndex: Int, functionEn
                                                                         "  " -> print
                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                                                             -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
-                                                                        " = insertvalue { ptr, i64 } poison, ptr " -> print
+                                                                        " = insertvalue %sollang.int_slice poison, ptr " -> print
                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                                                             -> if { "%v$(expressionIndex)_slot" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_slot" -> print }
                                                                         ", 0" -> println
                                                                         "  " -> print
                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                                                             -> if { expressionIndex -> writeMemberStorageValueName(context, state) } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)" -> print }
-                                                                        " = insertvalue { ptr, i64 } " -> print
+                                                                        " = insertvalue %sollang.int_slice " -> print
                                                                         memberIdentifierOrdinal! == memberIdentifierCount! - 1
                                                                             -> if { "%v$(expressionIndex)_0" -> print } else { "%v$(expressionIndex)_m$(memberProjectionOrdinal!)_0" -> print }
                                                                         ", i64 " -> print

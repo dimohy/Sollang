@@ -2737,8 +2737,8 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
             ", i32 0, i32 " -> print
             context.ir[mutableValueIndex].symbol -> writeDecimalLine
             projectedFixedMember -> if {
-                "  %$(label)_carrier = load { ptr, i64 }, ptr %$(label)_field, align 8" -> println
-                "  %$(label) = extractvalue { ptr, i64 } %$(label)_carrier, 0" -> println
+                "  %$(label)_carrier = load %sollang.int_slice, ptr %$(label)_field, align 8" -> println
+                "  %$(label) = extractvalue %sollang.int_slice %$(label)_carrier, 0" -> println
             }
         } else {
             context.ir[mutableParameterIndex] -> effectiveTypeId(context, state) => mutableTargetTypeId
@@ -2747,9 +2747,9 @@ emitMutableBorrowPlace label: Text, mutableParameterIndex: Int, mutableValueInde
                 and context.types[mutableTargetTypeId].length >= 0
                 and forwardedOrdinal < 0 -> if {
                     mutableRootBinding -> mutableBindingRoot(context, state) => mutableRoot
-                    "  %$(label)_fixed = load { ptr, i64 }, ptr %slot$(mutableRoot), align " -> print
+                    "  %$(label)_fixed = load %sollang.int_slice, ptr %slot$(mutableRoot), align " -> print
                     context.ir[mutableRoot] -> storageAlign(context, state) -> writeDecimalLine
-                    "  %$(label) = extractvalue { ptr, i64 } %$(label)_fixed, 0" -> println
+                    "  %$(label) = extractvalue %sollang.int_slice %$(label)_fixed, 0" -> println
                 } else {
                     "  %$(label) = getelementptr i8, ptr " -> print
                     forwardedOrdinal >= 0 -> if {
@@ -2863,7 +2863,7 @@ emitCurrentMutableParameterValueAt prefix: Text, valueIndex: Int, parameterOrdin
                 and context.types[mutableParameterTypeId].kind == 4
                 and context.types[mutableParameterTypeId].length >= 0
                 -> if {
-                    "  %$(prefix) = insertvalue { ptr, i64 } " -> print
+                    "  %$(prefix) = insertvalue %sollang.int_slice " -> print
                     parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
                     ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
                 } else {
@@ -4546,13 +4546,13 @@ emitIfResultStore resultNode: typedIr.TypedIrNode, valueIndex: Int, ownerIndex: 
                     (branchOrdinal == 0 -> if { resultNode.operand1 } else { resultNode.nextOperand }) => branchRegion
                     valueIndex -> fixedBranchTransferredBacking(branchRegion, context, state) => transferredBacking
                     transferredBacking < 0 -> if {
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue { ptr, i64 } " -> print
+                        "  %if$(ifIndex)_fixed$(branchOrdinal)_source = extractvalue %sollang.int_slice " -> print
                         valueIndex -> writeValue(ownerIndex, context, state)
                         ", 0" -> println
                         "  %if$(ifIndex)_fixed$(branchOrdinal)_data = call ptr @malloc(i64 $(context.typeSizes[resultNode.typeId]))" -> println
                         "  call void @llvm.memcpy.p0.p0.i64(ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, ptr %if$(ifIndex)_fixed$(branchOrdinal)_source, i64 $(context.typeSizes[resultNode.typeId]), i1 false)" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue { ptr, i64 } poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
-                        "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue { ptr, i64 } %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
+                        "  %if$(ifIndex)_fixed$(branchOrdinal)_0 = insertvalue %sollang.int_slice poison, ptr %if$(ifIndex)_fixed$(branchOrdinal)_data, 0" -> println
+                        "  %if$(ifIndex)_fixed$(branchOrdinal) = insertvalue %sollang.int_slice %if$(ifIndex)_fixed$(branchOrdinal)_0, i64 $(context.types[resultNode.typeId].length), 1" -> println
                         true => fixedBranchCopied!
                     }
                 }

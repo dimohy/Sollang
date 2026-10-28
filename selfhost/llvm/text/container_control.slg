@@ -165,7 +165,7 @@ emitWhileCurrentMutableParameterValue whileIndex: Int, valueIndex: Int, paramete
                 and context.types[mutableParameterTypeId].kind == 4
                 and context.types[mutableParameterTypeId].length >= 0
                 -> if {
-                    "  %while$(whileIndex)_v$(valueIndex) = insertvalue { ptr, i64 } " -> print
+                    "  %while$(whileIndex)_v$(valueIndex) = insertvalue %sollang.int_slice " -> print
                     parameterOrdinal == 0 -> if { "%arg" -> print } else { "%arg$(parameterOrdinal)" -> print }
                     ", i64 $(context.types[mutableParameterTypeId].length), 1" -> println
                 } else {
@@ -656,21 +656,21 @@ emitMemberAssignment request: WhileValueRequest, context: ref emitterContext.Emi
                     and (materializeFixedAssignment! or (assignmentTargetFieldTypeId! -> semanticTypeOwns(context, state)))
                     -> if {
                         "  %member_assign$(request.nodeIndex)_previous = load " -> print
-                        materializeFixedAssignment! -> if { "{ ptr, i64 }" -> print } else { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) }
+                        materializeFixedAssignment! -> if { "%sollang.int_slice" -> print } else { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) }
                         ", ptr %member_assign$(request.nodeIndex)_field_address, align " -> print
                         materializeFixedAssignment! -> if { "8" -> println } else { context.typeAligns[assignmentTargetFieldTypeId!] -> writeDecimalLine }
                         materializeFixedAssignment! and not (assignmentTargetFieldTypeId! -> semanticTypeOwns(context, state))
                             -> if {
-                                "  %member_assign$(request.nodeIndex)_previous_data = extractvalue { ptr, i64 } %member_assign$(request.nodeIndex)_previous, 0" -> println
+                                "  %member_assign$(request.nodeIndex)_previous_data = extractvalue %sollang.int_slice %member_assign$(request.nodeIndex)_previous, 0" -> println
                                 "  call void @free(ptr %member_assign$(request.nodeIndex)_previous_data)" -> println
                             } else {
                                 "  call void @sollang_drop_t$(assignmentTargetFieldTypeId!)(" -> print
-                                materializeFixedAssignment! -> if { "{ ptr, i64 }" -> print } else { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) }
+                                materializeFixedAssignment! -> if { "%sollang.int_slice" -> print } else { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) }
                                 " %member_assign$(request.nodeIndex)_previous)" -> println
                             }
                     }
                 "  store " -> print
-                materializeFixedAssignment! -> if { "{ ptr, i64 }" -> print } else {
+                materializeFixedAssignment! -> if { "%sollang.int_slice" -> print } else {
                     assignmentTargetFieldTypeId! >= 0 -> if { assignmentTargetFieldTypeId! -> writeSemanticTypeId(context, state) } else { assignmentValue -> writeIrType(context, state) }
                 }
                 " " -> print
@@ -830,7 +830,7 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
                         argumentIndex -> writeCallArgument(callIndex, ownerIndex, ordinal, context, state)
                     } else {
                         whileArgumentNeedsSliceProjection -> if {
-                            "{ ptr, i64 } %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice" -> print
+                            "%sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice" -> print
                         } else {
                             argumentNeedsReferenceSlot! -> if {
                                 "ptr %callref$(callIndex)_arg$(ordinal)_address" -> print
@@ -902,8 +902,8 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
                         " " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
                         ", ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage, align $(context.typeAligns[whileSliceTypeId!])" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[whileSliceTypeId!].length), 1" -> println
+                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_storage, 0" -> println
+                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 $(context.types[whileSliceTypeId!].length), 1" -> println
                     } else {
                         "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_data = extractvalue %sollang.array.i32 " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
@@ -911,8 +911,10 @@ emitWhileCallArgumentPromotions argumentIndex: Int, callIndex: Int, whileIndex: 
                         "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_length = extractvalue %sollang.array.i32 " -> print
                         WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceValueIndex } -> writeWhileValue(context, state)
                         ", 1" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue { ptr, i64 } poison, ptr %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_data, 0" -> println
-                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue { ptr, i64 } %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
+                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0 = insertvalue %sollang.int_slice poison, ptr " -> print
+                        whileSliceValueIndex -> writeCallSliceDataPointer("%while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_data", context, state)
+                        ", 0" -> println
+                        "  %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice = insertvalue %sollang.int_slice %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice0, i64 %while$(whileIndex)_call$(callIndex)_arg$(ordinal)_slice_length, 1" -> println
                     }
                 }
             context.ir[argumentIndex].nextOperand -> emitWhileCallArgumentPromotions(callIndex, whileIndex, ownerIndex, ordinal + 1, context, state)
@@ -1301,8 +1303,8 @@ emitWhileBranch request: WhileBranchRequest, emissionOrder: [Int], context: ref 
                                                 }
                                             (valueNode -> isFixedArrayType) or (valueNode -> isSliceArrayType)
                                                 -> if {
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_0 = insertvalue { ptr, i64 } poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_data, 0" -> println
-                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = insertvalue { ptr, i64 } %while$(whileIndex)_v$(valueNodeIndex)_0, i64 $(whileArrayLength!), 1" -> println
+                                                    "  %while$(whileIndex)_v$(valueNodeIndex)_0 = insertvalue %sollang.int_slice poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_data, 0" -> println
+                                                    "  %while$(whileIndex)_v$(valueNodeIndex) = insertvalue %sollang.int_slice %while$(whileIndex)_v$(valueNodeIndex)_0, i64 $(whileArrayLength!), 1" -> println
                                                 } else {
                                                     "  %while$(whileIndex)_v$(valueNodeIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_data, 0" -> println
                                                     "  %while$(whileIndex)_v$(valueNodeIndex)_1 = insertvalue %sollang.array.i32 %while$(whileIndex)_v$(valueNodeIndex)_0, i64 $(whileArrayLength!), 1" -> println
@@ -2165,19 +2167,19 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
                     "_fixed_carrier = " -> print
                     ownedDropCandidate.flags == 1 or ownedDropFrameRoot! >= 0
                         -> if {
-                            "load { ptr, i64 }, ptr " -> print
+                            "load %sollang.int_slice, ptr " -> print
                             ownedDropFrameRoot! >= 0 -> if {
                                 ownedDropFrameRoot! -> writeAsyncLocalAddress(context)
                             } else { "%slot$(ownedDropRoot!)" -> print }
                             ", align 8" -> println
                         } else {
-                            "freeze { ptr, i64 } " -> print
+                            "freeze %sollang.int_slice " -> print
                             ownedDropValueIndex! -> writeCleanupValueName(ownedDropParameterIndex!, ownedDropOwner!, context, state)
                             "" -> println
                         }
                     "  " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
-                    "_fixed_data = extractvalue { ptr, i64 } " -> print
+                    "_fixed_data = extractvalue %sollang.int_slice " -> print
                     request.edgeIndex -> writeCleanupName(cleanupBindingIndex, context, state)
                     "_fixed_carrier, 0" -> println
                     "  " -> print
@@ -2427,7 +2429,7 @@ emitOwnedDrops request: OwnedDropRequest, emissionOrder: [Int], context: ref emi
             and context.types[ownedDropCandidate.typeId].kind == 4
             and not (ownedDropCandidate.typeId -> semanticTypeOwns(context, state))
             -> if {
-                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue { ptr, i64 } %v$(ownedDropIndex!), 0" -> println
+                "  %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.int_slice %v$(ownedDropIndex!), 0" -> println
                 "  call void @free(ptr %patternreturn$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
             }
         ownedDropPatternFlagGuard -> if {

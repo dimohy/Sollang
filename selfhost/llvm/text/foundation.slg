@@ -2976,7 +2976,7 @@ emitInterpolationCallTemporaryDrops labelIndex: Int, callIndex: Int, targetIndex
         temporaryOrdinals![temporaryIndex!] => temporaryOrdinal
         temporaryOwner -> interpolationNodeTypeId(nodes, sourceModule, ownerIndex, beforeIndex, context, state) => temporaryTypeId
         context.types[temporaryTypeId].kind == 4 -> if {
-            "  %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal) = extractvalue { ptr, i64 } " -> print
+            "  %v$(labelIndex)_expression$(callIndex)_temporary$(temporaryOrdinal) = extractvalue %sollang.int_slice " -> print
             labelIndex -> writeInterpolationValue(temporaryOwner, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
             ", 0" -> println
             temporaryTypeId -> semanticTypeOwns(context, state)
@@ -3663,7 +3663,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                 " = load " -> print
                 context.types[memberField.fieldType].kind == 4
                     -> if {
-                        "{ ptr, i64 }" -> print
+                        "%sollang.int_slice" -> print
                     } else {
                         memberField.fieldType -> writeSemanticTypeId(context, state)
                     }
@@ -3806,8 +3806,8 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                             "%v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_source" -> print
                         } else { labelIndex -> writeInterpolationValue(projectionArgumentIndex!, nodes, sourceModule, ownerIndex, beforeIndex, context, state) }
                         ", 1" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0 = insertvalue { ptr, i64 } poison, ptr %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data, 0" -> println
-                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice = insertvalue { ptr, i64 } %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0, i64 %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length, 1" -> println
+                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0 = insertvalue %sollang.int_slice poison, ptr %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_data, 0" -> println
+                        "  %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice = insertvalue %sollang.int_slice %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice0, i64 %v$(labelIndex)_expression$(nodeIndex)_arg$(projectionArgumentOrdinal!)_slice_length, 1" -> println
                     }
                     projectionArgumentOrdinal! == 0 -> if { callTarget.nextOperand => projectionParameterIndex! } else { context.ir[projectionParameterIndex!].nextOperand => projectionParameterIndex! }
                     projectionArgumentOrdinal! + 1 => projectionArgumentOrdinal!
@@ -4069,7 +4069,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                                     lengthResultWidth == 32 -> if { "_raw" -> print }
                                     " = extractvalue " -> print
                                     projectedBaseType.kind == 2 -> if {
-                                        "{ ptr, i64 }" -> print
+                                        "%sollang.int_slice" -> print
                                     } else {
                                         projectedBaseTypeId! -> writeSemanticTypeId(context, state)
                                     }
@@ -4413,12 +4413,12 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     # pointer/length carrier used by the runtime ABI.
                     indexedContainerType.kind == 4 and indexedReference!
                         -> if {
-                            "  %v$(labelIndex)_expression$(nodeIndex)_carrier = load { ptr, i64 }, ptr " -> print
+                            "  %v$(labelIndex)_expression$(nodeIndex)_carrier = load %sollang.int_slice, ptr " -> print
                             labelIndex -> writeInterpolationValue(node.operand0, nodes, sourceModule, ownerIndex, beforeIndex, context, state)
                             ", align 8" -> println
                         }
                     "  %v$(labelIndex)_expression$(nodeIndex)_data = extractvalue " -> print
-                    indexedContainerType.kind == 4 -> if { "{ ptr, i64 }" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
+                    indexedContainerType.kind == 4 -> if { "%sollang.int_slice" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
                     " " -> print
                     indexedReference! -> if {
                         indexedContainerType.kind == 4 -> if { "%v$(labelIndex)_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print }
@@ -4438,7 +4438,7 @@ emitInterpolationIntrinsic labelIndex: Int, nodeIndex: Int, nodes: ref [interpol
                     indexedSubscriptWidth! < 64 -> if { " to i64" -> print }
                     "" -> println
                     "  %v$(labelIndex)_expression$(nodeIndex)_length = extractvalue " -> print
-                    indexedContainerType.kind == 4 -> if { "{ ptr, i64 }" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
+                    indexedContainerType.kind == 4 -> if { "%sollang.int_slice" -> print } else { indexedContainerTypeId! -> writeInterpolationRuntimeTypeId(context, state) }
                     " " -> print
                     indexedReference! -> if {
                         indexedContainerType.kind == 4 -> if { "%v$(labelIndex)_expression$(nodeIndex)_carrier" -> print } else { "%v$(labelIndex)_expression$(nodeIndex)_source" -> print }
@@ -5378,8 +5378,8 @@ emitValueGenericArrayRepeat nodeIndex: Int, ownerIndex: Int, context: ref emitte
     "  store i64 %v$(nodeIndex)_repeat_next, ptr %v$(nodeIndex)_repeat_slot, align 8" -> println
     "  br label %repeat$(nodeIndex)_header" -> println
     "repeat$(nodeIndex)_end:" -> println
-    "  %v$(nodeIndex)_0 = insertvalue { ptr, i64 } poison, ptr %v$(nodeIndex)_data, 0" -> println
-    "  %v$(nodeIndex) = insertvalue { ptr, i64 } %v$(nodeIndex)_0, i64 %v$(nodeIndex)_repeat_length, 1" -> println
+    "  %v$(nodeIndex)_0 = insertvalue %sollang.int_slice poison, ptr %v$(nodeIndex)_data, 0" -> println
+    "  %v$(nodeIndex) = insertvalue %sollang.int_slice %v$(nodeIndex)_0, i64 %v$(nodeIndex)_repeat_length, 1" -> println
     true
 }
 
